@@ -7,6 +7,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
 #include "tt_metal/common/core_descriptor.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
@@ -2043,6 +2044,8 @@ bool Device::close() {
     this->sysmem_manager_.reset();
     this->allocator_.reset();
     this->tunnel_device_dispatch_workers_.clear();
+    this->clear_persistent_programs();
+    this->clear_current_persistent_program();
     this->initialized_ = false;
 
     return true;
@@ -2327,6 +2330,40 @@ const string Device::build_firmware_target_path(JitBuildProcessorType t, int i) 
 const string Device::build_kernel_target_path(JitBuildProcessorType t, int i, const string& kernel_name) const {
     const JitBuildState& bs = build_kernel_state(t, i);
     return bs.get_target_out_path(kernel_name);
+}
+
+void Device::insert_persistent_program(const Program& program) {
+    TT_ASSERT(program.is_finalized(), "Program must be finalized before inserting into persistent programs");
+    uint32_t programmable_core_count = hal.get_programmable_core_type_count();
+    // Ugly. We create a copy of the current program after it has been finalized so that we have an owned copy with extended lifetime for now
+    auto & persistent_program = this->persistent_programs_.insert_or_assign(program.get_id(), persistent_program_t{std::make_shared<Program>(program)}).first->second;
+    persistent_program.used_cores.resize(programmable_core_count, CoreRangeSet({}));
+    persistent_program.kernels.resize(programmable_core_count);
+    const auto& kernels = program.get_kernels();
+    for (uint32_t i = 0; i < programmable_core_count; i++) {
+        for (auto &[id, kernel] : kernels[i]) {
+            persistent_program.used_cores[i] = persistent_program.used_cores[i].merge(kernel->core_range_set());
+            persistent_program.kernels[i][kernel->compute_hash()] = kernel;
+        }
+    }
+}
+
+std::optional<uint64_t> Device::find_persistent_program(HalProgrammableCoreType core_type, std::string hash, CoreRangeSet core_ranges) const {
+    for (const auto& [id, persistent_program] : this->persistent_programs_) {
+        auto persistent_kernel = persistent_program.kernels[hal.get_programmable_core_type_index(core_type)].find(hash);
+        if (persistent_kernel != persistent_program.kernels[hal.get_programmable_core_type_index(core_type)].end()
+            && persistent_kernel->second->core_range_set().contains(core_ranges)) {
+                return id;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<uint64_t> Device::get_current_persistent_program_id() const {
+    if (this->current_persistent_program_) {
+        return this->current_persistent_program_->get_id();
+    }
+    return std::nullopt;
 }
 
 HWCommandQueue& Device::hw_command_queue(size_t cq_id) {

@@ -75,7 +75,8 @@ class Program {
    public:
     Program();
 
-    Program(const Program &other) = delete;
+    // TODO: Need to figure out how to not copy for persistent programs
+    Program(const Program &other) = default;
     Program& operator=(const Program &other) = delete;
 
     Program(Program &&other) = default;
@@ -139,13 +140,20 @@ class Program {
     void allocate_circular_buffers();
 
     bool is_finalized() const { return this->finalized_; }
-    void finalize();
+    void finalize(Device * device);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
+    const std::vector<std::unordered_map<KernelHandle, std::shared_ptr<Kernel> >> & get_kernels() const { return kernels_; }
 
     void capture_multi_device_dependencies() { capture_multi_device_dependencies_ = true; }
     bool has_multi_device_dependencies() { return capture_multi_device_dependencies_; }
 
     ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
+
+    bool is_persistent() const { return persistent_; }
+
+    std::optional<uint64_t> get_attached_program_id() const { return attached_program_id_; }
+    void set_attached_program_id(uint64_t id) { attached_program_id_ = id; }
+    uint32_t get_used_programmable_core_types() const { return used_programmable_core_types_; }
 
     // debug/test
     uint32_t get_sem_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) const;
@@ -154,6 +162,10 @@ class Program {
     uint32_t get_cb_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
 
    private:
+    Program(bool persistent) : Program() {
+        this->persistent_ = persistent;
+    }
+
     void populate_dispatch_data(Device *device);
 
     // Buffers temporarily owned by the program
@@ -220,6 +232,14 @@ class Program {
     std::vector<ProgramConfig> program_configs_;
     std::vector<uint32_t> program_config_sizes_;
     bool capture_multi_device_dependencies_ = false;
+
+    bool persistent_ = false;
+    std::optional<uint64_t> attached_program_id_;
+    // Bitmask of programmable core types used by this program
+    uint32_t used_programmable_core_types_ = 0;
+
+    friend Program CreatePersistentProgram();
+
     friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);

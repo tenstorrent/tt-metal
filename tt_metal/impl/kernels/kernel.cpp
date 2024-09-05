@@ -20,11 +20,37 @@ namespace tt {
 
 namespace tt_metal {
 
+namespace detail {
+
+HalProgrammableCoreType get_core_type(const Config &config) {
+    return std::visit(
+        [&](auto &&cfg) -> HalProgrammableCoreType {
+            using T = std::decay_t<decltype(cfg)>;
+            if constexpr (std::is_same_v<T, DataMovementConfig>) {
+                return HalProgrammableCoreType::TENSIX;
+            } else if constexpr (std::is_same_v<T, ComputeConfig>) {
+                return HalProgrammableCoreType::TENSIX;
+            } else if constexpr (std::is_same_v<T, EthernetConfig>) {
+                if (cfg.eth_mode == Eth::IDLE) {
+                    return HalProgrammableCoreType::IDLE_ETH;
+                } else {
+                    return HalProgrammableCoreType::ACTIVE_ETH;
+                }
+            } else {
+                TT_THROW("Unsupported kernel config type");
+            }
+        },
+        config);
+}
+
+}  // namespace detail
+
 Kernel::Kernel(
     const std::string &kernel_path_file_name,
     const CoreRangeSet &core_range_set,
     const std::vector<uint32_t> &compile_args,
-    const std::map<std::string, std::string> &defines) :
+    const std::map<std::string, std::string> &defines,
+    const bool from_persistent) :
     watcher_kernel_id_(watcher_register_kernel(kernel_path_file_name)),
     kernel_path_file_name_(kernel_path_file_name),
     core_range_set_(core_range_set),
@@ -32,7 +58,8 @@ Kernel::Kernel(
     max_runtime_args_per_core_(0),
     core_with_max_runtime_args_({0, 0}),
     compile_time_args_(compile_args),
-    defines_(defines) {
+    defines_(defines),
+    from_persistent_(from_persistent) {
 
     size_t max_x = 0, max_y = 0;
     for (auto core_range : this->core_range_set_.ranges()) {
@@ -279,7 +306,7 @@ void Kernel::set_common_runtime_args_count(uint32_t count) {
     this->common_runtime_args_data_.rt_args_count = count;
 }
 
-bool Kernel::is_idle_eth() {
+bool Kernel::is_idle_eth() const {
     return std::holds_alternative<EthernetConfig>(this->config()) && std::get<EthernetConfig>(this->config()).eth_mode == Eth::IDLE;
 }
 

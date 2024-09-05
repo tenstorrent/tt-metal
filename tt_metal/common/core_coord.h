@@ -64,6 +64,93 @@ inline CoreCoord get_core_coord_from_relative(const RelativeCoreCoord &in, const
     return coord;
 }
 
+inline std::vector<CoreCoord> grid_to_cores(
+    uint32_t num_cores, uint32_t grid_size_x, uint32_t grid_size_y, bool row_wise = false) {
+    std::vector<CoreCoord> cores;
+    cores.reserve(num_cores);
+    TT_ASSERT(
+        num_cores <= grid_size_x * grid_size_y,
+        "Number of cores {} exceeds grid size {}x{}",
+        num_cores,
+        grid_size_x,
+        grid_size_y);
+    if (row_wise) {
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            cores.push_back({i % grid_size_x, i / grid_size_x});
+        }
+    } else {
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            cores.push_back({i / grid_size_y, i % grid_size_y});
+        }
+    }
+    return cores;
+}
+
+inline std::vector<CoreCoord> grid_to_cores(CoreCoord start, CoreCoord end, bool row_wise = false) {
+    std::vector<CoreCoord> cores;
+    auto num_cores_x = (end.x + 1) - start.x;
+    auto num_cores_y = (end.y + 1) - start.y;
+    uint32_t num_cores = num_cores_x * num_cores_y;
+    cores.reserve(num_cores);
+    if (row_wise) {
+        for (uint32_t j = start.y; j < (end.y + 1); j++) {
+            for (uint32_t i = start.x; i < (end.x + 1); i++) {
+                cores.push_back({i, j});
+            }
+        }
+
+    } else {
+        for (uint32_t i = start.x; i < (end.x + 1); i++) {
+            for (uint32_t j = start.y; j < (end.y + 1); j++) {
+                cores.push_back({i, j});
+            }
+        }
+    }
+    return cores;
+}
+
+// Noop cores are appended at the end with no guarantees on ordering
+inline std::vector<CoreCoord> grid_to_cores_with_noop(
+    const uint32_t bbox_x,
+    const uint32_t bbox_y,
+    const uint32_t grid_size_x,
+    const uint32_t grid_size_y,
+    const bool row_wise = false) {
+    ZoneScoped;
+    std::vector<CoreCoord> cores;
+    cores.reserve(grid_size_x * grid_size_y);
+    TT_ASSERT(bbox_x < grid_size_x);
+    TT_ASSERT(bbox_y < grid_size_y);
+    const uint32_t box_size_x = bbox_x + 1;
+    const uint32_t box_size_y = bbox_y + 1;
+
+    if (row_wise) {
+        for (uint32_t i = 0; i < box_size_x * box_size_y; ++i) {
+            cores.push_back({i % box_size_x, i / box_size_x});
+        }
+    } else {
+        for (uint32_t i = 0; i < box_size_x * box_size_y; ++i) {
+            cores.push_back({i / box_size_y, i % box_size_y});
+        }
+    }
+
+    // Right rectangle noops
+    for (uint32_t x = box_size_x; x < grid_size_x; ++x) {
+        for (uint32_t y = 0; y < grid_size_y; ++y) {
+            cores.push_back({x, y});
+        }
+    }
+
+    // Bottom rectangle noops
+    for (uint32_t y = box_size_y; y < grid_size_y; ++y) {
+        for (uint32_t x = 0; x < box_size_x; ++x) {
+            cores.push_back({x, y});
+        }
+    }
+
+    return cores;
+}
+
 struct CoreRange {
     CoreCoord start_coord;
     CoreCoord end_coord;
@@ -346,6 +433,42 @@ class CoreRangeSet {
         return false;
     }
 
+    // TODO: Should rename some of these methods and split into a source and header file
+    inline std::vector<CoreCoord> corerange_to_cores(std::optional<uint32_t> max_cores = std::nullopt, bool row_wise = false) const {
+        uint32_t num_total_cores = 0;
+        std::vector<CoreCoord> all_cores;
+        uint32_t offset = 0;
+
+        for (auto core_range : this->ranges()) {
+            auto start_coord = core_range.start_coord;
+            auto end_coord = core_range.end_coord;
+            auto cores = grid_to_cores(start_coord, end_coord, row_wise);
+            if (max_cores.has_value()) {
+                if (all_cores.size() + cores.size() > max_cores.value()) {
+                    uint32_t num_cores_to_add = max_cores.value() - all_cores.size();
+                    all_cores.insert(all_cores.end(), cores.begin(), cores.begin() + num_cores_to_add);
+                } else {
+                    all_cores.insert(all_cores.end(), cores.begin(), cores.end());
+                }
+            } else {
+                all_cores.insert(all_cores.end(), cores.begin(), cores.end());
+            }
+        }
+
+        return all_cores;
+    }
+
+    inline bool contains(const CoreRangeSet &other) const {
+        ZoneScoped;
+        const auto& other_cores = other.corerange_to_cores();
+        for (const auto &other_core : other_cores) {
+            if (!this->core_coord_in_core_ranges(other_core)) {
+                return false;
+            }
+        }
+       return true;
+    }
+
     inline bool intersects(const CoreRange &cr) const {
         for (const auto &local_cr : this->ranges_) {
             if (local_cr.intersects(cr))
@@ -408,116 +531,10 @@ const inline bool operator==(const CoreRangeSet &a, const CoreRangeSet &b) {
     return false;
 }
 
-inline std::vector<CoreCoord> grid_to_cores(
-    uint32_t num_cores, uint32_t grid_size_x, uint32_t grid_size_y, bool row_wise = false) {
-    std::vector<CoreCoord> cores;
-    cores.reserve(num_cores);
-    TT_ASSERT(
-        num_cores <= grid_size_x * grid_size_y,
-        "Number of cores {} exceeds grid size {}x{}",
-        num_cores,
-        grid_size_x,
-        grid_size_y);
-    if (row_wise) {
-        for (uint32_t i = 0; i < num_cores; ++i) {
-            cores.push_back({i % grid_size_x, i / grid_size_x});
-        }
-    } else {
-        for (uint32_t i = 0; i < num_cores; ++i) {
-            cores.push_back({i / grid_size_y, i % grid_size_y});
-        }
-    }
-    return cores;
-}
-
-inline std::vector<CoreCoord> grid_to_cores(CoreCoord start, CoreCoord end, bool row_wise = false) {
-    std::vector<CoreCoord> cores;
-    auto num_cores_x = (end.x + 1) - start.x;
-    auto num_cores_y = (end.y + 1) - start.y;
-    uint32_t num_cores = num_cores_x * num_cores_y;
-    cores.reserve(num_cores);
-    if (row_wise) {
-        for (uint32_t j = start.y; j < (end.y + 1); j++) {
-            for (uint32_t i = start.x; i < (end.x + 1); i++) {
-                cores.push_back({i, j});
-            }
-        }
-
-    } else {
-        for (uint32_t i = start.x; i < (end.x + 1); i++) {
-            for (uint32_t j = start.y; j < (end.y + 1); j++) {
-                cores.push_back({i, j});
-            }
-        }
-    }
-    return cores;
-}
-
-// Noop cores are appended at the end with no guarantees on ordering
-inline std::vector<CoreCoord> grid_to_cores_with_noop(
-    const uint32_t bbox_x,
-    const uint32_t bbox_y,
-    const uint32_t grid_size_x,
-    const uint32_t grid_size_y,
-    const bool row_wise = false) {
-    ZoneScoped;
-    std::vector<CoreCoord> cores;
-    cores.reserve(grid_size_x * grid_size_y);
-    TT_ASSERT(bbox_x < grid_size_x);
-    TT_ASSERT(bbox_y < grid_size_y);
-    const uint32_t box_size_x = bbox_x + 1;
-    const uint32_t box_size_y = bbox_y + 1;
-
-    if (row_wise) {
-        for (uint32_t i = 0; i < box_size_x * box_size_y; ++i) {
-            cores.push_back({i % box_size_x, i / box_size_x});
-        }
-    } else {
-        for (uint32_t i = 0; i < box_size_x * box_size_y; ++i) {
-            cores.push_back({i / box_size_y, i % box_size_y});
-        }
-    }
-
-    // Right rectangle noops
-    for (uint32_t x = box_size_x; x < grid_size_x; ++x) {
-        for (uint32_t y = 0; y < grid_size_y; ++y) {
-            cores.push_back({x, y});
-        }
-    }
-
-    // Bottom rectangle noops
-    for (uint32_t y = box_size_y; y < grid_size_y; ++y) {
-        for (uint32_t x = 0; x < box_size_x; ++x) {
-            cores.push_back({x, y});
-        }
-    }
-
-    return cores;
-}
 
 inline std::vector<CoreCoord> corerange_to_cores(
     const CoreRangeSet &crs, std::optional<uint32_t> max_cores = std::nullopt, bool row_wise = false) {
-    uint32_t num_total_cores = 0;
-    std::vector<CoreCoord> all_cores;
-    uint32_t offset = 0;
-
-    for (auto core_range : crs.ranges()) {
-        auto start_coord = core_range.start_coord;
-        auto end_coord = core_range.end_coord;
-        auto cores = grid_to_cores(start_coord, end_coord, row_wise);
-        if (max_cores.has_value()) {
-            if (all_cores.size() + cores.size() > max_cores.value()) {
-                uint32_t num_cores_to_add = max_cores.value() - all_cores.size();
-                all_cores.insert(all_cores.end(), cores.begin(), cores.begin() + num_cores_to_add);
-            } else {
-                all_cores.insert(all_cores.end(), cores.begin(), cores.end());
-            }
-        } else {
-            all_cores.insert(all_cores.end(), cores.begin(), cores.end());
-        }
-    }
-
-    return all_cores;
+    return crs.corerange_to_cores(max_cores, row_wise);
 }
 
 const inline bool operator!=(const CoreRangeSet &a, const CoreRangeSet &b) { return !(a == b); }
