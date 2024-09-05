@@ -248,6 +248,9 @@ def pad_and_fold_with_permute_and_reshape_on_device_sharded(device, tt_input_ten
     return tt_output_tensor
 
 
+@skip_for_grayskull(
+    "Grayskull packer untilize will corrupt the packer states in the following avg_pool2d/reduce unit test"
+)
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [3])
 @pytest.mark.parametrize("h", [224])
