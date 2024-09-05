@@ -139,8 +139,8 @@ void Shape::validate() const {
     for (auto index = 0; index < this->rank_; index++) {
         TT_FATAL(
             this->dimensions_[index] > 0,
-            "Shape dimensions should be > 0, however dimension {} is {}, {}", 
-            index, this->dimensions_[index], *this));
+            "Shape dimensions should be > 0, however dimension {} is {}, {}",
+            index, this->dimensions_[index], *this);
     }
 }
 
