@@ -76,7 +76,9 @@ def read_kernel_hugepage_info() -> Dict[int, Dict[str, Union[int, str]]]:
         results = {}
 
         for page_size_dir in sys_kernel_mm_hugepages.glob("hugepages-*kB"):
-            items = {item.name: maybe_int(item.read_text()) for item in page_size_dir.iterdir() if item.name != 'demote'}
+            items = {
+                item.name: maybe_int(item.read_text()) for item in page_size_dir.iterdir() if item.name != "demote"
+            }
 
             page_size_bytes = int(page_size_dir.name[10:-2]) * 1024
             results[page_size_bytes] = items
