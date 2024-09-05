@@ -374,6 +374,7 @@ int main() {
             tc.pad_w,
             1,
             1,
+            1,
             tc.num_cores_nhw);
         Shape input_tensor_shape = {
             config.batch_size_,

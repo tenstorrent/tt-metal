@@ -21,11 +21,9 @@ Shape SlidingWindowConfig::get_input_shape() const {
     * Calculate the window op output shape, excludes the channel dimension since this config is independent of the depth.
     */
 Shape SlidingWindowConfig::get_output_shape() const {
-    uint32_t output_h = (input_hw_.first + 2 * pad_hw_.first - dilation_hw_.first * window_hw_.first) / stride_hw_.first + 1;
-    uint32_t output_w = (input_hw_.second + 2 * pad_hw_.second - dilation_hw_.second * window_hw_.second) / stride_hw_.second + 1;
-    // uint32_t output_h = (std::get<0>(input_hw_) + 2 * std::get<0>(pad_hw_) - std::get<0>(dilation_hw_) * std::get<0>(window_hw_)) / std::get<0>(stride_hw_) + 1;
-    // uint32_t output_w = (std::get<1>(input_hw_) + 2 * std::get<1>(pad_hw_) - std::get<1>(dilation_hw_) * std::get<1>(window_hw_)) / std::get<1>(stride_hw_) + 1;
-    log_debug(tt::LogOp, "output_size: {} {} {}", batch_size_, output_h, output_w);
+    uint32_t output_h = (input_hw_.first + 2 * pad_hw_.first - window_hw_.first - (dilation_hw_.first - 1) * (window_hw_.first - 1 )) / stride_hw_.first + 1;
+    uint32_t output_w = (input_hw_.second + 2 * pad_hw_.second - window_hw_.second - (dilation_hw_.second - 1) * (window_hw_.second - 1 )) / stride_hw_.second + 1;
+    log_debug(tt::LogOp, "SlidingWindowConfig::output_size: {} {} {}", batch_size_, output_h, output_w);
     return Shape( std::vector<uint32_t>{batch_size_, output_h, output_w, 0});
 }
 
@@ -84,7 +82,11 @@ std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(c
     uint32_t output_shard_h = config.get_output_shard_y(config.snap_to_tile_);
     uint32_t padded_input_w = config.input_hw_.second + 2 * config.pad_hw_.second;
     uint32_t max_index = op_trace_metadata.size();
-    uint32_t halo_with_pad_len = (config.window_hw_.first - 1) * padded_input_w + config.window_hw_.second - 1;
+
+    uint32_t dilated_window_h = config.window_hw_.first + (config.dilation_hw_.first - 1) * (config.window_hw_.first - 1 );
+    uint32_t dilated_window_w = config.window_hw_.second + (config.dilation_hw_.second - 1) * (config.window_hw_.second - 1 );
+    uint32_t halo_with_pad_len = (dilated_window_h - 1) * padded_input_w + dilated_window_w - 1;
+
     uint32_t output_index_start = 0;
     for (uint32_t core = 0; core < num_cores; ++ core) {
         uint32_t output_index_end = std::min(output_index_start + output_shard_h, max_index) - 1;
@@ -505,7 +507,7 @@ auto fmt::formatter<ttnn::operations::sliding_window::ParallelConfig>::format(co
 }
 
 auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::format(const ttnn::operations::sliding_window::SlidingWindowConfig& t, format_context& ctx) const -> format_context::iterator {
-        std::string str = fmt::format("SlidingWindowConfig(batch_size_={}, input_hw_=({},{}), window_hw_=({},{}), stride_hw_=({},{}), pad_hw_=({},{}), dilation_hw_=({},{}), num_cores_nhw_={}, core_range_set_={})",
+        std::string str = fmt::format("SlidingWindowConfig(batch_size_={}, input_hw_=({},{}), window_hw_=({},{}), stride_hw_=({},{}), pad_hw_=({},{}), dilation_hw_=({},{}), groups={}, num_cores_nhw_={}, core_range_set_={})",
             t.batch_size_,
             t.input_hw_.first,
             t.input_hw_.second,
@@ -517,6 +519,7 @@ auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::form
             t.pad_hw_.second,
             t.dilation_hw_.first,
             t.dilation_hw_.second,
+            t.groups,
             t.num_cores_nhw_,
             t.core_range_set_.str());
         return fmt::format_to(ctx.out(), "{}", str);
