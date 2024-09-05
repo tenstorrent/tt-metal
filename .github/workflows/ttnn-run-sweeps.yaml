@@ -2,6 +2,8 @@ name: "ttnn - Run sweeps"
 
 on:
   workflow_dispatch:
+    schedule:
+     - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 
 jobs:
   build-artifact:
