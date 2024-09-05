@@ -11,6 +11,13 @@ run_common_func_tests() {
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/llama31_8b/demo/demo.py --timeout 600
   # Mistral7B
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/mistral7b/demo/demo.py --timeout 420
+
+  # Bert
+  pytest -n auto --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py -k batch_7
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py -k batch_8
+
+  # Resnet
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/ttnn_resnet/demo/demo.py
 }
 
 run_common_perf_tests(){
@@ -35,10 +42,6 @@ run_n150_tests(){
 
 run_n300_func_tests(){
   run_common_func_tests
-
-  # Not working on N150, working on N300
-  unset WH_ARCH_YAML
-  pytest -n auto --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py -k batch_7
 }
 
 run_n300_perf_tests(){
