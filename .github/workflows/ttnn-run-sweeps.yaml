@@ -2,9 +2,6 @@ name: "ttnn - Run sweeps"
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - jdesousa/sweeps-ci-tagging
 
 jobs:
   build-artifact:
@@ -88,4 +85,4 @@ jobs:
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          python tests/sweep_framework/runner.py --elastic cloud --tag ci-main
+          python tests/sweep_framework/runner.py --elastic cloud --tag ci-main --suite-name nightly
