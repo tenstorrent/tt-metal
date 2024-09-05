@@ -68,8 +68,6 @@ struct ReduceScatterWorkerArgBuilder {
         ttnn::ccl::RingTopology const& topology_config,
         ttnn::ccl::InterleavedTensorWorkerSlice const& worker_input_slice,
         WorkerTransferInfo const& worker_transfer_info,
-        uint32_t worker_idx,
-        uint32_t link,
         uint32_t cb_num_pages_per_packet,
         uint32_t worker_sender_semaphore_id,
         uint32_t worker_receiver_semaphore_id) :
@@ -81,7 +79,9 @@ struct ReduceScatterWorkerArgBuilder {
         cb_num_pages_per_packet(cb_num_pages_per_packet),
         worker_sender_semaphore_id(worker_sender_semaphore_id),
         worker_receiver_semaphore_id(worker_receiver_semaphore_id) {
-#ifndef SEND_MATH_TERMINATE_SIGNAL
+    }
+
+    uint32_t get_total_num_math_pages(uint32_t link, uint32_t worker_idx) const {
         // This algorithm assumes that the worker slices are sized such that they start at the same x offsets for each
         // new row they slice into (as they stride through the tensor)
         std::size_t num_slice_iterations =
@@ -90,11 +90,9 @@ struct ReduceScatterWorkerArgBuilder {
             worker_input_slice.worker_slice_shape.x * worker_input_slice.worker_slice_shape.y;
         std::size_t pages_per_full_chunk = worker_transfer_info.get_num_pages_per_full_chunk(link, worker_idx);
         std::size_t num_filler_pages_per_slice = pages_per_full_chunk - (worker_slice_num_pages % pages_per_full_chunk);
-        this->total_num_math_pages = (worker_input_slice.get_worker_slice_num_pages() + num_filler_pages_per_slice) *
+        uint32_t total_num_math_pages = (worker_input_slice.get_worker_slice_num_pages() + num_filler_pages_per_slice) *
                                      num_slice_iterations * (topology_config.ring_size - 1);
-
-        log_trace(tt::LogOp, "ReduceScatterWorkerArgBuilder: total_num_math_pages: {}", this->total_num_math_pages);
-#endif
+        return total_num_math_pages;
     }
 
     std::vector<uint32_t> generate_reduce_op_kernel_ct_args() const {
@@ -105,6 +103,8 @@ struct ReduceScatterWorkerArgBuilder {
     std::vector<uint32_t> generate_reduce_op_kernel_rt_args(
         uint32_t link, uint32_t worker_index, uint32_t ring_size) const {
         log_trace(tt::LogOp, "generate_reduce_op_kernel_rt_args");
+
+        uint32_t total_num_math_pages = get_total_num_math_pages(link, worker_index);
 
         auto const& args = std::vector<uint32_t>{total_num_math_pages, 1, 0};
 
@@ -155,6 +155,7 @@ struct ReduceScatterWorkerArgBuilder {
                                       : (this->topology_config.ring_index == this->topology_config.ring_size - 1
                                              ? 0
                                              : this->topology_config.ring_index + 1);
+        uint32_t total_num_math_pages = get_total_num_math_pages(link, worker_index);
         auto args = std::vector<uint32_t>{
             static_cast<uint32_t>(local_input_tensor.buffer()->address()),
             static_cast<uint32_t>(this->topology_config.ring_size),  // num_transfers
@@ -184,7 +185,7 @@ struct ReduceScatterWorkerArgBuilder {
             static_cast<uint32_t>(this->worker_input_slice.worker_slice_offset.x),
             static_cast<uint32_t>(this->worker_input_slice.worker_slice_offset.y),
 
-            this->total_num_math_pages};
+            total_num_math_pages};
 
         std::size_t i = 0;
         log_trace(tt::LogOp, "Reduce Scatter Receiver Worker RT Args:");
@@ -256,6 +257,7 @@ struct ReduceScatterWorkerArgBuilder {
         TT_ASSERT(edm_core_semaphore_address > 0);
         TT_ASSERT(edm_core_buffer_address > 0);
         auto const& local_output_tensor = this->op_config.get_output_tensor(0);
+        uint32_t total_num_math_pages = get_total_num_math_pages(link, worker_index);
         auto args = std::vector<uint32_t>{
             static_cast<uint32_t>(local_output_tensor.buffer()->address()),
             static_cast<uint32_t>(edm_core_buffer_address),
@@ -326,7 +328,6 @@ struct ReduceScatterWorkerArgBuilder {
     uint32_t worker_sender_semaphore_id;
     uint32_t worker_receiver_semaphore_id;
 
-    uint32_t total_num_math_pages;
     bool src_is_dram;
     bool dst_is_dram;
 };
@@ -845,8 +846,6 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         topology_config,
         dummy_worker_slice,
         worker_transfer_info,
-        0,
-        0,
         cb_num_pages_per_packet,
         worker_sender_semaphore_id,
         worker_receiver_semaphore_id);
@@ -874,8 +873,6 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
                 topology_config,
                 worker_slice,
                 worker_transfer_info,
-                worker,
-                link,
                 cb_num_pages_per_packet,
                 worker_sender_semaphore_id,
                 worker_receiver_semaphore_id);
