@@ -22,6 +22,7 @@
 
 #include "tt_metal/common/constants.hpp"
 #include "ttnn/cpp/ttnn/common/constants.hpp"
+#include "ttnn/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/ternary/where.hpp"
@@ -105,18 +106,39 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteAddalphaBW::invoke(
        return ExecuteAddalphaBW::invoke(ttnn::DefaultQueueId, grad, input, other, alpha, are_required_outputs, output_mem_config, input_grad, other_grad);
 }
 
-std::vector<ttnn::Tensor> _subalpha_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    grad_tensor.emplace_back(grad);
-    Tensor grad_b = ttnn::multiply(ttnn::neg(grad, output_mem_config), alpha, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_b);
-    return grad_tensor;
-}
+std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardSubAlpha::invoke(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& other,
+    float alpha,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
 
-std::vector<ttnn::Tensor> _sub_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
-    return _subalpha_bw(grad, input, other, 1.0, output_mem_config);
+    std::vector<std::optional<Tensor>> result;
+    if (are_required_outputs.at(0)) {
+         if(!input_grad.has_value()){
+            input_grad = grad;
+        }
+        ttnn::assign(queue_id, grad, input_grad.value());
+        result.emplace_back(input_grad);
+    } else {
+        result.emplace_back(std::nullopt);
+    }
+
+    if (are_required_outputs.at(1)) {
+        if(!other_grad.has_value()){
+            other_grad = ttnn::neg(queue_id, grad, output_mem_config);
+        }
+        ttnn::neg(queue_id, grad, output_mem_config, other_grad);
+        result.emplace_back(other_grad);
+    } else {
+        result.emplace_back(std::nullopt);
+    }
+
+    return result;
 }
 
 std::vector<Tensor> ExecuteBackwardAdd::invoke(
@@ -435,10 +457,38 @@ std::vector<Tensor> _binary_comp_bw(const Tensor& grad, const Tensor& input, con
     return grad_tensor;
 }
 
-std::vector<Tensor> _rsub_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor = _subalpha_bw(grad, input, other, 1.0f, output_mem_config.value_or(input.memory_config()));
-    std::swap(grad_tensor[0], grad_tensor[1]);
-    return grad_tensor;
+std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardRsub::invoke(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& other,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+
+    std::vector<std::optional<ttnn::Tensor>> result;
+
+    if (are_required_outputs.at(0)) {
+        if(!input_grad.has_value()){
+            input_grad = ttnn::neg(queue_id, grad, output_mem_config);
+        }
+        ttnn::neg(queue_id, grad, output_mem_config, input_grad);
+        result.emplace_back(input_grad);
+    } else {
+        result.emplace_back(std::nullopt);
+    }
+
+    if (are_required_outputs.at(1)) {
+        if(!other_grad.has_value()){
+            other_grad = grad;
+        }
+        ttnn::assign(queue_id, grad, other_grad.value());
+        result.emplace_back(other_grad);
+    } else {
+        result.emplace_back(std::nullopt);
+    }
+    return result;
 }
 
 std::vector<Tensor> ExecuteBackwardBiasGelu::invoke(
