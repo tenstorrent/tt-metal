@@ -56,7 +56,9 @@ runs:
         password: ${{ inputs.docker_password }}
         registry: ghcr.io
         image: ghcr.io/${{ github.repository }}/${{ inputs.docker_image }}:${{ env.IMAGE_TAG }}
+        # The most important option below is `--rm`. The machines will fill up with containers.
         options: |
+          --rm
           -v ${{ github.workspace }}:/github_workspace:ro
           --net=host
           ${{ inputs.docker_opts }}
