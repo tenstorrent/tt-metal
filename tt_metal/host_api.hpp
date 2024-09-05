@@ -262,7 +262,7 @@ void DeallocateBuffer(Buffer &buffer);
 *  | Argument | Description                                  | Type                           | Valid Range | Required |
 *  |----------|----------------------------------------------|--------------------------------|-------------|----------|
 *  | buffer   | The buffer that will be owned by the program | std::shared_ptr<Buffer> buffer |             | Yes      |
-*  | program  | The program getting ownership of the buffer  | std::shared_ptr<Buffer> buffer |             | Yes      |
+*  | program  | The program getting ownership of the buffer  | Program &                      |             | Yes      |
 */
 void AssignGlobalBufferToProgram(std::shared_ptr<Buffer> buffer, Program& program);
 
