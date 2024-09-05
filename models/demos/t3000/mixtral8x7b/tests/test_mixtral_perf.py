@@ -350,8 +350,6 @@ def run_inference_decode(tt_model, embd, encoded_prompts, generation_start_pos, 
         decode_input = prepare_inputs_ttnn(
             pt_decode_input,
             tt_model.args.dim,
-            start_pos,
-            tt_model.args,
             tt_model.mesh_device,
         )
         profiler.end(f"Decode_prepare_inputs_{i}")

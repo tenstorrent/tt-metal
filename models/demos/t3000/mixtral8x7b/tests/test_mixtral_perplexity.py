@@ -166,8 +166,6 @@ def run_test_perplexity(
                     decode_input_11BH = prepare_inputs_ttnn(
                         pt_decode_input,
                         model_args.dim,
-                        start_pos,
-                        model_args,
                         tt_model.mesh_device,
                     )
                 else:

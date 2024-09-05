@@ -94,8 +94,6 @@ def test_mixtral_model_inference(
         decode_input = prepare_inputs_ttnn(
             pt_decode_input,
             model_args.dim,
-            start_pos,
-            model_args,
             tt_model.mesh_device,
         )
 
