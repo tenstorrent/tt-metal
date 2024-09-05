@@ -613,7 +613,7 @@ class SystemMemoryManager {
         );
     }
 
-    void completion_queue_wait_front(const uint8_t cq_id, volatile bool &exit_condition) const {
+    uint32_t completion_queue_wait_front(const uint8_t cq_id, volatile bool &exit_condition) const {
         uint32_t write_ptr_and_toggle;
         uint32_t write_ptr;
         uint32_t write_toggle;
@@ -625,6 +625,7 @@ class SystemMemoryManager {
             write_toggle = write_ptr_and_toggle >> 31;
         } while (cq_interface.completion_fifo_rd_ptr == write_ptr and
                  cq_interface.completion_fifo_rd_toggle == write_toggle and not exit_condition);
+        return write_ptr_and_toggle;
     }
 
     void send_completion_queue_read_ptr(const uint8_t cq_id) const {

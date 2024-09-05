@@ -20,6 +20,8 @@ from tests.ttnn.utils_for_testing import (
 )
 from models.utility_functions import torch_random
 
+TIMEOUT = 5
+
 
 def get_height_sharded_specs(
     batch_sizes_choices: List[Tuple[int, ...]], m_size_choices: List[int], num_cores_choices: List[int]

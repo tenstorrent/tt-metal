@@ -11,6 +11,8 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
+TIMEOUT = 5
+
 parameters = {
     "default": {
         "batch_sizes": [(1,)],

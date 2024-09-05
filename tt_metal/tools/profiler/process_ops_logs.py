@@ -190,9 +190,27 @@ def append_device_data(ops, deviceLogFolder):
         for device in deviceOps:
             assert device in deviceData["devices"].keys()
             deviceOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
-            assert len(deviceOps[device]) == len(
-                deviceOpsTime
-            ), f"Device data mismatch. Expected {len(deviceOps[device])} but received {len(deviceOpsTime)} ops on device {device}"
+            if len(deviceOps[device]) != len(deviceOpsTime):
+                deviceOPId = None
+                hostOPId = None
+                for deviceOp, deviceOpTime in zip(deviceOps[device], deviceOpsTime):
+                    if len(deviceOpTime["timeseries"]) > 0:
+                        timeID, ts, statData, risc, core = deviceOpTime["timeseries"][0]
+                        if "zone_name" in timeID.keys() and "FW" in timeID["zone_name"]:
+                            if "run_host_id" in timeID.keys():
+                                if timeID["run_host_id"] != deviceOp["global_call_count"]:
+                                    deviceOPId = timeID["run_host_id"]
+                                    hostOPId = deviceOp["global_call_count"]
+                                    break
+
+                if deviceOPId and hostOPId:
+                    assert (
+                        False
+                    ), f"Device data mismatch: Expected {len(deviceOps[device])} but received {len(deviceOpsTime)} ops on device {device}. Device is showing op ID {deviceOPId} when host is showing op ID {hostOPId}"
+                else:
+                    assert (
+                        True
+                    ), f"Device data mismatch: Expected {len(deviceOps[device])} but received {len(deviceOpsTime)} ops on device {device}"
             for deviceOp, deviceOpTime in zip(deviceOps[device], deviceOpsTime):
                 cores = set()
                 for timeID, ts, statData, risc, core in deviceOpTime["timeseries"]:
