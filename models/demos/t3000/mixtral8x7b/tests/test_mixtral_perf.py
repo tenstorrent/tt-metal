@@ -60,9 +60,13 @@ def test_mixtral_model_perf(
     dtype = ttnn.bfloat8_b
 
     batch_size = 32
+    # Although in decode-only mode change the max seqlen to 16k to avoid KV cache running out of memory size
+    max_seqlen = 16384
 
     # Can use dummy_weights=True correctness is not tested, but it is much slower
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0), dummy_weights=False, max_batch_size=batch_size)
+    model_args = TtModelArgs(
+        t3k_mesh_device.get_device(0), dummy_weights=False, max_batch_size=batch_size, max_seq_len=max_seqlen
+    )
     model_args.n_layers = 32
 
     # Clear global profiler state before starting measurements
