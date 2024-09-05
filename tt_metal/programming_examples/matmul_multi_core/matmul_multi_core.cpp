@@ -8,7 +8,7 @@
 #include "tt_metal/common/bfloat16.hpp"
 #include "tt_metal/common/test_tiles.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/programming_examples/matmul_common/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/programming_examples/matmul_common/bmm_op.hpp"
 #include "tt_metal/common/tilize_untilize.hpp"
 #include "tt_metal/impl/device/device.hpp"
