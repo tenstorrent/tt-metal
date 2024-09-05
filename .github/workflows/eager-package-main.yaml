@@ -10,12 +10,13 @@ on:
   workflow_call:
 
 jobs:
-  build-artifact:
+  # To ensure we don't conflict with caller workflow build-artifacts
+  build-artifact-for-precompiled:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.from-precompiled }}
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
   build-wheels:
-    needs: build-artifact
+    needs: build-artifact-for-precompiled
     # Since this depends on build-artifact if we use from-precompiled, otherwise it's
     # a standalone job if we do not use from-precompiled
     if: always()
