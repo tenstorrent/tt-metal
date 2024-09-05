@@ -96,7 +96,7 @@ int main(int argc, char **argv) {
             runtime_args
         );
 
-        EnqueueProgram(cq, &program, false);
+        EnqueueProgram(cq, program, false);
         Finish(cq);
 
         /*

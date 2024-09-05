@@ -281,14 +281,14 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
         device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
     }
 
-    const auto enqueue_or_launch_program = [=](Program* program) {
+    const auto enqueue_or_launch_program = [=](Program& program) {
         if (USE_FAST_DISPATCH) {
             ZoneScopedN("EnqueueProgram");
             auto& queue = device->command_queue(cq_id);
             tt::tt_metal::EnqueueProgram(queue, program, false);
         } else {
             ZoneScopedN("LaunchProgram");
-            tt::tt_metal::detail::LaunchProgram(device, *program);
+            tt::tt_metal::detail::LaunchProgram(device, program);
         }
     };
 
@@ -303,7 +303,7 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
             return;
         }
 
-        enqueue_or_launch_program(&program);
+        enqueue_or_launch_program(program);
 
         TracyOpTTNNDevice(
             device_operation_t{},
@@ -332,7 +332,7 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
             return;
         }
 
-        enqueue_or_launch_program(program.get());
+        enqueue_or_launch_program(*program);
 
         TracyOpTTNNDevice(
             device_operation_t{},

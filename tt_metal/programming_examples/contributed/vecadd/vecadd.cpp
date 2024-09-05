@@ -195,7 +195,7 @@ int main(int argc, char **argv)
     // `Finish(cq)` to wait for all programs to finish.
     // But it shouldn't matter in this case since we block on reading the output
     // buffer.
-    EnqueueProgram(cq, &program, true);
+    EnqueueProgram(cq, program, true);
     // Finish(cq);
     std::cout << "Kernel execution finished" << std::endl;
 

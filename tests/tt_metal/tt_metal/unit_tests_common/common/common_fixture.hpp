@@ -22,7 +22,7 @@ public:
             tt::tt_metal::detail::LaunchProgram(device, program);
         } else {
             tt::tt_metal::CommandQueue& cq = device->command_queue();
-            tt::tt_metal::EnqueueProgram(cq, &program, false);
+            tt::tt_metal::EnqueueProgram(cq, program, false);
             tt::tt_metal::Finish(cq);
         }
     }

@@ -72,7 +72,7 @@ void RunTest(Device *device) {
     } else {
         // Fast Dispatch uses the command queue
         CommandQueue& cq = device->command_queue();
-        EnqueueProgram(cq, &program, false);
+        EnqueueProgram(cq, program, false);
         Finish(cq);
     }
 

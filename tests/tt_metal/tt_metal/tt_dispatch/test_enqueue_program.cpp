@@ -107,7 +107,7 @@ void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device *devi
         SetRuntimeArgs(program, kernel_group->riscv1_id.value(), worker_core, {buf.address(), 0, 0, NUM_TILES});
 
         EnqueueWriteBuffer(cq, std::ref(buf), inp, false);
-        EnqueueProgram(cq, &program, false);
+        EnqueueProgram(cq, program, false);
 
         EnqueueReadBuffer(cq, std::ref(out), out_vec, true);
     }

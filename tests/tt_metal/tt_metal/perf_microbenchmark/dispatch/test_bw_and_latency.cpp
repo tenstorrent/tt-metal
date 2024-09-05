@@ -262,7 +262,7 @@ int main(int argc, char **argv) {
         if (source_mem_g < 4) {
             // Cache stuff
             for (int i = 0; i < warmup_iterations_g; i++) {
-                EnqueueProgram(cq, &program, false);
+                EnqueueProgram(cq, program, false);
             }
             Finish(cq);
 
@@ -271,7 +271,7 @@ int main(int argc, char **argv) {
             }
 
             auto start = std::chrono::system_clock::now();
-            EnqueueProgram(cq, &program, false);
+            EnqueueProgram(cq, program, false);
             if (time_just_finish_g) {
                 start = std::chrono::system_clock::now();
             }

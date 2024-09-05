@@ -325,7 +325,7 @@ void matmul_multicore_reuse(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfl
 
     EnqueueWriteBuffer(cq, src0_dram_buffer, a.data(), false);
     EnqueueWriteBuffer(cq, src1_dram_buffer, b.data(), false);
-    EnqueueProgram(cq, &program, false);
+    EnqueueProgram(cq, program, false);
     EnqueueReadBuffer(cq, dst_dram_buffer, output.data(), true);
 }
 

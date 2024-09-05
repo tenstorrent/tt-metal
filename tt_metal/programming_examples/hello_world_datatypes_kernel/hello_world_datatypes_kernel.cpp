@@ -51,7 +51,7 @@ int main(int argc, char **argv) {
     // Configure Program and Start Program Execution on Device
 
     SetRuntimeArgs(program, data_reader_kernel_id, core, {dram_buffer->address()});
-    EnqueueProgram(cq, &program, false);
+    EnqueueProgram(cq, program, false);
 
     printf("Hello, Core {0, 0} on Device 0, please handle the data.\n");
 

@@ -171,12 +171,12 @@ bool flatten(Device *device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5)
         // Async write input
         EnqueueWriteBuffer(device->command_queue(), src_dram_buffer, src_vec, false);
         // Share ownership of buffer with program
-        AssignGlobalBufferToProgram(src_dram_buffer, &program);
+        AssignGlobalBufferToProgram(src_dram_buffer, program);
         // Main thread gives up ownership of buffer and src data (this is what python does)
         src_dram_buffer.reset();
         src_vec.reset();
         // Queue up program
-        EnqueueProgram(device->command_queue(), &program, false);
+        EnqueueProgram(device->command_queue(), program, false);
         // Blocking read
         std::vector<uint32_t> result_vec;
         EnqueueReadBuffer(device->command_queue(), dst_dram_buffer, result_vec, true);
@@ -214,7 +214,7 @@ TEST_F(CommandQueueFixture, TestAsyncCommandQueueSanityAndProfile) {
     // Use scoper timer to benchmark time for pushing 2 commands
     {
         tt::ScopedTimer timer("AsyncCommandQueue");
-        EnqueueProgram(command_queue, &program, false);
+        EnqueueProgram(command_queue, program, false);
         Finish(command_queue);
     }
     command_queue.set_mode(current_mode);
@@ -259,7 +259,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAsyncBufferRW) {
         // Reallocate the vector in the main thread after asynchronously pushing it (ensure that worker still has access to this data)
         vec = std::make_shared<std::vector<uint32_t>>(second_buf_size / 4, second_buf_value);
         // Simulate what tt-eager does: Share buffer ownership with program
-        AssignGlobalBufferToProgram(buffer, &program);
+        AssignGlobalBufferToProgram(buffer, program);
         // Reallocate buffer (this is safe, since the program also owns the existing buffer, which will not be deallocated)
         buffer = std::make_shared<Buffer>(this->device_, second_buf_size, second_buf_size, BufferType::DRAM);
         // Write second vector to second buffer

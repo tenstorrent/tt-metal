@@ -208,7 +208,7 @@ int main(int argc, char **argv) {
 
 
 
-        EnqueueProgram(cq, &program, false);
+        EnqueueProgram(cq, program, false);
         Finish(cq);
 
         /*
@@ -314,7 +314,7 @@ int main(int argc, char **argv) {
          * Execute.
          */
 
-        EnqueueProgram(cq, &program_mul, false);
+        EnqueueProgram(cq, program_mul, false);
         Finish(cq);
 
         /*

@@ -220,7 +220,7 @@ bool run_sfpu_all_same_buffer(CommandQueue & cq, const SfpuConfig& test_config) 
     std::vector<uint32_t> dest_buffer_data;
     EnqueueWriteBuffer(cq, input_dram_buffer, packed_input, false);
 
-    EnqueueProgram(cq, &program, false);
+    EnqueueProgram(cq, program, false);
 
     EnqueueReadBuffer(cq, output_dram_buffer, dest_buffer_data, true);
 

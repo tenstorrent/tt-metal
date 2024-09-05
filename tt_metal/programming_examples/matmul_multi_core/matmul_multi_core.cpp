@@ -244,7 +244,7 @@ void matmul_multi_core(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16
     /* Launch program & read in output buffer result into the host vector */
     EnqueueWriteBuffer(cq, src0_dram_buffer, a.data(), false);
     EnqueueWriteBuffer(cq, src1_dram_buffer, b.data(), false);
-    EnqueueProgram(cq, &program, false);
+    EnqueueProgram(cq, program, false);
     EnqueueReadBuffer(cq, dst_dram_buffer, output.data(), true);
 }
 

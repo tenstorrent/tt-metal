@@ -163,8 +163,8 @@ void run(
         th1.join();
     } else {
 
-        tt_metal::EnqueueProgram(device0->command_queue(), &program0, false);
-        tt_metal::EnqueueProgram(device1->command_queue(), &program1, false);
+        tt_metal::EnqueueProgram(device0->command_queue(), program0, false);
+        tt_metal::EnqueueProgram(device1->command_queue(), program1, false);
 
         std::cout << "Calling Finish" << std::endl;
         tt_metal::Finish(device0->command_queue());

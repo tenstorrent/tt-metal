@@ -554,7 +554,7 @@ int main(int argc, char** argv) {
                 log_debug(LogTest, "calling EnqueueProgram");
                 std::chrono::duration<double, std::nano> duration;
                 auto t_begin = std::chrono::high_resolution_clock::now();
-                EnqueueProgram(device->command_queue(), &program, false);
+                EnqueueProgram(device->command_queue(), program, false);
                 Finish(device->command_queue());
                 log_debug(LogTest, "EnqueProgram done");
                 tt_metal::DumpDeviceProfileResults(device, program);
@@ -577,7 +577,7 @@ int main(int argc, char** argv) {
                     log_debug(LogTest, "calling EnqueueProgram");
                     std::chrono::duration<double, std::nano> duration;
                     auto t_begin = std::chrono::high_resolution_clock::now();
-                    EnqueueProgram(device->command_queue(), &program, false);
+                    EnqueueProgram(device->command_queue(), program, false);
                     Finish(device->command_queue());
                     log_debug(LogTest, "EnqueProgram done");
                     auto t_end = std::chrono::high_resolution_clock::now();

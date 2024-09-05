@@ -246,7 +246,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestRandomizedProgram) {
         log_info(tt::LogTest, "Running {} programs on cq {} for cache warmup.", programs.size(), (uint32_t)cq_id);
         // This loop caches program and runs
         for (Program& program: programs) {
-            EnqueueProgram(this->device_->command_queue(cq_id), &program, false);
+            EnqueueProgram(this->device_->command_queue(cq_id), program, false);
         }
 
         // This loops assumes already cached
@@ -260,7 +260,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestRandomizedProgram) {
                 log_debug(tt::LogTest, "Enqueueing {} programs on cq {} for iter: {}/{} now.", programs.size(), (uint32_t)cq_id, i+1, NUM_ITERATIONS);
             }
             for (Program& program: programs) {
-                EnqueueProgram(this->device_->command_queue(cq_id), &program, false);
+                EnqueueProgram(this->device_->command_queue(cq_id), program, false);
             }
         }
 

@@ -443,7 +443,7 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Writing kernel runtime args to device complete");
 
         log_info(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
-        EnqueueProgram(cq, &program, false);
+        EnqueueProgram(cq, program, false);
 
         log_info(LogTest, "Matmul test done");
         log_info(LogTest, "Gathering data back from dram and checking against golden");

@@ -605,8 +605,8 @@ bool RunWriteBWTest(
         th2.join();
         th1.join();
     } else {
-        tt_metal::EnqueueProgram(sender_device->command_queue(), &sender_program, false);
-        tt_metal::EnqueueProgram(receiver_device->command_queue(), &receiver_program, false);
+        tt_metal::EnqueueProgram(sender_device->command_queue(), sender_program, false);
+        tt_metal::EnqueueProgram(receiver_device->command_queue(), receiver_program, false);
 
         log_debug(tt::LogTest, "Calling Finish");
         tt_metal::Finish(sender_device->command_queue());

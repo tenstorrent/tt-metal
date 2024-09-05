@@ -69,7 +69,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, const CoreCoord
 
     tt::tt_metal::detail::CompileProgram(device, program);
     auto& cq = device->command_queue();
-    EnqueueProgram(cq, &program, false);
+    EnqueueProgram(cq, program, false);
     Finish(cq);
 
     vector<uint32_t> dummy_kernel0_args_readback = llrt::read_hex_vec_from_core(
@@ -142,7 +142,7 @@ bool reader_kernel_no_send(
 
     auto& cq = device->command_queue();
     tt::tt_metal::detail::CompileProgram(device, program);
-    EnqueueProgram(cq, &program, false);
+    EnqueueProgram(cq, program, false);
     Finish(cq);
 
     auto readback_vec = llrt::read_hex_vec_from_core(device->id(), eth_noc_xy, eth_l1_byte_address, byte_size);
@@ -212,7 +212,7 @@ bool writer_kernel_no_receive(
 
     auto& cq = device->command_queue();
     tt::tt_metal::detail::CompileProgram(device, program);
-    EnqueueProgram(cq, &program, false);
+    EnqueueProgram(cq, program, false);
     Finish(cq);
 
     auto readback_vec = llrt::read_hex_vec_from_core(device->id(), dram_noc_xy, dram_byte_address, byte_size);
@@ -308,8 +308,8 @@ bool eth_direct_sender_receiver_kernels(
     tt::tt_metal::detail::CompileProgram(sender_device, sender_program);
     tt::tt_metal::detail::CompileProgram(receiver_device, receiver_program);
 
-    EnqueueProgram(sender_device->command_queue(), &sender_program, false);
-    EnqueueProgram(receiver_device->command_queue(), &receiver_program, false);
+    EnqueueProgram(sender_device->command_queue(), sender_program, false);
+    EnqueueProgram(receiver_device->command_queue(), receiver_program, false);
     Finish(sender_device->command_queue());
     Finish(receiver_device->command_queue());
 
@@ -424,8 +424,8 @@ bool chip_to_chip_dram_buffer_transfer(
     tt::tt_metal::detail::CompileProgram(sender_device, sender_program);
     tt::tt_metal::detail::CompileProgram(receiver_device, receiver_program);
 
-    EnqueueProgram(sender_device->command_queue(), &sender_program, false);
-    EnqueueProgram(receiver_device->command_queue(), &receiver_program, false);
+    EnqueueProgram(sender_device->command_queue(), sender_program, false);
+    EnqueueProgram(receiver_device->command_queue(), receiver_program, false);
     Finish(sender_device->command_queue());
     Finish(receiver_device->command_queue());
 
@@ -538,8 +538,8 @@ bool chip_to_chip_interleaved_buffer_transfer(
     tt::tt_metal::detail::CompileProgram(sender_device, sender_program);
     tt::tt_metal::detail::CompileProgram(receiver_device, receiver_program);
 
-    EnqueueProgram(sender_device->command_queue(), &sender_program, false);
-    EnqueueProgram(receiver_device->command_queue(), &receiver_program, false);
+    EnqueueProgram(sender_device->command_queue(), sender_program, false);
+    EnqueueProgram(receiver_device->command_queue(), receiver_program, false);
     Finish(sender_device->command_queue());
     Finish(receiver_device->command_queue());
 

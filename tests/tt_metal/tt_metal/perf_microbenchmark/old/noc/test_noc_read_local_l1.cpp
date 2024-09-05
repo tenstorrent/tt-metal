@@ -217,7 +217,7 @@ int main(int argc, char **argv) {
 
         log_info(LogTest, "Running {} core test", num_cores_r * num_cores_c);
         auto begin = std::chrono::steady_clock::now();
-        EnqueueProgram(device->command_queue(), &program, false);
+        EnqueueProgram(device->command_queue(), program, false);
         Finish(device->command_queue());
         auto end = std::chrono::steady_clock::now();
         auto elapsed_us = duration_cast<microseconds>(end - begin).count();

@@ -554,7 +554,7 @@ class HWCommandQueue {
     friend void EnqueueTraceImpl(CommandQueue& cq, uint32_t trace_id, bool blocking);
     friend void EnqueueProgramImpl(
         CommandQueue& cq,
-        Program* program,
+        Program& program,
         bool blocking);
     friend void EnqueueReadBufferImpl(
         CommandQueue& cq,
@@ -694,7 +694,7 @@ void EnqueueSetRuntimeArgs(
 void EnqueueAddBufferToProgram(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
-    Program* program,
+    Program& program,
     bool blocking);
 
 }  // namespace tt::tt_metal
