@@ -135,7 +135,7 @@ Shape::Shape(const Shape& other, const Padding& padding) :
 }
 
 void Shape::validate() const {
-    TT_FATAL(this->rank_ > 0, "Shape rank == 0 is not supported, {}", *this);
+    TT_FATAL(this->rank_ > 0, "Shape rank == 0 is not supported");
     for (auto index = 0; index < this->rank_; index++) {
         TT_FATAL(
             this->dimensions_[index] > 0,
