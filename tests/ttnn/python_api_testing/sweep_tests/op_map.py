@@ -1042,4 +1042,12 @@ op_map = {
         "tt_op": ttnn_ops.argmax,
         "pytorch_op": pytorch_ops.argmax,
     },
+    "eltwise-right_shift": {
+        "tt_op": ttnn_ops.eltwise_right_shift,
+        "pytorch_op": pytorch_ops.right_shift,
+    },
+    "eltwise-left_shift": {
+        "tt_op": ttnn_ops.eltwise_left_shift,
+        "pytorch_op": pytorch_ops.left_shift,
+    },
 }
