@@ -239,6 +239,18 @@ class ChannelBuffer final {
     FORCE_INLINE bool eth_is_receiver_channel_send_acked() const {
         return *(this->channel_bytes_acked_addresses[buffer_index]) != 0; }
     FORCE_INLINE void eth_clear_sender_channel_ack() const { *(this->channel_bytes_acked_addresses[buffer_index]) = 0; }
+
+    /*
+     * As a receiver channel, send a first level ack to the connected sender channel on the other
+     * end of the ethernet link. The first level ack is a signal from the receiver to the sender
+     * to indicate that the last sent message has been received. When the sender receives the first
+     * level ack, it is safe to clear its buffer with new data from producers
+     *
+     * It is crucial that when the receiver channel sends the first level ack, that it does not send from the same
+     * source as the second level ack. Doing so will present a race condition where by the time the
+     * first level ack leaves L1 and the ethernet subsystem, the EDM receiver channel may have overwritten
+     * the L1 memory with the second level ack - resulting in the sender receiving two second level acks.
+     */
     FORCE_INLINE void eth_receiver_channel_ack(uint32_t eth_transaction_ack_word_addr) const {
         ASSERT(reinterpret_cast<volatile uint32_t*>(eth_transaction_ack_word_addr)[0] == 1);
         reinterpret_cast<volatile uint32_t*>(eth_transaction_ack_word_addr)[1] = 1;
@@ -356,8 +368,39 @@ class QueueIndexPointer {
  * of the link is ready to start sending/receiving messages. We perform a handshake to ensure that's
  * case. Before handshaking, we make sure to clear any of the channel sync datastructures local
  * to our core.
+ *
+ * The handshaking process is split into two parts for the sender/master and two parts for the
+ * the slave. The handshake is broken into 2 parts so that the master can initiate the handshake
+ * as early as possible so the message can be "in flight" over the ethernet link while other EDM
+ * initialization is taking place.
+ *
+ * Important note about handshaking: the sender/master canNOT complete the handshake until all receiver
+ * channels are initialized. Otherwise we have a race between channel initialization on the receiver side
+ * and real payload data (and signals) using those channels.
+ *
+ * Note that the master and slave concepts here only apply in the context of handshaking and initialization
+ * of the EDM. They do not apply during the main EDM execution loop.
+ *
+ * The basic protocol for the handshake is to use the reserved space at erisc_info[0] where the master writes
+ * and sends payload available information to that channel. The receive must acknowledge that message and upon
+ * doing so, considers the handshake complete.
  */
-FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, bool is_sender) {
+namespace handshake {
+
+static constexpr uint32_t A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH = 1000000000;
+
+/*
+ * Initialize base datastructures and values which are common to master and slave EDM cores.
+ * The main memory region initialized here is the channel ack region offset 16B from the
+ * base handshake address.
+ *
+ * This memory region serves a special purpose for flow control between EDM cores. This
+ * 16B region is initialized to a fixed set of values. This region is used by receiver
+ * EDM channels when sending first level acks to its corresponding sender EDM channel.
+ *
+ * See ChannelBuffer::eth_receiver_channel_ack for more information
+ */
+FORCE_INLINE void initialize_edm_common_datastructures(std::uint32_t handshake_register_address) {
     reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[4] = 1;
     reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[5] = 1;
     reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[6] = 0x1c0ffee1;
@@ -369,15 +412,46 @@ FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, 
         erisc_info->channels[i].receiver_ack = 0;
     }
     *(volatile tt_l1_ptr uint32_t *)handshake_register_address = 0;
-    if (is_sender) {
-        eth_wait_receiver_done();
-        eth_send_bytes(handshake_register_address, handshake_register_address, 16);
-        eth_wait_for_receiver_done();
-    } else {
-        eth_wait_for_bytes(16);
-        eth_receiver_channel_done(0);
-    }
 }
+
+/*
+ * As the designated master EDM core, initiate a handshake by sending a packet to reserved
+ * memory region.
+ */
+FORCE_INLINE void sender_side_start(std::uint32_t handshake_register_address) {
+    initialize_edm_common_datastructures(handshake_register_address);
+    eth_wait_receiver_done(A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH);
+    while (eth_txq_reg_read(0, ETH_TXQ_CMD) != 0) {
+        asm volatile("nop");
+    }
+    eth_send_bytes(handshake_register_address, handshake_register_address, 16);
+}
+
+/*
+ * As the designated master EDM core, wait for the acknowledgement from the slave EDM core
+ */
+FORCE_INLINE void sender_side_finish(std::uint32_t handshake_register_address) {
+    eth_wait_for_receiver_done(A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH);
+}
+
+FORCE_INLINE void receiver_side_start(std::uint32_t handshake_register_address) {
+    initialize_edm_common_datastructures(handshake_register_address);
+}
+
+/*
+ * As the designated slave EDM core, send the acknowledgement to the master EDM core.
+ * The slave EDM core shall only acknowledge after receiving the initial handshake packet
+ * from the master EDM core.
+ */
+FORCE_INLINE void receiver_side_finish(std::uint32_t handshake_register_address) {
+    eth_wait_for_bytes(16, A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH);
+    while (eth_txq_reg_read(0, ETH_TXQ_CMD) != 0) {
+        asm volatile("nop");
+    }
+    eth_receiver_channel_done(0);
+}
+} // namespace handshake
+
 
 template <uint32_t NUM_CHANNELS>
 FORCE_INLINE void initialize_transaction_buffer_addresses(
