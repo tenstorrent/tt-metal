@@ -577,7 +577,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         is_output_sharded,
         cb_out4_id,
         B,
-        use_cur_pos_tensor
+        use_cur_pos_tensor,
+        is_paged_attention
         ]
     (
         const void* operation,
@@ -598,7 +599,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         uint32_t k_addr = k_buffer->address();
         uint32_t v_addr = v_buffer->address();
         uint32_t pos_addr = use_cur_pos_tensor ? optional_input_tensors.at(0).value().buffer()->address() : 0;
-        uint32_t page_table_addr = optional_input_tensors.at(1).value().buffer()->address();
+        uint32_t page_table_addr = is_paged_attention ? optional_input_tensors.at(1).value().buffer()->address() : 0;
         uint32_t out_addr = out0_buffer->address();
 
         auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
