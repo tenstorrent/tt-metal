@@ -70,8 +70,6 @@ inline void reduce_h_fused(
     for (uint32_t out_elem_i = 0; out_elem_i < nblocks; ++ out_elem_i) {
         const uint32_t curr_in_cb_id = split_reader ? (in_cb_id + (in_stick_index * nblocks + out_elem_i)&0x1) : in_cb_id;
         cb_wait_front(curr_in_cb_id, 1);
-         // if(curr_in_cb_id == 0)
-         //     print_full_tile(curr_in_cb_id, 0);
         unpack_tilizeA_B_block(curr_in_cb_id, in_scalar_cb_id, num_tiles_for_reduction, 0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/, num_faces_in_tile /* unpack 1 or 2 faces ) */, unpA_face_r_dim);
         for (uint32_t c_i = 0; c_i < num_tiles_for_reduction ; ++c_i) {
             reduce_tile_math(in_ntiles_c * out_elem_i + c_i,  num_faces_in_tile /* reduce 1 or 2 faces */);

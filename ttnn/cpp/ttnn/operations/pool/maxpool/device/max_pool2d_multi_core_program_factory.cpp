@@ -147,7 +147,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         in_cb_sz,
         tt::constants::TILE_HW);  // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
     uint32_t in_cb_pagesize = in_nbytes * in_cb_page_padded;
-    uint32_t in_cb_npages = multi_buffering_factor * nblocks;
+    uint32_t in_cb_npages = nblocks;
 
     CircularBufferConfig in_cb_config_0 = CircularBufferConfig(in_cb_npages * in_cb_pagesize, {{in_cb_id_0, in_df}})
                                               .set_page_size(in_cb_id_0, in_cb_pagesize);
@@ -173,7 +173,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
 
     uint32_t max_pool_partials_cb_id = tt::CB::c_intermed1;  // max_pool partials
     uint32_t max_pool_partials_cb_pagesize = in_cb_sz;
-    uint32_t max_pool_partials_cb_npages = multi_buffering_factor * nblocks;
+    uint32_t max_pool_partials_cb_npages = nblocks;
     CircularBufferConfig max_pool_partials_cb_config =
         CircularBufferConfig(
             max_pool_partials_cb_npages * max_pool_partials_cb_pagesize, {{max_pool_partials_cb_id, in_df}})

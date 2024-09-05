@@ -9,7 +9,7 @@
 
 #define ENABLE_DEBUG_PRINT 1
 
-#define DUMP(a) \
+#define dump(a) \
     do { DPRINT << "reader_max_pool: "<< #a " = " << a << ENDL(); } while(false)
 
 #if ENABLE_DEBUG_PRINT == 1
@@ -110,7 +110,6 @@ void kernel_main() {
     uint32_t counter = reader_id;
     uint32_t remaining_rows = (window_h * window_w) % MAX_ROWS_FOR_REDUCTION;
     while (counter < reader_nindices) {
-        fill_with_val(get_write_ptr(interm_reduction_cb_id), 8*32 *32, data);
         for(uint32_t j = 0; j < num_8_tile_blocks; j++ ) {
             for (uint32_t i = 0; i < nblocks; ++ i) {
                 uint16_t top_left_local_index = reader_indices_ptr[counter];
