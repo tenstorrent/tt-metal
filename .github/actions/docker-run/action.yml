@@ -21,17 +21,17 @@ inputs:
   docker_opts:
     description: 'Docker options'
     required: false
-  device:
-    description: "Description of Device as it is used in docker run command."
-    type: string
-    required: false
-    default: |
-      -v /dev/hugepages-1G:/dev/hugepages-1G
-      --device /dev/tenstorrent
+
 runs:
   using: "composite"
-  steps:
-    - name: Determine Docker Tag to use
+  steps:  
+    - name: Set up dynamic env vars for build
+      shell: bash
+      run: |
+        echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+        echo "RUNNER_UID=$(id -u)" >> $GITHUB_ENV
+        echo "RUNNER_GID=$(id -g)" >> $GITHUB_ENV
+    - name: Create correct Docker Tag
       shell: bash
       run: |
         # if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
@@ -45,27 +45,21 @@ runs:
         registry: https://ghcr.io
         username: ${{ inputs.docker_username }}
         password: ${{ inputs.docker_password }}
-    - name: Pull the latest version of the image
-      shell: bash
-      run: |
-        docker pull ghcr.io/${{ github.repository }}/${{ inputs.docker_image }}:${{ env.IMAGE_TAG }}
     - uses: addnab/docker-run-action@v3
       with:
         shell: bash
         username: ${{ inputs.docker_username }}
         password: ${{ inputs.docker_password }}
         registry: ghcr.io
-        image: ghcr.io/${{ github.repository }}/${{ inputs.docker_image }}:${{ env.IMAGE_TAG }}
+        image: ghcr.io/${{ github.repository }}/${{ inputs.docker_image }}/${{ inputs.docker_image_arch }}:${{ env.OUTPUT_IMAGE_TAG }}
         options: |
-          -v ${{ github.workspace }}:/github_workspace:ro
+          -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
+          -v ${{ github.workspace }}:/app/mtl
+          -v /home/ubuntu/.cache/huggingface:/home/ubuntu/.cache/huggingface
+          -v /home/ubuntu/.cache/matplotlib:/home/ubuntu/.cache/matplotlib
+          -v /home/ubuntu/.cache/pre-commit:/home/ubuntu/.cache/pre-commit
+          -v /home/ubuntu/.cache/torch:/home/ubuntu/.cache/torch
           --net=host
           ${{ inputs.docker_opts }}
-          -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
-          -e PYTHONPATH=/usr/app
-          -e ARCH_NAME=${{ inputs.docker_image_arch }}
-          ${{ inputs.device }}
         run: |
-          cp -r /github_workspace/* /usr/app/
-          cd /usr/app/
-          rm -rf tt_metal tt_eager
           ${{ inputs.run_args }}

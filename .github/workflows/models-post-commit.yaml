@@ -42,7 +42,6 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        os: ["ubuntu-20.04"]
         test-group: [
           {name: model, cmd: ./tests/scripts/run_python_model_tests.sh},
         ]
@@ -58,20 +57,19 @@ jobs:
       - cloud-virtual-machine
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - uses: actions/download-artifact@v4
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: ./.github/actions/prepare-metal-run
         with:
-          name: eager-dist-${{ matrix.os }}-${{ inputs.arch }}
-      - name: ${{ matrix.test-group.name }} tests
+          arch: ${{ inputs.arch }}
+      - name: ${{ inputs.runner-label }} tests
         timeout-minutes: ${{ inputs.timeout }}
-        uses: ./.github/actions/docker-run
-        with:
-          docker_username: ${{ github.actor }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_image_arch: ${{ inputs.arch }}
-          run_args: |
-            WHEEL_FILENAME=$(ls -1 *.whl)
-            pip3 install --user $WHEEL_FILENAME
-            ${{ matrix.test-group.cmd }}
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:

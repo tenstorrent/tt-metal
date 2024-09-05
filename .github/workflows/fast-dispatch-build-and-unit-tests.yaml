@@ -42,17 +42,16 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        os: ["ubuntu-20.04"]
         test-group: [
-          {name: eager unit tests 1, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 1 },
-          {name: eager unit tests 2, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 2 },
-          {name: eager unit tests 3, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 3 },
-          {name: eager unit tests 4, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 4 },
-          {name: eager unit tests 5, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 5 },
-          {name: eager unit tests 6, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 6 },
-          {name: eager unit tests 7, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 7 },
-          {name: eager trace tests, cmd: pytest tests/tt_eager/python_api_testing/trace_testing/ -xvvv},
-          {name: sweep, cmd: pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/ -xvvv},
+          {name: eager unit tests 1, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 1 },
+          {name: eager unit tests 2, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 2 },
+          {name: eager unit tests 3, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 3 },
+          {name: eager unit tests 4, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 4 },
+          {name: eager unit tests 5, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 5 },
+          {name: eager unit tests 6, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 6 },
+          {name: eager unit tests 7, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 7 },
+          {name: eager trace tests, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/trace_testing/ -xvvv},
+          {name: sweep, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/ -xvvv},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     env:
@@ -69,21 +68,16 @@ jobs:
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-          echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+      - uses: ./.github/actions/prepare-metal-run
         with:
-          name: eager-dist-${{ matrix.os }}-${{ inputs.arch }}
+          arch: ${{ inputs.arch }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
-        uses: ./.github/actions/docker-run
-        with:
-          docker_username: ${{ github.actor }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_image_arch: ${{ inputs.arch }}
-          run_args: |
-            WHEEL_FILENAME=$(ls -1 *.whl)
-            pip3 install --user $WHEEL_FILENAME
-            ${{ matrix.test-group.cmd }}
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
