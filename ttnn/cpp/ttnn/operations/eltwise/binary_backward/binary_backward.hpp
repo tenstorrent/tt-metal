@@ -144,6 +144,26 @@ struct ExecuteBackwardBiasGelu {
 
 };
 
+struct ExecuteBackwardLt {
+    static std::vector<std::optional<Tensor>> invoke(
+        uint8_t queue_id,
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const Tensor &other_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        std::optional<Tensor> input_grad = std::nullopt,
+        std::optional<Tensor> other_grad = std::nullopt);
+
+    static std::vector<std::optional<Tensor>> invoke(
+        uint8_t queue_id,
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float other,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt);
+};
+
 struct ExecuteBackwardAdd {
     static std::vector<std::optional<Tensor>> invoke(
         uint8_t queue_id,
@@ -379,6 +399,10 @@ constexpr auto bias_gelu_bw = ttnn::register_operation<
 constexpr auto addalpha_bw = ttnn::register_operation<
     "ttnn::addalpha_bw",
     operations::binary_backward::ExecuteAddalphaBW>();
+
+constexpr auto lt_bw = ttnn::register_operation<
+    "ttnn::lt_bw",
+    operations::binary_backward::ExecuteBackwardLt>();
 
 constexpr auto add_bw = ttnn::register_operation<
     "ttnn::add_bw",
