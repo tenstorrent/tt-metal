@@ -62,6 +62,13 @@ jobs:
               timeout: 70
             },
             {
+              name: "GS-only models",
+              arch: grayskull,
+              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
+              cmd: tests/scripts/single_card/nightly/run_gs_only.sh,
+              timeout: 40
+            },
+            {
               name: "N300 WH-only models",
               arch: wormhole_b0,
               runs-on: ["cloud-virtual-machine", "N300", "in-service"],
