@@ -18,16 +18,16 @@ class FreeList : public Algorithm {
         FIRST = 1
     };
 
-    FreeList(uint64_t max_size_bytes, uint64_t offset_bytes, uint64_t min_allocation_size, uint64_t alignment, SearchPolicy search_policy);
+    FreeList(DeviceAddr max_size_bytes, DeviceAddr offset_bytes, DeviceAddr min_allocation_size, DeviceAddr alignment, SearchPolicy search_policy);
     void init();
 
-    std::vector<std::pair<uint64_t, uint64_t>> available_addresses(uint64_t size_bytes) const;
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> available_addresses(DeviceAddr size_bytes) const;
 
-    std::optional<uint64_t> allocate(uint64_t size_bytes, bool bottom_up=true, uint64_t address_limit=0);
+    std::optional<DeviceAddr> allocate(DeviceAddr size_bytes, bool bottom_up=true, DeviceAddr address_limit=0);
 
-    std::optional<uint64_t> allocate_at_address(uint64_t absolute_start_address, uint64_t size_bytes);
+    std::optional<DeviceAddr> allocate_at_address(DeviceAddr absolute_start_address, DeviceAddr size_bytes);
 
-    void deallocate(uint64_t absolute_address);
+    void deallocate(DeviceAddr absolute_address);
 
     void clear();
 
@@ -37,11 +37,11 @@ class FreeList : public Algorithm {
 
    private:
     struct Block {
-        Block(uint64_t address, uint64_t size) : address(address), size(size) {}
-        Block(uint64_t address, uint64_t size, boost::local_shared_ptr<Block> prev_block, boost::local_shared_ptr<Block> next_block, boost::local_shared_ptr<Block> prev_free, boost::local_shared_ptr<Block> next_free)
+        Block(DeviceAddr address, DeviceAddr size) : address(address), size(size) {}
+        Block(DeviceAddr address, DeviceAddr size, boost::local_shared_ptr<Block> prev_block, boost::local_shared_ptr<Block> next_block, boost::local_shared_ptr<Block> prev_free, boost::local_shared_ptr<Block> next_free)
               : address(address), size(size), prev_block(prev_block), next_block(next_block), prev_free(prev_free), next_free(next_free) {}
-        uint64_t address;
-        uint64_t size;
+        DeviceAddr address;
+        DeviceAddr size;
         boost::local_shared_ptr<Block> prev_block = nullptr;
         boost::local_shared_ptr<Block> next_block = nullptr;
         boost::local_shared_ptr<Block> prev_free = nullptr;
@@ -52,11 +52,11 @@ class FreeList : public Algorithm {
 
     bool is_allocated(const boost::local_shared_ptr<Block> block) const;
 
-    boost::local_shared_ptr<Block> search_best(uint64_t size_bytes, bool bottom_up);
+    boost::local_shared_ptr<Block> search_best(DeviceAddr size_bytes, bool bottom_up);
 
-    boost::local_shared_ptr<Block> search_first(uint64_t size_bytes, bool bottom_up);
+    boost::local_shared_ptr<Block> search_first(DeviceAddr size_bytes, bool bottom_up);
 
-    boost::local_shared_ptr<Block> search(uint64_t size_bytes, bool bottom_up);
+    boost::local_shared_ptr<Block> search(DeviceAddr size_bytes, bool bottom_up);
 
     void allocate_entire_free_block(boost::local_shared_ptr<Block> free_block_to_allocate);
 
@@ -64,13 +64,13 @@ class FreeList : public Algorithm {
 
     void update_right_aligned_allocated_block_connections(boost::local_shared_ptr<Block> free_block, boost::local_shared_ptr<Block> allocated_block);
 
-    boost::local_shared_ptr<Block> allocate_slice_of_free_block(boost::local_shared_ptr<Block> free_block, uint64_t offset, uint64_t size_bytes);
+    boost::local_shared_ptr<Block> allocate_slice_of_free_block(boost::local_shared_ptr<Block> free_block, DeviceAddr offset, DeviceAddr size_bytes);
 
-    boost::local_shared_ptr<Block> find_block(uint64_t address);
+    boost::local_shared_ptr<Block> find_block(DeviceAddr address);
 
     void update_lowest_occupied_address();
 
-    void update_lowest_occupied_address(uint64_t address);
+    void update_lowest_occupied_address(DeviceAddr address);
 
     SearchPolicy search_policy_;
     boost::local_shared_ptr<Block> block_head_;
