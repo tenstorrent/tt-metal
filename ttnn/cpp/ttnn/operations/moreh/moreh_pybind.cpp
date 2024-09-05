@@ -11,6 +11,7 @@
 #include "ttnn/operations/moreh/moreh_mean/moreh_mean_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_mean_backward/moreh_mean_backward_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_dot_op/moreh_dot_pybind.hpp"
+#include "ttnn/operations/moreh/moreh_dot_op_backward/moreh_dot_backward_pybind.hpp"
 
 namespace ttnn::operations::moreh {
 void bind_moreh_operations(py::module &module) {
@@ -21,5 +22,6 @@ void bind_moreh_operations(py::module &module) {
     moreh_mean::bind_moreh_mean_operation(module);
     moreh_mean_backward::bind_moreh_mean_backward_operation(module);
     moreh_dot::bind_moreh_dot_operation(module);
+    moreh_dot_backward::bind_moreh_dot_backward_operation(module);
 }
 }  // namespace ttnn::operations::moreh
