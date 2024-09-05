@@ -21,7 +21,7 @@ class TtModelArgs:
     norm_eps = 1e-05
     vocab_size = 32000
 
-    max_batch_size = 32  # default
+    max_batch_size = 8  # default
     max_seq_len = 32768  # default
     moe = True
     num_experts = 8
@@ -66,7 +66,7 @@ class TtModelArgs:
         "OUTPUT_MM",
     )
 
-    def __init__(self, device=None, instruct=False, dummy_weights=False, max_seq_len=32768, max_batch_size=32):
+    def __init__(self, device=None, instruct=False, dummy_weights=False, max_seq_len=32768, max_batch_size=8):
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
 
