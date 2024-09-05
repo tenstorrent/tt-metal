@@ -138,8 +138,9 @@ void Shape::validate() const {
     TT_FATAL(this->rank_ > 0, "Shape rank == 0 is not supported, {}", *this);
     for (auto index = 0; index < this->rank_; index++) {
         TT_FATAL(
-            this->dimensions_[index] >= 0,
-            fmt::format("Shape can't have negative dimensions, however dimension {} is {}, {}", index, this->dimensions_[index], *this));
+            this->dimensions_[index] > 0,
+            "Shape dimensions should be > 0, however dimension {} is {}, {}", 
+            index, this->dimensions_[index], *this));
     }
 }
 
