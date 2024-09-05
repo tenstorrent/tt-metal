@@ -189,12 +189,14 @@ class Shape {
         for (auto index = 0; index < Rank; index++) {
             this->dimensions_[index] = shape[index];
         }
+        validate();
     }
 
     Shape(const Array4D &shape) : rank_(4), dimensions_{}, padding_{4} {
         for (auto index = 0; index < 4; index++) {
             this->dimensions_[index] = shape[index];
         }
+        validate();
     }
 
     template <std::size_t Rank>
@@ -205,6 +207,7 @@ class Shape {
             this->dimensions_[index] = padded_dimension;
             this->padding_[index] = {.front = 0, .back = padded_dimension - shape[index]};
         }
+        validate();
     }
     explicit Shape(const std::vector<uint32_t> &shape, const std::vector<uint32_t> &shape_with_tile_padding) :
         rank_(shape.size()), dimensions_{}, padding_{shape.size()} {
@@ -216,6 +219,7 @@ class Shape {
             this->dimensions_[index] = padded_dimension;
             this->padding_[index] = {.front = 0, .back = padded_dimension - shape[index]};
         }
+        validate();
     }
 
     std::size_t rank() const;
@@ -246,6 +250,7 @@ class Shape {
         return ret_array;
     }
 
+    void validate() const;
 };
 
 inline std::ostream &operator<<(std::ostream &os, const Shape &shape) {
@@ -689,28 +694,35 @@ struct Shape {
     // It is used to flip the default value of operator[] to return the shape without padding
     tt::tt_metal::Shape value;
 
-    explicit Shape(const tt::tt_metal::Shape &shape) : value{shape} {}
+    explicit Shape(const tt::tt_metal::Shape &shape) : value{shape} { validate(); }
 
     template <std::size_t Rank>
-    explicit Shape(const std::array<uint32_t, Rank> &shape) : value{shape} {}
+    explicit Shape(const std::array<uint32_t, Rank> &shape) : value{shape} {validate();}
 
     template <std::size_t Rank>
     explicit Shape(const std::array<uint32_t, Rank> &shape, const std::array<uint32_t, Rank> &shape_with_tile_padding) :
-        value{tt::tt_metal::Shape{shape, shape_with_tile_padding}} {}
+        value{tt::tt_metal::Shape{shape, shape_with_tile_padding}} { validate(); }
 
     template <std::size_t Rank>
     explicit Shape(
         const std::array<uint32_t, Rank> &shape, const std::array<std::array<uint32_t, 2>, Rank> &tile_padding) :
-        value{detail::compute_ttl_shape(shape, tile_padding)} {}
+        value{detail::compute_ttl_shape(shape, tile_padding)} { validate(); }
 
-    explicit Shape(const std::vector<uint32_t> &shape) : value{tt::tt_metal::Shape{shape}} {}
+    explicit Shape(const std::vector<uint32_t> &shape) : value{tt::tt_metal::Shape{shape}} { validate(); }
 
     explicit Shape(const std::vector<uint32_t> &shape, const std::vector<uint32_t> &shape_with_tile_padding) :
-        value{tt::tt_metal::Shape{shape, shape_with_tile_padding}} {}
+        value{tt::tt_metal::Shape{shape, shape_with_tile_padding}} { validate(); }
 
     const auto rank() const { return this->value.rank(); }
 
     const auto size() const { return this->rank(); }
+
+    void validate() const {
+        TT_FATAL(this->rank() > 0, "Shape rank == 0 is not supported, {}", *this);
+        for(auto i = 0; i < this->rank(); i++) {
+            TT_FATAL(value[i] > 0, "Shape dimension {} cannot be zero, {}", i, *this);
+        }
+    }
 
     Shape with_tile_padding() const {
         return Shape{tt::tt_metal::Shape{this->value, tt::tt_metal::Padding{this->value.rank()}}};

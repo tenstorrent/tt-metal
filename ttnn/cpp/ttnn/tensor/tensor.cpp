@@ -494,19 +494,7 @@ StorageType Tensor::storage_type() const {
         this->get_storage());
 }
 
-namespace detail {
-const Shape compute_strides(const Shape& shape) {
-    auto num_elements = compute_volume(shape);
-    std::vector<std::uint32_t> strides;
-    for (std::int32_t index = 0; index < shape.rank(); index++) {
-        num_elements /= shape[index];
-        strides.push_back(num_elements);
-    }
-    return strides;
-}
-}  // namespace detail
-
-const Shape Tensor::strides() const { return detail::compute_strides(this->get_legacy_shape()); }
+const Shape Tensor::strides() const { return Shape(tt::tt_metal::compute_strides(this->get_legacy_shape())); }
 
 uint32_t Tensor::volume() const { return tt::tt_metal::compute_volume(this->get_legacy_shape()); }
 

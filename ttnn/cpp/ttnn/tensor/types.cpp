@@ -108,26 +108,39 @@ bool operator!=(const Padding& padding_a, const Padding& padding_b) { return not
 Shape::Shape(const std::initializer_list<uint32_t> dimensions) :
     rank_(dimensions.size()), dimensions_{}, padding_(dimensions.size()) {
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
+    validate();
 }
 Shape::Shape(const std::vector<uint32_t>& dimensions) :
     rank_(dimensions.size()), dimensions_{}, padding_(dimensions.size()) {
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
+    validate();
 }
 
 Shape::Shape(const std::initializer_list<uint32_t> dimensions, const Padding& padding) :
     rank_(dimensions.size()), dimensions_{}, padding_(padding) {
     TT_ASSERT(this->padding_.rank_ == this->rank_);
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
+    validate();
 }
 Shape::Shape(const std::vector<uint32_t>& dimensions, const Padding& padding) :
     rank_(dimensions.size()), dimensions_{}, padding_(padding) {
     TT_ASSERT(this->padding_.rank_ == this->rank_);
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
+    validate();
 }
 
 Shape::Shape(const Shape& other, const Padding& padding) :
     dimensions_(other.dimensions_), rank_(other.rank_), padding_(padding) {
     TT_ASSERT(this->padding_.rank_ == this->rank_);
+}
+
+void Shape::validate() const {
+    TT_FATAL(this->rank_ > 0, "Shape rank == 0 is not supported, {}", *this);
+    for (auto index = 0; index < this->rank_; index++) {
+        TT_FATAL(
+            this->dimensions_[index] >= 0,
+            fmt::format("Shape can't have negative dimensions, however dimension {} is {}, {}", index, this->dimensions_[index], *this));
+    }
 }
 
 std::size_t Shape::rank() const { return this->rank_; }
