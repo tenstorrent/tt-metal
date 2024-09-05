@@ -107,8 +107,6 @@ class CMakeBuild(build_ext):
     # This should only run when building the wheel. Should not be running for any dev flow
     # Taking advantage of the fact devs run editable pip install -> "pip install -e ."
     def run(self) -> None:
-        assert len(self.extensions) == 1, f"Detected {len(self.extensions)} extensions, but should be only 1: ttnn"
-
         if self.is_editable_install_():
             assert get_is_srcdir_build(), f"Editable install detected in a non-srcdir environment, aborting"
             return
@@ -118,18 +116,9 @@ class CMakeBuild(build_ext):
         build_dir = source_dir / "build"
 
         if not metal_build_config.is_from_precompiled:
-            # Currently, the ttnn (ttnn/_ttnn.so)
-            # both link to the tt_metal runtime. The specific thing in
-            # ttnn linking to tt_metal is likely the implementation of
-            # ttnn.manage_device.
-            # However, because of the singleton design of
-            # tt_cluster in tt_metal, ttnn will have a
-            # copy of the cluster object, causing a hang during
-            # device operations in ttnn, such as calling
-            # output = ttnn.to_torch(output).
-            # Ultimately, we will not statically build tt_metal, and
-            # set rpath at build-time to use $ORIGIN, and package all
-            # the libs in a common folder.
+            # We indirectly set a wheel build for our CMake build by using BUILD_SHARED_LIBS. This does two things:
+            # - Set the right rpath ($ORIGIN) for our Python bindings so it can find the extra libraries it needs at runtime
+            # - Bundles (most) of our libraries into a static library to deal with a potential singleton bug error with tt_cluster (to fix)
             cmake_args = ["-DBUILD_SHARED_LIBS=OFF"]
 
             nproc = subprocess.check_output(["nproc"]).decode().strip()
@@ -150,30 +139,32 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["ls", "-hal", "build/lib"], cwd=source_dir, env=build_env)
         subprocess.check_call(["ls", "-hal", "runtime"], cwd=source_dir, env=build_env)
 
+        # Copy needed C++ shared libraries and runtime assets into wheel (sfpi, FW etc)
         tt_build_dir = self.build_lib + "/ttnn/build"
         os.makedirs(tt_build_dir, exist_ok=True)
         self.copy_tree(source_dir / "build/lib", tt_build_dir + "/lib")
         self.copy_tree(source_dir / "runtime", self.build_lib + "/runtime")
 
-        # Encode ARCH_NAME into package for later use
+        # Encode ARCH_NAME into package for later use so user doesn't have to provide
         arch_name_file = self.build_lib + "/ttnn/.ARCH_NAME"
         subprocess.check_call(f"echo {metal_build_config.arch_name} > {arch_name_file}", shell=True)
 
-        # Move built SOs into appropriate locations
-        for ext in self.extensions:
-            fullname = self.get_ext_fullname(ext.name)
-            filename = self.get_ext_filename(fullname)
+        # Move built final built _ttnn SO into appropriate location in ttnn Python tree in wheel
+        assert len(self.extensions) == 1, f"Detected {len(self.extensions)} extensions, but should be only 1: ttnn"
+        ext = list(self.extensions)[0]
+        fullname = self.get_ext_fullname(ext.name)
+        filename = self.get_ext_filename(fullname)
 
-            build_lib = self.build_lib
-            full_lib_path = build_lib + "/" + filename
+        build_lib = self.build_lib
+        full_lib_path = build_lib + "/" + filename
 
-            dir_path = os.path.dirname(full_lib_path)
-            if not os.path.exists(dir_path):
-                os.makedirs(dir_path)
+        dir_path = os.path.dirname(full_lib_path)
+        if not os.path.exists(dir_path):
+            os.makedirs(dir_path)
 
-            src = os.path.join(tt_build_dir, build_constants_lookup[ext].so_src_location)
-            self.copy_file(src, full_lib_path)
-            os.remove(src)
+        src = os.path.join(tt_build_dir, build_constants_lookup[ext].so_src_location)
+        self.copy_file(src, full_lib_path)
+        os.remove(src)
 
     def is_editable_install_(self):
         return self.inplace
