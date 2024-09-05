@@ -5,13 +5,9 @@
 #include "compute_kernel_api/eltwise_binary.h"
 
 #include <cstdint>
-#include "debug/dprint.h"
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api/tile_move_copy.h"
-
-#define STRINGIFY(x) #x
-#define TOSTRING(x) STRINGIFY(x)
 namespace NAMESPACE {
 void MAIN {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);

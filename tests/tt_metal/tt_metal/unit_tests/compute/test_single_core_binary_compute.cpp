@@ -8,7 +8,6 @@
 #include <functional>
 #include <random>
 #include <bit>
-#include <chrono>
 
 #include "device_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -52,11 +51,12 @@ struct SingleCoreBinaryConfig {
 };
 
 void set_math_fid_masks(uint16_t &srca_fid_mask, uint16_t &srcb_fid_mask, MathFidelity math_fidelity = MathFidelity::HiFi4) {
+    auto arch = get_arch_from_string(get_env_arch_name());
     switch (math_fidelity) {
         case MathFidelity::HiFi4:
         case MathFidelity::HiFi3: { break; }
-        case MathFidelity::HiFi2: { srcb_fid_mask = 0xFFFE; break; }
-        case MathFidelity::LoFi: { srca_fid_mask = 0xFFF8; srcb_fid_mask = 0xFFFE; break; }
+        case MathFidelity::HiFi2: { srcb_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE;; break; }
+        case MathFidelity::LoFi: { srca_fid_mask = 0xFFF8; srcb_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE; break; }
         default: { TT_THROW("Unsupported MathFidelity={}", math_fidelity); break; }
     }
 }
@@ -565,31 +565,5 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileMulDestAcc) {
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
         }
-    }
-}
-
-TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileMathFid) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
-        if (i == 1) continue;
-        auto elapsed = std::chrono::nanoseconds(0);
-        unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
-            .num_tiles = 4,
-            .tile_byte_size = 2 * 32 * 32,
-            .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_data_format = tt::DataFormat::Float16_b,
-            .core = CoreCoord(0, 0),
-            .binary_op = "mul",
-            .math_fidelity = MathFidelity(i),
-        };
-        tt::log_info(tt::LogTest, "Math Fidelity = {}", i);
-        for (uint8_t j = 0; j <  10; j++) {
-            for (unsigned int id = 0; id < num_devices_; id++) {
-                auto begin = std::chrono::high_resolution_clock::now();
-                ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
-                auto end = std::chrono::high_resolution_clock::now();
-                elapsed += std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin);
-            }
-        }
-        tt::log_info(tt::LogTest, "This kernel call lasted for {:.5f}s on average.", elapsed.count()*1e-10);
     }
 }

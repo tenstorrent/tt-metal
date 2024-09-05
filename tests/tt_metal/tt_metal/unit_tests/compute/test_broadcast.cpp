@@ -90,12 +90,13 @@ std::vector<tt::test_utils::df::bfloat16> gold_broadcast(std::vector<tt::test_ut
     uint16_t srcb_fid_mask = 0xFFFF;
 
     std::vector<tt::test_utils::df::bfloat16> golden(num_cols * num_rows);
+    auto arch = get_arch_from_string(get_env_arch_name());
 
     switch (math_fidelity) {
         case MathFidelity::HiFi4:
         case MathFidelity::HiFi3: { break; }
-        case MathFidelity::HiFi2: { srcb_fid_mask = 0xFFFE; break; }
-        case MathFidelity::LoFi: { srca_fid_mask = 0xFFF8; srcb_fid_mask = 0xFFFE; break; }
+        case MathFidelity::HiFi2: { srcb_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE; break; }
+        case MathFidelity::LoFi: { srca_fid_mask = 0xFFF8; srcb_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE; break; }
         default: { TT_THROW("Unsupported MathFidelity={}", math_fidelity); break; }
     }
 

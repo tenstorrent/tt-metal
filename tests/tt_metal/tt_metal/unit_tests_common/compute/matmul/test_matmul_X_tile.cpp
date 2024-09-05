@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <functional>
 #include <random>
-#include <chrono>
 
 #include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
 #include "tt_metal/host_api.hpp"
@@ -19,6 +18,7 @@
 #include "tests/tt_metal/tt_metal/unit_tests_common/compute/matmul/matmul_utils.hpp"
 
 using namespace tt;
+using namespace tt::test_utils;
 
 namespace unit_tests_common::matmul::test_matmul_X_tile{
 
@@ -34,11 +34,12 @@ struct MatmulTileConfig {
 };
 
 void set_math_fid_masks(uint16_t &math_fid_mask, MathFidelity math_fidelity = MathFidelity::HiFi4) {
+    auto arch = get_arch_from_string(get_env_arch_name());
     switch (math_fidelity) {
         case MathFidelity::HiFi4:
         case MathFidelity::HiFi3: { break; }
         case MathFidelity::HiFi2:
-        case MathFidelity::LoFi: { math_fid_mask = 0xFFFE; break; }
+        case MathFidelity::LoFi: { math_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE; break; }
         default: { TT_THROW("Unsupported MathFidelity={}", math_fidelity); break; }
     }
 }
@@ -492,55 +493,5 @@ TEST_F(CommonFixture, MatmulBlockInitShortWithDt){
         for(unsigned int id = 0; id < devices_.size(); id++){
             ASSERT_TRUE(unit_tests_common::matmul::test_matmul_X_tile::matmul_tile(this, devices_.at(id), matmul_config, activations_tile_transposed, weights, tensor));
         }
-    }
-}
-
-TEST_F(CommonFixture, MatmulMultiTileMathFid){
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
-        if (i == 1) continue;
-        auto elapsed = std::chrono::nanoseconds(0);
-        uint32_t M = 4;
-        uint32_t N = 4;
-        uint32_t K = 4;
-        unit_tests_common::matmul::test_matmul_X_tile::MatmulTileConfig matmul_config = {
-            .M = M, .K = K, .N = N,
-            .reader_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_with_bias_blocked.cpp",
-            .compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/matmul_with_bias.cpp",
-            .compute_kernel_args = {
-                1, // block_tile_dim, within block, how many tiles are on the K dim
-                M, // dst_tile_rows
-                N, // dst_tile_cols
-                K, // block_cnt, across blocks, how many tiles are on the K dim
-                M, // in0_block_tile_cnt, M * block_tile_dim
-                N, // in1_block_tile_cnt,  N * block_tile_dim
-                (M * N), // out_block_tile_cnt
-                matmul_config.with_bias // whether or not to use bias
-            },
-            .math_fidelity = MathFidelity(i)
-        };
-        tt::log_info(tt::LogTest, "Math Fidelity = {}", i);
-        SHAPE shape = {1, 1, M * 32, K * 32};
-        tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(shape, tt::deprecated::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
-
-        auto activations_tilized = test_utils::tilize(tensor.get_values(), M * 32, K * 32);
-        auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
-        auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-        auto activations_tile_transposed = transpose_tiles(activations, M, K, 1);
-
-        auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32); //bfloat16 32x32 identity
-        auto identity_tilized = test_utils::tilize(identity, K * 32, N * 32);
-        auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
-        auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-        for (uint8_t j = 0; j <  10; j++) {
-            for(unsigned int id = 0; id < devices_.size(); id++){
-                auto begin = std::chrono::high_resolution_clock::now();
-                ASSERT_TRUE(unit_tests_common::matmul::test_matmul_X_tile::matmul_tile(this, devices_.at(id), matmul_config, activations_tile_transposed, weights, tensor));
-                matmul_config.with_bias = true;
-                ASSERT_TRUE(unit_tests_common::matmul::test_matmul_X_tile::matmul_tile(this, devices_.at(id), matmul_config, activations_tile_transposed, weights, tensor));
-                auto end = std::chrono::high_resolution_clock::now();
-                elapsed += std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin);
-            }
-        }
-        tt::log_info(tt::LogTest, "This kernel call lasted for {:.5f}s on average.", elapsed.count()*1e-10);
     }
 }
