@@ -10,7 +10,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_bmm/moreh_bmm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_bmm_backward/moreh_bmm_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_cumsum/moreh_cumsum_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
@@ -243,23 +242,6 @@ void py_module(py::module& m_primary) {
         py::arg("input_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs sum backward operation. Returns an input_grad tensor.");
-
-    m_primary.def(
-        "moreh_cumsum",
-        &moreh_cumsum,
-        py::arg("input").noconvert(),
-        py::arg("output").noconvert(),
-        py::kw_only(),
-        py::arg("dim").noconvert(),
-        "Performs cumsum operation. Returns an output tensor.");
-    m_primary.def(
-        "moreh_cumsum_backward",
-        &moreh_cumsum_backward,
-        py::arg("output_grad").noconvert(),
-        py::arg("input_grad").noconvert(),
-        py::kw_only(),
-        py::arg("dim").noconvert(),
-        "Performs cumsum backward operation. Returns an input_grad tensor.");
 }
 
 }  // namespace

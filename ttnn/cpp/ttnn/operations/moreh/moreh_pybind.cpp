@@ -10,6 +10,7 @@
 #include "ttnn/operations/moreh/moreh_bmm/moreh_bmm_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_bmm_backward/moreh_bmm_backward_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_dot/moreh_dot_pybind.hpp"
+#include "ttnn/operations/moreh/moreh_cumsum/moreh_cumsum_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_dot_op_backward/moreh_dot_backward_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_getitem/moreh_getitem_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_group_norm/moreh_group_norm_pybind.hpp"
@@ -40,6 +41,8 @@ void bind_moreh_operations(py::module &module) {
     moreh_arange::bind_moreh_arange_operation(module);
     moreh_bmm_backward::bind_moreh_bmm_backward_operation(module);
     moreh_bmm::bind_moreh_bmm_operation(module);
+    moreh_cumsum::bind_moreh_cumsum_backward_operation(module);
+    moreh_cumsum::bind_moreh_cumsum_operation(module);
     moreh_dot_backward::bind_moreh_dot_backward_operation(module);
     moreh_dot::bind_moreh_dot_operation(module);
     moreh_getitem::bind_moreh_getitem_operation(module);
