@@ -67,6 +67,12 @@ static void run_width_sharded_tensor_slice_indexer_get_page_location_test(
                             ASSERT_EQ(result.core_location.noc_x, worker_to_routing_x_wormhole.at(x_logical));
                             ASSERT_EQ(result.core_location.noc_y, worker_to_routing_y_wormhole.at(y_logical));
                             ASSERT_EQ(result.page_offset, px + (py * pages_per_shard_x));
+
+                            auto const& result2 = addrgen.get_page_location_with_contiguous_pages_in_row_in_bank(page_id);
+                            ASSERT_EQ(result2.core_location.noc_x, result.core_location.noc_x);
+                            ASSERT_EQ(result2.core_location.noc_y, result.core_location.noc_y);
+                            ASSERT_EQ(result2.page_offset, result.page_offset);
+                            ASSERT_EQ(result2.contig_pages_in_row, pages_per_shard_x - px);
                         }
 
                         page_id++;
@@ -84,6 +90,12 @@ static void run_width_sharded_tensor_slice_indexer_get_page_location_test(
                             ASSERT_EQ(result.core_location.noc_x, worker_to_routing_x_wormhole.at(x_logical));
                             ASSERT_EQ(result.core_location.noc_y, worker_to_routing_y_wormhole.at(y_logical));
                             ASSERT_EQ(result.page_offset, px + (py * pages_per_shard_x));
+
+                            auto const& result2 = addrgen.get_page_location_with_contiguous_pages_in_row_in_bank(page_id);
+                            ASSERT_EQ(result2.core_location.noc_x, result.core_location.noc_x);
+                            ASSERT_EQ(result2.core_location.noc_y, result.core_location.noc_y);
+                            ASSERT_EQ(result2.page_offset, result.page_offset);
+                            ASSERT_EQ(result2.contig_pages_in_row, pages_per_shard_x - px);
                         }
                         page_id++;
                     }
@@ -363,6 +375,12 @@ static void run_block_sharded_tensor_slice_indexer_get_page_location_test(
                             ASSERT_EQ(result.core_location.noc_x, worker_to_routing_x_wormhole.at(x_logical));
                             ASSERT_EQ(result.core_location.noc_y, worker_to_routing_y_wormhole.at(y_logical));
                             ASSERT_EQ(result.page_offset, px + (py * pages_per_shard_x));
+
+                            auto const& result2 = addrgen.get_page_location_with_contiguous_pages_in_row_in_bank(page_id);
+                            ASSERT_EQ(result2.core_location.noc_x, result.core_location.noc_x);
+                            ASSERT_EQ(result2.core_location.noc_y, result.core_location.noc_y);
+                            ASSERT_EQ(result2.page_offset, result.page_offset);
+                            ASSERT_EQ(result2.contig_pages_in_row, pages_per_shard_x - px);
                         }
 
                         page_id++;
