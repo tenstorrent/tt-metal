@@ -50,14 +50,14 @@ static std::vector<uint32_t> compute_strides(const Shape& shape) {
     auto num_elements = compute_volume(shape);
     std::vector<uint32_t> strides;
     for (std::int32_t index = 0; index < shape.rank(); index++) {
-        TT_FATAL(shape[index] > 0, "Shape can't have dimension {} as zero {}", index, shape);        
+        TT_FATAL(shape[index] > 0, "Shape can't have dimension {} as zero {}", index, shape);
         num_elements /= shape[index];
         strides.push_back(num_elements);
     }
     return strides;
 }
 
-static int compute_flat_indices(const vector<int>& indices, const vector<std::uint32_t>& strides) {
+static int compute_flat_indices(const vector<int>& indices, const vector<std::uint32_t> strides) {
     int flat_index = 0;
     for (auto i = 0; i < indices.size(); i++) {
         flat_index += indices[i] * strides[i];
