@@ -93,11 +93,6 @@ metal_build_config = MetalliumBuildConfig()
 class CMakeBuild(build_ext):
     @staticmethod
     def get_build_env():
-        """
-        Force production environment when creating the wheel because there's
-        a lot of extra stuff that's added to the environment in dev that the
-        wheel doesn't need
-        """
         return {
             **os.environ.copy(),
             "CXX": "clang++-17",
@@ -133,13 +128,10 @@ class CMakeBuild(build_ext):
             # device operations in ttnn, such as calling
             # output = ttnn.to_torch(output).
             # Ultimately, we will not statically build tt_metal, and
-            # opt to dynamically set rpath of the bindings to the
-            # packaged libs for now.
+            # set rpath at build-time to use $ORIGIN, and package all
+            # the libs in a common folder.
             cmake_args = ["-DBUILD_SHARED_LIBS=OFF"]
 
-        cmake_args = []
-        
-        if not metal_build_config.is_from_precompiled:
             nproc = subprocess.check_output(["nproc"]).decode().strip()
             build_args = [f"-j{nproc}"]
 
@@ -153,6 +145,7 @@ class CMakeBuild(build_ext):
                 "The precompiled option is selected via `TT_FROM_PRECOMPILED` \
             env var. Please place files into `build/lib` and `runtime` folders."
 
+        # Some verbose sanity logging to see what files exist in the outputs
         subprocess.check_call(["ls", "-hal"], cwd=source_dir, env=build_env)
         subprocess.check_call(["ls", "-hal", "build/lib"], cwd=source_dir, env=build_env)
         subprocess.check_call(["ls", "-hal", "runtime"], cwd=source_dir, env=build_env)

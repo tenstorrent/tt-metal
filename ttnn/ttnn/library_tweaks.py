@@ -69,8 +69,22 @@ def prepare_dir_as_metal_home(ttnn_package_path, metal_home):
     ttnn_dest.symlink_to(ttnn_src)
 
 
+def _is_non_existent_or_empty_env_var(env_var_name):
+    assert isinstance(env_var_name, str)
+    return env_var_name not in os.environ or not os.environ[env_var_name]
+
+
 def _setup_env(ttnn_package_path, cwd):
-    if "ARCH_NAME" not in os.environ or os.environ["ARCH_NAME"] == "":
+    # We are heuristically determinining that we installed from a wheel by
+    # checking whether or not we have these environment variables. Only devs
+    # working from source should be using these environment variables.
+    # Otherwise, we set them dynamically here.
+
+    is_wheel_installation = _is_non_existent_or_empty_env_var("ARCH_NAME") and _is_non_existent_or_empty_env_var(
+        "TT_METAL_HOME"
+    )
+
+    if is_wheel_installation:
         arch_name_file = ttnn_package_path / ".ARCH_NAME"
 
         assert (
@@ -80,15 +94,10 @@ def _setup_env(ttnn_package_path, cwd):
         with open(arch_name_file) as f:
             os.environ["ARCH_NAME"] = f.readline().strip()
 
-    if "TT_METAL_HOME" not in os.environ or os.environ["TT_METAL_HOME"] == "":
-        # Workaround: treat cwd / ttnn_links as TT_METAL_HOME and copy assets to it
+        # Workaround: treat cwd / ttnn_links as TT_METAL_HOME and copy/symlink assets to it
         metal_home = cwd / ".ttnn_runtime_artifacts"
         prepare_dir_as_metal_home(ttnn_package_path, metal_home)
         os.environ["TT_METAL_HOME"] = str(metal_home)
-
-    # jit build needs linker script under $TT_METAL_HOME/hw/toolchain/,
-    # so when TT_METAL_HOME is site-packages,
-    # it needs to softlink build/ from site-packages/tt_lib
 
 
 def setup_ttnn_so():
