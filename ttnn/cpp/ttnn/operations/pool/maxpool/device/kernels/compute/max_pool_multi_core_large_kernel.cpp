@@ -10,10 +10,7 @@
 #include "compute_kernel_api/pack_untilize.h"
 // #include "tools/profiler/kernel_profiler.hpp"
 
-#define DEBUG_PRINT 1
-
-#define dump(a) \
-    do { DPRINT_MATH(DPRINT << "max pool compute: "<< #a " = " << a << ENDL();); } while(false);
+#define DEBUG_PRINT 0
 
 #if DEBUG_PRINT == 1
     #include "debug/dprint.h"
@@ -97,8 +94,6 @@ void MAIN {
 
     constexpr uint32_t nsticks_per_core_by_nblocks = get_compile_time_arg_val(13);
     constexpr uint32_t in_c = get_compile_time_arg_val(14);
-    constexpr uint32_t window_h = get_compile_time_arg_val(15);
-    constexpr uint32_t window_w = get_compile_time_arg_val(16);
     constexpr uint32_t num_output_tiles = out_ntiles_c * nblocks;
 
     constexpr uint32_t in_cb_id = tt::CB::c_in0; // and tt::CB::c_in1 for split reader
@@ -123,8 +118,7 @@ void MAIN {
 
     tilizeA_B_reduce_init(in_cb_id, in_scalar_cb_id, num_tiles_for_reduction, interm_reduction_cb_id, num_faces_in_tile, MAX_ROWS_FOR_REDUCTION);
 
-    uint32_t interm_reduction_chunks = (window_w * window_h) / MAX_ROWS_FOR_REDUCTION;
-    uint32_t remaining_rows = (window_w * window_h) % MAX_ROWS_FOR_REDUCTION;
+    uint32_t interm_reduction_chunks = window_size_hw / MAX_ROWS_FOR_REDUCTION;
     cb_wait_front(in_scalar_cb_id, 1);
     cb_reserve_back(out_cb_id, 1);
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++ i) {
@@ -135,7 +129,7 @@ void MAIN {
 
             pack_untilize_dst_init_short<num_tiles_for_reduction, num_output_tiles>(interm_reduction_cb_id, num_out_rows, num_faces_in_tile);
             cb_reserve_back(interm_reduction_cb_id, 1);
-            for(uint32_t h = 0; h < interm_reduction_chunks; h++) {
+            for(uint32_t h = 0; h <= interm_reduction_chunks; h++) {
                 tile_regs_acquire();
 
                 reduce_h_fused<in_ntiles_hw, in_ntiles_c, out_ntiles_c, nblocks, is_partial_tile, split_reader>(in_cb_id, in_scalar_cb_id, num_tiles_for_reduction, i, interm_reduction_cb_id, MAX_ROWS_FOR_REDUCTION);
@@ -144,25 +138,13 @@ void MAIN {
                 pack_untilize_dst<num_tiles_for_reduction, num_output_tiles>(interm_reduction_cb_id, 1/*out_subblock_h*/, h, num_out_rows, num_faces_in_tile);  /* pack 1 row (1x16 or 1x32) */
                 tile_regs_release();
             }
-            if(remaining_rows) {
-                tile_regs_acquire();
-                reduce_h_fused<in_ntiles_hw, in_ntiles_c, out_ntiles_c, nblocks, is_partial_tile, split_reader>(in_cb_id, in_scalar_cb_id, num_tiles_for_reduction, i, interm_reduction_cb_id, MAX_ROWS_FOR_REDUCTION);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_untilize_dst<num_tiles_for_reduction, num_output_tiles>(interm_reduction_cb_id, 1/*out_subblock_h*/, interm_reduction_chunks, num_out_rows, num_faces_in_tile);  /* pack 1 row (1x16 or 1x32) */
-                tile_regs_release();
-
-            }
             cb_push_back(interm_reduction_cb_id, 1);
             pack_untilize_uninit(interm_reduction_cb_id);
             cb_wait_front(interm_reduction_cb_id, 1);
             pack_untilize_dst_init_short<num_tiles_for_reduction, num_output_tiles>(out_cb_id, num_out_rows, num_faces_in_tile);
 
-            // if(i == 0) {
-            //     print_full_tile(interm_reduction_cb_id);
-            // }
             tile_regs_acquire();
-            unpack_tilizeA_B_block(interm_reduction_cb_id, in_scalar_cb_id, num_tiles_for_reduction, 0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/, num_faces_in_tile /* unpack 1 or 2 faces ) */, interm_reduction_chunks + 1);
+            unpack_tilizeA_B_block(interm_reduction_cb_id, in_scalar_cb_id, num_tiles_for_reduction, 0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/, num_faces_in_tile /* unpack 1 or 2 faces ) */, MAX_ROWS_FOR_REDUCTION);
             for (uint32_t c_i = 0; c_i < num_tiles_for_reduction ; ++c_i) {
                 reduce_tile_math(c_i,  num_faces_in_tile /* reduce 1 or 2 faces */);
             }

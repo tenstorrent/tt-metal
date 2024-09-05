@@ -7,10 +7,8 @@
 #include <cstring>
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG_PRINT 1
+#define ENABLE_DEBUG_PRINT 0
 
-#define dump(a) \
-    do { DPRINT << "reader_max_pool: "<< #a " = " << a << ENDL(); } while(false)
 
 #if ENABLE_DEBUG_PRINT == 1
     #include "debug/dprint.h"
@@ -34,7 +32,7 @@
 ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
     // simplest impl:
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
-    for (uint32_t i = 0; i < n/2; ++ i) {
+    for (uint32_t i = 0; i < n / 2; ++i) {
         ptr[i] = (val | (val << 16));
     }
     return true;
@@ -82,7 +80,8 @@ void kernel_main() {
 
     constexpr uint32_t ROW_HW = 64;
 
-    uint16_t data = 63487;
+    // This is minus_inf for bfp16
+    uint16_t minus_inf = 63487;
     // Reduce scalar = 1
     if (reader_id == 0) {
         cb_reserve_back(in_scalar_cb_id, 1);
@@ -90,7 +89,8 @@ void kernel_main() {
         uint32_t bf16_one_u16 = bf16_one_u32 >> 16;
         // fill 1 row w/ scalar
         fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_one_u16);
-        fill_with_val(get_write_ptr(interm_reduction_cb_id), 8*32 *32, data);
+        // fill interm buffer with minus_inf
+        fill_with_val(get_write_ptr(interm_reduction_cb_id), 8 * 32 * 32, minus_inf);
         cb_push_back(in_scalar_cb_id, 1);
     }
 
@@ -108,39 +108,41 @@ void kernel_main() {
         read_bytes = MAX_ELE_PER_REDUCTION; // for now, pow of 2 channels are only supported.
     }
     uint32_t counter = reader_id;
-    uint32_t remaining_rows = (window_h * window_w) % MAX_ROWS_FOR_REDUCTION;
+    uint32_t total_elems_to_reduce = window_h * window_w;
+    uint32_t remaining_elems = total_elems_to_reduce % MAX_ROWS_FOR_REDUCTION;
     while (counter < reader_nindices) {
         for(uint32_t j = 0; j < num_8_tile_blocks; j++ ) {
             for (uint32_t i = 0; i < nblocks; ++ i) {
                 uint16_t top_left_local_index = reader_indices_ptr[counter];
                 uint32_t h_multiples = 0;
-                uint32_t num_rows = 0;
+                uint32_t processed_rows = 0;
                 uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
                 uint32_t out_l1_write_addr = out_l1_write_addr_base;
                 cb_reserve_back(in_cb_id, npages_to_reserve);
-                fill_with_val(out_l1_write_addr_base, 8 * 32 *32, data);
                 for (uint32_t h = 0; h < window_h; ++ h, h_multiples += in_w_padded) {
                     uint32_t stick_offset = top_left_local_index + h_multiples;
                     uint32_t read_offset = j * MAX_ELE_PER_REDUCTION + in_l1_read_base_addr + (stick_offset << in_nbytes_c_log2);
                     for(uint32_t w = 0; w < window_w; w++) {
                         noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, read_bytes);
-                        noc_async_read_barrier();
                         if(reader_id == 0) {
                             // print_pages(get_noc_addr(read_offset), read_bytes / 2, 1);
                         }
                         out_l1_write_addr += read_bytes;
                         read_offset += in_nbytes_c;
-                        num_rows++;
-                        if(num_rows == MAX_ROWS_FOR_REDUCTION) {
+                        processed_rows++;
+                        if((processed_rows % MAX_ROWS_FOR_REDUCTION) == 0) {
+                            noc_async_read_barrier();
                             cb_push_back(in_cb_id, npages_to_reserve);
-                            num_rows = 0;
-                            out_l1_write_addr_base = get_write_ptr(in_cb_id);
                             out_l1_write_addr = out_l1_write_addr_base;
                             cb_reserve_back(in_cb_id, npages_to_reserve);
+                            // If next is last chunk, fill whole buffer with -inf.
+                            if((total_elems_to_reduce - processed_rows) < MAX_ROWS_FOR_REDUCTION)
+                                fill_with_val(out_l1_write_addr_base, 8 * 32 *32, minus_inf);
                         }
                     }
                 }
-                if(remaining_rows) {
+                if(remaining_elems) {
+                    noc_async_read_barrier();
                     cb_push_back(in_cb_id, npages_to_reserve);
                 }
             }
