@@ -30,7 +30,7 @@ void MAIN {
         bool enable_reload = false;
         for (uint32_t j = 0; j < num_tiles_to_cumsum; ++j) {
             ACQ();
-            uint32_t cb_add  = (enable_reload) ? (cb_intermed0) : (cb_in1);
+            uint32_t cb_add = (enable_reload) ? (cb_intermed0) : (cb_in1);
             cb_wait_front(cb_in0, onetile);
 
             add_tiles_init();

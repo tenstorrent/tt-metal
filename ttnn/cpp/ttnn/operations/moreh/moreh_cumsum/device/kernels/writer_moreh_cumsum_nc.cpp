@@ -7,7 +7,7 @@
 #include "dataflow_api.h"
 
 inline uint32_t get_write_tile_id(uint32_t tile_id, uint32_t dim, uint32_t CHtWt, uint32_t HtWt) {
-    return (dim == 0 ) ? (tile_id) : (tile_id / HtWt * CHtWt) + (tile_id % HtWt);
+    return (dim == 0) ? (tile_id) : (tile_id / HtWt * CHtWt) + (tile_id % HtWt);
 }
 
 void kernel_main() {

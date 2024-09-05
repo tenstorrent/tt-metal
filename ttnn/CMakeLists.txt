@@ -373,6 +373,10 @@ set(ALL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_bmm_backward/moreh_bmm_backward.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_bmm/moreh_bmm_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_bmm/moreh_bmm.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_cumsum/device/moreh_cumsum_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_cumsum/device/moreh_cumsum_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_cumsum/moreh_cumsum_pybind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_cumsum/moreh_cumsum.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_dot_op_backward/device/moreh_dot_backward_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_dot_op_backward/device/moreh_dot_backward_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_dot_op_backward/moreh_dot_backward_pybind.cpp
