@@ -59,8 +59,10 @@ def test_mixtral_model_perf(
 
     dtype = ttnn.bfloat8_b
 
+    batch_size = 32
+
     # Can use dummy_weights=True correctness is not tested, but it is much slower
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0), dummy_weights=False)
+    model_args = TtModelArgs(t3k_mesh_device.get_device(0), dummy_weights=False, max_batch_size=batch_size)
     model_args.n_layers = 32
 
     # Clear global profiler state before starting measurements
@@ -70,7 +72,7 @@ def test_mixtral_model_perf(
     state_dict = model_args.load_state_dict()
     profiler.end("weight_loading")
 
-    prompts = ["Once"] * 32
+    prompts = ["Once"] * batch_size
     if model_args.dummy_weights:
         encoded_prompts = [[1, 5713]] * len(prompts)  # manual encoding of the "Once" prompt
     else:
@@ -242,7 +244,7 @@ def test_mixtral_model_with_prefill_perf(
         signpost("prefill warmup")
     profiler.clear()
     profiler.start(f"e2e_prefill_warmup")
-    run_inference_prefill(tt_model, model_args, prefill_seq_len, t3k_mesh_device, pt_prefill_input, 1)
+    run_inference_prefill(tt_model, model_args, prefill_seqlen, t3k_mesh_device, pt_prefill_input, 1)
     profiler.end(f"e2e_prefill_warmup")
     profiler.print(units="ms")
     prefill_warmup_time = profiler.get("e2e_prefill_warmup")
@@ -256,7 +258,7 @@ def test_mixtral_model_with_prefill_perf(
     profiler.clear()
     profiler.start(f"e2e_prefill_1_user")
     # Prefill a single user, as this will be the real-world usage
-    prefill_out = run_inference_prefill(tt_model, model_args, prefill_seq_len, t3k_mesh_device, pt_prefill_input, 1)
+    prefill_out = run_inference_prefill(tt_model, model_args, prefill_seqlen, t3k_mesh_device, pt_prefill_input, 1)
     profiler.end(f"e2e_prefill_1_user")
     profiler.print(units="ms")
     prefill_time = profiler.get("e2e_prefill_1_user")
@@ -266,7 +268,7 @@ def test_mixtral_model_with_prefill_perf(
         ttnn.DumpDeviceProfiler(t3k_mesh_device.get_device(device_id))
 
     # Decode (Run 1 warmup iteration before running 1 perf iteration)
-    generation_start_pos = prefill_seq_len
+    generation_start_pos = prefill_seqlen
     generation_length = 1
 
     if not is_ci_env:  # Enable tracy signpost support in local runs only
@@ -279,8 +281,8 @@ def test_mixtral_model_with_prefill_perf(
     decode_warmup_time = profiler.get("e2e_decode_warmup")
 
     # Profiler dump, ready for real run
-    for device_id in t3k_device_mesh.get_device_ids():
-        ttnn.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
+    for device_id in t3k_mesh_device.get_device_ids():
+        ttnn.DumpDeviceProfiler(t3k_mesh_device.get_device(device_id))
 
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("decode perf run")
@@ -306,11 +308,11 @@ def test_mixtral_model_with_prefill_perf(
     )
 
 
-def run_inference_prefill(tt_model, model_args, prefill_seq_len, mesh_device, pt_prefill_input, batch_size):
+def run_inference_prefill(tt_model, model_args, prefill_seqlen, mesh_device, pt_prefill_input, batch_size):
     # Get rotary matrix
     profiler.start("prefill_prepare_rot_matrices")
     rot_mats_prefill = get_prefill_rot_mat(
-        model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=prefill_seq_len
+        model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=prefill_seqlen
     )
 
     head_dim = model_args.dim // model_args.n_heads
