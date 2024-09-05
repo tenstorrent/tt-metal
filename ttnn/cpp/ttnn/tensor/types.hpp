@@ -222,6 +222,8 @@ class Shape {
         validate();
     }
 
+    void validate() const;
+
     std::size_t rank() const;
     std::size_t size() const;
 
@@ -249,8 +251,6 @@ class Shape {
         }
         return ret_array;
     }
-
-    void validate() const;
 };
 
 inline std::ostream &operator<<(std::ostream &os, const Shape &shape) {
@@ -694,35 +694,28 @@ struct Shape {
     // It is used to flip the default value of operator[] to return the shape without padding
     tt::tt_metal::Shape value;
 
-    explicit Shape(const tt::tt_metal::Shape &shape) : value{shape} { validate(); }
+    explicit Shape(const tt::tt_metal::Shape &shape) : value{shape} {}
 
     template <std::size_t Rank>
-    explicit Shape(const std::array<uint32_t, Rank> &shape) : value{shape} {validate();}
+    explicit Shape(const std::array<uint32_t, Rank> &shape) : value{shape} {}
 
     template <std::size_t Rank>
     explicit Shape(const std::array<uint32_t, Rank> &shape, const std::array<uint32_t, Rank> &shape_with_tile_padding) :
-        value{tt::tt_metal::Shape{shape, shape_with_tile_padding}} { validate(); }
+        value{tt::tt_metal::Shape{shape, shape_with_tile_padding}} {}
 
     template <std::size_t Rank>
     explicit Shape(
         const std::array<uint32_t, Rank> &shape, const std::array<std::array<uint32_t, 2>, Rank> &tile_padding) :
-        value{detail::compute_ttl_shape(shape, tile_padding)} { validate(); }
+        value{detail::compute_ttl_shape(shape, tile_padding)} {}
 
-    explicit Shape(const std::vector<uint32_t> &shape) : value{tt::tt_metal::Shape{shape}} { validate(); }
+    explicit Shape(const std::vector<uint32_t> &shape) : value{tt::tt_metal::Shape{shape}} {}
 
     explicit Shape(const std::vector<uint32_t> &shape, const std::vector<uint32_t> &shape_with_tile_padding) :
-        value{tt::tt_metal::Shape{shape, shape_with_tile_padding}} { validate(); }
+        value{tt::tt_metal::Shape{shape, shape_with_tile_padding}} {}
 
     const auto rank() const { return this->value.rank(); }
 
     const auto size() const { return this->rank(); }
-
-    void validate() const {
-        TT_FATAL(this->rank() > 0, "Shape rank == 0 is not supported, {}", *this);
-        for(auto i = 0; i < this->rank(); i++) {
-            TT_FATAL(value[i] > 0, "Shape dimension {} cannot be zero, {}", i, *this);
-        }
-    }
 
     Shape with_tile_padding() const {
         return Shape{tt::tt_metal::Shape{this->value, tt::tt_metal::Padding{this->value.rank()}}};

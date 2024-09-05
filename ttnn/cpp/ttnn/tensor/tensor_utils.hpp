@@ -46,7 +46,7 @@ static std::size_t compute_volume(const T& shape) {
     return volume;
 }
 
-static std::vector<uint32_t> compute_strides(Shape shape) {
+static std::vector<uint32_t> compute_strides(const Shape& shape) {
     auto num_elements = compute_volume(shape);
     std::vector<uint32_t> strides;
     for (std::int32_t index = 0; index < shape.rank(); index++) {
@@ -59,9 +59,9 @@ static std::vector<uint32_t> compute_strides(Shape shape) {
     return strides;
 }
 
-static int compute_flat_indices(vector<int> indices, vector<std::uint32_t> strides) {
+static int compute_flat_indices(const vector<int>& indices, const vector<std::uint32_t>& strides) {
     int flat_index = 0;
-    for (auto i = 0; i < indices.size(); i++) {
+    for (uint32_t i = 0; i < indices.size(); i++) {
         flat_index += indices[i] * strides[i];
     }
     return flat_index;
