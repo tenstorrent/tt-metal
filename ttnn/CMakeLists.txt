@@ -609,6 +609,19 @@ endif()
 
 set(ALL_TTNN_SUBLIBRARIES)
 
+function(add_ttnn_sublibrary SUBLIBRARY_NAME)
+    message("Adding sublibrary with ${SUBLIBRARY_NAME} ")
+    add_library(${SUBLIBRARY_NAME} OBJECT ${ARGN})
+    target_include_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
+    target_link_libraries(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_LIBRARIES})
+    target_link_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
+    target_precompile_headers(${SUBLIBRARY_NAME} PRIVATE ${TTNN_PRECOMPILED_HEADERS})
+    target_compile_options(${SUBLIBRARY_NAME} PUBLIC -MP -Wno-int-to-pointer-cast -fno-var-tracking)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_compile_definitions(${SUBLIBRARY_NAME} PUBLIC DISABLE_NAMESPACE_STATIC_ASSERT)
+    endif()
+endfunction()
+
 message("TTNN_PUBLIC_INCLUDE_DIRS: ${TTNN_PUBLIC_INCLUDE_DIRS}")
 message("TTNN_PUBLIC_LINK_LIBRARIES: ${TTNN_PUBLIC_LINK_LIBRARIES}")
 foreach(SUBLIBRARY_PATH ${TTNN_SUBLIBRARIES})
@@ -617,24 +630,16 @@ foreach(SUBLIBRARY_PATH ${TTNN_SUBLIBRARIES})
     list(FILTER TTNN_SRC EXCLUDE REGEX "${SUBLIBRARY_PATH}")
     if(SUBLIBRARY_SRCS)
         string(REPLACE "/"  "_"  SUBLIBRARY_NAME ${SUBLIBRARY_PATH})
-        add_library(${SUBLIBRARY_NAME} OBJECT ${SUBLIBRARY_SRCS})
-        target_include_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
-        target_link_libraries(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_LIBRARIES})
-        target_link_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
-        target_precompile_headers(${SUBLIBRARY_NAME} PRIVATE ${TTNN_PRECOMPILED_HEADERS})
-        target_compile_options(${SUBLIBRARY_NAME} PUBLIC -MP -Wno-int-to-pointer-cast -fno-var-tracking)
-
+        add_ttnn_sublibrary(${SUBLIBRARY_NAME} ${SUBLIBRARY_SRCS})
         list(APPEND ALL_TTNN_SUBLIBRARIES ${SUBLIBRARY_NAME})
     endif()
 endforeach(SUBLIBRARY_PATH ${TTNN_SUBLIBRARIES})
 
-set(TTNN_FINAL_SRC
-    ${TTNN_BASE_SRCS}
-    ${QUEUE_SRCS}
-    ${TENSOR_SRCS}
-    ${TT_DNN_SRCS})
+add_ttnn_sublibrary(ttnn_tensor ${TENSOR_SRCS})
+add_ttnn_sublibrary(tt_dnn ${TT_DNN_SRCS})
+message("TTNN_SRC: ${TT_DNN_SRCS}")
 
-add_library(ttnn SHARED ${TTNN_FINAL_SRC})
+add_library(ttnn STATIC ${TTNN_BASE_SRCS} ${QUEUE_SRCS})
 target_compile_options(ttnn PUBLIC -MP -Wno-int-to-pointer-cast -fno-var-tracking)
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
@@ -643,7 +648,10 @@ endif()
 
 target_include_directories(ttnn PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
 target_link_libraries(ttnn PUBLIC ${TTNN_PUBLIC_LINK_LIBRARIES})
-target_link_libraries(ttnn PUBLIC ${ALL_TTNN_SUBLIBRARIES})
+target_link_libraries(ttnn PRIVATE ${ALL_TTNN_SUBLIBRARIES})
+target_link_libraries(ttnn PRIVATE ttnn_tensor)
+target_link_libraries(ttnn PRIVATE tt_dnn)
+
 target_link_directories(ttnn PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
 target_precompile_headers(ttnn PRIVATE ${TTNN_PRECOMPILED_HEADERS})
 
