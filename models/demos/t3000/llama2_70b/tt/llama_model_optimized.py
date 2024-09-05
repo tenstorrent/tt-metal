@@ -33,6 +33,7 @@ class TtLlamaModel_optimized:
         configuration,
         cache_path=None,
         read_cache=False,
+        paged_attention_config=None,
     ):
         self.state_dict = state_dict
         self.mesh_device = mesh_device
@@ -77,6 +78,7 @@ class TtLlamaModel_optimized:
                 transformation_mats,
                 cache_path=cache_path,
                 read_cache=read_cache,
+                paged_attention_config=paged_attention_config,
             )
             for layer_num in tqdm(range(n_layers))
         ]
@@ -288,11 +290,14 @@ class TtLlamaModel_optimized:
         user_id: int = 0,
         cache_idxs=None,
         unpadded_seq_len=None,
+        page_table=None,
     ) -> ttnn.Tensor:
         if self.model_config["LLM_MODE"] == "prefill":
-            return self.prefill_forward(xs, rot_mats, start_pos, attn_masks, user_id, unpadded_seq_len=unpadded_seq_len)
+            return self.prefill_forward(
+                xs, rot_mats, start_pos, attn_masks, user_id, unpadded_seq_len=unpadded_seq_len, page_table=page_table
+            )
         elif self.model_config["LLM_MODE"] == "decode":
-            return self.decode_forward(xs, rot_mats, start_pos, attn_masks, cache_idxs)
+            return self.decode_forward(xs, rot_mats, start_pos, attn_masks, cache_idxs, page_table=page_table)
         else:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
@@ -303,10 +308,13 @@ class TtLlamaModel_optimized:
         start_pos: int,
         attn_masks: List[ttnn.Tensor],
         cache_idxs,
+        page_table=None,
     ) -> ttnn.Tensor:
         ### Run all layers
         for layer in self.layers:
-            xs = layer(xs, rot_mats, start_pos, attn_masks, cache_idxs=cache_idxs)  # xs is sharded
+            xs = layer(
+                xs, rot_mats, start_pos, attn_masks, cache_idxs=cache_idxs, page_table=page_table
+            )  # xs is sharded
 
         xs = ttnn.all_gather(
             xs,
@@ -377,10 +385,11 @@ class TtLlamaModel_optimized:
         attn_masks: List[ttnn.Tensor],
         user_id: int = 0,
         unpadded_seq_len=None,
+        page_table=None,
     ) -> ttnn.Tensor:
         ### Run all layers
         for layer in self.layers:
-            xs = layer(xs, rot_mats, start_pos, attn_masks, user_id)  # xs is sharded
+            xs = layer(xs, rot_mats, start_pos, attn_masks, user_id, page_table=page_table)  # xs is sharded
 
         # Distributed rmsnorm
         norm_out = self.tt_distributed_rmsnorm(xs, self.norm_eps, self.norm_sharded)

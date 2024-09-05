@@ -17,7 +17,7 @@ from models.demos.t3000.llama2_70b.tt.model_config import (
 
 
 class TtLlamaModelForGeneration:
-    def __init__(self, configuration, state_dict, model_args, tt_args):
+    def __init__(self, configuration, state_dict, model_args, tt_args, paged_attention_config=None):
         # Cache Weights setup
         n_layers = model_args.num_layers or 80
 
@@ -49,6 +49,7 @@ class TtLlamaModelForGeneration:
             self.params,
             cache_path=tt_args.cache_path,
             read_cache=False,
+            paged_attention_config=paged_attention_config,
         )
 
         del state_dict
@@ -128,7 +129,7 @@ class TtLlamaModelForGeneration:
 
         return logits
 
-    def decode_forward(self, tokens: torch.Tensor, start_pos: int):
+    def decode_forward(self, tokens: torch.Tensor, start_pos: int, page_table=None):
         self._update_model_config("decode", tokens.shape[0], 1)
         batch = tokens.shape[0]
         tt_inp, start_pos, rot_mat, attn_mask, cache_idxs_tt = self.tt_model.prepare_inputs(tokens, start_pos)
@@ -143,6 +144,7 @@ class TtLlamaModelForGeneration:
             start_pos,
             attn_mask,
             cache_idxs=cache_idxs_tt,
+            page_table=page_table,
         )
 
         # del tt_inp_emb
@@ -157,7 +159,9 @@ class TtLlamaModelForGeneration:
 
         return logits
 
-    def prefill_forward_single_user(self, tokens: torch.Tensor, start_pos: int, user_id: int, unpadded_seq_len=None):
+    def prefill_forward_single_user(
+        self, tokens: torch.Tensor, start_pos: int, user_id: int, unpadded_seq_len=None, page_table=None
+    ):
         batch, seq_len = tokens.shape
         assert batch == 1
         assert start_pos == 0, "start_pos must be 0 for prefill_forward_single_user"
@@ -176,6 +180,7 @@ class TtLlamaModelForGeneration:
             attn_mask,
             user_id=user_id,
             unpadded_seq_len=unpadded_seq_len,
+            page_table=page_table,
         )
 
         del tt_inp_emb
