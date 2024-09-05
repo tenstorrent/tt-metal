@@ -110,4 +110,8 @@ void bind_max_pool2d_operation(py::module& module) {
                 py::arg("queue_id") = 0});
 }
 
+void py_module(py::module& module) {
+    bind_max_pool2d_operation(module);
+}
+
 }  // namespace ttnn::operations::pool
