@@ -10,6 +10,9 @@ from ttnn import ReplicateTensorToMesh
 from models.demos.t3000.llama2_70b.tt.llama_common import ShardTensor2dMesh, ConcatMesh2DToTensor
 from models.utility_functions import nearest_32
 from models.demos.tg.llama3_70b.tt.llama_common import tt_all_reduce
+from models.demos.t3000.falcon40b.tt.model_utils import (
+    matmul_2d_config_from_tensor_shapes as get_matmul_2d_config_from_tensor_shapes,
+)
 
 
 class TtLlamaMLP_galaxy:
@@ -136,6 +139,38 @@ class TtLlamaMLP_galaxy:
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
+            )
+
+        elif self.model_config["LLM_MODE"] == "prefill":
+            hidden_dim_per_chip = self.hidden_size // self.cluster_shape[0]  # 2048
+            ff_outer_dim_per_chip = (
+                self.state_dict["layers.0.feed_forward.w1.weight"].shape[0] // self.cluster_shape[1]
+            )  # 3584
+            self.FF1_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
+                (
+                    1,
+                    1,
+                    self.model_config["MAX_MM_SEQ_LEN"],
+                    hidden_dim_per_chip,
+                ),  # (1, 1, self.model_config["MAX_MM_SEQ_LEN"], 2048)
+                (1, 1, hidden_dim_per_chip, ff_outer_dim_per_chip),  # (1, 1, 2048, 3584)
+                grid=ttnn.CoreGrid(x=8, y=4),
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
+                fuse_batch=False,
+            )
+            self.FF2_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
+                (
+                    1,
+                    1,
+                    self.model_config["MAX_MM_SEQ_LEN"],
+                    ff_outer_dim_per_chip,
+                ),  # (1, 1, self.model_config["MAX_MM_SEQ_LEN"], 3584)
+                (1, 1, ff_outer_dim_per_chip, hidden_dim_per_chip),  # (1, 1, 3584, 2048)
+                grid=ttnn.CoreGrid(x=8, y=4),
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
+                fuse_batch=False,
             )
 
     def load_weights(self):
@@ -275,17 +310,27 @@ class TtLlamaMLP_galaxy:
         return hidden_states
 
     def prefill_forward(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
+        _, _, seq_len, _ = x.shape
+        max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
+        batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
+        x = ttnn.reshape(x, (1, batch_dim, seq_len // batch_dim, -1))
+
         w1_out = ttnn.matmul(
             x,
             self.w1,
             dtype=ttnn.bfloat16,
+            program_config=self.FF1_PROGCFG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         w3_out = ttnn.matmul(
             x,
             self.w3,
             dtype=ttnn.bfloat16,
+            program_config=self.FF1_PROGCFG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        x.deallocate(True)
+
+        w1_out = ttnn.reshape(w1_out, (1, 1, seq_len, -1))
 
         w1_out = tt_all_reduce(
             w1_out,
@@ -293,6 +338,8 @@ class TtLlamaMLP_galaxy:
             cluster_axis=1,
             num_links=2,
         )
+
+        w3_out = ttnn.reshape(w3_out, (1, 1, seq_len, -1))
         w3_out = tt_all_reduce(
             w3_out,
             self.mesh_device,
@@ -300,38 +347,32 @@ class TtLlamaMLP_galaxy:
             num_links=2,
         )
 
-        # w1_out = ttnn.to_memory_config(w1_out, self.FULL_GRID_MEMCFG)
-        # w3_out = ttnn.to_memory_config(w3_out, self.FULL_GRID_MEMCFG)
+        # w1_out.deallocate(True)
 
         hidden_states = ttnn.mul(
             w1_out,
             w3_out,
-            # memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             input_tensor_a_activation=ttnn.UnaryOpType.SILU,
             dtype=ttnn.bfloat16,
         )
-        w1_out.deallocate(True)
-        w3_out.deallocate(True)
 
         # hidden_states = ttnn.to_memory_config(hidden_states, self.FF2_ACT_MEMCFG)
+        hidden_states = ttnn.reshape(hidden_states, (1, batch_dim, seq_len // batch_dim, -1))
         hidden_states = ttnn.matmul(
             hidden_states,
             self.w2,
-            # program_config=self.FF2_DRAM_SHARDED_PROGCFG,  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
-            # core_grid=ttnn.CoreGrid(y=1, x=8),
-            # compute_kernel_config=self.COMPUTE_KERNEL_LOFI,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            program_config=self.FF2_PROGCFG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+        hidden_states = ttnn.reshape(hidden_states, (1, 1, seq_len, -1))
 
         hidden_states = tt_all_reduce(
             hidden_states,
             self.mesh_device,
             cluster_axis=0,
             num_links=2,
-            # memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
-
-        # hidden_states = ttnn.to_memory_config(hidden_states, self.FF1_ACT_MEMCFG)
 
         return hidden_states

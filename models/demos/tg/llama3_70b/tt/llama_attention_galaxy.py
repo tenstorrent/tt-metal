@@ -18,6 +18,9 @@ from models.demos.tg.llama3_70b.tt.llama_common import (
     tt_all_reduce,
     tt_all_gather,
 )
+from models.demos.t3000.falcon40b.tt.model_utils import (
+    matmul_2d_config_from_tensor_shapes as get_matmul_2d_config_from_tensor_shapes,
+)
 
 
 class TtLlamaAttention_galaxy:
@@ -192,6 +195,24 @@ class TtLlamaAttention_galaxy:
                 math_approx_mode=False,
                 fp32_dest_acc_en=False,
                 packer_l1_acc=False,
+            )
+
+            self.FUSED_QKV_MM_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
+                (1, 1, self.model_config["MAX_MM_SEQ_LEN"], 2048),
+                (1, 1, 2048, 1280),
+                grid=ttnn.CoreGrid(x=8, y=4),
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
+                fuse_batch=False,
+            )
+
+            self.SELFOUT_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
+                (1, 1, self.model_config["MAX_MM_SEQ_LEN"], 1024),
+                (1, 1, 1024, 2048),
+                grid=ttnn.CoreGrid(x=8, y=4),
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
+                fuse_batch=False,
             )
 
     def init_kv_cache(self):
@@ -524,6 +545,7 @@ class TtLlamaAttention_galaxy:
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.COMPUTE_KERNEL_QKV,
+            program_config=self.FUSED_QKV_MM_PROGCFG,
         )
 
         fused_query_key_value = tt_all_reduce(
@@ -531,8 +553,6 @@ class TtLlamaAttention_galaxy:
         )
 
         fused_query_key_value = ttnn.reshape(fused_query_key_value, (1, 1, seq_len, -1))
-
-        xs.deallocate(True)
 
         (
             query_layer,  # [bsz, n_local_heads, seq_len, head_dim]
@@ -546,22 +566,18 @@ class TtLlamaAttention_galaxy:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        fused_query_key_value.deallocate(True)
-
         # ROTARY EMBEDDINGS
         # Q Rotary Embeddings
         # query_layer: ttnn.Shape([1, 8, seq_len, 128]) -> [bsz, n_local_heads, seq_len, head_dim]
         query_layer_ret = ttnn.experimental.rotary_embedding_llama(
             query_layer, rot_mats[0], rot_mats[1], self.transformation_mats
         )
-        query_layer.deallocate(True)
 
         # K Rotary Embeddings
         # key_layer: ttnn.Shape([1, 1, seq_len, 128]) -> [bsz, n_local_kv_heads, seq_len, head_dim]
         key_layer_ret = ttnn.experimental.rotary_embedding_llama(
             key_layer, rot_mats[0], rot_mats[1], self.transformation_mats
         )
-        key_layer.deallocate(True)
 
         return query_layer_ret, key_layer_ret, value_layer
 
@@ -615,7 +631,7 @@ class TtLlamaAttention_galaxy:
         )
 
         # SDPA
-        attn_output = ttnn.transformers.scaled_dot_product_attention(
+        attn_output = ttnn.transformer.scaled_dot_product_attention(
             query_layer,
             key_layer,
             value_layer,
@@ -623,11 +639,6 @@ class TtLlamaAttention_galaxy:
             is_causal=True,
             scale=self.scale,
         )
-
-        # deallocate keys and values
-        query_layer.deallocate(True)
-        key_layer.deallocate(True)
-        value_layer.deallocate(True)
 
         return attn_output
 
@@ -649,6 +660,7 @@ class TtLlamaAttention_galaxy:
             self.wo,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
+            program_config=self.SELFOUT_PROGCFG,
         )  # bsz, 1, seqlen, hidden_size
 
         attn_output = ttnn.reshape(attn_output, (1, 1, seq_len, -1))
