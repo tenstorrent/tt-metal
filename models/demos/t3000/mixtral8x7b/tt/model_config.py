@@ -21,8 +21,9 @@ class TtModelArgs:
     norm_eps = 1e-05
     vocab_size = 32000
 
-    max_batch_size = 8  # default
-    max_seq_len = 32768  # default
+    # We support up to a batch size of 32, if the max_seq_len is 16k, otherwise, 8 is the max batch size
+    max_batch_size = 8  # Max batch size supported when max_seq_len = 32768
+    max_seq_len = 32768  # Maximum supported sequence length
     moe = True
     num_experts = 8
     num_experts_per_tok = 2
