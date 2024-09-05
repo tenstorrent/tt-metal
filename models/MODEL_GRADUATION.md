@@ -1,11 +1,13 @@
 # Graduating `experimental` model to `demo`
 
-- PCC regression
-- Performance regression
+- Add PCC regression to CI
+- Add Performance regression to CI
 - Unit test suite
 - Model owner to CODEOWNERS
 - Update GH landing page
 - README on how to run the model
 - Add weights checkpoint
-- Trace
-- Two CQs
+- With Trace
+- With Two CQs
+- Monitor the CI pipeline
+- [Steps for a model regression](MODEL_REGRESS.md)
