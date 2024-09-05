@@ -13,6 +13,7 @@
 namespace ttnn::operations::moreh::moreh_cumsum {
 void MorehCumsumDeviceOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto dim = operation_attributes.dim;
     TT_ASSERT((dim >= 0 && dim <= 3), "dim should be 0 - 3");
     const auto& input = tensor_args.input;
     const auto& output = tensor_args.output;
