@@ -60,7 +60,7 @@ def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, in
 
 
 def run_all_gather_on_t3000_impl(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     dim,
@@ -74,11 +74,11 @@ def run_all_gather_on_t3000_impl(
     num_iters=1,
     enable_async=False,
 ):
-    if len(all_devices) != 8:
+    if t3k_mesh_device.get_num_devices() != 8:
         pytest.skip("Not T3000!")
 
     # Use Async mode based on test input config
-    for device in all_devices:
+    for device in t3k_mesh_device.get_devices():
         device.enable_async(enable_async)
     if enable_async:
         logger.info(f"Using Async Mode for All Gather Op Dispatch")
@@ -91,7 +91,6 @@ def run_all_gather_on_t3000_impl(
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
 
-    devices = get_devices_for_t3000(all_devices, num_devices)
     # for device in devices:
     #    device.disable_and_clear_program_cache()
 
@@ -103,13 +102,13 @@ def run_all_gather_on_t3000_impl(
     input_tensors = torch.chunk(input_tensor, num_devices, dim)
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(devices[i], mem_config))
+        tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(t3k_mesh_device.get_devices()[i], mem_config))
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     for i in range(num_iters):
         tt_out_tensor = all_gather_operation(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
 
-        for d in devices:
+        for d in t3k_mesh_device.get_devices():
             ttnn.synchronize_device(d)
         logger.info(f"Done iteration {i}")
 
@@ -125,7 +124,7 @@ def run_all_gather_on_t3000_impl(
 
 
 def run_all_gather_on_t3000_impl_tight_loop(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     dim,
@@ -140,7 +139,7 @@ def run_all_gather_on_t3000_impl_tight_loop(
     enable_async=False,
 ):
     run_all_gather_on_t3000_impl(
-        all_devices,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         dim,
@@ -188,7 +187,7 @@ def run_all_gather_on_t3000_impl_tight_loop(
 @pytest.mark.parametrize("num_iters", [1])  # restore to 500: https://github.com/tenstorrent/tt-metal/issues/9686
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_all_gather_on_t3000_post_commit_looping(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     dim,
@@ -202,7 +201,7 @@ def test_all_gather_on_t3000_post_commit_looping(
     enable_async,
 ):
     run_all_gather_on_t3000_impl_tight_loop(
-        all_devices,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         dim,
@@ -250,7 +249,7 @@ def test_all_gather_on_t3000_post_commit_looping(
 @pytest.mark.parametrize("num_iters", [1000])  # TODO: restore to 500
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_all_gather_on_t3000_nightly_commit_looping(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     dim,
@@ -264,7 +263,7 @@ def test_all_gather_on_t3000_nightly_commit_looping(
     enable_async,
 ):
     run_all_gather_on_t3000_impl_tight_loop(
-        all_devices,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         dim,
@@ -340,7 +339,7 @@ def test_all_gather_on_t3000_nightly_commit_looping(
     ],
 )
 def test_all_gather_on_t3000_post_commit(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     dim,
@@ -352,7 +351,7 @@ def test_all_gather_on_t3000_post_commit(
     function_level_defaults,
 ):
     run_all_gather_on_t3000_impl(
-        all_devices,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         dim,
@@ -421,7 +420,7 @@ def run_line_all_gather(
 
 # This run function is deprecated and is only intended to be used by 2-link tests on t3k
 def run_line_all_gather_deprecated(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     dim,
@@ -434,10 +433,10 @@ def run_line_all_gather_deprecated(
     enable_async,
     num_iters=1,
 ):
-    if len(all_devices) != 8:
+    if t3k_mesh_device.get_num_devices() != 8:
         pytest.skip("Not T3000!")
 
-    for device in all_devices:
+    for device in t3k_mesh_device.get_devices():
         device.enable_async(enable_async)
 
     logger.info(f"Input shape: {input_shape}")
@@ -449,8 +448,6 @@ def run_line_all_gather_deprecated(
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
 
-    devices = get_devices_for_t3000(all_devices, num_devices)
-
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")
 
@@ -459,13 +456,13 @@ def run_line_all_gather_deprecated(
     input_tensors = torch.chunk(input_tensor, num_devices, dim)
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(devices[i], mem_config))
+        tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(t3k_mesh_device.get_devices()[i], mem_config))
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     for i in range(num_iters):
         tt_out_tensor = ttnn.line_all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
 
-        for d in devices:
+        for d in t3k_mesh_device.get_devices():
             ttnn.synchronize_device(d)
         logger.info(f"Done iteration {i}")
 
@@ -575,7 +572,7 @@ def test_line_all_gather_on_t3000_post_commit(
 )
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_line_all_gather_on_t3000_post_commit_two_link(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     dim,
@@ -589,7 +586,7 @@ def test_line_all_gather_on_t3000_post_commit_two_link(
     num_iters=1,
 ):
     run_line_all_gather_deprecated(
-        all_devices,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         dim,
@@ -792,7 +789,7 @@ def test_line_all_gather_on_t3000_nightly(
     ],
 )
 def test_all_gather_on_t3000_nightly(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     dim,
@@ -848,7 +845,7 @@ def test_all_gather_on_t3000_nightly(
         pytest.xfail(reason="Known failure")
 
     run_all_gather_on_t3000_impl(
-        all_devices,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         dim,
@@ -863,7 +860,7 @@ def test_all_gather_on_t3000_nightly(
 
 
 def run_all_gather_sharded(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -879,7 +876,7 @@ def run_all_gather_sharded(
     function_level_defaults,
     all_gather_operation,
 ):
-    if len(all_devices) != 8:
+    if t3k_mesh_device.get_num_devices() != 8:
         pytest.skip("Not T3000!")
 
     numel = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3] * num_devices
@@ -903,7 +900,6 @@ def run_all_gather_sharded(
     unchunked_input_tensor = unchunked_input_tensor.bfloat16()
 
     input_tensors = torch.chunk(unchunked_input_tensor, num_devices, dim)
-    devices = get_devices_for_t3000(all_devices, num_devices)
 
     # num_cores =
     # compute_grid_size = devices[0].compute_with_storage_grid_size()
@@ -953,19 +949,19 @@ def run_all_gather_sharded(
     ):
         pytest.skip("Unsupported test case")
 
-    tt_input_tensors_dups = []
     tt_input_tensors = []
 
     for i, t in enumerate(input_tensors):
-        tt_input_tensors_dups.append(ttnn.Tensor(t, input_dtype).to(tensor_layout).to(devices[i], input_mem_config))
-        tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(tensor_layout).to(devices[i], input_mem_config))
+        tt_input_tensors.append(
+            ttnn.Tensor(t, input_dtype).to(tensor_layout).to(t3k_mesh_device.get_devices()[i], input_mem_config)
+        )
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
 
     ## Run the actual allgather operation
     tt_out_tensor = all_gather_operation(input_tensor_mesh, dim, num_links=num_links, memory_config=output_mem_config)
     ## Wait for completion
-    for d in devices:
+    for d in t3k_mesh_device.get_devices():
         ttnn.synchronize_device(d)
 
     torch.set_printoptions(sci_mode=False)
@@ -1047,8 +1043,9 @@ def run_all_gather_sharded(
         ),
     ),
 )
+# @pytest.mark.parametrize("device_params", [{"trace_region_size": 60000}], indirect=True)
 def test_all_gather_sharded_post_commit(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -1064,7 +1061,7 @@ def test_all_gather_sharded_post_commit(
     function_level_defaults,
 ):
     run_all_gather_sharded(
-        all_devices,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         input_shard_shape,
@@ -1135,7 +1132,7 @@ def test_all_gather_sharded_post_commit(
     ),
 )
 def test_all_gather_height_sharded_post_commit(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -1151,7 +1148,7 @@ def test_all_gather_height_sharded_post_commit(
     function_level_defaults,
 ):
     run_all_gather_sharded(
-        all_devices,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         input_shard_shape,
@@ -1216,7 +1213,7 @@ def test_all_gather_height_sharded_post_commit(
     ),
 )
 def test_all_gather_block_sharded_post_commit(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -1232,7 +1229,7 @@ def test_all_gather_block_sharded_post_commit(
     function_level_defaults,
 ):
     run_all_gather_sharded(
-        all_devices,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         input_shard_shape,
@@ -1305,7 +1302,7 @@ def test_all_gather_block_sharded_post_commit(
     ),
 )
 def test_line_all_gather_sharded_post_commit(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -1321,7 +1318,7 @@ def test_line_all_gather_sharded_post_commit(
     function_level_defaults,
 ):
     run_all_gather_sharded(
-        all_devices,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         input_shard_shape,
@@ -1465,7 +1462,7 @@ def test_line_all_gather_sharded_post_commit(
 )
 @pytest.mark.parametrize("all_gather_operation", [ttnn.all_gather, ttnn.line_all_gather])
 def test_sharded_all_gather_nightly(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -1482,7 +1479,7 @@ def test_sharded_all_gather_nightly(
     all_gather_operation,
 ):
     run_all_gather_sharded(
-        all_devices,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         input_shard_shape,
