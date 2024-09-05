@@ -22,17 +22,22 @@ FORCE_INLINE void master_sync_slaves(
     const uint32_t num_fused_op_cores_to_signal,
     const uint32_t* fused_op_cores_noc_coords,
     const uint32_t fused_op_sem_addr,
+    const bool mcast_signal_op_cores,
 
-    bool wait_for_start_signal) {
-
+    uint32_t fused_op_core_idx) {
     // Wait for all the slaves to finish their work
     volatile tt_l1_ptr uint32_t* master_l1_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sync_sem_addr);
-    noc_semaphore_wait(master_l1_semaphore_addr,  num_workers_to_sync - 1 + (uint32_t)wait_for_start_signal);
+    noc_semaphore_wait(master_l1_semaphore_addr,  num_workers_to_sync - 1);
     // DPRINT << "MASTER SYNCED WITH SLAVES" << ENDL();
 
     // Send signal to op
-    for (uint32_t i = 0; i < num_fused_op_cores_to_signal; i++) {
-        uint64_t remote_fused_op_l1_semaphore_addr = get_noc_addr(fused_op_cores_noc_coords[i * 2], fused_op_cores_noc_coords[i * 2 + 1], fused_op_sem_addr);
+    if (mcast_signal_op_cores) {
+        for (uint32_t i = 0; i < num_fused_op_cores_to_signal; i++) {
+            uint64_t remote_fused_op_l1_semaphore_addr = get_noc_addr(fused_op_cores_noc_coords[i * 2], fused_op_cores_noc_coords[i * 2 + 1], fused_op_sem_addr);
+            noc_semaphore_inc(remote_fused_op_l1_semaphore_addr, 1);
+        }
+    } else {
+        uint64_t remote_fused_op_l1_semaphore_addr = get_noc_addr(fused_op_cores_noc_coords[fused_op_core_idx * 2], fused_op_cores_noc_coords[fused_op_core_idx * 2 + 1], fused_op_sem_addr);
         noc_semaphore_inc(remote_fused_op_l1_semaphore_addr, 1);
     }
     // DPRINT << "MASTER SIGNALED REMOTE OP" << ENDL();
@@ -88,13 +93,8 @@ struct OpSignaler {
     uint32_t num_fused_op_cores_to_signal;
     uint32_t* signal_op_cores_noc_coords;
     uint32_t signal_op_sem_addr;
+    bool mcast_signal_op_cores;
     uint32_t curr_worker_is_master;
-
-    // Params for start signal
-    bool wait_for_start_signal;
-    bool send_start_signal;
-    uint32_t* start_signal_receiver_core_noc;
-    uint32_t start_signal_receiver_sem_addr;
 
     bool initialized = false;
 
@@ -111,14 +111,7 @@ struct OpSignaler {
         this->num_fused_op_cores_to_signal = get_arg_val<uint32_t>(rt_args_idx++);
         this->signal_op_cores_noc_coords = (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, this->num_fused_op_cores_to_signal * 2));
         this->signal_op_sem_addr = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
-
-
-        this->wait_for_start_signal = get_arg_val<uint32_t>(rt_args_idx++);
-        this->send_start_signal = get_arg_val<uint32_t>(rt_args_idx++);
-        if (this->send_start_signal) {
-            this->start_signal_receiver_core_noc = (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, 2));
-            this->start_signal_receiver_sem_addr = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
-        }
+        this->mcast_signal_op_cores = get_arg_val<uint32_t>(rt_args_idx++) == 1;
 
         uint32_t master_worker_noc_x = this->workers_noc_coords[0];
         uint32_t master_worker_noc_y = this->workers_noc_coords[1];
@@ -129,7 +122,7 @@ struct OpSignaler {
         this->initialized = true;
     }
 
-    void synchronize_workers_and_signal_op() {
+    void synchronize_workers_and_signal_op(uint32_t fused_op_core_idx) {
         ASSERT(this->initialized);
 
         if (this->curr_worker_is_master) {
@@ -141,24 +134,10 @@ struct OpSignaler {
                 this->num_fused_op_cores_to_signal,
                 this->signal_op_cores_noc_coords,
                 this->signal_op_sem_addr,
+                this->mcast_signal_op_cores,
 
-                this->wait_for_start_signal
+                fused_op_core_idx
             );
-
-            // Once start signal is received, no need to wait for it again
-            this->wait_for_start_signal = false;
-
-            if (this->send_start_signal) {
-                uint64_t remote_master_l1_semaphore_addr = get_noc_addr(
-                    this->start_signal_receiver_core_noc[0],
-                    this->start_signal_receiver_core_noc[1],
-                    this->start_signal_receiver_sem_addr
-                );
-                noc_semaphore_inc(remote_master_l1_semaphore_addr, 1);
-
-                // Once start signal is sent, no need to send it again
-                this->send_start_signal = false;
-            }
         } else {
             slave_sync_master(this->workers_noc_coords, this->worker_sync_sem_addr);
         }
@@ -342,7 +321,7 @@ struct MatmulOpReceiver {
             // Wait for a sempaphore signal to start processing the tensor slice
             if (this->wait_for_op_signal && block_id == sender_id) {
                 uint32_t tensor_slice_cnt = (this->curr_transfer_idx) / this->num_directions;
-                noc_semaphore_wait_min(this->signal_op_semaphore_addr_ptrs[this->curr_dir], tensor_slice_cnt + 1);
+                noc_semaphore_wait_min(this->signal_op_semaphore_addr_ptrs[this->curr_dir], 1);
             }
 
             this->curr_transfer_idx++;

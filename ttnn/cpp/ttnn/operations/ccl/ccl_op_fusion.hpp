@@ -23,6 +23,7 @@ struct AllGatherFusedOpSignaler {
     uint32_t num_fused_op_cores_to_signal;
     std::vector<CoreCoord> fused_op_receiver_cores_noc;
     std::vector<uint32_t> fused_op_receiver_signal_semaphores;
+    bool mcast_fused_op_cores;
 
     /* All Gather specific */
     std::vector<CoreCoord> all_gather_worker_cores_noc;
@@ -35,7 +36,8 @@ struct AllGatherFusedOpSignaler {
 
     void init_fused_op(
         const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
-        const std::vector<uint32_t>& fused_op_receiver_signal_semaphores
+        const std::vector<uint32_t>& fused_op_receiver_signal_semaphores,
+        bool mcast_fused_op_cores = true
     );
 
     void init_all_gather(
@@ -51,8 +53,7 @@ struct AllGatherFusedOpSignaler {
 
         uint32_t num_workers_to_sync,
         uint32_t curr_worker_index,
-        uint32_t all_gather_direction,
-        std::optional<CoreSemPair> start_signal_core_sem_pair = {}
+        uint32_t all_gather_direction
     );
 
 };
@@ -62,6 +63,7 @@ struct MatmulFusedOpSignaler {
     uint32_t num_fused_op_cores_to_signal;
     std::vector<CoreCoord> fused_op_receiver_cores_noc;
     std::vector<uint32_t> fused_op_receiver_signal_semaphores; // [dir0, dir1]
+    bool mcast_fused_op_cores;
 
     /* All Gather specs */
     uint32_t num_transfers;
@@ -91,7 +93,8 @@ struct MatmulFusedOpSignaler {
     void init_fused_op(
         Program& program,
         Device const* device,
-        const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal
+        const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
+        bool mcast_fused_op_cores = true
     );
 
     void push_matmul_fused_op_rt_args(
