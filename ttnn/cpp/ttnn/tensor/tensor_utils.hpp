@@ -59,7 +59,7 @@ static std::vector<uint32_t> compute_strides(const Shape& shape) {
 
 static int compute_flat_indices(const vector<int>& indices, const vector<std::uint32_t>& strides) {
     int flat_index = 0;
-    for (uint32_t i = 0; i < indices.size(); i++) {
+    for (auto i = 0; i < indices.size(); i++) {
         flat_index += indices[i] * strides[i];
     }
     return flat_index;
