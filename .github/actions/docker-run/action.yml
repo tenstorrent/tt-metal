@@ -34,11 +34,11 @@ runs:
     - name: Determine Docker Tag to use
       shell: bash
       run: |
-        if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
-          echo "IMAGE_TAG=latest" >> $GITHUB_ENV
-        else
-          echo "IMAGE_TAG=dev-${GITHUB_REF_NAME//\//-}" >> $GITHUB_ENV
-        fi
+        # if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+        echo "IMAGE_TAG=latest" >> $GITHUB_ENV
+        # else
+        #   echo "IMAGE_TAG=dev-${GITHUB_REF_NAME//\//-}" >> $GITHUB_ENV
+        # fi
     - name: Docker login
       uses: docker/login-action@v3
       with:

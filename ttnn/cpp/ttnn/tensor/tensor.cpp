@@ -394,7 +394,7 @@ Tensor Tensor::cpu_sharded() const {
 
 Tensor Tensor::extract_shard(const CoreCoord& core) const {
     ZoneScoped;
-    auto buffer_page_mapping = generate_buffer_page_mapping(*this->buffer());
+    const auto& buffer_page_mapping = *this->buffer()->get_buffer_page_mapping();
     auto core_id = buffer_page_mapping.core_to_core_id_.at(core);
     return this->extract_shard(core_id);
 }
@@ -458,7 +458,7 @@ bool Tensor::is_allocated() const {
 }
 
 std::vector<uint32_t> Tensor::host_page_ordering() {
-    auto buffer_page_mapping = generate_buffer_page_mapping(*this->buffer());
+    const auto& buffer_page_mapping = *this->buffer()->get_buffer_page_mapping();
     auto cores = buffer_page_mapping.all_cores_;
     auto shard_size = buffer()->shard_spec().size();
     auto num_pages = cores.size() * shard_size;
