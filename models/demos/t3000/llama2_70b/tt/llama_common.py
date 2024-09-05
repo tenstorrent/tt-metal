@@ -23,6 +23,7 @@ from models.demos.t3000.llama2_70b.tt.model_config import get_model_config
 
 MAX_SEQ_LEN = 4096
 MAX_SEQ_LEN_LLAMA3 = 8192
+MAX_SEQ_LEN_LLAMA3_1 = 128 * 1024
 BASE_URL = "layers"
 UNIT_TEST_N_LAYER = 1
 UNIT_TEST_LAYER_NUM = 0

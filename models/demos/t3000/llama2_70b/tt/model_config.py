@@ -7,6 +7,11 @@ from loguru import logger
 import os
 
 
+MAX_SEQ_LEN = 4096
+MAX_SEQ_LEN_LLAMA3 = 8192
+MAX_SEQ_LEN_LLAMA3_1 = 128 * 1024
+
+
 def pretty_print_model_config(model_config):
     print_str = []
     for key, val in model_config.items():
@@ -28,7 +33,7 @@ def get_model_config(
     llm_mode = "decode" if seq_len == 1 else "prefill"
     assert num_devices == 8
     assert batch in (1, 16, 32)
-    assert seq_len in (1, 128, 256, 2048, 8192)
+    assert seq_len in (1, 128, 256, 2048, 8192, 32 * 1024, 128 * 1024)
 
     # Supported values, TODO update for larger TT chips
     if max_context_len > 4096:
@@ -58,6 +63,8 @@ def get_model_config(
         "ALL_GATHER_NUM_LINKS": 1,
         "MAX_BATCH_SIZE": max_batch_size,
         "MAX_CONTEXT_LEN": max_context_len,
+        "llama3-tg": MAX_SEQ_LEN_LLAMA3,
+        "llama3.1-tg": MAX_SEQ_LEN_LLAMA3_1,
         "COMPUTE_KERNEL_CONFIG": ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=True,

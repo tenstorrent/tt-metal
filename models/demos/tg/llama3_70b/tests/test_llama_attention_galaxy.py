@@ -77,7 +77,7 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
         start_pos, and KV cache has valid data up to start_pos.
         """
         batch = x.size(0)
-        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2)
+        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2, self.rope_theta)
         freqs_cis = freqs_cis[start_pos : start_pos + 1]
 
         attn_mask = torch.zeros(batch, 1, 1, start_pos + 1)
@@ -204,7 +204,7 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_
         )
 
         cos, sin = precompute_freqs(
-            llama_attention_model.head_dim, llama_attention_model.max_seq_len * 2, rope_theta, use_scaled=True
+            llama_attention_model.head_dim, llama_attention_model.max_seq_len * 2, rope_theta, use_scaled=False
         )
         cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
         assert cos_gathered.size() == (1, 1, seq_len, llama_attention_model.head_dim)
@@ -353,7 +353,6 @@ def run_test_LlamaAttention_inference(
             start_pos,
             attn_mask,
         )
-
         # tt_out = ttnn.to_torch(tt_out, mesh_composer=ListMeshToTensor(mesh_device))[0]
 
         tt_out = ttnn.to_torch(
@@ -362,9 +361,9 @@ def run_test_LlamaAttention_inference(
         tt_out = tt_out[:, 0:1, :, :]
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
 
-        # check outputs ----------------------------------------------------------------------
         does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
         logger.info(f"Output: {output_pcc}")
+
         all_pccs.append(extract_pcc_from_log(output_pcc))
 
         if does_pass:
