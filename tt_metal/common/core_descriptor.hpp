@@ -6,6 +6,7 @@
 
 #include "core_coord.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
+#include "llrt/hal.hpp"
 
 namespace tt {
 
@@ -74,7 +75,7 @@ inline uint32_t get_l1_bank_size(chip_id_t device_id, const uint8_t num_hw_cqs, 
     uint32_t l1_bank_size = core_desc.storage_core_bank_size.has_value()
                                 ? core_desc.storage_core_bank_size.value()
                                 : (soc_desc.worker_l1_size - L1_UNRESERVED_BASE);
-    TT_FATAL(l1_bank_size % L1_ALIGNMENT == 0, "L1 bank size must be {} B aligned", L1_ALIGNMENT);
+    TT_FATAL(l1_bank_size % tt_metal::hal.get_alignment(tt_metal::HalMemType::L1) == 0, "L1 bank size must be {} B aligned", tt_metal::hal.get_alignment(tt_metal::HalMemType::L1));
     return l1_bank_size;
 }
 

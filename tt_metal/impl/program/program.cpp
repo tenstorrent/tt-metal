@@ -811,6 +811,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
 
     this->get_program_config(programmable_core_type_index).rta_offset = base_offset;
 
+    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
     for (auto& kg : this->get_kernel_groups(programmable_core_type_index)) {
         for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
             max_rtas[dispatch_class] = 0;
@@ -844,7 +845,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
         }
 
         kg.total_rta_size = offset;
-        offset = align(offset, L1_ALIGNMENT);
+        offset = align(offset, l1_alignment);
         max_unique_rta_size = std::max(offset, max_unique_rta_size);
     }
 
@@ -870,7 +871,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
         this->get_program_config(programmable_core_type_index).crta_offsets[dispatch_class] = base_offset + max_unique_rta_size + offset;
         this->get_program_config(programmable_core_type_index).crta_sizes[dispatch_class] = size;
         offset += size;
-        offset = align(offset, L1_ALIGNMENT);
+        offset = align(offset, l1_alignment);
     }
     total_crta_size = offset;
 
@@ -913,7 +914,7 @@ uint32_t Program::finalize_sems(uint32_t programmable_core_type_index, uint32_t 
         }
     }
 
-    uint32_t sem_size = (max_id + 1) * L1_ALIGNMENT;
+    uint32_t sem_size = (max_id + 1) * hal.get_alignment(HalMemType::L1);
 
     this->program_configs_[programmable_core_type_index].sem_offset = base_offset;
     this->program_configs_[programmable_core_type_index].sem_size = sem_size;
@@ -976,11 +977,11 @@ void Program::finalize() {
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         uint32_t offset = 0;
         offset = finalize_rt_args(index, offset);
-        TT_ASSERT(offset == align(offset, L1_ALIGNMENT));
+        TT_ASSERT(offset == align(offset, hal.get_alignment(HalMemType::L1)));
         offset = finalize_sems(index, offset);
-        TT_ASSERT(offset == align(offset, L1_ALIGNMENT));
+        TT_ASSERT(offset == align(offset, hal.get_alignment(HalMemType::L1)));
         offset = finalize_cbs(index, offset);
-        TT_ASSERT(offset == align(offset, L1_ALIGNMENT));
+        TT_ASSERT(offset == align(offset, hal.get_alignment(HalMemType::L1)));
         this->get_program_config_size(index) = offset;
     }
 

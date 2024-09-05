@@ -72,5 +72,10 @@ namespace utils
             std::vector<std::exception_ptr> exceptions;
             std::mutex exceptionMutex;
         };
+
+        template <typename E, std::enable_if_t<std::is_enum<E>::value, bool> = true>
+        auto underlying_type(const E &e) {
+            return static_cast<typename std::underlying_type<E>::type>(e);
+        }
 }
 }

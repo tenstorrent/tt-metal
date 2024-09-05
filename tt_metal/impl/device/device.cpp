@@ -1045,7 +1045,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     prefetch_d_settings.upstream_cores.push_back(demux_d_settings.worker_physical_core);
                     prefetch_d_settings.downstream_cores.push_back(dispatch_d_settings.worker_physical_core);
 
-                    uint32_t scratch_db_base = (prefetch_d_settings.cb_start_address + prefetch_d_settings.cb_size_bytes + PCIE_ALIGNMENT - 1) & (~(PCIE_ALIGNMENT - 1));
+                    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
+                    uint32_t scratch_db_base = (prefetch_d_settings.cb_start_address + prefetch_d_settings.cb_size_bytes + pcie_alignment - 1) & (~(pcie_alignment - 1));
                     uint32_t scratch_db_size = dispatch_constants::get(dispatch_core_type).scratch_db_size();
                     const uint32_t l1_size = dispatch_core_type == CoreType::WORKER ? MEM_L1_SIZE : MEM_ETH_SIZE;
                     TT_ASSERT(scratch_db_base + scratch_db_size <= l1_size);

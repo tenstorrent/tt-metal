@@ -13,6 +13,7 @@
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "tt_metal/tt_stl/aligned_allocator.hpp"
+#include "tt_metal/llrt/hal.hpp"
 
 template <typename T>
 using vector_memcpy_aligned = std::vector<T, tt::stl::aligned_allocator<T, MEMCPY_ALIGNMENT>>;
@@ -106,13 +107,13 @@ class DeviceCommand {
         } else {
             initialize_wait_cmds(relay_wait_dst, wait_cmd_dst);
         }
-        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     void add_dispatch_wait_with_prefetch_stall(
         uint8_t barrier, uint32_t address, uint32_t count, uint8_t clear_count = 0, bool do_wait = true) {
         this->add_dispatch_wait(barrier, address, count, clear_count, true, do_wait);
-        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
+        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), this->pcie_alignment);
         auto initialize_stall_cmd = [&](CQPrefetchCmd *stall_cmd) {
             *stall_cmd = {};
             stall_cmd->base.cmd_id = CQ_PREFETCH_CMD_STALL;
@@ -129,7 +130,7 @@ class DeviceCommand {
     }
 
     void add_prefetch_wait_for_event(uint32_t event_id, uint32_t event_addr) {
-        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
+        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), this->pcie_alignment);
         auto initialize_wait_cmd = [&](CQPrefetchCmd *wait_cmd) {
             *wait_cmd = {};
             wait_cmd->base.cmd_id = CQ_PREFETCH_CMD_WAIT_FOR_EVENT;
@@ -171,7 +172,7 @@ class DeviceCommand {
     }
 
     void add_prefetch_relay_linear(uint32_t noc_xy_addr, uint32_t lengthB, uint32_t addr) {
-        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
+        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), this->pcie_alignment);
         auto initialize_relay_linear_cmd = [&](CQPrefetchCmd *relay_linear_cmd) {
             relay_linear_cmd->base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR;
             relay_linear_cmd->relay_linear.noc_xy_addr = noc_xy_addr;
@@ -196,7 +197,7 @@ class DeviceCommand {
         uint32_t page_size,
         uint32_t pages,
         uint16_t length_adjust = 0) {
-        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
+        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), this->pcie_alignment);
         auto initialize_relay_paged_cmd = [&](CQPrefetchCmd *relay_paged_cmd) {
             relay_paged_cmd->base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED;
             relay_paged_cmd->relay_paged.packed_page_flags = (is_dram << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT) |
@@ -226,7 +227,7 @@ class DeviceCommand {
         static_assert(sizeof(CQPrefetchRelayPagedPackedSubCmd) % sizeof(uint32_t) == 0);
 
         uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQPrefetchRelayPagedPackedSubCmd);
-        uint32_t increment_sizeB = align(sub_cmds_sizeB + sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
+        uint32_t increment_sizeB = align(sub_cmds_sizeB + sizeof(CQPrefetchCmd), this->pcie_alignment);
         auto initialize_relay_paged_cmd = [&](CQPrefetchCmd *relay_paged_cmd) {
             relay_paged_cmd->base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED_PACKED;
             relay_paged_cmd->relay_paged_packed.total_length = length;
@@ -278,7 +279,7 @@ class DeviceCommand {
 
         if constexpr (inline_data) {
             TT_ASSERT(data != nullptr);  // compiled out?
-            uint32_t increment_sizeB = align(data_sizeB, PCIE_ALIGNMENT);
+            uint32_t increment_sizeB = align(data_sizeB, this->pcie_alignment);
             this->add_data(data, data_sizeB, increment_sizeB);
         }
     }
@@ -316,7 +317,7 @@ class DeviceCommand {
 
         if (inline_data) {
             TT_ASSERT(data != nullptr);  // compiled out?
-            uint32_t increment_sizeB = align(data_sizeB, PCIE_ALIGNMENT);
+            uint32_t increment_sizeB = align(data_sizeB, this->pcie_alignment);
             this->add_data(data, data_sizeB, increment_sizeB);
         }
     }
@@ -346,11 +347,11 @@ class DeviceCommand {
             TT_ASSERT(data != nullptr);  // compiled out?
             this->add_data(data, data_sizeB, data_sizeB);
         }
-        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     void add_prefetch_exec_buf(uint32_t base_addr, uint32_t log_page_size, uint32_t pages) {
-        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
+        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), this->pcie_alignment);
         auto initialize_exec_buf_cmd = [&](CQPrefetchCmd *exec_buf_cmd) {
             exec_buf_cmd->base.cmd_id = CQ_PREFETCH_CMD_EXEC_BUF;
             exec_buf_cmd->exec_buf.base_addr = base_addr;
@@ -386,7 +387,7 @@ class DeviceCommand {
         } else {
             initialize_write_offset_cmd(write_offset_cmd_dst);
         }
-        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     void add_dispatch_terminate() {
@@ -404,11 +405,11 @@ class DeviceCommand {
         } else {
             initialize_terminate_cmd(terminate_cmd_dst);
         }
-        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     void add_prefetch_terminate() {
-        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
+        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), this->pcie_alignment);
         auto initialize_terminate_cmd = [&](CQPrefetchCmd *terminate_cmd) {
             *terminate_cmd = {};
             terminate_cmd->base.cmd_id = CQ_PREFETCH_CMD_TERMINATE;
@@ -429,7 +430,7 @@ class DeviceCommand {
             // prefetch exec_buf_end behaves as a relay_inline
             exec_buf_end_cmd->base.cmd_id = CQ_PREFETCH_CMD_EXEC_BUF_END;
             exec_buf_end_cmd->relay_inline.length = sizeof(CQDispatchCmd);
-            exec_buf_end_cmd->relay_inline.stride = align(sizeof(CQDispatchCmd) + sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
+            exec_buf_end_cmd->relay_inline.stride = align(sizeof(CQDispatchCmd) + sizeof(CQPrefetchCmd), this->pcie_alignment);
         };
         auto initialize_dispatch_exec_buf_end_cmd = [&](CQDispatchCmd *exec_buf_end_cmd) {
             exec_buf_end_cmd->base.cmd_id = CQ_DISPATCH_CMD_EXEC_BUF_END;
@@ -449,7 +450,7 @@ class DeviceCommand {
             initialize_prefetch_exec_buf_end_cmd(prefetch_exec_buf_end_cmd_dst);
             initialize_dispatch_exec_buf_end_cmd(dispatch_exec_buf_end_cmd_dst);
         }
-        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     void update_cmd_sequence(uint32_t cmd_offsetB, const void *new_data, uint32_t data_sizeB) {
@@ -515,11 +516,11 @@ class DeviceCommand {
         this->memcpy((char *)this->cmd_region + this->cmd_write_offsetB, &sub_cmds[offset_idx], sub_cmds_sizeB);
 
         uint32_t increment_sizeB =
-            align(sub_cmds_sizeB, L1_ALIGNMENT);  // this assumes CQDispatchCmd is L1_ALIGNEMENT aligned
+            align(sub_cmds_sizeB, this->l1_alignment);  // this assumes CQDispatchCmd is L1 aligned
         this->cmd_write_offsetB += increment_sizeB;
 
         // copy the actual data
-        increment_sizeB = align(packed_data_sizeB, L1_ALIGNMENT);
+        increment_sizeB = align(packed_data_sizeB, this->l1_alignment);
         uint32_t num_data_copies = no_stride ? 1 : num_sub_cmds;
         for (uint32_t i = offset_idx; i < offset_idx + num_data_copies; ++i) {
             this->memcpy(
@@ -529,7 +530,7 @@ class DeviceCommand {
             this->cmd_write_offsetB += increment_sizeB;
         }
 
-        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     // Tuple in data_collection is:
@@ -587,11 +588,11 @@ class DeviceCommand {
         this->memcpy((char *)this->cmd_region + this->cmd_write_offsetB, &sub_cmds[offset_idx], sub_cmds_sizeB);
 
         uint32_t increment_sizeB =
-            align(sub_cmds_sizeB, L1_ALIGNMENT);  // this assumes CQDispatchCmd is L1_ALIGNEMENT aligned
+            align(sub_cmds_sizeB, this->l1_alignment);  // this assumes CQDispatchCmd is L1 aligned
         this->cmd_write_offsetB += increment_sizeB;
 
         // copy the actual data
-        increment_sizeB = align(packed_data_sizeB, L1_ALIGNMENT);
+        increment_sizeB = align(packed_data_sizeB, this->l1_alignment);
         uint32_t num_data_copies = no_stride ? 1 : num_sub_cmds;
         for (uint32_t i = offset_idx; i < offset_idx + num_data_copies; ++i) {
             uint32_t offset = 0;
@@ -605,7 +606,7 @@ class DeviceCommand {
             this->cmd_write_offsetB += increment_sizeB;
         }
 
-        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     void add_dispatch_write_packed_large(
@@ -619,7 +620,7 @@ class DeviceCommand {
         static_assert(sizeof(CQDispatchWritePackedLargeSubCmd) % sizeof(uint32_t) == 0);
         uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQDispatchWritePackedLargeSubCmd);
         constexpr bool flush_prefetch = false;
-        uint32_t payload_size = align(sizeof(CQDispatchCmd) + sub_cmds_sizeB, L1_ALIGNMENT);
+        uint32_t payload_size = align(sizeof(CQDispatchCmd) + sub_cmds_sizeB, this->l1_alignment);
         this->add_prefetch_relay_inline(flush_prefetch, payload_size);
 
         auto initialize_write_packed_large_cmd = [&](CQDispatchCmd *write_packed_large_cmd) {
@@ -628,7 +629,7 @@ class DeviceCommand {
             write_packed_large_cmd->write_packed_large.alignment = alignment;
             write_packed_large_cmd->write_packed_large.write_offset_index = write_offset_index;
         };
-        uint32_t payload_dst_size = align(sizeof(CQPrefetchCmd) + payload_size, PCIE_ALIGNMENT) - sizeof(CQPrefetchCmd);
+        uint32_t payload_dst_size = align(sizeof(CQPrefetchCmd) + payload_size, this->pcie_alignment) - sizeof(CQPrefetchCmd);
         CQDispatchCmd * write_packed_large_cmd_dst = this->reserve_space<CQDispatchCmd *>(payload_dst_size);
         char * write_packed_large_sub_cmds_dst = (char *)write_packed_large_cmd_dst + sizeof(CQDispatchCmd);
 
@@ -641,7 +642,7 @@ class DeviceCommand {
         }
 
         this->memcpy(write_packed_large_sub_cmds_dst, &sub_cmds[offset_idx], sub_cmds_sizeB);
-        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     template <typename CommandPtr, bool data = false>
@@ -667,7 +668,7 @@ class DeviceCommand {
         auto initialize_relay_write = [&](CQPrefetchCmd *relay_write) {
             relay_write->base.cmd_id = flush ? CQ_PREFETCH_CMD_RELAY_INLINE : CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH;
             relay_write->relay_inline.length = lengthB;
-            relay_write->relay_inline.stride = align(sizeof(CQPrefetchCmd) + lengthB, PCIE_ALIGNMENT);
+            relay_write->relay_inline.stride = align(sizeof(CQPrefetchCmd) + lengthB, this->pcie_alignment);
         };
         CQPrefetchCmd *relay_write_dst = this->reserve_space<CQPrefetchCmd *>(sizeof(CQPrefetchCmd));
 
@@ -720,6 +721,8 @@ class DeviceCommand {
     uint32_t cmd_sequence_sizeB = 0;
     void *cmd_region = nullptr;
     uint32_t cmd_write_offsetB = 0;
+    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
+    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
     vector_memcpy_aligned<uint32_t> cmd_region_vector;
 };
