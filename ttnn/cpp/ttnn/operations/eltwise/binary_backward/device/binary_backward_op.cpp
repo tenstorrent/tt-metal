@@ -177,13 +177,16 @@ std::vector<Tensor> ExecuteBackwardSub::invoke(
     return grad_tensor;
 }
 
-std::vector<Tensor> ExecuteBackwardSub::invoke(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    grad_tensor.emplace_back(grad);
-    Tensor grad_b = ttnn::multiply(ttnn::neg(grad, output_mem_config), 1.0f, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_b);
-    return grad_tensor;
+std::vector<std::optional<Tensor>> ExecuteBackwardSub::invoke(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& other,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+        return ttnn::subalpha_bw(queue_id, grad, input, other, 1.0f, output_mem_config, are_required_outputs, input_grad, other_grad);
 }
 
 std::vector<ComplexTensor> ExecuteBackwardSub::invoke(

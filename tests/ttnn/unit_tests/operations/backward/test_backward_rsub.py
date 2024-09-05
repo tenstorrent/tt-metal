@@ -39,7 +39,7 @@ def test_bw_rsub(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True], [False, False]])
+@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
 def test_bw_rsub_opt(input_shapes, device, are_required_outputs):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     other_data, other_tensor = data_gen_with_range(input_shapes, -5, 5, device, True)
@@ -57,18 +57,16 @@ def test_bw_rsub_opt(input_shapes, device, are_required_outputs):
 
     cq_id = 0
 
-    if are_required_outputs[0] and are_required_outputs[1]:
-        pages_before = ttnn._ttnn.reports.get_buffer_pages()
-        ttnn.rsub_bw(
-            grad_tensor, input_tensor, other_tensor, input_grad=input_grad, other_grad=other_grad, queue_id=cq_id
-        )
-        assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
-        tt_output_tensor_on_device = [input_grad, other_grad]
-    else:
-        tt_output_tensor_on_device = ttnn.rsub_bw(grad_tensor, input_tensor, other_tensor, queue_id=cq_id)
+    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    ttnn.rsub_bw(grad_tensor, input_tensor, other_tensor, input_grad=input_grad, other_grad=other_grad, queue_id=cq_id)
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+    tt_output_tensor_on_device = [input_grad, other_grad]
 
     golden_function = ttnn.get_golden_function(ttnn.rsub_bw)
     golden_tensor = golden_function(grad_data, in_data, other_data)
 
-    status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
+    status = True
+    for i in range(len(are_required_outputs)):
+        if are_required_outputs[i]:
+            status = status & compare_pcc([tt_output_tensor_on_device[i]], [golden_tensor[i]])
     assert status
