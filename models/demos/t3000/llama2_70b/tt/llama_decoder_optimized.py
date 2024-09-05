@@ -15,7 +15,7 @@ from models.demos.t3000.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_opti
 class TtLlamaDecoder_optimized:
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         layer_num,
@@ -28,8 +28,8 @@ class TtLlamaDecoder_optimized:
         super().__init__()
 
         self.state_dict = state_dict
-        self.device_mesh = device_mesh
-        self.num_devices = device_mesh.get_num_devices()
+        self.mesh_device = mesh_device
+        self.num_devices = mesh_device.get_num_devices()
         self.model_config = model_config
         self.read_cache = read_cache
 
@@ -48,7 +48,7 @@ class TtLlamaDecoder_optimized:
         self.cache_path = cache_path
 
         self.attention = TtLlamaAttention_optimized(
-            device_mesh,
+            mesh_device,
             state_dict,
             base_url,
             layer_num,
@@ -60,7 +60,7 @@ class TtLlamaDecoder_optimized:
         )
 
         self.mlp = TtLlamaMLP_optimized(
-            device_mesh,
+            mesh_device,
             state_dict,
             base_url,
             layer_num,
@@ -100,45 +100,45 @@ class TtLlamaDecoder_optimized:
             pt_attn_norm,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=self.model_config["DRAM_MEMCFG"],
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             cache_file_name=self.cache_path / attn_norm_str,
         )
-        self.attn_norm = ttnn.to_device(attn_norm_ttnn, self.device_mesh)
+        self.attn_norm = ttnn.to_device(attn_norm_ttnn, self.mesh_device)
 
         attn_norm_sharded_ttnn = ttnn.as_tensor(
             pt_attn_norm,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=self.model_config["DRAM_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=2),
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=2),
             cache_file_name=self.cache_path / attn_norm_sharded_str,
         )
-        self.attn_norm_sharded = ttnn.to_device(attn_norm_sharded_ttnn, self.device_mesh)
+        self.attn_norm_sharded = ttnn.to_device(attn_norm_sharded_ttnn, self.mesh_device)
 
         ffn_norm_ttnn = ttnn.as_tensor(
             pt_ffn_norm,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=self.model_config["DRAM_MEMCFG"],
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             cache_file_name=self.cache_path / ffn_norm_str,
         )
-        self.ffn_norm = ttnn.to_device(ffn_norm_ttnn, self.device_mesh)
+        self.ffn_norm = ttnn.to_device(ffn_norm_ttnn, self.mesh_device)
 
         ffn_norm_sharded_ttnn = ttnn.as_tensor(
             pt_ffn_norm,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=self.model_config["DRAM_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=2),
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=2),
             cache_file_name=self.cache_path / ffn_norm_sharded_str,
         )
-        self.ffn_norm_sharded = ttnn.to_device(ffn_norm_sharded_ttnn, self.device_mesh)
+        self.ffn_norm_sharded = ttnn.to_device(ffn_norm_sharded_ttnn, self.mesh_device)
 
     def __call__(
         self,
@@ -264,7 +264,7 @@ class TtLlamaDecoder_optimized:
         # xs_replicated = []
         # for i in range(self.num_devices):
         #     xs_replicated.append(
-        #         ttnn.experimental.tensor.typecast(ttnn.experimental.tensor.clone(xs[i]), dtype=ttnn.bfloat8_b)
+        #         ttnn.experimental.tensor.typecast(ttnn.clone(xs[i]), dtype=ttnn.bfloat8_b)
         #     )
 
         attn_norm_interleaved = self.tt_distributed_rmsnorm(xs, self.norm_eps, self.attn_norm_sharded)

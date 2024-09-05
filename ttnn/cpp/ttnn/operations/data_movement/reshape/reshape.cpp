@@ -6,9 +6,9 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/run_operation.hpp"
 #include "reshape.hpp"
-
+#include "tt_metal/common/constants.hpp"
 #include <ttnn/deprecated/tt_numpy/functions.hpp>
-#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "device/reshape_op.hpp"
 
@@ -56,7 +56,7 @@ ttnn::Tensor ReshapeOperation::invoke(
     int H,
     int W,
     const std::optional<MemoryConfig>& memory_config_arg) {
-
+    using namespace tt::constants;
     auto output_mem_config = memory_config_arg.value_or(input_tensor.memory_config());
     // No-op (Will do a tensor copy)
     tt::tt_metal::Shape output_shape = tt::tt_metal::infer_dims_for_reshape(N, C, H, W, input_tensor.volume());
@@ -68,7 +68,7 @@ ttnn::Tensor ReshapeOperation::invoke(
         return input_tensor.reshape(N, C, H, W);
     }
     if (input_tensor.get_legacy_shape() == output_shape) {
-        return AutoFormat::move_tensor_to_mem_config(input_tensor, output_mem_config);
+        return ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(input_tensor, output_mem_config);
     }
     uint32_t ROW_MAJOR_WIDTH = 8;
     if (input_tensor.get_layout() == Layout::ROW_MAJOR &&

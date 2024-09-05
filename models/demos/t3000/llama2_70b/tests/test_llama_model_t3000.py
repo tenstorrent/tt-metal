@@ -5,7 +5,7 @@
 import pytest
 
 from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0
-from models.demos.t3000.llama2_70b.tt.llama_common import setup_llama_env, check_device_mesh
+from models.demos.t3000.llama2_70b.tt.llama_common import setup_llama_env, check_mesh_device
 from models.demos.t3000.llama2_70b.tests.test_llama_model import run_test_LlamaModel_inference
 
 
@@ -44,7 +44,7 @@ def test_LlamaModel_inference(
     seq_len,
     pcc,
     n_layers,
-    t3k_device_mesh,
+    t3k_mesh_device,
     max_batch_size,
     max_context_len,
     llama_version,
@@ -67,10 +67,10 @@ def test_LlamaModel_inference(
         max_context_len=max_context_len,
     )
 
-    check_device_mesh(t3k_device_mesh, model_config)
+    check_mesh_device(t3k_mesh_device, model_config)
 
     run_test_LlamaModel_inference(
-        t3k_device_mesh,
+        t3k_mesh_device,
         batch,
         seq_len,
         pcc,

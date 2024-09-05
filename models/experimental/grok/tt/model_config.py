@@ -125,14 +125,14 @@ class TtModelArgs:
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
 
         # Set configurations for sharded type
-        self.model_config["WIDTH_SHARDED_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttnn.experimental.tensor.BufferType.L1
+        self.model_config["WIDTH_SHARDED_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1
         )
-        self.model_config["HEIGHT_SHARDED_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.experimental.tensor.BufferType.L1
+        self.model_config["HEIGHT_SHARDED_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1
         )
-        self.model_config["BLOCK_SHARDED_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED, ttnn.experimental.tensor.BufferType.L1
+        self.model_config["BLOCK_SHARDED_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1
         )
 
         # Create sharded memory configs for different ops
@@ -348,7 +348,7 @@ class TtModelArgs:
         )
 
         # Create Compute kernel configs
-        self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+        self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"] = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity
             math_approx_mode=False,
             fp32_dest_acc_en=True,

@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_mean_backward/moreh_mean_backward_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_mean_backward/moreh_mean_backward_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 
 namespace tt {
 using namespace constants;
@@ -15,7 +15,57 @@ namespace operations {
 
 namespace primary {
 
-operation::ProgramWithCallbacks moreh_mean_backward_program(const Tensor &output_grad, const Tensor &input_grad) {
+namespace {
+
+void get_tensor_dim(std::vector<uint32_t> &dim, const Shape &shape) {
+    const auto rank = shape.rank();
+    for (auto i = 0; i < rank; ++i) {
+        auto idx = rank - 1 - i;
+
+        // last 2-dim
+        if (idx == rank - 1 || idx == rank - 2) {
+            dim[i] = shape[idx] / TILE_HEIGHT;
+        } else {
+            dim[i] = shape[idx];
+        }
+    }
+
+    log_debug(LogOp, "rank {}", rank);
+    for (auto i = 0; i < rank; ++i) {
+        log_debug(LogOp, "dim[{}] = {}", i, dim[i]);
+    }
+}
+
+Shape get_output_grad_shape(
+    const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keepdim) {
+    if (keepdim) {
+        return output_grad.get_legacy_shape();
+    }
+
+    auto shape = input_grad.get_legacy_shape();
+    auto rank = shape.rank();
+    auto padding = shape.padding();
+    for (auto dim : dims) {
+        TT_FATAL(dim < rank, "dim {} < rank {}", dim, rank);
+        bool is_tile_dim = (dim == rank - 1 || dim == rank - 2);
+        if (is_tile_dim) {
+            shape[dim] = TILE_HEIGHT;
+            padding[dim] = Padding::PadDimension{0, 31};
+        } else {
+            shape[dim] = 1;
+        }
+    }
+
+    return Shape(shape, padding);
+}
+}  // namespace
+
+operation::ProgramWithCallbacks moreh_mean_backward_impl(
+    const Tensor &output_grad,
+    const Tensor &input_grad,
+    const std::vector<int64_t> &dims,
+    const bool keepdim,
+    const ttnn::DeviceComputeKernelConfig &compute_kernel_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -28,49 +78,54 @@ operation::ProgramWithCallbacks moreh_mean_backward_program(const Tensor &output
     const auto cb_data_format = datatype_to_dataformat_converter(output_grad.get_dtype());
     const auto single_tile_size = detail::TileSize(cb_data_format);
 
-    const auto &output_grad_shape = output_grad.get_legacy_shape();
-    const auto &output_grad_shape_wo_padding = output_grad_shape.without_padding();
-    const auto output_grad_n = output_grad_shape[0];
-    const auto output_grad_c = output_grad_shape[1];
-    const auto output_grad_ht = output_grad_shape[2] / TILE_HEIGHT;
-    const auto output_grad_wt = output_grad_shape[3] / TILE_WIDTH;
-    const auto output_grad_origin_h = output_grad_shape_wo_padding[2];
-    const auto output_grad_origin_w = output_grad_shape_wo_padding[3];
-
     const auto &input_grad_shape = input_grad.get_legacy_shape();
     const auto &input_grad_shape_wo_padding = input_grad_shape.without_padding();
-    const auto input_grad_n = input_grad_shape[0];
-    const auto input_grad_c = input_grad_shape[1];
-    const auto input_grad_ht = input_grad_shape[2] / TILE_HEIGHT;
-    const auto input_grad_wt = input_grad_shape[3] / TILE_WIDTH;
-    const auto input_grad_origin_h = input_grad_shape_wo_padding[2];
-    const auto input_grad_origin_w = input_grad_shape_wo_padding[3];
+    const uint32_t input_grad_rank = input_grad_shape.rank();
 
-    const auto n_need_bcast = (output_grad_n != input_grad_n);
-    const auto c_need_bcast = (output_grad_c != input_grad_c);
-    const auto ht_need_bcast = (output_grad_origin_h != input_grad_origin_h);
-    const auto wt_need_bcast = (output_grad_origin_w != input_grad_origin_w);
+    std::vector<uint32_t> input_grad_dim(input_grad_rank, 1);
+    log_debug(LogOp, "input_grad");
+    get_tensor_dim(input_grad_dim, input_grad_shape);
+    const auto &output_grad_shape = get_output_grad_shape(output_grad, input_grad, dims, keepdim);
+    const auto &output_grad_shape_wo_padding = output_grad_shape.without_padding();
+
+    std::vector<uint32_t> output_grad_dim(input_grad_rank, 1);
+    log_debug(LogOp, "output_grad");
+    get_tensor_dim(output_grad_dim, output_grad_shape);
+
+    std::vector<uint32_t> need_bcast_dim(input_grad_rank, 0);
+    for (auto i = 0; i < input_grad_rank; ++i) {
+        auto idx = input_grad_rank - 1 - i;
+        bool is_tile_dim = (idx == input_grad_rank - 1 || idx == input_grad_rank - 2);
+
+        if (is_tile_dim) {
+            need_bcast_dim[i] = (output_grad_shape_wo_padding[idx] != input_grad_shape_wo_padding[idx]);
+        } else {
+            need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
+        }
+    }
     const auto num_input_grad_tiles = input_grad.volume() / TILE_HW;
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+        get_compute_kernel_config_args(output_grad.device()->arch(), compute_kernel_config);
 
-    uint32_t num_dim = 1;
-    if (n_need_bcast) num_dim *= input_grad_n;
-    if (c_need_bcast) num_dim *= input_grad_c;
-    if (ht_need_bcast) num_dim *= input_grad_origin_h;
-    if (wt_need_bcast) num_dim *= input_grad_origin_w;
-
-    log_debug(LogOp, "num_dim {}", num_dim);
+    for (auto i = 0; i < input_grad_rank; ++i) {
+        log_debug(LogOp, "need_bcast_dim [{}] = {}", i, need_bcast_dim[i]);
+    }
+    log_debug(LogOp, "num_input_grad_tiles {}", num_input_grad_tiles);
+    log_debug(
+        LogOp,
+        "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
+        math_fidelity,
+        math_approx_mode,
+        fp32_dest_acc_en,
+        packer_l1_acc);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
+
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
 
-    const uint32_t in0_t = 2;        // input
-    const uint32_t in1_t = 1;        // zero
-    const uint32_t in2_t = 1;        // scalar
-    const uint32_t intermed0_t = 1;  // accumulated mean
-    const uint32_t out0_t = 2;       // output
     const auto
         [num_cores_to_be_used,
          all_cores,
@@ -87,45 +142,61 @@ operation::ProgramWithCallbacks moreh_mean_backward_program(const Tensor &output
         all_cores,
         cb_data_format,
         {
-            {CB::c_in0, in0_t},              // input
-            {CB::c_in1, in1_t},              // zero
-            {CB::c_in2, in2_t},              // scalar
-            {CB::c_intermed0, intermed0_t},  // temp
-            {CB::c_out0, out0_t},            // output
+            {CB::c_in0, 2},  // input
+            {CB::c_in1, 1},  // zero
+            {CB::c_in2, 1},  // scalar
+            {CB::c_intermed0, 1},
+            {CB::c_out0, 2},  // output
         });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> reader_compile_time_args;
-    std::vector<uint32_t> writer_compile_time_args;
-    const auto reader_kernel_file = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean_backward/kernels/reader_moreh_mean_backward.cpp";
-    const auto writer_kernel_file = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean_backward/kernels/writer_moreh_mean_backward.cpp";
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(is_dram(output_grad)), input_grad_rank};
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(is_dram(input_grad))};
+    const auto reader_kernel_file =
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean_backward/kernels/reader_moreh_mean_backward.cpp";
+    const auto writer_kernel_file =
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean_backward/kernels/writer_moreh_mean_backward.cpp";
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1};
     std::map<string, string> compute_defines;
-    const auto compute_kernel_file = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean_backward/kernels/moreh_mean_backward.cpp";
-    const auto compute_kernel_1_id = CreateComputeKernel(
-        program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines);
-
-    std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
-    if (!core_group_2.ranges().empty()) {
-        const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2};
-        compute_kernel_2_id = CreateComputeKernel(
-            program,
-            compute_kernel_file,
-            {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
-            compute_defines);
+    if (fp32_dest_acc_en) {
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
+
+    const auto compute_kernel_file =
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean_backward/kernels/moreh_mean_backward.cpp";
+    const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1, need_bcast_dim[0], need_bcast_dim[1]};
+    const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2, need_bcast_dim[0], need_bcast_dim[1]};
+    auto compute_kernel_ids = CreateComputeKernel(
+        program,
+        compute_kernel_file,
+        {
+            {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
+            {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
+        },
+        ComputeKernelConfig{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            // TODO(hyungsuk): change preserve_fp32_precision from false to fp32_dest_acc_en after fix #10337
+            // .preserve_fp32_precision = fp32_dest_acc_en,
+            .preserve_fp32_precision = false,
+            .math_approx_mode = math_approx_mode,
+            .defines = compute_defines});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
+    uint32_t num_dim = 1;
+    for (auto dim : dims) {
+        num_dim *= input_grad_shape_wo_padding[dim];
+    }
+
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -138,53 +209,20 @@ operation::ProgramWithCallbacks moreh_mean_backward_program(const Tensor &output
             TT_THROW("Core not in specified core ranges.");
         }
 
-        SetRuntimeArgs(
-            program,
-            reader_kernel_id,
-            core,
-            {output_grad.buffer()->address(),
-             num_tiles_per_core,
-             tile_offset,
-             static_cast<uint32_t>(is_dram(output_grad)),
-             output_grad_n,
-             output_grad_c,
-             output_grad_ht,
-             output_grad_wt,
-             input_grad_n,
-             input_grad_c,
-             input_grad_ht,
-             input_grad_wt,
-             n_need_bcast,
-             c_need_bcast,
-             ht_need_bcast,
-             wt_need_bcast,
-             num_dim});
+        std::vector<uint32_t> reader_rt_args;
+        reader_rt_args.push_back(output_grad.buffer()->address());
+        reader_rt_args.push_back(num_tiles_per_core);
+        reader_rt_args.push_back(tile_offset);
+        reader_rt_args.push_back(num_dim);
+        reader_rt_args.insert(reader_rt_args.end(), output_grad_dim.begin(), output_grad_dim.end());
+        reader_rt_args.insert(reader_rt_args.end(), input_grad_dim.begin(), input_grad_dim.end());
+        reader_rt_args.insert(reader_rt_args.end(), need_bcast_dim.begin(), need_bcast_dim.end());
+
+        SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
 
         SetRuntimeArgs(
-            program,
-            writer_kernel_id,
-            core,
-            {input_grad.buffer()->address(),
-             num_tiles_per_core,
-             tile_offset,
-             static_cast<uint32_t>(is_dram(input_grad))});
+            program, writer_kernel_id, core, {input_grad.buffer()->address(), num_tiles_per_core, tile_offset});
 
-        if (core_group_1.core_coord_in_core_ranges(core)) {
-            SetRuntimeArgs(
-                program,
-                compute_kernel_1_id,
-                core,
-                {num_tiles_per_core, n_need_bcast, c_need_bcast, ht_need_bcast, wt_need_bcast});
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
-            TT_ASSERT(compute_kernel_2_id.has_value());
-            SetRuntimeArgs(
-                program,
-                compute_kernel_2_id.value(),
-                core,
-                {num_tiles_per_core, n_need_bcast, c_need_bcast, ht_need_bcast, wt_need_bcast});
-        } else {
-            TT_ASSERT(false, "Core not in specified core ranges.");
-        }
         tile_offset += num_tiles_per_core;
     }
 
@@ -195,7 +233,7 @@ operation::ProgramWithCallbacks moreh_mean_backward_program(const Tensor &output
                                                    const std::vector<std::optional<const Tensor>> &,
                                                    const std::vector<Tensor> &output_tensors) {
         const auto *output_grad_buffer = input_tensors.at(0).buffer();
-        const auto *input_grad_buffer = input_tensors.at(1).buffer();
+        const auto *input_grad_buffer = output_tensors.at(0).buffer();
         for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
             {

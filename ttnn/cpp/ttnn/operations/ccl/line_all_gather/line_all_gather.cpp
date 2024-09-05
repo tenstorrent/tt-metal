@@ -20,11 +20,11 @@ ttnn::Tensor ExecuteLineAllGather::invoke(
     const ttnn::Tensor& input_tensor,
     const uint32_t dim,
     const uint32_t cluster_axis,
-    const DeviceMesh& device_mesh,
+    const MeshDevice& mesh_device,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
     return ttnn::operations::ccl::line_all_gather(
-        input_tensor, dim, cluster_axis, device_mesh, num_links, memory_config);
+        input_tensor, dim, cluster_axis, mesh_device, num_links, memory_config);
 }
 
 }  // namespace ttnn::operations::ccl

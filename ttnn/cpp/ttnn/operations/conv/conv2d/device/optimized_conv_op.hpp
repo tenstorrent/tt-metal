@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn {
 
@@ -20,9 +20,10 @@ enum class OptimizedConvOpParallelizationStrategy {
 
 struct OptimizedConvParallelizationConfig {
     CoreCoord grid_size; // (x,y)
-    uint32_t num_cores_nhw;
-    uint32_t per_core_out_matrix_height_ntiles;
-    uint32_t per_core_out_matrix_width_ntiles;
+    uint32_t num_cores_nhw = 1;
+    uint32_t num_cores_c = 1;
+    uint32_t per_core_out_matrix_height_ntiles = 1;
+    uint32_t per_core_out_matrix_width_ntiles = 1;
     // std::size_t in0_block_w;
     // std::size_t out_subblock_h;
     // std::size_t out_subblock_w;

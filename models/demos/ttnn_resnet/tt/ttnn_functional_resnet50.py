@@ -310,7 +310,6 @@ class resnet50Bottleneck:
                 out,
                 ds_out,
                 activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)],
-                memory_config=self.output_memory_config,
             )
         else:
             out = ttnn.add(
@@ -710,11 +709,11 @@ class resnet50:
         )
 
         grid_size = (8, 4)
-        shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+        shard_grid = ttnn.CoreRangeSet(
             {
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, 0),
-                    ttnn.experimental.tensor.CoreCoord(grid_size[0] - 1, grid_size[1] - 1),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1),
                 )
             }
         )
@@ -722,11 +721,9 @@ class resnet50:
             x.volume() // x.get_legacy_shape()[-1],
             x.get_legacy_shape()[-1] // (grid_size[0] * grid_size[1]),
         ]
-        shard_spec = ttnn.experimental.tensor.ShardSpec(
-            shard_grid, shard_shape, ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
-        )
-        width_sharded_mem_config = ttnn.types.MemoryConfig(
-            ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec
+        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+        width_sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec
         )
         x = ttnn.to_memory_config(x, width_sharded_mem_config)
         unpadded_shape = x.get_legacy_shape()

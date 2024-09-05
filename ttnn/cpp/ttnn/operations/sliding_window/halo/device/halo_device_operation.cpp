@@ -19,9 +19,9 @@ void HaloDeviceOperation::validate(const std::vector<Tensor> &input_tensors) con
         // skip the untilize, only do halo
         log_debug(tt::LogOp, "Input is ROW_MAJOR, no need to untilize.");
     } else {
-        TT_FATAL(input_tensor.volume() % TILE_HW == 0);
+        TT_FATAL(input_tensor.volume() % tt::constants::TILE_HW == 0);
     }
-    TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Only height or block sharded tensors are supported.");
+    TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Only height, width or block sharded tensors are supported.");
     TT_FATAL(input_tensor.shard_spec().has_value(), "Shard spec should not be empty");
 }
 
@@ -125,11 +125,10 @@ Tensor halo_op(const Tensor& input_tensor,
                 MemoryConfig output_memory_config,
                 bool is_out_tiled) {
     TT_ASSERT(input_tensor.memory_config().is_sharded());
-    TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
+    TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED);
     // NOTE: for HEIGHT_SHARDED, ncores_nhw == ncores
     //       for BLOCK_SHARDED, ncores_nhw is just the ncores along height dim (last tensor dim is split along width)
     bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
-
     auto halo_func = [config, pad_val, remote_read, is_block_sharded, transpose_mcast, reshard_num_cores_nhw, output_memory_config, is_out_tiled]
         (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
         auto input_tensor = input_tensors.at(0);

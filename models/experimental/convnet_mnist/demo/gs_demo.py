@@ -27,7 +27,7 @@ from models.experimental.convnet_mnist.convnet_mnist_utils import get_test_data
 def test_mnist_inference():
     device = ttnn.open_device(0)
 
-    ttnn.experimental.device.SetDefaultDevice(device)
+    ttnn.SetDefaultDevice(device)
 
     tt_convnet, pt_convnet = convnet_mnist(device)
 

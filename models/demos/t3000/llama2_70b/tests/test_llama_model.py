@@ -19,7 +19,7 @@ from models.demos.t3000.llama2_70b.tt.llama_model_optimized import TtLlamaModel_
 from models.utility_functions import skip_for_grayskull
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
-    check_device_mesh,
+    check_mesh_device,
     extract_pcc_from_log,
     MAX_SEQ_LEN,
     MAX_SEQ_LEN_LLAMA3,
@@ -58,7 +58,7 @@ class PytorchLlamaModel(torch.nn.Module):
 
 
 def run_test_LlamaModel_inference(
-    t3k_device_mesh,
+    t3k_mesh_device,
     batch,
     seq_len,
     pcc,
@@ -100,7 +100,7 @@ def run_test_LlamaModel_inference(
     pytorch_model = PytorchLlamaModel(hugging_face_reference_model)
     # TT model -------------------------------------------------------------------------
     tt_model = TtLlamaModel_optimized(
-        t3k_device_mesh,
+        t3k_mesh_device,
         state_dict,
         BASE_URL,
         n_layers,
@@ -159,7 +159,7 @@ def run_test_LlamaModel_inference(
         del tt_inp_emb, rot_mat, attn_mask
 
         tt_out = ttnn.from_device(tt_out)
-        tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=3))
+        tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
         tt_out = tt_out[..., : configuration.vocab_size]
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze()  # [batch, hidden_dim]
         if model_config["LLM_MODE"] == "decode":
@@ -214,7 +214,7 @@ def run_test_LlamaModel_inference(
 
     tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_model.layers[0].attention.layer_past]
     tt_layer_present_all = [
-        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0)).transpose(0, 1)[:batch, ...]
+        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0)).transpose(0, 1)[:batch, ...]
         for lp in tt_layer_present_all
     ]
 
@@ -286,7 +286,7 @@ def test_LlamaModel_inference(
     seq_len,
     pcc,
     n_layers,
-    t3k_device_mesh,
+    t3k_mesh_device,
     max_batch_size,
     max_context_len,
     llama_version,
@@ -310,10 +310,10 @@ def test_LlamaModel_inference(
         max_context_len=max_context_len,
     )
 
-    check_device_mesh(t3k_device_mesh, model_config)
+    check_mesh_device(t3k_mesh_device, model_config)
 
     run_test_LlamaModel_inference(
-        t3k_device_mesh,
+        t3k_mesh_device,
         batch,
         seq_len,
         pcc,

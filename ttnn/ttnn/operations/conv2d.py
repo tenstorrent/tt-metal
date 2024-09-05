@@ -234,7 +234,7 @@ class ParallelConfig:
         shard_orientation: ttnn.ShardOrientation,
     ):
         # TODO: using core range set would be better
-        self.grid_size = ttnn.experimental.tensor.CoreCoord(num_cores_x, num_cores_y)
+        self.grid_size = ttnn.CoreCoord(num_cores_x, num_cores_y)
         self.num_cores_nhw = num_cores_nhw
         self.shard_scheme = shard_scheme
         self.shard_orientation = shard_orientation
@@ -261,10 +261,8 @@ class ParallelConfig:
 def get_shard_grid_from_core_grid(core_grid):
     shard_grid = None
     if isinstance(core_grid, ttnn.CoreGrid):
-        grid_coord = ttnn.experimental.tensor.CoreCoord(core_grid.x - 1, core_grid.y - 1)
-        shard_grid = ttnn.experimental.tensor.CoreRangeSet(
-            {ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), grid_coord)}
-        )
+        grid_coord = ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1)
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
     elif isinstance(core_grid, (list, tuple)):
         if len(core_grid) != 2:
             raise RuntimeError("Invalid core_grid")
@@ -273,15 +271,15 @@ def get_shard_grid_from_core_grid(core_grid):
         if not isinstance(core_grid[1], ttnn.CoreGrid):
             raise RuntimeError("Invalid core_grid type")
 
-        grid_coord_1 = ttnn.experimental.tensor.CoreCoord(core_grid[0].x - 1, core_grid[0].y - 1)
-        grid_coord_2 = ttnn.experimental.tensor.CoreCoord(core_grid[1].x - 1, core_grid[0].y)
-        shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+        grid_coord_1 = ttnn.CoreCoord(core_grid[0].x - 1, core_grid[0].y - 1)
+        grid_coord_2 = ttnn.CoreCoord(core_grid[1].x - 1, core_grid[0].y)
+        shard_grid = ttnn.CoreRangeSet(
             {
-                ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), grid_coord_1),
-                ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, core_grid[0].y), grid_coord_2),
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord_1),
+                ttnn.CoreRange(ttnn.CoreCoord(0, core_grid[0].y), grid_coord_2),
             }
         )
-    elif isinstance(core_grid, ttnn.experimental.tensor.CoreRangeSet):
+    elif isinstance(core_grid, ttnn.CoreRangeSet):
         shard_grid = core_grid
     else:
         raise RuntimeError("Invalid core_grid type")
@@ -380,7 +378,7 @@ def get_grid_size_and_num_cores_nhw_from_core_grid(core_grid, height_sharded):
             raise RuntimeError("Invalid core_grid type")
         assert height_sharded
         num_cores_nhw = (core_grid[0].x * core_grid[0].y) + core_grid[1].x
-    elif isinstance(core_grid, ttnn.experimental.tensor.CoreRangeSet):
+    elif isinstance(core_grid, ttnn.CoreRangeSet):
         grid_size = core_grid.bounding_box().grid_size()
         num_cores = core_grid.num_cores()
         if height_sharded:
@@ -421,7 +419,7 @@ def create_sharded_memory_config_from_parallel_config(tensor_shape, parallel_con
     assert channels_padded % logical_grid_size[1] == 0
     shard_shape = [nhw_shard, channels_padded // logical_grid_size[1]]
     shard_halo = False
-    shard_spec = ttnn.experimental.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
     return ttnn.MemoryConfig(shard_scheme, ttnn.BufferType.L1, shard_spec)
 
 
@@ -531,16 +529,15 @@ def conv2d(
         if config_shard_grid is not None:
             if config_shard_grid != input_shard_grid:
                 needs_reshard = True
-        input_height_sharded = input_shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        if conv_config.height_sharding is not None:
-            if input_height_sharded != conv_config.height_sharding:
+        if conv_config.shard_layout is not None:
+            if input_shard_scheme != conv_config.shard_layout:
                 needs_reshard = True
     else:
         needs_reshard = True
     parallel_config = None
     if conv_config.reshard_if_not_optimal or needs_reshard:
         optimal_parallel_config = determine_parallel_config(
-            True if conv_config.height_sharding is None else conv_config.height_sharding,
+            conv_config.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             batch_size,
             in_channels,
             output_height,
@@ -549,25 +546,24 @@ def conv2d(
             device,
         )
     if needs_reshard:
-        if conv_config.height_sharding is None:
-            # default shard scheme is height sharding
-            conv_config.height_sharding = True
+        if conv_config.shard_layout is None:
+            conv_config.shard_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
         if conv_config.core_grid is None:
             parallel_config = optimal_parallel_config
         else:
             assert config_shard_grid is not None
             grid_size, num_cores_nhw = get_grid_size_and_num_cores_nhw_from_core_grid(
-                conv_config.core_grid, conv_config.height_sharding
+                conv_config.core_grid, conv_config.conv_config.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
             )
-            shard_scheme = (
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-                if conv_config.height_sharding
-                else ttnn.TensorMemoryLayout.BLOCK_SHARDED
-            )
+
             shard_orientation = (
-                ttnn.ShardOrientation.ROW_MAJOR if conv_config.height_sharding else ttnn.ShardOrientation.COL_MAJOR
+                ttnn.ShardOrientation.ROW_MAJOR
+                if conv_config.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+                else ttnn.ShardOrientation.COL_MAJOR
             )
-            parallel_config = ParallelConfig(grid_size.y, grid_size.x, num_cores_nhw, shard_scheme, shard_orientation)
+            parallel_config = ParallelConfig(
+                grid_size.y, grid_size.x, num_cores_nhw, conv_config.shard_layout, shard_orientation
+            )
     else:
         assert ttnn.is_sharded(input_tensor)
         grid_size, num_cores_nhw = get_grid_size_and_num_cores_nhw_from_core_grid(
@@ -673,8 +669,8 @@ def conv2d(
             compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=conv_config.math_fidelity,
                 math_approx_mode=conv_config.math_approx_mode_enabled,
-                fp32_dest_acc_en=conv_config.fp32_dest_acc_en_enabled,
-                packer_l1_acc=conv_config.packer_l1_acc_enabled,
+                fp32_dest_acc_en=conv_config.fp32_dest_acc_enabled,
+                packer_l1_acc=conv_config.packer_l1_accum_enabled,
             )
         else:
             assert False, f"Unsupported device: {device}"

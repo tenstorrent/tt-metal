@@ -38,9 +38,10 @@ struct Conv2dConfig {
     bool deallocate_activation = false;
     bool reallocate_halo_output = false;
     uint32_t act_block_h_override = 0;
+    uint32_t act_block_w_div = 1; //Amount by which the maximum possible act_block_width is divided. Max act_block_w = (in_channels * window_w * window_h)/total_num_cores;
     bool reshard_if_not_optimal = false; // if true, override_sharding_config should not be set to true
     bool override_sharding_config = false; // if true, reshard_if_not_optimal should not be set to true
-    bool height_sharding = true; // used only if override_sharding_config is true
+    TensorMemoryLayout shard_layout = TensorMemoryLayout::HEIGHT_SHARDED; // used only if override_sharding_config is true
     std::optional<CoreRangeSet> core_grid = std::nullopt; // used only if override_sharding_config is true
     bool transpose_shards = true; // used only if override_sharding_config is true and if height sharding is false
     Layout output_layout = Layout::TILE;
@@ -59,9 +60,10 @@ struct Conv2dConfig {
         "deallocate_activation",
         "reallocate_halo_output",
         "act_block_h_override",
+        "act_block_w_div",
         "reshard_if_not_optimal",
         "override_sharding_config",
-        "height_sharding",
+        "shard_layout",
         "core_grid",
         "transpose_shards",
         "output_layout",
@@ -81,9 +83,10 @@ struct Conv2dConfig {
             std::cref(this->deallocate_activation),
             std::cref(this->reallocate_halo_output),
             std::cref(this->act_block_h_override),
+            std::cref(this->act_block_w_div),
             std::cref(this->reshard_if_not_optimal),
             std::cref(this->override_sharding_config),
-            std::cref(this->height_sharding),
+            std::cref(this->shard_layout),
             std::cref(this->core_grid),
             std::cref(this->transpose_shards),
             std::cref(this->output_layout),
@@ -101,7 +104,7 @@ uint32_t find_closest_common_largest_divisor(uint32_t num1, uint32_t num2, uint3
 
 template <typename T>
 sliding_window::ParallelConfig determine_parallel_config(
-    bool height_sharding,
+    const TensorMemoryLayout shard_layout,
     uint32_t batch_size,
     uint32_t input_channels,
     uint32_t output_height,
@@ -194,7 +197,7 @@ struct Conv2dOperation{
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
-        DeviceMesh * device,
+        MeshDevice * device,
         uint32_t in_channels,
         uint32_t out_channels,
         uint32_t batch_size,

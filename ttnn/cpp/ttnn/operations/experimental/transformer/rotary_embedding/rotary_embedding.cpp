@@ -5,7 +5,7 @@
 #include "rotary_embedding.hpp"
 #include "device/rotary_embedding_device_operation.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
 #include "ttnn/operation.hpp"
 
@@ -17,11 +17,11 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
     const Tensor& sin_cache,
     const std::optional<uint32_t> token_index,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
 
-    TT_FATAL(input_tensor.get_legacy_shape()[-1] % (TILE_WIDTH * 2) == 0,
+    TT_FATAL(input_tensor.get_legacy_shape()[-1] % (tt::constants::TILE_WIDTH * 2) == 0,
             fmt::format("Input X dimension ({}) must be divisible by {} for tiling.",
-            input_tensor.get_legacy_shape()[-1], TILE_WIDTH * 2));
+            input_tensor.get_legacy_shape()[-1], tt::constants::TILE_WIDTH * 2));
 
     uint32_t seq_len = input_tensor.get_legacy_shape()[-2];
     uint32_t B = input_tensor.get_legacy_shape()[0];
@@ -54,7 +54,7 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
                             cos_cache.get_legacy_shape()[-2]));
     }
 
-    auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch() : tt::tt_metal::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch() : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
 
     tt::tt_metal::MemoryConfig default_memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
@@ -62,14 +62,14 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
         default_memory_config = input_tensor.memory_config();
     }
 
-    tt::tt_metal::Shape input_pad_shape = tt::tt_metal::AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
-    tt::tt_metal::FormatParams input_format_params = {.pad_shape = input_pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
+    tt::tt_metal::Shape input_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
+    ttnn::operations::experimental::auto_format::FormatParams input_format_params = {.pad_shape = input_pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
 
-    tt::tt_metal::Shape cos_pad_shape = tt::tt_metal::AutoFormat::pad_to_tile_shape(cos_cache.get_legacy_shape());
-    tt::tt_metal::FormatParams cos_format_params = {.pad_shape = cos_pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
+    tt::tt_metal::Shape cos_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(cos_cache.get_legacy_shape());
+    ttnn::operations::experimental::auto_format::FormatParams cos_format_params = {.pad_shape = cos_pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
 
-    tt::tt_metal::Shape sin_pad_shape = tt::tt_metal::AutoFormat::pad_to_tile_shape(sin_cache.get_legacy_shape());
-    tt::tt_metal::FormatParams sin_format_params = {.pad_shape = sin_pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
+    tt::tt_metal::Shape sin_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(sin_cache.get_legacy_shape());
+    ttnn::operations::experimental::auto_format::FormatParams sin_format_params = {.pad_shape = sin_pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
 
     return operation::run_with_autoformat(
             RotaryEmbedding{seq_len, token_index, memory_config.value_or(default_memory_config), kernel_config_val},

@@ -39,7 +39,7 @@ class PytorchFalconModel(torch.nn.Module):
 
 
 def run_test_FalconModel_inference(
-    device_mesh,
+    mesh_device,
     model_version,
     llm_mode,
     batch,
@@ -93,17 +93,17 @@ def run_test_FalconModel_inference(
                 tensor=tt_kv_cache_host,
                 dtype=model_config["KV_CACHE_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
-                device=device_mesh,
+                device=mesh_device,
                 memory_config=model_config["KV_CACHE_MEMCFG"],
-                mesh_mapper=ShardTensorToMesh(device_mesh, dim=1),
+                mesh_mapper=ShardTensorToMesh(mesh_device, dim=1),
             )
             tt_v_cache = ttnn.as_tensor(
                 tensor=tt_kv_cache_host,
                 dtype=model_config["KV_CACHE_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
-                device=device_mesh,
+                device=mesh_device,
                 memory_config=model_config["KV_CACHE_MEMCFG"],
-                mesh_mapper=ShardTensorToMesh(device_mesh, dim=1),
+                mesh_mapper=ShardTensorToMesh(mesh_device, dim=1),
             )
             tt_layer_past += ((tt_k_cache, tt_v_cache),)
 
@@ -134,17 +134,17 @@ def run_test_FalconModel_inference(
                 tensor=tt_k_cache_host,
                 dtype=model_config["KV_CACHE_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
-                device=device_mesh,
+                device=mesh_device,
                 memory_config=model_config["KV_CACHE_MEMCFG"],
-                mesh_mapper=ShardTensorToMesh(device_mesh, dim=1),
+                mesh_mapper=ShardTensorToMesh(mesh_device, dim=1),
             )
             tt_v_cache = ttnn.as_tensor(
                 tensor=tt_v_cache_host,
                 dtype=model_config["KV_CACHE_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
-                device=device_mesh,
+                device=mesh_device,
                 memory_config=model_config["KV_CACHE_MEMCFG"],
-                mesh_mapper=ShardTensorToMesh(device_mesh, dim=1),
+                mesh_mapper=ShardTensorToMesh(mesh_device, dim=1),
             )
 
             tt_layer_past += ((tt_k_cache, tt_v_cache),)
@@ -162,7 +162,7 @@ def run_test_FalconModel_inference(
     # since we don't yet have embedding support on device
     # device, state_dict, base_url, max_position_embeddings, config, num_decoders
     tt_FalconModel = TtFalconModel(
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         num_layers,
@@ -172,8 +172,8 @@ def run_test_FalconModel_inference(
         tt_cache_path,
         use_global_cos_sin_cache=use_global_cos_sin_cache,
     )
-    for device in device_mesh.get_devices():
-        ttnn.device.synchronize_device(device)
+    for device in mesh_device.get_devices():
+        ttnn.synchronize_device(device)
 
     # TODO: Generate embeddings and attention_mask on device
     if llm_mode == "prefill":
@@ -196,7 +196,7 @@ def run_test_FalconModel_inference(
                 use_cache=use_cache,
             )
             # output of model is replicated
-            tensors = ttnn.to_torch(tt_out, device=device_mesh, mesh_composer=ListMeshToTensor(device_mesh))
+            tensors = ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ListMeshToTensor(mesh_device))
             tt_outs.append(tensors[0].squeeze(1))
 
         tt_out = torch.vstack(tt_outs)
@@ -213,7 +213,7 @@ def run_test_FalconModel_inference(
             use_cache=use_cache,
         )
         # Output of model is replicated
-        tensors = ttnn.to_torch(tt_out, device=device_mesh, mesh_composer=ListMeshToTensor(device_mesh))
+        tensors = ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ListMeshToTensor(mesh_device))
         tt_out = tensors[0].squeeze(1).transpose(0, 1)
 
     # check outputs ----------------------------------------------------------------------
@@ -224,10 +224,10 @@ def run_test_FalconModel_inference(
         pytorch_layer_pres = pytorch_layer_present[i]
         tt_layer_pres = (
             ttnn.to_torch(
-                tt_layer_present[i][0], device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=1)
+                tt_layer_present[i][0], device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=1)
             ),
             ttnn.to_torch(
-                tt_layer_present[i][1], device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=1)
+                tt_layer_present[i][1], device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=1)
             ),
         )
         tt_layer_pres = (
@@ -326,7 +326,7 @@ def test_FalconModel_inference(
     model_config_str,
     model_location_generator,
     get_tt_cache_path,
-    t3k_device_mesh,
+    t3k_mesh_device,
     use_program_cache,
 ):
     if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
@@ -336,7 +336,7 @@ def test_FalconModel_inference(
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
-    devices = t3k_device_mesh.get_devices()
+    devices = t3k_mesh_device.get_devices()
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
@@ -346,7 +346,7 @@ def test_FalconModel_inference(
     )
 
     run_test_FalconModel_inference(
-        t3k_device_mesh,
+        t3k_mesh_device,
         model_version,
         llm_mode,
         batch,

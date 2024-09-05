@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/run_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn {
 namespace operations::experimental::matmul {
@@ -18,7 +18,7 @@ struct AttnMatmulOperation {
         const Tensor &input_tensor_b,
         const CoreCoord& compute_with_storage_grid_size,
         std::optional<const DataType> output_dtype = std::nullopt,
-        std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 
@@ -27,7 +27,7 @@ struct AttnMatmulOperation {
         const Tensor &input_tensor_b,
         const CoreCoord& compute_with_storage_grid_size,
         std::optional<const DataType> output_dtype = std::nullopt,
-        std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
@@ -42,7 +42,7 @@ struct AttnMatmulFromCacheOperation {
         const CoreCoord& compute_with_storage_grid_size,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<const DataType> dtype = std::nullopt,
-        std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 
     static ttnn::Tensor invoke(
@@ -53,7 +53,7 @@ struct AttnMatmulFromCacheOperation {
         const CoreCoord& compute_with_storage_grid_size,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<const DataType> dtype = std::nullopt,
-        std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 

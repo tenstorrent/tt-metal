@@ -1,9 +1,7 @@
 
 # We do not use GLOB here since build system won't be able to pick up changes to the file list generated
 set(TT_DNN_SRCS
-    ${CMAKE_CURRENT_SOURCE_DIR}/auto_format.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharding_utilities.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/compute_kernel_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_helper_functions.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_adam/moreh_adam.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_adam/moreh_adam_op.cpp

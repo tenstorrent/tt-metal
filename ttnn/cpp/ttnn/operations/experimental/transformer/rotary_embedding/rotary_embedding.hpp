@@ -6,7 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn {
 namespace operations::experimental::transformer {
@@ -18,7 +18,7 @@ struct RotaryEmbeddingOperation {
         const Tensor& sin_cache,
         const std::optional<uint32_t> token_index = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+        const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
 }  // namespace operations::transformer

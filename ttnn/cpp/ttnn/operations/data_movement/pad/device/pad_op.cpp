@@ -2,22 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_metal/common/constants.hpp"
 #include "pad_op.hpp"
 #include "pad_program_factory.hpp"
-
 
 namespace ttnn::operations::data_movement {
 
 void Pad::validate_with_output_tensors(
     const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
+    using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operand to pad needs to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
     TT_FATAL(input_tensor.get_layout() == Layout::TILE || input_tensor.get_layout() == Layout::ROW_MAJOR);
-    TT_FATAL(
-        (this->input_tensor_start[0] == 0 && this->input_tensor_start[1] == 0 && this->input_tensor_start[2] == 0 && this->input_tensor_start[3] == 0),
-        "On device padding only supports padding at end of dims"
-    );
+    if (input_tensor.get_layout() == Layout::TILE) {
+        TT_FATAL(
+            (this->input_tensor_start[0] == 0 && this->input_tensor_start[1] == 0 && this->input_tensor_start[2] == 0 && this->input_tensor_start[3] == 0),
+            "On device padding only supports padding at end of dims"
+        );
+    }
     TT_FATAL(input_tensor.get_legacy_shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0], "Output size cannot fit input with offset");
     TT_FATAL(input_tensor.get_legacy_shape()[1] + this->input_tensor_start[1] <= this->output_tensor_shape[1], "Output size cannot fit input with offset");
     TT_FATAL(input_tensor.get_legacy_shape()[2] + this->input_tensor_start[2] <= this->output_tensor_shape[2], "Output size cannot fit input with offset");

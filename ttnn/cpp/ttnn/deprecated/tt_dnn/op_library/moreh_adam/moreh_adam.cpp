@@ -39,8 +39,8 @@ operation::ProgramWithCallbacks moreh_adam_(
     const Tensor& exp_avg_out,
     const Tensor& exp_avg_sq_out,
     const std::optional<const Tensor> max_exp_avg_sq_out,
-    const DeviceComputeKernelConfig compute_kernel_config) {
-    uint32_t num_tiles = param_in.volume() / TILE_HW;
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
+    uint32_t num_tiles = param_in.volume() / tt::constants::TILE_HW;
 
     Program program{};
 

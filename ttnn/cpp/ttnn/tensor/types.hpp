@@ -306,12 +306,16 @@ struct OwnedStorage {
     static constexpr auto attribute_names = std::forward_as_tuple();
     const auto attribute_values() const { return std::forward_as_tuple(); }
 
-    inline void insert_buffer(OwnedBuffer buffer_) {
+    inline void insert_buffer(const OwnedBuffer& buffer_) {
         this->buffer = buffer_;
     }
 
     inline OwnedBuffer get_buffer() const {
         return this->buffer;
+    }
+
+    inline bool is_allocated() const {
+         return std::visit([](auto&& buffer) -> bool { return buffer.is_allocated(); }, buffer);
     }
 
 };
@@ -344,6 +348,10 @@ struct DeviceStorage {
     inline DeviceBuffer get_buffer() const { return this->buffer; }
     static constexpr auto attribute_names = std::forward_as_tuple("memory_config");
     const auto attribute_values() const { return std::make_tuple(this->memory_config()); }
+
+    inline bool is_allocated() const {
+         return buffer && buffer->size() > 0;
+    }
 };
 
 using BorrowedBuffer = std::variant<
@@ -404,6 +412,11 @@ struct BorrowedStorage {
 
     static constexpr auto attribute_names = std::forward_as_tuple();
     const auto attribute_values() const { return std::forward_as_tuple(); }
+
+    inline bool is_allocated() const {
+        return true;
+    }
+
 };
 
 struct MultiDeviceHostStorage {
@@ -452,7 +465,7 @@ struct MultiDeviceHostStorage {
 
         // Helper Functions - Getters and setters to get/modify storage attributes. These are needed to
         // preinitialize empty tensor handles and use/populate them in the worker threads.
-        void insert_buffer_and_shape_for_device(int buffer_index, const OwnedBuffer buffer, const Shape shape) {
+        void insert_buffer_and_shape_for_device(int buffer_index, const OwnedBuffer& buffer, const Shape shape) {
             std::lock_guard<std::mutex> lock(mtx);
             buffers[buffer_index] = buffer;
             shapes[buffer_index] = shape;
@@ -461,7 +474,7 @@ struct MultiDeviceHostStorage {
         OwnedBuffer get_buffer(int buffer_index) const {
             std::lock_guard<std::mutex> lock(mtx);
             TT_ASSERT(buffer_index < buffers.size(), "Buffer not found for buffer_index " + std::to_string(buffer_index));
-            return buffers[buffer_index];;
+            return buffers[buffer_index];
         }
 
         OwnedBuffer& get_buffer(int buffer_index) {
@@ -479,6 +492,16 @@ struct MultiDeviceHostStorage {
         uint32_t num_buffers() const {
             std::lock_guard<std::mutex> lock(mtx);
             return buffers.size();
+        }
+
+        inline bool is_allocated() const {
+            // not sure what is better mutex for each buffer 10 times or one here.
+            // I think this one is better.
+            std::lock_guard<std::mutex> lock(mtx);
+
+            return std::all_of(buffers.begin(), buffers.end(), [](auto&& buffer) {
+                return std::visit([](auto&& buffer) -> bool { return buffer.is_allocated(); }, buffer);
+            });
         }
     };
 
@@ -536,7 +559,10 @@ struct MultiDeviceHostStorage {
 
         inline const MemoryConfig memory_config() const {
             std::lock_guard<std::mutex> lock(buffer_mtx);
-            auto first_device_id = this->ordered_device_ids.at(0);
+            if (this->ordered_device_ids.empty()) {
+                TT_FATAL("no such device...");
+            }
+            auto first_device_id = this->ordered_device_ids[0];
             if (this->buffers.at(first_device_id).get() == nullptr) {
                 TT_THROW("MemoryConfig can only be obtained if the buffer is not null");
             }
@@ -605,6 +631,15 @@ struct MultiDeviceHostStorage {
         inline bool has_buffer_for_device_id(uint32_t device_id) const {
             std::lock_guard<std::mutex> lock(buffer_mtx);
             return buffers.find(device_id) != buffers.end();
+        }
+
+        inline bool is_allocated() const {
+            std::lock_guard<std::mutex> lock(buffer_mtx);
+
+            return std::all_of(ordered_device_ids.begin(), ordered_device_ids.end(), [&buffers = this->buffers](auto&& device_id) {
+                const auto& buffer = buffers.at(device_id);
+                return buffer && buffer->size() > 0;
+            });
         }
     };
 
@@ -679,6 +714,20 @@ struct Shape {
 
     Shape with_tile_padding() const {
         return Shape{tt::tt_metal::Shape{this->value, tt::tt_metal::Padding{this->value.rank()}}};
+    }
+
+    bool has_tile_padding() const {
+        auto rank = this->rank();
+        for (auto index = 0; index < rank; index++) {
+            if (this->has_tile_padding(index)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool has_tile_padding(int dim) const {
+        return this->value.padding()[dim].front > 0 or this->value.padding()[dim].back > 0;
     }
 
     bool operator==(const Shape &other) const {

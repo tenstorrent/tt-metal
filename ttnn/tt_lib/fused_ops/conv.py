@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import List, Union
-from tt_lib import tensor, operations
+from tt_lib import tensor
 from tt_lib.utils import _nearest_32, _nearest_y
 import torch
 import ttnn
@@ -28,7 +28,7 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
         return None
     weights_shape = [K, C, R, S]
     weights_channels_padded_shape = [_nearest_32(K), _nearest_y(C, 16), R, S]
-    weight_untiled = tensor.Tensor(weight, weights_shape, tensor.DataType.BFLOAT16, tensor.Layout.ROW_MAJOR).pad(
+    weight_untiled = ttnn.Tensor(weight, weights_shape, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT).pad(
         weights_channels_padded_shape, (0, 0, 0, 0), 0
     )
     weight_tiled_ = tensor.convert_conv_weight_tensor_to_tiled_layout(weight_untiled, weight_block_h, weight_block_w)
@@ -38,7 +38,7 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
     else:
         bias_shape = [1, 1, 1, K]
         bias_channels_padded_shape = [1, 1, 1, _nearest_32(K)]
-        bias_ = tensor.Tensor(bias, bias_shape, tensor.DataType.BFLOAT16, tensor.Layout.ROW_MAJOR).pad(
+        bias_ = ttnn.Tensor(bias, bias_shape, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT).pad(
             bias_channels_padded_shape, (0, 0, 0, 0), 0
         )
         bias_on_device = bias_.to(device)
@@ -58,15 +58,15 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
             False,
         )
 
-        assert output.storage_type() == tensor.StorageType.DEVICE
+        assert output.storage_type() == ttnn.StorageType.DEVICE
 
         if bias_on_device is not None:
             output_plus_bias = ttnn.add(output, bias_on_device)
-            if output_plus_bias.get_layout() != tensor.Layout.ROW_MAJOR:
-                assert output_plus_bias.get_layout() == tensor.Layout.TILE
-                assert output_plus_bias.storage_type() == tensor.StorageType.DEVICE
+            if output_plus_bias.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+                assert output_plus_bias.get_layout() == ttnn.TILE_LAYOUT
+                assert output_plus_bias.storage_type() == ttnn.StorageType.DEVICE
                 output_plus_bias = ttnn.untilize(output_plus_bias, memory_config=output_plus_bias.memory_config())
-                assert output_plus_bias.get_layout() == tensor.Layout.ROW_MAJOR
+                assert output_plus_bias.get_layout() == ttnn.ROW_MAJOR_LAYOUT
             return output_plus_bias
 
         return output
@@ -101,8 +101,8 @@ def resnet50_1x1_conv_as_matmul(
     assert C % 16 == 0
     assert K % 32 == 0
 
-    weights_untiled_dtype = weights_dtype if weights_dtype != tensor.DataType.BFLOAT8_B else tensor.DataType.FLOAT32
-    weight_untiled = tensor.Tensor(weight, weights_shape, weights_untiled_dtype, tensor.Layout.ROW_MAJOR)
+    weights_untiled_dtype = weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+    weight_untiled = ttnn.Tensor(weight, weights_shape, weights_untiled_dtype, ttnn.ROW_MAJOR_LAYOUT)
     # weight for matmul op
     weight_tiled_ = tensor.convert_conv_weight_tensor_to_tiled_layout(weight_untiled, 1, 1, output_dtype=weights_dtype)
 
@@ -110,9 +110,7 @@ def resnet50_1x1_conv_as_matmul(
     bias_shape = [1, 1, 1, K]
     bias_channels_padded_shape = [1, 1, 32, K]
     bias = torch.nn.functional.pad(torch.Tensor(bias).reshape(bias_shape), (0, 0, 0, 31)).flatten().tolist()
-    bias_ = tensor.Tensor(bias, bias_channels_padded_shape, weights_dtype, tensor.Layout.ROW_MAJOR).to(
-        tensor.Layout.TILE
-    )
+    bias_ = ttnn.Tensor(bias, bias_channels_padded_shape, weights_dtype, ttnn.ROW_MAJOR_LAYOUT).to(ttnn.TILE_LAYOUT)
     bias_on_device = bias_.to(device)
     if isinstance(matmul_config, dict):
         matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -198,8 +196,8 @@ def resnet50_optimized_conv(
 
     weights_shape = [K, C, R, S]
     weights_channels_padded_shape = [_nearest_32(K), _nearest_y(C, 16), R, S]
-    weights_untiled_dtype = weights_dtype if weights_dtype != tensor.DataType.BFLOAT8_B else tensor.DataType.FLOAT32
-    weight_untiled = tensor.Tensor(weight, weights_shape, weights_untiled_dtype, tensor.Layout.ROW_MAJOR).pad(
+    weights_untiled_dtype = weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+    weight_untiled = ttnn.Tensor(weight, weights_shape, weights_untiled_dtype, ttnn.ROW_MAJOR_LAYOUT).pad(
         weights_channels_padded_shape, (0, 0, 0, 0), 0
     )
     act_block_w_equals_input_channels_x_filter_width = act_block_shape_hw[1] == (C * S)
@@ -231,9 +229,7 @@ def resnet50_optimized_conv(
         .flatten()
         .tolist()
     )
-    bias_ = tensor.Tensor(bias, bias_channels_padded_shape, weights_dtype, tensor.Layout.ROW_MAJOR).to(
-        tensor.Layout.TILE
-    )
+    bias_ = ttnn.Tensor(bias, bias_channels_padded_shape, weights_dtype, ttnn.ROW_MAJOR_LAYOUT).to(ttnn.TILE_LAYOUT)
     bias_on_device = bias_.to(device)
 
     opt_conv_parall_conf = ttnn.operations.conv2d.OptimizedConvParallelizationConfig(
@@ -250,7 +246,6 @@ def resnet50_optimized_conv(
     )
 
     def conv_(activation):
-        # assert(activation.get_layout() == tensor.Layout.ROW_MAJOR)
         output = ttnn.operations.conv2d.optimized_conv(
             activation,
             weight_on_device,
@@ -270,7 +265,6 @@ def resnet50_optimized_conv(
             input_tensor_shape=input_tensor_shape,
             compute_kernel_config=compute_kernel_config,
         )
-        # assert(output.storage_type() == tensor.StorageType.DEVICE)
         return output
 
     return conv_
@@ -327,8 +321,8 @@ def resnet50_first_conv(
         R,
         padded_filter_window_width,
     ]  # first conv channel padded to 4 only
-    weights_untiled_dtype = weights_dtype if weights_dtype != tensor.DataType.BFLOAT8_B else tensor.DataType.FLOAT32
-    weight_untiled = tensor.Tensor(weight, weights_shape, weights_untiled_dtype, tensor.Layout.ROW_MAJOR).pad(
+    weights_untiled_dtype = weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+    weight_untiled = ttnn.Tensor(weight, weights_shape, weights_untiled_dtype, ttnn.ROW_MAJOR_LAYOUT).pad(
         weights_channels_padded_shape, (0, 0, 0, 0), 0
     )
     per_core_weight_matrix_w_ntiles = (int)(weights_channels_padded_shape[0] / 32)
@@ -346,9 +340,7 @@ def resnet50_first_conv(
         .flatten()
         .tolist()
     )
-    bias_ = tensor.Tensor(bias, bias_channels_padded_shape, weights_dtype, tensor.Layout.ROW_MAJOR).to(
-        tensor.Layout.TILE
-    )
+    bias_ = ttnn.Tensor(bias, bias_channels_padded_shape, weights_dtype, ttnn.ROW_MAJOR_LAYOUT).to(ttnn.TILE_LAYOUT)
     bias_on_device = bias_.to(device)
 
     # Resnet50 first conv is pre-padded on host
@@ -369,7 +361,6 @@ def resnet50_first_conv(
     )
 
     def conv_(activation):
-        # assert(activation.get_layout() == tensor.Layout.ROW_MAJOR)
         output_plus_bias = ttnn.operations.conv2d.optimized_conv(
             activation,
             weight_on_device,
@@ -387,8 +378,6 @@ def resnet50_first_conv(
             out_mem_config,
             output_dtype,
         )
-        # assert(output.storage_type() == tensor.StorageType.DEVICE)
-        # assert output.get_layout() == tensor.Layout.TILE
         return output_plus_bias
 
     return conv_
@@ -420,8 +409,8 @@ def resnet50_1x1_conv_s2_as_downsample_and_matmul(
     assert C % 16 == 0
     assert K % 32 == 0
 
-    weights_untiled_dtype = weights_dtype if weights_dtype != tensor.DataType.BFLOAT8_B else tensor.DataType.FLOAT32
-    weight_untiled = tensor.Tensor(weight, weights_shape, weights_untiled_dtype, tensor.Layout.ROW_MAJOR)
+    weights_untiled_dtype = weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+    weight_untiled = ttnn.Tensor(weight, weights_shape, weights_untiled_dtype, ttnn.ROW_MAJOR_LAYOUT)
     # weight for matmul op
     weight_tiled_ = tensor.convert_conv_weight_tensor_to_tiled_layout(weight_untiled, 1, 1, output_dtype=weights_dtype)
 
@@ -429,9 +418,7 @@ def resnet50_1x1_conv_s2_as_downsample_and_matmul(
     bias_shape = [1, 1, 1, K]
     bias_channels_padded_shape = [1, 1, 32, K]
     bias = torch.nn.functional.pad(torch.Tensor(bias).reshape(bias_shape), (0, 0, 0, 31)).flatten().tolist()
-    bias_ = tensor.Tensor(bias, bias_channels_padded_shape, weights_dtype, tensor.Layout.ROW_MAJOR).to(
-        tensor.Layout.TILE
-    )
+    bias_ = ttnn.Tensor(bias, bias_channels_padded_shape, weights_dtype, ttnn.ROW_MAJOR_LAYOUT).to(ttnn.TILE_LAYOUT)
     bias_on_device = bias_.to(device)
     if isinstance(matmul_config, dict):
         matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(

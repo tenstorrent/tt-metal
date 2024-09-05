@@ -42,9 +42,9 @@ def num_to_corerange(x):
     num_x = min(x, 8)
     num_y = x // num_x
     assert num_x * num_y == x
-    return ttnn.experimental.tensor.CoreRange(
-        ttnn.experimental.tensor.CoreCoord(0, 0),
-        ttnn.experimental.tensor.CoreCoord(num_x - 1, num_y - 1),
+    return ttnn.CoreRange(
+        ttnn.CoreCoord(0, 0),
+        ttnn.CoreCoord(num_x - 1, num_y - 1),
     )
 
 
@@ -103,7 +103,7 @@ def run_test_sdpa_decode_single_iter(
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
-    dram_memcfg = ttnn.types.MemoryConfig(ttnn.types.TensorMemoryLayout.INTERLEAVED, ttnn.types.BufferType.DRAM)
+    dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
     K = fa_rand(b, nkv, s, d)
     V = fa_rand(b, nkv, s, d)
@@ -200,7 +200,7 @@ def run_test_sdpa_decode_single_iter(
     ),
 )
 def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single_iter, use_program_cache):
-    ttnn.experimental.device.DisablePersistentKernelCache()
+    ttnn.device.DisablePersistentKernelCache()
     run_test_sdpa_decode_single_iter(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype)
 
 
@@ -220,7 +220,7 @@ def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single
     ([4, 32, 8, 8192, 128],),  # Llama3.1-8B
 )
 def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_cache):
-    ttnn.experimental.device.DisablePersistentKernelCache()
+    ttnn.device.DisablePersistentKernelCache()
 
     for i in range(2):
         run_test_sdpa_decode_single_iter(

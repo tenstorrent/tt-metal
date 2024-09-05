@@ -17,6 +17,7 @@
 #include "compute_kernel_api/reduce.h"
 
 #include "debug/dprint.h"  // required in all kernels using DPRINT
+#include "../../rt_args_common.hpp"
 
 namespace NAMESPACE {
 void max_block_inplace(uint32_t in0, uint32_t in1, uint32_t num_tiles) {
@@ -104,7 +105,7 @@ void reduce_c() {
     UNPACK(tensix_sync());
 }
 
-void __attribute((noinline)) recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
+void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
     copy_tile_to_dst_init_short(in_cb);
@@ -445,6 +446,7 @@ void MAIN {
     constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(14);
     constexpr uint32_t out_num_blocks = get_compile_time_arg_val(15);
     constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(16);
+    constexpr uint32_t k_chunk_size = get_compile_time_arg_val(17);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -477,15 +479,40 @@ void MAIN {
     constexpr uint32_t cb_out_l = tt::CB::c_out2;
     constexpr uint32_t cb_out_final = tt::CB::c_out4;
 
-    const uint32_t k_num_chunks = get_arg_val<uint32_t>(0);  // number of chunks in K, where k_num_chunks*Sk_chunk_t = PSt
-    const uint32_t k_chunk_start = get_arg_val<uint32_t>(1);
-    const uint32_t k_chunk_end = get_arg_val<uint32_t>(2);
-    const bool do_reduce = get_arg_val<uint32_t>(3) == 1;
+    const bool do_reduce = get_arg_val<uint32_t>(0) == 1;
+    const uint32_t core_num = get_arg_val<uint32_t>(1);
+    const uint32_t cur_batch = get_arg_val<uint32_t>(2);
+    const uint32_t cur_pos_arg = get_arg_val<uint32_t>(3);
+
     // const uin32_t idle_core = get_arg_val<uint32_t>(4);
 
+    // idle core
+    // get_arg_val<uint32_t>(0) can go from 0-63 for the core_num; for active cores 65 is out of range so 65 indicates an idle_core
+    if (get_arg_val<uint32_t>(0)==65){
+        return;
+    }
+
+    // Get cur_pos
+    uint32_t cur_pos = 0;
+    // using 4294967295 (end of uint32 range) as a flag to indicate that cur_pos is not provided as a list
+    if (cur_pos_arg!=4294967295){
+        cur_pos = cur_pos_arg;
+    }
+    else {
+        constexpr uint32_t cb_index_id = tt::CB::dataflow0;
+        cb_wait_front(cb_index_id, 1);
+        volatile uint32_t *index_addr_ptr;
+        cb_get_tile(cb_index_id, 0, &index_addr_ptr);
+        cur_pos = index_addr_ptr[4+cur_batch];
+        cb_release_tile(cb_index_id);
+    }
+    // Sequence length assignment
+    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(cur_pos, cur_batch, core_num, num_cores_per_batch, k_chunk_size);
     if (k_chunk_start == k_chunk_end) {
         return; // early exit because no computes needs to be done
     }
+    uint32_t num_cores_to_wait = num_cores_per_batch-1;
+    if (num_cores_per_batch>k_num_chunks) num_cores_to_wait = k_num_chunks-1;
 
     mm_init();
     cb_wait_front(cb_q_in, q_chunk_tiles);
@@ -610,7 +637,7 @@ void MAIN {
         // DPRINT << "[Compute] Start for reducer" << ENDL();
         if (k_chunk_end - k_chunk_start < k_num_chunks){
             // This indicates that there are computes done by other workers. Needs to wait for them and send to reducer's compute
-            for (uint32_t i = 0; i < num_cores_per_batch-1 ; i++) {
+            for (uint32_t i = 0; i < num_cores_to_wait ; i++) {
 
                 // DPRINT << "[C] Reduce Iter" << ENDL();
 

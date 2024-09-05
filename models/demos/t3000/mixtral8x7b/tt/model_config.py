@@ -19,11 +19,10 @@ class TtModelArgs:
     n_heads = 32
     n_kv_heads = 8
     norm_eps = 1e-05
-    sliding_window = 4096
     vocab_size = 32000
 
     max_batch_size = 32  # default
-    max_seq_len = 8192 * 2  # default
+    max_seq_len = 32768  # default
     moe = True
     num_experts = 8
     num_experts_per_tok = 2
@@ -67,7 +66,7 @@ class TtModelArgs:
         "OUTPUT_MM",
     )
 
-    def __init__(self, device=None, instruct=False, dummy_weights=False, max_seq_len=16384, max_batch_size=32):
+    def __init__(self, device=None, instruct=False, dummy_weights=False, max_seq_len=32768, max_batch_size=32):
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
 
@@ -111,14 +110,14 @@ class TtModelArgs:
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
 
         # Set configurations for sharded type
-        self.model_config["WIDTH_SHARDED_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttnn.experimental.tensor.BufferType.L1
+        self.model_config["WIDTH_SHARDED_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1
         )
-        self.model_config["HEIGHT_SHARDED_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.experimental.tensor.BufferType.L1
+        self.model_config["HEIGHT_SHARDED_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1
         )
-        self.model_config["BLOCK_SHARDED_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED, ttnn.experimental.tensor.BufferType.L1
+        self.model_config["BLOCK_SHARDED_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1
         )
 
         # Useful core grid based on batch size
@@ -187,8 +186,8 @@ class TtModelArgs:
             k_chunk_size=32,
         )
 
-        self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
+        self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
@@ -368,8 +367,8 @@ class TtModelArgs:
             fused_activation=None,
             fuse_batch=False,
         )
-        self.model_config["PREFILL_MLP_COMPUTE_CONFIG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
+        self.model_config["PREFILL_MLP_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
@@ -401,8 +400,8 @@ class TtModelArgs:
         # Chunk values based on what works best empirically
         self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8),
-            q_chunk_size=256 if seqlen > 8192 * 2 else (128 if seqlen >= 8192 else 64),
-            k_chunk_size=256 if seqlen > 8192 * 2 else (128 if seqlen >= 8192 else 64),
+            q_chunk_size=256 if seqlen >= 8192 * 2 else (128 if seqlen > 128 else 64),
+            k_chunk_size=512 if seqlen >= 8192 * 2 else (128 if seqlen > 128 else 64),
         )
 
         if device is not None:  # Avoid issue with test_mixtral_torch.py not having a device
@@ -427,14 +426,14 @@ class TtModelArgs:
             packer_l1_acc=True,
         )
 
-        self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,  # Highest fidelity
+        self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
-        self.model_config["GATE_MM_OUTPUT_KERNEL_CONFIG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+        self.model_config["GATE_MM_OUTPUT_KERNEL_CONFIG"] = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,

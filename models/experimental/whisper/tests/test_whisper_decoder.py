@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 from transformers import WhisperModel, WhisperConfig
 
-import tt_lib
+import ttnn
 
 from models.experimental.whisper.tt.whisper_decoder import TtWhisperDecoder
 from models.utility_functions import (
@@ -67,7 +67,7 @@ def run_whisper_decoder(device):
     )
     tt_whisper_decoder.eval()
 
-    ttm_encoder_hidden_states = torch2tt_tensor(encoder_hidden_states, device, tt_lib.tensor.Layout.ROW_MAJOR)
+    ttm_encoder_hidden_states = torch2tt_tensor(encoder_hidden_states, device, ttnn.ROW_MAJOR_LAYOUT)
     with torch.no_grad():
         ttm_output = tt_whisper_decoder(
             input_ids=decoder_input_ids,

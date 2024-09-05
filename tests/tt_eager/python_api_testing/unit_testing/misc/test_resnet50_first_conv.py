@@ -142,7 +142,7 @@ def test_resnet50_first_conv(
             extra_pad_w_right=1 + extra_padding_for_32B_alignment,
         )
         print("A_cl_host shape", A_cl_host.get_legacy_shape())
-        memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+        memory_config = ttnn.L1_MEMORY_CONFIG
 
         # save original shape (N, H, W, C)
         original_A_cl_host_shape = A_cl_host.get_legacy_shape()
@@ -227,9 +227,7 @@ def test_resnet50_first_conv(
         if not untilize_out:
             out_unpadded_shape = [1, 1, N * OH * OW, K]
             assert out_unpadded_shape == list(out.shape_without_padding())
-            out = ttnn.experimental.tensor.format_output_tensor(
-                out, out.shape_without_padding(), device, ttnn.ROW_MAJOR_LAYOUT
-            )
+            out = ttnn.format_output_tensor(out, out.shape_without_padding(), device, ttnn.ROW_MAJOR_LAYOUT)
             out = out.reshape(
                 conv_output_shape[0],
                 conv_output_shape[1],

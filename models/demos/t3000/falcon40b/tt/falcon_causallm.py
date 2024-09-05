@@ -15,7 +15,7 @@ from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul, d
 class TtFalconCausalLM(TtFalconModelShared):
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         num_layers,
@@ -28,7 +28,7 @@ class TtFalconCausalLM(TtFalconModelShared):
         assert base_url == "", "base_url should be empty at the root of the model!"
 
         super().__init__(
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             base_url=f"transformer",
             num_layers=num_layers,
@@ -39,7 +39,7 @@ class TtFalconCausalLM(TtFalconModelShared):
             use_global_cos_sin_cache=use_global_cos_sin_cache,
         )
         self.model_config = model_config
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
         lm_head_str = f"lm_head.weight"
 
         lm_head_path = tt_cache_path / f"{lm_head_str}_{self.model_config['LM_HEAD_MM_WEIGHTS_DTYPE'].name}"
@@ -48,26 +48,26 @@ class TtFalconCausalLM(TtFalconModelShared):
             tensor=self.state_dict[f"lm_head.weight"],
             dtype=self.model_config["LM_HEAD_MM_WEIGHTS_DTYPE"],
             layout=ttnn.TILE_LAYOUT,
-            device=device_mesh,
+            device=mesh_device,
             memory_config=self.model_config["LM_HEAD_MM_WEIGHTS_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(device_mesh, dim=3),
+            mesh_mapper=ShardTensorToMesh(mesh_device, dim=3),
             cache_file_name=lm_head_path,
             preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
         )
         self.perf_e2e_test_tile_tensor = ttnn.from_torch(
-            torch.zeros((1, 1, 32, 32)), device=device_mesh.get_devices()[0]
+            torch.zeros((1, 1, 32, 32)), device=mesh_device.get_devices()[0]
         )
 
     def __call__(
         self,
-        input_ids: ttnn.experimental.tensor.Tensor,
+        input_ids: ttnn.Tensor,
         llm_mode: str,
-        attention_mask: ttnn.experimental.tensor.Tensor = None,
+        attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> ttnn.experimental.tensor.Tensor:
+    ) -> ttnn.Tensor:
         if llm_mode == "prefill":
             return self.fwd_prefill_causallm(
                 input_ids=input_ids,
@@ -93,14 +93,14 @@ class TtFalconCausalLM(TtFalconModelShared):
 
     def fwd_prefill_causallm(
         self,
-        input_ids: ttnn.experimental.tensor.Tensor,
+        input_ids: ttnn.Tensor,
         llm_mode: str,
-        attention_mask: ttnn.experimental.tensor.Tensor = None,
+        attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> ttnn.experimental.tensor.Tensor:
+    ) -> ttnn.Tensor:
         hidden_states, presents = super().__call__(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -143,14 +143,14 @@ class TtFalconCausalLM(TtFalconModelShared):
 
     def fwd_decode_causallm(
         self,
-        input_ids: ttnn.experimental.tensor.Tensor,
+        input_ids: ttnn.Tensor,
         llm_mode: str,
-        attention_mask: ttnn.experimental.tensor.Tensor = None,
+        attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> ttnn.experimental.tensor.Tensor:
+    ) -> ttnn.Tensor:
         hidden_states, presents = super().__call__(
             input_ids=input_ids,
             attention_mask=attention_mask,

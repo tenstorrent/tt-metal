@@ -38,15 +38,19 @@ def get_username():
 
 def get_devices(test_module):
     try:
-        return test_module.device_mesh_fixture()
+        return test_module.mesh_device_fixture()
     except:
         return default_device()
 
 
 def run(test_module, input_queue, output_queue):
     device_generator = get_devices(test_module)
-    device, device_name = next(device_generator)
-    print(f"SWEEPS: Opened device configuration, {device_name}.")
+    try:
+        device, device_name = next(device_generator)
+        print(f"SWEEPS: Opened device configuration, {device_name}.")
+    except AssertionError as e:
+        output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None])
+        return
     try:
         while True:
             test_vector = input_queue.get(block=True, timeout=1)
@@ -65,7 +69,7 @@ def run(test_module, input_queue, output_queue):
             output_queue.put([status, message, e2e_perf])
     except Empty as e:
         try:
-            # Run teardown in device_mesh_fixture
+            # Run teardown in mesh_device_fixture
             next(device_generator)
         except StopIteration:
             print(f"SWEEPS: Closed device configuration, {device_name}.")
@@ -124,6 +128,13 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
                     result["status"] = TestStatus.PASS
                     result["message"] = message
                 else:
+                    if "DEVICE EXCEPTION" in message:
+                        print(
+                            "SWEEPS: DEVICE EXCEPTION: Device could not be initialized. The following assertion was thrown: ",
+                            message,
+                        )
+                        print("SWEEPS: Skipping test suite because of device error, proceeding...")
+                        return []
                     if "Out of Memory: Not enough space to allocate" in message:
                         result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
                     elif "Watcher" in message:
@@ -156,13 +167,14 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
 
 
 def sanitize_inputs(test_vectors):
-    info_field_names = ["sweep_name", "suite_name", "vector_id"]
+    info_field_names = ["sweep_name", "suite_name", "vector_id", "input_hash"]
     header_info = []
     for vector in test_vectors:
         header = dict()
         for field in info_field_names:
             header[field] = vector.pop(field)
         vector.pop("timestamp")
+        vector.pop("tag")
         header_info.append(header)
     return header_info, test_vectors
 
@@ -172,7 +184,11 @@ def get_suite_vectors(client, vector_index, suite):
         index=vector_index,
         query={
             "bool": {
-                "must": [{"match": {"status": str(VectorStatus.CURRENT)}}, {"match": {"suite_name.keyword": suite}}]
+                "must": [
+                    {"match": {"status": str(VectorStatus.CURRENT)}},
+                    {"match": {"suite_name.keyword": suite}},
+                    {"match": {"tag.keyword": SWEEPS_TAG}},
+                ]
             }
         },
         size=10000,
@@ -200,10 +216,14 @@ def run_sweeps(module_name, suite_name, vector_id):
             try:
                 response = client.search(
                     index=vector_index,
+                    query={"match": {"tag.keyword": SWEEPS_TAG}},
                     aggregations={"suites": {"terms": {"field": "suite_name.keyword", "size": 10000}}},
                 )
                 suites = [suite["key"] for suite in response["aggregations"]["suites"]["buckets"]]
                 if len(suites) == 0:
+                    print(
+                        f"SWEEPS: No suites found for module {module_name}, with tag {SWEEPS_TAG}. If you meant to run the CI suites of tests, use '--tag ci-main' in your test command, otherwise, run the parameter generator with your own tag and try again. Continuing..."
+                    )
                     continue
 
                 module_pbar = pbar_manager.counter(total=len(suites), desc=f"Module: {sweep_name}", leave=False)
@@ -242,11 +262,15 @@ def run_sweeps(module_name, suite_name, vector_id):
                 if not suite_name:
                     response = client.search(
                         index=vector_index,
+                        query={"match": {"tag.keyword": SWEEPS_TAG}},
                         aggregations={"suites": {"terms": {"field": "suite_name.keyword", "size": 10000}}},
                         size=10000,
                     )
                     suites = [suite["key"] for suite in response["aggregations"]["suites"]["buckets"]]
                     if len(suites) == 0:
+                        print(
+                            f"SWEEPS: No suites found for module {module_name}, with tag {SWEEPS_TAG}. If you meant to run the CI suites of tests, use '--tag ci-main' in your test command, otherwise, run the parameter generator with your own tag and try again."
+                        )
                         return
 
                     for suite in suites:
@@ -335,6 +359,12 @@ if __name__ == "__main__":
         required=False,
         help="Add this flag to perform a dry run.",
     )
+    parser.add_argument(
+        "--tag",
+        required=False,
+        default=os.getenv("USER"),
+        help="Custom tag for the vectors you are running. This is to keep copies seperate from other people's test vectors. By default, this will be your username. You are able to specify a tag when generating tests using the generator.",
+    )
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -355,6 +385,11 @@ if __name__ == "__main__":
 
     global DRY_RUN
     DRY_RUN = args.dry_run
+
+    global SWEEPS_TAG
+    SWEEPS_TAG = args.tag
+
+    print(f"SWEEPS: Running current sweeps with tag: {SWEEPS_TAG}.")
 
     if args.watcher:
         enable_watcher()

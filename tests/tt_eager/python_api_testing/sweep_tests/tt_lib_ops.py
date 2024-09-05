@@ -29,7 +29,7 @@ def setup_tt_tensor(x, device, layout, input_mem_config, dtype):
 def setup_host_and_device(func):
     def wrap(*args, device, **kwargs):
         output = func(*args, device=device, **kwargs)
-        ttnn.experimental.device.DeallocateBuffers(device)
+        ttnn.device.DeallocateBuffers(device)
         return output
 
     return wrap
@@ -548,6 +548,26 @@ def binary_assign_bw(
     t3 = ttnn.assign_bw(t0, t1, t2, output_mem_config)
 
     return tt2torch_tensor(t3[0])
+
+
+@setup_host_and_device
+def eltwise_logical_and_(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t3 = ttnn.logical_and_(t0, t1)
+
+    return tt2torch_tensor(t3)
 
 
 @setup_host_and_device

@@ -331,8 +331,7 @@ class SystemMemoryManager {
    private:
     chip_id_t device_id;
     uint8_t num_hw_cqs;
-    const uint32_t m_dma_buf_size;
-    const std::function<void(uint32_t, uint32_t, const uint8_t *, uint32_t)> fast_write_callable;
+    const std::function<void(uint32_t, uint32_t, const uint8_t *)> fast_write_callable;
     vector<uint32_t> completion_byte_addrs;
     char *cq_sysmem_start;
     vector<SystemMemoryCQInterface> cq_interfaces;
@@ -356,7 +355,6 @@ class SystemMemoryManager {
     SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs) :
         device_id(device_id),
         num_hw_cqs(num_hw_cqs),
-        m_dma_buf_size(tt::Cluster::instance().get_m_dma_buf_size(device_id)),
         fast_write_callable(tt::Cluster::instance().get_fast_pcie_static_tlb_write_callable(device_id)),
         bypass_enable(false),
         bypass_buffer_write_offset(0),
@@ -615,7 +613,7 @@ class SystemMemoryManager {
         );
     }
 
-    void completion_queue_wait_front(const uint8_t cq_id, volatile bool &exit_condition) const {
+    uint32_t completion_queue_wait_front(const uint8_t cq_id, volatile bool &exit_condition) const {
         uint32_t write_ptr_and_toggle;
         uint32_t write_ptr;
         uint32_t write_toggle;
@@ -627,6 +625,7 @@ class SystemMemoryManager {
             write_toggle = write_ptr_and_toggle >> 31;
         } while (cq_interface.completion_fifo_rd_ptr == write_ptr and
                  cq_interface.completion_fifo_rd_toggle == write_toggle and not exit_condition);
+        return write_ptr_and_toggle;
     }
 
     void send_completion_queue_read_ptr(const uint8_t cq_id) const {
@@ -635,7 +634,7 @@ class SystemMemoryManager {
         uint32_t read_ptr_and_toggle =
             cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
         this->fast_write_callable(
-            this->completion_byte_addrs[cq_id], 4, (uint8_t *)&read_ptr_and_toggle, this->m_dma_buf_size);
+            this->completion_byte_addrs[cq_id], 4, (uint8_t *)&read_ptr_and_toggle);
 
         // Also store this data in hugepages in case we hang and can't get it from the device.
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_id);

@@ -94,7 +94,7 @@ void py_bind_conv2d(py::module& module) {
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::conv2d)& self, const ttnn::Tensor& input_tensor,
                 const ttnn::Tensor& weight_tensor,
-                ttnn::DeviceMesh* device,
+                ttnn::MeshDevice* device,
                 uint32_t in_channels,
                 uint32_t out_channels,
                 uint32_t batch_size,
@@ -195,7 +195,7 @@ void py_bind_conv2d(py::module& module) {
 
     module.def(
         "get_conv_padded_input_shape_and_mem_config",
-        [](DeviceMesh * device,
+        [](MeshDevice * device,
             const ttnn::Tensor& input_tensor,
             const Conv2dConfig& conv_config,
             uint32_t batch_size,
@@ -203,7 +203,7 @@ void py_bind_conv2d(py::module& module) {
             uint32_t width,
             uint32_t in_channels,
             uint32_t out_channels) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> {
-            return ttnn::operations::conv::conv2d::get_conv_padded_input_shape_and_mem_config<DeviceMesh>(
+            return ttnn::operations::conv::conv2d::get_conv_padded_input_shape_and_mem_config<MeshDevice>(
                 device, input_tensor, conv_config, batch_size, height, width, in_channels, out_channels);
         },
         py::kw_only(),
@@ -218,7 +218,7 @@ void py_bind_conv2d(py::module& module) {
 
     auto py_conv_config = py::class_<Conv2dConfig>(module, "Conv2dConfig");
     py_conv_config.def(
-            py::init<MathFidelity, DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, bool, bool, bool, std::optional<CoreRangeSet>, bool, Layout, bool, bool, bool>(),
+            py::init<MathFidelity, DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, uint32_t, bool, bool, TensorMemoryLayout, std::optional<CoreRangeSet>, bool, Layout, bool, bool, bool>(),
             py::kw_only(),
             py::arg("math_fidelity") = MathFidelity::HiFi4,
             py::arg("dtype") = DataType::BFLOAT16,
@@ -231,9 +231,10 @@ void py_bind_conv2d(py::module& module) {
             py::arg("deallocate_activation") = false,
             py::arg("reallocate_halo_output") = false,
             py::arg("act_block_h_override") = 0,
+            py::arg("act_block_w_div") = 1,
             py::arg("reshard_if_not_optimal") = false,
             py::arg("override_sharding_config") = false,
-            py::arg("height_sharding") = true,
+            py::arg("shard_layout") = TensorMemoryLayout::HEIGHT_SHARDED,
             py::arg("core_grid") = std::nullopt,
             py::arg("transpose_shards") = true,
             py::arg("output_layout") = Layout::TILE,
@@ -252,9 +253,10 @@ void py_bind_conv2d(py::module& module) {
         py_conv_config.def_readwrite("deallocate_activation", &Conv2dConfig::deallocate_activation);
         py_conv_config.def_readwrite("reallocate_halo_output", &Conv2dConfig::reallocate_halo_output);
         py_conv_config.def_readwrite("act_block_h_override", &Conv2dConfig::act_block_h_override);
+        py_conv_config.def_readwrite("act_block_w_div", &Conv2dConfig::act_block_w_div);
         py_conv_config.def_readwrite("reshard_if_not_optimal", &Conv2dConfig::reshard_if_not_optimal);
         py_conv_config.def_readwrite("override_sharding_config", &Conv2dConfig::override_sharding_config);
-        py_conv_config.def_readwrite("height_sharding", &Conv2dConfig::height_sharding);
+        py_conv_config.def_readwrite("shard_layout", &Conv2dConfig::shard_layout);
         py_conv_config.def_readwrite("core_grid", &Conv2dConfig::core_grid);
         py_conv_config.def_readwrite("transpose_shards", &Conv2dConfig::transpose_shards);
         py_conv_config.def_readwrite("output_layout", &Conv2dConfig::output_layout);
@@ -264,12 +266,13 @@ void py_bind_conv2d(py::module& module) {
 
     py::class_<OptimizedConvParallelizationConfig>(module, "OptimizedConvParallelizationConfig")
         .def(
-            py::init<CoreCoord, uint32_t, uint32_t, uint32_t>(),
+            py::init<CoreCoord, uint32_t, uint32_t, uint32_t, uint32_t>(),
             py::kw_only(),
             py::arg("grid_size"),
-            py::arg("num_cores_nhw"),
-            py::arg("per_core_out_matrix_height_ntiles").noconvert(),
-            py::arg("per_core_out_matrix_width_ntiles").noconvert())
+            py::arg("num_cores_nhw") = 1,
+            py::arg("num_cores_c") = 1,
+            py::arg("per_core_out_matrix_height_ntiles").noconvert() = 1,
+            py::arg("per_core_out_matrix_width_ntiles").noconvert() = 1)
         .def_property_readonly("grid_size", [](OptimizedConvParallelizationConfig const& c) { return c.grid_size; })
         .def_property_readonly(
             "num_cores_nhw", [](OptimizedConvParallelizationConfig const& c) { return c.num_cores_nhw; })

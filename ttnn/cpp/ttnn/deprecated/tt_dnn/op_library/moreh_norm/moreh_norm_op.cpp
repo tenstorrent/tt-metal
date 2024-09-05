@@ -58,7 +58,7 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
 
     if (keepdim) {
         bool ranks_are_equal = (input_rank == output_rank);
-        input_shape[dim] = (is_tile_dim) ? (TILE_HEIGHT) : (1);
+        input_shape[dim] = (is_tile_dim) ? (tt::constants::TILE_HEIGHT) : (1);
         input_shape_wo_padding[dim] = 1;
 
         if (!ranks_are_equal) {
@@ -138,6 +138,7 @@ void MorehNorm::validate_with_output_tensors(
 }
 
 std::vector<Shape> MorehNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    using namespace tt::constants;
     const auto& input = input_tensors.at(0);
     const auto& input_shape = input.get_legacy_shape();
     const auto input_rank = input_shape.rank();
@@ -204,7 +205,7 @@ Tensor moreh_norm(
     const bool keepdim,
     const std::optional<const Tensor> output,
     const std::optional<MemoryConfig> &memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     if (dim == std::nullopt) {
         std::vector<int64_t> dims(input.get_legacy_shape().rank());
         std::iota(dims.begin(), dims.end(), 0);
@@ -250,7 +251,7 @@ Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim,
     const bool keepdim,
     const std::optional<const Tensor> output,
     const std::optional<MemoryConfig> &memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config
 ) {
     auto device = input.device();
 

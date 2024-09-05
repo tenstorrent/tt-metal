@@ -9,7 +9,7 @@ from loguru import logger
 from datasets import load_dataset
 from transformers import WhisperForAudioClassification, AutoFeatureExtractor
 
-import tt_lib
+import ttnn
 
 from models.experimental.whisper.tt.whisper_for_audio_classification import (
     TtWhisperForAudioClassification,
@@ -59,7 +59,7 @@ def run_whisper_for_audio_classification(device):
     tt_whisper_model.eval()
 
     with torch.no_grad():
-        input_features = torch2tt_tensor(input_features, device, tt_lib.tensor.Layout.ROW_MAJOR)
+        input_features = torch2tt_tensor(input_features, device, ttnn.ROW_MAJOR_LAYOUT)
         ttm_logits = tt_whisper_model(
             input_features=input_features,
         ).logits

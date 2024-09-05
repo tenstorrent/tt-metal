@@ -118,8 +118,8 @@ void GraphProcessor::track_allocate(tt::tt_metal::Buffer* buffer, bool bottom_up
 
 void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
     const std::lock_guard<std::mutex> lock(mutex);
-    auto counter = graph.size();
     auto buffer_idx = add_buffer(buffer);
+    auto counter = graph.size();
     std::unordered_map<std::string, std::string> params = {
             {kSize, std::to_string(buffer->size())},
             {kType, buffer->is_dram() ? "DRAM" : "L1"},
@@ -276,8 +276,7 @@ int GraphProcessor::add_tensor(const Tensor& t) {
     std::int64_t tensor_id;
     if (not t.tensor_id.has_value()) {
         tt::log_warning("Tensor doesn't have tensor_id, generating new one. Ideally this should not happen. Please set tensor_id for this tensor ahead of time.");
-        ttnn::increment_tensor_id();
-        tensor_id = ttnn::get_tensor_id();
+        tensor_id = ttnn::CoreIDs::instance().fetch_and_increment_tensor_id();
     } else {
         tensor_id = t.tensor_id.value();
     }

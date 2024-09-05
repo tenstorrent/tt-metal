@@ -8,13 +8,10 @@
 #include "compute_kernel_api/mask.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
-
-ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
-ALWI void REL() { release_dst(tt::DstMode::Half); }
+#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
-
     uint32_t Ht = get_compile_time_arg_val(0);
     uint32_t Wt = get_compile_time_arg_val(1);
     uint32_t NC = get_compile_time_arg_val(2);
@@ -26,8 +23,7 @@ void MAIN {
     constexpr auto cb_accum_dst = tt::CB::c_intermed0;
     constexpr auto cb_masked_input = tt::CB::c_intermed1;
     constexpr auto cb_out = tt::CB::c_out0;
-    constexpr uint32_t TILE_H = 32;
-    constexpr bool do_mask_h = (origin_H % TILE_H) != 0;
+    constexpr bool do_mask_h = (origin_H % TILE_HEIGHT) != 0;
 
     binary_op_init_common(cb_input, cb_input);
 
@@ -51,61 +47,70 @@ void MAIN {
             bool is_h_single_tile = (Ht == 1);
 
             if (!is_h_single_tile) {
-                ACQ();
+                tile_regs_acquire();
+                reduce_init_delta_with_dt<false, REDUCE_OP, REDUCE_DIM>(cb_accum_dst, cb_input, cb_scaler);
                 for (uint32_t ht = 0; ht < Ht - 1; ++ht) {
                     cb_wait_front(cb_input, onetile);
-
-                    reduce_init_delta<false>();
                     reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
-                    reduce_revert_delta();
-
                     cb_pop_front(cb_input, onetile);
                 }
+                reduce_revert_delta(cb_accum_dst);
                 cb_reserve_back(cb_accum_dst, onetile);
-                pack_tile(reduce_dst_idx, cb_accum_dst);
+                tile_regs_commit();
+
+                tile_regs_wait();
+                pack_tile_with_dt(reduce_dst_idx, cb_accum_dst);
+                tile_regs_release();
+
                 cb_push_back(cb_accum_dst, onetile);
-                REL();
             }
 
             if (do_mask_h) {
-                ACQ();
+                tile_regs_acquire();
                 cb_wait_front(cb_input, onetile);
-                copy_tile_init();
+                copy_tile_init_with_dt(cb_input);
                 copy_tile(cb_input, 0, reduce_dst_idx);
+
+                copy_tile_init_with_dt(cb_mask_h);
                 copy_tile(cb_mask_h, 0, mask_dst_idx);
+
                 mask_tile_init();
                 mask_tile(reduce_dst_idx, mask_dst_idx);
+                tile_regs_commit();
 
                 cb_reserve_back(cb_masked_input, onetile);
-                pack_tile(reduce_dst_idx, cb_masked_input);
+                tile_regs_wait();
+                pack_tile_with_dt(reduce_dst_idx, cb_masked_input);
+                tile_regs_release();
                 cb_push_back(cb_masked_input, onetile);
 
                 cb_pop_front(cb_input, onetile);
                 cb_input = cb_masked_input;
-                REL();
             }
 
-            ACQ();
+            tile_regs_acquire();
             cb_wait_front(cb_input, onetile);
             if (!is_h_single_tile) {
                 cb_wait_front(cb_accum_dst, onetile);
-                copy_tile_init();
+                copy_tile_init_with_dt(cb_accum_dst);
                 copy_tile(cb_accum_dst, 0, reduce_dst_idx);
             }
 
-            reduce_init_delta<false>();
+            reduce_init_delta_with_dt<false, REDUCE_OP, REDUCE_DIM>(cb_out, cb_input, cb_scaler);
             reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
-            reduce_revert_delta();
+            reduce_revert_delta(cb_out);
+            tile_regs_commit();
 
             cb_reserve_back(cb_out, onetile);
-            pack_tile(reduce_dst_idx, cb_out);
+            tile_regs_wait();
+            pack_tile_with_dt(reduce_dst_idx, cb_out);
+            tile_regs_release();
             cb_push_back(cb_out, onetile);
 
             cb_pop_front(cb_input, onetile);
             if (!is_h_single_tile) {
                 cb_pop_front(cb_accum_dst, onetile);
             }
-            REL();
         }
     }
 

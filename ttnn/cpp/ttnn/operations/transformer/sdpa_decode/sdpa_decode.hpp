@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 
@@ -18,6 +18,7 @@ struct ExecuteScaledDotProductAttentionDecode {
         const ttnn::Tensor &input_tensor_k,
         const ttnn::Tensor &input_tensor_v,
         const std::vector<uint32_t> cur_pos,
+        const std::optional<const Tensor> cur_pos_tensor= std::nullopt,
         std::optional<float> scale = std::nullopt,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<SDPAProgramConfig> program_config = std::nullopt,
@@ -28,6 +29,7 @@ struct ExecuteScaledDotProductAttentionDecode {
         const ttnn::Tensor &input_tensor_k,
         const ttnn::Tensor &input_tensor_v,
         const std::vector<uint32_t> cur_pos,
+        const std::optional<const Tensor> cur_pos_tensor= std::nullopt,
         std::optional<float> scale = std::nullopt,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<SDPAProgramConfig> program_config = std::nullopt,

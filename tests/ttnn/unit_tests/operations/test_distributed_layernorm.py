@@ -68,8 +68,8 @@ def tt_distributed_layernorm(inp, gamma, beta, epsilon, is_rmsnorm, compute_kern
 def run_distributed_layernorm(
     inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, devices, fp32_enabled=False, iterations=1
 ):
-    compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,  # Highest fidelity
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity
         math_approx_mode=False,
         fp32_dest_acc_en=fp32_enabled,
         packer_l1_acc=False,

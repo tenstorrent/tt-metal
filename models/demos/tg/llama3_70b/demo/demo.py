@@ -19,7 +19,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import load_llama_state_dict
 from models.demos.t3000.llama2_70b.reference.llama.llama.tokenizer3 import ChatFormat
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
-    check_device_mesh,
+    check_mesh_device,
     string_similarity_score,
 )
 
@@ -39,7 +39,7 @@ class ModelArgs:
 
 @dataclass
 class TTArgs:
-    device_mesh: object = None
+    mesh_device: object = None
     cluster_shape: tuple = (4, 8)
     n_devices: int = 32
     emulated: bool = False
@@ -350,7 +350,7 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
 @pytest.mark.timeout(240000)
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "cluster_shape, device_mesh", [pytest.param((4, 8), (8, 4), id="4x8_grid")], indirect=["device_mesh"]
+    "cluster_shape, mesh_device", [pytest.param((4, 8), (8, 4), id="4x8_grid")], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize(
     "llama_version",
@@ -417,7 +417,7 @@ def test_LlamaModel_demo(
     temperature,
     chat,
     # TT args
-    device_mesh,
+    mesh_device,
     cluster_shape,
     n_devices,
     decode_only,
@@ -434,10 +434,10 @@ def test_LlamaModel_demo(
         llama_version=llama_version,
     )
 
-    check_device_mesh(device_mesh, model_config)
+    check_mesh_device(mesh_device, model_config)
 
-    for i in device_mesh.get_device_ids():
-        device = device_mesh.get_device(i)
+    for i in mesh_device.get_device_ids():
+        device = mesh_device.get_device(i)
         device.enable_async(True)
 
     args = construct_arg(
@@ -456,7 +456,7 @@ def test_LlamaModel_demo(
         top_k=top_k,
         temperature=temperature,
         chat=chat,
-        device_mesh=device_mesh,
+        mesh_device=mesh_device,
         cluster_shape=cluster_shape,
         n_devices=n_devices,
         cache_path=cache_path,

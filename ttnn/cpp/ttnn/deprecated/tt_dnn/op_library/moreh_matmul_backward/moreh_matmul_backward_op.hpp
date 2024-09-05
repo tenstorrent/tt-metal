@@ -5,9 +5,9 @@
  */
 
 #pragma once
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace tt {
 
@@ -25,7 +25,7 @@ std::vector<std::optional<Tensor>> moreh_matmul_backward(
     std::optional<const Tensor> input_grad = std::nullopt,
     std::optional<const Tensor> other_grad = std::nullopt,
     const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace primary
 

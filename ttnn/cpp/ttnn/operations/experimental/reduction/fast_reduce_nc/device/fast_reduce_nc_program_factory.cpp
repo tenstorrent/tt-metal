@@ -17,6 +17,8 @@ using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
+namespace {
+
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const tt::tt_metal::Shape& shape, uint32_t dim) {
     const auto rank = shape.rank();
 
@@ -36,7 +38,9 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dim
     return { Wt, Ht, inner_tile_size, reduce_tile_size};
 }
 
-operation::ProgramWithCallbacks reduce_nc_factory(const ttnn::Tensor &input, const ttnn::Tensor &output, int64_t dim,const DeviceComputeKernelConfig &compute_kernel_config) {
+}
+
+operation::ProgramWithCallbacks reduce_nc_factory(const ttnn::Tensor &input, const ttnn::Tensor &output, int64_t dim,const ttnn::DeviceComputeKernelConfig &compute_kernel_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////

@@ -101,7 +101,7 @@ std::vector<std::optional<Tensor>> moreh_linear_backward(
     const MemoryConfig& input_grad_mem_config,
     const MemoryConfig& weight_grad_mem_config,
     const MemoryConfig& bias_grad_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     std::vector<std::optional<Tensor>> result(3);
     const auto [input_required_grad, weight_required_grad, bias_required_grad] =
         get_required_outputs(are_required_outputs);

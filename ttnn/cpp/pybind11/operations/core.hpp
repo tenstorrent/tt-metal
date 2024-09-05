@@ -16,6 +16,33 @@ namespace ttnn {
 namespace operations {
 namespace core {
 
+void py_module_types(py::module& module) {
+    py::class_<DeviceComputeKernelConfig>(module, "DeviceComputeKernelConfig");
+
+    py::class_<GrayskullComputeKernelConfig>(module, "GrayskullComputeKernelConfig")
+        .def(
+            py::init<MathFidelity, bool>(),
+            py::kw_only(),
+            py::arg("math_fidelity") = MathFidelity::Invalid,
+            py::arg("math_approx_mode") = true)
+        .def_readwrite("math_fidelity", &GrayskullComputeKernelConfig::math_fidelity)
+        .def_readwrite("math_approx_mode", &GrayskullComputeKernelConfig::math_approx_mode);
+
+    py::class_<WormholeComputeKernelConfig>(module, "WormholeComputeKernelConfig")
+        .def(
+            py::init<MathFidelity, bool, bool, bool>(),
+            py::kw_only(),
+            py::arg("math_fidelity") = MathFidelity::Invalid,
+            py::arg("math_approx_mode") = true,
+            py::arg("fp32_dest_acc_en") = false,
+            py::arg("packer_l1_acc") = false)
+        .def_readwrite("math_fidelity", &WormholeComputeKernelConfig::math_fidelity)
+        .def_readwrite("math_approx_mode", &WormholeComputeKernelConfig::math_approx_mode)
+        .def_readwrite("fp32_dest_acc_en", &WormholeComputeKernelConfig::fp32_dest_acc_en)
+        .def_readwrite("packer_l1_acc", &WormholeComputeKernelConfig::packer_l1_acc);
+
+}
+
 void py_module(py::module& module) {
     module.def(
         "reshape",
@@ -77,7 +104,7 @@ void py_module(py::module& module) {
 
     module.def(
         "to_device",
-        py::overload_cast<const ttnn::Tensor&, DeviceMesh*, const std::optional<MemoryConfig>&>(
+        py::overload_cast<const ttnn::Tensor&, MeshDevice*, const std::optional<MemoryConfig>&>(
             &ttnn::operations::core::to_device),
         py::arg("tensor"),
         py::arg("device"),
@@ -159,12 +186,12 @@ void py_module(py::module& module) {
             const ttnn::Shape&,
             ttnn::DataType,
             ttnn::Layout,
-            DeviceMesh*,
+            MeshDevice*,
             const std::optional<ttnn::MemoryConfig>&>(&ttnn::operations::core::allocate_tensor_on_device),
         py::arg("shape"),
         py::arg("dtype"),
         py::arg("layout"),
-        py::arg("device_mesh"),
+        py::arg("mesh_device"),
         py::arg("memory_config") = std::nullopt);
 
     module.def(
@@ -206,23 +233,23 @@ void py_module(py::module& module) {
 
     module.def(
         "begin_trace_capture",
-        py::overload_cast<DeviceMesh*, const uint8_t>(&ttnn::operations::core::begin_trace_capture),
-        py::arg("device_mesh"),
+        py::overload_cast<MeshDevice*, const uint8_t>(&ttnn::operations::core::begin_trace_capture),
+        py::arg("mesh_device"),
         py::kw_only(),
         py::arg("cq_id") = ttnn::DefaultQueueId);
 
     module.def(
         "end_trace_capture",
-        py::overload_cast<DeviceMesh*, const uint32_t, const uint8_t>(&ttnn::operations::core::end_trace_capture),
-        py::arg("device_mesh"),
+        py::overload_cast<MeshDevice*, const uint32_t, const uint8_t>(&ttnn::operations::core::end_trace_capture),
+        py::arg("mesh_device"),
         py::arg("trace_id"),
         py::kw_only(),
         py::arg("cq_id") = ttnn::DefaultQueueId);
 
     module.def(
         "execute_trace",
-        py::overload_cast<DeviceMesh*, const uint32_t, const uint8_t, bool>(&ttnn::operations::core::execute_trace),
-        py::arg("device_mesh"),
+        py::overload_cast<MeshDevice*, const uint32_t, const uint8_t, bool>(&ttnn::operations::core::execute_trace),
+        py::arg("mesh_device"),
         py::arg("trace_id"),
         py::kw_only(),
         py::arg("cq_id") = ttnn::DefaultQueueId,
@@ -230,8 +257,8 @@ void py_module(py::module& module) {
 
     module.def(
         "release_trace",
-        py::overload_cast<DeviceMesh*, const uint32_t>(&ttnn::operations::core::release_trace),
-        py::arg("device_mesh"),
+        py::overload_cast<MeshDevice*, const uint32_t>(&ttnn::operations::core::release_trace),
+        py::arg("mesh_device"),
         py::arg("trace_id"));
 
     bind_registered_operation(
@@ -249,7 +276,7 @@ void py_module(py::module& module) {
         * :attr:`layout`: the layout of either ttnn.ROW_MAJOR_LAYOUT or ttnn.TILE_LAYOUT.
         * :attr:`dtype`: the optional output data type.
         * :attr:`memory_config`: the optional output memory configuration.
-        * :attr:`device`: Device/DeviceMesh whose worker thread on host should be used for the layout conversion
+        * :attr:`device`: Device/MeshDevice whose worker thread on host should be used for the layout conversion
 
     Example:
         >>> device_id = 0
@@ -276,12 +303,13 @@ void py_module(py::module& module) {
                const ttnn::Layout layout,
                const std::optional<ttnn::DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               DeviceMesh* device) -> ttnn::Tensor { return self(tensor, layout, dtype, memory_config, device); },
+               MeshDevice* device) -> ttnn::Tensor { return self(tensor, layout, dtype, memory_config, device); },
             py::arg("tensor"),
             py::arg("layout"),
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("device") = nullptr});
+
 }
 
 }  // namespace core

@@ -15,7 +15,7 @@ namespace ttnn::operations::experimental::paged_cache::detail {
 using namespace tt::constants;
 using namespace tt;
 
-bool enable_fp32_dest(const tt_metal::Device * device, const DeviceComputeKernelConfig& compute_kernel_config, const tt::DataFormat& input_cb_data_format) {
+bool enable_fp32_dest(const tt_metal::Device * device, const ttnn::DeviceComputeKernelConfig& compute_kernel_config, const tt::DataFormat& input_cb_data_format) {
     bool fp32_dest_acc_en;
     std::visit([&](auto&& compute_kernel_config) {
         using T = std::decay_t<decltype(compute_kernel_config)>;
@@ -34,7 +34,7 @@ bool enable_fp32_dest(const tt_metal::Device * device, const DeviceComputeKernel
     return fp32_dest_acc_en;
 }
 
-operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, std::optional<const Tensor> update_idxs_tensor, std::optional<const Tensor> page_table, const std::vector<uint32_t> update_idxs, const uint32_t batch_offset, DeviceComputeKernelConfig compute_kernel_config) {
+operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, std::optional<const Tensor> update_idxs_tensor, std::optional<const Tensor> page_table, const std::vector<uint32_t> update_idxs, const uint32_t batch_offset, ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     Program program{};
 
     tt_metal::Device *device = input_tensor.device();

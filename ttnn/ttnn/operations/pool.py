@@ -26,11 +26,9 @@ from ttnn.operations.conv.sliding_window_op_utils import (
 from typing import Union, Tuple, Dict
 
 from tt_lib.utils import _nearest_32
-import tt_lib as ttl
 
 import math
 import torch
-import ttnn
 
 
 def golden_maxpool2d(
@@ -398,7 +396,7 @@ class TTPyMaxPool(TTPyOp):
         padded_nhw = self.input_sharded_memory_config.shard_spec.shape[0] * self.sliding_window_op_params.num_cores_nhw
         if padded_nhw != act_shape[-2]:
             padded_shape = ttnn.Shape(act_shape, (1, 1, padded_nhw, in_c))
-            act_reshaped = ttl.tensor.format_input_tensor(
+            act_reshaped = ttnn.format_input_tensor(
                 act_reshaped,
                 self.device,
                 padded_shape,
@@ -431,9 +429,7 @@ def golden_global_avg_pool2d(input_tensor: ttnn.Tensor):
     return torch.nn.functional.global_avg_pool2d(input_tensor, output_size)
 
 
-global_avg_pool2d = ttnn.register_python_operation(
-    name="ttnn.global_avg_pool2d", golden_function=golden_global_avg_pool2d
-)(ttnn._ttnn.operations.pool.global_avg_pool2d)
+ttnn.attach_golden_function(ttnn.global_avg_pool2d, golden_global_avg_pool2d)
 
 avg_pool2d = ttnn.register_python_operation(name="ttnn.avg_pool2d", golden_function=golden_global_avg_pool2d)(
     ttnn._ttnn.operations.pool.avg_pool2d

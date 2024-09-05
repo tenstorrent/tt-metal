@@ -8,7 +8,7 @@
 
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace tt {
 namespace operations {
@@ -40,28 +40,28 @@ operation::ProgramWithCallbacks moreh_softmax_backward_w_small(
     const Tensor &input_grad,
     const CoreRange core_range,
     const MorehSoftmaxBackwardOp op,
-    const DeviceComputeKernelConfig compute_kernel_config);
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config);
 operation::ProgramWithCallbacks moreh_softmax_backward_w_large(
     const Tensor &output,
     const Tensor &output_grad,
     const Tensor &input_grad,
     const CoreRange core_range,
     const MorehSoftmaxBackwardOp op,
-    const DeviceComputeKernelConfig compute_kernel_config);
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config);
 operation::ProgramWithCallbacks moreh_softmax_backward_h_small(
     const Tensor &output,
     const Tensor &output_grad,
     const Tensor &input_grad,
     const CoreRange core_range,
     const MorehSoftmaxBackwardOp op,
-    const DeviceComputeKernelConfig compute_kernel_config);
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config);
 operation::ProgramWithCallbacks moreh_softmax_backward_h_large(
     const Tensor &output,
     const Tensor &output_grad,
     const Tensor &input_grad,
     const CoreRange core_range,
     const MorehSoftmaxBackwardOp op,
-    const DeviceComputeKernelConfig compute_kernel_config);
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config);
 operation::ProgramWithCallbacks moreh_softmax_backward_c_large(
     const Tensor &output,
     const Tensor &output_grad,
@@ -69,7 +69,7 @@ operation::ProgramWithCallbacks moreh_softmax_backward_c_large(
     uint32_t dim,
     const CoreRange core_range,
     const MorehSoftmaxBackwardOp op,
-    const DeviceComputeKernelConfig compute_kernel_config);
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config);
 
 struct MorehSoftmaxBackward {
     const uint32_t dim;
@@ -77,7 +77,7 @@ struct MorehSoftmaxBackward {
     const MorehSoftmaxBackwardOp op;
     const MorehSoftmaxBackwardOpParallelizationStrategy strategy;
     const MemoryConfig output_mem_config;
-    const DeviceComputeKernelConfig compute_kernel_config;
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
 
     void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -100,7 +100,7 @@ Tensor moreh_softmax_backward(
     std::optional<Tensor> input_grad_tensor = std::nullopt,
     const MorehSoftmaxBackwardOpParallelizationStrategy strategy = MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 Tensor moreh_softmin_backward(
     const Tensor &output_tensor,
@@ -109,7 +109,7 @@ Tensor moreh_softmin_backward(
     std::optional<Tensor> input_grad_tensor = std::nullopt,
     const MorehSoftmaxBackwardOpParallelizationStrategy strategy = MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 Tensor moreh_logsoftmax_backward(
     const Tensor &output_tensor,
@@ -118,7 +118,7 @@ Tensor moreh_logsoftmax_backward(
     std::optional<Tensor> input_grad_tensor = std::nullopt,
     const MorehSoftmaxBackwardOpParallelizationStrategy strategy = MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace primary
 }  // namespace operations

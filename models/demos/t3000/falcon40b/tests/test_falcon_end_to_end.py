@@ -33,7 +33,7 @@ from models.utility_functions import (
 
 # TODO: Replace this with actual Falcon application-level tests
 def run_test_FalconCausalLM_end_to_end(
-    device_mesh,
+    mesh_device,
     model_version,
     llm_mode,
     batch,
@@ -120,7 +120,7 @@ def run_test_FalconCausalLM_end_to_end(
     logger.info("Loading TT Falcon Model")
     profiler.start("TtFalcon_model_setup")
     tt_FalconCausalLM = TtFalconCausalLM(
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         num_layers,
@@ -130,8 +130,8 @@ def run_test_FalconCausalLM_end_to_end(
         tt_cache_path,
         use_global_cos_sin_cache,
     )
-    for device in device_mesh.get_devices():
-        ttnn.device.synchronize_device(device)
+    for device in mesh_device.get_devices():
+        ttnn.synchronize_device(device)
     profiler.end("TtFalcon_model_setup")
     logger.info("Done loading TT Falcon Model")
 
@@ -174,7 +174,7 @@ def run_test_FalconCausalLM_end_to_end(
             tt_outs.append(tt_out)
 
         tt_outs = [
-            ttnn.to_torch(tt_out, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=-1))
+            ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
             for tt_out in tt_outs
         ]
         tt_out = tt_outs
@@ -188,11 +188,11 @@ def run_test_FalconCausalLM_end_to_end(
             layer_past_len=kv_cache_len,
             use_cache=use_cache,
         )
-        tt_out = ttnn.to_torch(tt_out, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=-1))
+        tt_out = ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
 
     profiler.end("first_model_run_with_compile", force_enable=True)
-    for device in device_mesh.get_devices():
-        ttnn.device.synchronize_device(device)
+    for device in mesh_device.get_devices():
+        ttnn.synchronize_device(device)
 
     del tt_out
     del tt_inputs
@@ -227,12 +227,12 @@ def run_test_FalconCausalLM_end_to_end(
                     layer_past_len=kv_cache_len,
                     use_cache=use_cache,
                 )
-                if tt_out.get_layout() != ttnn.experimental.tensor.Layout.ROW_MAJOR:
+                if tt_out.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
                     tt_out = ttnn.untilize(tt_out, use_multicore=False)
                 tt_outs.append(tt_out)
 
             tt_outs = [
-                ttnn.to_torch(tt_out, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=-1))
+                ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
                 for tt_out in tt_outs
             ]
             tt_out = tt_outs
@@ -246,9 +246,9 @@ def run_test_FalconCausalLM_end_to_end(
                 layer_past_len=kv_cache_len,
                 use_cache=use_cache,
             )
-            tt_out = ttnn.to_torch(tt_out, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=-1))
-        for device in device_mesh.get_devices():
-            ttnn.device.synchronize_device(device)
+            tt_out = ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
+        for device in mesh_device.get_devices():
+            ttnn.synchronize_device(device)
 
         del tt_out
         del tt_inputs
@@ -271,8 +271,8 @@ def run_test_FalconCausalLM_end_to_end(
         tt_inputs, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
             llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
         )
-    for device in device_mesh.get_devices():
-        ttnn.device.synchronize_device(device)
+    for device in mesh_device.get_devices():
+        ttnn.synchronize_device(device)
     profiler.start(f"model_run_for_inference")
 
     if llm_mode == "prefill":
@@ -299,17 +299,17 @@ def run_test_FalconCausalLM_end_to_end(
             use_cache=use_cache,
         )
     profiler.end(f"model_run_for_inference")
-    for device in device_mesh.get_devices():
-        ttnn.device.synchronize_device(device)
+    for device in mesh_device.get_devices():
+        ttnn.synchronize_device(device)
 
     if llm_mode == "prefill":
         tensors = [
-            ttnn.to_torch(tt_out, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=-1))
+            ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
             for tt_out in tt_outs
         ]
         tt_out = torch.vstack(tensors)
     elif llm_mode == "decode":
-        tt_out = ttnn.to_torch(tt_out, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=-1))
+        tt_out = ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
         tt_out = tt_out.squeeze(1).transpose(0, 1)
     # check outputs ----------------------------------------------------------------------
     does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, out_pcc)
@@ -326,10 +326,10 @@ def run_test_FalconCausalLM_end_to_end(
         pytorch_layer_pres = pytorch_layer_present[i]
         tt_layer_pres = (
             ttnn.to_torch(
-                tt_layer_present[i][0], device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=1)
+                tt_layer_present[i][0], device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=1)
             ),
             ttnn.to_torch(
-                tt_layer_present[i][1], device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=1)
+                tt_layer_present[i][1], device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=1)
             ),
         )
         tt_layer_pres = (
@@ -462,7 +462,7 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     memcfg,
     model_location_generator,
     get_tt_cache_path,
-    t3k_device_mesh,
+    t3k_mesh_device,
     use_program_cache,
     async_mode,
 ):
@@ -524,7 +524,7 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
-    devices = t3k_device_mesh.get_devices()
+    devices = t3k_mesh_device.get_devices()
     # Set async mode
     for device in devices:
         device.enable_async(async_mode)
@@ -540,7 +540,7 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     disable_compilation_reports()
 
     run_test_FalconCausalLM_end_to_end(
-        t3k_device_mesh,
+        t3k_mesh_device,
         model_version,
         llm_mode,
         batch,

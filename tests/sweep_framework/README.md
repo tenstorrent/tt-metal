@@ -173,7 +173,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 Vectors marked invalid will not be run by the test runner, but it will be recorded that it was skipped due to its invalidity.
 
 ### Device Fixture
-Each op test file can optionally have a `device_mesh_fixture` generator which will be picked up by the infra for when a developer wants to use a custom (multi-chip, mesh, or otherwise) device configuration.
+Each op test file can optionally have a `mesh_device_fixture` generator which will be picked up by the infra for when a developer wants to use a custom (multi-chip, mesh, or otherwise) device configuration.
 
 This function should have two stages, setup and teardown of the device. These stages will be executed before, and after the test suite is executed. They are separated by the yield statement.
 
@@ -184,7 +184,7 @@ The `yield` statement must give a tuple of your device object, and a label for t
 #### Example
 
 ```
-def device_mesh_fixture():
+def mesh_device_fixture():
     # SETUP (called before test suite is executed)
     import tt_lib as ttl
 
@@ -193,24 +193,24 @@ def device_mesh_fixture():
     device_ids = [0, 4, 5, 1, 2, 6, 7, 3]
     num_devices_requested = len(device_ids)
 
-    device_mesh = ttnn.open_device_mesh(
-        ttnn.DeviceGrid(1, num_devices_requested), device_ids[:num_devices_requested]
+    mesh_device = ttnn.open_mesh_device(
+        ttnn.MeshShape(1, num_devices_requested), device_ids[:num_devices_requested]
     )
 
     print("ADD: Opened device mesh")
     # YIELD to test infrastructure
     # IMPORTANT: Whatever device object(s) you want to pass to your run function need to be ONE object here, as this generator will only be referenced once before executing the tests.
     # i.e. If you have four separate devices to use in your test, use 'yield ([device1, device2, device3, device4], "4 Device Setup")' inside of a list.
-    yield (device_mesh, "T3000 Mesh")
+    yield (mesh_device, "T3000 Mesh")
 
     # TEARDOWN (called after test suite is finished executing)
     print("ADD: Closing device mesh")
 
-    for device in device_mesh.get_devices():
-        ttl.device.DumpDeviceProfiler(device)
+    for device in mesh_device.get_devices():
+        ttnn.DumpDeviceProfiler(device)
 
-    ttnn.close_device_mesh(device_mesh)
-    del device_mesh
+    ttnn.close_mesh_device(mesh_device)
+    del mesh_device
 ```
 
 ### Run Function
@@ -219,7 +219,7 @@ The run function will be called by the test runner with all defined parameters p
 
 This is where to define the test case itself including setup and teardown and golden comparison.
 
-If you defined a `device_mesh_fixture` generator, the object you yielded will be passed into this function as `device`. Otherwise, `device` will be the default ttnn device opened by the infra.
+If you defined a `mesh_device_fixture` generator, the object you yielded will be passed into this function as `device`. Otherwise, `device` will be the default ttnn device opened by the infra.
 
 The runner expects one of two returns from the run function:
 
@@ -307,6 +307,8 @@ Options:
 
 `--clean` OPTIONAL: This setting is used to recover from mistakes in parameter generation, or if you have removed some test suites. If set, this flag will mark ALL vectors in the sweep as "archived", and regenerate all suites based on the current parameters in the sweep file.
 
+`--tag <tag>` OPTIONAL: This setting is used to assign a custom tag that will be assigned to your test vectors. This is to keep copies of vectors seperate from other developers / CI. By default, this will be your username. You are able to specify a tag when running tests using the runner.
+
 ## Test Runner
 
 The test runner reads in test vectors from the test vector database and executes the tests sequentially by calling the op test's run function with the specified vectors.
@@ -315,6 +317,7 @@ The test runner reads in test vectors from the test vector database and executes
 
 - Hang Detection / Timeout: Default timeout for one single test is 30 seconds. This can be overridden by setting a global `TIMEOUT` variable in the test file. Test processes are killed after this timeout and tt-smi is automatically run to reset the chip after a hang, before continuing the test suite.
 - NOTE ON HANGS: When specifying one test vector to run, hang detection will be disabled. This is because the test is run in the parent process to allow debug tools like gdb/lldb to be used easily.
+- NOTE ON TT-SMI: To ensure the best stability, set the TT-SMI reset command in an environment variable `TT_SMI_RESET_COMMAND`. For example `TT_SMI_RESET_COMMAND="tt-smi -tr 0"`. If this is not set, the system will attempt to find tt-smi and use default flags, but this is not guaranteed to work on every system because of version mismatches of tt-smi.
 - Result Classification: Tests will be assigned one of the following statuses after a run:
     1. PASS: The test met expected criteria. In this case the test message response is stored with the status, typically this is a PCC value.
     2. FAIL: ASSERT / EXCEPTION: The test failed due to an assertion in the op itself, failed PCC assertion, or any other exception that is raised during execution. The exception is stored with the test result.
@@ -349,6 +352,8 @@ Options:
 `--perf` OPTIONAL: This will enable e2e perf testing on the op tests that are written to support it. Each test will be run twice and the second result will be kept to avoid measuring compile time.
 
 `--dry-run` EXPERIMENTAL: This flag will print all the test vectors that would be run without the flag. This is best used piping stdout to a text file to avoid flooding the terminal.
+
+`--tag <tag>` OPTIONAL: This setting is used to assign a custom tag that will be used to search for test vectors. This is to keep copies of vectors seperate from other developers / CI. By default, this will be your username. You are able to specify a tag when generating tests using the generator. To run the CI suites of tests locally, use the `ci-main` tag.
 
 ## Query Tool
 

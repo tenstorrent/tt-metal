@@ -19,13 +19,13 @@ from models.utility_functions import (
 )
 
 
-def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_seeds):
-    for device in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device).enable_async(True)
+def test_mixtral_attention_inference(t3k_mesh_device, use_program_cache, reset_seeds):
+    for device in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device).enable_async(True)
 
     pcc = 0.99
     dtype = ttnn.bfloat8_b
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    model_args = TtModelArgs(t3k_mesh_device.get_device(0))
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -37,11 +37,11 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
     batch = 32
     seq_len = 1  # Decode one token at a time
 
-    tt_model = TtMixtralAttention(t3k_device_mesh, state_dict, args=model_args, layer_num=0, dtype=dtype)
+    tt_model = TtMixtralAttention(t3k_mesh_device, state_dict, args=model_args, layer_num=0, dtype=dtype)
 
     current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
-        tt_model.device_mesh,
+        tt_model.mesh_device,
     )
 
     generation_start_pos = 0
@@ -51,30 +51,26 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
     for i in range(generation_length):
         pt_attention_input = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1
         tt_attention_input = pt_attention_input
-        start_pos = generation_start_pos + i
+        start_pos_ids = [generation_start_pos + i for _ in range(batch)]
         attention_input = prepare_inputs_ttnn(
             tt_attention_input,
             model_args.dim,
-            start_pos,
-            model_args,
-            tt_model.device_mesh,
+            tt_model.mesh_device,
         )
 
-        current_pos = start_pos % model_args.sliding_window
         tt_out = tt_model(
             attention_input,
-            start_pos,
-            current_pos,
+            start_pos_ids,
             None,
             current_rot_mat,
         )
 
         tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
+            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
             .squeeze(2)
             .view(batch, 1, -1)
         )  # [ batch, seq, hidden_dim]
-        positions = torch.LongTensor([start_pos])
+        positions = torch.LongTensor([start_pos_ids[0]])
         freqs_cis_i = precompute_freqs_cis(model_args.head_dim, 128_000)[positions]
         reference_output = reference_model(pt_attention_input, freqs_cis_i, positions, mask=None)
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
@@ -83,9 +79,9 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
         logger.info(pcc_message)
 
         if passing:
-            logger.info(f"[start_pos={start_pos}] Mixtral_Attention Passed!")
+            logger.info(f"[start_pos={start_pos_ids[0]}] Mixtral_Attention Passed!")
         else:
-            logger.warning(f"[start_pos={start_pos}] Mixtral_Attention Failed!")
+            logger.warning(f"[start_pos={start_pos_ids[0]}] Mixtral_Attention Failed!")
             all_tests_pass = False
 
         # Update rotation matrix for next iteration

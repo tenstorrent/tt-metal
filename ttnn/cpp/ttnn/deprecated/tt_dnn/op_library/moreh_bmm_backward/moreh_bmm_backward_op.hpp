@@ -6,8 +6,9 @@
 
 #pragma once
 
-#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace tt {
 namespace operations {
@@ -15,13 +16,16 @@ namespace primary {
 
 using namespace tt_metal;
 
-[[maybe_unused]] std::vector<std::variant<std::monostate, Tensor, char *>> moreh_bmm_backward(
+std::vector<std::optional<Tensor>> moreh_bmm_backward(
     const Tensor &output_grad,
     const Tensor &input,
     const Tensor &mat2,
-    std::optional<std::reference_wrapper<const Tensor>> input_grad = std::nullopt,
-    std::optional<std::reference_wrapper<const Tensor>> mat2_grad = std::nullopt,
-    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+    std::optional<const Tensor> input_grad = std::nullopt,
+    std::optional<const Tensor> mat2_grad = std::nullopt,
+    const MemoryConfig &input_grad_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const MemoryConfig &mat2_grad_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace primary
 

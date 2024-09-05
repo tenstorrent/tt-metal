@@ -61,13 +61,13 @@ class TtFalconCreateQKVHeads:
         self.num_heads = num_heads
         self.num_kv_heads = num_kv_heads
 
-    def __call__(self, x: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
+    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         q_layer, k_layer, v_layer = ttnn.experimental.nlp_create_qkv_heads(
             x,
             num_heads=self.num_heads,
             num_kv_heads=self.num_kv_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         return q_layer, k_layer, v_layer
@@ -109,12 +109,10 @@ def run_test_FalconMLP_inference(
         num_kv_heads=num_kv_heads,
     )
 
-    input_host = torch2tt_tensor(input, None, tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16)
+    input_host = torch2tt_tensor(input, None, tt_dtype=ttnn.bfloat16)
     input = input_host.to(
         device,
-        ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
-        ),
+        ttnn.DRAM_MEMORY_CONFIG,
     )
 
     q_tt_out, k_tt_out, v_tt_out = tt_Falconcreate_qkv_heads_model(input)

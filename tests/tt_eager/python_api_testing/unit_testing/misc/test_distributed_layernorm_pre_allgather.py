@@ -103,7 +103,7 @@ def run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
     # out_torchfp32 = referencefp32(inp_chunked, n_devices, is_rmsnorm)
     # out_torchfp32 = torch.concat(out_torchfp32, -1)
 
-    dram_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
     tt_inp = []
     for d in range(n_devices):
@@ -255,7 +255,7 @@ def test_layernorm_part_1_with_program_cache2(
 ):
     dummy_tensors = []
 
-    dram_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
     for i in range(2):
         if i > 0:

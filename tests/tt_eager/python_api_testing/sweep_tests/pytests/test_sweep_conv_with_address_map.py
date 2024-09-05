@@ -6,7 +6,6 @@ import pytest
 from loguru import logger
 import ttnn
 import numpy as np
-import tt_lib as ttl
 from tt_lib.utils import _nearest_32, _nearest_y
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.conv.pytorch_conv_tb import (

@@ -23,7 +23,7 @@
 /* Fusion includes */
 #include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/cpp/ttnn/operations/matmul/device/matmul_op.hpp"
-#include "ttnn/operations/experimental/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 
 namespace ttnn {
@@ -56,6 +56,8 @@ operation::ProgramWithCallbacks all_gather_matmul_multi_core_with_workers(
     /* General Params */
     const Tensor& input_tensor,
     Tensor& all_gather_output_tensor,
+    Tensor& datacopy_output_tensor,
+    const Tensor& weight_tensor,
     Tensor& matmul_output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
@@ -64,24 +66,14 @@ operation::ProgramWithCallbacks all_gather_matmul_multi_core_with_workers(
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     all_gather_op::Topology topology,
-    const CoreCoord core_grid_offset = CoreCoord(0, 0)
+    const CoreCoord core_grid_offset,
 
     /* Matmul Params */
-    // const std::optional<const Tensor> bias,
-    // Tensor &mm_output_tensor,
-    // bool bcast_batch,
-    // CoreCoord compute_with_storage_grid_size,
-    // DeviceComputeKernelConfig compute_kernel_config,
-    // uint32_t in0_block_w,
-    // uint32_t out_subblock_h,
-    // uint32_t out_subblock_w,
-    // uint32_t per_core_M,
-    // uint32_t per_core_N,
-    // bool fuse_batch,
-    // bool transpose_mcast,
-    // std::optional<UnaryWithParam> fused_activation,
-    // bool untilize_out
-
+    const std::optional<const Tensor> bias,
+    bool bcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const operations::matmul::MatmulProgramConfig program_config,
+    bool untilize_out
 );
 }  // namespace experimental
 
@@ -96,13 +88,14 @@ std::vector<Tensor> all_gather_matmul(
     const uint32_t dim,
     const CoreCoord all_gather_core_grid_offset,
     const uint32_t num_links = 1,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config_ag = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config_mm = std::nullopt,
     const bool transpose_a = false,
     const bool transpose_b = false,
     const std::optional<const DataType> dtype = std::nullopt,
     const std::optional<const operations::matmul::MatmulProgramConfig> program_config = std::nullopt,
     const std::optional<const std::string>& activation = std::nullopt,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
 
 } // namespace ccl

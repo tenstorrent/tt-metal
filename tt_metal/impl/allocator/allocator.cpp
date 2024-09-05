@@ -120,7 +120,7 @@ uint64_t BankManager::allocate_buffer(
         is_sharded = true;
         TT_FATAL(
             num_shards.value() <= num_compute_banks,
-            "Expected number of shards to be less than or equal to total number of L1 banks in compute cores");
+            fmt::format("Expected number of shards {} to be less than or equal to total number of L1 banks {} in compute cores", num_shards.value(), num_compute_banks));
         num_banks = num_shards.value();
     }
     uint32_t size_per_bank = tt::tt_metal::detail::SizeBytesPerBank(size, page_size, num_banks, this->alignment_bytes_);
@@ -211,21 +211,19 @@ void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &allo
         allocator.dram_channel_to_bank_ids.insert({bank_id, {bank_id}});
         allocator.logical_core_to_bank_ids[BufferType::DRAM].insert({logical_core, {bank_id}});
     }
-    if (alloc_config.trace_region_size > 0) {
-        // Trace buffers are allocated in this region (top-down). Trace region is offset at dram_bank_size + UNRESERVED
-        // offset
-        allocator.trace_buffer_manager = BankManager(
-            BufferType::TRACE,
-            bank_offsets,
-            alloc_config.trace_region_size,
-            ALLOCATOR_ALIGNMENT,
-            dram_bank_size + DRAM_UNRESERVED_BASE);
-        for (uint32_t bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
-            CoreCoord logical_core = CoreCoord{bank_id, 0};
-            allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
-            allocator.dram_channel_to_bank_ids.insert({bank_id, {bank_id}});
-            allocator.logical_core_to_bank_ids[BufferType::TRACE].insert({logical_core, {bank_id}});
-        }
+    // Trace buffers are allocated in this region (top-down). Trace region is offset at dram_bank_size + UNRESERVED
+    // offset
+    allocator.trace_buffer_manager = BankManager(
+        BufferType::TRACE,
+        bank_offsets,
+        alloc_config.trace_region_size,
+        ALLOCATOR_ALIGNMENT,
+        dram_bank_size + DRAM_UNRESERVED_BASE);
+    for (uint32_t bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
+        CoreCoord logical_core = CoreCoord{bank_id, 0};
+        allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
+        allocator.dram_channel_to_bank_ids.insert({bank_id, {bank_id}});
+        allocator.logical_core_to_bank_ids[BufferType::TRACE].insert({logical_core, {bank_id}});
     }
 }
 

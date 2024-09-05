@@ -147,7 +147,7 @@ std::vector<std::optional<Tensor>> moreh_adamw(
     const std::optional<const Tensor> exp_avg_sq_out,
     const std::optional<const Tensor> max_exp_avg_sq_out,
     const MemoryConfig& mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
 
     auto device = param_in.device();
     auto grid_coord = device->compute_with_storage_grid_size();

@@ -8,7 +8,7 @@
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
-
+#include "tt_metal/common/constants.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn {
@@ -30,7 +30,7 @@ inline bool use_multicore_device_tilize(
             ? tt::tt_metal::detail::TileSize(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
             : input_single_tile_size;
 
-    uint32_t num_tiles_in_row = input.get_shape()[-1] / TILE_WIDTH;
+    uint32_t num_tiles_in_row = input.get_shape()[-1] / tt::constants::TILE_WIDTH;
     uint32_t max_l1_size = input.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
     uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size);  // 2 CBs
 
@@ -210,7 +210,7 @@ Tensor to_layout_impl(
     const ttnn::Layout layout,
     const std::optional<ttnn::DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    DeviceMesh* device) {
+    MeshDevice* device) {
     return detail::to_layout_impl(tensor_arg, layout, dtype, memory_config, device);
 }
 

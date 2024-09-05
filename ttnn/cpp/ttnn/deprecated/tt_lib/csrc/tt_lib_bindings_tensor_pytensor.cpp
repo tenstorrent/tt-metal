@@ -24,7 +24,7 @@ void log_external_operation(
     const std::vector<Tensor>& input_tensors) {
     tt::log_debug(
         tt::LogOp,
-        "Launching External Operation: \"{}\" ({})", operation.get_type_name());
+        "Launching External Operation: \"{}\"", operation.get_type_name());
 
     auto attributes = operation.attributes();
     if (not attributes.empty()) {
@@ -632,42 +632,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
         return std::make_tuple(operation, input_tensors);
     }
 
-    void TensorModulePyTensor(py::module &m_tensor) {
-        m_tensor.def(
-            "decorate_external_operation",
-            [](const py::function &function, std::optional<std::string> function_name) -> py::function {
-                return py::cpp_function(std::function([function, function_name](
-                                                          const py::args &args, const py::kwargs &kwargs) {
-                    ZoneScopedN("TT_DNN_FALLBACK_OP");
-                    ttnn::increment_device_operation_id();
-                    uint32_t device_operation_id = ttnn::get_device_operation_id();
-                    auto [operation, input_tensors] = detail::parse_external_operation(function, args, kwargs, function_name);
-                    GraphTracker::instance().track_function_start(operation.get_type_name(), args, kwargs);
-                    log_external_operation(ttnn::get_python_operation_id(), device_operation_id, operation, input_tensors);
-
-                    auto output = function(*args, **kwargs);
-
-                    TracyOpTTNNExternal(device_operation_id, operation, input_tensors);
-                    GraphTracker::instance().track_function_end(output);
-                    return output;
-                }));
-            },
-            py::arg("function").noconvert(),
-            py::arg("function_name").noconvert() = std::nullopt,
-            R"doc(
-            Decorate external operation for purposes of reporting and profiling.
-
-                +----------+----------------------+-----------+-------------+----------+
-                | Argument | Description          | Data type | Valid range | Required |
-                +==========+======================+===========+=============+==========+
-                | function | Fallback Operation   | Function  |             | Yes      |
-                +----------+----------------------+-----------+-------------+----------+
-                | args     | Packed args          | tuple     |             | No       |
-                +----------+----------------------+-----------+-------------+----------+
-                | kwargs   | Packed kwargs        | dict      |             | No       |
-                +----------+----------------------+-----------+-------------+----------+
-        )doc");
-
+    void TensorModulePyTensorTypes(py::module& m_tensor) {
         // Tensor constructors that accept device and .to(device) function use keep alive call policy to communicate that Device needs to outlive Tensor.
         // This is because when tensors on device are destroyed they need to deallocate their buffers via device.
         // keep_alive increases the ref count of the Device object being passed into the constructor and .to() function.
@@ -704,7 +669,45 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
             +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
 
         )doc");
+    }
 
+    void TensorModulePyTensor(py::module &m_tensor) {
+        m_tensor.def(
+            "decorate_external_operation",
+            [](const py::function &function, std::optional<std::string> function_name) -> py::function {
+                return py::cpp_function(std::function([function, function_name](
+                                                          const py::args &args, const py::kwargs &kwargs) {
+                    ZoneScopedN("TT_DNN_FALLBACK_OP");
+                    uint32_t device_operation_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
+                    auto [operation, input_tensors] = detail::parse_external_operation(function, args, kwargs, function_name);
+                    GraphTracker::instance().track_function_start(operation.get_type_name(), args, kwargs);
+                    log_external_operation(ttnn::CoreIDs::instance().get_python_operation_id(), device_operation_id, operation, input_tensors);
+
+                    auto output = function(*args, **kwargs);
+
+                    TracyOpTTNNExternal(device_operation_id, operation, input_tensors);
+                    GraphTracker::instance().track_function_end(output);
+                    return output;
+                }));
+            },
+            py::arg("function").noconvert(),
+            py::arg("function_name").noconvert() = std::nullopt,
+            R"doc(
+            Decorate external operation for purposes of reporting and profiling.
+
+                +----------+----------------------+-----------+-------------+----------+
+                | Argument | Description          | Data type | Valid range | Required |
+                +==========+======================+===========+=============+==========+
+                | function | Fallback Operation   | Function  |             | Yes      |
+                +----------+----------------------+-----------+-------------+----------+
+                | args     | Packed args          | tuple     |             | No       |
+                +----------+----------------------+-----------+-------------+----------+
+                | kwargs   | Packed kwargs        | dict      |             | No       |
+                +----------+----------------------+-----------+-------------+----------+
+        )doc");
+
+
+        auto pyTensor = static_cast<py::class_<Tensor>>(m_tensor.attr("Tensor"));
         pyTensor.def(py::init<ttnn::Tensor &>())
             .def(
                 py::init<>([](std::vector<float> &&data,
@@ -948,8 +951,8 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                 )doc")
             .def(
                 "to",
-                py::overload_cast<DeviceMesh *, const MemoryConfig &>(&Tensor::to, py::const_),
-                py::arg("device_mesh").noconvert(),
+                py::overload_cast<MeshDevice *, const MemoryConfig &>(&Tensor::to, py::const_),
+                py::arg("mesh_device").noconvert(),
                 py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED},
                 py::keep_alive<0, 2>(),
                 R"doc(
@@ -962,7 +965,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                 +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
                 | Argument  | Description                                     | Data type                  | Valid range           | Required |
                 +===========+=================================================+============================+=======================+==========+
-                | arg0      | DeviceMesh to which tensor will be moved        | tt_lib.device.DeviceMesh   | TT accelerator device | Yes      |
+                | arg0      | MeshDevice to which tensor will be moved        | tt_lib.device.MeshDevice   | TT accelerator device | Yes      |
                 +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
                 | arg1      | MemoryConfig of tensor of TT accelerator device | tt_lib.tensor.MemoryConfig |                       | No       |
                 +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
@@ -1062,9 +1065,9 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
             )doc")
             .def(
                 "to",
-                py::overload_cast<Layout, DeviceMesh*>(&Tensor::to, py::const_),
+                py::overload_cast<Layout, MeshDevice*>(&Tensor::to, py::const_),
                 py::arg("target_layout").noconvert(),
-                py::arg("device_mesh") = nullptr,
+                py::arg("mesh_device") = nullptr,
                 R"doc(
                 Convert TT Tensor to provided memory layout. Available layouts conversions are:
                 * ROW_MAJOR to TILE
@@ -1080,7 +1083,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
 
                 .. code-block:: python
 
-                    tt_tensor = tt_tensor.to(tt_lib.tensor.Layout.TILE, device_mesh)
+                    tt_tensor = tt_tensor.to(tt_lib.tensor.Layout.TILE, mesh_device)
             )doc")
             .def(
                 "pad",

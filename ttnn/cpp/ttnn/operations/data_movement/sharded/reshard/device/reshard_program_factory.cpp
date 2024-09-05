@@ -18,8 +18,8 @@ namespace ttnn::operations::data_movement::detail {
 
 std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
     Buffer* input_buffer, Buffer* output_buffer) {
-    auto output_buffer_page_mapping = generate_buffer_page_mapping(*output_buffer);
-    auto input_buffer_page_mapping = generate_buffer_page_mapping(*input_buffer);
+    const auto& output_buffer_page_mapping = *output_buffer->get_buffer_page_mapping();
+    const auto& input_buffer_page_mapping = *input_buffer->get_buffer_page_mapping();
 
     const auto& output_shard_to_host_mapping = output_buffer_page_mapping.dev_page_to_host_page_mapping_;
     const auto& input_page_to_local_page_mapping = input_buffer_page_mapping.host_page_to_local_shard_page_mapping_;
@@ -363,12 +363,14 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
         uint32_t output_units_per_core = std::min(output_units_left, output_units_per_shard);
         output_units_left -= output_units_per_core;
         uint32_t output_units_per_kernel = tt::div_up(output_units_per_core, kernels.size());
+        uint32_t output_start_offset = 0;
         for (const auto& kernel_id : kernels) {
             std::vector<uint32_t> kernel_args = {input_address, 0, 0};
             uint32_t output_units_to_get = std::min(output_units_per_core, output_units_per_kernel);
             if (output_units_to_get != 0) {
                 uint32_t num_reads = 0;
-                kernel_args[1] = (output_units_per_shard - output_units_per_core) * unit_size;
+                kernel_args[1] = output_start_offset;
+                output_start_offset += output_units_to_get * unit_size;
                 while (output_units_to_get > 0) {
                     if (input_core_units_rem == 0) {
                         input_core_idx++;

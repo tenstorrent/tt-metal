@@ -14,7 +14,7 @@ namespace operations {
 
 namespace primary {
 
-operation::ProgramWithCallbacks moreh_bias_backward_single_core_hw(const Tensor &output_grad, const Tensor &bias_grad, const DeviceComputeKernelConfig &compute_kernel_config) {
+operation::ProgramWithCallbacks moreh_bias_backward_single_core_hw(const Tensor &output_grad, const Tensor &bias_grad, const ttnn::DeviceComputeKernelConfig &compute_kernel_config) {
     Program program{};
     CoreCoord core = {0, 0};
     const uint32_t core_num = 1;

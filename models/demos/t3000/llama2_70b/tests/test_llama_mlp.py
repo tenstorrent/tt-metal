@@ -13,7 +13,7 @@ from models.demos.t3000.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_opti
 from models.utility_functions import skip_for_grayskull
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
-    check_device_mesh,
+    check_mesh_device,
     MAX_SEQ_LEN,
     BASE_URL,
     UNIT_TEST_N_LAYER,
@@ -42,8 +42,8 @@ def tt_llama_mlp_prepare_inputs(llama_mlp_model, x):
         x,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
-        device=llama_mlp_model.device_mesh,
-        mesh_mapper=ReplicateTensorToMesh(llama_mlp_model.device_mesh),
+        device=llama_mlp_model.mesh_device,
+        mesh_mapper=ReplicateTensorToMesh(llama_mlp_model.mesh_device),
     )
 
     if llama_mlp_model.model_config["LLM_MODE"] == "decode":
@@ -64,7 +64,7 @@ def tt_llama_mlp_prepare_inputs(llama_mlp_model, x):
 
 
 def run_test_LlamaMLP_inference(
-    t3k_device_mesh,
+    t3k_mesh_device,
     batch,
     seq_len,
     pcc,
@@ -109,7 +109,7 @@ def run_test_LlamaMLP_inference(
 
     # TT hardware execution -------------------------------------------------------------
     tt_LlamaMLP_model = TtLlamaMLP_optimized(
-        t3k_device_mesh,
+        t3k_mesh_device,
         state_dict,
         BASE_URL,
         UNIT_TEST_LAYER_NUM,
@@ -122,7 +122,7 @@ def run_test_LlamaMLP_inference(
 
     tt_out = tt_LlamaMLP_model(tt_mlp_input)
     tt_out = ttnn.from_device(tt_out)
-    tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=3))
+    tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
 
     does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"PCC value: {output_pcc}")
@@ -163,7 +163,7 @@ def test_LlamaMLP_inference(
     batch,
     seq_len,
     pcc,
-    t3k_device_mesh,
+    t3k_mesh_device,
     max_batch_size,
     max_context_len,
     llama_version,
@@ -186,9 +186,9 @@ def test_LlamaMLP_inference(
         max_context_len=max_context_len,
     )
 
-    check_device_mesh(t3k_device_mesh, model_config)
+    check_mesh_device(t3k_mesh_device, model_config)
     run_test_LlamaMLP_inference(
-        t3k_device_mesh,
+        t3k_mesh_device,
         batch,
         seq_len,
         pcc,

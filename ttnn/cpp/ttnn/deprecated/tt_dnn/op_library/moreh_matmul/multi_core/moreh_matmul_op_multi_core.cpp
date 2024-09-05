@@ -70,7 +70,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     const std::optional<const Tensor>& bias,
     bool transpose_input,
     bool transpose_other,
-    const DeviceComputeKernelConfig &compute_kernel_config) {
+    const ttnn::DeviceComputeKernelConfig &compute_kernel_config) {
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup

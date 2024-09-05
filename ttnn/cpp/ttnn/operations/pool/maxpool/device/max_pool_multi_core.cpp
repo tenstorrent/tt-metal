@@ -66,6 +66,7 @@ std::tuple<CoreRange, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> get_decomp
 
 // uint32_t get_num_cores(CoreCoord grid_size, uint32_t out_nhw, uint32_t nbatch) {
 uint32_t get_num_cores(const Device* device, uint32_t out_nhw, uint32_t nbatch) {
+    using namespace tt::constants;
     auto grid_size = device->compute_with_storage_grid_size();
     uint32_t avail_ncores = grid_size.x * grid_size.y;
     uint32_t ncores = 0;
