@@ -252,6 +252,18 @@ def run_math_unary_test_recip(device, h, w, ttnn_function, pcc=0.9999):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
+def run_math_unary_test_fixed_val(device, h, w, fill_value, ttnn_function, pcc=0.9999):
+    torch.manual_seed(0)
+    torch_input_tensor = torch.full((h, w), fill_value, dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn_function)
+    torch_output_tensor = golden_function(torch_input_tensor, device=device)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn_function(input_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_recip(device, h, w):
@@ -277,7 +289,6 @@ def run_math_unary_test_range(device, h, w, ttnn_function, pcc=0.9999):
 @pytest.mark.parametrize("h", [5])
 @pytest.mark.parametrize("w", [5])
 def test_multigammaln(device, h, w):
-    torch_multigammaln = ttnn.get_golden_function(ttnn.multigammaln)
     run_math_unary_test_range(device, h, w, ttnn.multigammaln, pcc=0.999)
 
 
@@ -303,3 +314,9 @@ def run_math_test_polygamma(device, h, w, scalar, ttnn_function, pcc=0.9999):
 @pytest.mark.parametrize("w", [128])
 def test_polygamma(device, h, w, scalar):
     run_math_test_polygamma(device, h, w, scalar, ttnn.polygamma, pcc=0.999)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_recip_fixed(device, h, w):
+    run_math_unary_test_fixed_val(device, h, w, 0, ttnn.reciprocal, pcc=0.999)

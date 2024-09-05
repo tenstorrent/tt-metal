@@ -89,7 +89,7 @@ Tensor _acosh(const Tensor& input_a, const std::optional<MemoryConfig>& output_m
        // input < 1, output is nan
        // input > 1, output is acosh(input)
        Tensor nan_res = ttnn::multiply(
-           ttnn::le(input_a, t_one, std::nullopt, output_mem_config), std::nanf(""), std::nullopt, output_mem_config);
+           ttnn::le(input_a, t_one, std::nullopt, output_mem_config), input_a.device()->sfpu_nan(), std::nullopt, output_mem_config);
        t_result = ttnn::multiply(
            ttnn::gt(input_a, t_one, std::nullopt, output_mem_config), ln_res, std::nullopt, output_mem_config);
        t_result = ttnn::add(nan_res, t_result, std::nullopt, output_mem_config);
@@ -724,11 +724,11 @@ Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig
     Tensor linput_m1 = ttnn::rsub(logit_input, 1.0, output_mem_config);
     Tensor log_input = ttnn::multiply(logit_input, ttnn::reciprocal(linput_m1, output_mem_config), std::nullopt, output_mem_config);
     linput_m1.deallocate();
-    Tensor t_inf = ttnn::multiply(ttnn::sign(input_a, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
+    Tensor t_inf = ttnn::multiply(ttnn::sign(input_a, output_mem_config), input_a.device()->sfpu_inf(), std::nullopt, output_mem_config);
     Tensor logit_result = ttnn::where(
         ttnn::eq(logit_input, 1.0, std::nullopt, output_mem_config),
         t_inf,
-        ttnn::where(ttnn::ltz(log_input, output_mem_config), std::nanf(" "), ttnn::log(log_input, output_mem_config))
+        ttnn::where(ttnn::ltz(log_input, output_mem_config), input_a.device()->sfpu_nan(), ttnn::log(log_input, output_mem_config))
         );
     return logit_result;
 }

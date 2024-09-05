@@ -137,7 +137,6 @@ def run_test_LlamaMLP_inference(
     )
 
     tt_mlp_input = tt_llama_mlp_prepare_inputs(tt_LlamaMLP_model, tt_inp)
-
     tt_out = tt_LlamaMLP_model(tt_mlp_input)
 
     tt_out = ttnn.to_torch(
