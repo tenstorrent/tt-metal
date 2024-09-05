@@ -133,6 +133,7 @@ void kernel_main() {
                         if((processed_rows % MAX_ROWS_FOR_REDUCTION) == 0) {
                             noc_async_read_barrier();
                             cb_push_back(in_cb_id, npages_to_reserve);
+                            uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
                             out_l1_write_addr = out_l1_write_addr_base;
                             cb_reserve_back(in_cb_id, npages_to_reserve);
                             // If next is last chunk, fill whole buffer with -inf.
