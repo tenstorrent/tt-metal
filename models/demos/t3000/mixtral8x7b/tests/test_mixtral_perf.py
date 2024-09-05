@@ -169,10 +169,21 @@ def test_mixtral_model_with_prefill_perf(
         from tracy import signpost
 
     dtype = ttnn.bfloat8_b
-    batch_size = 32
+
+    if prefill_seqlen >= 16 * 1024:
+        seq_len = 32 * 1024
+        batch_size = 8
+    elif prefill_seqlen >= 8 * 1024:
+        seq_len = 16 * 1024
+        batch_size = 16
+    else:
+        seq_len = 8 * 1024
+        batch_size = 32
 
     # Can use dummy_weights=True correctness is not tested, but it is much slower
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0), dummy_weights=False)
+    model_args = TtModelArgs(
+        t3k_mesh_device.get_device(0), dummy_weights=False, max_batch_size=batch_size, max_seq_len=seq_len
+    )
     model_args.n_layers = 32
 
     # Clear global profiler state before starting measurements
