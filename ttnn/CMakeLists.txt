@@ -1,4 +1,4 @@
-set(ALL_TTNN_SRCS
+set(TTNN_BASE_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/async_runtime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/core.cpp
@@ -9,6 +9,9 @@ set(ALL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph/graph_processor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph/graph_trace_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph/graph_pybind.cpp
+)
+
+set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_gather/all_gather.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_gather/all_gather_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.cpp
@@ -440,6 +443,98 @@ set(ALL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_sum/moreh_sum.cpp
 )
 
+set(TTNN_SUBLIBRARIES
+    ttnn/operations/core
+    ttnn/operations/normalization/layernorm
+    ttnn/operations/reduction/reduction_pybind
+    ttnn/operations/core/to_layout
+    ttnn/operations/eltwise/complex_binary
+    ttnn/operations/reduction/argmax
+    ttnn/operations/pool/avgpool
+    ttnn/operations/reduction/prod
+    ttnn/operations/reduction/generic
+    ttnn/operations/ccl/
+    ttnn/operations/data_movement/fill_rm
+    ttnn/operations/data_movement/permute
+    ttnn/operations/normalization/groupnorm
+    ttnn/operations/data_movement/sharded
+    ttnn/operations/normalization/softmax
+    ttnn/operations/reduction/topk
+    ttnn/operations/experimental/ssm
+    ttnn/operations/matmul/matmul
+    ttnn/operations/transformer/transformer_pybind
+    ttnn/operations/transformer/concatenate_heads
+    ttnn/operations/data_movement/sharded_partial
+    ttnn/operations/transformer/attention_softmax
+    ttnn/operations/examples/example
+    ttnn/operations/embedding_backward/embedding_backward_pybind
+    ttnn/operations/kv_cache/kv_cache
+    ttnn/operations/experimental/experimental_pybind
+    ttnn/operations/pool/maxpool
+    ttnn/operations/data_movement/tilize_with_val_padding
+    ttnn/operations/sliding_window/sliding_window
+    ttnn/operations/data_movement/pad
+    ttnn/operations/normalization/layernorm_distributed
+    ttnn/operations/data_movement/non_zero_indices
+    ttnn/operations/data_movement/fold
+    ttnn/operations/matmul/device
+    ttnn/operations/data_movement/slice
+    ttnn/operations/loss/loss
+    ttnn/operations/normalization/rmsnorm_distributed
+    ttnn/operations/kv_cache/kv_cache_pybind
+    ttnn/operations/embedding_backward/embedding_backward
+    ttnn/operations/eltwise/binary
+    ttnn/operations/data_movement/indexed_fill
+    ttnn/operations/loss/loss_pybind
+    ttnn/operations/transformer/split_query_key_value_and_split_heads
+    ttnn/operations/embedding_backward/device
+    ttnn/operations/data_movement/move
+    ttnn/operations/transformer/sdpa_decode_gqa
+    ttnn/operations/data_movement/untilize
+    ttnn/operations/data_movement/repeat_interleave
+    ttnn/operations/data_movement/repeat
+    ttnn/operations/experimental/ccl
+    ttnn/operations/pool/downsample
+    ttnn/operations/data_movement/data_transfer
+    ttnn/operations/sliding_window/reference_sliding_window
+    ttnn/operations/embedding/device
+    ttnn/operations/experimental/transformer
+    ttnn/operations/transformer/sdpa
+    ttnn/operations/experimental/auto_format
+    ttnn/operations/normalization/rmsnorm
+    ttnn/operations/eltwise/unary_backward
+    ttnn/operations/transformer/sdpa_decode
+    ttnn/operations/conv/conv2d
+    ttnn/operations/eltwise/ternary
+    ttnn/operations/experimental/matmul
+    ttnn/operations/experimental/reduction
+    ttnn/operations/data_movement/untilize_with_halo_v2
+    ttnn/operations/experimental/paged_cache
+    ttnn/operations/experimental/copy
+    ttnn/operations/core/compute_kernel
+    ttnn/operations/data_movement/transpose
+    ttnn/operations/eltwise/complex
+    ttnn/operations/data_movement/bcast
+    ttnn/operations/data_movement/concat
+    ttnn/operations/data_movement/reshape
+    ttnn/operations/data_movement/tilize
+    ttnn/operations/data_movement/split
+    ttnn/operations/kv_cache/device
+    ttnn/operations/eltwise/complex_unary
+    ttnn/operations/sliding_window/halo
+    ttnn/operations/data_movement/untilize_with_unpadding
+    ttnn/operations/reduction/moe
+    ttnn/operations/data_movement/copy
+    ttnn/operations/matmul/matmul_pybind
+    ttnn/operations/eltwise/unary
+    ttnn/operations/eltwise/complex_unary_backward
+    ttnn/operations/eltwise/ternary_backward
+    ttnn/operations/eltwise/binary_backward
+    ttnn/operations/pool/upsample
+)
+
+
+
 # Split src and python bindings
 # We only build python bindings optionally
 set(TTNN_SRC)
@@ -452,13 +547,15 @@ set(PYBIND_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/pytensor.cpp
 )
 
-foreach(FILE ${ALL_TTNN_SRCS})
+foreach(FILE ${TTNN_OP_SRCS})
     if(FILE MATCHES "_pybind.cpp$")
         list(APPEND PYBIND_SRC ${FILE})
     else()
         list(APPEND TTNN_SRC ${FILE})
     endif()
 endforeach()
+
+
 
 ### Setup TTNN as a shared library with optional Python bindings
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor)
@@ -514,7 +611,27 @@ if(WITH_PYTHON_BINDINGS)
     list(APPEND TTNN_PUBLIC_LINK_LIBRARIES pch_pybinds ${Python3_LIBRARIES})
 endif()
 
-add_library(ttnn SHARED ${TTNN_FINAL_SRC})
+set(ALL_TTNN_SUBLIBRARIES)
+
+foreach(SUBLIBRARY_PATH ${TTNN_SUBLIBRARIES})
+    set(SUBLIBRARY_SRCS ${TTNN_SRC})
+    list(FILTER SUBLIBRARY_SRCS INCLUDE REGEX "${SUBLIBRARY_PATH}")
+    if(SUBLIBRARY_SRCS)
+        string(REPLACE "/"  "_"  SUBLIBRARY_NAME ${SUBLIBRARY_PATH})
+        message(${SUBLIBRARY_NAME} ": " ${SUBLIBRARY_SRCS})
+
+        add_library(${SUBLIBRARY_NAME} STATIC ${SUBLIBRARY_SRCS})
+        target_include_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
+        target_link_libraries(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_LIBRARIES})
+        target_link_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
+        target_precompile_headers(${SUBLIBRARY_NAME} PRIVATE ${TTNN_PRECOMPILED_HEADERS})
+        target_compile_options(${SUBLIBRARY_NAME} PUBLIC -MP -Wno-int-to-pointer-cast -fno-var-tracking)
+
+        list(APPEND ALL_TTNN_SUBLIBRARIES ${SUBLIBRARY_NAME})
+    endif()
+endforeach(SUBLIBRARY ${TTNN_SUBLIBRARIES})
+
+add_library(ttnn SHARED ${TTNN_BASE_SRCS})
 target_compile_options(ttnn PUBLIC -MP -Wno-int-to-pointer-cast -fno-var-tracking)
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
@@ -523,6 +640,7 @@ endif()
 
 target_include_directories(ttnn PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
 target_link_libraries(ttnn PUBLIC ${TTNN_PUBLIC_LINK_LIBRARIES})
+target_link_libraries(ttnn PUBLIC ${ALL_TTNN_SUBLIBRARIES})
 target_link_directories(ttnn PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
 target_precompile_headers(ttnn PRIVATE ${TTNN_PRECOMPILED_HEADERS})
 
