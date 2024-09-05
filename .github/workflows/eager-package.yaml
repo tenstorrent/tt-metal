@@ -51,6 +51,7 @@ jobs:
         run: |
           echo "DEVICE_CXX=g++" >> $GITHUB_ENV
       - uses: ./.github/actions/prepare-metal-run
+        if: ${{ inputs.from-precompiled }}
         with:
           arch: ${{ inputs.arch }}
       - name: Build Python package distribution
