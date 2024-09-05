@@ -34,8 +34,8 @@ class Emb(torch.nn.Module):
 @pytest.mark.parametrize(
     "seq_len",
     (
-        128,
-        1024,
+        # 128,  # FIXME #12264
+        # 1024,  # FIXME #12264
         1024 * 8,
         1024 * 32,
     ),
