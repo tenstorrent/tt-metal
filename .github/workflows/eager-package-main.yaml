@@ -2,23 +2,34 @@ name: "[post-commit] Python wheel build and test"
 
 on:
   workflow_dispatch:
+    inputs:
+      from-precompiled:
+        description: "Use precompiled assets for wheel build"
+        default: True
+        type: boolean
   workflow_call:
 
-# TODO: RK - need to change this to every push later once
-# we go public
 jobs:
-  build-eager-package:
+  build-artifact:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.from-precompiled }}
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+  build-wheels:
+    needs: build-artifact
+    # Since this depends on build-artifact if we use from-precompiled, otherwise it's
+    # a standalone job if we do not use from-precompiled
+    if: always()
     strategy:
       matrix:
         os: [ubuntu-20.04, ubuntu-22.04]
         arch: [grayskull, wormhole_b0]
     uses: ./.github/workflows/eager-package.yaml
     with:
-      environment: dev
       os: ${{ matrix.os }}
       arch: ${{ matrix.arch }}
-  test-eager-package-host:
-    needs: build-eager-package
+      from-precompiled: ${{ github.event_name == 'workflow_dispatch' && inputs.from-precompiled }}
+  test-wheels-host:
+    needs: build-wheels
     strategy:
       matrix:
         os: [ubuntu-20.04, ubuntu-22.04]
@@ -41,8 +52,8 @@ jobs:
           source tests/end_to_end_tests/env/bin/activate
           cd tests/end_to_end_tests
           pytest -c conftest.py . -m eager_host_side
-  test-eager-package-silicon:
-    needs: build-eager-package
+  test-wheels-silicon:
+    needs: build-wheels
     strategy:
       matrix:
         os: [ubuntu-20.04]

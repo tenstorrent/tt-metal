@@ -110,7 +110,7 @@ jobs:
         with:
           name: release-notes
           path: RELEASE_NOTES.txt
-  build-eager-package:
+  build-wheels:
     needs: create-tag
     strategy:
       matrix:
@@ -118,15 +118,15 @@ jobs:
         arch: [grayskull, wormhole_b0]
     uses: ./.github/workflows/eager-package.yaml
     with:
-      environment: dev
       os: ${{ matrix.os }}
       arch: ${{ matrix.arch }}
+      from-precompiled: false
   # Candidate for breaking up
   create-and-upload-draft-release:
     needs: [
       create-tag,
       create-release-notes,
-      build-eager-package,
+      build-wheels,
     ]
     strategy:
       matrix:
