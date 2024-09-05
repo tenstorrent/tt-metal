@@ -198,6 +198,8 @@ def test_mixtral_model_with_prefill_perf(
     (
         input_tokens_prefill_pt,
         encoded_prompts,
+        decoding_pos,
+        prefill_lens,
     ) = preprocess_inputs_prefill(
         prompts,
         tokenizer,
