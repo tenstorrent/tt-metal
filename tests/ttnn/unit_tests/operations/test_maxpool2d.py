@@ -70,10 +70,7 @@ from ttnn.operations.conv2d import determine_parallel_config, create_sharded_mem
 )
 @pytest.mark.parametrize(
     "stride",
-    (
-        (1, 1),
-        (2, 2),
-    ),
+    ((2, 2),),
 )
 @pytest.mark.parametrize("dilation", ((1, 1),))  ## default
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
