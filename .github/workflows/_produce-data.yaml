@@ -71,7 +71,8 @@ jobs:
           gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} > workflow.json
           echo "[Info] Workflow run attempt jobs"
           gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs --paginate
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs --paginate > workflow_jobs.json
+          # GitHub chunks the jobs array into multiple objects side-by-side if there are more than 100 jobs, so we need to slurp them into one giant object for later Python processing
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs --paginate | jq -s '{total_count: .[0].total_count, jobs: map(.jobs) | add}' > workflow_jobs.json
       - name: Collect workflow artifact and job logs
         shell: bash
         env:
