@@ -154,6 +154,9 @@ std::vector<Tensor> _rdiv_bw(
 // grad_input = grad * exponent * torch.pow(input, exponent - 1)
 std::vector<std::optional<Tensor>> _pow_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
+    if(!input_grad.has_value()){
+        input_grad = input;
+    }
     const float ZERO_THRESHOLD = std::numeric_limits<float>::epsilon() * 10.0f;
     TT_FATAL(exponent >= 0.0, "negative exponents are not supported; use recip(pow(input,abs(exponent)))");
     if (std::abs(exponent) < ZERO_THRESHOLD) {
@@ -172,11 +175,7 @@ std::vector<std::optional<Tensor>> _pow_bw(uint8_t queue_id, const Tensor& grad,
     Tensor final_result = ttnn::multiply(queue_id, result, grad, std::nullopt, output_mem_config);
     result.deallocate();
     Tensor temp = where(queue_id, ttnn::le(queue_id, final_result, -3.4e+38, std::nullopt, output_mem_config), -std::numeric_limits<float>::infinity(), final_result, output_mem_config);
-    if(input_grad.has_value()){
         where(queue_id, ttnn::ge(queue_id, final_result, 3.4e+38, std::nullopt, output_mem_config), std::numeric_limits<float>::infinity(), temp, output_mem_config, input_grad);
-    } else {
-        input_grad = where(queue_id, ttnn::ge(queue_id, final_result, 3.4e+38, std::nullopt, output_mem_config), std::numeric_limits<float>::infinity(), temp, output_mem_config);
-    }
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
 }
@@ -184,22 +183,20 @@ std::vector<std::optional<Tensor>> _pow_bw(uint8_t queue_id, const Tensor& grad,
 std::vector<std::optional<Tensor>> _exp_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
 
+    if(!input_grad.has_value())
+    {
+        input_grad = input;
+    }
     float t_inf = std::numeric_limits<float>::infinity();
     Tensor exp_result = ttnn::exp(queue_id, input, false, output_mem_config);
     Tensor result = ttnn::multiply(queue_id, grad, exp_result, std::nullopt, output_mem_config);
     result = where(queue_id, ttnn::ge(queue_id, result, 1e+38, std::nullopt, output_mem_config), t_inf, result, output_mem_config);
     result = where(queue_id, ttnn::ge(queue_id, result, -1e+38, std::nullopt,  output_mem_config), -t_inf, result, output_mem_config);
-    if(input_grad.has_value()){
-        where(queue_id,
-        ttnn::logical_and(
-            ttnn::ge(queue_id, ttnn::abs(queue_id, exp_result, output_mem_config), 1e+38, std::nullopt, output_mem_config),
-            ttnn::ltz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config), -t_inf, result, output_mem_config, input_grad);
-    } else {
-    input_grad = where(queue_id,
-        ttnn::logical_and(
-            ttnn::ge(queue_id, ttnn::abs(queue_id, exp_result, output_mem_config), 1e+38, std::nullopt, output_mem_config),
-            ttnn::ltz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config), -t_inf, result, output_mem_config);
-    }
+    where(queue_id,
+    ttnn::logical_and(
+        ttnn::ge(queue_id, ttnn::abs(queue_id, exp_result, output_mem_config), 1e+38, std::nullopt, output_mem_config),
+        ttnn::ltz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config), -t_inf, result, output_mem_config, input_grad);
+
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
 }
@@ -207,14 +204,13 @@ std::vector<std::optional<Tensor>> _exp_bw(uint8_t queue_id, const Tensor& grad,
 std::vector<std::optional<Tensor>> _tanh_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
 
+    if(!input_grad.has_value()){
+        input_grad = input;
+    }
     Tensor tanh_res = ttnn::tanh(queue_id, input, output_mem_config);
     tanh_res = ttnn::square(queue_id, tanh_res, output_mem_config);
     tanh_res = ttnn::rsub(queue_id, tanh_res, 1.0f, output_mem_config);
-    if(input_grad.has_value()){
-        ttnn::multiply(queue_id, grad, tanh_res, std::nullopt, output_mem_config, input_grad);
-    } else {
-    input_grad = ttnn::multiply(queue_id, grad, tanh_res, std::nullopt, output_mem_config);
-    }
+    ttnn::multiply(queue_id, grad, tanh_res, std::nullopt, output_mem_config, input_grad);
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
 }
@@ -225,20 +221,14 @@ std::vector<std::optional<Tensor>> _sqrt_bw(uint8_t queue_id, const Tensor& grad
     float t_nan = std::nanf("");
     float t_inf = std::numeric_limits<float>::infinity();
 
-    if(input_grad.has_value()){
+    if(!input_grad.has_value()){
+        input_grad = input;
+    }
         ttnn::sqrt(queue_id, input, output_mem_config, input_grad);
         ttnn::multiply(queue_id, grad, ttnn::reciprocal(queue_id, ttnn::multiply(queue_id, input_grad.value(), 2.0, std::nullopt, output_mem_config), output_mem_config),std::nullopt,output_mem_config, input_grad);
         where(queue_id, ttnn::lez(queue_id, input, output_mem_config), t_nan, input_grad.value(), output_mem_config, input_grad);
         where(queue_id,ttnn::logical_and(queue_id, ttnn::eqz(queue_id, input, output_mem_config), ttnn::ltz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config), -t_inf,input_grad.value(),output_mem_config,input_grad);
         where(queue_id, ttnn::logical_and(queue_id, ttnn::eqz(queue_id, input, output_mem_config), ttnn::gtz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config), t_inf,input_grad.value(),output_mem_config,input_grad);
-    } else {
-    Tensor sqrt_result = ttnn::sqrt(queue_id, input, output_mem_config);
-    Tensor result = ttnn::multiply(queue_id, grad, ttnn::reciprocal(queue_id, ttnn::multiply(queue_id, sqrt_result, 2.0, std::nullopt, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
-    sqrt_result.deallocate();
-    input_grad = where(queue_id, ttnn::lez(queue_id, input, output_mem_config), t_nan, result, output_mem_config);
-    input_grad = where(queue_id, ttnn::logical_and(queue_id, ttnn::eqz(queue_id, input, output_mem_config), ttnn::ltz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config),-t_inf, input_grad.value(),output_mem_config);
-    input_grad = where(queue_id, ttnn::logical_and(queue_id, ttnn::eqz(queue_id, input, output_mem_config), ttnn::gtz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config),t_inf, input_grad.value(), output_mem_config);
-    }
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
 }
@@ -740,10 +730,10 @@ std::vector<Tensor> _abs_bw(const Tensor& grad, const Tensor& input, const std::
 
 // Silu
 // result:  grad * sigmoid_result * (1 + input * (1 - sigmoid_result))
-std::vector<std::optional<ttnn::Tensor>> _silu_bw(uint8_t cq_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
+std::vector<std::optional<ttnn::Tensor>> _silu_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;
     if(!input_grad.has_value()){
-        input_grad = grad;
+        input_grad = input;
     }
     Tensor grad_sigmoid = ttnn::multiply(cq_id, grad, ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config);
     Tensor add_sub = ttnn::add(cq_id,
