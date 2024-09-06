@@ -1,13 +1,11 @@
----
-abstract: 'In this paper we discuss the details of implementing Convolution Neural Networks (CNNs) on the Tenstorrent architectures. This includes the \emph{Convolution} operation. We also detail the parallelization and performance optimizations, particularly focusing on the \emph{sliding window operations} in general and construction of fully local (to each core on the processors) data shards. An implementation of the ResNet-50 model using our Metalium stack.'
-author:
-- |
-    Metalium CNN Team, Tenstorrent Inc.\
-    Correspondence: `asarje@tenstorrent.com`
-bibliography:
-- 'references.bib'
-title: Convolution Networks on Tenstorrent Chips
----
+# Convolution Networks on Tenstorrent Chips
+
+**Author**: Metalium CNN Team, Tenstorrent Inc.\
+**Correspondence**: `asarje@tenstorrent.com`
+
+## Abstract
+In this paper we discuss the details of implementing Convolution Neural Networks (CNNs) on the Tenstorrent architectures. This includes the _Conv2D_ operation. We also detail the parallelization and performance optimizations, particularly focusing on the _sliding window operations_ in general and construction of fully local (to each core on the processors) data shards. An implementation of the ResNet-50 model using our Metalium stack.
+
 
 Introduction
 ============
@@ -102,18 +100,9 @@ expected output (see
 Figure [\[fig:output\]](#fig:output){reference-type="ref"
 reference="fig:output"}.)
 
-Applications of Convolutions in Machine Learning
-------------------------------------------------
-
-\[TODO\]
 
 Convolution Operation on Tenstorrent Architecture
 =================================================
-
-Tenstorrent architecture basics
--------------------------------
-
-\[TODO\]
 
 Implementation of Convolution Operation on a Single Tensix Core
 ---------------------------------------------------------------
@@ -252,11 +241,11 @@ operations on the data in these source registers, generating result
 output block in to the destination registers. The pack core moves the
 output block data from the destination registers to the local L1 memory.
 
-![Convolutions operation using generic interleaved global
-tensors.[]{label="fig:op1"}](media/op1.png){#fig:op1 width="50%"}
+<img src="media/op1.png" style="width:500px;">\
+_Convolutions operation using generic interleaved global tensors._
 
-![Convolutions operation using sharded local
-tensors.[]{label="fig:op2"}](media/op2.png){#fig:op2 width="50%"}
+<img src="media/op2.png" style="width:500px;">\
+_Convolutions operation using sharded local tensors._
 
 Parallelization of Convolution Operation
 ========================================
@@ -294,10 +283,8 @@ strategies: *height*, *width*, and *block*. To demonstrate the mechanics
 of each strategy, consider a 2D matrix of size $[H, W]$ (representing a
 flattened tensor), and let $p$ be the number of cores used.
 
-![Sharding.[]{label="fig:sharding"}](media/heightshard.png "fig:"){#fig:sharding
-width="20%"}
-![Sharding.[]{label="fig:sharding"}](media/blockshard.png "fig:"){#fig:sharding
-width="20%"}
+<img src="media/heightshard.png" style="width:300px;">\
+<img src="media/blockshard.png" style="width:300px;">
 
 1.  **Height sharding (1D)**: In the height sharded scheme, the input
     matrix height is equally divided into $p$ contiguous segments and
@@ -363,7 +350,8 @@ process follows several steps.
 Haloing
 -------
 
-![Halo.[]{label="fig:halo0"}](media/halos.png){#fig:halo0 width="25%"}
+<img src="media/halos.png" style="width:200px;">\
+_Halo._
 
 In the following example, we describe the haloing process. This is a
 data movement operation we use to construct \"haloed\" shards, where
@@ -386,7 +374,7 @@ Figure [6](#fig:halo1){reference-type="ref" reference="fig:halo1"}. We
 will separate the input tensor dimensions versus the output tensor
 dimensions.
 
-![Halo.[]{label="fig:halo1"}](media/halo1.png){#fig:halo1 width="50%"}
+<img src="media/halo1.png" style="width:200px;">
 
 For simplicity, let the batch size be one. IN the figure, we also
 demonstrate a single channel view of this block. This view will be a
@@ -395,7 +383,7 @@ assume we have $p = 3$ cores. The sharding strategy we will be using is
 *height*-sharding. This is depicted in the figure via three distinct
 colors, one for each shard.
 
-![Halo.[]{label="fig:halo2"}](media/halo2.png){#fig:halo2 width="50%"}
+<img src="media/halo2.png" style="width:200px;">
 
 Next, we can visualize what our window will look like. Recall that the
 weight tensor consists of a number of filters, and each filter consists
@@ -403,7 +391,7 @@ of one or more kernels. This kernel is also referred to as the *window*
 in 2D visualization representation. We can see the 3D kernels (a single
 filter) that is being convoluted across our input tensor.
 
-![Halo.[]{label="fig:halo3"}](media/halo3.png){#fig:halo3 width="50%"}
+<img src="media/halo3.png" style="width:200px;">
 
 We will keep in mind the strides, $S_w$ and $S_h$, as how many data
 elements we traverse by. We have not shown any padding ($pad_h$ and
@@ -421,9 +409,9 @@ from all 3 shards. Thus, for this particular output data element, it
 will need data from its current core, as well as 2 other cores for the 2
 other shards.
 
-![Halo.[]{label="fig:halo4"}](media/halo4.png){#fig:halo4 width="50%"}
+<img src="media/halo4.png" style="width:200px;">
 
-![Halo.[]{label="fig:halo5"}](media/halo5.png){#fig:halo5 width="50%"}
+<img src="media/halo5.png" style="width:200px;">
 
 The goal of halo is to figure out what data is needed for the current
 output data element calculation, and to bring that within the core that
@@ -434,7 +422,7 @@ example, we will first add the appropriate padding onto the input
 tensor. In the case of convolution, the padding value is 0. We have
 chosen to have $pad_w$ and $pad_h$ to be 0.
 
-![Halo.[]{label="fig:halo6"}](media/halo6.png){#fig:halo6 width="50%"}
+<img src="media/halo6.png" style="width:200px;">
 
 Moving on, from this tensor, we will generate another tensor of boolean
 values that will be sized the same as the original input tensor. Each of
@@ -443,7 +431,7 @@ or a data value. Padding values are set to true (value=1), while the
 latter is set to false (value=0). This is called our padding config
 tensor.
 
-![Halo.[]{label="fig:halo7"}](media/halo7.png){#fig:halo7 width="50%"}
+<img src="media/halo7.png" style="width:200px;">
 
 Next up, we will traverse through the input tensor and store the indices
 that correspond to each stick. You can see that certain sticks will
@@ -451,7 +439,7 @@ correspond to padding values whereas certain sticks will correspond to
 data values. We store these indices. If you know the top-leftmost index,
 you can generate all the indices in your window that you will need.
 
-![Halo.[]{label="fig:halo8"}](media/halo8.png){#fig:halo8 width="50%"}
+<img src="media/halo8.png" style="width:200px;">
 
 Now we will determine where data needs to be read from. We first compute
 what part of the output each core is responsible for. Therefore, the
@@ -478,35 +466,18 @@ knows what data it needs to get and where. Thus, it will issue a Halo
 operation with these indices and their locations and obtain the relevant
 data within its own core.
 
-![Halo.[]{label="fig:halo9"}](media/halo9.png){#fig:halo9 width="50%"}
+<img src="media/halo9.png" style="width:200px;">\
+<img src="media/halo10.png" style="width:200px;">
 
-![Halo.[]{label="fig:halo10"}](media/halo10.png){#fig:halo10
-width="50%"}
-
-Convolutions Implementation and API
-===================================
-
-\[TODO\] ***Shwetank***
-
-Optimizations
-=============
-
--   Fused bcast add for bias
-
--   split reader
-
--   input data reuse (conv 2.0 version)
 
 CNN Models: ResNet-50 Benchmark
 ===============================
 
-![Resnet
-blocks.[]{label="fig:resnet"}](media/resnet1.png "fig:"){#fig:resnet
-width="20%"} ![Resnet
-blocks.[]{label="fig:resnet"}](media/resnet2.png "fig:"){#fig:resnet
-width="20%"}
+<img src="media/resnet1.png" style="width:200px;">\
+<img src="media/resnet2.png" style="width:200px;">\
+_Resnet Blocks_
 
-ResNet-50 is a CNN(convolutional neural network) with 50 layers, part of
+ResNet-50 is a CNN with 50 layers, part of
 the ResNet (Residual Network) family. Primarily to address the vanishing
 gradient problem associated with training deep neural networks, ResNet
 was introduced. ResNet-50 utilises a concept called residual learning,
@@ -557,24 +528,3 @@ leveraging deep feature extraction while maintaining manageable
 computational complexity. The residual blocks, through their combination
 of convolutions and shortcut connections, ensure robust learning and
 performance during inference.
-
-First Convolution Data Transformation
-=====================================
-
-\[TODO\]
-
-![Data transformation for the first convolution -- folding $H$ and $W$
-into $C$. The operation is transformed from $225\times225\times3$ input,
-stride $2,2$, filter window $7,7$, padding $3,3$ into
-$115\times115\times16$ input, stride $1,1$, filter window $4,4$, padding
-$0,0$.[]{label="fig:firstconv"}](media/firstconv.png){#fig:firstconv
-width="\textwidth"}
-
-Performance on Grayskull and WormholeB0
-=======================================
-
-Conclusions and future work
-===========================
-
-Acknowledgments {#acknowledgments .unnumbered}
-===============
