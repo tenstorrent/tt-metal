@@ -12,7 +12,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 15
+        default: 25
   workflow_dispatch:
     inputs:
       arch:
