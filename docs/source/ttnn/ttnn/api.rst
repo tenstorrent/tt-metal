@@ -443,7 +443,7 @@ Pooling
    :maxdepth: 1
 
    ttnn/global_avg_pool2d
-   ttnn/MaxPool2d
+   ttnn/max_pool2d_new
 
 Vision
 ========
