@@ -289,7 +289,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         pass &= (intermediate_result_vec == result_vec); // src1 is identity matrix
 
-        pass &= tt_metal::CloseDevice(device);;
+        pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;

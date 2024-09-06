@@ -632,8 +632,8 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     std::optional<const Conv2dConfig> conv_config_) {
 
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-    uint32_t output_height = ((input_height - kernel_size[0] + 2 * padding[0]) / stride[0]) + 1;
-    uint32_t output_width = ((input_width - kernel_size[1] + 2 * padding[1]) / stride[1]) + 1;
+    uint32_t output_height = ((input_height - kernel_size[0] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
+    uint32_t output_width = ((input_width - kernel_size[1] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
     auto [input_tensor_post_tm, parallel_config, tensor_manipulated] = shard_or_reshard_tensor_if_required(
         device, input_tensor, conv_config, batch_size, output_height, output_width, in_channels, out_channels);
     if (tensor_manipulated) {
@@ -724,37 +724,32 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     }
     if (!use_matmul_for_1x1_conv) {
         // call halo op
-        SlidingWindowConfig sliding_window_config = SlidingWindowConfig(
-            batch_size,
-            input_height,
-            input_width,
-            kernel_size[0],
-            kernel_size[1],
-            stride[0],
-            stride[1],
-            padding[0],
-            padding[1],
-            dilation[0],
-            dilation[1],
-            opt_conv_op_parallel_config.num_cores_nhw,
-            input_tensor_post_tm.memory_config().shard_spec.value().grid,
-            true);
+        SlidingWindowConfig sliding_window_config = SlidingWindowConfig{
+            .batch_size = batch_size,
+            .input_hw = {input_height, input_width},
+            .window_hw = {kernel_size[0], kernel_size[1]},
+            .stride_hw = {stride[0], stride[1]},
+            .pad_hw = {padding[0], padding[1]},
+            .dilation_hw = {dilation[0], dilation[1]},
+            .num_cores_nhw = opt_conv_op_parallel_config.num_cores_nhw,
+            .core_range_set = input_tensor_post_tm.memory_config().shard_spec.value().grid,
+            .snap_to_tile = true
+        };
 
         bool bypass_halo = (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED &&
-            sliding_window_config.pad_hw_.first==0 &&
-            sliding_window_config.pad_hw_.second==0
+            sliding_window_config.pad_hw.first==0 &&
+            sliding_window_config.pad_hw.second==0
             );
         if(bypass_halo)
         {
             // call conv micro op
-            std::vector<int> conv_params = {
-                (int)kernel_size[0], (int)kernel_size[1], (int)stride[0], (int)stride[1], (int)padding[0], (int)padding[1], (int)groups};
             auto conv_output = optimized_conv_new(
                 input_tensor_post_tm,
                 weight_tensor_on_device,
                 bias_tensor_on_device,
-                conv_params,
+                sliding_window_config,
                 out_channels,
+                groups,
                 conv_config.output_layout == Layout::ROW_MAJOR,
                 conv_config.activation == "relu",
                 conv_config.math_fidelity,
@@ -799,8 +794,9 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             halo_output,
             weight_tensor_on_device,
             bias_tensor_on_device,
-            conv_params,
+            sliding_window_config,
             out_channels,
+            groups,
             conv_config.output_layout == Layout::ROW_MAJOR,
             conv_config.activation == "relu",
             conv_config.math_fidelity,

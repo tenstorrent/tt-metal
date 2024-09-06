@@ -166,7 +166,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle , tt_metal::KernelHandle> c
     TT_FATAL(out_CB_size <= 540*1024);
 
     CoreCoord start_core = {0, 0};
-    CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};;
+    CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};
     CoreRange all_cores(start_core, end_core);
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
@@ -416,7 +416,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::CloseDevice(device);;
+        pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;

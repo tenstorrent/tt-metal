@@ -203,7 +203,7 @@ bool run_sfpu_test(string sfpu_name,int tile_factor=1,bool use_DRAM=true) {
         pass &= packed_uint32_t_vector_comparison(result_vec, golden, sfpu_op_to_comparison_function.at(sfpu_name));
 
 
-        pass &= tt_metal::CloseDevice(device);;
+        pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;

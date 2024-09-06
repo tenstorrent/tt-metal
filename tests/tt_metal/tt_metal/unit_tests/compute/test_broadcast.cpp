@@ -65,6 +65,7 @@ struct BroadcastConfig {
     ApiConvention api_convention;
     EltwiseOp eltwise_op;
     BroadcastDim broadcast_dim;
+    MathFidelity math_fidelity = MathFidelity::HiFi4;
 };
 
 void mask_src_b_for_broadcast(std::vector<tt::test_utils::df::bfloat16>& tile, const std::vector<uint32_t> &shape, BroadcastDim dim) {
@@ -81,11 +82,23 @@ void mask_src_b_for_broadcast(std::vector<tt::test_utils::df::bfloat16>& tile, c
     }
 }
 
-std::vector<tt::test_utils::df::bfloat16> gold_broadcast(std::vector<tt::test_utils::df::bfloat16>& src_a, std::vector<tt::test_utils::df::bfloat16>& src_b, const std::vector<uint32_t> &shape, EltwiseOp op, BroadcastDim dim) {
+std::vector<tt::test_utils::df::bfloat16> gold_broadcast(std::vector<tt::test_utils::df::bfloat16>& src_a, std::vector<tt::test_utils::df::bfloat16>& src_b, const std::vector<uint32_t> &shape, EltwiseOp op, BroadcastDim dim, MathFidelity math_fidelity = MathFidelity::HiFi4) {
     int num_rows = shape.at(0);
     int num_cols = shape.at(1);
 
+    uint16_t srca_fid_mask = 0xFFFF;
+    uint16_t srcb_fid_mask = 0xFFFF;
+
     std::vector<tt::test_utils::df::bfloat16> golden(num_cols * num_rows);
+    auto arch = get_arch_from_string(get_env_arch_name());
+
+    switch (math_fidelity) {
+        case MathFidelity::HiFi4:
+        case MathFidelity::HiFi3: { break; }
+        case MathFidelity::HiFi2: { srcb_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE; break; }
+        case MathFidelity::LoFi: { srca_fid_mask = 0xFFF8; srcb_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE; break; }
+        default: { TT_THROW("Unsupported MathFidelity={}", math_fidelity); break; }
+    }
 
     for (int i = 0; i < num_rows; i++) {
         for (int j = 0; j < num_cols; j++) {
@@ -102,7 +115,12 @@ std::vector<tt::test_utils::df::bfloat16> gold_broadcast(std::vector<tt::test_ut
             {
             case EltwiseOp::ADD: { golden[i * num_cols + j] = src_a[i * num_cols + j].to_float() + broadcast_value.to_float(); break; }
             case EltwiseOp::SUB: { golden[i * num_cols + j] = src_a[i * num_cols + j].to_float() - broadcast_value.to_float(); break; }
-            case EltwiseOp::MUL: { golden[i * num_cols + j] = src_a[i * num_cols + j].to_float() * broadcast_value.to_float(); break; }
+            case EltwiseOp::MUL: {
+                golden[i * num_cols + j] =
+                    tt::test_utils::df::bfloat16(std::bit_cast<uint32_t>(src_a[i * num_cols + j].to_packed() & srca_fid_mask)).to_float() *
+                    tt::test_utils::df::bfloat16(std::bit_cast<uint32_t>(broadcast_value.to_packed() & srcb_fid_mask)).to_float();
+                break;
+            }
             default: { TT_THROW("Unsupported EltwiseOp={}", op); break; }
             }
         }
@@ -198,7 +216,7 @@ void run_single_core_broadcast(tt_metal::Device* device, const BroadcastConfig& 
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/broadcast.cpp",
         core,
-        tt_metal::ComputeConfig{.compile_args = {}, .defines = defines});
+        tt_metal::ComputeConfig{.math_fidelity = test_config.math_fidelity, .compile_args = {}, .defines = defines});
 
     tt_metal::SetRuntimeArgs(
         program,
@@ -239,7 +257,7 @@ void run_single_core_broadcast(tt_metal::Device* device, const BroadcastConfig& 
 
     mask_src_b_for_broadcast(input1, {tile_width, tile_height}, test_config.broadcast_dim);
 
-    std::vector<tt::test_utils::df::bfloat16> golden = gold_broadcast(input0, input1, {tile_width, tile_height}, test_config.eltwise_op, test_config.broadcast_dim);
+    std::vector<tt::test_utils::df::bfloat16> golden = gold_broadcast(input0, input1, {tile_width, tile_height}, test_config.eltwise_op, test_config.broadcast_dim, test_config.math_fidelity);
 
     auto packed_input0 = pack_vector<uint32_t, tt::test_utils::df::bfloat16>(input0);
     auto packed_input1 = pack_vector<uint32_t, tt::test_utils::df::bfloat16>(input1);
@@ -264,7 +282,7 @@ void run_single_core_broadcast(tt_metal::Device* device, const BroadcastConfig& 
         dest_buffer_data_untilized,
         packed_golden,
         [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) {
-            return is_close(a, b, 0.0155f);
+            return is_close(a, b, 0.0155);
         });
     ASSERT_TRUE(result);
 }
@@ -275,7 +293,13 @@ class BroadcastParametrizedDeviceFixture : public DeviceFixture,
 };
 
 TEST_P(BroadcastParametrizedDeviceFixture, ComputeSingleTileBroadcast) {
-    unit_tests::compute::broadcast::run_single_core_broadcast(this->devices_.at(0), GetParam());
+    unit_tests::compute::broadcast::BroadcastConfig test_config = GetParam();
+    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+        if (i == 1) continue;
+        log_info("Math Fidelity = {}", i);
+        test_config.math_fidelity = MathFidelity(i);
+        unit_tests::compute::broadcast::run_single_core_broadcast(this->devices_.at(0), test_config);
+    }
 }
 
 using namespace unit_tests::compute::broadcast;

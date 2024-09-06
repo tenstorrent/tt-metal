@@ -245,7 +245,6 @@ class Shape {
         }
         return ret_array;
     }
-
 };
 
 inline std::ostream &operator<<(std::ostream &os, const Shape &shape) {

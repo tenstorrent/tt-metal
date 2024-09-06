@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random, skip_for_wormhole_b0, is_wormhole_b0
+from models.utility_functions import torch_random, is_wormhole_b0, is_wormhole_b0
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])

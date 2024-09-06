@@ -14,7 +14,7 @@ import numpy as np
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.tg.llama3_70b.tt.llama_model_galaxy import TtLlamaModel_galaxy
-
+from models.demos.tg.llama3_70b.tt.llama_common import PytorchLlamaModel
 from models.utility_functions import skip_for_grayskull
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
@@ -29,31 +29,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     ConcatMesh2DToTensor,
 )
 import gc
-
-
-class PytorchLlamaModel(torch.nn.Module):
-    def __init__(self, hf_reference_model):
-        super().__init__()
-        self.model = hf_reference_model
-
-        # Disable dropout
-        self.model.eval()
-
-        configuration = hf_reference_model.params
-        self.n_heads = configuration.n_heads
-        hidden_dim = configuration.dim
-        self.head_dim = hidden_dim // self.n_heads
-        self.max_seq_len = configuration.max_seq_len
-
-    def forward(self, x, start_pos):
-        """
-        x: (batch, seq)
-        start_pos: int
-
-        return: (batch, seq, hidden_dim)
-        """
-        with torch.no_grad():
-            return self.model(x, start_pos)
 
 
 def run_test_LlamaModel_inference(

@@ -13,14 +13,14 @@ import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.utility_functions import torch2tt_tensor, skip_for_wormhole_b0, is_grayskull
+from models.utility_functions import torch2tt_tensor, is_wormhole_b0, is_grayskull
 
 
 def rms_norm(x, dim, gamma, beta, eps):
     return x * torch.rsqrt(x.pow(2).mean([-i for i in range(1, len(dim) + 1)], keepdim=True) + eps) * gamma + beta
 
 
-# @skip_for_wormhole_b0()
+# @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize(
     "out_mem_config",
     (ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1),),
