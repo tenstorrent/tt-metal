@@ -730,21 +730,21 @@ std::vector<Tensor> _abs_bw(const Tensor& grad, const Tensor& input, const std::
 
 // Silu
 // result:  grad * sigmoid_result * (1 + input * (1 - sigmoid_result))
-std::vector<std::optional<ttnn::Tensor>> _silu_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
+std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSilu::invoke(uint8_t queue_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;
     if(!input_grad.has_value()){
         input_grad = input;
     }
-    Tensor grad_sigmoid = ttnn::multiply(cq_id, grad, ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config);
-    Tensor add_sub = ttnn::add(cq_id,
-        ttnn::multiply(cq_id, ttnn::subtract(cq_id, ttnn::full_like(input, 1.0f) , ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config),
+    Tensor grad_sigmoid = ttnn::multiply(queue_id, grad, ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config);
+    Tensor add_sub = ttnn::add(queue_id,
+        ttnn::multiply(queue_id, ttnn::subtract(queue_id, ttnn::full_like(input, 1.0f) , ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config),
             input,
             std::nullopt,
             output_mem_config),
         1.0f,
         std::nullopt,
         output_mem_config);
-    ttnn::multiply(cq_id, grad_sigmoid, add_sub, std::nullopt, output_mem_config, input_grad);
+    ttnn::multiply(queue_id, grad_sigmoid, add_sub, std::nullopt, output_mem_config, input_grad);
 
     result.push_back(input_grad.value());
     return result;

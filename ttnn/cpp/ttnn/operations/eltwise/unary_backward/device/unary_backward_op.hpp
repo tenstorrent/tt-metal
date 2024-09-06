@@ -59,7 +59,6 @@ enum class UnaryBackwardOpType {
     LOG_BW,
     RELU6_BW,
     ABS_BW,
-    SILU_BW,
     SELU_BW,
     SQUARE_BW,
     HARDSWISH_BW,
@@ -129,7 +128,6 @@ std::vector<Tensor> _log1p_bw(const Tensor& grad, const Tensor& input, const std
 std::vector<Tensor> _erfc_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _relu6_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _abs_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<std::optional<Tensor>> _silu_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad);
 std::vector<Tensor> _selu_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _square_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 
@@ -457,13 +455,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::ABS_BW> {
     static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
         return _abs_bw(grad, input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::SILU_BW> {
-    static std::vector<std::optional<Tensor>> handle(uint8_t queue_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
-        return _silu_bw(queue_id, grad, input, output_mem_config, input_grad);
     }
 };
 
