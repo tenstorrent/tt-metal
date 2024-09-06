@@ -50,7 +50,8 @@ ttnn::Tensor ExecuteScaledDotProductAttentionGQADecode::invoke(
     // formatting input tensors
     auto q_shape = input_tensor_q.get_shape();
     auto k_shape = input_tensor_k.get_shape();
-    uint32_t B = k_shape[0];
+    uint32_t Bkv = k_shape[0];
+    uint32_t Bq = transpose_q.value() ? q_shape[2] : q_shape[1];
     uint32_t NQH = transpose_q.value() ? q_shape[1] : q_shape[2];
     uint32_t NKH = k_shape[1];
     uint32_t D = k_shape[3];
@@ -64,14 +65,14 @@ ttnn::Tensor ExecuteScaledDotProductAttentionGQADecode::invoke(
     if (transpose_q.value()) {
         input_tensor_q_gqa = ttnn::transpose(input_tensor_q_gqa, 1, 2);
     }
-    input_tensor_q_gqa = ttnn::reshape(input_tensor_q_gqa, ttnn::Shape{std::array<uint32_t, 4>{1, B * NKH, NG, D}});
+    input_tensor_q_gqa = ttnn::reshape(input_tensor_q_gqa, ttnn::Shape{std::array<uint32_t, 4>{1, Bq * NKH, NG, D}});
     input_tensor_q_gqa =
         ttnn::to_layout(input_tensor_q_gqa, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
 
     auto input_tensor_k_gqa =
-        ttnn::reshape(input_tensor_k, ttnn::Shape{std::array<uint32_t, 4>{1, B * NKH, k_shape[2], D}});
+        ttnn::reshape(input_tensor_k, ttnn::Shape{std::array<uint32_t, 4>{1, Bkv * NKH, k_shape[2], D}});
     auto input_tensor_v_gqa =
-        ttnn::reshape(input_tensor_v, ttnn::Shape{std::array<uint32_t, 4>{1, B * NKH, k_shape[2], D}});
+        ttnn::reshape(input_tensor_v, ttnn::Shape{std::array<uint32_t, 4>{1, Bkv * NKH, k_shape[2], D}});
 
     uint32_t max_cur_pos = *std::max_element(cur_pos.begin(), cur_pos.end());
     uint32_t k_chunk_size = get_chunk_size(max_cur_pos + 1);
@@ -82,6 +83,7 @@ ttnn::Tensor ExecuteScaledDotProductAttentionGQADecode::invoke(
     auto output_tensors = operation::run(
         ScaledDotProductAttentionGQADecode{
             .cur_pos = cur_pos,
+            .share_cache = share_cache,
             .scale = scale,
             .output_mem_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
             .program_config = program_config,
@@ -96,7 +98,7 @@ ttnn::Tensor ExecuteScaledDotProductAttentionGQADecode::invoke(
     auto output_tensor = output_tensors.at(0);
     output_tensor =
         ttnn::to_layout(output_tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
-    output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{std::array<uint32_t, 4>{1, B, NQH, D}});
+    output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{std::array<uint32_t, 4>{1, Bq, NQH, D}});
     output_tensor = ttnn::to_layout(output_tensor, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
     return output_tensor;
 }

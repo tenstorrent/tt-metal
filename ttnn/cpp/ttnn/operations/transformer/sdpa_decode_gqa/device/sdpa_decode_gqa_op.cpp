@@ -121,7 +121,8 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionGQADecode::create_progr
         scale,
         this->compute_kernel_config,
         this->program_config,
-        this->k_chunk_size);
+        this->k_chunk_size,
+        this->share_cache);
 }
 
 operation::Hash ScaledDotProductAttentionGQADecode::compute_program_hash(

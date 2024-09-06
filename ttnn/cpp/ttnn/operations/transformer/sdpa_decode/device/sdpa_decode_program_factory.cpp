@@ -31,7 +31,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     std::optional<float> scale,
     DeviceComputeKernelConfig compute_kernel_config,
     std::optional<SDPAProgramConfig> program_config,
-    const uint32_t k_chunk_size){
+    const uint32_t k_chunk_size,
+    std::optional<bool> share_cache){
 
     /*
     Q: 1 x B x PNH x DH
@@ -62,12 +63,22 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         num_kv_heads = k_shape[1];
         page_block_size_t = block_size / TILE_HEIGHT;
     }
+    uint32_t Bkv = k_shape[1];
     uint32_t St = S/TILE_HEIGHT;
     uint32_t DHt = DH/TILE_WIDTH;
     uint32_t PNHt = PNH/TILE_HEIGHT;
     uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
     bool is_q_sharded = input_tensor_q.is_sharded();
     bool is_output_sharded = output_tensor.is_sharded();
+    if (!share_cache.has_value()) {
+        // default share_cache to false
+        share_cache = false;
+    }
+    if (! share_cache.value()) {
+        TT_FATAL(B == Bkv, "Q and KV must have the same batch size if not sharing cache");
+    } else {
+        TT_FATAL(B%Bkv == 0, "Batch dim in Q must be divisible by batch dim in KV if sharing cache");
+    }
 
     // log_debug all of the above
     log_debug("B: {}", B);
@@ -455,7 +466,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     auto in0_mcast_reducer_semaphore_id = tt_metal::CreateSemaphore(program, core_grid, 0);
 
     std::vector<uint32_t> reader_compile_time_args_common = {
-        B, PNHt, St, DHt, Sk_chunk_t, num_active_cores, is_q_sharded, num_cores_per_batch, k_chunk_size, log2_page_size, index_stick_size, (uint32_t)is_paged_attention, num_kv_heads, page_block_size_t, log2_page_table_page_size, page_table_stick_size
+        B, PNHt, St, DHt, Sk_chunk_t, num_active_cores, is_q_sharded, num_cores_per_batch, k_chunk_size, log2_page_size, index_stick_size, (uint32_t)is_paged_attention, num_kv_heads, page_block_size_t, log2_page_table_page_size, page_table_stick_size, Bkv
     };
 
     std::vector<uint32_t> writer_compile_time_args_common = {
