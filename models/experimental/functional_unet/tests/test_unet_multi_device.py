@@ -16,6 +16,7 @@ from models.experimental.functional_unet.tt import unet_shallow_ttnn
 from models.experimental.functional_unet.tests.common import (
     check_pcc_conv,
     is_n300_with_eth_dispatch_cores,
+    is_t3k_with_eth_dispatch_cores,
 )
 
 
@@ -23,8 +24,8 @@ from models.experimental.functional_unet.tests.common import (
 @pytest.mark.parametrize("groups", [1])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64768}], indirect=True)
 def test_unet_multi_device_model(batch, groups, mesh_device, use_program_cache, reset_seeds):
-    if not is_n300_with_eth_dispatch_cores(mesh_device):
-        pytest.skip("Test is only valid for N300")
+    if not is_n300_with_eth_dispatch_cores(mesh_device) and not is_t3k_with_eth_dispatch_cores(mesh_device):
+        pytest.skip("Test is only valid for N300 or T3000")
 
     inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
     weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
@@ -37,6 +38,8 @@ def test_unet_multi_device_model(batch, groups, mesh_device, use_program_cache, 
     ttnn_model = unet_shallow_ttnn.UNet(parameters, device=mesh_device, mesh_mapper=weights_mesh_mapper)
 
     num_devices = len(mesh_device.get_device_ids())
+    logger.info(f"Using {num_devices} devices for this test")
+
     torch_input, ttnn_input = create_unet_input_tensors(
         mesh_device, num_devices * batch, groups, pad_input=True, mesh_mapper=inputs_mesh_mapper
     )
