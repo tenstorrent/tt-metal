@@ -354,6 +354,7 @@ static void add_worker_config_to_edm_builders(
     ccl::CCLOpConfig const& op_config,
     std::vector<CoreCoord> const& worker_cores,
     uint32_t num_channels_per_edm,
+    uint32_t num_buffers_per_channel,
 
     std::vector<ttnn::ccl::EriscDatamoverBuilder>& clockwise_edm_builders,
     std::vector<ttnn::ccl::EriscDatamoverBuilder>& counter_clockwise_edm_builders,
@@ -381,7 +382,8 @@ static void add_worker_config_to_edm_builders(
         }
 
         // Get the maximum message size we'd like to use. Not the actual packet size
-        uint32_t expected_message_size_bytes = clockwise_edm_builders.at(link).get_eth_buffer_size_bytes();//tensor_slicer.get_worker_slice_size_bytes(global_worker_idx);
+        uint32_t expected_message_size_bytes = (num_buffers_per_channel == 1) ? tensor_slicer.get_worker_slice_size_bytes(global_worker_idx)
+                                                                           : clockwise_edm_builders.at(link).get_eth_buffer_size_bytes();
 
         bool sender_enabled = true;  // (!is_linear || !is_last_chip_in_chain); // update for linear
         if (sender_enabled) {
@@ -754,7 +756,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     log_trace(tt::LogOp, "num_edm_channels: {}", num_edm_channels);
     auto edm_termination_mode = ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED;
 
-    constexpr std::size_t num_buffers_per_channel = 2; // enable double buffering later
+    constexpr std::size_t num_buffers_per_channel = 1; // enable double buffering later
     auto const& edm_builder = create_erisc_datamover_builder(
         num_edm_channels, op_config.get_page_size(), num_buffers_per_channel, buffer_sharing_mode, edm_termination_mode);
     TT_ASSERT(num_edm_channels > 0);
@@ -830,6 +832,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
             op_config,
             worker_cores,
             num_edm_channels,
+            num_buffers_per_channel,
 
             cw_per_link_edm_builders,
             ccw_per_link_edm_builders,
