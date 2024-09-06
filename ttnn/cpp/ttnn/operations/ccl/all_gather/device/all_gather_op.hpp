@@ -14,7 +14,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
-
+#include "ttnn/cpp/ttnn/operations/ccl/ccl_fabric.hpp"
 
 #include "ttnn/run_operation.hpp"
 
@@ -130,6 +130,7 @@ struct AllGather {
     const std::optional<chip_id_t> sender_device_id;
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
+    const ccl::OpBuildMode build_mode;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -149,44 +150,33 @@ AllGather create_all_gather_struct(
 );
 
 // All Gather Variants
-operation::ProgramWithCallbacks all_gather_full_shard_grid(
-    const Tensor& input_tensor,
-    Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
-    const std::optional<size_t> user_defined_num_workers,
-    const std::optional<size_t> user_defined_num_buffers_per_channel,
-    const std::optional<chip_id_t> receiver_device_id,
-    const std::optional<chip_id_t> sender_device_id,
-    ccl::Topology topology);
+
+struct all_gather_op_builder_args_t {
+    std::size_t dim;
+    std::size_t num_links;
+    std::size_t ring_size;
+    std::size_t ring_index;
+    std::optional<chip_id_t> receiver_device_id;
+    std::optional<chip_id_t> sender_device_id;
+    ccl::Topology topology;
+    std::optional<size_t> user_defined_num_workers;
+    std::optional<size_t> user_defined_num_buffers_per_channel;
+};
+
+
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers(
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
-    const std::optional<chip_id_t> receiver_device_id,
-    const std::optional<chip_id_t> sender_device_id,
-    ccl::Topology topology,
-    const std::optional<size_t> user_defined_num_workers,
-    const std::optional<size_t> user_defined_num_buffers_per_channel);
+    all_gather_op_builder_args_t const& op_args,
+    ccl::OpBuildMode build_mode
+    );
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
-    const std::optional<chip_id_t> receiver_device_id,
-    const std::optional<chip_id_t> sender_device_id,
-    ccl::Topology topology,
-    const std::optional<size_t> user_defined_num_workers,
-    const std::optional<size_t> user_defined_num_buffers_per_channel,
+    all_gather_op_builder_args_t const& op_args,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
+    ccl::OpBuildMode build_mode,
     const CoreCoord core_grid_offset = CoreCoord(0, 0));
 
 
@@ -201,7 +191,8 @@ Tensor all_gather(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> user_defined_num_workers = std::nullopt,
     const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
-    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
+    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+    ttnn::ccl::OpFabricMode = ttnn::ccl::OpFabricMode::TEMPORARY_EDM);
 
 Tensor all_gather(
     const Tensor& input_tensor,
@@ -212,7 +203,8 @@ Tensor all_gather(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> user_defined_num_workers = std::nullopt,
     const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
-    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear);
+    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
+    ttnn::ccl::OpFabricMode = ttnn::ccl::OpFabricMode::TEMPORARY_EDM);
 
 } // namespace ccl
 } // namespace operations
