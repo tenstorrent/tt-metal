@@ -127,3 +127,8 @@ print(output)
 ## Getting started
 
 Get started with [simple kernels](https://docs.tenstorrent.com/tt-metalium/latest/tt_metal/examples/index.html).
+
+## Tech Reports
+
+- [Flash Attention on Wormhole](./tech_reports/FlashAttention/FlashAttention.md)
+- [Programming Mesh of Devices](./tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md)

@@ -15,7 +15,7 @@ from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
 )
 
 
@@ -51,20 +51,16 @@ def test_mixtral_attention_inference(t3k_mesh_device, use_program_cache, reset_s
     for i in range(generation_length):
         pt_attention_input = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1
         tt_attention_input = pt_attention_input
-        start_pos = generation_start_pos + i
+        start_pos_ids = [generation_start_pos + i for _ in range(batch)]
         attention_input = prepare_inputs_ttnn(
             tt_attention_input,
             model_args.dim,
-            start_pos,
-            model_args,
             tt_model.mesh_device,
         )
 
-        current_pos = start_pos % model_args.sliding_window
         tt_out = tt_model(
             attention_input,
-            start_pos,
-            current_pos,
+            start_pos_ids,
             None,
             current_rot_mat,
         )
@@ -74,7 +70,7 @@ def test_mixtral_attention_inference(t3k_mesh_device, use_program_cache, reset_s
             .squeeze(2)
             .view(batch, 1, -1)
         )  # [ batch, seq, hidden_dim]
-        positions = torch.LongTensor([start_pos])
+        positions = torch.LongTensor([start_pos_ids[0]])
         freqs_cis_i = precompute_freqs_cis(model_args.head_dim, 128_000)[positions]
         reference_output = reference_model(pt_attention_input, freqs_cis_i, positions, mask=None)
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
@@ -83,9 +79,9 @@ def test_mixtral_attention_inference(t3k_mesh_device, use_program_cache, reset_s
         logger.info(pcc_message)
 
         if passing:
-            logger.info(f"[start_pos={start_pos}] Mixtral_Attention Passed!")
+            logger.info(f"[start_pos={start_pos_ids[0]}] Mixtral_Attention Passed!")
         else:
-            logger.warning(f"[start_pos={start_pos}] Mixtral_Attention Failed!")
+            logger.warning(f"[start_pos={start_pos_ids[0]}] Mixtral_Attention Failed!")
             all_tests_pass = False
 
         # Update rotation matrix for next iteration

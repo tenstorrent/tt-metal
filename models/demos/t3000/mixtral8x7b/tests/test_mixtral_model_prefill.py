@@ -99,17 +99,14 @@ def test_mixtral_model_inference_CI(t3k_mesh_device, use_program_cache, reset_se
         args=model_args,
         layers=list(range(model_args.n_layers)),
         dtype=dtype,
-        start_pos=seq_len,  # Start position for decode mode
-        rotary_on_host=True,
+        start_pos_ids=[seq_len for _ in range(batch)],  # Start position for decode mode
+        rotary_on_host=False,
     )
 
     # Select the corresponding seq_len of tokens for prefill
     encoded_prompts_tensor = torch.tensor(encoded_prompts)
     pt_decode_input = embd(encoded_prompts_tensor).view(batch, seq_len, -1)
     tt_decode_input = pt_decode_input
-
-    start_pos = 0
-    current_pos = start_pos
 
     for iter in range(1):
         decode_input, attn_mask, attn_mask_torch = prepare_inputs_ttnn_prefill(
@@ -118,9 +115,7 @@ def test_mixtral_model_inference_CI(t3k_mesh_device, use_program_cache, reset_se
         )
 
         # Run TT model
-        tt_out = tt_model(
-            decode_input, start_pos, current_pos, attn_mask, rot_mats, transformation_mats, 0, mode="prefill"
-        )
+        tt_out = tt_model(decode_input, None, attn_mask, rot_mats, transformation_mats, 0, mode="prefill")
 
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
@@ -162,9 +157,9 @@ def test_mixtral_model_inference_CI(t3k_mesh_device, use_program_cache, reset_se
         from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn
 
         start_pos = seq_len
-        current_pos = start_pos
         seqlen = 1
         batch = model_args.max_batch_size
+        start_pos_ids = [start_pos for _ in range(batch)]
 
         prompts = ["Once"] * batch
         encoded_prompts_tensor = torch.tensor([tokenizer.encode(prompt) for prompt in prompts])
@@ -172,11 +167,9 @@ def test_mixtral_model_inference_CI(t3k_mesh_device, use_program_cache, reset_se
         decode_input = prepare_inputs_ttnn(
             decode_input_torch,
             model_args.dim,
-            start_pos,
-            model_args,
             tt_model.mesh_device,
         )
-        tt_out = tt_model(decode_input, start_pos, current_pos, mode="decode")
+        tt_out = tt_model(decode_input, start_pos_ids, mode="decode")
 
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (

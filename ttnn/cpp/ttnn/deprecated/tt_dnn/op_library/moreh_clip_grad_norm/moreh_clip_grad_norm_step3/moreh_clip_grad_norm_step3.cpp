@@ -104,7 +104,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step3_impl(
 
         const auto& input = inputs.at(i);
         const auto input_addr = input.buffer()->address();
-        const auto num_tiles = input.volume() / TILE_HW;
+        const auto num_tiles = input.volume() / tt::constants::TILE_HW;
 
         // reader
         const std::vector<uint32_t> reader_runtime_args{

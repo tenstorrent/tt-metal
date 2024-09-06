@@ -11,6 +11,7 @@
 namespace ttnn::operations::data_movement {
 
 void UntilizeWithHaloV2::validate(const std::vector<Tensor>& input_tensors) const {
+    using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
 
     // validate input data tensor

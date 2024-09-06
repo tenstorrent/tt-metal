@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_blackhole
 from tests.ttnn.unit_tests.operations.backward.utility_funcs import (
     data_gen_with_val,
     compare_all_close,
@@ -56,7 +56,7 @@ def test_atanh(device, h, w, in_val, grad_val):
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("in_val", [-1, 0, 1])
 @pytest.mark.parametrize("grad_val", [-1, 0, 1])
-@skip_for_wormhole_b0("Skipped due to hardware restriction in storing nan")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Skipped due to hardware restriction in storing nan")
 def test_atanh_nan(device, h, w, in_val, grad_val):
     run_backward_unary_test(device, h, w, in_val, grad_val, ttnn.atanh_bw, torch.atanh)
 
@@ -98,7 +98,7 @@ def test_atan2(device, h, w, in_val, grad_val, other_val):
 @pytest.mark.parametrize("in_val", [0])
 @pytest.mark.parametrize("grad_val", [-1, 0, 1])
 @pytest.mark.parametrize("other_val", [0])
-@skip_for_wormhole_b0("Skipped due to hardware restriction in storing nan")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Skipped due to hardware restriction in storing nan")
 def test_atan2_zero(device, h, w, in_val, grad_val, other_val):
     run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.atan2_bw, torch.atan2)
 
@@ -108,7 +108,7 @@ def test_atan2_zero(device, h, w, in_val, grad_val, other_val):
 @pytest.mark.parametrize("in_val", [-1, 1])
 @pytest.mark.parametrize("grad_val", [-1, 0, 1])
 @pytest.mark.parametrize("other_val", [-1, 1])
-@skip_for_wormhole_b0("Skipped due to hardware restriction in storing nan")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Skipped due to hardware restriction in storing nan")
 def test_xlogy(device, h, w, in_val, grad_val, other_val):
     run_backward_binary_test(device, h, w, in_val, grad_val, other_val, ttnn.xlogy_bw, torch.xlogy)
 

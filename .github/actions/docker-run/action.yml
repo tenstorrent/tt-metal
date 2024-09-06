@@ -34,15 +34,11 @@ runs:
     - name: Create correct Docker Tag
       shell: bash
       run: |
-        if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
-          echo "BASE_IMAGE_TAG=latest" >> $GITHUB_ENV
-          echo "OUTPUT_IMAGE_TAG=${{ env.ARCH_NAME }}" >> $GITHUB_ENV
-        else
-          echo "BASE_IMAGE_TAG=${GITHUB_ACTOR}" >> $GITHUB_ENV
-          echo "OUTPUT_IMAGE_TAG=dev-${GITHUB_ACTOR}.${{ inputs.docker_image_arch }}.${{ github.sha }}" >> $GITHUB_ENV
-          echo "RUNNER UID"
-          echo "${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}"
-        fi
+        # if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+        echo "IMAGE_TAG=latest" >> $GITHUB_ENV
+        # else
+        #   echo "IMAGE_TAG=dev-${GITHUB_REF_NAME//\//-}" >> $GITHUB_ENV
+        # fi
     - name: Docker login
       uses: docker/login-action@v3
       with:

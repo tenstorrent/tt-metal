@@ -73,18 +73,16 @@ def test_mixtral_decoder_inference(t3k_mesh_device, use_program_cache, reset_see
 
         pt_decode_input_bsh = (torch.rand(batch, seqlen, model_args.dim) * 2) - 1
         start_pos = generation_start_pos + i
-        current_pos = start_pos
+        start_pos_ids = [start_pos for _ in range(batch)]
 
         decode_input_b1sh = prepare_inputs_ttnn(
             pt_decode_input_bsh,
             model_args.dim,
-            start_pos,
-            model_args,
             tt_model.mesh_device,
         )
 
         # Run TT model
-        tt_out_b1sh = tt_model(decode_input_b1sh, start_pos, current_pos, None, current_rot_mat)
+        tt_out_b1sh = tt_model(decode_input_b1sh, start_pos_ids, None, current_rot_mat)
 
         tt_output_torch_b1h = (
             ttnn.to_torch(tt_out_b1sh, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]

@@ -13,7 +13,7 @@ static inline bool verify_available_cores(uint16_t width, uint16_t min_dim, uint
         uint16_t rem = width % split_size;
         uint16_t num_cores = width / split_size + (rem > 0);
         uint32_t memory_cost_gather = 2*num_cores * (value_tile_size + index_tile_size); // gathering one index and one value tile from each local core, allocating two CBs for each
-        uint32_t memory_cost_local = (split_size / TILE_WIDTH) * (value_tile_size + index_tile_size); // we divide the width into split_size chunks and each chunk, as well as a matching set of indices, is processed by a core
+        uint32_t memory_cost_local = (split_size / tt::constants::TILE_WIDTH) * (value_tile_size + index_tile_size); // we divide the width into split_size chunks and each chunk, as well as a matching set of indices, is processed by a core
         if (num_cores <= max_cores && (memory_cost_gather + memory_cost_local) < L1_SIZE && num_cores > 1) {
             return true;
         }

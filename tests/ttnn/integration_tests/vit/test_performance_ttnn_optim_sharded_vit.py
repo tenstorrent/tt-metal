@@ -15,12 +15,12 @@ from transformers import AutoImageProcessor
 
 import ttnn
 from models.experimental.functional_vit.tt import ttnn_optimized_sharded_vit
-from models.utility_functions import torch_random, skip_for_wormhole_b0
+from models.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.utility_functions import (
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
     torch_random,
 )
 from models.perf.perf_utils import prep_perf_report
@@ -32,7 +32,7 @@ def get_expected_times(functional_vit):
     }[functional_vit]
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -112,7 +112,7 @@ def test_performance_vit_encoder(device, use_program_cache, model_name, batch_si
     logger.info(f"Samples per second: {1 / inference_time * batch_size}")
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])

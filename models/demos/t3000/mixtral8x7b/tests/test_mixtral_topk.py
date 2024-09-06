@@ -45,15 +45,18 @@ def test_mixtral_model_inference(
     for device in t3k_mesh_device.get_device_ids():
         t3k_mesh_device.get_device(device).enable_async(True)
 
+    # TODO Currently topk test is supporting decode-only mode. Add prefill support.
+
     dtype = ttnn.bfloat8_b
     seqlen = 1  # Generating one token per user at a time
     batch = 32
+    max_seq_len = 8192  # Maximum sequence length supported for a batch size of 32
     generation_start_pos = 0
     running_top1 = 0
     running_top5 = 0
     inputs_file = "models/demos/t3000/mixtral8x7b/demo/input_data.json"
 
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0))
+    model_args = TtModelArgs(t3k_mesh_device.get_device(0), max_batch_size=batch, max_seq_len=max_seq_len)
     state_dict = model_args.load_state_dict()
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
@@ -79,7 +82,8 @@ def test_mixtral_model_inference(
         args=model_args,
         layers=list(range(model_args.n_layers)),
         dtype=dtype,
-        rotary_on_host=True,
+        rotary_on_host=False,
+        start_pos_ids=[generation_start_pos] * batch,
     )
 
     # Select the first token from the prompts for initial decoding
@@ -89,18 +93,15 @@ def test_mixtral_model_inference(
         logger.info(f"[Decode] Generating token {i}")
 
         start_pos = generation_start_pos + i
-        current_pos = start_pos
 
         decode_input = prepare_inputs_ttnn(
             pt_decode_input,
             model_args.dim,
-            start_pos,
-            model_args,
             tt_model.mesh_device,
         )
 
         # Run TT model
-        tt_out = tt_model(decode_input, start_pos, current_pos)
+        tt_out = tt_model(decode_input, [start_pos] * batch)
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
             ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]

@@ -26,6 +26,7 @@ uint32_t get_num_cores(CoreCoord grid_size, uint32_t nblocks) {
 }  // namespace untilize_helpers
 
 void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
+    using namespace tt::constants;
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to untilize need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to untilize need to be allocated in buffers on device!");
@@ -64,6 +65,7 @@ std::vector<tt::tt_metal::Shape> Untilize::compute_output_shapes(const std::vect
 
 std::vector<Tensor> Untilize::create_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
     DataType output_dtype =
         input_tensor.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.get_dtype();
