@@ -44,21 +44,6 @@ def is_sharded(tensor) -> bool:
 get_memory_config = ttnn._ttnn.core.get_memory_config
 
 
-def num_cores_to_core_range_set(
-    target_num_cores: int,
-    grid_size: ttnn.CoreCoord,
-    row_wise: bool = False,
-):
-    """
-    Returns a CoreRangeSet from number of cores
-    """
-    return ttnn._ttnn.operations.core.num_cores_to_core_range_set(
-        target_num_cores,
-        grid_size,
-        row_wise,
-    )
-
-
 def num_cores_to_corerange_set(
     target_num_cores: int,
     grid_size: ttnn.CoreCoord,
