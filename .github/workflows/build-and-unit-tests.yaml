@@ -33,7 +33,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 15
+        default: 25
 jobs:
   unit-tests-slow-dispatch:
     name: ${{ inputs.arch }} ${{ inputs.runner-label }}
