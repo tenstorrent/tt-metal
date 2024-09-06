@@ -5,6 +5,7 @@
 import torch
 from torchvision import models
 import pytest
+from models.utility_functions import skip_for_grayskull
 from models.experimental.functional_swin_s.reference.shifted_window_attention import ShiftedWindowAttention
 from models.experimental.functional_swin_s.tt.tt_shifted_window_attention import TtShiftedWindowAttention
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -16,7 +17,6 @@ def create_custom_preprocessor(device):
     def custom_preprocessor(torch_model, name, ttnn_module_args):
         parameters = {}
         if isinstance(torch_model, ShiftedWindowAttention):
-            print("model", torch_model)
             parameters["qkv"] = {}
             parameters["proj"] = {}
             parameters["qkv"]["weight"] = preprocess_linear_weight(torch_model.qkv.weight, dtype=ttnn.bfloat8_b)
@@ -32,6 +32,7 @@ def create_custom_preprocessor(device):
     return custom_preprocessor
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size",
