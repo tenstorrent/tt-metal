@@ -477,8 +477,8 @@ def print_matmul_advice(rows, headers, col_widths):
                 else:
                     all_good = True
                     if inner_dim_block is not None:
-                        if inner_dim_block < 4:
-                            advice.append(f"- in0_block_w={inner_dim_block} is small, try in0_block_w=4 or above")
+                        if inner_dim_block < 2:
+                            advice.append(f"- in0_block_w={inner_dim_block} is small, try in0_block_w=2 or above")
                             all_good = False
                     else:
                         advice.append("- No inner dim block size found")
@@ -486,8 +486,8 @@ def print_matmul_advice(rows, headers, col_widths):
                     
                     if out_h is not None and out_w is not None:
                         out_area = out_h * out_w
-                        if out_area < 4:
-                            advice.append(f"- Output subblock {out_h}x{out_w} is small, try out_subblock_h * out_subblock_w >= 4 if possible")
+                        if out_area < 2:
+                            advice.append(f"- Output subblock {out_h}x{out_w} is small, try out_subblock_h * out_subblock_w >= 2 if possible")
                             all_good = False
                     else:
                         advice.append("- No output subblock size found")
