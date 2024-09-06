@@ -449,6 +449,7 @@ def test_pcie_d2h_dram(iteration, test_vector_small, test_vector_large):
     [
         ("grayskull", 2, 1048576, np.array([4096, 16384, 65536, 262144, 1048576, 4194304, 16777216])),
         ("wormhole_b0", 2, 1499136, np.array([4096, 16384, 65536, 262144, 1048576, 4194304, 16777216])),
+        ("blackhole", 2, 1499136, np.array([4096, 16384, 65536, 262144, 1048576, 4194304, 16777216])),
     ],
 )
 def test_pcie_h2d_l1(arch, iteration, L1_size, test_vector):
@@ -473,6 +474,7 @@ def test_pcie_h2d_l1(arch, iteration, L1_size, test_vector):
     [
         ("grayskull", 2, 1048576, np.array([4096, 16384, 65536])),
         ("wormhole_b0", 2, 1499136, np.array([4096, 16384, 65536])),
+        ("blackhole", 2, 1499136, np.array([4096, 16384, 65536])),
     ],
 )
 def test_pcie_d2h_l1(arch, iteration, L1_size, test_vector):
@@ -556,6 +558,7 @@ def test_matmul_dram(arch, freq, r, c, test_vector):
     return
 
 
+# TODO (abhullar): Uplift frequency and baseline when faster BH chips are available
 @pytest.mark.parametrize(
     "arch, freq, test_vector, dtype, fidel, matmul_block, num_blocks, packer_l1_acc, fp32_dest_acc, interm_cb_dtype, subblock_index, baseline",
     [
@@ -564,11 +567,21 @@ def test_matmul_dram(arch, freq, r, c, test_vector):
         ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 1, 8, 0, 0, 0, 0, 1233930.0),
         ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 1, 8, 1, 0, 0, 0, 664492.0),
         ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 1, 8, 1, 0, 0, 0, 1173029.0),
+        ("blackhole", 1100, np.array([[512, 512, 512]]), 0, 0, 1, 8, 0, 0, 0, 0, 635270.0),
+        ("blackhole", 1100, np.array([[512, 512, 512]]), 0, 1, 1, 8, 0, 0, 0, 0, 1192194.0),
+        ("blackhole", 1100, np.array([[512, 512, 512]]), 0, 0, 1, 8, 1, 0, 0, 0, 582810.0),
+        ("blackhole", 1100, np.array([[512, 512, 512]]), 0, 1, 1, 8, 1, 0, 0, 0, 1139919.0),
         # ########################### 512 512 256x8 subblock 4 2 ################################
         ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 0, 0, 0, 0, 399068.0),
         ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 0, 658522.0),
         ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 0, 346350.0),
         ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 0, 597457.0),
+        ("blackhole", 1100, np.array([[512, 512, 256]]), 0, 0, 0, 8, 0, 0, 0, 0, 969369.0),
+        ("blackhole", 1100, np.array([[512, 512, 256]]), 0, 1, 0, 8, 0, 0, 0, 0, 969349.0),
+        ("blackhole", 1100, np.array([[512, 512, 256]]), 0, 0, 1, 8, 0, 0, 0, 0, 352615.0),
+        ("blackhole", 1100, np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 0, 631106.0),
+        ("blackhole", 1100, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 0, 300156.0),
+        ("blackhole", 1100, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 0, 578722.0),
     ],
 )
 def test_matmul_single_core_sharded(
@@ -635,9 +648,11 @@ def test_matmul_single_core_sharded(
     [
         ("wormhole_b0", 1000, np.array([32768, 12 * 128]), 1, 8, 0, 12, 0),
         ("wormhole_b0", 1000, np.array([32768, 12 * 128]), 1, 8, 1, 12, 0),
+        ("blackhole", 1100, np.array([32768, 8 * 128]), 1, 8, 0, 8, 0),
+        ("blackhole", 1100, np.array([32768, 8 * 128]), 1, 8, 1, 8, 0),
     ],
 )
-def test_dram_read_12_core(arch, freq, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id):
+def test_dram_read_multi_core(arch, freq, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id):
     data = []
     cycle_list = []
     time_list = []
