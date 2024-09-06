@@ -23,6 +23,7 @@
 #include "tt_metal/impl/device/device_pool.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include "tt_metal/impl/program/program.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 #include "tt_metal/graph/graph_tracking.hpp"
@@ -100,7 +101,11 @@ void ConfigureKernelGroup(
 
     for (auto& optional_id : kernel_group->kernel_ids) {
         if (optional_id) {
-            detail::GetKernel(program, optional_id.value())->configure(device, logical_core);
+            auto kernel = detail::GetKernel(program, optional_id.value());
+            // Only write non-persistent kernels to the device
+            if (!kernel->from_persistent()) {
+                kernel->configure(device, logical_core);
+            }
         }
     }
 }
@@ -638,8 +643,21 @@ void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done,
         ZoneScoped;
         detail::DispatchStateCheck(force_slow_dispatch);
         detail::CompileProgram(device, program);
+
+        auto attached_program_id = program.get_attached_program_id();
+        auto current_persistent_program_id = device->get_current_persistent_program_id();
+        // If program has attached persistent kernels that aren't on device, we need to send it before executing the progrma
+        if (attached_program_id.has_value() && (current_persistent_program_id != attached_program_id)) {
+            LaunchProgram(device, *device->get_persistent_program(*attached_program_id), wait_until_cores_done, force_slow_dispatch);
+        }
+
         if (!program.is_finalized()) {
-            program.finalize();
+            program.finalize(device);
+        } else {
+            // Early exit if the program is already on the device
+            if (current_persistent_program_id.has_value() && program.get_id() == current_persistent_program_id) {
+                return;
+            }
         }
 
         detail::WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
@@ -653,22 +671,34 @@ void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done,
         // don't get the GO mailbox (eg, storage cores) have all landed
         tt::Cluster::instance().l1_barrier(device->id());
 
-        std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
-        std::unordered_set<CoreCoord> not_done_cores;
-        for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size(); programmable_core_type_index++) {
-            CoreType core_type = hal.get_core_type(programmable_core_type_index);
-            for (const auto &logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
-                launch_msg_t *msg = &program.kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
-                msg->kernel_config.host_assigned_id = program.get_runtime_id();
+        // Don't send go signals for persistent kernels
+        if (!program.is_persistent()) {
+            std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
+            std::unordered_set<CoreCoord> not_done_cores;
+            for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size(); programmable_core_type_index++) {
+                CoreType core_type = hal.get_core_type(programmable_core_type_index);
+                for (const auto &logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
+                    launch_msg_t *msg = &program.kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
+                    msg->kernel_config.host_assigned_id = program.get_runtime_id();
 
-                auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
-                not_done_cores.insert(physical_core);
-                tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg, device->get_dev_addr(physical_core, HalMemAddrType::LAUNCH));
+                    auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
+                    not_done_cores.insert(physical_core);
+                    tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg, device->get_dev_addr(physical_core, HalMemAddrType::LAUNCH));
+                }
             }
-        }
-        if (wait_until_cores_done) {
-            // Wait for all cores to be done
-            llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
+            if (wait_until_cores_done) {
+                // Wait for all cores to be done
+                llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
+            }
+            // If we aren't attached to a persistent kernel, check if we invalidated the current persistent program
+            // We track overlap by core types, instead of by core for ease of checking for now
+            if (!attached_program_id.has_value() && current_persistent_program_id.has_value()) {
+                if (program.get_used_programmable_core_types() && (*device->get_persistent_program(*current_persistent_program_id)).get_used_programmable_core_types()) {
+                    device->clear_current_persistent_program();
+                }
+            }
+        } else {
+            device->set_current_persistent_program(program.get_id());
         }
     }  // Profiler scope end
     if (wait_until_cores_done) {
@@ -880,31 +910,92 @@ bool CloseDevice(Device *device) {
 
 Program CreateProgram() { return Program(); }
 
+Program CreatePersistentProgram() {
+    return Program(true);
+}
+
+bool FindPersistentKernel(const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const Config &config, Device * device) {
+    auto core_type = detail::get_core_type(config);
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    return std::visit(
+        [&](auto &&cfg) -> KernelHandle {
+            // Create a temporary kernel here to compute the hash
+            std::shared_ptr<Kernel> kernel;
+            using T = std::decay_t<decltype(cfg)>;
+            if constexpr (std::is_same_v<T, DataMovementConfig>) {
+                kernel = std::make_shared<DataMovementKernel>(file_name, core_ranges, cfg);
+            } else if constexpr (std::is_same_v<T, ComputeConfig>) {
+                kernel = std::make_shared<ComputeKernel>(file_name, core_ranges, cfg);
+            } else if constexpr (std::is_same_v<T, EthernetConfig>) {
+                kernel = std::make_shared<EthernetKernel>(file_name, core_ranges, cfg);
+            } else {
+                TT_THROW("Unsupported kernel config type");
+            }
+            std::string hash = kernel->compute_hash();
+
+            return device->find_persistent_program(core_type, hash, core_ranges).has_value();
+        },
+        config);
+}
+
+KernelHandle AttachPersistentKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const Config &config, Device * device) {
+
+    auto core_type = detail::get_core_type(config);
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+
+    return std::visit(
+        [&](auto &&cfg) -> KernelHandle {
+            std::shared_ptr<Kernel> kernel;
+            using T = std::decay_t<decltype(cfg)>;
+            if constexpr (std::is_same_v<T, DataMovementConfig>) {
+                CheckDataMovementConfig(program, file_name, core_ranges);
+                kernel = std::make_shared<DataMovementKernel>(file_name, core_ranges, cfg, program.is_persistent());
+            } else if constexpr (std::is_same_v<T, ComputeConfig>) {
+                kernel = std::make_shared<ComputeKernel>(file_name, core_ranges, cfg);
+            } else if constexpr (std::is_same_v<T, EthernetConfig>) {
+                kernel = std::make_shared<EthernetKernel>(file_name, core_ranges, cfg);
+            } else {
+                TT_THROW("Unsupported kernel config type");
+            }
+            std::string hash = kernel->compute_hash();
+            auto found_persistent_program_id = device->find_persistent_program(core_type, hash, core_ranges);
+            TT_FATAL(found_persistent_program_id.has_value(), "No persistent kernel found");
+            auto current_attached_program_id = program.get_attached_program_id();
+            if (current_attached_program_id.has_value()) {
+                TT_FATAL(*current_attached_program_id == *found_persistent_program_id, "Program already attached to a different persistent program");
+            } else {
+                program.set_attached_program_id(*found_persistent_program_id);
+            }
+
+            return detail::AddKernel(program, kernel, core_type);
+        },
+        config);
+}
+
 KernelHandle CreateKernel(
     Program &program,
     const std::string &file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config) {
+    const Config &config) {
+
+    auto core_type = detail::get_core_type(config);
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+
     return std::visit(
         [&](auto &&cfg) -> KernelHandle {
-            CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
             std::shared_ptr<Kernel> kernel;
             using T = std::decay_t<decltype(cfg)>;
             if constexpr (std::is_same_v<T, DataMovementConfig>) {
                 CheckDataMovementConfig(program, file_name, core_ranges);
                 kernel = std::make_shared<DataMovementKernel>(file_name, core_ranges, cfg);
-                return detail::AddKernel(program, kernel, HalProgrammableCoreType::TENSIX);
             } else if constexpr (std::is_same_v<T, ComputeConfig>) {
                 kernel = std::make_shared<ComputeKernel>(file_name, core_ranges, cfg);
-                return detail::AddKernel(program, kernel, HalProgrammableCoreType::TENSIX);
             } else if constexpr (std::is_same_v<T, EthernetConfig>) {
                 kernel = std::make_shared<EthernetKernel>(file_name, core_ranges, cfg);
-                if (cfg.eth_mode == Eth::IDLE) {
-                    return detail::AddKernel(program, kernel, HalProgrammableCoreType::IDLE_ETH);
-                } else {
-                    return detail::AddKernel(program, kernel, HalProgrammableCoreType::ACTIVE_ETH);
-                }
+            } else {
+                TT_THROW("Unsupported kernel config type");
             }
+            return detail::AddKernel(program, kernel, core_type);
         },
         config);
 }

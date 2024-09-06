@@ -109,6 +109,8 @@ bool CloseDevice(Device *device);
  */
 Program CreateProgram();
 
+Program CreatePersistentProgram();
+
 /**
  * Creates a data movement kernel with no compile time arguments and adds it to the program.
  *
@@ -126,6 +128,9 @@ KernelHandle CreateKernel(
     const std::string &file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config);
+
+bool FindPersistentKernel(const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config);
+KernelHandle AttachPersistentKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config, Device * device);
 
 // ==================================================
 //                  HOST API: buffers
