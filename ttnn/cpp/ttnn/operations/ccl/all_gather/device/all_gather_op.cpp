@@ -7,6 +7,7 @@
 
 #include "tt_metal/host_api.hpp"
 
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include "eth_l1_address_map.h"
@@ -172,7 +173,20 @@ std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor> &
 }
 
 operation::ProgramWithCallbacks AllGather::create_program(const std::vector<Tensor> & input_tensors, std::vector<Tensor> &output_tensors) const {
-    return all_gather_multi_core_with_workers(input_tensors[0], output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->receiver_device_id, this->sender_device_id, this->topology);
+    return all_gather_multi_core_with_workers(
+        input_tensors[0],
+        output_tensors[0],
+        all_gather_op_builder_args_t {
+            this->dim,
+            this->num_links,
+            this->ring_size,
+            this->ring_index,
+            this->receiver_device_id,
+            this->sender_device_id,
+            this->topology
+        },
+        this->op_build_mode
+    );
 }
 
 namespace operations {

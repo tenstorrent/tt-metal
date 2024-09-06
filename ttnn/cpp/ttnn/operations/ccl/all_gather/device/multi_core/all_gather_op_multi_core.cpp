@@ -7,6 +7,7 @@
 #include "tt_metal/common/core_coord.h"
 #include "eth_l1_address_map.h"
 #include "impl/buffers/buffer.hpp"
+#include "ttnn/operations/ccl/ccl_fabric.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -204,30 +205,47 @@ static void log_sharded_tensor_kernel_args(Tensor const& tensor, std::size_t pag
     ShardedAddrGenArgBuilder::log_sharded_tensor_kernel_args(tensor, prefix);
 }
 
+static Program build_all_gather_program(ccl::OpBuildMode build_mode) {
+    // The only time we create a persistent program is if we are building a
+    // program for persistent EDMs as those are the only kernels that make
+    // sense to keep persistent.
+    return build_mode == ccl::OpBuildMode::PERSISTENT_BUILD_PERSISTENT_EDM ? CreatePersistentProgram() : Program{};
+}
 
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
 //   (in other words, disable the "bidirectional" send flag)
-operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor& input_tensor, Tensor& output_tensor, const uint32_t dim, const uint32_t num_links, const uint32_t ring_size, const uint32_t ring_index, const std::optional<chip_id_t> receiver_device_id, const std::optional<chip_id_t> sender_device_id, all_gather_op::Topology topology) {
+operation::ProgramWithCallbacks all_gather_multi_core_with_workers(
+    const Tensor& input_tensor,
+    Tensor& output_tensor,
+    ttnn::all_gather_op_builder_args_t const& args,
+    ccl::OpBuildMode build_mode) {
 
-    tt::tt_metal::Program program{};
+
+    tt::tt_metal::Program program = build_all_gather_program(build_mode);
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
-    return all_gather_multi_core_with_workers_helper(program, input_tensor, output_tensor, dim, num_links, ring_size, ring_index, receiver_device_id, sender_device_id, topology, empty_fused_op_signaler);
+    return all_gather_multi_core_with_workers_helper(program, input_tensor, output_tensor, args, empty_fused_op_signaler, build_mode);
 }
 
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
-    const std::optional<chip_id_t> receiver_device_id,
-    const std::optional<chip_id_t> sender_device_id,
-    all_gather_op::Topology topology,
+    ttnn::all_gather_op_builder_args_t const& args,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
+    const ccl::OpBuildMode build_mode,
     const CoreCoord core_grid_offset) {
+
+    const uint32_t dim = args.dim;
+    const uint32_t num_links = args.num_links;
+    const uint32_t ring_size = args.ring_size;
+    const uint32_t ring_index = args.ring_index;
+    const std::optional<chip_id_t> receiver_device_id = args.receiver_device_id;
+    const std::optional<chip_id_t> sender_device_id = args.sender_device_id;
+    all_gather_op::Topology topology = args.topology;
+
+    bool build_edm_kernels = build_mode != ccl::OpBuildMode::PERSISTENT_BUILD_NON_PERSISTENT_WORKERS;
+    bool build_worker_kernels = build_mode != ccl::OpBuildMode::PERSISTENT_BUILD_PERSISTENT_EDM;
 
     TT_FATAL(!(receiver_device_id == std::nullopt && sender_device_id == std::nullopt), "At least one of receiver_device_id or sender_device_id must be specified");
 
@@ -1097,23 +1115,33 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
         }
     } // num_full_send_directions
 
-    ttnn::ccl::generate_edm_kernels_for_ring_or_linear_topology(
-        program,
-        device,
-        topology_config,
-        clockwise_edm_builders,
-        counter_clockwise_edm_builders,
-        receiver_device_id,
-        sender_device_id);
+    if (build_edm_kernels) {
+        // If we are building in persistent mode but we are building the workers
+        // then we must avoid building the erisc kernels so that
+        ttnn::ccl::generate_edm_kernels_for_ring_or_linear_topology(
+            program,
+            device,
+            topology_config,
+            clockwise_edm_builders,
+            counter_clockwise_edm_builders,
+            receiver_device_id,
+            sender_device_id);
+    }
+
+
+    bool update_worker_rt_args = build_mode != ccl::OpBuildMode::PERSISTENT_BUILD_PERSISTENT_EDM;
+    bool update_edm_rt_args = build_mode == ccl::OpBuildMode::PERSISTENT_BUILD_PERSISTENT_EDM;
+
+    TT_ASSERT(update_worker_rt_args ^ update_edm_rt_args, "Internal error. Both workers and EDM are set to override args in same all-gather program.");
 
     auto override_runtime_arguments_callback =
         [worker_sender_reader_kernel_id,
-         worker_sender_writer_kernel_id,
-         worker_receiver_reader_kernel_id,
-         worker_receiver_writer_kernel_id,
-         num_links,
-         all_sender_worker_cores,
-         all_receiver_worker_cores] (
+        worker_sender_writer_kernel_id,
+        worker_receiver_reader_kernel_id,
+        worker_receiver_writer_kernel_id,
+        num_links,
+        all_sender_worker_cores,
+        all_receiver_worker_cores] (
         const void* operation,
         Program& program,
         const std::vector<Tensor>& input_tensors,

@@ -14,7 +14,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
-
+#include "ttnn/cpp/ttnn/operations/ccl/ccl_fabric.hpp"
 
 #include "ttnn/run_operation.hpp"
 
@@ -148,38 +148,44 @@ AllGather create_all_gather_struct(
 );
 
 // All Gather Variants
-operation::ProgramWithCallbacks all_gather_full_shard_grid(
-    const Tensor& input_tensor,
-    Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
-    const std::optional<chip_id_t> receiver_device_id,
-    const std::optional<chip_id_t> sender_device_id,
-    all_gather_op::Topology topology);
+struct all_gather_op_builder_args_t {
+    std::size_t dim;
+    std::size_t num_links;
+    std::size_t ring_size;
+    std::size_t ring_index;
+    std::optional<chip_id_t> receiver_device_id;
+    std::optional<chip_id_t> sender_device_id;
+    ccl::Topology topology;
+};
+
+
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers(
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
-    const std::optional<chip_id_t> receiver_device_id,
-    const std::optional<chip_id_t> sender_device_id,
-    all_gather_op::Topology topology);
+    all_gather_op_builder_args_t const& op_args,
+    ccl::OpBuildMode build_mode
+    // const uint32_t dim,
+    // const uint32_t num_links,
+    // const uint32_t ring_size,
+    // const uint32_t ring_index,
+    // const std::optional<chip_id_t> receiver_device_id,
+    // const std::optional<chip_id_t> sender_device_id,
+    // all_gather_op::Topology topology
+    );
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
-    const std::optional<chip_id_t> receiver_device_id,
-    const std::optional<chip_id_t> sender_device_id,
-    all_gather_op::Topology topology,
+    all_gather_op_builder_args_t const& op_args,
+    // const uint32_t dim,
+    // const uint32_t num_links,
+    // const uint32_t ring_size,
+    // const uint32_t ring_index,
+    // const std::optional<chip_id_t> receiver_device_id,
+    // const std::optional<chip_id_t> sender_device_id,
+    // all_gather_op::Topology topology,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
+    ccl::OpBuildMode build_mode,
     const CoreCoord core_grid_offset = CoreCoord(0, 0));
 
 
@@ -191,7 +197,8 @@ Tensor all_gather(
     const Tensor& input_tensor,
     const uint32_t dim,
     const uint32_t num_links = 1,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    ttnn::ccl::OpFabricMode = ttnn::ccl::OpFabricMode::TEMPORARY_EDM);
 
 } // namespace ccl
 } // namespace operations
