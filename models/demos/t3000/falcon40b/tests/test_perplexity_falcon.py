@@ -263,7 +263,7 @@ def test_perplexity_huggingface(
         ("prefill", 1, 2048, "BFLOAT8_B-DRAM", 64, 6.55, 0.56, 0.80),
         ("decode", 32, 128, "BFLOAT8_B-SHARDED", 64, 13.91, 0.46, 0.71),
         ("decode", 32, 1024, "BFLOAT8_B-SHARDED", 64, 7.79, 0.54, 0.78),
-        # ("decode", 32, 2048, "BFLOAT8_B-SHARDED", 64, 6.96, 0.55, 0.79), # TODO: Hangs on CI
+        ("decode", 32, 2048, "BFLOAT8_B-SHARDED", 64, 6.96, 0.55, 0.79),  # TODO: Hangs on CI
     ),
     ids=[
         "prefill_seq128",
@@ -271,7 +271,7 @@ def test_perplexity_huggingface(
         "prefill_seq2048",
         "decode_128",
         "decode_1024",
-        # "decode_2048",
+        "decode_2048",
     ],
 )
 def test_perplexity(
