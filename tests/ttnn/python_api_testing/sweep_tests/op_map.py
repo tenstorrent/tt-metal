@@ -9,6 +9,42 @@ from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
 
 
 op_map = {
+    "ttnn-bcast_add_h": {
+        "tt_op": ttnn_ops.bcast_add_h,
+        "pytorch_op": pytorch_ops.add,
+    },
+    "ttnn-bcast_add_hw": {
+        "tt_op": ttnn_ops.bcast_add_hw,
+        "pytorch_op": pytorch_ops.add,
+    },
+    "ttnn-bcast_add_w": {
+        "tt_op": ttnn_ops.bcast_add_w,
+        "pytorch_op": pytorch_ops.add,
+    },
+    "ttnn-bcast_mul_h": {
+        "tt_op": ttnn_ops.bcast_mul_h,
+        "pytorch_op": pytorch_ops.mul,
+    },
+    "ttnn-bcast_mul_hw": {
+        "tt_op": ttnn_ops.bcast_mul_hw,
+        "pytorch_op": pytorch_ops.mul,
+    },
+    "ttnn-bcast_mul_w": {
+        "tt_op": ttnn_ops.bcast_mul_w,
+        "pytorch_op": pytorch_ops.mul,
+    },
+    "ttnn-bcast_sub_h": {
+        "tt_op": ttnn_ops.bcast_sub_h,
+        "pytorch_op": pytorch_ops.sub,
+    },
+    "ttnn-bcast_sub_hw": {
+        "tt_op": ttnn_ops.bcast_sub_hw,
+        "pytorch_op": pytorch_ops.sub,
+    },
+    "ttnn-bcast_sub_w": {
+        "tt_op": ttnn_ops.bcast_sub_w,
+        "pytorch_op": pytorch_ops.sub,
+    },
     "ttnn-concat": {
         "tt_op": ttnn_ops.concat,
         "pytorch_op": pytorch_ops.concat,

@@ -770,6 +770,168 @@ def eltwise_add(
     return ttnn_tensor_to_torch(t2)
 
 
+def bcast_add_h(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.bcast(t0, t1, ttnn.BcastOpMath.ADD, ttnn.BcastOpDim.H, memory_config=output_mem_config)
+    return ttnn_tensor_to_torch(t2)
+
+
+def bcast_add_hw(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.bcast(t0, t1, ttnn.BcastOpMath.ADD, ttnn.BcastOpDim.HW, memory_config=output_mem_config)
+    return ttnn_tensor_to_torch(t2)
+
+
+def bcast_add_w(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.bcast(t0, t1, ttnn.BcastOpMath.ADD, ttnn.BcastOpDim.W, memory_config=output_mem_config)
+    return ttnn_tensor_to_torch(t2)
+
+
+def bcast_mul_h(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.bcast(t0, t1, ttnn.BcastOpMath.MUL, ttnn.BcastOpDim.H, memory_config=output_mem_config)
+    return ttnn_tensor_to_torch(t2)
+
+
+def bcast_mul_hw(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.bcast(t0, t1, ttnn.BcastOpMath.MUL, ttnn.BcastOpDim.HW, memory_config=output_mem_config)
+    return ttnn_tensor_to_torch(t2)
+
+
+def bcast_mul_w(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.bcast(t0, t1, ttnn.BcastOpMath.MUL, ttnn.BcastOpDim.W, memory_config=output_mem_config)
+    return ttnn_tensor_to_torch(t2)
+
+
+def bcast_sub_h(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.bcast(t0, t1, ttnn.BcastOpMath.SUB, ttnn.BcastOpDim.H, memory_config=output_mem_config)
+    return ttnn_tensor_to_torch(t2)
+
+
+def bcast_sub_hw(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.bcast(t0, t1, ttnn.BcastOpMath.SUB, ttnn.BcastOpDim.HW, memory_config=output_mem_config)
+    return ttnn_tensor_to_torch(t2)
+
+
+def bcast_sub_w(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.bcast(t0, t1, ttnn.BcastOpMath.SUB, ttnn.BcastOpDim.W, memory_config=output_mem_config)
+    return ttnn_tensor_to_torch(t2)
+
+
 def eltwise_exp(
     x,
     *args,
