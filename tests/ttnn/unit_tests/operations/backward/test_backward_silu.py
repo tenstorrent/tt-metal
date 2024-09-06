@@ -44,7 +44,9 @@ def test_bw_silu_opt_tensor(input_shapes, device):
 
     _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
 
+    pages_before = ttnn._ttnn.reports.get_buffer_pages()
     ttnn.silu_bw(grad_tensor, input_tensor, input_grad=input_grad)
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
 
     golden_function = ttnn.get_golden_function(ttnn.silu_bw)
     golden_tensor = golden_function(grad_data, in_data)

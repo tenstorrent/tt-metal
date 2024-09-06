@@ -154,9 +154,7 @@ std::vector<Tensor> _rdiv_bw(
 // grad_input = grad * exponent * torch.pow(input, exponent - 1)
 std::vector<std::optional<Tensor>> _pow_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
-    if(!input_grad.has_value()){
-        input_grad = input;
-    }
+    input_grad = input_grad.value_or(ttnn::zeros_like(input));
     const float ZERO_THRESHOLD = std::numeric_limits<float>::epsilon() * 10.0f;
     TT_FATAL(exponent >= 0.0, "negative exponents are not supported; use recip(pow(input,abs(exponent)))");
     if (std::abs(exponent) < ZERO_THRESHOLD) {
@@ -183,10 +181,7 @@ std::vector<std::optional<Tensor>> _pow_bw(uint8_t queue_id, const Tensor& grad,
 std::vector<std::optional<Tensor>> _exp_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
 
-    if(!input_grad.has_value())
-    {
-        input_grad = input;
-    }
+    input_grad = input_grad.value_or(ttnn::zeros_like(input));
     float t_inf = std::numeric_limits<float>::infinity();
     Tensor exp_result = ttnn::exp(queue_id, input, false, output_mem_config);
     Tensor result = ttnn::multiply(queue_id, grad, exp_result, std::nullopt, output_mem_config);
@@ -204,9 +199,7 @@ std::vector<std::optional<Tensor>> _exp_bw(uint8_t queue_id, const Tensor& grad,
 std::vector<std::optional<Tensor>> _tanh_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
 
-    if(!input_grad.has_value()){
-        input_grad = input;
-    }
+    input_grad = input_grad.value_or(ttnn::zeros_like(input));
     Tensor tanh_res = ttnn::tanh(queue_id, input, output_mem_config);
     tanh_res = ttnn::square(queue_id, tanh_res, output_mem_config);
     tanh_res = ttnn::rsub(queue_id, tanh_res, 1.0f, output_mem_config);
@@ -221,9 +214,7 @@ std::vector<std::optional<Tensor>> _sqrt_bw(uint8_t queue_id, const Tensor& grad
     float t_nan = std::nanf("");
     float t_inf = std::numeric_limits<float>::infinity();
 
-    if(!input_grad.has_value()){
-        input_grad = input;
-    }
+    input_grad = input_grad.value_or(ttnn::zeros_like(input));
         ttnn::sqrt(queue_id, input, output_mem_config, input_grad);
         ttnn::multiply(queue_id, grad, ttnn::reciprocal(queue_id, ttnn::multiply(queue_id, input_grad.value(), 2.0, std::nullopt, output_mem_config), output_mem_config),std::nullopt,output_mem_config, input_grad);
         where(queue_id, ttnn::lez(queue_id, input, output_mem_config), t_nan, input_grad.value(), output_mem_config, input_grad);
@@ -731,10 +722,9 @@ std::vector<Tensor> _abs_bw(const Tensor& grad, const Tensor& input, const std::
 // Silu
 // result:  grad * sigmoid_result * (1 + input * (1 - sigmoid_result))
 std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSilu::invoke(uint8_t queue_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
-    std::vector<std::optional<Tensor>> result;
-    if(!input_grad.has_value()){
-        input_grad = input;
-    }
+    std::vector<std::optional<Tensor>> result = {std::nullopt};
+
+    input_grad = input_grad.value_or(ttnn::zeros_like(input));
     Tensor grad_sigmoid = ttnn::multiply(queue_id, grad, ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config);
     Tensor add_sub = ttnn::add(queue_id,
         ttnn::multiply(queue_id, ttnn::subtract(queue_id, ttnn::full_like(input, 1.0f) , ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config),
@@ -746,7 +736,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSilu::invoke(uint8_t queu
         output_mem_config);
     ttnn::multiply(queue_id, grad_sigmoid, add_sub, std::nullopt, output_mem_config, input_grad);
 
-    result.push_back(input_grad.value());
+    result[0] = input_grad;
     return result;
 }
 
