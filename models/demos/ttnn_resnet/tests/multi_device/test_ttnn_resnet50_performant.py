@@ -125,7 +125,7 @@ def test_run_resnet50_trace_inference(
         weight_dtype,
         math_fidelity,
         True,
-        final_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
         inputs_mesh_mapper=inputs_mesh_mapper,
         weights_mesh_mapper=weights_mesh_mapper,
         output_mesh_composer=output_mesh_composer,
@@ -289,7 +289,7 @@ def test_run_resnet50_trace_2cqs_inference(
         weight_dtype,
         math_fidelity,
         True,
-        final_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
         inputs_mesh_mapper=inputs_mesh_mapper,
         weights_mesh_mapper=weights_mesh_mapper,
         output_mesh_composer=output_mesh_composer,
@@ -326,6 +326,9 @@ def test_run_resnet50_trace_2cqs_inference(
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
     first_out_addr = ttnn.buffer_address(test_infra.input_tensor)
     ttnn.record_event(0, op_event)
+    # Deallocate the previous output tensor here to make allocation match capture setup
+    # This allows us to allocate the input tensor after at the same address
+    test_infra.output_tensor.deallocate(force=True)
     test_infra.run()
     test_infra.validate()
 
@@ -336,6 +339,8 @@ def test_run_resnet50_trace_2cqs_inference(
     ttnn.wait_for_event(0, write_event)
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
     ttnn.record_event(0, op_event)
+    test_infra.output_tensor.deallocate(force=True)
+    first_out_addr = ttnn.buffer_address(test_infra.input_tensor)
     tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     test_infra.run()
     input_tensor = ttnn.allocate_tensor_on_device(
