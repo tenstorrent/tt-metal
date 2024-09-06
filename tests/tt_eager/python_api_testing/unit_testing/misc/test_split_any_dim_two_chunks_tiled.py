@@ -46,8 +46,18 @@ import os
         [1, 2, 256, 5120],
         [1, 2, 64, 10240],
         [1, 1, 64, 64],
+        [1, 2, 64, 64],
     ),
-    ids=["1x2x64x64", "1x2x64x128", "1x2x256x2560", "1x2x1024x2560", "1x2x256x5120", "1x2x64x10240", "1x1x64x64"],
+    ids=[
+        "1x2x64x128",
+        "1x2x1024x128",
+        "1x2x256x2560",
+        "1x2x1024x2560",
+        "1x2x256x5120",
+        "1x2x64x10240",
+        "1x1x64x64",
+        "1x2x64x64",
+    ],
 )
 def test_split_tiled_w(dim, refshape, in_mem_config, out_mem_config, device, dtype=ttnn.bfloat16):
     profile_location = "splitTwoChunks/"
@@ -131,6 +141,11 @@ def test_split_tiled_w(dim, refshape, in_mem_config, out_mem_config, device, dty
         pyt_buff_list.append(pyt_got_back_rm_buff)
 
     golden_buffers = torch.chunk(A, num_splits, dim=dim)
+    # import pdb; pdb.set_trace()
+    print("torch result: ", golden_buffers[0][0, 0, 0])
+    print("our result: ", pyt_buff_list[0][0, 0, 0])
+    print("torch result: ", golden_buffers[1][0, 0, 0])
+    print("our result: ", pyt_buff_list[1][0, 0, 0])
     assert len(pyt_buff_list) == len(golden_buffers)
 
     for index, pyt_buff in enumerate(pyt_buff_list):

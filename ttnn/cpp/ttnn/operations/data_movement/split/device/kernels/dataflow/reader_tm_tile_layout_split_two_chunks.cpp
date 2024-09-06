@@ -6,7 +6,7 @@
 
 #include "dataflow_api.h"
 
-#define DEBUG
+// #define DEBUG
 #ifdef DEBUG
 #include "debug/dprint.h"
 #endif
@@ -41,12 +41,6 @@ void kernel_main() {
         .bank_base_address = in0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Bfp8_b};
 #endif
 
-#ifdef DEBUG
-    DPRINT << "Reader Start Tile: " << start_tile << ENDL() << ENDL();
-    DPRINT << "Reader Z Stride: " << z_stride << ENDL();
-    DPRINT << "Reader Y Stride: " << y_stride << ENDL();
-#endif
-
     uint32_t z_stride_cum = 0;
     for (uint32_t k = 0; k < z; k++) {
         uint32_t y_stride_cum = 0;
@@ -59,9 +53,7 @@ void kernel_main() {
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in0, onetile);
 #ifdef DEBUG
-                DPRINT << "Reader Core ID: " << reader_core_id << ENDL();
-                DPRINT << "Reader Tile ID: " << start_tile + tile_offset << ENDL();
-                DPRINT << "Reader Address: " << l1_write_addr_in0 << ENDL() << ENDL();
+                DPRINT << "[R/" << reader_core_id << "]" << " @ " << s0.bank_base_address << "[" << start_tile+tile_offset << "]" << ENDL();
 #endif
             }
             y_stride_cum += y_stride;

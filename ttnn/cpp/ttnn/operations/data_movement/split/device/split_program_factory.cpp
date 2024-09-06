@@ -3,90 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <iterator>
+#include <ranges>
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/cpp/ttnn/operation.hpp"
 namespace   ttnn::operations::data_movement::detail {
-
-void setup_runtime(const Program &program,
-                   const uint32_t &core_offset,
-                   const uint32_t &num_cores_r,
-                   const uint32_t &num_cores_c,
-                   const uint32_t &z,
-                   const uint32_t &num_cores_x,
-                   const uint32_t &per_core_tiles_y,
-                   const uint32_t &per_core_tiles_x,
-                   const uint32_t &num_tiles_per_z,
-                   tt::tt_metal::Buffer *in0_buffer,
-                   const std::vector<tt::tt_metal::Buffer*> &output_buffers,
-                   tt::tt_metal::KernelHandle reader_kernel_id,
-                   tt::tt_metal::KernelHandle writer_kernel_id) {
-
-    uint32_t start_core_x = 0;
-    uint32_t start_core_y = 0;
-
-    if (num_cores_c > 1) {
-        TT_FATAL(num_cores_c % 2 == 0, "Must be even number of cores");
-    }
-    uint32_t idc_outer_limit = 1;
-    uint32_t idc_inner_limit = num_cores_c;
-
-    for (int id_r_outer = 0; id_r_outer < z; id_r_outer++) {
-        for (int id_r_inner = 0; id_r_inner < num_cores_x; id_r_inner++) {
-            uint32_t id_r = id_r_outer * num_cores_x + id_r_inner;
-
-            uint32_t id_r_reader =
-                id_r_outer * num_tiles_per_z + id_r_inner * per_core_tiles_y * num_cores_c * per_core_tiles_x;
-            uint32_t id_r_writer = id_r_reader / 2;
-            if (num_cores_c > 1) {
-                idc_outer_limit = 2;
-                idc_inner_limit = num_cores_c / 2;
-            }
-            for (int id_c_outer = 0; id_c_outer < idc_outer_limit; id_c_outer++) {
-                for (int id_c_inner = 0; id_c_inner < idc_inner_limit; id_c_inner++) {
-                    uint32_t id_c = id_c_outer * idc_inner_limit + id_c_inner;
-                    CoreCoord core = {(std::size_t)start_core_x + id_r, (std::size_t)start_core_y + id_c};
-
-                    uint32_t reader_core_id = id_c * per_core_tiles_y;
-                    reader_core_id += id_r_reader;
-
-                    std::vector<uint32_t> reader_runtime_args = {
-                        (std::uint32_t)reader_core_id,
-                        (std::uint32_t)(in0_buffer->address()),  // in0_tensor_addr
-                    };
-                    bool out0_only = false;
-                    bool out1_only = false;
-                    if (num_cores_c > 1) {
-                        out0_only = (id_c_outer == 0);
-                        out1_only = (id_c_outer == 1);
-                    }
-
-                    uint32_t writer_core_id = id_c_inner * per_core_tiles_y + (id_r_writer);
-
-                    std::vector<uint32_t> writer_runtime_args = {
-                        writer_core_id
-                    };
-
-                    std::vector<uint32_t> output_addrs(output_buffers.size());
-                    std::transform(output_buffers.begin(),
-                                   output_buffers.end(),
-                                   output_addrs.begin(),
-                                   [](Buffer* b) { return b->address(); });
-
-                    writer_runtime_args.reserve(1+output_buffers.size());
-                    writer_runtime_args.insert(writer_runtime_args.end(),
-                                               output_addrs.begin(),
-                                               output_addrs.end());
-
-                    tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-                    tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
-                }
-            }
-        }
-    }
-}
 
 operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     const Tensor &input_tensor, std::vector<Tensor> &output_tensors, const MemoryConfig &mem_config) {
@@ -122,13 +46,6 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     uint32_t num_cores_x_limit = device->compute_with_storage_grid_size().x;
     uint32_t num_cores_y_limit = device->compute_with_storage_grid_size().y;
 
-    // print out all of these
-    std::cout << "z: " << z << std::endl;
-    std::cout << "num_tiles_y_dim: " << num_tiles_y_dim << std::endl;
-    std::cout << "num_tiles_x_dim: " << num_tiles_x_dim << std::endl;
-    std::cout << "num_cores_x_limit: " << num_cores_x_limit << std::endl;
-    std::cout << "num_cores_y_limit: " << num_cores_y_limit << std::endl;
-
     // We are splitting along the width (last dim/dim 3) of the tensor so we
     // parallelize along height (dim 2) and depth (dim 1).
 
@@ -137,18 +54,14 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     auto [num_cores_used, y_tiles_per_core] = get_max_cores_divisible_by_tiles_per_core_tiles(num_tiles_y_dim, num_cores);
 
     uint32_t x_tiles_per_core = num_tiles_x_dim;
-    uint32_t tiles_per_core = y_tiles_per_core * num_tiles_x_dim * z;
-
-    // FIXME: remove debugging stuff
-    std::cout << "Num chunks: " << num_chunks << std::endl;
-    std::cout << "Per core tiles: " << tiles_per_core << std::endl;
-    // endFIXME: remove debugging stuff
+    uint32_t xy_tiles_per_core = y_tiles_per_core * x_tiles_per_core;
+    uint32_t tiles_per_core = xy_tiles_per_core * z;
 
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
 
-    uint32_t num_cores_c = num_cores_used / num_cores_x_limit;
-    uint32_t num_cores_r = num_cores_x_limit;
+    uint32_t num_cores_c = std::gcd(num_cores_used, num_cores_x_limit);
+    uint32_t num_cores_r = num_cores_used / num_cores_c;
 
     CoreRange all_cores(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
@@ -196,10 +109,8 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
                                                       (std::uint32_t)tile_dtype_is_bfloat16,
                                                       (std::uint32_t)out_is_dram,
-
                                                       (std::uint32_t)y_tiles_per_core,
                                                       (std::uint32_t)x_tiles_per_bank,
-
                                                       (std::uint32_t)z,
                                                       (std::uint32_t)z_stride_write,
                                                       (std::uint32_t)y_stride_write,
@@ -224,47 +135,81 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
             .set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    setup_runtime(
-        program,
-        0,
-        num_cores_r,
-        num_cores_c,
-        num_cores_z,
-        num_cores_x,
-        per_core_tiles_y,
-        per_core_tiles_x,
-        num_tiles_per_z,
-        in0_buffer,
-        output_buffers,
-        reader_kernel_id,
-        writer_kernel_id);
+    // dump basically every local so far
+    std::cout << "Input shape: ";
+    for (auto dim : input_shape) {
+        std::cout << dim << "x";
+    }
+    std::cout << std::endl;
+    std::cout << std::format("num_cores: {}\n", num_cores);
+    std::cout << std::format("num_cores_used: {}\n", num_cores_used);
+    std::cout << std::format("y_tiles_per_core: {}\n", y_tiles_per_core);
+    std::cout << std::format("x_tiles_per_core: {}\n", x_tiles_per_core);
+    std::cout << std::format("tiles_per_core: {}\n", tiles_per_core);
+    std::cout << std::format("num_cores_c: {}\n", num_cores_c);
+    std::cout << std::format("num_cores_r: {}\n", num_cores_r);
+    std::cout << std::format("num_cores_x_limit: {}\n", num_cores_x_limit);
+    std::cout << std::format("num_cores_y_limit: {}\n", num_cores_y_limit);
+    std::cout << std::format("num_tiles_y_dim: {}\n", num_tiles_y_dim);
+    std::cout << std::format("num_tiles_x_dim: {}\n", num_tiles_x_dim);
+
+    auto setup_reader_runtime_args = [&](const CoreCoord &core) {
+        uint32_t reader_core_id = core.y * num_cores_r + core.x;
+        uint32_t start_tile = tiles_per_core * reader_core_id; // start tile within the input tensor
+        std::cout << std::format("Reader {} has start_tile {}", reader_core_id, start_tile) << std::endl;
+        std::vector<uint32_t> reader_runtime_args = {
+            (std::uint32_t)start_tile,
+            (std::uint32_t)(in0_buffer->address()),  // in0_tensor_addr
+            (std::uint32_t)reader_core_id,
+        };
+
+        tt::tt_metal::SetRuntimeArgs(program,
+                                     reader_kernel_id,
+                                     core,
+                                     reader_runtime_args);
+    };
+
+    std::vector<uint32_t> output_addrs;
+    output_addrs.reserve(output_buffers.size());
+    std::transform(output_buffers.begin(),
+                   output_buffers.end(),
+                   std::back_inserter(output_addrs),
+                   [](tt::tt_metal::Buffer *buf) { return buf->address(); });
+
+    auto setup_writer_runtime_args = [&](const CoreCoord &core) {
+        uint32_t writer_core_id = core.y * num_cores_r + core.x;
+        uint32_t writer_start_tile = (xy_tiles_per_core / num_chunks) * writer_core_id; // start tile within each output bank
+
+        std::cout << std::format("Writer {} has start_tile {}", writer_core_id, writer_start_tile) << std::endl;
+        std::vector<uint32_t> control_args = {writer_core_id, writer_start_tile};
+
+        std::vector<uint32_t> writer_runtime_args;
+        writer_runtime_args.reserve(output_buffers.size()+control_args.size());
+
+        writer_runtime_args.insert(writer_runtime_args.end(),
+                                   output_addrs.begin(),
+                                   output_addrs.end());
+
+        // add writer_core_id and start_tile to the end of the writer_runtime_args
+        writer_runtime_args.insert(writer_runtime_args.end(),
+                                   control_args.begin(),
+                                   control_args.end());
+
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+    };
+
+    for (auto core : all_cores) {
+        setup_reader_runtime_args(core);
+        setup_writer_runtime_args(core);
+    };
 
     auto override_runtime_args_callback =
-        [reader_kernel_id, writer_kernel_id, num_cores_r, num_cores_c, start_core_x, start_core_y](
+        [](
             const Program &program,
             const std::vector<Buffer *> &input_buffers,
             const std::vector<Buffer *> &output_buffers) {
-            auto src_dram_buffer = input_buffers.at(0);
-
-            auto dst_0_dram_buffer = output_buffers.at(0);
-            auto dst_1_dram_buffer = output_buffers.at(0);
-
-            for (int core_idx_y = 0; core_idx_y < num_cores_c; core_idx_y++) {
-                for (int core_idx_x = 0; core_idx_x < num_cores_r; core_idx_x++) {
-                    CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
-
-                    {
-                        auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                        runtime_args[1] = src_dram_buffer->address();
-                    }
-
-                    {
-                        auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                        runtime_args[1] = dst_0_dram_buffer->address();
-                        runtime_args[2] = dst_1_dram_buffer->address();
-                    }
-                }
-            }
+            // FIXME FIXME FIXME
+            return;
         };
 
     return {std::move(program), override_runtime_args_callback};

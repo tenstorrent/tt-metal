@@ -3,12 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-
 #include <algorithm>
 #include <array>
 #include "dataflow_api.h"
 
-//#define DEBUG
+#define DEBUG
+#ifdef DEBUG
+#include "debug/dprint.h"
+#endif
 
 void kernel_main() {
     // COMPILE TIME ARGS
@@ -24,12 +26,14 @@ void kernel_main() {
     constexpr uint32_t num_chunks = get_compile_time_arg_val(7);
 
     // WRITER RUNTIME ARGS
-    uint32_t writer_core_id = get_arg_val<uint32_t>(0);
     std::array<uint32_t, num_chunks> out_addrs;
 
-    for (uint32_t i = 1; i <= num_chunks; i++) {
-        out_addrs[i-1] = get_arg_val<uint32_t>(i);
+    for (uint32_t i = 0; i < num_chunks; i++) {
+        out_addrs[i] = get_arg_val<uint32_t>(i);
     }
+
+    uint32_t writer_core_id = get_arg_val<uint32_t>(num_chunks+0);
+    uint32_t start_tile = get_arg_val<uint32_t>(num_chunks+1);
 
     constexpr uint32_t cb_id_out0 = 0;  // same as cb_id_in0
     uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
@@ -58,24 +62,21 @@ void kernel_main() {
     uint32_t out_split_tensor_tile_id;
     uint32_t bank_id = 0;
     uint32_t tile_id = 0;
-#ifdef DEBUG
-    // DPRINT << "Writer Tile ID Offset: " << out_tensor_tile_id << ENDL() << ENDL();
-#endif
+
     for (const auto& s : output_banks) {
         uint32_t z_stride_cum = 0;
         for (uint32_t k = 0; k < z; k++) {
             uint32_t y_stride_cum = 0;
             for (uint32_t j = 0; j < y_tiles_per_core; j++) {
                 for (uint32_t i = 0; i < x_tiles_per_bank; i++) {
-                    uint32_t tile_id = y_stride_cum + z_stride_cum + i;
+                    uint32_t tile_id = start_tile + y_stride_cum + z_stride_cum + i;
                     cb_wait_front(cb_id_out0, onetile);
                     uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
                     noc_async_write_tile(tile_id, s, l1_read_addr);
                     noc_async_write_barrier();
                     cb_pop_front(cb_id_out0, onetile);
 #ifdef DEBUG
-            // DPRINT << "Writer for Bank: " << bank_id << " has Tile ID: " << tile_id + out_tensor_tile_id << ENDL();
-            // DPRINT << "Writer Address: " << l1_read_addr << ENDL() << ENDL();
+                    DPRINT << "[W/" << writer_core_id <<"] B" << bank_id << "@" << s.bank_base_address << "[" << tile_id << "]" << ENDL();
 #endif
                 }
                 y_stride_cum += y_stride;
@@ -84,8 +85,4 @@ void kernel_main() {
         }
         bank_id++;
     }
-
-#ifdef DEBUG
-    // DPRINT << "Writer End " << ENDL();
-#endif
 }
