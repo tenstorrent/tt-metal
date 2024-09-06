@@ -158,7 +158,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         pass &= dst_vec == golden;
 
-        pass &= tt_metal::CloseDevice(device);;
+        pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;

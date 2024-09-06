@@ -988,7 +988,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor &a,
 
     uint32_t output_cb_index = tt::CB::c_out0; // output operands start at index 16
     tt::tt_metal::CircularBufferConfig cb_output_config = tt::tt_metal::CircularBufferConfig(shard_height * stick_size_bytes, {{output_cb_index, dst_cb_data_format}})
-        .set_page_size(output_cb_index, stick_size_bytes).set_globally_allocated_address(*output.buffer());;
+        .set_page_size(output_cb_index, stick_size_bytes).set_globally_allocated_address(*output.buffer());
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     std::vector<uint32_t> reader_compile_time_args;
@@ -1593,7 +1593,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
     uint32_t output_cb_index = tt::CB::c_out0; // output operands start at index 16
     uint32_t num_output_tiles = num_tiles_per_shard;
     tt::tt_metal::CircularBufferConfig cb_output_config = tt::tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
-		.set_page_size(output_cb_index, dst_single_tile_size).set_globally_allocated_address(*output.buffer());;
+		.set_page_size(output_cb_index, dst_single_tile_size).set_globally_allocated_address(*output.buffer());
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_output_config);
 
     std::vector<uint32_t> reader_compile_time_args = {
@@ -1768,7 +1768,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor 
     // sharded cb
     uint32_t output_cb_index = tt::CB::c_out0; // output operands start at index 16
     tt::tt_metal::CircularBufferConfig cb_output_config = tt::tt_metal::CircularBufferConfig(shard_height * stick_size_bytes, {{output_cb_index, dst_cb_data_format}})
-        .set_page_size(output_cb_index, stick_size_bytes).set_globally_allocated_address(*output.buffer());;
+        .set_page_size(output_cb_index, stick_size_bytes).set_globally_allocated_address(*output.buffer());
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     // cb_in

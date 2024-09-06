@@ -50,7 +50,7 @@ int main(int argc, char **argv) {
         auto num_cores_c = 2;
         auto num_cores_r = 2;
         CoreCoord start_core = {0, 0};
-        CoreCoord end_core = {(std::size_t)start_core.x + num_cores_c - 1, (std::size_t)start_core.y + num_cores_r - 1};;
+        CoreCoord end_core = {(std::size_t)start_core.x + num_cores_c - 1, (std::size_t)start_core.y + num_cores_r - 1};
         CoreRange all_cores(start_core, end_core);
 
         int num_sticks = 4;

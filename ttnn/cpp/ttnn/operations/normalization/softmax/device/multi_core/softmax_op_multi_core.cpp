@@ -694,7 +694,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     }
     // out
     auto c_out0_config = CircularBufferConfig(out_CB_size, {{tt::CB::c_out0, out0_cb_data_format}})
-        .set_page_size(tt::CB::c_out0, out0_tile_size).set_globally_allocated_address(*out0_buffer);;
+        .set_page_size(tt::CB::c_out0, out0_tile_size).set_globally_allocated_address(*out0_buffer);
     auto cb_out0_id = CreateCircularBuffer( program, all_device_cores, c_out0_config );
     // im0 for exp(x)
     auto c_intermed0_config = CircularBufferConfig(im0_CB_size, {{tt::CB::c_intermed0, im_cb_data_format}})

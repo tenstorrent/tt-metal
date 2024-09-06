@@ -28,7 +28,7 @@ using namespace tt;
 
 uint32_t iterations_g = DEFAULT_ITERATIONS;
 uint32_t warmup_iterations_g = DEFAULT_WARMUP_ITERATIONS;
-CoreRange workers_g = {{0, 0}, {0, 0}};;
+CoreRange workers_g = {{0, 0}, {0, 0}};
 uint32_t kernel_size_g;
 uint32_t fast_kernel_cycles_g;
 uint32_t slow_kernel_cycles_g;

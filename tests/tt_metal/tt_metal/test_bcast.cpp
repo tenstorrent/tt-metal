@@ -327,7 +327,7 @@ int main(int argc, char **argv) {
         if (!pass)
             log_error(LogTest, "Failure position={}", argfail);
 
-        pass &= tt_metal::CloseDevice(device);;
+        pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;

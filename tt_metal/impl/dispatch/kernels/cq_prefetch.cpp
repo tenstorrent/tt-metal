@@ -975,7 +975,7 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(uint32_t& cmd_ptr,
     uint32_t length = cmd->relay_inline.length;
     uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
 
-    uint32_t stride = cmd->relay_inline.stride;;
+    uint32_t stride = cmd->relay_inline.stride;
 
     cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(1);
     if (dispatch_data_ptr == downstream_cb_end) {
@@ -1186,7 +1186,7 @@ bool process_cmd(uint32_t& cmd_ptr,
         break;
 
     case CQ_PREFETCH_CMD_TERMINATE:
-        //DPRINT << "prefetch terminating_" << is_h_variant << is_d_variant << ENDL();;
+        //DPRINT << "prefetch terminating_" << is_h_variant << is_d_variant << ENDL();
         ASSERT(!exec_buf);
         done = true;
         break;

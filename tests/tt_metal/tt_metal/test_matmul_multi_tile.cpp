@@ -321,7 +321,7 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         }
         DeallocateBuffer(dst_dram_buffer);
 
-        pass &= tt_metal::CloseDevice(device);;
+        pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;

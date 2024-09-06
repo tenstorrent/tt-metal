@@ -240,7 +240,7 @@ int main(int argc, char **argv) {
 
         pass &= (golden == result_vec);
 
-        pass &= tt_metal::CloseDevice(device);;
+        pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;

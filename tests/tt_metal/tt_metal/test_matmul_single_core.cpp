@@ -370,7 +370,7 @@ int main(int argc, char **argv) {
         auto golden = select_columns(tensor.get_values(), M, K, std::min(K, N));
         // auto golden = tensor.get_values();
         pass &= (golden == result_untilized);
-        pass &= tt_metal::CloseDevice(device);;
+        pass &= tt_metal::CloseDevice(device);
         log_info(LogTest, "Closing device");
 
     } catch (const std::exception &e) {

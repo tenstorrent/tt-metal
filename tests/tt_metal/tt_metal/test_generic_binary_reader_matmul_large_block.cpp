@@ -379,7 +379,7 @@ int main(int argc, char **argv) {
         // print_vec(tensor.get_values(), 128, 128, "Golden");
 
         pass &= (tensor.get_values() == result_untilized);
-        pass &= tt_metal::CloseDevice(device);;
+        pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;

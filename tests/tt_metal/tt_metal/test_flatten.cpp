@@ -207,7 +207,7 @@ int main(int argc, char **argv) {
             print_vec_of_uint32_as_packed_bfloat16(result_vec, num_tiles * 32);
         }
 
-        pass &= tt_metal::CloseDevice(device);;
+        pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;
