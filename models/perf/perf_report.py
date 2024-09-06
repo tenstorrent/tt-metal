@@ -2,12 +2,46 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pandas as pd
+import sys
 import argparse
 import re
-from termcolor import colored
 from typing import Any, Optional
 from collections import defaultdict
+import pandas as pd
+
+# Global variable to store color preference
+color_output = None  # None means auto-detect, True forces color, False forces no color
+
+def set_color_output(force_color, force_no_color):
+    global color_output
+    if force_no_color:
+        color_output = False
+    elif force_color:
+        color_output = True
+    else:
+        color_output = None  # Auto-detect
+
+def colored(text, color):
+    if color_output is None:
+        should_color = sys.stdout.isatty()
+    else:
+        should_color = color_output
+
+    if should_color:
+        colors = {
+            'grey': '\033[38;5;8m',
+            'red': '\033[38;5;9m',
+            'green': '\033[38;5;10m',
+            'yellow': '\033[38;5;11m',
+            'blue': '\033[38;5;12m',
+            'magenta': '\033[38;5;13m',
+            'cyan': '\033[38;5;14m',
+            'white': '\033[38;5;15m',
+            'end': '\033[0m'
+        }
+        return f"{colors[color]}{text}{colors['end']}"
+    else:
+        return text
 
 def tflops_per_core(math_fidelity):
     """ Source: https://tenstorrent.com/assets/one-pagers/08.01.24_Wormhole.pdf """
@@ -36,7 +70,7 @@ class Cell:
             parts = self.raw_value.split(maxsplit=1)
             op_name = parts[0]
             size = parts[1] if len(parts) > 1 else ""
-            formatted = f"{colored(op_name, self.color) if self.color else op_name} {colored(size, 'dark_grey')}"
+            formatted = f"{colored(op_name, self.color) if self.color else op_name} {colored(size, 'grey')}"
         else:
             try:
                 formatted = f"{float(self.raw_value):,.{self.decimals}f}"
@@ -47,7 +81,7 @@ class Cell:
                 formatted = colored(formatted, self.color)
         
         if self.unit:
-            formatted += f" {colored(self.unit, 'dark_grey')}"
+            formatted += f" {colored(self.unit, 'grey')}"
         
         return formatted
 
@@ -272,7 +306,7 @@ def print_row(row, col_widths, headers):
 def color_row(op_data, percentage, min_percentage):
     if percentage is not None and percentage < min_percentage:
         for v in op_data.values():
-            v.color = 'dark_grey'
+            v.color = 'grey'
     else:
         op_colors = {
             "(torch)": 'red',
@@ -300,7 +334,7 @@ def color_row(op_data, percentage, min_percentage):
             elif num_cores == 64:
                 op_data['Cores'].color = 'green'
         else:
-            op_data['Cores'].color = 'dark_grey'
+            op_data['Cores'].color = 'grey'
 
         if op_data['Bound'].raw_value == "DRAM":
             op_data['Bound'].color = 'green'
@@ -370,7 +404,7 @@ def print_performance_table(rows, headers, col_widths, device_ops, host_ops):
     for header in headers:
         if header not in total_row:
             total_row[header] = Cell("")
-    print_row({k: Cell(v.raw_value, v.unit, v.decimals, color='dark_grey') for k, v in total_row.items()}, col_widths, headers)
+    print_row({k: Cell(v.raw_value, v.unit, v.decimals, color='grey') for k, v in total_row.items()}, col_widths, headers)
 
 
 def print_advice_section(rows, headers, col_widths):
@@ -410,7 +444,7 @@ def print_matmul_advice(rows, headers, col_widths):
         for op_data in matmul_ops:
             print_row(op_data, col_widths, headers)
             advice = []
-            color = "dark_grey" if op_data['OP Code'].color == "dark_grey" else "white"
+            color = "grey" if op_data['OP Code'].color == "grey" else "white"
             
             math_fidelity = op_data['Math Fidelity'].raw_value.split()[0] if op_data['Math Fidelity'].raw_value else None
             output_datatype = op_data['Output Datatype'].raw_value
@@ -590,7 +624,12 @@ if __name__ == "__main__":
     parser.add_argument("--ignore-signposts", action="store_true", help="Ignore all signposts and use the entire file for analysis")
     parser.add_argument("--min-percentage", type=float, default=0.5, help="Minimum percentage for coloring (default: 0.5)")
     parser.add_argument("--id-range", type=str, help="Show only rows with IDs in the specified range (e.g., '5-10', '31-', or '-12')")
+    parser.add_argument("--color", action="store_true", help="Force colored output even when output is redirected")
+    parser.add_argument("--no-color", action="store_true", help="Force output without color")
     args = parser.parse_args()
+
+    # Set the global color_output variable
+    set_color_output(args.color, args.no_color)
 
     # Parse id_range
     try:
