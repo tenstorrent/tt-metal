@@ -190,6 +190,7 @@ from ttnn.multi_device import (
     ListMeshToTensor,
     visualize_mesh_device,
     ConcatMesh2dToTensor,
+    distribute,
 )
 
 from ttnn.core import (
