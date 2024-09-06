@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random, skip_for_wormhole_b0
+from models.utility_functions import torch_random, is_blackhole, is_wormhole_b0
 
 
 @pytest.mark.parametrize("batch_size", [1])
@@ -328,7 +328,7 @@ def test_vit_split_query_key_value_and_split_heads(
     assert ttnn.pearson_correlation_coefficient(torch_value_tensor, value_tensor) > 0.999
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("sequence_size", [224, 384])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("head_size", [64])

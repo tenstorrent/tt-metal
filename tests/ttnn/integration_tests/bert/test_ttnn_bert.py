@@ -11,12 +11,12 @@ import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.demos.bert.tt import ttnn_bert
-from models.utility_functions import torch_random, skip_for_wormhole_b0
+from models.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [384])
@@ -49,7 +49,7 @@ def test_bert_attention(device, model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output, 0.9999)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [384])
@@ -79,7 +79,7 @@ def test_bert_intermediate(device, model_name, batch_size, sequence_size, torch_
     assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.9997)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [384])
@@ -125,7 +125,7 @@ class BertFeedForward(torch.nn.Module):
         return hidden_states
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [384])
@@ -155,7 +155,7 @@ def test_bert_feedforward(device, model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output, 0.99979)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [384])
@@ -188,7 +188,7 @@ def test_bert_layer(device, model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output, 0.99964)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [384])
@@ -225,7 +225,7 @@ def test_bert_encoder(device, model_name, batch_size, sequence_size):
 
 
 @pytest.mark.skip(reason="Mismatch in output")
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [384])
@@ -269,7 +269,7 @@ def test_bert(device, model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output, 0.9999)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [384])

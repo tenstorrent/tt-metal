@@ -23,7 +23,7 @@ from models.utility_functions import (
     profiler,
     disable_compilation_reports,
     skip_for_grayskull,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
 )
 from models.perf.perf_utils import prep_perf_report
 

@@ -7,7 +7,7 @@ from loguru import logger
 
 
 import ttnn
-from models.utility_functions import comp_pcc, skip_for_wormhole_b0
+from models.utility_functions import comp_pcc, is_wormhole_b0, is_blackhole
 import torch
 import ttnn
 
@@ -16,7 +16,7 @@ shapes = [
 ]
 
 
-@skip_for_wormhole_b0("disabled due to watcher error, see issue #5863")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="disabled due to watcher error, see issue #5863")
 @pytest.mark.parametrize("shape", shapes)
 def test_move_op(shape, device):
     run_move_op(shape, device)

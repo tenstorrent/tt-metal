@@ -10,7 +10,7 @@ import pytest
 
 from tt_metal.tools.profiler.process_model_log import run_device_profiler, post_process_ops_log
 
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_blackhole
 
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
@@ -135,7 +135,7 @@ def run_op_test():
         assert is_within_range
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.models_device_performance_bare_metal
 def test_run_op_test():
     run_op_test()

@@ -9,7 +9,7 @@ import ttnn
 from transformers.models import bloom
 
 from models.demos.grayskull.functional_bloom.tt import ttnn_optimized_functional_bloom
-from models.utility_functions import skip_for_wormhole_b0, skip_for_grayskull
+from models.utility_functions import is_wormhole_b0, skip_for_grayskull, is_blackhole
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -21,7 +21,7 @@ def torch_random(shape, low, high, dtype):
     return torch.zeros(shape, dtype=dtype).uniform_(low, high)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @skip_for_grayskull(reason_str="#10797: OOM")
 @pytest.mark.parametrize("model_name", ["bigscience/bloom-560m"])
 @pytest.mark.parametrize("batch_size", [8])
