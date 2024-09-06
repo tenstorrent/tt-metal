@@ -730,7 +730,7 @@ class resnet50:
         if self.batch_size == 20:
             x = ttnn.reallocate(x)
 
-        x = ttnn.max_pool2d_new(
+        x = ttnn.max_pool2d(
             input_tensor=x,
             batch_size=self.batch_size,
             input_h=x_height,

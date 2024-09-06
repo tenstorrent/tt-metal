@@ -17,7 +17,7 @@ namespace ttnn::operations::pool {
 void bind_max_pool2d_operation(py::module& module) {
     bind_registered_operation(
         module,
-        ttnn::max_pool2d_new,
+        ttnn::max_pool2d,
         R"doc(
         Max Pool 2D
         +-------------------+-------------------------------+---------------+-------------+----------+
@@ -39,7 +39,7 @@ void bind_max_pool2d_operation(py::module& module) {
         +-------------------+-------------------------------+---------------+-------------+----------+
         )doc",
         ttnn::pybind_overload_t{
-            [](const decltype(ttnn::max_pool2d_new)& self, const ttnn::Tensor& input_tensor,
+            [](const decltype(ttnn::max_pool2d)& self, const ttnn::Tensor& input_tensor,
                 uint32_t batch_size,
                 uint32_t input_h,
                 uint32_t input_w,
@@ -74,7 +74,7 @@ void bind_max_pool2d_operation(py::module& module) {
                 py::arg("device"),
                 py::arg("queue_id") = 0},
         ttnn::pybind_overload_t{
-            [](const decltype(ttnn::max_pool2d_new)& self, const ttnn::Tensor& input_tensor,
+            [](const decltype(ttnn::max_pool2d)& self, const ttnn::Tensor& input_tensor,
                 uint32_t batch_size,
                 uint32_t input_h,
                 uint32_t input_w,

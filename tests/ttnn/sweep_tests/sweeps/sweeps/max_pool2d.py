@@ -85,7 +85,7 @@ def run(
     else:
         ttact = ttnn.from_torch(act_reshaped, dtype)
     ttact_d = ttnn.to_device(ttact, device)
-    out_d = ttnn.max_pool2d_new(
+    out_d = ttnn.max_pool2d(
         input_tensor=ttact_d,
         batch_size=in_n,
         input_h=in_h,

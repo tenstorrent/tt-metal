@@ -156,7 +156,7 @@ def test_run_max_pool(
             tile_size=32 if dtype == ttnn.bfloat8_b else 1,
         )
         ttact_device = ttnn.to_memory_config(ttact_device, sharded_memory_config)
-    output = ttnn.max_pool2d_new(
+    output = ttnn.max_pool2d(
         input_tensor=ttact_device,
         batch_size=in_n,
         input_h=in_h,
@@ -407,7 +407,7 @@ def test_pool_core_nondivis(
             tile_size=32 if dtype == ttnn.bfloat8_b else 1,
         )
         ttact_device = ttnn.to_memory_config(ttact_device, sharded_memory_config)
-    output = ttnn.max_pool2d_new(
+    output = ttnn.max_pool2d(
         input_tensor=ttact_device,
         batch_size=in_n,
         input_h=in_h,
