@@ -189,14 +189,12 @@ class Shape {
         for (auto index = 0; index < Rank; index++) {
             this->dimensions_[index] = shape[index];
         }
-        validate();
     }
 
     Shape(const Array4D &shape) : rank_(4), dimensions_{}, padding_{4} {
         for (auto index = 0; index < 4; index++) {
             this->dimensions_[index] = shape[index];
         }
-        validate();
     }
 
     template <std::size_t Rank>
@@ -207,7 +205,6 @@ class Shape {
             this->dimensions_[index] = padded_dimension;
             this->padding_[index] = {.front = 0, .back = padded_dimension - shape[index]};
         }
-        validate();
     }
     explicit Shape(const std::vector<uint32_t> &shape, const std::vector<uint32_t> &shape_with_tile_padding) :
         rank_(shape.size()), dimensions_{}, padding_{shape.size()} {
@@ -219,10 +216,7 @@ class Shape {
             this->dimensions_[index] = padded_dimension;
             this->padding_[index] = {.front = 0, .back = padded_dimension - shape[index]};
         }
-        validate();
     }
-
-    void validate() const;
 
     std::size_t rank() const;
     std::size_t size() const;

@@ -47,10 +47,18 @@ static std::size_t compute_volume(const T& shape) {
 }
 
 static std::vector<uint32_t> compute_strides(const Shape& shape) {
+    if (shape.rank() == 0)
+        return {};
+
     auto num_elements = compute_volume(shape);
     std::vector<uint32_t> strides;
     for (std::int32_t index = 0; index < shape.rank(); index++) {
-        TT_FATAL(shape[index] > 0, "Shape can't have dimension {} as zero {}", index, shape);
+        if (shape[index] == 0) {
+            // Insert 0 to indicate no memory access for this dimension
+            strides.push_back(0);
+            continue;
+        }
+
         num_elements /= shape[index];
         strides.push_back(num_elements);
     }
