@@ -89,14 +89,14 @@ ParallelConfig determine_parallel_config(
 
     auto calculate_grid = [&](uint32_t num_cores_nhw) {
         if (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-            CoreRangeSet grid = num_cores_to_core_range_set(num_cores_nhw, device_grid_size_coord, true);
+            CoreRangeSet grid = num_cores_to_corerange_set(num_cores_nhw, device_grid_size_coord, true);
             return grid;
 
         } else if(shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             uint32_t num_cores_channels = find_closest_common_largest_divisor(
                 conv_out_2d_matrix_width_ntiles, std::ceil((double)input_channels / (double)tt::constants::TILE_WIDTH), max_num_cores);
              log_debug(LogOp, "Num cores for Width Sharding : {}", num_cores_channels);
-            CoreRangeSet grid = num_cores_to_core_range_set(num_cores_channels, device_grid_size_coord, true);
+            CoreRangeSet grid = num_cores_to_corerange_set(num_cores_channels, device_grid_size_coord, true);
             return grid;
 
         } else if(shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
