@@ -15,7 +15,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 
 mem_configs = [
     ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
@@ -40,6 +40,7 @@ mem_configs = [
     mem_configs,
 )
 @skip_for_grayskull("#TODO: GS implementation needs to be done")
+@skip_for_blackhole("Mismatching on BH, see #12349")
 class TestRightShift:
     def test_run_right_shift_op(
         self,

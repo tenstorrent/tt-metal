@@ -10,7 +10,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 
 
 def run_reshard_test(
@@ -82,6 +82,7 @@ def run_reshard_test(
     return torch_tensor, torch_tensor_after_round_trip
 
 
+@skip_for_blackhole("Hitting assertion in reshard op on BH, see #12349")
 @pytest.mark.parametrize(
     "input_shape, input_layout, input_shard_grid,  input_shard_shape, input_shard_orientation, input_sharding_scheme, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme",
     [

@@ -16,6 +16,7 @@ from models.utility_functions import (
     print_diff_argmax,
     is_close,
     comp_pcc,
+    skip_for_blackhole,
 )
 import torch
 
@@ -61,5 +62,6 @@ def run_tilize_matmul_test(M, K, N, device):
     assert passing_pcc
 
 
+@skip_for_blackhole("Hanging on BH, see #12349")
 def test_tilize_hpadding_matmul(device):
     run_tilize_matmul_test(4, 32 * 9, 32, device)

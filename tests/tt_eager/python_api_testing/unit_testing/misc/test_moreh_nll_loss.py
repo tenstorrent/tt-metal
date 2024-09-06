@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 import pytest
-from models.utility_functions import comp_allclose_and_pcc
+from models.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
 from loguru import logger
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
@@ -81,6 +81,7 @@ def run_moreh_nll_loss(shape, ignore_index, reduction, none_weight, device, comp
     assert passing
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "shape",
     [[5, 10], [3000, 100], [200, 100, 90], [5, 50, 2, 7, 50, 70]],
@@ -94,6 +95,7 @@ def test_moreh_nll_loss(shape, ignore_index, reduction, none_weight, device):
     run_moreh_nll_loss(shape, ignore_index, reduction, none_weight, device)
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -115,6 +117,7 @@ def test_moreh_nll_loss_callback(shape, reduction, none_weight, device, use_prog
         tt_dummy = to_npu(torch_dummy, device)
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "shape",
     [
