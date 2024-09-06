@@ -58,7 +58,15 @@ def test_bw_rsub_opt(input_shapes, device, are_required_outputs):
     cq_id = 0
 
     pages_before = ttnn._ttnn.reports.get_buffer_pages()
-    ttnn.rsub_bw(grad_tensor, input_tensor, other_tensor, input_grad=input_grad, other_grad=other_grad, queue_id=cq_id)
+    ttnn.rsub_bw(
+        grad_tensor,
+        input_tensor,
+        other_tensor,
+        are_required_outputs=are_required_outputs,
+        input_grad=input_grad,
+        other_grad=other_grad,
+        queue_id=cq_id,
+    )
     assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
     tt_output_tensor_on_device = [input_grad, other_grad]
 

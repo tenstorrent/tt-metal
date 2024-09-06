@@ -61,22 +61,41 @@ def test_bw_subalpha_default(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_bw_subalpha_opt_output(input_shapes, device):
+@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
+def test_bw_subalpha_opt_output(input_shapes, device, are_required_outputs):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     other_data, other_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
 
-    _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
+    input_grad = None
+    other_grad = None
+    tt_output_tensor_on_device = None
+
+    if are_required_outputs[0]:
+        _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
+    if are_required_outputs[1]:
+        _, other_grad = data_gen_with_range(input_shapes, -1, 1, device)
 
     cq_id = 0
     pages_before = ttnn._ttnn.reports.get_buffer_pages()
-    ttnn.subalpha_bw(grad_tensor, input_tensor, other_tensor, input_grad=input_grad, queue_id=cq_id)
+    ttnn.subalpha_bw(
+        grad_tensor,
+        input_tensor,
+        other_tensor,
+        are_required_outputs=are_required_outputs,
+        input_grad=input_grad,
+        other_grad=other_grad,
+        queue_id=cq_id,
+    )
     assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
 
-    tt_output_tensor_on_device = [input_grad]
+    tt_output_tensor_on_device = [input_grad, other_grad]
 
     golden_function = ttnn.get_golden_function(ttnn.subalpha_bw)
     golden_tensor = golden_function(grad_data, in_data, other_data)
 
-    status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
+    status = True
+    for i in range(len(are_required_outputs)):
+        if are_required_outputs[i]:
+            status = status & compare_pcc([tt_output_tensor_on_device[i]], [golden_tensor[i]])
     assert status
