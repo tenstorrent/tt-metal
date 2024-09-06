@@ -70,7 +70,9 @@ def run_test_perplexity(
         ref_running_nll, ref_running_top1_acc, ref_running_top5_acc = 0.0, 0.0, 0.0
 
     # Load model args, weights, and tokenizer
-    model_args = TtModelArgs(mesh_device.get_device(0), instruct=instruct_mode)
+    model_args = TtModelArgs(
+        mesh_device.get_device(0), instruct=instruct_mode, max_batch_size=batch_size, max_seq_len=max_seq_len
+    )
     tokenizer = Tokenizer(model_args.tokenizer_path)
     if instruct_mode:
         tokenizer._model.pad_id = tokenizer._model.eos_id
@@ -284,9 +286,17 @@ def test_mixtral_perplexity(
     for device in t3k_mesh_device.get_device_ids():
         t3k_mesh_device.get_device(device).enable_async(True)
 
+    # Adjust the batch size based on the max prefill length
+    if max_seq_len >= 16 * 1024:
+        batch_size = 8
+    elif max_seq_len >= 8 * 1024:
+        batch_size = 16
+    else:
+        batch_size = 32
+
     return run_test_perplexity(
         mesh_device=t3k_mesh_device,
-        batch_size=32,
+        batch_size=batch_size,
         llm_mode=llm_mode,
         max_seq_len=max_seq_len,
         num_samples=num_samples,

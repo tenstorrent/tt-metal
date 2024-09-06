@@ -177,13 +177,13 @@ def test_mixtral_model_with_prefill_perf(
     dtype = ttnn.bfloat8_b
 
     if prefill_seqlen >= 16 * 1024:
-        seq_len = 32 * 1024
+        seq_len = 32 * 1024  # Cap the sequence length to a max of 32k
         batch_size = 8
     elif prefill_seqlen >= 8 * 1024:
         seq_len = 16 * 1024
         batch_size = 16
     else:
-        seq_len = 8 * 1024
+        seq_len = prefill_seqlen
         batch_size = 32
 
     # Can use dummy_weights=True correctness is not tested, but it is much slower
