@@ -83,7 +83,14 @@ class TtShiftedWindowAttention(nn.Module):
         qkv_bias = self.parameters.qkv.bias
 
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        qkv = ttnn.linear(x, qkv_weight, bias=qkv_bias)
+        qkv = ttnn.linear(
+            x,
+            qkv_weight,
+            bias=qkv_bias,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+            ),
+        )
 
         qkv = ttnn.to_layout(qkv, layout=ttnn.ROW_MAJOR_LAYOUT)
         qkv = ttnn.from_device(qkv)
@@ -99,7 +106,13 @@ class TtShiftedWindowAttention(nn.Module):
 
         q = q * (C // self.num_heads) ** -0.5
         k = ttnn.permute(k, (0, 1, 3, 2))
-        attn = ttnn.matmul(q, k)
+        attn = ttnn.matmul(
+            q,
+            k,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+            ),
+        )
         # add relative position bias
         attn = ttnn.add(attn, relative_position_bias)
 
@@ -153,7 +166,13 @@ class TtShiftedWindowAttention(nn.Module):
 
         attn = ttnn.softmax(attn, dim=-1)
 
-        x = ttnn.matmul(attn, v)
+        x = ttnn.matmul(
+            attn,
+            v,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+            ),
+        )
         x = ttnn.permute(x, (0, 2, 1, 3))
 
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -168,7 +187,14 @@ class TtShiftedWindowAttention(nn.Module):
 
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
-        x = ttnn.linear(x, proj_weight, bias=proj_bias)
+        x = ttnn.linear(
+            x,
+            proj_weight,
+            bias=proj_bias,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+            ),
+        )
 
         # Torch is used since ttnn doesn't support reshape or permute of 6D tensor
         x = ttnn.to_torch(x)
