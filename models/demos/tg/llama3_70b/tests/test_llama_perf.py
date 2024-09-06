@@ -22,6 +22,7 @@ from models.utility_functions import (
     disable_compilation_reports,
     skip_for_grayskull,
     profiler,
+    enable_persistent_kernel_cache,
 )
 from models.demos.tg.llama3_70b.tt.llama_common import PytorchLlamaModel
 
@@ -146,6 +147,7 @@ def run_test_LlamaModel_end_to_end(
     for device in mesh_device.get_devices():
         ttnn.synchronize_device(device)
     # Run prefill num_iterations times and measure time
+    enable_persistent_kernel_cache()
     for iter_idx in range(num_iterations):
         # Prepare inputs for TT model
         profiler.start(f"prefill_iteration_{iter_idx}")
@@ -164,8 +166,7 @@ def run_test_LlamaModel_end_to_end(
             start_pos,
             attn_mask,
         )
-
-        # OR
+        # Retrieve output from device
         tt_out_cpu = ttnn.to_torch(
             tt_out, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(1, 3), cluster_shape=cluster_shape)
         )
