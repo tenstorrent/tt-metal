@@ -74,47 +74,30 @@ def run(
 
     ## construct the tensor in NCHW shape
     act = torch.randn(act_shape, dtype=torch.bfloat16)
-    # act = torch.zeros(act_shape, dtype=torch.bfloat16)
-    # act = torch.ones(act_shape, dtype=torch.bfloat16)
-    # act = torch.arange(0, volume(act_shape), dtype=torch.bfloat16).reshape(act_shape)
-    # for n in range(act_shape[0]):
-    #     for c in range(act_shape[1]):
-    #         for h in range(act_shape[2]):
-    #             for w in range(act_shape[3]):
-    #                 act[n, c, h, w] = 1 + n + h + w + c + torch.rand(1) * 0.15
-
     ## this op expects input tensor as { N, 1, H * W, C }, so rearrange and reshape tensor
     ## but before that, make sure in_c is multiple of tile width
     act_shape = (in_n, 1, in_h * in_w, in_c)
     act_permuted = torch.permute(act, (0, 2, 3, 1))
     act_reshaped = act_permuted.reshape(act_shape)
 
-    reader_patterns_cache = {}
-    max_pool = ttnn.MaxPool2d(
-        kernel_size=(kernel_h, kernel_w),
-        stride=(stride_h, stride_w),
-        padding=(pad_h, pad_w),
-        dilation=(dilation_h, dilation_w),
-        dtype=dtype,
-        device=device,
-        batch_size=in_n,
-        input_height=in_h,
-        input_width=in_w,
-        reader_patterns_cache=reader_patterns_cache,
-    )
-
     if dtype == ttnn.bfloat8_b:
         ttact = ttnn.from_torch(act_reshaped, dtype, layout=ttnn.TILE_LAYOUT)
     else:
         ttact = ttnn.from_torch(act_reshaped, dtype)
-    ttact_d = max_pool.copy_input_to_device(ttact)
-
-    out_d = max_pool(ttact_d)
-    out_padded = max_pool.copy_output_from_device(out_d)
-
-    # clear the cache maps
-    reader_patterns_cache.clear()
-
+    ttact_d = ttnn.to_device(ttact, device)
+    out_d = ttnn.max_pool2d_new(
+        input_tensor=ttact_d,
+        batch_size=in_n,
+        input_h=in_h,
+        input_w=in_w,
+        channels=in_c,
+        kernel_size=[kernel_h, kernel_w],
+        stride=[stride_h, stride_w],
+        padding=[pad_h, pad_w],
+        dilation=[dilation_h, dilation_w],
+        device=device,
+    )
+    out_padded = out_d.cpu()
     out_pytorch_padded = ttnn.to_torch(out_padded)
     out_pytorch = out_pytorch_padded[:, :, :, :in_c]
     out_pytorch = torch.permute(out_pytorch, (0, 3, 1, 2))  ## N, C, 1, HW
