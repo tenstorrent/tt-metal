@@ -98,7 +98,8 @@ void py_module(py::module& module) {
 
             Returns:
                 Tuple[int, int]: The shape of the device mesh as (num_rows, num_cols).
-        )doc");
+        )doc")
+        .def("__repr__", &MeshDevice::to_string);
 
     module.def(
         "open_mesh_device",

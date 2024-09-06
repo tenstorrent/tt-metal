@@ -57,10 +57,13 @@ public:
     std::shared_ptr<const MeshDeviceView> get_view() const;
     std::shared_ptr<MeshDeviceView> get_view();
 
+    std::string to_string() const;
+
    private:
     bool is_galaxy_;
 };
 
+std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);
 bool validate_worker_modes(const std::vector<Device*>& workers);
 
 } // namespace tt::tt_metal

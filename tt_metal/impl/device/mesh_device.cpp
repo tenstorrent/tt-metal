@@ -164,12 +164,23 @@ void MeshDevice::close_devices() {
     managed_devices.clear();
 }
 
+std::string MeshDevice::to_string() const {
+    return fmt::format("MeshDevice({}x{} grid, {} devices)",
+                       this->num_rows(),
+                       this->num_cols(),
+                       this->num_devices());
+}
+
 std::shared_ptr<const MeshDeviceView> MeshDevice::get_view() const {
     return this->view;
 }
 
 std::shared_ptr<MeshDeviceView> MeshDevice::get_view() {
     return this->view;
+}
+
+std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) {
+    return os << mesh_device.to_string();
 }
 
 bool validate_worker_modes(const std::vector<Device*>& workers) {
