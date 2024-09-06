@@ -51,7 +51,6 @@ class TtSwinTransformer:
             stage = []
             dim = embed_dim * 2**i_stage
             for i_layer in range(depths[index]):
-                print("depths[index]", depths[index])
                 stage.append(
                     self.block(
                         device,
@@ -115,5 +114,12 @@ class TtSwinTransformer:
         x = ttnn.reshape(x, (x.shape[0], -1))  # Replace for flatten, self.flatten(x)
         x = ttnn.to_device(x, device=self.device)
         x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
-        x = ttnn.linear(x, self.parameters.head.weight, bias=self.parameters.head.bias)
+        x = ttnn.linear(
+            x,
+            self.parameters.head.weight,
+            bias=self.parameters.head.bias,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+            ),
+        )
         return x
