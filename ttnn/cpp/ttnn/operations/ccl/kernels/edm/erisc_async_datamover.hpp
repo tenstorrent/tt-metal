@@ -439,6 +439,14 @@ FORCE_INLINE void receiver_side_start(std::uint32_t handshake_register_address) 
 }
 
 /*
+ * Return: true if slave EDM handshake core is able to complete the handshake with
+ * an ack.
+ */
+FORCE_INLINE bool receiver_side_can_finish() {
+    return eth_bytes_are_available_on_channel(0);
+}
+
+/*
  * As the designated slave EDM core, send the acknowledgement to the master EDM core.
  * The slave EDM core shall only acknowledge after receiving the initial handshake packet
  * from the master EDM core.
