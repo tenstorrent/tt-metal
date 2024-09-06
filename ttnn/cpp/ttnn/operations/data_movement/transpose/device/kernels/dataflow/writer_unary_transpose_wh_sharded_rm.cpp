@@ -26,21 +26,24 @@ void kernel_main() {
     uint32_t l1_write_addr = get_write_ptr(cb_out0);
     uint64_t write_noc_addr = get_noc_addr(l1_write_addr);
 
-    noc_async_write_one_packet_set_state(write_noc_addr, stick_size_bytes);
+    // temporary fix until pack_untilze is fully fixed
+    if constexpr (Ht > 8) {
+        noc_async_write_one_packet_set_state(write_noc_addr, stick_size_bytes);
 
-    for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
-        for (uint32_t w = 0; w < Wt; ++w) {
-            cb_wait_front(cb_out, Ht);
-            uint32_t l1_read_addr = get_read_ptr(cb_out);
-            uint32_t W_curr = w == Wt-1 ? W_per_tile_last : W_per_tile;
-            for (uint32_t w_datum = 0; w_datum < W_curr; ++w_datum) {
-                noc_async_write_one_packet_with_state(l1_read_addr, write_noc_addr);
-                l1_read_addr += l1_read_offset_bytes;
-                write_noc_addr += stick_size_bytes;
+        for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
+            for (uint32_t w = 0; w < Wt; ++w) {
+                cb_wait_front(cb_out, Ht);
+                uint32_t l1_read_addr = get_read_ptr(cb_out);
+                uint32_t W_curr = w == Wt-1 ? W_per_tile_last : W_per_tile;
+                for (uint32_t w_datum = 0; w_datum < W_curr; ++w_datum) {
+                    noc_async_write_one_packet_with_state(l1_read_addr, write_noc_addr);
+                    l1_read_addr += l1_read_offset_bytes;
+                    write_noc_addr += stick_size_bytes;
+                }
+                noc_async_writes_flushed();
+                cb_pop_front(cb_out, Ht);
             }
-            noc_async_writes_flushed();
-            cb_pop_front(cb_out, Ht);
         }
+        noc_async_write_barrier();
     }
-    noc_async_write_barrier();
 }

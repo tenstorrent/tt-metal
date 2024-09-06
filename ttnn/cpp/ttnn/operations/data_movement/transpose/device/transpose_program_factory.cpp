@@ -1736,10 +1736,48 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor 
     uint32_t ht = (H + TILE_HEIGHT - 1) / TILE_HEIGHT;
     uint32_t wt = (W + TILE_WIDTH - 1) / TILE_WIDTH;
 
+    uint32_t output_page_size, pack_num_pages, pack_num_pages_last_col, pack_num_pages_last_row, pack_num_pages_last_row_col;
+    if ((W % TILE_WIDTH) != 0 and (H % TILE_HEIGHT) != 0) {
+        output_page_size = (W % TILE_WIDTH) * (H % TILE_HEIGHT) * output.element_size();
+        pack_num_pages = dst_single_tile_size / output_page_size;
+        auto output_page_size_last_col = TILE_WIDTH * (H % TILE_HEIGHT) * output.element_size();
+        pack_num_pages_last_col = dst_single_tile_size / output_page_size_last_col;
+        auto output_page_size_last_row = TILE_HEIGHT * (W % TILE_WIDTH) * output.element_size();
+        pack_num_pages_last_row = dst_single_tile_size / output_page_size_last_row;
+        pack_num_pages_last_row_col = 1;
+    } else if ((W % TILE_WIDTH) != 0 and (H % TILE_HEIGHT) == 0) {
+        output_page_size = (W % TILE_WIDTH) * (TILE_HEIGHT) * output.element_size();
+        pack_num_pages = dst_single_tile_size / output_page_size;
+        pack_num_pages_last_col = pack_num_pages;
+        pack_num_pages_last_row = 1;
+        pack_num_pages_last_row_col = 1;
+    } else if ((W % TILE_WIDTH) == 0 and (H % TILE_HEIGHT) != 0) {
+        output_page_size = (TILE_WIDTH) * (H % TILE_HEIGHT) * output.element_size();
+        pack_num_pages = dst_single_tile_size / output_page_size;
+        pack_num_pages_last_col = 1;
+        pack_num_pages_last_row = pack_num_pages;
+        pack_num_pages_last_row_col = 1;
+    } else {
+        output_page_size = dst_single_tile_size;
+        pack_num_pages = 1;
+        pack_num_pages_last_col = 1;
+        pack_num_pages_last_row = 1;
+        pack_num_pages_last_row_col = 1;
+    }
+
+    tt::log_debug("output_page_size: {}", output_page_size);
+    tt::log_debug("pack_num_pages: {}", pack_num_pages);
+    tt::log_debug("pack_num_pages_last_col: {}", pack_num_pages_last_col);
+    tt::log_debug("pack_num_pages_last_row: {}", pack_num_pages_last_row);
+    tt::log_debug("pack_num_pages_last_row_col: {}", pack_num_pages_last_row_col);
+
     auto shard_spec = a.shard_spec().value();
     uint32_t shard_height = shard_spec.shape[0];
     uint32_t shard_width = shard_spec.shape[1];
     uint32_t num_hw_blocks_per_core = shard_height / H;
+
+    tt::log_debug("shard_height: {}", shard_height);
+    tt::log_debug("dst_single_tile_size: {}", dst_single_tile_size);
 
     bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
@@ -1767,8 +1805,8 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor 
 
     // sharded cb
     uint32_t output_cb_index = tt::CB::c_out0; // output operands start at index 16
-    tt::tt_metal::CircularBufferConfig cb_output_config = tt::tt_metal::CircularBufferConfig(shard_height * stick_size_bytes, {{output_cb_index, dst_cb_data_format}})
-        .set_page_size(output_cb_index, stick_size_bytes).set_globally_allocated_address(*output.buffer());
+    tt::tt_metal::CircularBufferConfig cb_output_config = tt::tt_metal::CircularBufferConfig(stick_size_bytes * shard_height, {{output_cb_index, dst_cb_data_format}})
+        .set_page_size(output_cb_index, output_page_size).set_globally_allocated_address(*output.buffer());
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     // cb_in
@@ -1792,14 +1830,14 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor 
         tt::tt_metal::CircularBufferConfig cb_im2_config = tt::tt_metal::CircularBufferConfig(num_im2_tiles * dst_single_tile_size, {{im2_cb_index, dst_cb_data_format}})
             .set_page_size(im2_cb_index, dst_single_tile_size);
         auto cb_im2 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im2_config);
-    }
 
-    // output_cb
-    uint32_t out_cb_index = tt::CB::c_intermed3;
-    uint32_t num_out_tiles = ht * 2; // double buffer
-    tt::tt_metal::CircularBufferConfig cb_out_config = tt::tt_metal::CircularBufferConfig(num_out_tiles * dst_single_tile_size, {{out_cb_index, dst_cb_data_format}})
-        .set_page_size(out_cb_index, dst_single_tile_size);
-    auto cb_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+        // compute_output_cb
+        uint32_t out_cb_index = tt::CB::c_intermed3;
+        uint32_t num_out_tiles = ht * 2; // double buffer
+        tt::tt_metal::CircularBufferConfig cb_out_config = tt::tt_metal::CircularBufferConfig(num_out_tiles * dst_single_tile_size, {{out_cb_index, dst_cb_data_format}})
+            .set_page_size(out_cb_index, dst_single_tile_size);
+        auto cb_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+    }
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t) num_hw_blocks_per_core,
@@ -1840,6 +1878,11 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor 
         (std::uint32_t) wt,
         (std::uint32_t) ht * wt,
         (std::uint32_t) num_hw_blocks_per_core,
+        (std::uint32_t) H % TILE_HEIGHT == 0 ? TILE_HEIGHT : H % TILE_HEIGHT, // last_output_row_num_datums
+        (std::uint32_t) pack_num_pages,
+        (std::uint32_t) pack_num_pages_last_col,
+        (std::uint32_t) pack_num_pages_last_row,
+        (std::uint32_t) pack_num_pages_last_row_col,
     };
 
     std::map<string, string> compute_defines;

@@ -123,11 +123,11 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 * LLK PACK UNTILIZE
 *************************************************************************/
 
-template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim, bool diagonal = false>
+template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim, bool diagonal = false, bool narrow_row = false, std::uint32_t row_num_datums = TILE_C_DIM>
 inline void llk_pack_untilize_init(std::uint32_t output, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4) {
     const std::uint32_t output_id = get_output_id(output);
 
-    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal>(
+    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
         pack_dst_format[output_id],
         face_r_dim,
         num_faces
@@ -135,10 +135,14 @@ inline void llk_pack_untilize_init(std::uint32_t output, const std::uint32_t fac
 
     if constexpr (diagonal) {
         TT_SETADCXX(p_setadc::PAC, 1-1, 0x0);
+    } else if constexpr(narrow_row) {
+        TT_SETADCXX(p_setadc::PAC, row_num_datums-1, 0x0);
+    } else {
+        TT_SETADCXX(p_setadc::PAC, FACE_R_DIM-1, 0x0);
     }
 }
 
-template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim, bool diagonal = false>
+template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim, bool diagonal = false, bool narrow_row = false, std::uint32_t row_num_datums = TILE_C_DIM>
 inline void llk_pack_untilize(const std::uint32_t block_rt_dim, const std::uint32_t output, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, const std::uint32_t block_c_index = 0) {
 
     const std::uint32_t output_id = get_output_id(output);
@@ -146,7 +150,7 @@ inline void llk_pack_untilize(const std::uint32_t block_rt_dim, const std::uint3
 
     for (std::uint32_t block_rt=0; block_rt<block_rt_dim; block_rt++) {
 
-        _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal>(
+        _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
             pack_tile_addr,
             pack_dst_format[output_id],
             face_r_dim,
