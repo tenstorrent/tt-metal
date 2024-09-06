@@ -61,7 +61,9 @@ jobs:
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on:
-      - issue-dimitri-docker-test
+      - ${{ inputs.runner-label }}
+      - cloud-virtual-machine
+      - in-service
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dynamic env vars for build
