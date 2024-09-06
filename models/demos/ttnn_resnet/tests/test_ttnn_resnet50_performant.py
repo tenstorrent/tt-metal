@@ -110,8 +110,6 @@ def run_resnet50_trace_inference(
         signpost(header="stop")
     test_infra.validate()
 
-    device.enable_async(False)
-
 
 def run_resnet50_2cqs_inference(
     device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator
@@ -229,8 +227,10 @@ def run_resnet50_trace_2cqs_inference(
     ttnn.record_event(1, write_event)
     ttnn.wait_for_event(0, write_event)
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    first_out_addr = test_infra.input_tensor.buffer_address()
     ttnn.record_event(0, op_event)
+    # Deallocate the previous output tensor here to make allocation match capture setup
+    # This allows us to allocate the input tensor after at the same address
+    test_infra.output_tensor.deallocate(force=True)
     test_infra.run()
     test_infra.validate()
 
@@ -241,6 +241,8 @@ def run_resnet50_trace_2cqs_inference(
     ttnn.wait_for_event(0, write_event)
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
     ttnn.record_event(0, op_event)
+    test_infra.output_tensor.deallocate(force=True)
+    first_out_addr = test_infra.input_tensor.buffer_address()
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     test_infra.run()
     input_tensor = ttnn.allocate_tensor_on_device(
@@ -275,7 +277,7 @@ def run_resnet50_trace_2cqs_inference(
     for output in outputs:
         test_infra.validate(output)
 
-    device.enable_async(False)
+    ttnn.release_trace(device, tid)
 
 
 @run_for_grayskull()

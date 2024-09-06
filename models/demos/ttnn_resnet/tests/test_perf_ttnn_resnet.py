@@ -219,8 +219,10 @@ def run_trace_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, nu
     ttnn.record_event(1, write_event)
     ttnn.wait_for_event(0, write_event)
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    first_out_addr = test_infra.input_tensor.buffer_address()
     ttnn.record_event(0, op_event)
+    # Deallocate the previous output tensor here to make allocation match capture setup
+    # This allows us to allocate the input tensor after at the same address
+    test_infra.output_tensor.deallocate(force=True)
     _ = ttnn.from_device(test_infra.run(), blocking=True)
     profiler.end("cache")
     ttnn.DumpDeviceProfiler(device)
@@ -233,7 +235,8 @@ def run_trace_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, nu
     ttnn.wait_for_event(0, write_event)
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
     ttnn.record_event(0, op_event)
-
+    test_infra.output_tensor.deallocate(force=True)
+    first_out_addr = test_infra.input_tensor.buffer_address()
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     tt_output_res = test_infra.run()
     reshard_out = ttnn.allocate_tensor_on_device(
@@ -323,7 +326,7 @@ def run_perf_resnet(
         model_config["WEIGHTS_DTYPE"],
         model_config["MATH_FIDELITY"],
         dealloc_input=True,
-        final_output_mem_config=ttnn.DRAM_MEMORY_CONFIG if "trace" in model_version else ttnn.L1_MEMORY_CONFIG,
+        final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
         model_location_generator=model_location_generator,
     )
 
