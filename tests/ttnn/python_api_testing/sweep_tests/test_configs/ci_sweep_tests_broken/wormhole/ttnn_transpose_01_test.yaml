@@ -1,11 +1,11 @@
 ---
 test-list:
-  - ttnn-transpose_23:
+  - ttnn-transpose_01:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
-        interval: [1, 1, 1, 1]
-        num-dims: [4]
+        interval: [1, 1, 32, 32]
+        num-dims: [2, 3, 4]
         num-shapes: 1
         num-samples: 128
         args-sampling-strategy: "all"
@@ -22,15 +22,15 @@ test-list:
       sanitize-args: False
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16"]
+        data-type: ["BFLOAT16", "BFLOAT8_B"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
-      output-file: tranpose_23_sweep.csv
-  - ttnn-transpose_23:
+      output-file: tranpose_01_sweep.csv
+  - ttnn-transpose_01:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
-        interval: [1, 1, 1, 1]
+        interval: [1, 1, 32, 32]
         num-dims: [4]
         num-shapes: 1
         num-samples: 128
@@ -43,12 +43,12 @@ test-list:
           low: -100
           high: 100
       comparison:
-        function: comp_pcc
+        function: comp_equal
       args-gen: gen_dtype_layout_device
       sanitize-args: False
       args:
-        data-layout: ["TILE"]
-        data-type: ["BFLOAT8_B"]
+        data-layout: ["ROW_MAJOR"]
+        data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
-      output-file: tranpose_23_sweep.csv
+      output-file: tranpose_01_sweep.csv
