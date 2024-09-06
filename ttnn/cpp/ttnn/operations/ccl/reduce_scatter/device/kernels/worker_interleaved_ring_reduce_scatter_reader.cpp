@@ -14,6 +14,7 @@
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
 
 using ttnn::ccl::coord_t;
 using ttnn::ccl::WorkerXY;
@@ -97,19 +98,20 @@ constexpr bool is_sharded = get_compile_time_arg_val(0) == 1;
 
 // Currently meaningless when `is_sharded=true`
 constexpr bool src_is_dram = get_compile_time_arg_val(1) == 1;
+constexpr uint32_t num_buffers_per_channel = get_compile_time_arg_val(2);
 static constexpr tt::tt_metal::TensorMemoryLayout input_tensor_memory_layout =
-    static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(2));
+    static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(3));
 
 // TODO: clean this up
 #ifdef SHARDED_MEM_LAYOUT
 static constexpr bool is_sharded_mode = true;
-static constexpr uint32_t input_tensor_shard_grid_height = get_compile_time_arg_val(3);
-static constexpr uint32_t input_tensor_shard_grid_width = get_compile_time_arg_val(4);
-static constexpr uint32_t input_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(5);
-static constexpr uint32_t input_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(6);
-static constexpr uint32_t input_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(7);
-static constexpr uint32_t input_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(8);
-static constexpr bool input_tensor_shard_grid_transposed = get_compile_time_arg_val(9) != 0;
+static constexpr uint32_t input_tensor_shard_grid_height = get_compile_time_arg_val(4);
+static constexpr uint32_t input_tensor_shard_grid_width = get_compile_time_arg_val(5);
+static constexpr uint32_t input_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(6);
+static constexpr uint32_t input_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(7);
+static constexpr uint32_t input_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(8);
+static constexpr uint32_t input_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(9);
+static constexpr bool input_tensor_shard_grid_transposed = get_compile_time_arg_val(10) != 0;
 #else
 static constexpr bool is_sharded_mode = false;
 static constexpr uint32_t input_tensor_shard_grid_height = 0;
@@ -225,13 +227,18 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* receiver_read_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.sem_addr);
-    const uint64_t eth_receiver_l1_base_noc_addr =
-        get_noc_addr(args.edm_core_noc0_core_x, args.edm_core_noc0_core_y, args.edm_core_buffer_address);
-    const uint64_t eth_receiver_l1_semaphore_noc_addr =
-        get_noc_addr(args.edm_core_noc0_core_x, args.edm_core_noc0_core_y, args.edm_core_semaphore_address);
 
     uint32_t total_cb_pages_pushed = 0;
     uint32_t total_cb_pages_pushed_to_math = 0;
+
+    ccl::edm::WorkerToEdmReader<ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED> reader(
+        ttnn::ccl::WorkerXY(args.edm_core_noc0_core_x, args.edm_core_noc0_core_y),
+        args.edm_core_buffer_address,
+        num_buffers_per_channel,
+        args.edm_core_semaphore_address,
+        // (num_full_chunks > 0 ? args.full_chunk_num_pages : rem_num_pages) * args.page_size,
+        args.full_chunk_num_pages * args.page_size,
+        receiver_read_semaphore_addr_ptr);
 
     // For the first timestep, there is no other input to reduce with, so we just send it straight to the input CB
     // of the output data movement kernel - short-circuiting past the (reducer) math kernel
@@ -332,21 +339,16 @@ void kernel_main() {
                     n_pages,
                     args.page_size,
                     last_page_of_worker);
-                uint64_t eth_receiver_l1_curr_noc_addr = eth_receiver_l1_base_noc_addr;
 
                 // Fetch from EDM
-                noc_semaphore_wait(receiver_read_semaphore_addr_ptr, 1);
-                noc_semaphore_set(receiver_read_semaphore_addr_ptr, 0);
-                fetch_chunk(cb_id_in0, n_pages, args.page_size, eth_receiver_l1_base_noc_addr);
+                bool last_worker_message_to_edm = last_transfer && last_slice_of_worker && (p + n_pages >= worker_slice_n_pages);
+
+                reader.wait_for_payload_available();
+                reader.fetch_payload_blocking(cb_id_in0, n_pages, args.page_size, last_worker_message_to_edm);
+
                 total_cb_pages_pushed_to_math += n_pages;
                 total_cb_pages_pushed += n_pages;
 
-                bool last_worker_message_to_edm = last_transfer && last_slice_of_worker && (p + n_pages >= worker_slice_n_pages);
-                if (!last_worker_message_to_edm) {
-                    noc_semaphore_inc(
-                        eth_receiver_l1_semaphore_noc_addr,
-                        ttnn::ccl::EriscDataMoverWorkerSignal::NEXT_MESSAGE_AVAILABLE);
-                }
                 if (n_pages < args.half_cb_n_pages) {
                     uint32_t num_filler_pages = args.half_cb_n_pages - n_pages;
                     push_filler_pages_to_cb(cb_id_in0, num_filler_pages);
@@ -372,8 +374,6 @@ void kernel_main() {
         push_filler_pages_to_cb(cb_id_in1, 1);
     }
 
-    noc_semaphore_inc(
-        eth_receiver_l1_semaphore_noc_addr,
-        ttnn::ccl::EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY);
+    reader.close();
     DEBUG_STATUS("DONE");
 }

@@ -70,7 +70,8 @@ struct ReduceScatterWorkerArgBuilder {
         WorkerTransferInfo const& worker_transfer_info,
         uint32_t cb_num_pages_per_packet,
         uint32_t worker_sender_semaphore_id,
-        uint32_t worker_receiver_semaphore_id) :
+        uint32_t worker_receiver_semaphore_id,
+        uint32_t num_buffers_per_channel) :
         device(device),
         op_config(op_config),
         topology_config(topology_config),
@@ -78,7 +79,8 @@ struct ReduceScatterWorkerArgBuilder {
         worker_transfer_info(worker_transfer_info),
         cb_num_pages_per_packet(cb_num_pages_per_packet),
         worker_sender_semaphore_id(worker_sender_semaphore_id),
-        worker_receiver_semaphore_id(worker_receiver_semaphore_id) {
+        worker_receiver_semaphore_id(worker_receiver_semaphore_id),
+        num_buffers_per_channel(num_buffers_per_channel) {
     }
 
     uint32_t get_total_num_math_pages(uint32_t link, uint32_t worker_idx) const {
@@ -121,13 +123,14 @@ struct ReduceScatterWorkerArgBuilder {
         auto const& local_input_tensor = this->op_config.get_input_tensor(0);
         auto args = std::vector<uint32_t>{
             static_cast<uint32_t>(this->op_config.is_input_sharded() ? 1 : 0),
-            static_cast<uint32_t>(
-                this->op_config.get_input_tensor(0).memory_config().buffer_type == BufferType::DRAM ? 1 : 0)};
+            static_cast<uint32_t>(this->op_config.get_input_tensor(0).memory_config().buffer_type == BufferType::DRAM ? 1 : 0),
+            static_cast<uint32_t>(this->num_buffers_per_channel)};
 
         std::size_t i = 0;
         log_trace(tt::LogOp, "Reduce Scatter Receiver Worker CT Args:");
         log_trace(tt::LogOp, "\tis_sharded: {}", args.at(i++));
         log_trace(tt::LogOp, "\tsrc_is_dram: {}", args.at(i++));
+        log_trace(tt::LogOp, "\tnum_buffers_per_channel: {}", args.at(i++));
         TT_ASSERT(args.size() == i, "Missed some args");
 
         if (local_input_tensor.is_sharded()) {
@@ -229,13 +232,14 @@ struct ReduceScatterWorkerArgBuilder {
         auto const& local_output_tensor = this->op_config.get_output_tensor(0);
         auto args = std::vector<uint32_t>{
             static_cast<uint32_t>(this->op_config.is_input_sharded() ? 1 : 0),
-            static_cast<uint32_t>(
-                this->op_config.get_output_tensor(0).memory_config().buffer_type == BufferType::DRAM ? 1 : 0)};
+            static_cast<uint32_t>(this->op_config.get_output_tensor(0).memory_config().buffer_type == BufferType::DRAM ? 1 : 0),
+            static_cast<uint32_t>(this->num_buffers_per_channel)};
 
         std::size_t i = 0;
         log_trace(tt::LogOp, "Reduce Scatter Sender Worker CT Args:");
         log_trace(tt::LogOp, "\tis_sharded: {}", args.at(i++));
         log_trace(tt::LogOp, "\tdst_is_dram: {}", args.at(i++));
+        log_trace(tt::LogOp, "\tnum_buffers_per_channel: {}", args.at(i++));
         TT_ASSERT(args.size() == i, "Missed some args");
 
         if (local_output_tensor.is_sharded()) {
@@ -327,6 +331,7 @@ struct ReduceScatterWorkerArgBuilder {
     uint32_t cb_num_pages_per_packet;
     uint32_t worker_sender_semaphore_id;
     uint32_t worker_receiver_semaphore_id;
+    uint32_t num_buffers_per_channel;
 
     bool src_is_dram;
     bool dst_is_dram;
@@ -349,6 +354,7 @@ static void add_worker_config_to_edm_builders(
     ccl::CCLOpConfig const& op_config,
     std::vector<CoreCoord> const& worker_cores,
     uint32_t num_channels_per_edm,
+    uint32_t num_buffers_per_channel,
 
     std::vector<ttnn::ccl::EriscDatamoverBuilder>& clockwise_edm_builders,
     std::vector<ttnn::ccl::EriscDatamoverBuilder>& counter_clockwise_edm_builders,
@@ -376,7 +382,8 @@ static void add_worker_config_to_edm_builders(
         }
 
         // Get the maximum message size we'd like to use. Not the actual packet size
-        uint32_t expected_message_size_bytes = tensor_slicer.get_worker_slice_size_bytes(global_worker_idx);
+        uint32_t expected_message_size_bytes = (num_buffers_per_channel == 1) ? tensor_slicer.get_worker_slice_size_bytes(global_worker_idx)
+                                                                           : clockwise_edm_builders.at(link).get_eth_buffer_size_bytes();
 
         bool sender_enabled = true;  // (!is_linear || !is_last_chip_in_chain); // update for linear
         if (sender_enabled) {
@@ -825,6 +832,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
             op_config,
             worker_cores,
             num_edm_channels,
+            num_buffers_per_channel,
 
             cw_per_link_edm_builders,
             ccw_per_link_edm_builders,
@@ -848,7 +856,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         worker_transfer_info,
         cb_num_pages_per_packet,
         worker_sender_semaphore_id,
-        worker_receiver_semaphore_id);
+        worker_receiver_semaphore_id,
+        num_buffers_per_channel);
     auto [worker_receiver_kernel_id, worker_sender_kernel_id, worker_reduce_kernel_id] = build_reduce_scatter_worker_ct(
         program,
         op_config,
@@ -875,7 +884,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
                 worker_transfer_info,
                 cb_num_pages_per_packet,
                 worker_sender_semaphore_id,
-                worker_receiver_semaphore_id);
+                worker_receiver_semaphore_id,
+                num_buffers_per_channel);
 
             log_trace(tt::LogOp, "worker_cores.at(global_worker_index): {}", worker_cores.at(global_worker_index));
             set_reduce_scatter_worker_rt(

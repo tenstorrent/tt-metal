@@ -14,17 +14,18 @@ using ttnn::ccl::coord_t;
 void kernel_main() {
     constexpr bool is_sharded = get_compile_time_arg_val(0) == 1;
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr uint32_t num_buffers_per_channel = get_compile_time_arg_val(2);
 
     constexpr tt::tt_metal::TensorMemoryLayout output_tensor_memory_layout =
-        static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(2));
+        static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(3));
     #ifdef SHARDED_MEM_LAYOUT
-    constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(3);
-    constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(4);
-    constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(5);
-    constexpr uint32_t output_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(6);
-    constexpr uint32_t output_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(7);
-    constexpr uint32_t output_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(8);
-    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(9) != 0;
+    constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(4);
+    constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(5);
+    constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(6);
+    constexpr uint32_t output_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(7);
+    constexpr uint32_t output_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(8);
+    constexpr uint32_t output_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(9);
+    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(10) != 0;
     #endif
 
     uint32_t arg_idx = 0;
@@ -111,12 +112,15 @@ void kernel_main() {
     // Used to wait until eth sender has space available
     volatile tt_l1_ptr uint32_t* writer_send_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_send_sem_addr);
-    // This is different per writer core
-    const uint64_t eth_l1_sender_base_noc_addr =
-        get_noc_addr(eth_sender_noc_x, eth_sender_noc_y, eth_sender_l1_base_addr);
-    // Used to signal eth sender that data is available. This is different per writer core
-    const uint64_t eth_l1_sender_semaphore_addr =
-        get_noc_addr(eth_sender_noc_x, eth_sender_noc_y, eth_sender_l1_sem_addr);
+
+    ccl::edm::WorkerToEdmSender<ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED> sender(
+        ttnn::ccl::WorkerXY(eth_sender_noc_x, eth_sender_noc_y),
+        eth_sender_l1_base_addr,
+        num_buffers_per_channel,
+        eth_sender_l1_sem_addr,
+        // (num_full_chunks > 0 ? num_pages_per_full_chunk : rem_num_pages) * page_size,
+        full_chunk_num_pages * page_size,
+        writer_send_semaphore_addr_ptr);
 
     uint32_t total_lifetime_cb_pages_popped_from_math = 0;
     while (worker_slice_base_offset.x < output_tensor_shape.x && worker_slice_base_offset.y < output_tensor_shape.y) {
@@ -136,12 +140,9 @@ void kernel_main() {
             for (uint32_t p = 0; p < num_pages_to_write; p += full_chunk_num_pages) {
                 uint32_t n_pages = std::min(full_chunk_num_pages, num_pages_to_write - p);
                 ASSERT(n_pages > 0);
-                noc_semaphore_wait(writer_send_semaphore_addr_ptr, 1);
-                noc_semaphore_set(writer_send_semaphore_addr_ptr, 0);
-                send_chunk(cb_in, n_pages, page_size, eth_l1_sender_base_noc_addr);
-                noc_semaphore_inc(
-                    eth_l1_sender_semaphore_addr,
-                    ttnn::ccl::EriscDataMoverWorkerSignal::NEXT_MESSAGE_AVAILABLE);
+                sender.wait_for_empty_write_slot();
+                sender.send_payload_blocking(cb_in, n_pages, page_size);
+
                 if (i != 0) {
                     total_lifetime_cb_pages_popped_from_math += n_pages;
                 }
@@ -205,8 +206,5 @@ void kernel_main() {
         pop_filler_pages_from_cb(cb_id_in0, 1);
     }
 
-    noc_semaphore_wait(writer_send_semaphore_addr_ptr, 1);
-    noc_semaphore_set(writer_send_semaphore_addr_ptr, 0);
-    noc_semaphore_inc(
-        eth_l1_sender_semaphore_addr, ttnn::ccl::EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY);
+    sender.close();
 }
