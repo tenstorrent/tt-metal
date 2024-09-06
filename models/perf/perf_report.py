@@ -358,7 +358,7 @@ def color_row(op_data, percentage, min_percentage):
         elif op_data['Bound'].raw_value == "HOST":
             op_data['Bound'].color = 'red'
 
-        if op_data['Dispatch Time'].raw_value is not None and op_data['Dispatch Time'].raw_value > 6:
+        if op_data['Dispatch Time'].raw_value is not None and op_data['Dispatch Time'].raw_value > 6.5:
             op_data['Dispatch Time'].color = 'red'
 
         if 'Matmul' in op_data['OP Code'].raw_value and op_data['Math Fidelity'].raw_value:
