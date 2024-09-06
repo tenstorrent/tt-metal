@@ -19,7 +19,7 @@ from ttnn.model_preprocessing import (
 )
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_wormhole_b0, skip_for_grayskull
+from models.utility_functions import is_wormhole_b0, skip_for_grayskull, is_blackhole
 
 
 @contextlib.contextmanager
@@ -29,7 +29,7 @@ def use_ttnn_model_cache():
     ttnn.CONFIG.enable_model_cache = False
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", [None, "linear"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("m_size", [64])
@@ -57,7 +57,7 @@ def test_linear(device, model_name, batch_size, m_size, k_size, n_size):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9997)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("m_size", [64])
 @pytest.mark.parametrize("k_size", [128])

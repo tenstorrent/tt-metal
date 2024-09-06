@@ -73,7 +73,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_step1_impl(
     uint32_t cb_usage = target_num_tile * target_tile_size + weight_num_tile * data_tile_size +
                         intermed_num_tile * intermed_tile_size + output_num_tile * data_tile_size;
 
-    const bool use_large_algorithm = cb_usage >= available_L1;;
+    const bool use_large_algorithm = cb_usage >= available_L1;
 
     if (use_large_algorithm) {
         CreateCircularBuffer(
