@@ -114,8 +114,7 @@ std::optional<uint32_t> get_semaphore_id(const Program &program, const CoreRange
             auto semaphores = program.semaphores_on_core(logical_core);
             if (semaphores.size() == NUM_SEMAPHORES) {
                 TT_THROW(
-                    "Cannot add semaphore on core " + logical_core.str() + ". Max number of semaphores (" +
-                    std::to_string(NUM_SEMAPHORES) + ") reached!");
+                    "Cannot add semaphore on core {}. Max number of semaphores ({}) reached!", logical_core.str(), NUM_SEMAPHORES);
             }
 
             for (const auto &semaphore : semaphores) {
@@ -135,7 +134,7 @@ std::optional<uint32_t> get_semaphore_id(const Program &program, const CoreRange
     if (uninitialized_sem_id.has_value()) {
         semaphore_id =  uninitialized_sem_id.value();
     } else {
-        TT_THROW("Unable to initialize semaphores on core range " + core_range.str());
+        TT_THROW("Unable to initialize semaphores on core range {}", core_range.str());
     }
 
     return semaphore_id;

@@ -63,7 +63,7 @@ int main(int argc, char **argv) {
         for(uint32_t i = 0; i < result_vec.size() ; i++) {
             if(result_vec[i] != golden_vec[i]) {
                 if(num_errors < 10)
-                    log_error(LogTest, "Error at i={} result={} golden={}", i, result_vec[i], golden_vec[i]);
+                    log_error(LogTest, "Error at i={} result={} golden={}", i, result_vec[i].to_float(), golden_vec[i].to_float());
                 num_errors++;
             }
         }

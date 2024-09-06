@@ -27,7 +27,7 @@ std::map<string, string> get_defines(BinaryOpType::Enum op_type){
         case BinaryOpType::ADD: op_name = "add_tiles"; op_binary_type = "EltwiseBinaryType::ELWADD"; break;
         case BinaryOpType::SUB: op_name = "sub_tiles"; op_binary_type = "EltwiseBinaryType::ELWSUB"; break;
         case BinaryOpType::MUL: op_name = "mul_tiles"; op_binary_type = "EltwiseBinaryType::ELWMUL"; break;
-        default: TT_FATAL(false && "Undefined op type", "Error");
+        default: TT_THROW("Undefined op type");
     }
     defines["ELTWISE_OP"] = op_name.c_str();
     defines["ELTWISE_OP_TYPE"] = op_binary_type.c_str();

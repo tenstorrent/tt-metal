@@ -6,9 +6,10 @@
 
 #include <cxxabi.h>
 #include <execinfo.h>
-#include <iostream>
 #include <stdio.h>
 #include <stdlib.h>
+
+#include <iostream>
 #include <sstream>
 #include <vector>
 
@@ -32,16 +33,13 @@ std::ostream& operator<<(std::ostream& os, tt::OStreamJoin<A, B> const& join) {
 
 namespace tt::assert {
 
-static std::string demangle(const char *str)
-{
+static std::string demangle(const char* str) {
     size_t size = 0;
     int status = 0;
     std::string rt(256, '\0');
-    if (1 == sscanf(str, "%*[^(]%*[^_]%255[^)+]", &rt[0]))
-    {
-        char *v = abi::__cxa_demangle(&rt[0], nullptr, &size, &status);
-        if (v)
-        {
+    if (1 == sscanf(str, "%*[^(]%*[^_]%255[^)+]", &rt[0])) {
+        char* v = abi::__cxa_demangle(&rt[0], nullptr, &size, &status);
+        if (v) {
             std::string result(v);
             free(v);
             return result;
@@ -58,19 +56,16 @@ static std::string demangle(const char *str)
  * @param[in] size Maximum number of return layers
  * @param[in] skip Skip the number of layers at the top of the stack
  */
-inline std::vector<std::string> backtrace(int size = 64, int skip = 1)
-{
+inline std::vector<std::string> backtrace(int size = 64, int skip = 1) {
     std::vector<std::string> bt;
-    void **array = (void **)malloc((sizeof(void *) * size));
+    void** array = (void**)malloc((sizeof(void*) * size));
     size_t s = ::backtrace(array, size);
-    char **strings = backtrace_symbols(array, s);
-    if (strings == NULL)
-    {
+    char** strings = backtrace_symbols(array, s);
+    if (strings == NULL) {
         std::cout << "backtrace_symbols error." << std::endl;
         return bt;
     }
-    for (size_t i = skip; i < s; ++i)
-    {
+    for (size_t i = skip; i < s; ++i) {
         bt.push_back(demangle(strings[i]));
     }
     free(strings);
@@ -85,67 +80,24 @@ inline std::vector<std::string> backtrace(int size = 64, int skip = 1)
  * @param[in] skip Skip the number of layers at the top of the stack
  * @param[in] prefix Output before stack information
  */
-inline std::string backtrace_to_string(int size = 64, int skip = 2, const std::string &prefix = "")
-{
+inline std::string backtrace_to_string(int size = 64, int skip = 2, const std::string& prefix = "") {
     std::vector<std::string> bt = backtrace(size, skip);
     std::stringstream ss;
-    for (size_t i = 0; i < bt.size(); ++i)
-    {
+    for (size_t i = 0; i < bt.size(); ++i) {
         ss << prefix << bt[i] << std::endl;
     }
     return ss.str();
 }
 
-template <typename... Ts>
-void tt_assert_message(std::ostream& os, Ts const&... ts) {
-    std::string fmt;
-    for (int i = 0; i < sizeof...(ts); i++) {
-        fmt += "{} ";
-    }
-    log_fatal(fmt.c_str(), ts...);
-    ((os << fmt::format("{} ", ts)), ...);
-    os << std::endl;
-}
-
-template <typename... Ts>
-void tt_assert_message(std::ostream& os, const char* t, Ts const&... ts) {
-    os << fmt::format(fmt::runtime(t), ts...);
-    os << std::endl;
-}
-
-template <typename... Ts>
-void tt_assert_message(std::ostream& os, const std::string& t, Ts const&... ts) {
-    os << fmt::format(fmt::runtime(t), ts...);
-    os << std::endl;
-}
-
-template <typename... Ts>
-void tt_assert_log_message(Ts const&... ts) {
-    std::string fmt;
-    for (int i = 0; i < sizeof...(ts); i++) {
-        fmt += "{} ";
-    }
-    log_fatal(fmt.c_str(), ts...);
-}
-
-template <typename... Ts>
-void tt_assert_log_message(const char *t, Ts const&... ts) {
-    log_fatal(t, ts...);
-}
-
-template <typename... Ts>
-void tt_assert_log_message(const std::string& t, Ts const&... ts) {
-    log_fatal(t.c_str(), ts...);
-}
-
-template <typename... Ts>
-[[ noreturn ]] void tt_throw(char const* file, int line, const std::string& assert_type, char const* condition_str, Ts const&... messages) {
+template <typename... Args>
+[[noreturn]] void tt_throw_impl(
+    char const* file, int line, char const* assert_type, char const* condition_str, Args const&... args) {
     std::stringstream trace_message_ss = {};
     trace_message_ss << assert_type << " @ " << file << ":" << line << ": " << condition_str << std::endl;
-    if constexpr (sizeof...(messages) > 0) {
+    if constexpr (sizeof...(args) > 0) {
         trace_message_ss << "info:" << std::endl;
-        tt_assert_message(trace_message_ss, messages...);
-        tt_assert_log_message(messages...);
+        trace_message_ss << fmt::format(args...) << std::endl;
+        log_fatal(args...);
     }
     trace_message_ss << "backtrace:\n";
     trace_message_ss << tt::assert::backtrace_to_string(100, 3, " --- ");
@@ -156,25 +108,53 @@ template <typename... Ts>
     throw std::runtime_error(trace_message_ss.str());
 }
 
-template <typename... Ts>
-void tt_assert(char const* file, int line, const std::string& assert_type, char const* condition_str, Ts const&... messages) {
-    ::tt::assert::tt_throw(file, line, assert_type, condition_str, messages...);
+[[noreturn]] inline void tt_throw(char const* file, int line, char const* assert_type, char const* condition_str) {
+    tt_throw_impl(file, line, assert_type, condition_str);
 }
 
-template <typename... Ts>
-void tt_assert(char const* file, int line, const std::string& assert_type, bool condition, char const* condition_str, Ts const&... messages) {
+template <typename... Args>
+[[noreturn]] void tt_throw(
+    char const* file,
+    int line,
+    char const* assert_type,
+    char const* condition_str,
+    fmt::format_string<Args const&...> fmt,
+    Args const&... args) {
+    tt_throw_impl(file, line, assert_type, condition_str, fmt, args...);
+}
+
+inline void tt_assert(char const* file, int line, char const* assert_type, bool condition, char const* condition_str) {
     if (not condition) {
-        ::tt::assert::tt_throw(file, line, assert_type, condition_str, messages...);
+        tt_throw(file, line, assert_type, condition_str);
+    }
+}
+
+template <typename... Args>
+void tt_assert(
+    char const* file,
+    int line,
+    char const* assert_type,
+    bool condition,
+    char const* condition_str,
+    fmt::format_string<Args const&...> fmt,
+    Args const&... args) {
+    if (not condition) {
+        tt_throw(file, line, assert_type, condition_str, fmt, args...);
     }
 }
 
 }  // namespace tt::assert
 
-// Adding do while around TT_ASSERT to allow flexible usage of the macro. More details can be found in Stack Overflow post:
+// Adding do while around TT_ASSERT to allow flexible usage of the macro. More details can be found in Stack Overflow
+// post:
 // https://stackoverflow.com/questions/55933541/else-without-previous-if-error-when-defining-macro-with-arguments/55933720#55933720
 #ifdef DEBUG
 #ifndef TT_ASSERT
-#define TT_ASSERT(condition, ...) do{ if (not (condition)) tt::assert::tt_assert(__FILE__, __LINE__, "TT_ASSERT", (condition), #condition, ##__VA_ARGS__); } while(0)
+#define TT_ASSERT(condition, ...)                                                                           \
+    do {                                                                                                    \
+        if (not(condition)) [[unlikely]]                                                                    \
+            tt::assert::tt_assert(__FILE__, __LINE__, "TT_ASSERT", (condition), #condition, ##__VA_ARGS__); \
+    } while (0)
 #endif
 #else
 #define TT_ASSERT(condition, ...)
@@ -187,7 +167,7 @@ void tt_assert(char const* file, int line, const std::string& assert_type, bool 
 #ifndef TT_FATAL
 #define TT_FATAL(condition, message, ...)                                                             \
     do {                                                                                              \
-        if (not(condition)) {                                                                         \
+        if (not(condition)) [[unlikely]] {                                                            \
             tt::assert::tt_throw(__FILE__, __LINE__, "TT_FATAL", #condition, message, ##__VA_ARGS__); \
             __builtin_unreachable();                                                                  \
         }                                                                                             \

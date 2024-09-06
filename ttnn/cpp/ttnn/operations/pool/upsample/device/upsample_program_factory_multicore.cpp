@@ -60,7 +60,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
         input_stick_nbytes = input_stick_nbytes / ncores_x;
         output_stick_nbytes = output_stick_nbytes / ncores_x;
     } else {
-        TT_FATAL(false, "Unsupported sharding layout");
+        TT_THROW("Unsupported sharding layout");
     }
 
     uint32_t input_nsticks_per_core = div_up(input_nsticks, ncores_nhw);
@@ -159,7 +159,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
             start_input_stick_id += input_nsticks_per_core;
         }
     } else {
-        TT_FATAL(false, "Unsupported memory layout");
+        TT_THROW("Unsupported memory layout");
     }
 
     auto override_runtime_args_callback = [writer_kernel, cb_src0, out_cb](

@@ -255,7 +255,7 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
 
     [[deprecated("deprecated code path for reduce scatter. Use nerw get_worker_slice API instead")]]
     virtual void increment(uint32_t num_pages) override {
-        TT_FATAL(false, "deprecated code path for ");
+        TT_THROW("deprecated code path for ");
     }
 
    public:

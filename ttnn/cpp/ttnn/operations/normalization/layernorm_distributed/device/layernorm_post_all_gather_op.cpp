@@ -47,7 +47,7 @@ void LayerNormPostAllGather::validate(const std::vector<Tensor> &input_tensors, 
 
     TT_FATAL(gamma_tensor.get_layout() == Layout::ROW_MAJOR, "Error"); // Only support packed RM right now
     if (gamma_tensor.get_layout() == Layout::TILE) {
-        TT_FATAL(a.get_legacy_shape()[-1] == gamma.value().get_legacy_shape()[-1], fmt::format("{} != {}", a.get_legacy_shape()[-1], gamma.value().get_legacy_shape()[-1]));
+        TT_FATAL(a.get_legacy_shape()[-1] == gamma.value().get_legacy_shape()[-1], "{} != {}", a.get_legacy_shape()[-1], gamma.value().get_legacy_shape()[-1]);
         TT_FATAL(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         TT_FATAL(a.device() == gamma.value().device(), "Error");
         TT_FATAL(gamma.value().get_legacy_shape()[-2] == TILE_HEIGHT, "Error");
