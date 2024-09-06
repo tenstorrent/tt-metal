@@ -1,5 +1,6 @@
 #include "binary_l1_interface.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <tuple>
@@ -36,51 +37,19 @@ uint32_t calculate_circular_buffer_l1_allocation_size_per_core(
     const tt::tt_metal::DataType data_type,
     const tt::tt_metal::Layout& layout,
     const tt::tt_metal::MemoryConfig& memory_config,
-    const int max_block_size) {
+    const uint32_t max_block_size) {
     auto total_size_bytes =
         shape.with_tile_padding().volume() * tt::tt_metal::tensor_impl::element_size_bytes(data_type);
     auto page_size = tt::tt_metal::tensor_impl::get_page_size(data_type, layout, total_size_bytes, shape.value);
-    auto num_pages = 2 * max_block_size;  /// default value for interleaved
-    if (memory_config.is_sharded()) {
-        num_pages = memory_config.shard_spec.value().shape[0] * memory_config.shard_spec.value().shape[1] /
-                    tt::constants::TILE_HW;
-    };
+    auto num_pages = memory_config.is_sharded() ? get_num_pages(memory_config.shard_spec.value()) : 2 * max_block_size;
 
     return page_size * num_pages;
 }
 
-int calculate_max_block_size(
-    const EltwiseOpParams& input_a, const EltwiseOpParams& input_b, const EltwiseOpParams& output) {
-    const auto input_a_memory_config = std::get<tt::tt_metal::MemoryConfig>(input_a);
-    const auto input_b_memory_config = std::get<tt::tt_metal::MemoryConfig>(input_b);
-    const auto output_memory_config = std::get<tt::tt_metal::MemoryConfig>(output);
+uint32_t calculate_repeat_circular_buffer_size(tt::tt_metal::DataType data_type) {
+    const auto repeat_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(data_type);
 
-    const bool is_shared =
-        input_a_memory_config.is_sharded() || input_b_memory_config.is_sharded() || output_memory_config.is_sharded();
-
-    if (!is_shared) {
-        return 1;
-    }
-
-    std::optional<ShardSpec> shard_spec = std::nullopt;
-    if (input_a_memory_config.is_sharded()) {
-        shard_spec = input_a_memory_config.shard_spec;
-    } else if (input_b_memory_config.is_sharded()) {
-        shard_spec = input_b_memory_config.shard_spec;
-    } else if (output_memory_config.is_sharded()) {
-        shard_spec = output_memory_config.shard_spec;
-    }
-
-    int num_tiles_per_shard = shard_spec.value().shape[0] * shard_spec.value().shape[1] / tt::constants::TILE_HW;
-    int max_block_size = 8;
-    int result = 1;
-    for (int find_divisor = max_block_size; find_divisor >= 1; find_divisor--) {
-        if (num_tiles_per_shard % find_divisor == 0) {
-            result = find_divisor;
-            break;
-        }
-    }
-    return result;
+    return 2 * tt::tt_metal::detail::TileSize(repeat_cb_data_format);
 }
 
 uint32_t calculate_max_block_size(const std::optional<tt::tt_metal::ShardSpec>& shard_spec) {
@@ -196,6 +165,23 @@ std::optional<EltwiseOpParams> EltwiseOpL1Usage::calculate_repeat_buffer_impl(
     return std::make_optional(intermediate);
 }
 
+std::optional<ShardSpec> EltwiseOpL1Usage::get_op_shard_spec() const {
+    const auto memory_config_a = std::get<tt::tt_metal::MemoryConfig>(input_a);
+    const auto memory_config_b = std::get<tt::tt_metal::MemoryConfig>(input_b);
+    const auto memory_config_output = std::get<tt::tt_metal::MemoryConfig>(output);
+
+    std::optional<ShardSpec> op_shard_spec = std::nullopt;
+    if (memory_config_a.is_sharded()) {
+        op_shard_spec = memory_config_a.shard_spec;
+    } else if (memory_config_b.is_sharded()) {
+        op_shard_spec = memory_config_b.shard_spec;
+    } else if (memory_config_output.is_sharded()) {
+        op_shard_spec = memory_config_output.shard_spec;
+    }
+
+    return op_shard_spec;
+}
+
 ElementWiseMultiCoreOpL1Usage::ElementWiseMultiCoreOpL1Usage(
     const EltwiseOpParams& input_a, const EltwiseOpParams& input_b, const EltwiseOpParams& output) :
     EltwiseOpL1Usage(input_a, input_b, output) {}
@@ -204,13 +190,12 @@ std::vector<std::tuple<uint32_t, uint32_t>>
 ElementWiseMultiCoreOpL1Usage::ElementWiseMultiCoreOpL1Usage::get_circular_buffer_l1_allocations_per_core() const {
     std::vector<std::tuple<uint32_t, uint32_t>> sizes;
     if (repeat.has_value()) {
-        const auto repeat_cb_data_format =
-            tt::tt_metal::datatype_to_dataformat_converter(std::get<tt::tt_metal::DataType>(repeat.value()));
         sizes.emplace_back(std::make_tuple(
-            2 * tt::tt_metal::detail::TileSize(repeat_cb_data_format),
+            calculate_repeat_circular_buffer_size(std::get<tt::tt_metal::DataType>(repeat.value())),
             get_num_of_cores(std::get<tt::tt_metal::MemoryConfig>(repeat.value()).shard_spec)));
     }
-    const int max_block_size = calculate_max_block_size(input_a, input_b, output);
+
+    const uint32_t max_block_size = calculate_max_block_size(get_op_shard_spec());
 
     sizes.emplace_back(std::make_tuple(
         calculate_circular_buffer_l1_allocation_size_per_core(input_a, max_block_size),
@@ -222,7 +207,7 @@ ElementWiseMultiCoreOpL1Usage::ElementWiseMultiCoreOpL1Usage::get_circular_buffe
         calculate_circular_buffer_l1_allocation_size_per_core(output, max_block_size),
         get_num_of_cores(std::get<tt::tt_metal::MemoryConfig>(output).shard_spec)));
 
-    return std::move(sizes);
+    return sizes;
 }
 
 std::vector<std::tuple<uint32_t, uint32_t>>
@@ -239,7 +224,7 @@ ElementWiseMultiCoreOpL1Usage::ElementWiseMultiCoreOpL1Usage::get_tensor_l1_allo
         calculate_tensor_l1_allocation_size_per_core(output),
         get_num_of_cores(std::get<tt::tt_metal::MemoryConfig>(output).shard_spec)));
 
-    return std::move(sizes);
+    return sizes;
 }
 
 BroadcastWidthMultiCoreOpL1Usage::BroadcastWidthMultiCoreOpL1Usage(
@@ -251,25 +236,24 @@ BroadcastWidthMultiCoreOpL1Usage::get_circular_buffer_l1_allocations_per_core() 
     std::vector<std::tuple<uint32_t, uint32_t>> sizes;
 
     if (repeat.has_value()) {
-        const auto repeat_cb_data_format =
-            tt::tt_metal::datatype_to_dataformat_converter(std::get<tt::tt_metal::DataType>(repeat.value()));
         sizes.emplace_back(std::make_tuple(
-            2 * tt::tt_metal::detail::TileSize(repeat_cb_data_format),
+            calculate_repeat_circular_buffer_size(std::get<tt::tt_metal::DataType>(repeat.value())),
             get_num_of_cores(std::get<tt::tt_metal::MemoryConfig>(repeat.value()).shard_spec)));
     }
 
+    const uint32_t max_block_size = calculate_max_block_size(get_op_shard_spec());
+
     sizes.emplace_back(std::make_tuple(
-        calculate_circular_buffer_l1_allocation_size_per_core(input_a),
+        calculate_circular_buffer_l1_allocation_size_per_core(input_a, max_block_size),
         get_num_of_cores(std::get<tt::tt_metal::MemoryConfig>(input_a).shard_spec)));
     sizes.emplace_back(std::make_tuple(
-        calculate_circular_buffer_l1_allocation_size_per_core(input_b),
+        calculate_circular_buffer_l1_allocation_size_per_core(input_b, max_block_size),
         get_num_of_cores(std::get<tt::tt_metal::MemoryConfig>(input_b).shard_spec)));
-
     sizes.emplace_back(std::make_tuple(
-        calculate_circular_buffer_l1_allocation_size_per_core(output),
+        calculate_circular_buffer_l1_allocation_size_per_core(output, max_block_size),
         get_num_of_cores(std::get<tt::tt_metal::MemoryConfig>(output).shard_spec)));
 
-    return std::move(sizes);
+    return sizes;
 }
 
 std::vector<std::tuple<uint32_t, uint32_t>> BroadcastWidthMultiCoreOpL1Usage::get_tensor_l1_allocations_per_core()
@@ -286,5 +270,5 @@ std::vector<std::tuple<uint32_t, uint32_t>> BroadcastWidthMultiCoreOpL1Usage::ge
         calculate_tensor_l1_allocation_size_per_core(output),
         get_num_of_cores(std::get<tt::tt_metal::MemoryConfig>(output).shard_spec)));
 
-    return std::move(sizes);
+    return sizes;
 }

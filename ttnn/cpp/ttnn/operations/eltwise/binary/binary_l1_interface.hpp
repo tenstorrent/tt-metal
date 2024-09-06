@@ -4,6 +4,8 @@
 #include <optional>
 #include <tuple>
 #include <vector>
+#include "impl/buffers/buffer.hpp"
+#include "ttnn/tensor/types.hpp"
 
 // forward declarations
 namespace tt {
@@ -30,10 +32,9 @@ uint32_t calculate_circular_buffer_l1_allocation_size_per_core(
     const tt::tt_metal::DataType data_type,
     const tt::tt_metal::Layout& layout,
     const tt::tt_metal::MemoryConfig& memory_config,
-    const int max_block_size = 1);
+    const uint32_t max_block_size);
 
-inline uint32_t calculate_circular_buffer_l1_allocation_size_per_core(
-    const EltwiseOpParams& input, int max_block_size = 1) {
+inline uint32_t calculate_circular_buffer_l1_allocation_size_per_core(EltwiseOpParams input, uint32_t max_block_size) {
     return calculate_circular_buffer_l1_allocation_size_per_core(
         std::get<ttnn::types::Shape>(input),
         std::get<tt::tt_metal::DataType>(input),
