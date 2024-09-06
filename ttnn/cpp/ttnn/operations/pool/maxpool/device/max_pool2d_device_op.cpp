@@ -61,9 +61,9 @@ MaxPoolNew::shape_return_value_t MaxPoolNew::compute_output_shapes(const operati
     uint32_t out_c = input_shape[3];
     uint32_t out_c_padded = ceil_multiple_of(out_c, (out_c <= 16) ? 16 : tt::constants::TILE_WIDTH);
     uint32_t out_pagesize = out_c_padded * datum_size(datatype_to_dataformat_converter(input.get_dtype()));
-    uint32_t out_nhw = sliding_window_config.batch_size_ * out_h * out_w;
+    uint32_t out_nhw = sliding_window_config.batch_size * out_h * out_w;
 
-    uint32_t out_nhw_padded = tt::round_up(out_nhw, (is_out_tiled ? tt::constants::TILE_HEIGHT : 1) * sliding_window_config.num_cores_nhw_);
+    uint32_t out_nhw_padded = tt::round_up(out_nhw, (is_out_tiled ? tt::constants::TILE_HEIGHT : 1) * sliding_window_config.num_cores_nhw);
 
     // {1, 1, N * H * W, C}
     const auto out_dims = std::vector<uint32_t>({1, 1, out_nhw_padded, out_c_padded});
@@ -86,11 +86,11 @@ MaxPoolNew::tensor_return_value_t MaxPoolNew::create_output_tensors(const operat
         mem_config.shard_spec->shape[1] = output_shape[3];
     } else {
         uint32_t ncores = input.shard_spec().value().num_cores();
-        TT_FATAL(ncores == sliding_window_config.num_cores_nhw_, "Number of cores should match");
+        TT_FATAL(ncores == sliding_window_config.num_cores_nhw, "Number of cores should match");
         uint32_t nbatch = output_shape[0];
         uint32_t out_nhw_padded = output_shape[0] * output_shape[1] * output_shape[2];
         uint32_t out_nhw_per_core = out_nhw_padded / ncores;
-        CoreRangeSet shard_grid = sliding_window_config.core_range_set_;
+        CoreRangeSet shard_grid = sliding_window_config.core_range_set;
         std::array<uint32_t, 2> shard_shape = {out_nhw_per_core, input.get_legacy_shape()[-1]};
         mem_config.shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR, false};
     }
@@ -109,18 +109,18 @@ operation::OpPerformanceModel MaxPoolNew::create_op_performance_model(const oper
     const auto& input = inputs.input_tensor_;
     const auto& input_shape = input.get_shape();
     auto sliding_window_config = op_attr.sliding_window_config_;
-    uint32_t batch_size = sliding_window_config.batch_size_;
-    uint32_t activation_h = sliding_window_config.input_hw_.first;
-    uint32_t activation_w = sliding_window_config.input_hw_.second;
+    uint32_t batch_size = sliding_window_config.batch_size;
+    uint32_t activation_h = sliding_window_config.input_hw.first;
+    uint32_t activation_w = sliding_window_config.input_hw.second;
     uint32_t activation_c = input_shape[3];
     uint32_t output_channels = input_shape[3];
 
-    uint32_t filter_h = sliding_window_config.window_hw_.first;
-    uint32_t filter_w = sliding_window_config.window_hw_.second;
-    uint32_t stride_h = sliding_window_config.stride_hw_.first;
-    uint32_t stride_w = sliding_window_config.stride_hw_.second;
-    uint32_t pad_h = sliding_window_config.pad_hw_.first;
-    uint32_t pad_w = sliding_window_config.pad_hw_.second;
+    uint32_t filter_h = sliding_window_config.window_hw.first;
+    uint32_t filter_w = sliding_window_config.window_hw.second;
+    uint32_t stride_h = sliding_window_config.stride_hw.first;
+    uint32_t stride_w = sliding_window_config.stride_hw.second;
+    uint32_t pad_h = sliding_window_config.pad_hw.first;
+    uint32_t pad_w = sliding_window_config.pad_hw.second;
 
     // GS specific parameters
     int num_cores = 9 * 12;

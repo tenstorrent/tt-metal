@@ -43,8 +43,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     const Shape& ashape,
     std::optional<const Tensor> bias,
     const std::optional<const Tensor> conv_reader_indices,
-    vector<int> conv_params,
+    sliding_window::SlidingWindowConfig sliding_window_config,
     uint32_t output_channels,
+    uint32_t groups,
     bool untilize_out,
     bool has_bias,
     bool fuse_relu,
@@ -339,8 +340,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     const Shape& ashape,
     std::optional<const Tensor> bias,
     const std::optional<const Tensor> conv_reader_indices,
-    vector<int> conv_params,
+    sliding_window::SlidingWindowConfig sliding_window_config,
     uint32_t output_channels,
+    uint32_t groups,
     bool untilize_out,
     bool has_bias,
     bool fuse_relu,
@@ -518,17 +520,17 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t conv_act_size_h = ashape_with_channels_padded[1];
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];
     uint32_t conv_act_size_c = ashape_with_channels_padded[3];
-    uint32_t weight_size_h = (uint32_t)conv_params[0];  // filter_h
-    uint32_t weight_size_w = (uint32_t)conv_params[1];  // filter_W
-    uint32_t stride_h = (uint32_t)conv_params[2];
-    uint32_t stride_w = (uint32_t)conv_params[3];
-    uint32_t pad_h = (uint32_t)conv_params[4];
-    uint32_t pad_w = (uint32_t)conv_params[5];
+    uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;  // filter_h
+    uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
+    uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw.first;
+    uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
+    uint32_t pad_h = (uint32_t)sliding_window_config.pad_hw.first;
+    uint32_t pad_w = (uint32_t)sliding_window_config.pad_hw.second;
 
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] =
         optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(
-            ashape_with_channels_padded.value, conv_params, out_block_h_ntiles, extra_padding_for_32B_alignment);
+            ashape_with_channels_padded.value, sliding_window_config, out_block_h_ntiles, extra_padding_for_32B_alignment);
     assert(act_matrix_shape.size() == 3);
     assert(act_matrix_shape[0] == 1);
     uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
@@ -540,9 +542,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     uint32_t input_width = ashape[2];
     uint32_t input_channels = ashape[3];
-    uint32_t kernel_width = conv_params[1];
-    uint32_t groups = conv_params[6];
-    bool is_conv1d = kernel_width == 1 && input_width == 1;
+    bool is_conv1d = filter_w == 1 && input_width == 1;
     bool is_depthwise_conv = groups == input_channels && groups == output_channels;
 
     if (has_bias) {
@@ -617,7 +617,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     log_debug(LogOp, "act_block_num_tiles_split_last: {}", act_block_num_tiles_split_last);
 
     TT_FATAL(
-        (act_block_w_datums == round_up(conv_act_size_c * weight_size_w, TILE_WIDTH)) ||
+        (act_block_w_datums == round_up(conv_act_size_c * filter_w, TILE_WIDTH)) ||
         ((act_block_w_datums <= conv_act_size_c) && (conv_act_size_c % act_block_w_datums == 0)));
 
     // weight block info
@@ -687,8 +687,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     auto [conv_output_size_h, conv_output_size_w] = optimized_conv_op_utils::compute_opt_conv_output_face_shape(
         conv_act_size_h,
         conv_act_size_w,
-        weight_size_h,
-        weight_size_w,
+        filter_h,
+        filter_w,
         stride_h,
         stride_w,
         pad_h,
@@ -785,12 +785,12 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t window_outer;
     uint32_t window_inner;
 
-    if (weight_width_sliced and weight_size_w == 3) {
+    if (weight_width_sliced and filter_w == 3) {
         window_outer = 1;  // window_outer = 1 becasue all of filter window is processed in the inner loop
         window_inner = 3;  // window_inner = 9 / 3, ie. read 3 width coalesced
     } else {
         window_outer = num_blocks_act_w;                                  // window_outer
-        window_inner = weight_size_h * weight_size_w / num_blocks_act_w;  // window_inner
+        window_inner = filter_h * filter_w / num_blocks_act_w;  // window_inner
     }
 
     reader_defines["WINDOW_INNER"] = std::to_string(window_inner);
@@ -941,14 +941,14 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t num_act_cb_tiles = act_block_h_ntiles * act_block_w_ntiles / conv_act_c_blocks;
     uint32_t num_act_cb_second_reader_tiles = 0;
     // TODO: This flag should be set in kernel logic but need this for create_CB
-    if (a.memory_config().is_sharded() and ((weight_size_h == 3 and weight_size_w == 3 and
-        (stride_h == 1 or stride_h == 2)) or (weight_size_h == 1 and weight_size_w == 1 and stride_h == 2)) and weight_width_sliced) {
+    if (a.memory_config().is_sharded() and ((filter_h == 3 and filter_w == 3 and
+        (stride_h == 1 or stride_h == 2)) or (filter_h == 1 and filter_w == 1 and stride_h == 2)) and weight_width_sliced) {
         // If conv_act_c_blocks > 1 and we have 2D conv with sharded input, we always read entire 3x3 window before
         // pushing in reader/writer
         // TODO: Generalize this to not make this assumption
         read_window_in_inner_loop = true;
-        num_weight_cb_tiles *= weight_size_h * weight_size_w;
-        num_act_cb_tiles *= weight_size_h * weight_size_w;
+        num_weight_cb_tiles *= filter_h * filter_w;
+        num_act_cb_tiles *= filter_h * filter_w;
     } else if (num_blocks_act_h_per_core > 1) {
         fully_buffer_weights = true;
     }
@@ -992,7 +992,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / conv_act_c_blocks;
     uint32_t act_block_w_extra_align_bytes =
-        (round_up(conv_act_size_c * weight_size_w, TILE_WIDTH) - (conv_act_size_c * weight_size_w)) * a.element_size();
+        (round_up(conv_act_size_c * filter_w, TILE_WIDTH) - (conv_act_size_c * filter_w)) * a.element_size();
 
     uint32_t in0_block_w = act_block_w_ntiles / conv_act_c_blocks;
     uint32_t in0_block_num_tiles = act_block_num_tiles / conv_act_c_blocks;
@@ -1075,7 +1075,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
     // Input should always be sharded in this conv; always use reader kernel for input shard with halo and padding
-    if (weight_size_h >= 1 and weight_size_w >= 1) {
+    if (filter_h >= 1 and filter_w >= 1) {
         if (!is_conv1d and weight_width_sliced) {
             // 2D conv
             assert(read_window_in_inner_loop == true);
@@ -1109,7 +1109,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         }
         else if (is_conv1d and is_depthwise_conv) {
             // 1D Depthwise Conv
-            TT_FATAL(act_block_w_datums == round_up(conv_act_size_c * weight_size_w, TILE_WIDTH));
+            TT_FATAL(act_block_w_datums == round_up(conv_act_size_c * filter_w, TILE_WIDTH));
             TT_FATAL(split_reader == false, "Split reader not supported for this conv yet!");
 
             compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/compute_depthwise_conv1d.cpp";
@@ -1122,7 +1122,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
         } else {
             // 1D conv
-            TT_FATAL(act_block_w_datums == round_up(conv_act_size_c * weight_size_w, TILE_WIDTH));
+            TT_FATAL(act_block_w_datums == round_up(conv_act_size_c * filter_w, TILE_WIDTH));
 
             reader_kernel =
                 "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_padded_with_halo_3x3_weights_v2.cpp";
@@ -1162,7 +1162,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     }
 
     if (read_window_in_inner_loop) {
-        const uint32_t window_size = weight_size_h * weight_size_w;
+        const uint32_t window_size = filter_h * filter_w;
         in0_block_w *= window_size;
         in0_block_num_tiles *= window_size;
         in0_subblock_num_tiles *= window_size;
@@ -1183,10 +1183,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         (uint32_t)window_inner,
         (uint32_t)reader_arg_act_block_h_datums,
         (uint32_t)(split_reader ? act_block_num_tiles_split / conv_act_c_blocks : act_block_num_tiles / conv_act_c_blocks),
-        (uint32_t)weight_size_w,
+        (uint32_t)filter_w,
         (uint32_t)conv_act_size_w + (2 * pad_w),
         (uint32_t)act_block_w_extra_align_bytes,  // only used for 1d systolic variant
-        (uint32_t)weight_size_h,
+        (uint32_t)filter_h,
         (uint32_t)num_blocks_act_h_per_core,                              // act_num_blocks_h
         (uint32_t)in0_block_num_tiles,                                    // act_block_num_tiles
         (uint32_t)conv_act_c_blocks,                                      // act_w_num_outer
@@ -1279,7 +1279,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             // (uint32_t)act_block_num_tiles / conv_act_c_blocks,
             (uint32_t)act_block_num_tiles_split_last / conv_act_c_blocks,
             (uint32_t)conv_act_c_read_bytes,
-            (uint32_t)weight_size_w * conv_act_c_read_bytes,                  // coalesced_read_bytes
+            (uint32_t)filter_w * conv_act_c_read_bytes,                  // coalesced_read_bytes
             (uint32_t)(conv_act_size_w + 2 * pad_w) * conv_act_c_read_bytes,  // window_outer_offset
             (uint32_t)act_block_w_extra_align_bytes,                          // only used for 1d systolic variant
             (uint32_t)act_block_h_datums_split,                          // only used for 1d systolic variant
@@ -1680,8 +1680,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(
     const Shape& ashape,
     std::optional<const Tensor> bias,
     const std::optional<const Tensor> conv_reader_indices,
-    vector<int> conv_params,
+    sliding_window::SlidingWindowConfig sliding_window_config,
     uint32_t output_channels,
+    uint32_t groups,
     bool untilize_out,
     bool has_bias,
     bool fuse_relu,
@@ -1704,8 +1705,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(
         ashape,
         bias,
         conv_reader_indices,
-        conv_params,
+        sliding_window_config,
         output_channels,
+        groups,
         untilize_out,
         has_bias,
         fuse_relu,
@@ -1727,8 +1729,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(
         ashape,
         bias,
         conv_reader_indices,
-        conv_params,
+        sliding_window_config,
         output_channels,
+        groups,
         untilize_out,
         has_bias,
         fuse_relu,
@@ -1748,8 +1751,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
     const Tensor& a,
     const Tensor& b,
     std::optional<const Tensor> bias,
-    vector<int> conv_params,
+    sliding_window::SlidingWindowConfig sliding_window_config,
     uint32_t output_channels,
+    uint32_t groups,
     bool untilize_out,
     bool fuse_relu,
     MathFidelity math_fidelity,
@@ -1765,33 +1769,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
     bool enable_split_reader,
     bool enable_subblock_padding) {
     tt_metal::Program program = tt_metal::CreateProgram();
-    // TODO: conv params need to be cleaned up and replaced with sliding window config
+
     ttnn::operations::sliding_window::ParallelConfig parallel_config;
     parallel_config.grid = a.shard_spec().value().grid;
     parallel_config.shard_scheme = a.memory_config().memory_layout;
     parallel_config.shard_orientation = a.shard_spec().value().orientation;
-    // TODO: pass sliding window config to the function instead of conv params
-    uint32_t weight_size_h = (uint32_t)conv_params[0];  // filter_h
-    uint32_t weight_size_w = (uint32_t)conv_params[1];  // filter_W
-    uint32_t stride_h = (uint32_t)conv_params[2];
-    uint32_t stride_w = (uint32_t)conv_params[3];
-    uint32_t pad_h = (uint32_t)conv_params[4];
-    uint32_t pad_w = (uint32_t)conv_params[5];
-    auto sliding_window_config = ttnn::operations::sliding_window::SlidingWindowConfig(
-        input_tensor_shape[0],
-        input_tensor_shape[1],
-        input_tensor_shape[2],
-        weight_size_h,
-        weight_size_w,
-        stride_h,
-        stride_w,
-        pad_h,
-        pad_w,
-        1,
-        1,
-        parallelization_config.num_cores_nhw,
-        parallel_config.grid,
-        true);
 
     // create conv config tensors
     auto pad_metadata = ttnn::operations::sliding_window::generate_pad_metadata(sliding_window_config);
@@ -1803,22 +1785,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
     DataType indices_tt_dtype = DataType::UINT16;
     // For 2d convs, each core in a column or row share the same specs
     CoreCoord grid_size = parallel_config.grid.bounding_box().grid_size();
-    // if(parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
-    //     uint32_t num_shards_nhw = conv_sharded_input_top_left_indices.size();
-    //     TT_FATAL(sliding_window_config.num_cores_nhw_ == num_shards_nhw);
-    //     uint32_t num_shards_channels = 0;
-    //     if(parallel_config.shard_orientation == ShardOrientation::COL_MAJOR) {
-    //         num_shards_channels = grid_size.y;
-    //     } else {
-    //         num_shards_channels = grid_size.x;
-    //     }
-    //     // replicate across channel shards
-    //     for (uint32_t j = 1; j < num_shards_channels; j++) {
-    //         for (uint32_t i = 0; i < num_shards_nhw; i++) {
-    //             conv_sharded_input_top_left_indices.push_back(conv_sharded_input_top_left_indices[i]);
-    //         }
-    //     }
-    // }
+
     bool is_block_sharded = a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
     auto conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
         conv_sharded_input_top_left_indices, sliding_window_config, parallel_config);
@@ -1835,8 +1802,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
         Shape(input_tensor_shape),
         bias,
         conv_reader_indices_tensor,
-        conv_params,
+        sliding_window_config,
         output_channels,
+        groups,
         untilize_out,
         bias.has_value(),
         fuse_relu,
@@ -1858,8 +1826,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
         Shape(input_tensor_shape),
         bias,
         conv_reader_indices_tensor,
-        conv_params,
+        sliding_window_config,
         output_channels,
+        groups,
         untilize_out,
         bias.has_value(),
         fuse_relu,

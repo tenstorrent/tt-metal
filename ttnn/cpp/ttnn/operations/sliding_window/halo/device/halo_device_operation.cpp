@@ -31,7 +31,7 @@ std::vector<tt::tt_metal::Shape> HaloDeviceOperation::compute_output_shapes(cons
     tt::tt_metal::Shape output_shape = input_shape;
 
     uint32_t nbatch = input_shape[0];
-    uint32_t total_nsticks = config_.num_cores_nhw_ * max_out_nsticks_per_core_;
+    uint32_t total_nsticks = config_.num_cores_nhw * max_out_nsticks_per_core_;
 
     // output_shape[0] remains same
     // output_shape[1] remains same
@@ -41,7 +41,7 @@ std::vector<tt::tt_metal::Shape> HaloDeviceOperation::compute_output_shapes(cons
 
     log_debug(tt::LogOp, "output_shape: [{} {} {} {}]", output_shape[0], output_shape[1], output_shape[2], output_shape[3]);
     log_debug(tt::LogOp, "max_out_nsticks_per_core: {}", max_out_nsticks_per_core_);
-    log_debug(tt::LogOp, "num_cores_nhw: {}", config_.num_cores_nhw_);
+    log_debug(tt::LogOp, "num_cores_nhw: {}", config_.num_cores_nhw);
 
     return {output_shape};
 }
@@ -62,7 +62,7 @@ std::vector<Tensor> HaloDeviceOperation::create_output_tensors(const std::vector
     }
 
     auto out_mem_config = output_memory_config_;
-    out_mem_config.shard_spec->shape[0] = tt::div_up(output_shape[0] * output_shape[2], config_.num_cores_nhw_);
+    out_mem_config.shard_spec->shape[0] = tt::div_up(output_shape[0] * output_shape[2], config_.num_cores_nhw);
     out_mem_config.shard_spec->shape[1] = input_tensor.memory_config().shard_spec->shape[1];
     out_mem_config.shard_spec->halo = true;
     return {create_device_tensor(output_shape, output_dtype, Layout::ROW_MAJOR, input_tensor.device(), out_mem_config)};
@@ -105,7 +105,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(const std::v
         program,
         input_tensor,
         pad_val_,
-        config_.num_cores_nhw_,
+        config_.num_cores_nhw,
         max_out_nsticks_per_core_,
         pad_config_device_tensor,
         local_config_device_tensor,
