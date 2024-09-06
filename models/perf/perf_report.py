@@ -564,7 +564,7 @@ def filter_by_id_range(rows, id_range):
         return filtered_rows
     return rows
 
-def main(csv_file, signpost, ignore_signposts, min_percentage, id_range):
+def main(csv_file, signpost, ignore_signposts, min_percentage, id_range, csv_output):
     df = pd.read_csv(csv_file)
     
     # Add a column for original row numbers
@@ -611,11 +611,17 @@ def main(csv_file, signpost, ignore_signposts, min_percentage, id_range):
 
     rows = [color_row(op_data, op_data['Total %'].raw_value, min_percentage) for op_data in rows]
 
-    headers = ["ID", "Total %", "Bound", "OP Code", "Device Time", "Dispatch Time", "Cores", "DRAM", "DRAM %", "FLOPs", "FLOPs %", "Math Fidelity"]
-    col_widths = [max(max(visible_length(str(row[header])) for row in rows), visible_length(header)) for header in headers]
-
-    print_performance_table(rows, headers, col_widths, device_ops, host_ops)
-    print_advice_section(rows, headers, col_widths)
+    visible_headers = ["ID", "Total %", "Bound", "OP Code", "Device Time", "Dispatch Time", "Cores", "DRAM", "DRAM %", "FLOPs", "FLOPs %", "Math Fidelity"]
+    
+    if csv_output:
+        all_headers = visible_headers + ["Output Datatype", "Input 0 Datatype", "Input 1 Datatype", "DRAM Sharded", "Input 0 Memory", "Inner Dim Block Size", "Output Subblock H", "Output Subblock W"]
+        print(",".join(all_headers))
+        for op_data in rows:
+            print(",".join(str(op_data[header].raw_value) for header in all_headers))
+    else:
+        col_widths = [max(max(visible_length(str(row[header])) for row in rows), visible_length(header)) for header in visible_headers]
+        print_performance_table(rows, visible_headers, col_widths, device_ops, host_ops)
+        print_advice_section(rows, visible_headers, col_widths)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="User-friendly Performance Report Analysis Tool")
@@ -626,6 +632,7 @@ if __name__ == "__main__":
     parser.add_argument("--id-range", type=str, help="Show only rows with IDs in the specified range (e.g., '5-10', '31-', or '-12')")
     parser.add_argument("--color", action="store_true", help="Force colored output even when output is redirected")
     parser.add_argument("--no-color", action="store_true", help="Force output without color")
+    parser.add_argument("--csv", action="store_true", help="Output in CSV format")
     args = parser.parse_args()
 
     # Set the global color_output variable
@@ -638,4 +645,4 @@ if __name__ == "__main__":
         print(colored("Invalid --id-range format. Please use 'START-END', 'START-', or '-END'.", "red"))
         exit(1)
 
-    main(args.csv_file, args.signpost, args.ignore_signposts, args.min_percentage, id_range)
+    main(args.csv_file, args.signpost, args.ignore_signposts, args.min_percentage, id_range, args.csv)
