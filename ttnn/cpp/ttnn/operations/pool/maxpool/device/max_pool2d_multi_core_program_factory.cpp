@@ -63,6 +63,10 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     uint32_t in_ntiles_hw = (uint32_t)std::ceil((float)kernel_size_hw_padded / tt::constants::TILE_HEIGHT);
     uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / tt::constants::TILE_WIDTH);
     uint32_t out_ntiles_c = (uint32_t)std::ceil((float)output_shape[3] / tt::constants::TILE_WIDTH);
+    uint32_t MAX_SMALL_KERNEL_SIZE_HW = 16;
+    // Hardware can do reduction of 8 tiles at a time.
+    // CB sizes can be restricted to this in case input channels are more than 256 to perform reduction iteratively.
+    uint32_t MAX_TILES_PER_REDUCTION = 8;
 
     TT_ASSERT(nblocks == 1, "Multiple blocks not yet supported");
 
@@ -137,9 +141,10 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
             .set_globally_allocated_address(*reader_indices_buffer);
     auto in_reader_indices_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, in_reader_indices_cb_config);
 
-    auto in_cb_sz = (input_shape[3] * kernel_size_hw_padded) > (conv_op_utils::constants::TILE_HW * 8)
-                        ? (conv_op_utils::constants::TILE_HW * 8)
-                        : input_shape[3] * kernel_size_hw_padded;
+    auto in_cb_sz =
+        (input_shape[3] * kernel_size_hw_padded) > (conv_op_utils::constants::TILE_HW * MAX_TILES_PER_REDUCTION)
+            ? (conv_op_utils::constants::TILE_HW * MAX_TILES_PER_REDUCTION)
+            : input_shape[3] * kernel_size_hw_padded;
     // reader output == input to tilize
     uint32_t in_cb_id_0 = tt::CB::c_in0;  // input rows for "multiple (out_nelems)" output pixels
     uint32_t in_cb_id_1 = tt::CB::c_in1;  // input rows for "multiple (out_nelems)" output pixels
@@ -171,20 +176,22 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     auto in_tiled_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, in_tiled_cb_config);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_tiled_cb_id, in_tiled_cb_pagesize, in_tiled_cb_npages);
 
-    uint32_t max_pool_partials_cb_id = tt::CB::c_intermed1;  // max_pool partials
-    uint32_t max_pool_partials_cb_pagesize = in_cb_sz;
-    uint32_t max_pool_partials_cb_npages = nblocks;
-    CircularBufferConfig max_pool_partials_cb_config =
-        CircularBufferConfig(
-            max_pool_partials_cb_npages * max_pool_partials_cb_pagesize, {{max_pool_partials_cb_id, in_df}})
-            .set_page_size(max_pool_partials_cb_id, max_pool_partials_cb_pagesize);
-    auto max_pool_partials_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, max_pool_partials_cb_config);
-    log_debug(
-        tt::LogOp,
-        "CB {} :: PS = {}, NP = {}",
-        max_pool_partials_cb_id,
-        max_pool_partials_cb_pagesize,
-        max_pool_partials_cb_npages);
+    if (kernel_size_hw > MAX_SMALL_KERNEL_SIZE_HW) {
+        uint32_t max_pool_partials_cb_id = tt::CB::c_intermed1;  // max_pool partials
+        uint32_t max_pool_partials_cb_pagesize = in_cb_sz;
+        uint32_t max_pool_partials_cb_npages = nblocks;
+        CircularBufferConfig max_pool_partials_cb_config =
+            CircularBufferConfig(
+                max_pool_partials_cb_npages * max_pool_partials_cb_pagesize, {{max_pool_partials_cb_id, in_df}})
+                .set_page_size(max_pool_partials_cb_id, max_pool_partials_cb_pagesize);
+        auto max_pool_partials_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, max_pool_partials_cb_config);
+        log_debug(
+            tt::LogOp,
+            "CB {} :: PS = {}, NP = {}",
+            max_pool_partials_cb_id,
+            max_pool_partials_cb_pagesize,
+            max_pool_partials_cb_npages);
+    }
 
     // output of reduce == writer to write
     uint32_t out_cb_id = tt::CB::c_out0;  // output rows in RM
@@ -282,7 +289,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         bf16_one_u32};
 
     std::string reader_kernel_fname;
-    if(kernel_size_hw > 16)
+    if(kernel_size_hw > MAX_SMALL_KERNEL_SIZE_HW)
         reader_kernel_fname =
             "ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/dataflow/reader_max_pool_2d_multi_core_sharded_with_halo_large_kernel_v2.cpp";
     else
@@ -330,7 +337,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         .compile_args = compute_ct_args,
         .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
     std::string compute_kernel_fname;
-    if(kernel_size_hw > 16)
+    if(kernel_size_hw > MAX_SMALL_KERNEL_SIZE_HW)
         compute_kernel_fname = "ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/compute/max_pool_multi_core_large_kernel.cpp";
     else
         compute_kernel_fname = "ttnn/cpp/ttnn/operations/pool/maxpool/device/kernels/compute/max_pool_multi_core.cpp";
