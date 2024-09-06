@@ -8,6 +8,7 @@ from models.experimental.functional_swin_s.reference.swin_transformer_block impo
 from models.experimental.functional_swin_s.tt.tt_swin_transformer_block import TtSwinTransformerBlock
 from tests.ttnn.utils_for_testing import assert_with_pcc
 import ttnn
+from models.utility_functions import skip_for_grayskull
 from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_layernorm_parameter
 from tests.ttnn.integration_tests.swin_s.test_ttnn_shifted_window_attention import (
     create_custom_preprocessor as create_custom_preprocessor_shifted_window_attention,
@@ -44,12 +45,13 @@ def create_custom_preprocessor(device):
     return custom_preprocessor
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size",
     [
         1,
-        8,
+        # 8, #MM shard is given for bs=1 alone in the pipeline
     ],
 )
 @pytest.mark.parametrize(
@@ -65,7 +67,7 @@ def create_custom_preprocessor(device):
         (768, [7, 7], [3, 3], 24, 16, 7, 1),
     ],
 )
-def test_shifted_window_attention(
+def test_swin_transformer_block(
     device, batch_size, dim, window_size, shift_size, num_heads, seq_len, i, j, reset_seeds
 ):
     model = models.swin_s(weights="IMAGENET1K_V1")

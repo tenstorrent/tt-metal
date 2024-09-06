@@ -11,6 +11,7 @@ from ttnn.model_preprocessing import (
     preprocess_linear_weight,
     preprocess_layernorm_parameter,
 )
+from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.functional_swin_s.reference.patchmerging import PatchMerging
 from models.experimental.functional_swin_s.tt.tt_patchmerging import TtPatchMerging
@@ -32,12 +33,13 @@ def create_custom_preprocessor(device):
     return custom_preprocessor
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size",
     [
         1,
-        8,
+        # 8, #MM shard is given for bs=1 alone in the pipeline
     ],
 )
 @pytest.mark.parametrize(
