@@ -54,21 +54,29 @@ void fill_diagonal_tile(uint32_t cb_id, uint32_t tile_id, uint32_t partial_val) 
     volatile tt_l1_ptr uint16_t* uint16_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id) + tile_id*tile_bytes);
     volatile tt_l1_ptr uint32_t* uint32_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id*tile_bytes);
 
-    constexpr uint32_t uint16_datums_per_face = 16;
+    constexpr uint32_t uint16_datums_per_face_row = 16;
+    constexpr uint32_t uint32_datums_per_face_row = 8;
+    constexpr uint32_t uint32_datums_per_face = (16 * 16) / 2;
     // Fill diagonal faces with diagonal -inf
     for (uint32_t k = 0; k < 4; k+=3) {
         uint32_t uint16_face_idx = k << 8;
-        for (uint32_t r = 0; r < uint16_datums_per_face; ++r) {
-            for (uint32_t c = r+1; c < uint16_datums_per_face; ++c) {
-                uint16_ptr[uint16_face_idx + r * uint16_datums_per_face + c] = partial_val;
+        uint32_t uint32_face_idx = k << 7;
+        for (uint32_t r = 0; r < uint16_datums_per_face_row; ++r) {
+            const uint32_t col_start = r+1;
+            const uint32_t col_start_uint32 = (col_start + 1) >> 1;
+            if ((col_start) % 2 == 1) {
+                uint16_ptr[uint16_face_idx + r * uint16_datums_per_face_row + col_start] = datum_val;
+            }
+            for (uint32_t c = col_start_uint32; c < uint32_datums_per_face_row; ++c) {
+                uint32_ptr[uint32_face_idx + r * uint32_datums_per_face_row + c] = partial_val;
             }
         }
     }
 
     // Fill face 1 with full -inf
-    uint32_t uint16_face_idx = 1 << 8;
-    for (uint32_t j = 0; j < uint16_datums_per_face*uint16_datums_per_face; j++) {
-        uint16_ptr[uint16_face_idx + j] = partial_val;
+    uint32_t uint32_face_idx = 1 << 7;
+    for (uint32_t j = 0; j < uint32_datums_per_face; j++) {
+        uint32_ptr[uint32_datums_per_face + j] = partial_val;
     }
 }
 
