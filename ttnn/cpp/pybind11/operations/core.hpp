@@ -312,14 +312,6 @@ void py_module(py::module& module) {
             py::arg("device") = nullptr});
 
     module.def(
-        "num_cores_to_core_range_set",
-        &tt::tt_metal::num_cores_to_core_range_set,
-        py::arg("target_num_cores"),
-        py::arg("grid_size"),
-        py::arg("row_wise")= false,
-        R"doc(Returns a CoreRangeSet from number of cores)doc");
-
-    module.def(
         "num_cores_to_corerange_set",
         py::overload_cast<const uint32_t, const CoreCoord, const bool>(&tt::tt_metal::num_cores_to_corerange_set),
         R"doc(Create a CoreRangeSet containing the specified number of cores)doc");
