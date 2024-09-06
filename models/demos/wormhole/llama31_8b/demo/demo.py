@@ -167,6 +167,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
 
         # Run ttnn llama model
         tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
+        tt_out = ttnn.untilize(tt_out, use_multicore=False)  # single core OOMs
         tt_output_torch = (
             ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[: model_args.max_batch_size, :, :]
         )  # [batch, seq, hidden_dim]
