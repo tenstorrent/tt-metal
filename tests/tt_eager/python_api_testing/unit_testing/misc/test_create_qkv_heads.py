@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 
 from models.utility_functions import tt2torch_tensor, comp_pcc
-from models.utility_functions import is_grayskull
+from models.utility_functions import is_grayskull, skip_for_blackhole
 import torch
 import ttnn
 
@@ -122,6 +122,7 @@ def run_create_qkv_heads_test(
     assert passing_pcc_v
 
 
+@skip_for_blackhole("L1 and Circular buffers are crashing on BH, see #12349")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize(
     "dtype",

@@ -11,7 +11,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
-from models.utility_functions import is_wormhole_b0, is_wormhole_b0, is_blackhole
+from models.utility_functions import is_wormhole_b0, is_wormhole_b0, is_blackhole, skip_for_blackhole
 from loguru import logger
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 
@@ -180,6 +180,7 @@ def test_sharded_rm(
     assert passing
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("H, num_cores", [[100352, 98], [25088, 98]])
 @pytest.mark.parametrize("in_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
@@ -255,6 +256,7 @@ def test_sharded_untilize(H, num_cores, in_sharded, out_sharded, dtype, device, 
     assert passing
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("H, num_cores", [[25088, 98]])
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_sharded_tilize(H, num_cores, output_dtype, device, function_level_defaults):
@@ -1066,6 +1068,7 @@ def test_sharded_program_cache(device, use_program_cache, function_level_default
     assert eq
 
 
+@skip_for_blackhole("Hanging on BH, see #12349")
 @pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize("M", [1600])
@@ -1335,6 +1338,7 @@ def test_sharded_matmul_2d_transposed(
     assert passing
 
 
+@skip_for_blackhole("Hanging on BH, see #12349")
 def test_resharded_binary_to_matmul(device, function_level_defaults):
     grid_size_binary = device.compute_with_storage_grid_size()
     num_cores_binary = 98
@@ -1761,6 +1765,7 @@ def test_width_sharded_untilize_with_unpadding(
     assert passing
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("input_shape", [[8, 1, 49, 2048], [1, 1, 8, 2048], [16, 1, 49, 2048], [1, 1, 16, 2048]])
 @pytest.mark.parametrize("sharding_config", [(True, True), (False, False)], ids=["both_sharded", "both_interleaved"])
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -1832,6 +1837,7 @@ def test_sharded_tilize_with_val_padding(input_shape, sharding_config, output_dt
     assert passing
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("N", [8, 16])
 @pytest.mark.parametrize("in_sharded", [True], ids=["in0_sharded"])
 @pytest.mark.parametrize("out_sharded", [True], ids=["out_sharded"])
@@ -1990,6 +1996,7 @@ def test_sharded_matmul_1d_in0(
 
 
 # Have at least one example of 1d matmul with in1 mcasted that runs on WH
+@skip_for_blackhole("Hangs on BH, see #12349")
 def test_sharded_matmul_1d_in1_wormhole(device, function_level_defaults):
     M = 4096
     K = 64

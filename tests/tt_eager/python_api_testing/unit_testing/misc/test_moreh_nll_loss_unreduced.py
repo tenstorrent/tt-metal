@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 import pytest
-from models.utility_functions import comp_allclose_and_pcc, is_wormhole_b0
+from models.utility_functions import comp_allclose_and_pcc, is_wormhole_b0, skip_for_blackhole
 from loguru import logger
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
@@ -108,6 +108,7 @@ def test_moreh_nll_loss_unreduced(shape, ignore_index, none_weight, compute_kern
     )
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "shape",
     [

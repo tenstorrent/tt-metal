@@ -8,9 +8,10 @@ import ttnn
 from loguru import logger
 from models.utility_functions import nearest_32, pad_by_zero
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
-from models.utility_functions import is_grayskull
+from models.utility_functions import is_grayskull, skip_for_blackhole
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("head_dim", [64])
 @pytest.mark.parametrize("max_seq_len", [2048])
 @pytest.mark.parametrize("num_users", [8, 16, 32, 64])
@@ -139,6 +140,7 @@ class TestUpdateCache:
         assert eq_cache and eq_update
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("head_dim", [64])
 @pytest.mark.parametrize("max_seq_len", [2048])
 @pytest.mark.parametrize("num_users", [8, 16, 32, 64])

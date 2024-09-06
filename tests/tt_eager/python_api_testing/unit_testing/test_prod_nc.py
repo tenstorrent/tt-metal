@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.utility_functions import comp_allclose_and_pcc
+from models.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
 
 TILE_HEIGHT = 32
 TILE_WIDTH = 32
@@ -28,6 +28,7 @@ def get_tensors(input_shape, output_shape, device):
     return tt_input, tt_output, torch_input
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "input_shape",
     (

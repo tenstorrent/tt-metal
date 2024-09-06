@@ -17,9 +17,10 @@ from tt_lib.utils import (
 )
 from models.utility_functions import print_diff_argmax, comp_pcc
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
-from models.utility_functions import is_grayskull
+from models.utility_functions import is_grayskull, is_blackhole, skip_for_blackhole
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16, ttnn.float32),
@@ -27,8 +28,8 @@ from models.utility_functions import is_grayskull
 )
 @pytest.mark.parametrize("inplace", [True, False])
 def test_softmax(device, inplace, dtype):
-    if is_grayskull() and dtype == ttnn.float32:
-        pytest.skip("Skipping float32 tests on Grayskull")
+    if (is_grayskull() or is_blackhole()) and dtype == ttnn.float32:
+        pytest.skip("Skipping float32 tests on Grayskull and Blackhole. For Blackhole see #12349")
 
     torch.manual_seed(0)
     sm_op = ttnn.softmax_in_place if inplace else ttnn.softmax
@@ -69,6 +70,7 @@ def test_softmax(device, inplace, dtype):
         assert allclose, f"FAILED: {output}"
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("inplace", [True, False])
 def test_softmax_with_program_cache(device, use_program_cache, inplace):
     torch.manual_seed(0)
@@ -92,6 +94,7 @@ def test_softmax_with_program_cache(device, use_program_cache, inplace):
         assert allclose, f"FAILED: {output}"
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "in_dtype",
     (ttnn.bfloat16, ttnn.bfloat8_b),
@@ -120,6 +123,7 @@ def test_softmax_mix_precision(device, inplace, in_dtype):
         assert allclose, f"FAILED: {output}"
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "seq_len",
     [64, 384],
@@ -226,6 +230,7 @@ def test_scale_mask_softmax_inplace(device, in_dtype, in0_mem_config, causal_mas
         assert allclose, f"FAILED: {output}"
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "in0_mem_config",
     (ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),),

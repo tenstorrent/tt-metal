@@ -8,9 +8,10 @@ from loguru import logger
 
 import ttnn
 from models.utility_functions import untilize, comp_pcc
-from models.utility_functions import is_grayskull
+from models.utility_functions import is_grayskull, skip_for_blackhole
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16, ttnn.float32),

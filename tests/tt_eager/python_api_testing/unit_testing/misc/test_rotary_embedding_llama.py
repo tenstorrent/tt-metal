@@ -11,7 +11,7 @@ from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 
 from models.demos.t3000.llama2_70b.tt.llama_common import precompute_freqs, freqs_to_rotation_matrix, gather_rotary_emb
 
@@ -178,6 +178,7 @@ def run_test_rotary_embedding_llama(
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
+@skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "batch, seq_len",
@@ -253,6 +254,7 @@ def test_rotary_embedding_llama(
     )
 
 
+@skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "batch, seq_len",

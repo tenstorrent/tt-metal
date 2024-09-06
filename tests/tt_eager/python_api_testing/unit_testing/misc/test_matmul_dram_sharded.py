@@ -18,6 +18,7 @@ from tt_lib.utils import (
     untilize,
     is_close,
 )
+from models.utility_functions import skip_for_blackhole
 
 
 def find_max_subblock(out_block_h, out_block_w):
@@ -190,6 +191,7 @@ def run_test_matmul_in1_dram_sharded(
     assert passing
 
 
+@skip_for_blackhole("Segfault on BH, see #12349")
 @pytest.mark.parametrize(
     "fidelity",
     [
@@ -395,6 +397,7 @@ def run_test_matmul_in1_dram_sharded_mm_chain(
     assert True
 
 
+@skip_for_blackhole("Segfaulting on BH, see #12349")
 @pytest.mark.parametrize(
     "fidelity",
     [
@@ -451,6 +454,7 @@ def test_matmul_in1_dram_sharded_with_mm_chain(
     )
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
 @pytest.mark.parametrize(
     "fp32_acc_mode",

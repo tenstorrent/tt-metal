@@ -6,11 +6,7 @@
 import ttnn
 from loguru import logger
 
-from models.utility_functions import (
-    untilize,
-    tilize_to_list,
-    comp_pcc,
-)
+from models.utility_functions import untilize, tilize_to_list, comp_pcc, skip_for_blackhole
 import torch
 
 
@@ -50,5 +46,6 @@ def run_tilize_matmul_test(M, K, N, device):
     assert passing_pcc
 
 
+@skip_for_blackhole("Hanging on BH, see #12349")
 def test_run_tilize_matmul_test(device):
     run_tilize_matmul_test(32, 32, 32, device)

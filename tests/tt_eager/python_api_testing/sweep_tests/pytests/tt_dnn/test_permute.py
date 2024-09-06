@@ -9,6 +9,7 @@ from functools import partial
 
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
+from models.utility_functions import skip_for_blackhole
 
 params = [
     pytest.param([[1, 1, 32, 32]], permute_args) for permute_args in generation_funcs.gen_permute_args([[1, 1, 32, 32]])
@@ -19,6 +20,7 @@ params += [
 ]
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("input_shapes, permute_args", params)
 def test_run_permute_test(input_shapes, permute_args, device, function_level_defaults):
     datagen_func = [

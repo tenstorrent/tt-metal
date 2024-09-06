@@ -17,9 +17,10 @@ from tt_lib.utils import (
 )
 from models.utility_functions import print_diff_argmax, comp_pcc
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
-from models.utility_functions import is_grayskull
+from models.utility_functions import is_grayskull, skip_for_blackhole
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize(
     "in0_mem_config",
@@ -93,6 +94,7 @@ def test_softmax_causal_mask(device, in_dtype, in0_mem_config):
     assert allclose, f"FAILED: {output}"
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize(
     "causal_mask",
@@ -189,6 +191,7 @@ def test_softmax(device, in_dtype, in0_mem_config, causal_mask):
     assert allclose, f"FAILED: {output}"
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize(
     "causal_mask",
@@ -286,6 +289,7 @@ def test_scale_mask_softmax_rm(device, in_dtype, in0_mem_config, causal_mask):
     assert allclose, f"FAILED: {output}"
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize(
     "shard_orient",

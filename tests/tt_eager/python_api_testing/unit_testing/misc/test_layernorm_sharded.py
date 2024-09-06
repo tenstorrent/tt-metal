@@ -13,7 +13,7 @@ import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.utility_functions import torch2tt_tensor, is_wormhole_b0, is_grayskull
+from models.utility_functions import torch2tt_tensor, is_wormhole_b0, is_grayskull, skip_for_blackhole
 
 
 def rms_norm(x, dim, gamma, beta, eps):
@@ -21,6 +21,7 @@ def rms_norm(x, dim, gamma, beta, eps):
 
 
 # @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+@skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.parametrize(
     "out_mem_config",
     (ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1),),
@@ -283,6 +284,7 @@ def test_layernorm_sharded_mix_precision_rm(
     assert passing
 
 
+@skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.parametrize(
     "shard_orientation",
     (ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR),

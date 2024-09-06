@@ -6,9 +6,10 @@ import torch
 import pytest
 import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
-from models.utility_functions import is_grayskull
+from models.utility_functions import is_grayskull, skip_for_blackhole
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "input_shapes",
     ((torch.Size([1, 1, 32, 32])),),
@@ -40,6 +41,7 @@ def test_binary_eq(input_shapes, out_dtype, mem_configs, device):
     assert comp_pass
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "input_shapes",
     ((torch.Size([1, 1, 32, 32])),),

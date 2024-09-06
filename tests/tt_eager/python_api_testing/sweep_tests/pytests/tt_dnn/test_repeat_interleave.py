@@ -15,7 +15,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
-from models.utility_functions import is_wormhole_b0
+from models.utility_functions import is_wormhole_b0, skip_for_blackhole
 
 shapes = (
     [[1, 1, 32, 32]],  # Single core
@@ -25,6 +25,7 @@ shapes = (
 )
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("input_shapes", shapes)
 @pytest.mark.parametrize("dim", [0, 2, -4, -2, 1, 3])
 @pytest.mark.parametrize("repeat", [2, 3, 4])

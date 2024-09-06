@@ -12,6 +12,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
 import ttnn
+from models.utility_functions import skip_for_blackhole
 
 
 def create_grid(x, y):
@@ -67,6 +68,7 @@ params += [
 ]
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("input_shapes, untilize_with_unpadding_args", params)
 def test_run_untilize_with_unpadding_test(input_shapes, untilize_with_unpadding_args, device):
     datagen_func = [

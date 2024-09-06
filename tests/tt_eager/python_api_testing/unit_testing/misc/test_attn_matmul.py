@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 from models.utility_functions import comp_pcc
-from models.utility_functions import is_grayskull
+from models.utility_functions import is_grayskull, skip_for_blackhole
 import ttnn
 
 
@@ -30,6 +30,7 @@ def generate_input_shapes():
     yield [q_len, q_heads, batch_size, K], [batch_size, kv_heads, K, seq_len]
 
 
+@skip_for_blackhole("Hanging on BH, see #12349")
 @pytest.mark.parametrize("in0_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -70,6 +71,7 @@ def test_attn_matmul(num_loops, enable_async, in0_dtype, in1_dtype, out_dtype, d
     device.enable_async(False)
 
 
+@skip_for_blackhole("Hanging on BH, see #12349")
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize(
@@ -115,6 +117,7 @@ def test_attn_matmul_fp32(num_loops, enable_async, in_dtype, device):
     device.enable_async(False)
 
 
+@skip_for_blackhole("Hanging on BH, see #12349")
 @pytest.mark.parametrize("in0_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -153,6 +156,7 @@ def test_attn_matmul_with_program_cache(
     device.enable_async(False)
 
 
+@skip_for_blackhole("Hanging on BH, see #12349")
 @pytest.mark.parametrize(
     "shard_orientation",
     (ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR),
@@ -274,6 +278,7 @@ def test_group_attn_matmul(
     device.enable_async(False)
 
 
+@skip_for_blackhole("Hanging on BH, see #12349")
 @pytest.mark.parametrize("sharded", [False, True])
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -368,6 +373,7 @@ def test_group_attn_matmul_with_program_cache(
     device.enable_async(False)
 
 
+@skip_for_blackhole("Hanging on BH, see #12349")
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize(

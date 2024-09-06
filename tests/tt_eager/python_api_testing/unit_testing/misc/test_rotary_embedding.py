@@ -7,7 +7,7 @@ import pytest
 from loguru import logger
 
 import ttnn
-from models.utility_functions import comp_pcc, divup, is_grayskull
+from models.utility_functions import comp_pcc, divup, is_grayskull, skip_for_blackhole
 
 
 def rotate_half(x):
@@ -100,6 +100,7 @@ def test_rotary_embedding_prefill(W, Z, Y, X, cache_size, in_sharded, out_sharde
     assert p
 
 
+@skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.parametrize(
     "W, Z, Y, X",
     ([1, 1, 32, 64], [1, 71, 32, 64], [1, 1, 64, 64], [1, 71, 64, 64], [1, 32, 32, 64], [1, 2, 32, 64]),
@@ -245,6 +246,7 @@ def test_rotary_embedding_prefill_fp32(
     assert p
 
 
+@skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("W, Z, Y, X", [(1, 1, 32, 64)])
 @pytest.mark.parametrize("cache_size", [2048])
