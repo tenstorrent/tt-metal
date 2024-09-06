@@ -89,27 +89,33 @@ def pad_string(string, length, align='left'):
     return padding + string if align == 'right' else string + padding
 
 def evaluate_fidelity(input_0_datatype, input_1_datatype, output_datatype, math_fidelity):
-    if input_1_datatype in ['BFLOAT16', 'BFLOAT8_B']:
-        if math_fidelity == 'HiFi2':
-            return 'sufficient', "This discards the least-significant bit of the weights"
-        elif math_fidelity == 'HiFi4':
-            return 'sufficient', "HiFi2 may also be is sufficient (it discards the least-significant bit of the weights), try it to improve throughput"
-        else:
-            return 'too_low', "HiFi2 or HiFi4 are recommended for accuracy; if LoFi works then try reducing the weights to BFLOAT4_B too"
-    elif input_0_datatype in ['BFLOAT8_B', 'BFLOAT16'] and input_1_datatype == 'BFLOAT4_B':
-        if math_fidelity == 'LoFi':
-            return 'sufficient', "This discards the 3 LSBs of the activations, if it works try reducing the activations to BFLOAT4_B too"
+    mantissa_bits = { 'BFLOAT16': 7, 'BFLOAT8_B': 7, 'BFLOAT4_B': 3 }
+    in0_bits = mantissa_bits[input_0_datatype] # activations -> srcB (7 bits)
+    in1_bits = mantissa_bits[input_1_datatype] # weights -> srcA (5 bits)
+    out_bits = mantissa_bits[output_datatype]
+    if in1_bits == 7 and out_bits == 7:
+        if math_fidelity == 'HiFi4':
+            return 'too_high', "HiFi2 is sufficient for BF16 multiplication and has 2x the throughput of HiFi4"
         elif math_fidelity == 'HiFi2':
-            return 'sufficient', "LoFi may also be sufficient (it discards the lower 3 bits of the activations), try it to improve throughput"
-        elif math_fidelity == 'HiFi4':
-            return 'too_high', "HiFi2 is sufficient, use it to improve throughput"
+            return 'sufficient', None
+        elif math_fidelity == 'LoFi':
+            return 'too_low', "HiFi2 is recommended for accuracy; LoFi discards the lowest 2 bits of the weights"
         else:
             assert False, f"Unknown math fidelity: {math_fidelity}"
-    elif input_0_datatype == 'BFLOAT4_B' and input_1_datatype == 'BFLOAT4_B':
+    elif in1_bits == 7 and out_bits == 3:
+        if math_fidelity == 'HiFi4':
+            return 'too_high', "HiFi2 is sufficient for BF16 multiplication and has 2x the throughput of HiFi4"
+        elif math_fidelity == 'HiFi2':
+            return 'sufficient', "LoFi might also be sufficient with BFP4 output and has almost 2x the throughput of HiFi2"
+        elif math_fidelity == 'LoFi':
+            return 'too_low', "HiFi2 may give slightly better accuracy for large matmuls with many intermediate accumulations"
+        else:
+            assert False, f"Unknown math fidelity: {math_fidelity}"
+    elif in1_bits == 3:
         if math_fidelity == 'LoFi':
             return 'sufficient', None
         else:
-            return 'too_high', "LoFi is sufficient, use it to improve throughput"
+            return 'too_high', "LoFi is sufficient with BFP4 weights, use it for much higher throughput"
     else:
         return 'unknown', f"Using {math_fidelity} for {input_0_datatype}/{input_1_datatype} inputs and {output_datatype} output"
 
@@ -416,16 +422,13 @@ def print_matmul_advice(rows, headers, col_widths):
             if op_data['Bound'].raw_value == "DRAM":
                 if not op_data['DRAM Sharded'].raw_value:
                     advice.append("- Try a DRAM-sharded program config (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) to improve throughput further")
-                if fidelity_evaluation == 'too_low':
+                if fidelity_evaluation == 'too_low' and op_data['FLOPs %'].raw_value < 40:
                     advice.append(f"- {fidelity_advice}")
-            
             elif op_data['Bound'].raw_value == "FLOP":               
                 if cores < 64:
                     advice.append(f"- Increase grid size (currently using {cores})")
-
-                if fidelity_evaluation != 'unknown':
+                if fidelity_evaluation == 'too_high':
                     advice.append(f"- {fidelity_advice}")
-            
             elif op_data['Bound'].raw_value == "SLOW":
                 input_0_memory = op_data['Input 0 Memory'].raw_value
                 if input_0_memory and 'L1' not in input_0_memory:
