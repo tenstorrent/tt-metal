@@ -30,24 +30,40 @@ ttnn::Tensor ExecuteScaledDotProductAttentionGQADecode::invoke(
     const ttnn::Tensor &input_tensor_k,
     const ttnn::Tensor &input_tensor_v,
     const std::vector<uint32_t> cur_pos,
+    std::optional<bool> transpose_q,
+    std::optional<bool> share_cache,
     std::optional<float> scale,
     const std::optional<MemoryConfig> &memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+
+    // default transpose_q to true and share_cache to false
+    if (!transpose_q.has_value()) {
+        transpose_q = true;
+    }
+    if (!share_cache.has_value()) {
+        share_cache = false;
+    }
+
     auto arch = input_tensor_q.storage_type() == StorageType::DEVICE ? input_tensor_q.device()->arch()
                                                                      : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     // formatting input tensors
-    auto q_shape = input_tensor_q.get_legacy_shape();
-    auto k_shape = input_tensor_k.get_legacy_shape();
+    auto q_shape = input_tensor_q.get_shape();
+    auto k_shape = input_tensor_k.get_shape();
     uint32_t B = k_shape[0];
-    uint32_t NQH = q_shape[1];
+    uint32_t NQH = transpose_q.value() ? q_shape[1] : q_shape[2];
     uint32_t NKH = k_shape[1];
     uint32_t D = k_shape[3];
     uint32_t NG = NQH / NKH;
 
+    // Q (if transpose q): 1, heads, batch, dim -> 1, batch, heads, dim -> 1, batch*k_heads, q_heads/k_heads, dim
+    // K: batch, k_heads, seqlen, dim -> 1, batch*k_heads, seqlen, dim
+
     auto input_tensor_q_gqa =
         ttnn::to_layout(input_tensor_q, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
-    input_tensor_q_gqa = ttnn::transpose(input_tensor_q_gqa, 1, 2);
+    if (transpose_q.value()) {
+        input_tensor_q_gqa = ttnn::transpose(input_tensor_q_gqa, 1, 2);
+    }
     input_tensor_q_gqa = ttnn::reshape(input_tensor_q_gqa, ttnn::Shape{std::array<uint32_t, 4>{1, B * NKH, NG, D}});
     input_tensor_q_gqa =
         ttnn::to_layout(input_tensor_q_gqa, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
@@ -90,6 +106,8 @@ ttnn::Tensor ExecuteScaledDotProductAttentionGQADecode::invoke(
     const ttnn::Tensor &input_tensor_k,
     const ttnn::Tensor &input_tensor_v,
     const std::vector<uint32_t> cur_pos,
+    std::optional<bool> transpose_q,
+    std::optional<bool> share_cache,
     std::optional<float> scale,
     const std::optional<MemoryConfig> &memory_config,
     std::optional<SDPAProgramConfig> program_config,
@@ -100,6 +118,8 @@ ttnn::Tensor ExecuteScaledDotProductAttentionGQADecode::invoke(
         input_tensor_k,
         input_tensor_v,
         cur_pos,
+        transpose_q,
+        share_cache,
         scale,
         memory_config,
         program_config,
