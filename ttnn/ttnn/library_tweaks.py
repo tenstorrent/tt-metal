@@ -19,9 +19,6 @@ def _has_not_found(target_so):
 
 def _setup_so_rpath(site_pkgs_ttnn, so_name, new_rpath):
     directory = site_pkgs_ttnn
-    check_f = directory / f".rpath_checked_{so_name}"
-    if os.path.exists(check_f):
-        return
 
     target_so = None
     for f in os.listdir(directory):
@@ -35,17 +32,14 @@ def _setup_so_rpath(site_pkgs_ttnn, so_name, new_rpath):
 
     if _has_not_found(target_so):
         subprocess.check_call(f"patchelf --set-rpath {new_rpath} {target_so}", shell=True)
-    subprocess.check_call(f"touch {check_f}", shell=True)
 
 
 def _setup_so_rpath_in_build_lib(site_pkgs_ttnn):
     directory = site_pkgs_ttnn / "build/lib"
-    check_f = directory / ".rpath_checked"
     if not os.path.exists(directory):
         logger.trace(f"Directory {directory} does not exists")
         return
-    if os.path.exists(check_f):
-        return
+
     import subprocess
 
     metal_so = directory / "libtt_metal.so"
@@ -53,7 +47,6 @@ def _setup_so_rpath_in_build_lib(site_pkgs_ttnn):
     new_rpath = directory
     if _has_not_found(metal_so):
         subprocess.check_call(f"patchelf --set-rpath {new_rpath} {metal_so}", shell=True)
-    subprocess.check_call(f"touch {check_f}", shell=True)
 
 
 def _setup_env(site_pkgs_ttnn):
