@@ -81,7 +81,7 @@ run_t3000_resnet50_tests() {
 
   echo "LOG_METAL: Running run_t3000_resnet50_tests"
 
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ttnn_resnet/tests/multi_device/test_perf_ttnn_resnet.py -m "model_perf_t3000" ; fail+=$?
+  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/resnet50/tests/test_perf_e2e_resnet50.py -m "model_perf_t3000" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
