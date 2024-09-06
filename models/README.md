@@ -14,3 +14,8 @@ which models work by their platforms.
 - Model writers are responsible for ensuring their demo model tests are always passing. Any failure is treated highest-priority (or P0) failure.
 - Model writers are responsible for advertising which release tag (including release candidates) contains passing tests for their demo models.
 - Model writers are responsible for updating their perf metrics for the demo models at a regular cadence. Currently, the cadence is at least every 2 weeks.
+
+## Adding a new model
+
+- [Adding a model to `experimental`](MODEL_ADD.md)
+- [Graduating `experimental` model to `demo`](MODEL_GRADUATION.md)
