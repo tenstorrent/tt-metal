@@ -13,6 +13,10 @@ on:
           - add
           - ccl.line_all_gather
           - ccl.all_gather_n300
+          - ccl.all_gather_t3k_height_sharded
+          - ccl.all_gather_t3k_width_sharded
+          - ccl.all_gather_t3k_block_sharded
+          - ccl.all_gather_t3k_non_sharded
           - eltwise.unary.relu.relu
           - eltwise.unary.gelu.gelu
           - eltwise.unary.cos.cos
