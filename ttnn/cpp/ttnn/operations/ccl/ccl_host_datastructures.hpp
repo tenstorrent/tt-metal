@@ -258,21 +258,21 @@ class EriscDatamoverBuilder {
 
         bool senders_below_receivers = active_channels.size() == 0 || this->active_channels.front().is_sender;
 
-        // Sender channel args
-        uint32_t sender_channels_offset = senders_below_receivers ? 0 : this->num_receivers;
-        args.push_back(sender_channels_offset);
-        for (auto const& channel : this->active_channels) {
-            if (!channel.is_sender) {
-                continue;
-            }
-            push_back_channel_args(args, channel);
-        }
-
         // Receiver channel args
         uint32_t receiver_channels_offset = senders_below_receivers ? this->num_senders : 0;
         args.push_back(receiver_channels_offset);
         for (auto const& channel : this->active_channels) {
             if (channel.is_sender) {
+                continue;
+            }
+            push_back_channel_args(args, channel);
+        }
+
+        // Sender channel args
+        uint32_t sender_channels_offset = senders_below_receivers ? 0 : this->num_receivers;
+        args.push_back(sender_channels_offset);
+        for (auto const& channel : this->active_channels) {
+            if (!channel.is_sender) {
                 continue;
             }
             push_back_channel_args(args, channel);
