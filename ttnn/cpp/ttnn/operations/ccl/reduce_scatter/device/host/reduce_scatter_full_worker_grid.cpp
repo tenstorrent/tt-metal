@@ -68,8 +68,6 @@ struct ReduceScatterWorkerArgBuilder {
         ttnn::ccl::RingTopology const& topology_config,
         ttnn::ccl::InterleavedTensorWorkerSlice const& worker_input_slice,
         WorkerTransferInfo const& worker_transfer_info,
-        uint32_t worker_idx,
-        uint32_t link,
         uint32_t cb_num_pages_per_packet,
         uint32_t worker_sender_semaphore_id,
         uint32_t worker_receiver_semaphore_id) :
@@ -81,7 +79,9 @@ struct ReduceScatterWorkerArgBuilder {
         cb_num_pages_per_packet(cb_num_pages_per_packet),
         worker_sender_semaphore_id(worker_sender_semaphore_id),
         worker_receiver_semaphore_id(worker_receiver_semaphore_id) {
-#ifndef SEND_MATH_TERMINATE_SIGNAL
+    }
+
+    uint32_t get_total_num_math_pages(uint32_t link, uint32_t worker_idx) const {
         // This algorithm assumes that the worker slices are sized such that they start at the same x offsets for each
         // new row they slice into (as they stride through the tensor)
         std::size_t num_slice_iterations =
@@ -90,11 +90,9 @@ struct ReduceScatterWorkerArgBuilder {
             worker_input_slice.worker_slice_shape.x * worker_input_slice.worker_slice_shape.y;
         std::size_t pages_per_full_chunk = worker_transfer_info.get_num_pages_per_full_chunk(link, worker_idx);
         std::size_t num_filler_pages_per_slice = pages_per_full_chunk - (worker_slice_num_pages % pages_per_full_chunk);
-        this->total_num_math_pages = (worker_input_slice.get_worker_slice_num_pages() + num_filler_pages_per_slice) *
+        uint32_t total_num_math_pages = (worker_input_slice.get_worker_slice_num_pages() + num_filler_pages_per_slice) *
                                      num_slice_iterations * (topology_config.ring_size - 1);
-
-        log_trace(tt::LogOp, "ReduceScatterWorkerArgBuilder: total_num_math_pages: {}", this->total_num_math_pages);
-#endif
+        return total_num_math_pages;
     }
 
     std::vector<uint32_t> generate_reduce_op_kernel_ct_args() const {
@@ -105,6 +103,8 @@ struct ReduceScatterWorkerArgBuilder {
     std::vector<uint32_t> generate_reduce_op_kernel_rt_args(
         uint32_t link, uint32_t worker_index, uint32_t ring_size) const {
         log_trace(tt::LogOp, "generate_reduce_op_kernel_rt_args");
+
+        uint32_t total_num_math_pages = get_total_num_math_pages(link, worker_index);
 
         auto const& args = std::vector<uint32_t>{total_num_math_pages, 1, 0};
 
@@ -155,6 +155,7 @@ struct ReduceScatterWorkerArgBuilder {
                                       : (this->topology_config.ring_index == this->topology_config.ring_size - 1
                                              ? 0
                                              : this->topology_config.ring_index + 1);
+        uint32_t total_num_math_pages = get_total_num_math_pages(link, worker_index);
         auto args = std::vector<uint32_t>{
             static_cast<uint32_t>(local_input_tensor.buffer()->address()),
             static_cast<uint32_t>(this->topology_config.ring_size),  // num_transfers
@@ -184,7 +185,7 @@ struct ReduceScatterWorkerArgBuilder {
             static_cast<uint32_t>(this->worker_input_slice.worker_slice_offset.x),
             static_cast<uint32_t>(this->worker_input_slice.worker_slice_offset.y),
 
-            this->total_num_math_pages};
+            total_num_math_pages};
 
         std::size_t i = 0;
         log_trace(tt::LogOp, "Reduce Scatter Receiver Worker RT Args:");
@@ -256,6 +257,7 @@ struct ReduceScatterWorkerArgBuilder {
         TT_ASSERT(edm_core_semaphore_address > 0);
         TT_ASSERT(edm_core_buffer_address > 0);
         auto const& local_output_tensor = this->op_config.get_output_tensor(0);
+        uint32_t total_num_math_pages = get_total_num_math_pages(link, worker_index);
         auto args = std::vector<uint32_t>{
             static_cast<uint32_t>(local_output_tensor.buffer()->address()),
             static_cast<uint32_t>(edm_core_buffer_address),
@@ -326,7 +328,6 @@ struct ReduceScatterWorkerArgBuilder {
     uint32_t worker_sender_semaphore_id;
     uint32_t worker_receiver_semaphore_id;
 
-    uint32_t total_num_math_pages;
     bool src_is_dram;
     bool dst_is_dram;
 };
@@ -416,9 +417,63 @@ static void add_worker_config_to_edm_builders(
     }
 }
 
-static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
+static std::tuple<KernelHandle, KernelHandle, KernelHandle> build_reduce_scatter_worker_ct(
+    tt::tt_metal::Program& program,
+    ttnn::ccl::CCLOpConfig const& op_config,
+    ReduceScatterWorkerArgBuilder const& worker_arg_builder,
+    CoreRangeSet const& worker_core_range,
+    ttnn::operations::binary::BinaryOpType binary_math_op) {
+
+    auto const& worker_defines = op_config.emit_worker_defines();
+    TT_ASSERT(worker_defines.size() > 0);
+    for (auto const& [key, value] : worker_defines) {
+        log_trace(tt::LogOp, "Worker Define: {} = {}", key, value);
+    }
+    static std::string const& receiver_kernel_path =
+        "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/kernels/worker_interleaved_ring_reduce_scatter_reader.cpp";
+    static std::string const& sender_kernel_path =
+        "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/kernels/worker_interleaved_ring_reduce_scatter_sender.cpp";
+    static std::string const& reduce_kernel_path =
+        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp";
+
+    KernelHandle worker_receiver_kernel_id, worker_sender_kernel_id, worker_reduce_kernel_id;
+
+    worker_receiver_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        receiver_kernel_path,
+        worker_core_range,
+        tt::tt_metal::ReaderDataMovementConfig(worker_arg_builder.generate_receiver_kernel_ct_args(), worker_defines));
+
+    worker_sender_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        sender_kernel_path,
+        worker_core_range,
+        tt::tt_metal::WriterDataMovementConfig(worker_arg_builder.generate_sender_kernel_ct_args(), worker_defines));
+
+    vector<uint32_t> compute_kernel_args = {};
+    constexpr bool fp32_dest_acc_en = false;
+    constexpr bool math_approx_mode = false;
+    std::map<string, string> eltwise_defines = ttnn::operations::binary::utils::get_defines(binary_math_op);
+    worker_reduce_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        reduce_kernel_path,
+        worker_core_range,
+        tt::tt_metal::ComputeConfig{
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .math_approx_mode = math_approx_mode,
+            .compile_args = compute_kernel_args,
+            .defines = eltwise_defines});
+
+    return {worker_receiver_kernel_id, worker_sender_kernel_id, worker_reduce_kernel_id};
+}
+
+static void set_reduce_scatter_worker_rt(
     tt::tt_metal::Program& program,
     Device const* device,
+    KernelHandle worker_receiver_kernel_id,
+    KernelHandle worker_sender_kernel_id,
+    KernelHandle worker_reduce_kernel_id,
     ttnn::ccl::RingTopology const& topology_config,
     ttnn::ccl::CCLOpConfig const& op_config,
     ReduceScatterWorkerArgBuilder const& worker_arg_builder,
@@ -432,19 +487,6 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
     uint32_t worker_index,
     ttnn::operations::binary::BinaryOpType binary_math_op,
     std::function<bool(uint32_t)> is_buffer_in_clockwise_direction_fn) {
-
-    auto const& worker_defines = op_config.emit_worker_defines();
-    TT_ASSERT(worker_defines.size() > 0);
-    for (auto const& [key, value] : worker_defines) {
-        log_trace(tt::LogOp, "Worker Define: {} = {}", key, value);
-    }
-    static std::string const& receiver_kernel_path =
-        "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/kernels/worker_interleaved_ring_reduce_scatter_reader.cpp";
-    static std::string const& sender_kernel_path =
-        "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/kernels/worker_interleaved_ring_reduce_scatter_sender.cpp";
-
-    // This will be configurable by sharded/non-sharded but present the same arg builder
-    KernelHandle worker_receiver_kernel_id, worker_sender_kernel_id;
 
     bool is_in_clockwise_direction = is_buffer_in_clockwise_direction_fn(worker_index);
     uint32_t global_worker_index = link * num_edm_channels + worker_index;
@@ -463,12 +505,6 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
                 ? edm_interface_addresses.worker_receiver_edm_buffer_addresses.at(global_worker_index)
                 : edm_interface_addresses.worker_sender_edm_buffer_addresses.at(global_worker_index);
 
-        worker_receiver_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            receiver_kernel_path,
-            worker_core,
-            tt::tt_metal::ReaderDataMovementConfig(worker_arg_builder.generate_receiver_kernel_ct_args(), worker_defines));
-
         tt::tt_metal::SetRuntimeArgs(
             program,
             worker_receiver_kernel_id,
@@ -483,21 +519,6 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
     }
 
     {
-        vector<uint32_t> compute_kernel_args = {};
-        constexpr bool fp32_dest_acc_en = false;
-        constexpr bool math_approx_mode = false;
-        std::map<string, string> eltwise_defines = ttnn::operations::binary::utils::get_defines(binary_math_op);
-        KernelHandle worker_reduce_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp",
-            worker_core,
-            tt::tt_metal::ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .math_approx_mode = math_approx_mode,
-                .compile_args = compute_kernel_args,
-                .defines = eltwise_defines});
-
         tt::tt_metal::SetRuntimeArgs(
             program,
             worker_reduce_kernel_id,
@@ -520,11 +541,6 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
             is_in_clockwise_direction
                 ? edm_interface_addresses.worker_sender_edm_buffer_addresses.at(global_worker_index)
                 : edm_interface_addresses.worker_receiver_edm_buffer_addresses.at(global_worker_index);
-        worker_sender_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            sender_kernel_path,
-            worker_core,
-            tt::tt_metal::WriterDataMovementConfig(worker_arg_builder.generate_sender_kernel_ct_args(), worker_defines));
 
         tt::tt_metal::SetRuntimeArgs(
             program,
@@ -538,8 +554,6 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
                 worker_index,
                 is_in_clockwise_direction));
     }
-
-    return {worker_receiver_kernel_id, worker_sender_kernel_id};
 }
 
 static CoreRangeSet select_worker_cores(
@@ -744,8 +758,6 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     Tensor const& local_chip_output_tensor = output_tensor;
 
     std::map<string, string> worker_defines;
-    std::vector<KernelHandle> worker_receiver_kernels;
-    std::vector<KernelHandle> worker_sender_kernels;
     std::vector<ttnn::ccl::EriscDatamoverBuilder> cw_per_link_edm_builders(num_links, edm_builder);
     std::vector<ttnn::ccl::EriscDatamoverBuilder> ccw_per_link_edm_builders(num_links, edm_builder);
 
@@ -826,7 +838,25 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
             edm_interface_addresses);
     }
 
-    // build the worker kernels
+    // build worker kernels ct
+    auto const& dummy_worker_slice = tensor_slicer.get_worker_slice(0);
+    auto worker_arg_builder = ReduceScatterWorkerArgBuilder(
+        device,
+        op_config,
+        topology_config,
+        dummy_worker_slice,
+        worker_transfer_info,
+        cb_num_pages_per_packet,
+        worker_sender_semaphore_id,
+        worker_receiver_semaphore_id);
+    auto [worker_receiver_kernel_id, worker_sender_kernel_id, worker_reduce_kernel_id] = build_reduce_scatter_worker_ct(
+        program,
+        op_config,
+        worker_arg_builder,
+        worker_core_range,
+        reduce_op);
+
+    // set worker kernels rt
     tt::tt_metal::ComputeConfig compute_config;
     for (std::size_t link = 0; link < num_links; link++) {
         uint32_t global_worker_index = link * num_edm_channels;
@@ -843,16 +873,17 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
                 topology_config,
                 worker_slice,
                 worker_transfer_info,
-                worker,
-                link,
                 cb_num_pages_per_packet,
                 worker_sender_semaphore_id,
                 worker_receiver_semaphore_id);
 
             log_trace(tt::LogOp, "worker_cores.at(global_worker_index): {}", worker_cores.at(global_worker_index));
-            auto [receiver_kernel_id, sender_kernel_id] = build_reduce_scatter_worker(
+            set_reduce_scatter_worker_rt(
                 program,
                 device,
+                worker_receiver_kernel_id,
+                worker_sender_kernel_id,
+                worker_reduce_kernel_id,
                 topology_config,
                 op_config,
                 worker_arg_builder,
@@ -866,8 +897,6 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
                 worker,
                 reduce_op,
                 is_worker_in_clockwise_direction_fn);
-            worker_receiver_kernels.push_back(receiver_kernel_id);
-            worker_sender_kernels.push_back(sender_kernel_id);
 
             TT_FATAL(is_cb_buffering_sufficient_to_avoid_deadlock(
                 worker_slice,
@@ -891,7 +920,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
 
     uint32_t total_num_workers = worker_cores.size();
     auto override_runtime_arguments_callback =
-        [topology_config, worker_receiver_kernels, worker_sender_kernels, worker_cores, total_num_workers, ring_index](
+        [topology_config, worker_receiver_kernel_id, worker_sender_kernel_id, worker_cores, total_num_workers, ring_index](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -899,14 +928,14 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors.at(0);
             const auto& output = output_tensors.at(0);
-            TT_ASSERT(worker_sender_kernels.size() == worker_receiver_kernels.size());
-            for (uint32_t i = 0; i < worker_sender_kernels.size(); ++i) {
-                auto& worker_receiver_runtime_args =
-                    GetRuntimeArgs(program, worker_receiver_kernels.at(i), worker_cores.at(i));
+            auto &worker_receiver_runtime_args_by_core = GetRuntimeArgs(program, worker_receiver_kernel_id);
+            auto &worker_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_kernel_id);
+            for (uint32_t i = 0; i < worker_cores.size(); ++i) {
+                auto core = worker_cores.at(i);
+                auto& worker_receiver_runtime_args = worker_receiver_runtime_args_by_core[core.x][core.y];
                 worker_receiver_runtime_args.at(0) = input.buffer()->address();
 
-                auto& worker_sender_runtime_args =
-                    GetRuntimeArgs(program, worker_sender_kernels.at(i), worker_cores.at(i));
+                auto& worker_sender_runtime_args = worker_sender_runtime_args_by_core[core.x][core.y];
                 worker_sender_runtime_args.at(0) = output.buffer()->address();
             }
         };
