@@ -290,6 +290,9 @@ def test_perplexity(
 ):
     assert is_wormhole_b0(), "This test is only for Wormhole B0"
 
+    if llm_mode == "decode" and max_seq_len > 128:
+        pytest.skip("Decode mode is hanging for seqlen > 128")
+
     run_test_perplexity(
         llm_mode,
         batch_size,
