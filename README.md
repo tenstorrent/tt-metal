@@ -132,3 +132,4 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metalium/lates
 
 - [Flash Attention on Wormhole](./tech_reports/FlashAttention/FlashAttention.md)
 - [Programming Mesh of Devices](./tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md)
+- [Saturating DRAM Bandwidth](./tech_reports/Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md)
