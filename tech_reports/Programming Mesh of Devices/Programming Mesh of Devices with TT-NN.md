@@ -1,6 +1,6 @@
 # Programming Mesh of Devices with TT-NN {#programming-mesh-of-devices-with-tt-nn}
 
-Author: [Joseph Chu](mailto:jchu@tenstorrent.com)
+Author: Joseph Chu
 
 # Table of Contents {#table-of-contents}
 
@@ -58,9 +58,9 @@ These concepts are key to understanding how we scale models using **Data-Paralle
 
 ##
 
-## 2\. MeshDevice {#2.-meshdevice}
+## 2\. MeshDevice
 
-### 2.1 System Topology {#2.1-system-topology}
+### 2.1 System Topology
 
 A MeshDevice can be instantiated over a collection of physically connected devices. The supported configurations are N300 (1x2), T3000 (2x4), Galaxy (8x4).
 
@@ -83,9 +83,9 @@ T3000 is composed of four N300 wormhole cards that are physically connected in a
 
 ###
 
-### 2.2 MeshDevice Management {#2.2-meshdevice-management}
+### 2.2 MeshDevice Management
 
-#### 2.2.1 MeshDevice Initialization/Close {#2.2.1-meshdevice-initialization/close}
+#### 2.2.1 MeshDevice Initialization/Close
 
 Using an N300, we can instantiate a MeshDevice over 1x2 Wormhole devices:
 
@@ -100,7 +100,7 @@ Using an N300, we can instantiate a MeshDevice over 1x2 Wormhole devices:
 
 ####
 
-#### 2.2.1 MeshDevice Visualization {#2.2.1-meshdevice-visualization}
+#### 2.2.1 MeshDevice Visualization
 
 ```py
 ttnn.visualize_mesh_device(mesh_device)
@@ -115,9 +115,9 @@ ttnn.visualize_mesh_device(mesh_device)
 
 ##
 
-## 3\. Distributing Tensor to MeshDevice {#3.-distributing-tensor-to-meshdevice}
+## 3\. Distributing Tensor to MeshDevice
 
-### 3.1 Distribution Strategies {#3.1-distribution-strategies}
+### 3.1 Distribution Strategies
 
 MeshDevice in TT-NN provides a flexible way to distribute data across multiple devices. The distribution is primarily handled through the use of "mesh mappers" when creating tensors.
 
@@ -129,7 +129,7 @@ There are two main types of distribution strategies:
 
 ###
 
-### 3.2 Programming Example: Sharding {#3.2-programming-example:-sharding}
+### 3.2 Programming Example: Sharding
 
 Let’s see how to split our data across two devices:
 
@@ -211,15 +211,15 @@ ttnn.visualize_mesh_device(mesh_device, tensor=mesh_tensor)
 
 ```
 
-## 4\. Single-Program Multiple Device {#4.-single-program-multiple-device}
+## 4\. Single-Program Multiple Device
 
-### 4.1 Execution Model {#4.1-execution-model}
+### 4.1 Execution Model
 
 TT-NN uses a Single-Program Multiple-Device (SPMD) technique to parallelize computations across multiple devices. This approach allows the same computation to run on multiple devices simultaneously, each operating on different portions of the input data.
 
-### 4.2 Single Device to Multiple Device Execution {#4.2-single-device-to-multiple-device-execution}
+### 4.2 Single Device to Multiple Device Execution
 
-#### 4.2.1 Single Device Execution {#4.2.1-single-device-execution}
+#### 4.2.1 Single Device Execution
 
 Let’s run a simple gelu operation on a single-device:
 
@@ -243,7 +243,7 @@ output_tensor = ttnn.gelu(ttnn_tensor)
 
 ####
 
-#### 4.2.1 Mesh Device Execution {#4.2.1-mesh-device-execution}
+#### 4.2.1 Mesh Device Execution
 
 ```py
 # Open MeshDevice
@@ -270,7 +270,7 @@ output_tensor = ttnn.gelu(ttnn_tensor)
 
 *Figure 1: Parallel execution of gelu operation on 4 devices*
 
-## 5\. Programming Mesh of Devices Using Data Parallel {#5.-programming-mesh-of-devices-using-data-parallel}
+## 5\. Programming Mesh of Devices Using Data Parallel
 
 This tutorial demonstrates how to convert a model running on a single-device to multiple devices using data-parallel strategy. Using data parallel can be a good strategy to scale to multiple devices when your model fits on a single-device.
 
@@ -283,7 +283,7 @@ Effectively, each device contains a replica of the model and is responsible for 
 
 ###
 
-### 5.1 Data Parallel Programming Example: {#5.1-data-parallel-programming-example:}
+### 5.1 Data Parallel Programming Example:
 
 Let's start by creating a simple MLP model in TT-NN on a single-device and scale to multiple devices by using data-parallel. We’ll use pretrained weights and compare against torch for validation:
 
