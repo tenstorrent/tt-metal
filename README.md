@@ -136,3 +136,4 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metalium/lates
 - [Saturating DRAM Bandwidth](./tech_reports/Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md)
 - [Flash Attention on Wormhole](./tech_reports/FlashAttention/FlashAttention.md)
 - [CNNs on TT Architectures](./tech_reports/CNNs/ttcnn.md)
+- [Advanced Performance Optimizations for Models](./tech_reports/AdvancedPerformanceOperationsForModels/AdvancedPerformanceOptimizationsForModels.md)
