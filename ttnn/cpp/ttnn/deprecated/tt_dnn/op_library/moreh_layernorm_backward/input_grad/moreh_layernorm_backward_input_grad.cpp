@@ -33,6 +33,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
     const tt_metal::Tensor& input_grad,
     const ttnn::DeviceComputeKernelConfig compute_kernel_config,
     const std::optional<const Tensor> gamma) {
+    using namespace tt::constants;
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////

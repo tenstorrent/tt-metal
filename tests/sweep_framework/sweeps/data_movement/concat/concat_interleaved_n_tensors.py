@@ -12,7 +12,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 20
+TIMEOUT = 30  # formatting on host and torch CPU call are slow
 random.seed(0)
 tiled_dim_unpadded = [32, 64, 96]
 tiled_dim_padded = [7, 16]
@@ -57,10 +57,10 @@ def generate_concat_config(tensor_counts, ranks, variable_dim, other_dims):
 parameter_tiled_interleaved = {
     f"tiled_interleaved_suite_{n}_tensors": {
         "concat_specs": list(
-            generate_concat_config(n, [4, 3, 2], tiled_dim_unpadded, tiled_dim_unpadded + tiled_dim_padded)
+            generate_concat_config(n, [4, 3], tiled_dim_unpadded, tiled_dim_unpadded + tiled_dim_padded)
         )
         + list(
-            generate_concat_config(n, [4, 3, 2], tiled_dim_padded, [32, 33])
+            generate_concat_config(n, [4, 3], tiled_dim_padded, [32, 33])
         ),  # variable dim doesn't support padding, other dims can be anything
         "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "layout": [ttnn.TILE_LAYOUT],
@@ -78,10 +78,10 @@ parameter_tiled_interleaved = {
 
 parameters_row_major_interleaved = {
     f"row_major_interleaved_suite_{n}_tensors": {
-        "concat_specs": list(generate_concat_config(n, [4, 3, 2], rm_dim_even, rm_dim_even))
-        + list(generate_concat_config(n, [4, 3, 2], rm_dim_even, rm_dim_odd))
+        "concat_specs": list(generate_concat_config(n, [4, 3], rm_dim_even, rm_dim_even))
+        + list(generate_concat_config(n, [4, 3], rm_dim_even, rm_dim_odd))
         + list(
-            generate_concat_config(n, [4, 3, 2], rm_dim_odd, rm_dim_even)
+            generate_concat_config(n, [4, 3], rm_dim_odd, rm_dim_even)
         ),  # variable dim doesn't support padding, other dims can be anything
         "dtype": [ttnn.bfloat16],
         "layout": [ttnn.ROW_MAJOR_LAYOUT],

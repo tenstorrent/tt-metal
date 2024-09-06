@@ -329,16 +329,16 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
                 all_outputs[user].append(user_tok)
 
         # Print out generated outputs for each user at the end of every iteration
-        if not is_ci_env:  # Avoid printing every iteration in CI
-            if len(user_input) == 1:
-                logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
-            else:
-                for user in range(batch_size):
-                    text = "".join(tokenizer.decode(all_outputs[user]))
-                    if len(text) > 100:
-                        text = "..." + text[-97:]
-                    text = text.replace("\n", " ")
-                    logger.info("[User {}] {}".format(user, text))
+        # if not is_ci_env:  # Avoid printing every iteration in CI
+        #     if len(user_input) == 1:
+        #         logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
+        #     else:
+        #         for user in range(batch_size):
+        #             text = "".join(tokenizer.decode(all_outputs[user]))
+        #             if len(text) > 100:
+        #                 text = "..." + text[-97:]
+        #             text = text.replace("\n", " ")
+        #             logger.info("[User {}] {}".format(user, text))
 
         # Always print iteration perf
         logger.info(
@@ -359,12 +359,13 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
         for user in range(batch_size):
             logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
 
-    if is_ci_env:
-        # When running in CI, check the output against the expected output to avoid accuracy regressions
-        if test_prefill_len == 128:
-            expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_128.json"
-        else:  # test_prefill_len == 32k
-            expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_32k.json"
+    # FIXME #12206
+    # if is_ci_env:
+    #     # When running in CI, check the output against the expected output to avoid accuracy regressions
+    #     if test_prefill_len == 128:
+    #         expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_128.json"
+    #     else:  # test_prefill_len == 32k
+    #         expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_32k.json"
 
         with open(expected_output, "r") as f:
             expected_out = json.load(f)

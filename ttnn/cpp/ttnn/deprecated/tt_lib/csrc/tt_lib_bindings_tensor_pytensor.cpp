@@ -678,11 +678,10 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                 return py::cpp_function(std::function([function, function_name](
                                                           const py::args &args, const py::kwargs &kwargs) {
                     ZoneScopedN("TT_DNN_FALLBACK_OP");
-                    ttnn::increment_device_operation_id();
-                    uint32_t device_operation_id = ttnn::get_device_operation_id();
+                    uint32_t device_operation_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
                     auto [operation, input_tensors] = detail::parse_external_operation(function, args, kwargs, function_name);
                     GraphTracker::instance().track_function_start(operation.get_type_name(), args, kwargs);
-                    log_external_operation(ttnn::get_python_operation_id(), device_operation_id, operation, input_tensors);
+                    log_external_operation(ttnn::CoreIDs::instance().get_python_operation_id(), device_operation_id, operation, input_tensors);
 
                     auto output = function(*args, **kwargs);
 

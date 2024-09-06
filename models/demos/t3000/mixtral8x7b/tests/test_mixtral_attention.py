@@ -15,7 +15,7 @@ from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
 )
 
 
@@ -55,8 +55,6 @@ def test_mixtral_attention_inference(t3k_mesh_device, use_program_cache, reset_s
         attention_input = prepare_inputs_ttnn(
             tt_attention_input,
             model_args.dim,
-            start_pos,
-            model_args,
             tt_model.mesh_device,
         )
 

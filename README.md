@@ -24,7 +24,7 @@
 
 | Model                                                      | Batch               | End-to-end throughput [1]    | Device throughput [2]       | Target throughput                             |
 |----------------------------------------------------------  |---------------------|------------------------------|-----------------------------|-------------------------------------|
-| [ResNet-50](./models/demos/resnet) (fps)                   | 20                  | 5,600                        | 7,560                       | 10,000                              |
+| [ResNet-50](./models/demos/ttnn_resnet) (fps)                   | 20                  | 5,100                        | 6,600                       | 10,000                              |
 | [BERT-Large](./models/demos/bert) (sen/s)                  | 12                  | 370                          | 406                         | 410                                 |
 | [Falcon7B-decode](./models/demos/ttnn_falcon7b) (t/s)      | 32                  | 135                          | 135                         | 140                                 |
 | [ViT](./models/demos/grayskull/vit) (fps)                  | 8                   | 860                          | 1570                        | 2000                                |
@@ -127,3 +127,8 @@ print(output)
 ## Getting started
 
 Get started with [simple kernels](https://docs.tenstorrent.com/tt-metalium/latest/tt_metal/examples/index.html).
+
+## Tech Reports
+
+- [Flash Attention on Wormhole](./tech_reports/FlashAttention/FlashAttention.md)
+- [Programming Mesh of Devices](./tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md)

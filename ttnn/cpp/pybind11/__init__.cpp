@@ -10,11 +10,11 @@
 #include "activation.hpp"
 #include "core.hpp"
 #include "device.hpp"
+#include "profiler.hpp"
 #include "events.hpp"
 #include "multi_device.hpp"
 #include "reports.hpp"
 #include "ttnn/deprecated/tt_lib/csrc/operations/primary/module.hpp"
-#include "ttnn/deprecated/tt_lib/csrc/tt_lib_bindings.hpp"
 #include "ttnn/deprecated/tt_lib/csrc/tt_lib_bindings_tensor.hpp"
 #include "ttnn/graph/graph_pybind.hpp"
 #include "types.hpp"
@@ -36,8 +36,6 @@ PYBIND11_MODULE(_ttnn, module) {
     auto m_depr_operations = m_deprecated.def_submodule("operations", "Submodule for experimental operations");
     auto m_primary_ops = m_depr_operations.def_submodule("primary", "Primary operations");
 
-    auto m_profiler = m_deprecated.def_submodule("profiler", "Submodule defining the profiler");
-
     auto m_graph = module.def_submodule("graph", "Contains graph capture functions");
     auto m_types = module.def_submodule("types", "ttnn Types");
     auto m_activation = module.def_submodule("activation", "ttnn Activation");
@@ -45,6 +43,7 @@ PYBIND11_MODULE(_ttnn, module) {
     auto m_device = module.def_submodule("device", "ttnn devices");
     auto m_multi_device = module.def_submodule("multi_device", "ttnn multi_device");
     auto m_events = module.def_submodule("events", "ttnn events");
+    auto m_profiler = module.def_submodule("profiler", "Submodule defining the profiler");
     auto m_reports = module.def_submodule("reports", "ttnn reports");
     auto m_operations = module.def_submodule("operations", "ttnn Operations");
 
@@ -67,7 +66,6 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::graph::py_graph_module(m_graph);
 
     tt::tt_metal::TensorModule(m_depr_tensor);
-    tt::tt_metal::ProfilerModule(m_profiler);
 
 #if defined(TRACY_ENABLE)
     py::function tracy_decorator = py::module::import("tracy.ttnn_profiler_wrapper").attr("callable_decorator");
@@ -82,6 +80,7 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::device::py_device_module(m_device);
     ttnn::multi_device::py_module(m_multi_device);
     ttnn::events::py_module(m_events);
+    ttnn::profiler::py_module(m_profiler);
     ttnn::reports::py_module(m_reports);
 
     // ttnn operations have to come before the deprecated ones,
@@ -91,16 +90,15 @@ PYBIND11_MODULE(_ttnn, module) {
     tt::operations::primary::py_module(m_primary_ops);
 
     module.attr("CONFIG") = &ttnn::CONFIG;
+    module.def("get_python_operation_id", []()->std::uint64_t {return ttnn::CoreIDs::instance().get_python_operation_id();} , "Get operation id");
+    module.def("set_python_operation_id", [](std::uint64_t id){ttnn::CoreIDs::instance().set_python_operation_id(id);}, "Set operation id");
+    module.def("fetch_and_increment_python_operation_id", []()->std::uint64_t {return ttnn::CoreIDs::instance().fetch_and_increment_python_operation_id();}, "Increment tensor id and return the previously held id");
 
-    module.def("get_python_operation_id", ttnn::get_python_operation_id, "Get operation id");
-    module.def("set_python_operation_id", ttnn::set_python_operation_id, "Set operation id");
-    module.def("increment_python_operation_id", ttnn::increment_python_operation_id, "Increment operation id");
+    module.def("get_tensor_id", []()->std::uint64_t {return ttnn::CoreIDs::instance().get_tensor_id();}, "Get tensor id");
+    module.def("set_tensor_id", [](std::uint64_t id){ttnn::CoreIDs::instance().set_tensor_id(id);}, "Set tensor id");
+    module.def("fetch_and_increment_tensor_id", []()->std::uint64_t {return ttnn::CoreIDs::instance().fetch_and_increment_tensor_id();}, "Increment tensor id and return the previously held id");
 
-    module.def("get_tensor_id", ttnn::get_tensor_id, "Get tensor id");
-    module.def("set_tensor_id", ttnn::set_tensor_id, "Set tensor id");
-    module.def("increment_tensor_id", ttnn::increment_tensor_id, "Increment tensor id");
-
-    module.def("get_device_operation_id", ttnn::get_device_operation_id, "Get device operation id");
-    module.def("set_device_operation_id", ttnn::set_device_operation_id, "Set device operation id");
-    module.def("increment_device_operation_id", ttnn::increment_device_operation_id, "Increment device operation id");
+    module.def("get_device_operation_id", []()->std::uint64_t {return ttnn::CoreIDs::instance().get_device_operation_id();}, "Get device operation id");
+    module.def("set_device_operation_id", [](std::uint64_t id){ttnn::CoreIDs::instance().set_device_operation_id(id);}, "Set device operation id");
+    module.def("fetch_and_increment_device_operation_id", []()->std::uint64_t {return ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();}, "Increment device operation id and return the previously held id");
 }

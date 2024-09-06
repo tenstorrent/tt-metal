@@ -14,7 +14,7 @@ from transformers import (
 
 import ttnn
 import pytest
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_blackhole
 
 from models.utility_functions import (
     torch2tt_tensor,
@@ -111,7 +111,7 @@ def run_whisper_encoder(device, for_audio_classification=False, encoder_layers=1
         assert does_pass
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_WhipserEncoder_inference(device):
     torch.manual_seed(1234)
     run_whisper_encoder(device=device, for_audio_classification=False)

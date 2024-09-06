@@ -7,7 +7,7 @@ import pytest
 import random
 import ttnn
 from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc
-from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0
+from models.utility_functions import skip_for_grayskull, is_wormhole_b0, is_blackhole
 
 
 @pytest.mark.parametrize(
@@ -23,7 +23,7 @@ def test_unary_composite_acosh_ttnn(input_shapes, device):
 
     output_tensor = ttnn.acosh(input_tensor1)
     golden_function = ttnn.get_golden_function(ttnn.acosh)
-    golden_tensor = golden_function(in_data1)
+    golden_tensor = golden_function(in_data1, device=device)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
@@ -721,7 +721,7 @@ def test_unary_softshrink(input_shapes, param, device):
     assert comp_pass
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -738,7 +738,7 @@ def test_unary_logit(input_shapes, param, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, 0, 1, device)
     output_tensor = ttnn.logit(input_tensor, eps=param)
     golden_function = ttnn.get_golden_function(ttnn.logit)
-    golden_tensor = golden_function(in_data, eps=param)
+    golden_tensor = golden_function(in_data, eps=param, device=device)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass

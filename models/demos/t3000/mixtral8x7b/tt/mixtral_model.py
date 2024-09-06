@@ -130,7 +130,7 @@ class TtTransformer(LightweightModule):
             prev_rot_mat = self.current_rot_mat
             self.current_rot_mat = torch.matmul(self.rot_matrix, prev_rot_mat)
         else:
-            if False:  # (start_pos_ids[0] + 1) % 32 == 0:
+            if (start_pos_ids[0] + 1) % 32 == 0:
                 # generate new rotmat to avoid numerical instability every 32 tokens
                 self.current_rot_mat, self.rot_matrix = get_single_rot_mat_multi_pos(
                     self.args.head_dim, self.mesh_device, [pos + 1 for pos in start_pos_ids]

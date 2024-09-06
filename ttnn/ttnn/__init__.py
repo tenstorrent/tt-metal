@@ -168,6 +168,8 @@ from ttnn.device import (
     pad_to_tile_shape,
 )
 
+from ttnn.profiler import start_tracy_zone, stop_tracy_zone, tracy_message, tracy_frame
+
 from ttnn.multi_device import (
     MeshDevice,
     DispatchCoreType,
@@ -301,7 +303,7 @@ from ttnn.operations.reduction import (
     ReduceType,
 )
 
-from ttnn.operations.conv2d import Conv2d, Conv2dConfig, get_conv_output_dim, get_conv_padded_input_shape_and_mem_config
+from ttnn.operations.conv2d import Conv2dConfig, get_conv_output_dim, get_conv_padded_input_shape_and_mem_config
 from ttnn.operations.pool import TTPyMaxPool, max_pool2d, max_pool2d_legacy, MaxPool2d, avg_pool2d
 from ttnn.operations.conv1d import Conv1d, Conv1dConfig
 

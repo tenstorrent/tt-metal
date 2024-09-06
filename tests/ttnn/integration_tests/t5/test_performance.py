@@ -13,7 +13,8 @@ from models.demos.grayskull.t5.tt import ttnn_functional_t5
 from models.demos.grayskull.t5.tt import ttnn_optimized_functional_t5
 from models.utility_functions import (
     torch_random,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
 )
@@ -36,7 +37,7 @@ def get_expected_times(model_name, functional_t5):
     }[model_name][functional_t5]
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.skip(reason="#7619: Perf regression on both")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine

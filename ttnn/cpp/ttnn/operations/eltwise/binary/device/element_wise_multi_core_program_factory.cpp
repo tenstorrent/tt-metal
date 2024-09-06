@@ -33,6 +33,7 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
     const uint32_t dst_single_tile_size) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::constants;
 
     auto src_buffer_a = a.buffer();
     auto src_buffer_b = b.buffer();
@@ -254,6 +255,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     using namespace tt;
     using namespace tt::tt_metal;
     using ttnn::operations::unary::UnaryWithParam;
+    using namespace tt::constants;
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
@@ -271,6 +273,9 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     uint32_t src1_single_tile_size = tt_metal::detail::TileSize(src1_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
+
+    tt::DataFormat interim_cb0_format = src0_cb_data_format;
+    tt::DataFormat interim_cb1_format = src1_cb_data_format;
 
     tt_metal::Buffer* src0_buffer = a.buffer();
     tt_metal::Buffer* src1_buffer = b.buffer();
@@ -334,15 +339,25 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
         utils::get_defines(op_type, a.get_dtype(), output.get_dtype(), fused_activations, operation_attributes.input_tensor_a_activation);
 
     if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN0_0") != eltwise_defines.end()) {
+        if (op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP ||
+         op_type == BinaryOpType::LOGADDEXP2){
+            interim_cb0_format = tt::DataFormat::Float16_b;
+        }
+        uint32_t interim0_single_tile_size = tt_metal::detail::TileSize(interim_cb0_format);
         tt_metal::CircularBufferConfig cb_interm_config =
-            tt_metal::CircularBufferConfig(max_block_size * src0_single_tile_size, {{CB::c_intermed0, src0_cb_data_format}})
-                .set_page_size(CB::c_intermed0, src0_single_tile_size);
+            tt_metal::CircularBufferConfig(max_block_size * interim0_single_tile_size, {{CB::c_intermed0, interim_cb0_format}})
+                .set_page_size(CB::c_intermed0, interim0_single_tile_size);
         auto cb_interm = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm_config);
     }
     if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN1_0") != eltwise_defines.end()) {
+        if (op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP ||
+         op_type == BinaryOpType::LOGADDEXP2){
+            interim_cb1_format = tt::DataFormat::Float16_b;
+        }
+        uint32_t interim1_single_tile_size = tt_metal::detail::TileSize(interim_cb1_format);
         tt_metal::CircularBufferConfig cb_interm2_config =
-            tt_metal::CircularBufferConfig(max_block_size * src1_single_tile_size, {{CB::c_intermed1, src1_cb_data_format}})
-                .set_page_size(CB::c_intermed1, src1_single_tile_size);
+            tt_metal::CircularBufferConfig(max_block_size * interim1_single_tile_size, {{CB::c_intermed1, interim_cb1_format}})
+                .set_page_size(CB::c_intermed1, interim1_single_tile_size);
         auto cb_interm2 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm2_config);
     }
 

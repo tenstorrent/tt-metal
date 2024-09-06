@@ -11,13 +11,17 @@ run_perf_models_other() {
     local tt_arch=$1
     local test_marker=$2
 
-    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/ttnn_resnet/tests/test_perf_ttnn_resnet.py -m $test_marker
+    if [ "$tt_arch" == "grayskull" ]; then
+        env pytest models/demos/ttnn_resnet/tests/test_perf_ttnn_resnet.py -m $test_marker
+    fi
+
+    if [ "$tt_arch" == "wormhole_b0" ]; then
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/ttnn_resnet/tests/test_perf_ttnn_resnet.py -m $test_marker
+    fi
 
     env pytest -n auto tests/ttnn/integration_tests/bert/test_performance.py -m $test_marker
 
     env pytest -n auto models/demos/ttnn_falcon7b/tests -m $test_marker
-
-    env pytest -n auto models/demos/resnet/tests/test_perf_resnet.py -m $test_marker
 
     env pytest -n auto tests/ttnn/integration_tests/whisper/test_performance.py -m $test_marker
 
@@ -59,8 +63,6 @@ run_device_perf_models() {
     set -eo pipefail
     local test_marker=$1
 
-    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/ttnn_resnet/tests -m $test_marker
-
     env pytest tests/device_perf_tests/stable_diffusion -m $test_marker --timeout=600
 
     if [ "$tt_arch" == "grayskull" ]; then
@@ -68,16 +70,18 @@ run_device_perf_models() {
         #Model Device perf regression tests to make sure thy run on no-soft-reset BMs
         tests/scripts/run_profiler_regressions.sh PROFILER_NO_RESET
 
+        env pytest models/demos/ttnn_resnet/tests -m $test_marker
+
         env pytest models/demos/metal_BERT_large_11/tests -m $test_marker
 
         env pytest models/demos/ttnn_falcon7b/tests -m $test_marker --timeout=360
 
         env pytest models/demos/bert/tests -m $test_marker
-
-        env pytest models/demos/resnet/tests -m $test_marker
     fi
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/ttnn_resnet/tests -m $test_marker
+
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/mamba/tests -m $test_marker
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/metal_BERT_large_11/tests -m $test_marker

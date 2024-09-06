@@ -968,7 +968,7 @@ void gen_prefetcher_exec_buf_cmd_and_write_to_dram(Device *device,
     add_prefetcher_cmd(exec_buf_cmds, empty_sizes, CQ_PREFETCH_CMD_EXEC_BUF_END, dispatch_cmds);
 
     // writes cmds to dram
-    num_dram_banks_g = device->num_banks(BufferType::DRAM);;
+    num_dram_banks_g = device->num_banks(BufferType::DRAM);
 
     uint32_t page_size = 1 << exec_buf_log_page_size_g;
 

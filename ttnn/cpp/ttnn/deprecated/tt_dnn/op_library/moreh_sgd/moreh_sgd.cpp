@@ -212,7 +212,7 @@ operation::ProgramWithCallbacks moreh_sgd_(
                 runtime_args[0] = param_in.buffer()->address();
                 runtime_args[1] = grad.buffer()->address();
                 if (momentum_buffer_in.has_value()) {
-                    runtime_args[2] = momentum_buffer_in.value().buffer()->address();;
+                    runtime_args[2] = momentum_buffer_in.value().buffer()->address();
                 }
             }
 
