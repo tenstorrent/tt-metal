@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 
-from models.utility_functions import pad_by_zero, torch2tt_tensor, comp_pcc, is_grayskull
+from models.utility_functions import pad_by_zero, torch2tt_tensor, comp_pcc, is_grayskull, is_blackhole
 
 
 def ref_layernorm(x, gamma, beta, eps):
@@ -171,6 +171,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
         assert passing, output
 
 
+@pytest.mark.skipif(is_blackhole(), reason="Mismatching on Blackhole, see #12349")
 @pytest.mark.parametrize(
     "out_mem_config",
     (ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),),

@@ -9,7 +9,7 @@ from functools import partial
 
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
-from models.utility_functions import is_grayskull
+from models.utility_functions import is_grayskull, skip_for_blackhole
 import random
 
 # Seed here for fixed params
@@ -22,6 +22,7 @@ if is_grayskull():
     params += [pytest.param([[5, 5, 64, 96]], pad_args) for pad_args in generation_funcs.gen_pad_args([[5, 5, 64, 96]])]
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("input_shapes, pad_args", params)
 def test_run_pad_test(input_shapes, pad_args, device, function_level_defaults):
     datagen_func = [

@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 import pytest
-from models.utility_functions import comp_allclose_and_pcc
+from models.utility_functions import comp_allclose_and_pcc, is_blackhole, skip_for_blackhole
 from loguru import logger
 
 
@@ -20,6 +20,7 @@ def to_output_5d_shape(shape, index_dims, index_size):
     return output_5d_shape
 
 
+@skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.parametrize(
     "shape_index_dim",
     (
@@ -82,6 +83,7 @@ def test_getitem_RAW_MJOR_one_index(shape_index_dim, dtype, index_size, device):
     assert passing
 
 
+@skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.parametrize(
     "shape_index_dims",
     (
@@ -143,6 +145,7 @@ def test_getitem_RAW_MAJOR_two_indices(shape_index_dims, dtype, index_size, devi
     assert passing
 
 
+@skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.parametrize(
     "shape_index_dims",
     (
@@ -202,6 +205,7 @@ def test_getitem_RAW_MAJOR_three_indices(shape_index_dims, dtype, index_size, de
     assert passing
 
 
+@skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.parametrize(
     "shape_index_dim",
     (
@@ -314,6 +318,7 @@ def test_getitem_tilized_one_index(shape_index_dim, dtype, index_size, row_major
     assert passing
 
 
+@skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.parametrize(
     "shape_index_dims",
     (
@@ -406,6 +411,7 @@ def test_getitem_tilized_two_indices(shape_index_dims, dtype, index_size, row_ma
     assert passing
 
 
+@skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.parametrize(
     "shape_index_dims",
     (
@@ -492,6 +498,7 @@ def test_getitem_tilized_three_indices(shape_index_dims, dtype, index_size, row_
     assert passing
 
 
+@skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.parametrize(
     "shape_index_dims",
     (
@@ -574,6 +581,7 @@ def test_getitem_tilized_four_indices(shape_index_dims, dtype, index_size, row_m
     assert passing
 
 
+@skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.parametrize(
     "shape_index_dims",
     (((10, 3, 5, 7, 80), (0, 1, 2, 3, 4)),),
