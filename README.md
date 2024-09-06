@@ -131,4 +131,4 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metalium/lates
 ## Tech Reports
 
 - [Flash Attention on Wormhole](./tech_reports/FlashAttention/FlashAttention.md)
-
+- [Programming Mesh of Devices](./tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN%20(1).md)
