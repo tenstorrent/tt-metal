@@ -19,7 +19,7 @@ void TilizeWithValPadding::validate(const std::vector<Tensor>& input_tensors) co
 
     const auto& input_shape = input_tensor_a.get_legacy_shape();
     for (auto i = 0; i < input_shape.rank(); i++) {
-        TT_FATAL(input_tensor_a.get_legacy_shape()[i] <= this->output_tensor_shape[i],
+        TT_FATAL(input_shape[i] <= this->output_tensor_shape[i],
                  "Output shape {} must be greater than or equal to input shape {} in each dimension",
                  this->output_tensor_shape, input_shape);
     }
@@ -32,7 +32,7 @@ void TilizeWithValPadding::validate(const std::vector<Tensor>& input_tensors) co
     if (input_tensor_a.memory_config().is_sharded()) {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED);
         TT_FATAL(this->output_mem_config.memory_layout == input_tensor_a.memory_config().memory_layout);
-        for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
+        for (uint32_t i = 0; i < input_shape.rank(); i++) {
             if (i != input_shape.rank() - 2) {
                 TT_FATAL(input_tensor_a.get_legacy_shape()[i] == this->output_tensor_shape[i]);
             }
