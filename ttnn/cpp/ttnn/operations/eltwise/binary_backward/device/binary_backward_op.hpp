@@ -21,7 +21,6 @@ enum class BinaryBackwardOpType {
     LOGADDEXP_BW,
     LOGADDEXP2_BW,
     SQUARED_DIFFERENCE_BW,
-    ADD_BW,
     ASSIGN_BW,
     CONCAT_BW,
     BIAS_GELU_BW,
@@ -131,6 +130,5 @@ struct OpHandler<BinaryBackwardOpType::CONCAT_BW> {
         return _concat_bw(grad, input, other, dim, output_mem_config);
     }
 };
-
 
 }  // namespace ttnn::operations::binary_backward
