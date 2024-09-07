@@ -130,7 +130,7 @@ KernelHandle CreateKernel(
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config);
 
 bool FindPersistentKernel(const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config);
-KernelHandle AttachPersistentKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config, Device * device);
+KernelHandle AttachPersistentKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config, const Device *const device);
 
 // ==================================================
 //                  HOST API: buffers

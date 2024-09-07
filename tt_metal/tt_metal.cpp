@@ -938,7 +938,7 @@ bool FindPersistentKernel(const std::string &file_name, const std::variant<CoreC
         config);
 }
 
-KernelHandle AttachPersistentKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const Config &config, Device * device) {
+KernelHandle AttachPersistentKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const Config &config, const Device *const device) {
 
     auto core_type = detail::get_core_type(config);
     CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
