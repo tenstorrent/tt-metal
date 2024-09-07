@@ -130,7 +130,9 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metalium/lates
 
 ## Tech Reports
 
-- [Flash Attention on Wormhole](./tech_reports/FlashAttention/FlashAttention.md)
+- [Matrix Engine](./tech_reports/matrix_engine/matrix_engine.md)
+- [Tensor Layouts](./tech_reports/tensor_layouts/tensor_layouts.md)
 - [Programming Mesh of Devices](./tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md)
 - [Saturating DRAM Bandwidth](./tech_reports/Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md)
+- [Flash Attention on Wormhole](./tech_reports/FlashAttention/FlashAttention.md)
 - [CNNs on TT Architectures](./tech_reports/CNNs/ttcnn.md)
