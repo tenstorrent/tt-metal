@@ -288,14 +288,33 @@ std::vector<Tensor> ExecuteBackwardRemainder::invoke(
     const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
-    Tensor result_div = ttnn::floor(ttnn::add(ttnn::multiply(input, ttnn::reciprocal(other)), 0.005f, std::nullopt, output_mem_config));
-    result_div = where(ttnn::eq(input, other, std::nullopt, output_mem_config), 1.0f, result_div, output_mem_config);
+    Tensor result_div = ttnn::floor(ttnn::add(ttnn::multiply(input, ttnn::reciprocal(other), std::nullopt, output_mem_config), 0.005f, std::nullopt, output_mem_config));
+    result_div = ttnn::where(ttnn::eq(input, other, std::nullopt, output_mem_config), 1.0f, result_div, output_mem_config);
     Tensor grad_b = ttnn::multiply(ttnn::neg(grad), result_div, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_b);
     return grad_tensor;
 }
 
 std::vector<Tensor> ExecuteBackwardRemainder::invoke(
+    const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
+    return grad_tensor;
+}
+
+std::vector<Tensor> ExecuteBackwardFmod::invoke(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
+    Tensor sign = ttnn::multiply(ttnn::sign(input, output_mem_config), ttnn::sign(other, output_mem_config), std::nullopt, output_mem_config);
+    Tensor result_div = ttnn::trunc(ttnn::add(ttnn::multiply(input, ttnn::reciprocal(other), std::nullopt, output_mem_config), 0.005f, std::nullopt, output_mem_config));
+    result_div = ttnn::where(ttnn::eq(ttnn::abs(input), ttnn::abs(other), std::nullopt, output_mem_config), sign, result_div, output_mem_config);
+    Tensor grad_b = ttnn::multiply(ttnn::neg(grad), result_div, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+
+std::vector<Tensor> ExecuteBackwardFmod::invoke(
     const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);

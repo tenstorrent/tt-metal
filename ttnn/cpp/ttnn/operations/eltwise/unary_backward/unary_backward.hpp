@@ -223,11 +223,6 @@ constexpr auto threshold_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardTwoFloat<
         operations::unary_backward::UnaryBackwardOpType::THRESHOLD_BW>>();
 
-constexpr auto fmod_bw = ttnn::register_operation<
-    "ttnn::fmod_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloat<
-        operations::unary_backward::UnaryBackwardOpType::FMOD_BW>>();
-
 constexpr auto assign_bw = ttnn::register_operation<
     "ttnn::assign_bw",
     operations::unary_backward::ExecuteUnaryBackwardWoFloat<
