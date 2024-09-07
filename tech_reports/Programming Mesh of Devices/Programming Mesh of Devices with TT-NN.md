@@ -69,7 +69,7 @@ With the N300 form-factor, it houses two wormhole chips. The host is connected t
 T3000 is composed of four N300 wormhole cards that are physically connected in a 2x4 mesh configuration.
 
 <!-- ![image1](images/image1.png){width=15 height=15} -->
-<img src="images/image1.png" style="width:500px;"/>
+<img src="../CCL/images/t3000.png" style="width:500px;"/>
 
 *Figure 1: T3000 System Topology*
 
