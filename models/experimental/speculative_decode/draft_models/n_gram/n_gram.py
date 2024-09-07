@@ -45,6 +45,7 @@ from collections import defaultdict
 
 class NGramModel(object):
     def __init__(self, train_data, n, tokenizer, laplace=1):
+        start_time = time.time()
         self.n = n
         self.tokenizer = tokenizer
         self.laplace = laplace
@@ -53,6 +54,7 @@ class NGramModel(object):
         )
         self.vocab, self.vocab_counts = np.unique(self.tokens, return_counts=True)
         self.model = self._create_model()
+        print("N-Gram model created in {:.2f} seconds".format(time.time() - start_time))
 
     def _smooth(self, n_vocab, m_vocab, vocab_size):
         smoothed_probs = defaultdict(dict)
@@ -77,7 +79,7 @@ class NGramModel(object):
 
             return self._smooth(n_vocab, m_vocab, vocab_size)
 
-    def _best_candidate(self, prev, i, without=[], sampling=True):
+    def _best_candidate(self, prev, without=[], sampling=True):
         """Choose the most likely next token given the previous (n-1) tokens.
 
         Always selects the candidate with the highest probability.
@@ -105,30 +107,27 @@ class NGramModel(object):
 
         return (self.tokenizer.eos_id, 1)
 
-    def __call__(self, sent, sampling=True):
+    def __call__(self, sent, generation_length=5, sampling=True):
         """Continue generate n tokens based on history.
 
         Args:
             sent (list): token ids of the sentence.
         Returns:
-            A tuple with the generated sentence and the combined probability
-            (in log-space) of all of its n-grams.
+            newly generated tokens in a list
 
         """
+        sent = sent.copy()
 
         if len(sent) < self.n - 1:
             sent = [self.tokenizer.bos_id] * (self.n - 1 - len(sent)) + sent
 
-        while sent[-1] != self.tokenizer.eos_id:
+        for _ in range(generation_length):
             prev = () if self.n == 1 else tuple(sent[-(self.n - 1) :])
-            blacklist = [self.tokenizer.eos_id] if len(sent) < min_len else []
-            next_token, _ = self._best_candidate(prev, i, without=blacklist, sampling=sampling)
+            blacklist = [self.tokenizer.eos_id] if len(sent) < generation_length else []
+            next_token, _ = self._best_candidate(prev, without=blacklist, sampling=sampling)
             sent.append(next_token)
 
-            if len(sent) >= max_len:
-                sent.append(self.tokenizer.eos_id)
-
-        return sent
+        return sent[-generation_length:]
 
     def generate_sentences_demo(self, num, min_len=12, max_len=24, sampling=True):
         """Generate num random sentences using the language model.
@@ -153,7 +152,7 @@ class NGramModel(object):
                 time_start = time.time()
                 prev = () if self.n == 1 else tuple(sent[-(self.n - 1) :])
                 blacklist = [self.tokenizer.eos_id] if len(sent) < min_len else []
-                next_token, _ = self._best_candidate(prev, i, without=blacklist, sampling=sampling)
+                next_token, _ = self._best_candidate(prev, without=blacklist, sampling=sampling)
                 sent.append(next_token)
 
                 if len(sent) >= max_len:
@@ -177,12 +176,31 @@ if __name__ == "__main__":
         default=0.01,
         help="Lambda parameter for Laplace smoothing (default is 0.01 -- use 1 for add-1 smoothing)",
     )
+    parser.add_argument(
+        "--data",
+        type=str,
+        choices=["sample-data", "wikitext-103"],
+        default="sample-data",
+        help="Directory containing train/test data",
+    )
     parser.add_argument("--num", type=int, default=10, help="Number of sentences to generate (default 10)")
     args = parser.parse_args()
 
     # Load and prepare train/test data
-    data_path = Path("models/experimental/speculative_decode/draft_models/n_gram/sample_data")
-    train, test = load_data(data_path)
+    train, test = None, None
+    if args.data == "sample-data":
+        data_path = Path("models/experimental/speculative_decode/draft_models/n_gram/sample_data")
+        train, test = load_data(data_path)
+
+    elif args.data == "wikitext-103":
+        from datasets import load_dataset
+
+        ds = load_dataset("Salesforce/wikitext", "wikitext-103-v1", ignore_verifications=True)
+        train, test = ds["train"]["text"], ds["test"]["text"]
+        # remove empty sentences ''
+        train = [s for s in train if s != ""]
+    else:
+        raise ValueError("Invalid data choice")
 
     # Load the Tokenizer
     from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer

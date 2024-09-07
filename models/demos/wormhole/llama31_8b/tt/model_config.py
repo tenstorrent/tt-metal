@@ -33,6 +33,7 @@ class TtModelArgs:
     max_seq_len = 8192 * 4
     kv_seq_len = 8192 * 4
     sliding_window = 8192 * 4
+    share_cache = False  # if true, all batches share the same cache
 
     # Default folder location for weights and cached files
     DEFAULT_CKPT_DIR = os.getenv("LLAMA_CKPT_DIR", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B/")
@@ -64,7 +65,7 @@ class TtModelArgs:
         "OUTPUT_MM",
     )
 
-    def __init__(self, device, instruct=False, dummy_weights=False):
+    def __init__(self, device, instruct=False, dummy_weights=False, max_batch_size=1):
         if not dummy_weights:
             # Assert if all folders and files exist
             assert os.path.exists(
@@ -102,6 +103,7 @@ class TtModelArgs:
         self.di_dt_workaround = os.getenv("DISABLE_DI_DT_WORKAROUND") != "1"
         if not self.di_dt_workaround:
             logger.info("Disabling di/dt workaround, re-enable if you see hangs")
+        self.max_batch_size = max_batch_size
 
         DRAM_MEMCFG = ttnn.DRAM_MEMORY_CONFIG
         L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
@@ -123,6 +125,9 @@ class TtModelArgs:
                 math_approx_mode=False,
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
+            )
+            self.model_config["HEIGHT_SHARDED_MEMCFG"] = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1
             )
             # Chunk values based on what works best empirically
             self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
@@ -334,6 +339,46 @@ class TtModelArgs:
                 strategy=ttnn.ShardStrategy.HEIGHT,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
+            )
+
+            self.model_config["XQKV_WSHARDED_MM_OUTPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, 128),
+                core_grid=ttnn.CoreGrid(y=4, x=6),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            self.model_config["XQKV_WSHARDED_1CORE_MM_OUTPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, 128 * 48),
+                core_grid=ttnn.CoreGrid(y=1, x=1),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            self.model_config["XQKV_WSHARDED_MM_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(8, 6),
+                in0_block_w=4,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=1,
+                per_core_N=4,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+
+            self.model_config["ROT_MAT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(4, 1),
+                in0_block_w=4,
+                out_subblock_h=1,
+                out_subblock_w=4,
+                per_core_M=1,
+                per_core_N=4,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=False,
             )
 
     def weight_cache_path(self, dtype):
