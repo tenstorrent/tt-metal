@@ -24,10 +24,10 @@ void TilizeWithValPadding::validate(const std::vector<Tensor>& input_tensors) co
                  this->output_tensor_shape, input_shape);
     }
 
-    uint32_t num_rows = this->output_tensor_shape[input_shape.rank() - 1];
-    uint32_t inner_dim = this->output_tensor_shape[input_shape.rank() - 2];
-    TT_FATAL(num_rows % TILE_HEIGHT == 0, "Output shape must be tilizable, but {} is not divisible by {}", num_rows, TILE_HEIGHT);
-    TT_FATAL(inner_dim % TILE_WIDTH == 0, "Output shape must be tilizable, but {} is not divisible by {}", inner_dim, TILE_WIDTH);
+    uint32_t num_rows = this->output_tensor_shape[-1];
+    uint32_t inner_dim = this->output_tensor_shape[-2];
+    TT_FATAL(num_rows % TILE_HEIGHT == 0, "Output shape must be tilizable, but {} is not divisible by {}", output_tensor_shape, TILE_HEIGHT);
+    TT_FATAL(inner_dim % TILE_WIDTH == 0, "Output shape must be tilizable, but {} is not divisible by {}", output_tensor_shape, TILE_WIDTH);
 
     if (input_tensor_a.memory_config().is_sharded()) {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED);
