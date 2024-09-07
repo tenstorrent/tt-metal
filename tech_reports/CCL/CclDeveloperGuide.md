@@ -115,7 +115,7 @@ Each Ethernet core can be connected to 0 or 1 ethernet links. If a core is not c
 
 ## Ethernet Link
 
-Every Wormhole Ethernet core is uniform in performance, all capable of sending and receiving a theoretical 100Gbps per direction. This includes overheads such as the Ethernet packet header, which is inserted automatically by the Ethernet subsystem. This overhead affects the achievable workload bandwidth, although the effect is marginal for larger packets. For Wormhole, the specifications for packet sizes and headers are as follows:
+Every Wormhole Ethernet core is uniform in performance, all capable of sending and receiving a theoretical 100GB/s per direction. This includes overheads such as the Ethernet packet header, which is inserted automatically by the Ethernet subsystem. This overhead affects the achievable workload bandwidth, although the effect is marginal for larger packets. For Wormhole, the specifications for packet sizes and headers are as follows:
 
 Minimum Packet Size: 16 B  
 Maximum Packet Size: 1500 B  
@@ -127,7 +127,7 @@ Note: The payload sent can be larger than the maximum packet size. The Ethernet 
 
 ![](images/workload_theoretical_peak_util.png) 
 
-In aggregate, when all 16 Ethernet links are active, a single Wormhole chip provides 1600Gbps of ethernet bandwidth in each direction, for a total of 3200 Gbps (400 GB/s) bi-directional bandwidth. 
+In aggregate, when all 16 Ethernet links are active, a single Wormhole chip provides 1600GB/s of ethernet bandwidth in each direction, for a total of 3200 GB/s (400 GB/s) bi-directional bandwidth. 
 
 ### Link Health and Retraining
 
@@ -166,7 +166,7 @@ The N300 is a single board part with 2 chips, the simplest supported multichip c
 
 To manage this limitation where the remote chip is not directly accessible by the host, the Dispatcher datapath reserves one of the links for its own use to send program data to the remote chip.
 
-In total, there are 200 Gbps of bandwidth, in each direction, between the local and remote chips. The board provides six additional ports to enable Ethernet connectivity to external boards/devices. With the reserved Dispatcher link taken into account, 100 Gbps of bandwidth is available per direction for user kernels.
+In total, there are 200 GB/s of bandwidth, in each direction, between the local and remote chips. The board provides six additional ports to enable Ethernet connectivity to external boards/devices. With the reserved Dispatcher link taken into account, 100 GB/s of bandwidth is available per direction for user kernels.
 
 ![n300](images/n300.png)
 
@@ -178,7 +178,7 @@ The T3000 part is a desktop form factor machine which contains a total of eight 
 
 #### Galaxy
 
-The Galaxy part is larger compared to the prior two parts, and is intended to be used as a building block for large scaleout systems. Each Galaxy part contains 32 Wormhole chips assembled in a 4x8 2D mesh. In this configuration, all non-edge and non-corner chips utilize all 16 of their Ethernet links. The corner and edge chips use fewer links. However, They have unconnected Ethernet cores which can be connected to Ethernet links which can be used to connect multiple Galaxies to each other in a larger mesh, or they can be used to convert this mesh into a torus. As with all other scaleout Wormhole parts, Ethernet link speeds are the same at 12.5 GBps per direction per link with a total of 25 GBps bidirectional.
+The Galaxy part is larger compared to the prior two parts, and is intended to be used as a building block for large scaleout systems. Each Galaxy part contains 32 Wormhole chips assembled in a 4x8 2D mesh. In this configuration, all non-edge and non-corner chips utilize all 16 of their Ethernet links. The corner and edge chips use fewer links. However, They have unconnected Ethernet cores which can be connected to Ethernet links which can be used to connect multiple Galaxies to each other in a larger mesh, or they can be used to convert this mesh into a torus. As with all other scaleout Wormhole parts, Ethernet link speeds are the same at 12.5 GB/s per direction per link with a total of 25 GB/s bidirectional.
 
 
 ![TG](images/TG.png)
@@ -1061,7 +1061,7 @@ Additionally, with these ring and line algorithms where all transfers are only t
 
 ## EDM Performance
 
-Plot TODO but measured upwards of 20 GBps link util
+Plot TODO but measured upwards of 20 GB/s link util
 
 # Host CCL Op Builder Components {#host-ccl-op-builder-components}
 
