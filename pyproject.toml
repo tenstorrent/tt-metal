@@ -24,7 +24,7 @@ dependencies = [
   "ipywidgets==8.1.1",
 
   # extra index required https://download.pytorch.org/whl/cpu
-  "torch==2.2.1+cpu",
+  "torch==2.3.1+cpu",
   "networkx==3.1",
   "graphviz==0.20.3",
   "bokeh==3.1.1",
