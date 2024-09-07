@@ -41,9 +41,13 @@ def run_resnet50_inference(
     # First run configures convs JIT
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
     test_infra.run()
+    test_infra.validate()
+
     # Optimized run
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
     test_infra.run()
+    test_infra.validate()
+
     # More optimized run with caching
     if use_signpost:
         signpost(header="start")
@@ -78,28 +82,40 @@ def run_resnet50_trace_inference(
         weight_dtype,
         math_fidelity,
         dealloc_input=True,
-        final_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
         model_location_generator=model_location_generator,
     )
-    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
-    tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
+    tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
 
     # First run configures convs JIT
-    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 0)
-    test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
+    test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
+    shape = test_infra.input_tensor.shape
+    dtype = test_infra.input_tensor.dtype
+    layout = test_infra.input_tensor.layout
     test_infra.run()
+    test_infra.validate()
+    test_infra.output_tensor.deallocate(force=True)
 
     # Optimized run
-    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 0)
-    test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
+    test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
     test_infra.run()
+    test_infra.validate()
 
     # Capture
-    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 0)
+    test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
+    test_infra.output_tensor.deallocate(force=True)
+    trace_input_addr = test_infra.input_tensor.buffer_address()
     tid = ttnn.begin_trace_capture(device, cq_id=0)
-    test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
     test_infra.run()
+    tt_image_res = ttnn.allocate_tensor_on_device(
+        shape,
+        dtype,
+        layout,
+        device,
+        input_mem_config,
+    )
     ttnn.end_trace_capture(device, tid, cq_id=0)
+    assert trace_input_addr == tt_image_res.buffer_address()
 
     # More optimized run with caching
     if use_signpost:
@@ -198,7 +214,7 @@ def run_resnet50_trace_2cqs_inference(
         weight_dtype,
         math_fidelity,
         dealloc_input=True,
-        final_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
         model_location_generator=model_location_generator,
     )
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
@@ -220,6 +236,7 @@ def run_resnet50_trace_2cqs_inference(
     ttnn.record_event(0, op_event)
     test_infra.run()
     test_infra.validate()
+    test_infra.output_tensor.deallocate(force=True)
 
     # Optimized run
     ttnn.wait_for_event(1, op_event)
@@ -228,9 +245,6 @@ def run_resnet50_trace_2cqs_inference(
     ttnn.wait_for_event(0, write_event)
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
     ttnn.record_event(0, op_event)
-    # Deallocate the previous output tensor here to make allocation match capture setup
-    # This allows us to allocate the input tensor after at the same address
-    test_infra.output_tensor.deallocate(force=True)
     test_infra.run()
     test_infra.validate()
 
@@ -242,7 +256,7 @@ def run_resnet50_trace_2cqs_inference(
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
     ttnn.record_event(0, op_event)
     test_infra.output_tensor.deallocate(force=True)
-    first_out_addr = test_infra.input_tensor.buffer_address()
+    trace_input_addr = test_infra.input_tensor.buffer_address()
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     test_infra.run()
     input_tensor = ttnn.allocate_tensor_on_device(
@@ -253,8 +267,7 @@ def run_resnet50_trace_2cqs_inference(
         input_mem_config,
     )
     ttnn.end_trace_capture(device, tid, cq_id=0)
-    assert first_out_addr == input_tensor.buffer_address()
-    test_infra.validate()
+    assert trace_input_addr == input_tensor.buffer_address()
 
     # More optimized run with caching
     if use_signpost:
