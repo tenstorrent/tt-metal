@@ -48,23 +48,23 @@ In addition, since trace requires the addresses of the used tensors to be the sa
 
   This will copy data from the input host tensor to the allocated on device tensor
 
-Normally for performance we try to allocate tensors in L1, but many models are not able to fit in L1 if we keep the input tensor in L1 memory. To work around this, we can allocate our input in DRAM so that we can keep the tensor persistent in memory, then run an operation to move it to L1. For performance, we’d expect to allocate the input as DRAM sharded and move it to L1 sharded using the reshard operation.
+Normally for performance we try to allocate tensors in L1, but many models are not able to fit in L1 if we keep the input tensor in L1 memory. The easiest way to work around this is that we can allocate our input in DRAM so that we can keep the tensor persistent in memory, then run an operation to move it to L1. For performance, we’d expect to allocate the input as DRAM sharded and move it to L1 sharded using the reshard operation. A more complex technique that allows us to still run with our input in L1 is to allow the input tensor to be deallocated, and then reallocating and ensuring it is allocated at the same address at the end of the trace. Both techniques will be demonstrated below.
 
 Trace only supports capturing and executing operations, and not other commands such as reading/writing tensors. This also means that to capture the trace of a sequence of operations, we must run with program cache and have already compiled the target operations before we capture them.
 
-Putting this together, we can capture and execute the trace of a model using the following basic structure:
+Putting this together, we can capture and execute the trace of a model using the following basic structure where we allocate our persistent input in DRAM for simplicity:
 
 ```py
 # Allocate our persistent input tensor
 input_dram_tensor = ttnn.allocate_tensor_on_device(shape, dtype, layout, device, sharded_dram_mem_config)
 
 # First run to compile the model
-ttnn.copy_host_to_device_tensor(host_tensor, device_dram_tensor, cq_id=0)
+ttnn.copy_host_to_device_tensor(host_tensor, input_dram_tensor, cq_id=0)
 input_l1_tensor = ttnn.to_memory_config(input_dram_tensor, sharded_l1_mem_config)
 output_tensor = run_model(input_l1_tensor)
 
 # Capture the trace of the model
-ttnn.copy_host_to_device_tensor(host_tensor, device_dram_tensor, cq_id=0)
+ttnn.copy_host_to_device_tensor(host_tensor, input_dram_tensor, cq_id=0)
 tid = ttnn.begin_trace_capture(device, cq_id=0)
 input_l1_tensor = ttnn.to_memory_config(input_dram_tensor, sharded_l1_mem_config)
 # It is important that we keep the output tensor on device returned here, so that we have the output tensor and associated address to read from after executing trace
@@ -72,7 +72,40 @@ output_tensor = run_model(input_l1_tensor)
 ttnn.end_trace_capture(device, tid, cq_id=0)
 
 # Execute the trace
-ttnn.copy_host_to_device_tensor(host_tensor, device_dram_tensor, cq_id=0)
+ttnn.copy_host_to_device_tensor(host_tensor, input_dram_tensor, cq_id=0)
+ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+host_output_tensor = output_tensor.cpu(blocking=False)
+
+```
+Below is a more advanced example where our input tensor is in L1 and we allow it to be deallocated since the model doesn't fit in L1 if it was persistent, but we will reallocate it at the same address at the end of trace capture to enable having the input in L1 for the trace.
+
+```py
+
+# First run to compile the model
+input_l1_tensor = host_tensor.to(device, sharded_l1_mem_config)
+output_tensor = run_model(input_l1_tensor)
+
+# Capture the trace of the model
+# Record the address of the input tensor to trace so that we can validate we allocated our input tensor at the right address
+input_l1_tensor = host_tensor.to(device, sharded_l1_mem_config)
+input_trace_addr = input_l1_tensor.buffer_address()
+shape = input_l1_tensor.shape
+dtype = input_l1_tensor.dtype
+layout = input_l1_tensor.layout
+# Deallocate the previous output tensor here so that we will allocate our input tensor at the right address afterwards
+output_tensor.deallocate(force=True)
+tid = ttnn.begin_trace_capture(device, cq_id=0)
+# It is important that we keep the output tensor on device returned here, so that we have the output tensor and associated address to read from after executing trace
+output_tensor = run_model(input_l1_tensor)
+
+# Try allocating our persistent input tensor here and verifying it matches the address that trace captured
+input_l1_tensor = ttnn.allocate_tensor_on_device(shape, dtype, layout, device, sharded_l1_mem_config)
+assert input_trace_addr == input_l1_tensor.buffer_address()
+
+ttnn.end_trace_capture(device, tid, cq_id=0)
+
+# Execute the trace
+ttnn.copy_host_to_device_tensor(host_tensor, input_l1_tensor, cq_id=0)
 ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
 host_output_tensor = output_tensor.cpu(blocking=False)
 
@@ -207,7 +240,7 @@ ttnn.wait_for_event(0, write_event)
 input_l1_tensor = ttnn.to_memory_config(input_dram_tensor, sharded_l1_mem_config)
 ttnn.record_event(0, op_event)
 # Record the address of the input tensor to trace so that we can validate we allocated our input tensor at the right address
-first_out_addr = input_l1_tensor.buffer_address()
+input_trace_addr = input_l1_tensor.buffer_address()
 shape = input_l1_tensor.shape
 dtype = input_l1_tensor.dtype
 layout = input_l1_tensor.layout
@@ -219,7 +252,7 @@ output_tensor = run_model(input_l1_tensor)
 
 # Try allocating our persistent input tensor here and verifying it matches the address that trace captured
 input_l1_tensor = ttnn.allocate_tensor_on_device(shape, dtype, layout, device, sharded_l1_mem_config)
-assert first_out_addr == input_l1_tensor.buffer_address()
+assert input_trace_addr == input_l1_tensor.buffer_address()
 
 ttnn.end_trace_capture(device, tid, cq_id=0)
 
