@@ -26,7 +26,7 @@ $PYTHON_CMD -m venv $PYTHON_ENV_DIR
 source $PYTHON_ENV_DIR/bin/activate
 
 echo "Forcefully using a version of pip that will work with our view of editable installs"
-pip install --force-reinstall pip==20.1.1
+#pip install --force-reinstall pip==20.1.1
 
 echo "Setting up virtual env"
 python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
