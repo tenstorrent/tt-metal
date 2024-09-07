@@ -7,11 +7,11 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import skip_for_wormhole_b0, torch_random, is_wormhole_b0, is_grayskull
+from models.utility_functions import is_wormhole_b0, torch_random, is_wormhole_b0, is_grayskull, is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("height", [32])
 @pytest.mark.parametrize("width", [32])
@@ -31,7 +31,7 @@ def test_ttnn_experimental_tensor_exp(device, height, width):
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("m_size", [32])
 @pytest.mark.parametrize("k_size", [32])
 @pytest.mark.parametrize("n_size", [32])
@@ -51,7 +51,7 @@ def test_ttnn_matmul(device, m_size, k_size, n_size):
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("m_size", [32])
 @pytest.mark.parametrize("k_size", [32])
 @pytest.mark.parametrize("n_size", [32])
@@ -92,13 +92,10 @@ def test_ttnn_linear(
     input_shape_b = [1, 1, k_size, n_size]
     bias_shape = [1, 1, 1, n_size]
 
-    interleaved_memory_config = ttnn.experimental.tensor.MemoryConfig(
-        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttnn.experimental.tensor.BufferType.DRAM,
-    )
-    sharded_memory_config = ttnn.experimental.tensor.MemoryConfig(
-        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        buffer_type=ttnn.experimental.tensor.BufferType.L1,
+    interleaved_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    sharded_memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
     )
 
     output_memory_config = sharded_memory_config if output_is_sharded else interleaved_memory_config
@@ -144,12 +141,12 @@ def test_ttnn_linear(
             dtype=input_b_dtype,
         )
         if input_a_is_sharded:
-            input_tensor_a = ttnn.experimental.tensor.interleaved_to_sharded(
+            input_tensor_a = ttnn.interleaved_to_sharded(
                 input_tensor_a,
                 grid_size,
                 [m_size // num_cores, k_size],
-                ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
             )
 
         output_tensor = ttnn.linear(
@@ -161,7 +158,7 @@ def test_ttnn_linear(
             dtype=input_a_dtype,
         )
         if output_is_sharded:
-            output_tensor = ttnn.experimental.tensor.sharded_to_interleaved(output_tensor, interleaved_memory_config)
+            output_tensor = ttnn.sharded_to_interleaved(output_tensor, interleaved_memory_config)
 
         output_tensor = ttnn.to_torch(output_tensor)
         ttnn.tracer.visualize(output_tensor)
@@ -187,17 +184,11 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
         torch_input_tensor_in0, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16
     )
     # in0 shard config
-    grid_coord = ttnn.experimental.tensor.CoreCoord(grid_size.x - 1, grid_size.y - 1)
-    shard_grid = ttnn.experimental.tensor.CoreRangeSet(
-        {ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), grid_coord)}
-    )
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
     shard_shape = (32, 1024)
-    shard_spec = ttnn.experimental.tensor.ShardSpec(
-        shard_grid, shard_shape, ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
-    )
-    sharded_mem_config = ttnn.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec
-    )
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+    sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
     input_tensor_in0 = ttnn.to_memory_config(input_tensor_in0, sharded_mem_config)
 
     # in1 shard config
@@ -205,9 +196,7 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
     in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), in1_shard_grid)})
     in1_shard_shape = (8192, 96)
     in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
-    in1_mem_config = ttnn.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.DRAM, in1_shard_spec
-    )
+    in1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
     input_tensor_in1 = ttnn.from_torch(
         torch_input_tensor_in1,
         layout=ttnn.TILE_LAYOUT,
@@ -257,13 +246,10 @@ def test_sharded_partial_op(device, H, num_cores, num_slices, enable_async):
     in0_shape = [1, 1, H, 64]
     W = in0_shape[-1]
 
-    interleaved_mem_config = ttnn.experimental.tensor.MemoryConfig(
-        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttnn.experimental.tensor.BufferType.L1,
-    )
-    sharded_mem_config = ttnn.experimental.tensor.MemoryConfig(
-        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        buffer_type=ttnn.experimental.tensor.BufferType.L1,
+    interleaved_mem_config = ttnn.L1_MEMORY_CONFIG
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
     )
 
     in0 = torch.ones(in0_shape).bfloat16().float()
@@ -291,8 +277,8 @@ def test_sharded_partial_op(device, H, num_cores, num_slices, enable_async):
             height_shard_spec,
             num_slices,
             slice_index,
-            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
         )
         assert in0_t_slice.is_sharded()
 

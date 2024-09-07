@@ -112,9 +112,9 @@ def _run_single_test(run, skip, xfail, permutation, *, device):
             status = "crashed"
             message = f"Exception: {e}"
     finally:
-        import tt_lib as ttl
+        import ttnn
 
-        ttl.device.DeallocateBuffers(device)
+        ttnn.device.DeallocateBuffers(device)
     return status, message
 
 

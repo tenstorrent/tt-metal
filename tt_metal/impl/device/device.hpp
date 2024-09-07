@@ -53,6 +53,14 @@ static constexpr float  EPS_GS = 0.001953125f;
 static constexpr float  EPS_WHB0 = 1.19209e-7f;
 static constexpr float  EPS_BH = EPS_WHB0;
 
+static constexpr float  NAN_GS = 6.9752e19;
+static constexpr float  NAN_WHB0 = 7.0040e+19;
+static constexpr float  NAN_BH = NAN_WHB0;
+
+static constexpr float  INF_GS = 1.6948e38;
+static constexpr float  INF_WHB0 = 1.7014e+38;
+static constexpr float  INF_BH = INF_WHB0;
+
 // A physical PCIexpress Tenstorrent device
 class Device {
    public:
@@ -194,6 +202,12 @@ class Device {
     // machine epsilon
     float sfpu_eps() const;
 
+    // machine nan
+    float sfpu_nan() const;
+
+    // machine inf
+    float sfpu_inf() const;
+
     void generate_device_headers(const std::string &path) const;
     const JitBuildEnv& build_env() const { return this->build_env_; }
     const string build_firmware_target_path(JitBuildProcessorType t, int i) const;
@@ -314,8 +328,9 @@ class Device {
    uint32_t trace_buffers_size = 0;
    void update_dispatch_cores_for_multi_cq_eth_dispatch();
 
+    HalProgrammableCoreType get_programmable_core_type(CoreCoord phys_core) const;
     template <typename T = DeviceAddr>
-    T get_dev_addr(CoreCoord phys_core, HalMemAddrType addr_type);
+    T get_dev_addr(CoreCoord phys_core, HalMemAddrType addr_type) const;
 
     template <typename CoreRangeContainer>
     std::vector<pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const CoreRangeContainer& ranges, const CoreType core_type);
@@ -326,22 +341,25 @@ class Device {
     std::unordered_map<uint32_t, std::shared_ptr<TraceBuffer>> trace_buffer_pool_;
 };
 
-template <typename T>
-T Device::get_dev_addr(CoreCoord phys_core, HalMemAddrType addr_type) {
+inline HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord phys_core) const {
 
-    HalProgrammableCoreType dispatch_core_type = HalProgrammableCoreType::TENSIX;;
-
+    HalProgrammableCoreType programmable_core_type = HalProgrammableCoreType::TENSIX;
     if (tt::llrt::is_ethernet_core(phys_core, this->id_)) {
         // Eth pcores have a different address, but only active ones.
         CoreCoord logical_core = this->logical_core_from_ethernet_core(phys_core);
         if (this->is_active_ethernet_core(logical_core)) {
-            dispatch_core_type = HalProgrammableCoreType::ACTIVE_ETH;
+            programmable_core_type = HalProgrammableCoreType::ACTIVE_ETH;
         } else {
-            dispatch_core_type = HalProgrammableCoreType::IDLE_ETH;
+            programmable_core_type = HalProgrammableCoreType::IDLE_ETH;
         }
     }
 
-    return hal.get_dev_addr<T>(dispatch_core_type, addr_type);
+    return programmable_core_type;
+}
+
+template <typename T>
+inline T Device::get_dev_addr(CoreCoord phys_core, HalMemAddrType addr_type) const {
+    return hal.get_dev_addr<T>(this->get_programmable_core_type(phys_core), addr_type);
 }
 
 // TODO: Find a better home for this function

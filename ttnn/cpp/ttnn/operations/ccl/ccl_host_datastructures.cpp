@@ -59,36 +59,11 @@ CCLOpConfig::CCLOpConfig(
     input_sharded(input_tensors.at(0).is_sharded()),
     output_sharded(output_tensors.at(0).is_sharded()),
     page_size(input_tensors.at(0).buffer()->page_size()),
-    input_shard_size_bytes(
-        input_tensors.at(0).is_sharded() ? static_cast<std::optional<uint32_t>>(
-                                                (input_tensors.at(0).buffer()->page_size() *
-                                                input_tensors.at(0).buffer()->shard_spec().tensor2d_shape[0] *
-                                                input_tensors.at(0).buffer()->shard_spec().tensor2d_shape[1]) /
-                                                input_tensors.at(0).shard_spec()->num_cores())
-                                            : std::nullopt),
-    output_shard_size_bytes(
-        output_tensors.at(0).is_sharded() ? static_cast<std::optional<uint32_t>>(
-                                                (output_tensors.at(0).buffer()->page_size() *
-                                                    output_tensors.at(0).buffer()->shard_spec().tensor2d_shape[0] *
-                                                    output_tensors.at(0).buffer()->shard_spec().tensor2d_shape[1]) /
-                                                input_tensors.at(0).shard_spec()->num_cores())
-                                            : std::nullopt),
     shard_grid_size(output_tensors.at(0).is_sharded() ? input_tensors.at(0).shard_spec()->num_cores() : 0),
     topology(topology),
     is_row_major(input_tensors.at(0).get_layout() == Layout::ROW_MAJOR) {
-    TT_ASSERT(!this->is_input_sharded() || input_shard_size_bytes.has_value());
-    TT_ASSERT(!this->is_output_sharded() || output_shard_size_bytes.has_value());
 }
 
-uint32_t CCLOpConfig::get_input_shard_size_bytes() const {
-    TT_ASSERT(input_shard_size_bytes.has_value());
-    return input_shard_size_bytes.value();
-}
-
-uint32_t CCLOpConfig::get_output_shard_size_bytes() const {
-    TT_ASSERT(output_shard_size_bytes.has_value());
-    return output_shard_size_bytes.value();
-}
 
 uint32_t CCLOpConfig::get_page_size() const { return this->page_size; }
 

@@ -6,7 +6,7 @@ import torch
 
 from loguru import logger
 
-import tt_lib
+import ttnn
 
 from models.experimental.yolov3.reference.models.common import (
     autopad,
@@ -34,9 +34,7 @@ def test_upsample_module(device, model_location_generator):
     model_config_path = str(data_path / "yolov3.yaml")
     weights_loc = str(model_path / "yolov3.pt")
 
-    reference_model = DetectMultiBackend(
-        weights_loc, device=torch.device("cpu"), dnn=False, data=data_coco, fp16=False
-    )
+    reference_model = DetectMultiBackend(weights_loc, device=torch.device("cpu"), dnn=False, data=data_coco, fp16=False)
     state_dict = reference_model.state_dict()
 
     INDEX = 17
@@ -57,7 +55,7 @@ def test_upsample_module(device, model_location_generator):
     # Inference
     pred = torch_model(im)
 
-    tt_im = torch2tt_tensor(im, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+    tt_im = torch2tt_tensor(im, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
     tt_pred = tt_model(tt_im)
 
     # Compare outputs

@@ -18,7 +18,7 @@
 extern "C" {
 #endif
 
-void ApplicationHandler(void) __attribute__((__section__(".init")));
+  void ApplicationHandler(void);
 
 #ifdef __cplusplus
 }
@@ -47,6 +47,7 @@ uint32_t atomic_ret_val __attribute__ ((section ("l1_data"))) __attribute__((use
 
 uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
 void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
     DEBUG_STATUS("I");
@@ -80,13 +81,10 @@ void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
         if (mailboxes->launch.go.run == RUN_MSG_GO) {
             DeviceZoneScopedMainN("ERISC-FW");
             DeviceZoneSetCounter(mailboxes->launch.kernel_config.host_assigned_id);
-            DEBUG_STATUS("R");
-            uint32_t kernel_config_base = mailboxes->launch.kernel_config.kernel_config_base;
-            rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-                mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_ETH_DM0].rta_offset);
-            crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-                mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_ETH_DM0].crta_offset);
 
+            firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
+
+            DEBUG_STATUS("R");
             kernel_init();
         } else {
             internal_::risc_context_switch();

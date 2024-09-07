@@ -259,8 +259,8 @@ def test_prim_add(device, shape):
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.prim.binary(input_tensor_a, input_tensor_b, ttnn.BinaryOpType.ADD, in_place=True)
-    output_tensor = ttnn.to_torch(output_tensor)
+    ttnn.prim.binary(input_tensor_a, input_tensor_b, ttnn.BinaryOpType.ADD, output_tensor=input_tensor_a)
+    output_tensor = ttnn.to_torch(input_tensor_a)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.99988)
     assert output_tensor.shape == shape
@@ -299,12 +299,12 @@ def test_add_with_different_batch(device, shape_a, shape_b):
 
     # Intended to swap code below with: output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     # print("here!!!!!!!!!!!!!!!!!!!!!!!")
-    # output_tensor = ttnn.experimental.tensor.bcast(
+    # output_tensor = ttnn.bcast(
     #     input_tensor_a,
     #     input_tensor_b,
-    #     ttnn.experimental.tensor.BcastOpMath.ADD,
-    #     ttnn.experimental.tensor.BcastOpDim.H,
-    #     output_mem_config=input_tensor_a.memory_config(),
+    #     ttnn.BcastOpMath.ADD,
+    #     ttnn.BcastOpDim.H,
+    #     memory_config=input_tensor_a.memory_config(),
     # )
     output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 

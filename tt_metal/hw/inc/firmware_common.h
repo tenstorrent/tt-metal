@@ -5,12 +5,14 @@
 #pragma once
 
 #include <cstdint>
+#include "core_config.h"
 #include "ckernel_globals.h"
 #include "tensix_functions.h"
 #include "risc_attribs.h"
 #include "compile_time_args.h"
 #include "dev_mem_map.h"
 #include "hostdevcommon/kernel_structs.h"
+#include "dev_msgs.h"
 
 extern uint32_t __ldm_bss_start[];
 extern uint32_t __ldm_bss_end[];
@@ -59,8 +61,27 @@ inline void firmware_kernel_common_init(void *init_local_l1_base) {
     for (void (** fptr)() = __init_array_start; fptr < __init_array_end; fptr++) {
         (**fptr)();
     }
+}
+FORCE_INLINE
+uint32_t firmware_config_init(tt_l1_ptr mailboxes_t* const mailboxes, uint32_t core_type_index, uint32_t dispatch_class) {
 
-    // Make sure DBG_FEATURE_DISABLE register is cleared before every kernel is executed
-    memory_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);
+    extern uint32_t tt_l1_ptr *rta_l1_base;
+    extern uint32_t tt_l1_ptr *crta_l1_base;
+    extern uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT];
 
+    // TODO: check the asm for this loop to be sure loads are scheduled ok
+    uint32_t kernel_config_base[ProgrammableCoreType::COUNT];
+#pragma GCC unroll ProgrammableCoreType::COUNT
+    for (uint32_t index = 0; index < ProgrammableCoreType::COUNT; index++) {
+        kernel_config_base[index] =
+            mailboxes->launch.kernel_config.kernel_config_base[index];
+        sem_l1_base[index] = (uint32_t tt_l1_ptr *)(kernel_config_base[index] +
+            mailboxes->launch.kernel_config.sem_offset[index]);
+    }
+    rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base[core_type_index] +
+        mailboxes->launch.kernel_config.mem_map[dispatch_class].rta_offset);
+    crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base[core_type_index] +
+        mailboxes->launch.kernel_config.mem_map[dispatch_class].crta_offset);
+
+    return kernel_config_base[core_type_index];
 }

@@ -10,7 +10,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace tt {
 namespace operations {
@@ -31,7 +31,7 @@ operation::ProgramWithCallbacks moreh_sgd_(
     bool nesterov,
     bool momentum_initialized,
     const CoreRange core_range,
-    const DeviceComputeKernelConfig compute_kernel_config);
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config);
 
 struct MorehSGD {
     float lr;
@@ -43,7 +43,7 @@ struct MorehSGD {
     const CoreRange core_range;  // unused for now
     MemoryConfig param_out_mem_config;
     MemoryConfig momentum_buffer_out_mem_config;
-    const DeviceComputeKernelConfig compute_kernel_config;
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
 
     void validate_with_output_tensors(
         const std::vector<Tensor> &input_tensors,
@@ -86,7 +86,7 @@ std::vector<std::optional<Tensor>> moreh_sgd(
     bool momentum_initialized,
     const MemoryConfig &param_out_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     const MemoryConfig &momentum_buffer_out_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace primary
 }  // namespace operations

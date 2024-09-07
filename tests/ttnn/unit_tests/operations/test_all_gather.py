@@ -5,15 +5,15 @@
 import torch
 import pytest
 from loguru import logger
-import tt_lib as ttl
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull, get_devices_for_t3000
 import itertools
+from ttnn import ShardTensorToMesh
 
 
 def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout):
-    if layout == ttl.tensor.Layout.ROW_MAJOR and input_dtype == ttl.tensor.DataType.BFLOAT8_B:
+    if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
         return True, "Invalid combination"
 
     if num_devices < 2:
@@ -26,8 +26,8 @@ def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, in
 
     ## Check that we can readback results
     fast_dispatch_page_size_limit = 55 * 1024
-    elem_size = 2 if input_dtype == ttl.tensor.DataType.BFLOAT16 else 1
-    if layout == ttl.tensor.Layout.ROW_MAJOR and (input_shape[dim] * elem_size) > fast_dispatch_page_size_limit:
+    elem_size = 2 if input_dtype == ttnn.bfloat16 else 1
+    if layout == ttnn.ROW_MAJOR_LAYOUT and (input_shape[dim] * elem_size) > fast_dispatch_page_size_limit:
         # Fast dispatch currently can't breakup readback of large pages into multiple smaller pages and is
         # limited to ~55K pages.
         return True, "Fast dispatch can't support reading back this page size in one shot"
@@ -37,7 +37,7 @@ def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, in
     for i in input_shape:
         tensor_size_bytes *= i
     num_l1_banks = 64
-    if mem_config.buffer_type == ttl.tensor.BufferType.L1 and tensor_size_bytes > num_l1_banks * 50 * 1024:
+    if mem_config.buffer_type == ttnn.BufferType.L1 and tensor_size_bytes > num_l1_banks * 50 * 1024:
         return True, "L1 buffer can't support large tensor sizes"
 
     # Check that each chip has a non-zero amount of data available
@@ -45,7 +45,7 @@ def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, in
     if dim == 3:
         min_sized_chunks_on_dim //= 32
     if dim == 2:
-        if layout == ttl.tensor.Layout.TILE:
+        if layout == ttnn.TILE_LAYOUT:
             min_sized_chunks_on_dim //= 32
     if min_sized_chunks_on_dim < num_devices:
         return (
@@ -53,12 +53,7 @@ def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, in
             f"Input shape {input_shape} incompatible with {num_devices} on dim {dim} because some chips will have no tensor",
         )
 
-    if (
-        input_shape == [8, 8, 256, 384]
-        and dim == 1
-        and layout == ttl.tensor.Layout.TILE
-        and input_dtype == ttl.tensor.DataType.BFLOAT8_B
-    ):
+    if input_shape == [8, 8, 256, 384] and dim == 1 and layout == ttnn.TILE_LAYOUT and input_dtype == ttnn.bfloat8_b:
         return True, "Known failure"
 
     return False, ""
@@ -108,19 +103,19 @@ def run_all_gather_on_t3000_impl(
     input_tensors = torch.chunk(input_tensor, num_devices, dim)
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttl.tensor.Tensor(t, input_dtype).to(layout).to(devices[i], mem_config))
+        tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(devices[i], mem_config))
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     for i in range(num_iters):
         tt_out_tensor = all_gather_operation(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
 
         for d in devices:
-            ttl.device.Synchronize(d)
+            ttnn.synchronize_device(d)
         logger.info(f"Done iteration {i}")
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-        tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-        if input_dtype == ttl.tensor.DataType.BFLOAT16:
+        tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+        if input_dtype == ttnn.bfloat16:
             eq, output = comp_equal(tt_output_tensor, input_tensor)
         else:
             eq, output = comp_pcc(tt_output_tensor, input_tensor)
@@ -166,30 +161,28 @@ def run_all_gather_on_t3000_impl_tight_loop(
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
-        # (4, 2, [4, 1, 256, 32], 0, ttl.tensor.Layout.TILE),        # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.TILE),        # https://github.com/tenstorrent/tt-metal/issues/9686
-        (8, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
-        # (4, 2, [1, 1, 32, 32768], 3, ttl.tensor.Layout.TILE),      # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (4, 2, [4, 1, 256, 32], 0, ttl.tensor.Layout.ROW_MAJOR),   # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.ROW_MAJOR),   # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (4, 2, [1, 1, 32, 32768], 3, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (4, 2, [4, 1, 256, 32], 0, ttnn.TILE_LAYOUT),        # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [8, 1, 256, 32], 0, ttnn.TILE_LAYOUT),        # https://github.com/tenstorrent/tt-metal/issues/9686
+        (8, 1, [1, 1, 32, 16384], 3, ttnn.TILE_LAYOUT),
+        # (4, 2, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),      # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (4, 2, [4, 1, 256, 32], 0, ttnn.ROW_MAJOR_LAYOUT),   # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [8, 1, 256, 32], 0, ttnn.ROW_MAJOR_LAYOUT),   # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [1, 1, 32, 16384], 3, ttnn.ROW_MAJOR_LAYOUT), # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (4, 2, [1, 1, 32, 32768], 3, ttnn.ROW_MAJOR_LAYOUT), # https://github.com/tenstorrent/tt-metal/issues/9686
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,
-        # ttl.tensor.DataType.BFLOAT8_B,        # https://github.com/tenstorrent/tt-metal/issues/9686
+        ttnn.bfloat16,
+        # ttnn.bfloat8_b,        # https://github.com/tenstorrent/tt-metal/issues/9686
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
-        ttl.tensor.MemoryConfig(
-            buffer_type=ttl.tensor.BufferType.DRAM
-        ),  # https://github.com/tenstorrent/tt-metal/issues/9686
-        # ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),  # https://github.com/tenstorrent/tt-metal/issues/9686
+        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("num_iters", [1])  # restore to 500: https://github.com/tenstorrent/tt-metal/issues/9686
@@ -230,28 +223,28 @@ def test_all_gather_on_t3000_post_commit_looping(
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
-        (4, 2, [4, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
-        (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
-        (8, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
-        (4, 2, [1, 1, 32, 32768], 3, ttl.tensor.Layout.TILE),
-        (4, 2, [4, 1, 256, 32], 0, ttl.tensor.Layout.ROW_MAJOR),
-        (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.ROW_MAJOR),
-        (8, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.ROW_MAJOR),
-        (4, 2, [1, 1, 32, 32768], 3, ttl.tensor.Layout.ROW_MAJOR),
+        (4, 2, [4, 1, 256, 32], 0, ttnn.TILE_LAYOUT),
+        (8, 1, [8, 1, 256, 32], 0, ttnn.TILE_LAYOUT),
+        (8, 1, [1, 1, 32, 16384], 3, ttnn.TILE_LAYOUT),
+        (4, 2, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),
+        (4, 2, [4, 1, 256, 32], 0, ttnn.ROW_MAJOR_LAYOUT),
+        (8, 1, [8, 1, 256, 32], 0, ttnn.ROW_MAJOR_LAYOUT),
+        (8, 1, [1, 1, 32, 16384], 3, ttnn.ROW_MAJOR_LAYOUT),
+        (4, 2, [1, 1, 32, 32768], 3, ttnn.ROW_MAJOR_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,
-        # ttl.tensor.DataType.BFLOAT8_B,        # https://github.com/tenstorrent/tt-metal/issues/9686
+        ttnn.bfloat16,
+        # ttnn.bfloat8_b,        # https://github.com/tenstorrent/tt-metal/issues/9686
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
-        # ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.DRAM),        # https://github.com/tenstorrent/tt-metal/issues/9686
-        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
+        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),        # https://github.com/tenstorrent/tt-metal/issues/9686
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("num_iters", [1000])  # TODO: restore to 500
@@ -292,58 +285,58 @@ def test_all_gather_on_t3000_nightly_commit_looping(
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
-        (4, 2, [4, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),  # https://github.com/tenstorrent/tt-metal/issues/9686
-        (8, 1, [8, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),  # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.ROW_MAJOR),           # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (4, 2, [8, 8, 256, 384], 1, ttl.tensor.Layout.ROW_MAJOR),           # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (4, 2, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),           # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),           # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (4, 2, [8, 5, 13, 384], 3, ttl.tensor.Layout.ROW_MAJOR),           # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [8, 5, 13, 512], 3, ttl.tensor.Layout.ROW_MAJOR),           # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (4, 2, [8, 5, 32, 384], 3, ttl.tensor.Layout.TILE),           # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [8, 5, 32, 512], 3, ttl.tensor.Layout.TILE),
+        (4, 2, [4, 1, 33, 256], 0, ttnn.ROW_MAJOR_LAYOUT),  # https://github.com/tenstorrent/tt-metal/issues/9686
+        (8, 1, [8, 1, 33, 256], 0, ttnn.ROW_MAJOR_LAYOUT),  # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [8, 8, 256, 384], 1, ttnn.ROW_MAJOR_LAYOUT),           # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (4, 2, [8, 8, 256, 384], 1, ttnn.ROW_MAJOR_LAYOUT),           # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (4, 2, [8, 8, 256, 384], 1, ttnn.TILE_LAYOUT),           # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [8, 8, 256, 384], 1, ttnn.TILE_LAYOUT),           # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (4, 2, [8, 5, 13, 384], 3, ttnn.ROW_MAJOR_LAYOUT),           # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [8, 5, 13, 512], 3, ttnn.ROW_MAJOR_LAYOUT),           # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (4, 2, [8, 5, 32, 384], 3, ttnn.TILE_LAYOUT),           # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [8, 5, 32, 512], 3, ttnn.TILE_LAYOUT),
         # Only for BFP8B
-        # # ([1, 1, 640, 32768], 3, ttl.tensor.Layout.TILE),        # https://github.com/tenstorrent/tt-metal/issues/9686
+        # # ([1, 1, 640, 32768], 3, ttnn.TILE_LAYOUT),        # https://github.com/tenstorrent/tt-metal/issues/9686
         # # MLP AllGather,  Llama 2 decode attn, mlp. Llama2, Falcon 40B decode mlp attn
-        # (8, 1, [1, 1, 32, 32768], 3, ttl.tensor.Layout.TILE),        # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (4, 2, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),        # https://github.com/tenstorrent/tt-metal/issues/9686
-        # # (4, 2, [1, 1, 32, 32768], 3, ttl.tensor.Layout.TILE),        # https://github.com/tenstorrent/tt-metal/issues/9686
-        # # (8, 1, [1, 1, 32, 32768], 3, ttl.tensor.Layout.ROW_MAJOR),        # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),        # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (4, 2, [1, 1, 32, 16384], 3, ttnn.TILE_LAYOUT),        # https://github.com/tenstorrent/tt-metal/issues/9686
+        # # (4, 2, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),        # https://github.com/tenstorrent/tt-metal/issues/9686
+        # # (8, 1, [1, 1, 32, 32768], 3, ttnn.ROW_MAJOR_LAYOUT),        # https://github.com/tenstorrent/tt-metal/issues/9686
         # # Input, Selfout, Final AllGather,  Llama2, Falcon 40B decode mlp attn
-        # (8, 1, [1, 1, 32, 8192], 3, ttl.tensor.Layout.TILE),        # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (4, 2, [1, 1, 32, 8192], 3, ttl.tensor.Layout.TILE),        # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [1, 1, 32, 8192], 3, ttl.tensor.Layout.ROW_MAJOR),        # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [1, 1, 32, 8192], 3, ttnn.TILE_LAYOUT),        # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (4, 2, [1, 1, 32, 8192], 3, ttnn.TILE_LAYOUT),        # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [1, 1, 32, 8192], 3, ttnn.ROW_MAJOR_LAYOUT),        # https://github.com/tenstorrent/tt-metal/issues/9686
         # # Falcon 40B prefill
         # # 8 chips
-        # (8, 1, [1, 1, 2048, 8192], 3, ttl.tensor.Layout.TILE),          # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [1, 1, 2048, 8192], 3, ttl.tensor.Layout.ROW_MAJOR),          # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [1, 1, 2048, 8192], 3, ttnn.TILE_LAYOUT),          # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [1, 1, 2048, 8192], 3, ttnn.ROW_MAJOR_LAYOUT),          # https://github.com/tenstorrent/tt-metal/issues/9686
         # # Falcon 40B prefill, also mixtral expert reduction (w/ zero filled tensor)
         # # 8 chips
-        # (8, 1, [1, 1, 2048, 32768], 3, ttl.tensor.Layout.TILE),  # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [1, 1, 2048, 32768], 3, ttnn.TILE_LAYOUT),  # https://github.com/tenstorrent/tt-metal/issues/9686
         # # Llama/falcon40B galaxy mlp weights stationary -> emulation of row/col reduce
-        # (8, 1, [1, 1, 256, 1024], 2, ttl.tensor.Layout.TILE),          # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [1, 1, 246, 4096], 2, ttl.tensor.Layout.ROW_MAJOR),          # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [1, 1, 246, 4096], 2, ttl.tensor.Layout.TILE),          # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [1, 1, 8192, 32], 2, ttl.tensor.Layout.TILE),          # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [1, 1, 1024, 256], 3, ttl.tensor.Layout.TILE),          # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [1, 1, 256, 2048], 2, ttl.tensor.Layout.TILE),          # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [1, 1, 256, 8192], 2, ttl.tensor.Layout.TILE),  # double on reduction dim for 8 chip          # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.TILE),          # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [8, 8, 128, 4096], 1, ttl.tensor.Layout.TILE),          # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [1, 1, 256, 1024], 2, ttnn.TILE_LAYOUT),          # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [1, 1, 246, 4096], 2, ttnn.ROW_MAJOR_LAYOUT),          # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [1, 1, 246, 4096], 2, ttnn.TILE_LAYOUT),          # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [1, 1, 8192, 32], 2, ttnn.TILE_LAYOUT),          # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [1, 1, 1024, 256], 3, ttnn.TILE_LAYOUT),          # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [1, 1, 256, 2048], 2, ttnn.TILE_LAYOUT),          # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [1, 1, 256, 8192], 2, ttnn.TILE_LAYOUT),  # double on reduction dim for 8 chip          # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [8, 1, 256, 32], 0, ttnn.TILE_LAYOUT),          # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [8, 8, 128, 4096], 1, ttnn.TILE_LAYOUT),          # https://github.com/tenstorrent/tt-metal/issues/9686
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,
-        # ttl.tensor.DataType.BFLOAT8_B,          # https://github.com/tenstorrent/tt-metal/issues/9686
+        ttnn.bfloat16,
+        # ttnn.bfloat8_b,          # https://github.com/tenstorrent/tt-metal/issues/9686
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
-        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.DRAM),
-        # ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),  # https://github.com/tenstorrent/tt-metal/issues/9686
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),  # https://github.com/tenstorrent/tt-metal/issues/9686
     ],
 )
 def test_all_gather_on_t3000_post_commit(
@@ -374,6 +367,60 @@ def test_all_gather_on_t3000_post_commit(
 
 
 def run_line_all_gather(
+    t3k_mesh_device,
+    num_devices,
+    input_shape,
+    dim,
+    num_links,
+    input_dtype,
+    layout,
+    mem_config,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    num_iters=1,
+):
+    if t3k_mesh_device.get_num_devices() != 8:
+        pytest.skip("Not T3000!")
+
+    for device in t3k_mesh_device.get_devices():
+        device.enable_async(enable_async)
+
+    logger.info(f"Input shape: {input_shape}")
+    logger.info(f"dim: {dim}")
+
+    (is_known_failure, message) = is_unsupported_case(
+        input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout
+    )
+    if is_known_failure:
+        pytest.skip(f"Skipping unsupported case {message}.")
+
+    logger.info(f"Input shape: {input_shape}")
+    logger.info(f"dim: {dim}")
+
+    input_tensor = torch.rand(input_shape).bfloat16()
+
+    ttnn_tensor = ttnn.from_torch(input_tensor, mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=dim))
+    input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_mesh_device)
+
+    for i in range(num_iters):
+        tt_out_tensor = ttnn.line_all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
+
+        logger.info(f"Done iteration {i}")
+
+    for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
+        tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+        if input_dtype == ttnn.bfloat16:
+            eq, output = comp_equal(tt_output_tensor, input_tensor)
+        else:
+            eq, output = comp_pcc(tt_output_tensor, input_tensor)
+        if not eq:
+            logger.error(f"output mismatch for tensor {i}")
+        assert eq, f"{i} FAILED: {output}"
+
+
+# This run function is deprecated and is only intended to be used by 2-link tests on t3k
+def run_line_all_gather_deprecated(
     all_devices,
     num_devices,
     input_shape,
@@ -412,19 +459,19 @@ def run_line_all_gather(
     input_tensors = torch.chunk(input_tensor, num_devices, dim)
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttl.tensor.Tensor(t, input_dtype).to(layout).to(devices[i], mem_config))
+        tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(devices[i], mem_config))
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     for i in range(num_iters):
         tt_out_tensor = ttnn.line_all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
 
         for d in devices:
-            ttl.device.Synchronize(d)
+            ttnn.synchronize_device(d)
         logger.info(f"Done iteration {i}")
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-        tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-        if input_dtype == ttl.tensor.DataType.BFLOAT16:
+        tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+        if input_dtype == ttnn.bfloat16:
             eq, output = comp_equal(tt_output_tensor, input_tensor)
         else:
             eq, output = comp_pcc(tt_output_tensor, input_tensor)
@@ -438,41 +485,39 @@ def run_line_all_gather(
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
-        (4, 2, [1, 4, 32, 3584], 1, ttl.tensor.Layout.TILE),
-        (8, 1, [1, 8, 32, 2048], 1, ttl.tensor.Layout.TILE),
-        (8, 1, [1, 8, 32, 4096], 1, ttl.tensor.Layout.TILE),
-        # (4, 1, [4, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [8, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
-        # # (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
-        # (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (4, 2, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE), # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE), # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (4, 1, [8, 5, 13, 384], 3, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [8, 5, 13, 512], 3, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (4, 1, [8, 5, 32, 384], 3, ttl.tensor.Layout.TILE), # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [8, 5, 32, 512], 3, ttl.tensor.Layout.TILE), # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (4, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
+        # (4, 2, [1, 4, 32, 3584], 1, ttnn.TILE_LAYOUT),
+        (8, 1, [1, 8, 32, 2048], 1, ttnn.TILE_LAYOUT),
+        (8, 1, [1, 8, 32, 4096], 1, ttnn.TILE_LAYOUT),
+        # (4, 1, [4, 1, 33, 256], 0, ttnn.ROW_MAJOR_LAYOUT), # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [8, 1, 33, 256], 0, ttnn.ROW_MAJOR_LAYOUT), # https://github.com/tenstorrent/tt-metal/issues/9686
+        # # (8, 1, [8, 1, 256, 32], 0, ttnn.TILE_LAYOUT),
+        # (8, 1, [8, 8, 256, 384], 1, ttnn.ROW_MAJOR_LAYOUT), # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (4, 2, [8, 8, 256, 384], 1, ttnn.TILE_LAYOUT), # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [8, 8, 256, 384], 1, ttnn.TILE_LAYOUT), # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (4, 1, [8, 5, 13, 384], 3, ttnn.ROW_MAJOR_LAYOUT), # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [8, 5, 13, 512], 3, ttnn.ROW_MAJOR_LAYOUT), # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (4, 1, [8, 5, 32, 384], 3, ttnn.TILE_LAYOUT), # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [8, 5, 32, 512], 3, ttnn.TILE_LAYOUT), # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (4, 1, [1, 1, 32, 16384], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.DataType.BFLOAT8_B,  # https://github.com/tenstorrent/tt-metal/issues/9686
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,  # https://github.com/tenstorrent/tt-metal/issues/9686
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
-        ttl.tensor.MemoryConfig(
-            buffer_type=ttl.tensor.BufferType.DRAM
-        ),  # https://github.com/tenstorrent/tt-metal/issues/9686
-        # ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),  # https://github.com/tenstorrent/tt-metal/issues/9686
+        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_line_all_gather_on_t3000_post_commit(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     dim,
@@ -486,6 +531,64 @@ def test_line_all_gather_on_t3000_post_commit(
     num_iters=1,
 ):
     run_line_all_gather(
+        t3k_mesh_device,
+        num_devices,
+        input_shape,
+        dim,
+        num_links,
+        input_dtype,
+        layout,
+        mem_config,
+        use_program_cache,
+        function_level_defaults,
+        enable_async,
+        num_iters,
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, num_links, input_shape, dim, layout",
+    [
+        (
+            4,
+            2,
+            [1, 4, 32, 3584],
+            1,
+            ttnn.TILE_LAYOUT,
+        ),  # test cases with num_links = 2 is currently not supported by new mesh fixture
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+    ],
+)
+@pytest.mark.parametrize("enable_async", [True, False])
+def test_line_all_gather_on_t3000_post_commit_two_link(
+    all_devices,
+    num_devices,
+    input_shape,
+    dim,
+    num_links,
+    input_dtype,
+    layout,
+    mem_config,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    num_iters=1,
+):
+    run_line_all_gather_deprecated(
         all_devices,
         num_devices,
         input_shape,
@@ -506,36 +609,36 @@ def test_line_all_gather_on_t3000_post_commit(
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
-        (4, 1, [4, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),
-        (8, 1, [8, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),
-        # (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
-        (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.ROW_MAJOR),
-        (4, 2, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),
-        (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),
-        (4, 1, [8, 5, 13, 384], 3, ttl.tensor.Layout.ROW_MAJOR),
-        (8, 1, [8, 5, 13, 512], 3, ttl.tensor.Layout.ROW_MAJOR),
-        (4, 1, [8, 5, 32, 384], 3, ttl.tensor.Layout.TILE),
-        (8, 1, [8, 5, 32, 512], 3, ttl.tensor.Layout.TILE),
-        (4, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
+        (4, 1, [4, 1, 33, 256], 0, ttnn.ROW_MAJOR_LAYOUT),
+        (8, 1, [8, 1, 33, 256], 0, ttnn.ROW_MAJOR_LAYOUT),
+        # (8, 1, [8, 1, 256, 32], 0, ttnn.TILE_LAYOUT),
+        (8, 1, [8, 8, 256, 384], 1, ttnn.ROW_MAJOR_LAYOUT),
+        # (4, 2, [8, 8, 256, 384], 1, ttnn.TILE_LAYOUT),
+        (8, 1, [8, 8, 256, 384], 1, ttnn.TILE_LAYOUT),
+        (4, 1, [8, 5, 13, 384], 3, ttnn.ROW_MAJOR_LAYOUT),
+        (8, 1, [8, 5, 13, 512], 3, ttnn.ROW_MAJOR_LAYOUT),
+        (4, 1, [8, 5, 32, 384], 3, ttnn.TILE_LAYOUT),
+        (8, 1, [8, 5, 32, 512], 3, ttnn.TILE_LAYOUT),
+        (4, 1, [1, 1, 32, 16384], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.DataType.BFLOAT8_B,
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
-        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_line_all_gather_on_t3000_nightly(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     dim,
@@ -549,7 +652,7 @@ def test_line_all_gather_on_t3000_nightly(
     num_iters=1,
 ):
     run_line_all_gather(
-        all_devices,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         dim,
@@ -577,115 +680,115 @@ def test_line_all_gather_on_t3000_nightly(
 @pytest.mark.parametrize(
     "input_shape, dim, layout",
     [
-        ([4, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),
-        ([4, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
-        ([8, 5, 13, 512], 3, ttl.tensor.Layout.ROW_MAJOR),
-        ([8, 5, 32, 512], 3, ttl.tensor.Layout.TILE),
-        ([8, 5, 13, 384], 3, ttl.tensor.Layout.ROW_MAJOR),
-        ([8, 5, 32, 384], 3, ttl.tensor.Layout.TILE),
-        ([8, 8, 256, 384], 0, ttl.tensor.Layout.ROW_MAJOR),
-        ([8, 8, 256, 384], 0, ttl.tensor.Layout.TILE),
-        ([8, 8, 256, 384], 1, ttl.tensor.Layout.ROW_MAJOR),
-        ([8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),
-        ([8, 8, 256, 384], 2, ttl.tensor.Layout.ROW_MAJOR),
-        ([8, 8, 256, 384], 2, ttl.tensor.Layout.TILE),
-        ([8, 8, 256, 384], 3, ttl.tensor.Layout.ROW_MAJOR),
-        ([8, 8, 256, 384], 3, ttl.tensor.Layout.TILE),
-        ([8, 8, 256, 768], 3, ttl.tensor.Layout.ROW_MAJOR),
-        ([8, 8, 256, 768], 3, ttl.tensor.Layout.TILE),
-        ([8, 8, 1024, 4096], 1, ttl.tensor.Layout.TILE),
-        ([8, 8, 2048, 4096], 1, ttl.tensor.Layout.TILE),
-        ([8, 8, 128, 4096], 1, ttl.tensor.Layout.ROW_MAJOR),
-        ([8, 8, 1024, 4096], 1, ttl.tensor.Layout.ROW_MAJOR),
-        ([8, 8, 2048, 4096], 1, ttl.tensor.Layout.ROW_MAJOR),
+        ([4, 1, 33, 256], 0, ttnn.ROW_MAJOR_LAYOUT),
+        ([4, 1, 256, 32], 0, ttnn.TILE_LAYOUT),
+        ([8, 5, 13, 512], 3, ttnn.ROW_MAJOR_LAYOUT),
+        ([8, 5, 32, 512], 3, ttnn.TILE_LAYOUT),
+        ([8, 5, 13, 384], 3, ttnn.ROW_MAJOR_LAYOUT),
+        ([8, 5, 32, 384], 3, ttnn.TILE_LAYOUT),
+        ([8, 8, 256, 384], 0, ttnn.ROW_MAJOR_LAYOUT),
+        ([8, 8, 256, 384], 0, ttnn.TILE_LAYOUT),
+        ([8, 8, 256, 384], 1, ttnn.ROW_MAJOR_LAYOUT),
+        ([8, 8, 256, 384], 1, ttnn.TILE_LAYOUT),
+        ([8, 8, 256, 384], 2, ttnn.ROW_MAJOR_LAYOUT),
+        ([8, 8, 256, 384], 2, ttnn.TILE_LAYOUT),
+        ([8, 8, 256, 384], 3, ttnn.ROW_MAJOR_LAYOUT),
+        ([8, 8, 256, 384], 3, ttnn.TILE_LAYOUT),
+        ([8, 8, 256, 768], 3, ttnn.ROW_MAJOR_LAYOUT),
+        ([8, 8, 256, 768], 3, ttnn.TILE_LAYOUT),
+        ([8, 8, 1024, 4096], 1, ttnn.TILE_LAYOUT),
+        ([8, 8, 2048, 4096], 1, ttnn.TILE_LAYOUT),
+        ([8, 8, 128, 4096], 1, ttnn.ROW_MAJOR_LAYOUT),
+        ([8, 8, 1024, 4096], 1, ttnn.ROW_MAJOR_LAYOUT),
+        ([8, 8, 2048, 4096], 1, ttnn.ROW_MAJOR_LAYOUT),
         # Only for BFP8B
-        # ([1, 1, 640, 32768], 3, ttl.tensor.Layout.TILE),
+        # ([1, 1, 640, 32768], 3, ttnn.TILE_LAYOUT),
         # MLP AllGather. Llama 2 decode attn, mlp. Llama2, Falcon 40B decode mlp attn
         # Mixtral 8x7B, functional bringup with expanded tensor getting allgathered
         # Full shape for 8 chips
-        ([1, 1, 32, 32768], 3, ttl.tensor.Layout.TILE),
-        ([1, 1, 32, 32768], 3, ttl.tensor.Layout.ROW_MAJOR),
+        ([1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 32768], 3, ttnn.ROW_MAJOR_LAYOUT),
         # Input, Selfout, Final AllGather
-        ([1, 1, 32, 8192], 3, ttl.tensor.Layout.TILE),
-        ([1, 1, 32, 8192], 3, ttl.tensor.Layout.ROW_MAJOR),
+        ([1, 1, 32, 8192], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 8192], 3, ttnn.ROW_MAJOR_LAYOUT),
         # MLP AllGather. Llama 2 decode attn, mlp. Llama2, Falcon 40B decode mlp attn
         # Half shape for 4 chips, same per chip shape as 8 chips
-        ([1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
-        ([1, 1, 32, 16384], 3, ttl.tensor.Layout.ROW_MAJOR),
+        ([1, 1, 32, 16384], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 16384], 3, ttnn.ROW_MAJOR_LAYOUT),
         # Input, Selfout, Final AllGather. Llama2, Falcon 40B decode mlp attn
         # Full shape for 8 chips
-        ([1, 1, 32, 8192], 3, ttl.tensor.Layout.TILE),
-        ([1, 1, 32, 8192], 3, ttl.tensor.Layout.ROW_MAJOR),
+        ([1, 1, 32, 8192], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 8192], 3, ttnn.ROW_MAJOR_LAYOUT),
         # Input, Selfout, Final AllGather. Llama2, Falcon 40B decode mlp attn
         # Half shape for running on 4 chips, same per chip shape as for 8 chips
-        ([1, 1, 32, 4096], 3, ttl.tensor.Layout.TILE),
-        ([1, 1, 32, 4096], 3, ttl.tensor.Layout.ROW_MAJOR),
+        ([1, 1, 32, 4096], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 4096], 3, ttnn.ROW_MAJOR_LAYOUT),
         # Falcon 40B prefill
         # 8 chips
-        ([1, 1, 2048, 8192], 3, ttl.tensor.Layout.TILE),
-        ([1, 1, 2048, 8192], 3, ttl.tensor.Layout.ROW_MAJOR),
+        ([1, 1, 2048, 8192], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 2048, 8192], 3, ttnn.ROW_MAJOR_LAYOUT),
         # 4 chips, same per chip shape as 8 chips
-        ([1, 1, 2048, 4096], 3, ttl.tensor.Layout.TILE),
-        ([1, 1, 2048, 4096], 3, ttl.tensor.Layout.ROW_MAJOR),
+        ([1, 1, 2048, 4096], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 2048, 4096], 3, ttnn.ROW_MAJOR_LAYOUT),
         # Falcon 40B prefill
         # 8 chips
-        ([1, 1, 2048, 32768], 3, ttl.tensor.Layout.TILE),
-        ([1, 1, 2048, 32768], 3, ttl.tensor.Layout.ROW_MAJOR),
+        ([1, 1, 2048, 32768], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 2048, 32768], 3, ttnn.ROW_MAJOR_LAYOUT),
         # 4 chips, same per chip shape as 8 chips
-        ([1, 1, 2048, 16384], 3, ttl.tensor.Layout.TILE),
-        ([1, 1, 2048, 16384], 3, ttl.tensor.Layout.ROW_MAJOR),
+        ([1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 2048, 16384], 3, ttnn.ROW_MAJOR_LAYOUT),
         # Mixtral 8x7B, Min sequence length
         # 8 chips
-        # ([1, 1, 32768, 32768], 3, ttl.tensor.Layout.ROW_MAJOR),
-        ([1, 1, 32768, 32768], 3, ttl.tensor.Layout.TILE),  # ultra slow?
+        # ([1, 1, 32768, 32768], 3, ttnn.ROW_MAJOR_LAYOUT),
+        ([1, 1, 32768, 32768], 3, ttnn.TILE_LAYOUT),  # ultra slow?
         # 4 chips, per chip shape same as 8 chips
-        # ([1, 1, 32768, 16384], 3, ttl.tensor.Layout.ROW_MAJOR),
-        # ([1, 1, 32768, 16384], 3, ttl.tensor.Layout.TILE),
+        # ([1, 1, 32768, 16384], 3, ttnn.ROW_MAJOR_LAYOUT),
+        # ([1, 1, 32768, 16384], 3, ttnn.TILE_LAYOUT),
         # Llama galaxy mlp weights stationary -> emulation of row/col reduce
-        ([1, 1, 128, 1024], 2, ttl.tensor.Layout.ROW_MAJOR),
-        ([1, 1, 128, 1024], 2, ttl.tensor.Layout.TILE),
-        # ([1, 1, 32, 8192], 3, ttl.tensor.Layout.ROW_MAJOR), # ALREADY LISTED PREVIOUSLY
-        # ([1, 1, 32, 8192], 3, ttl.tensor.Layout.TILE),      # ALREADY LISTED PREVIOUSLY
-        ([1, 1, 128, 4096], 2, ttl.tensor.Layout.ROW_MAJOR),  #
-        ([1, 1, 128, 4096], 2, ttl.tensor.Layout.TILE),
-        # ([1, 1, 32, 16384], 3, ttl.tensor.Layout.ROW_MAJOR), # ALREADY LISTED PREVIOUSLY. Update for 8 chip, actuall 32k for 8 chip but we are halving it for our 4 chip test
-        # ([1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),      # ALREADY LISTED PREVIOUSLY. Update for 8 chip, actuall 32k for 8 chip but we are halving it for our 4 chip test
-        ([1, 1, 8192, 32], 2, ttl.tensor.Layout.ROW_MAJOR),
-        ([1, 1, 8192, 32], 2, ttl.tensor.Layout.TILE),
-        ([1, 1, 1024, 128], 3, ttl.tensor.Layout.ROW_MAJOR),  # double on reduction dim for 8 chip
-        ([1, 1, 1024, 128], 3, ttl.tensor.Layout.TILE),  # double on reduction dim for 8 chip
-        ([1, 1, 16384, 32], 2, ttl.tensor.Layout.ROW_MAJOR),  # double on reduction dim for 8 chip
-        ([1, 1, 16384, 32], 2, ttl.tensor.Layout.TILE),  # double on reduction dim for 8 chip
-        ([1, 1, 32768, 32], 2, ttl.tensor.Layout.ROW_MAJOR),  # double on reduction dim for 8 chip
-        ([1, 1, 32768, 32], 2, ttl.tensor.Layout.TILE),  # double on reduction dim for 8 chip
-        ([1, 1, 4096, 128], 3, ttl.tensor.Layout.ROW_MAJOR),  # only for 4 chip
-        ([1, 1, 4096, 128], 3, ttl.tensor.Layout.TILE),  # only for 4 chip
-        ([1, 1, 128, 2048], 2, ttl.tensor.Layout.ROW_MAJOR),  # double on reduction dim for 8 chip
-        ([1, 1, 128, 2048], 2, ttl.tensor.Layout.TILE),  # double on reduction dim for 8 chip
-        # ([1, 1, 32, 8192], 3, ttl.tensor.Layout.ROW_MAJOR), # only for 4 chip - ALREADY LISTED PREVIOUSLY
-        # ([1, 1, 32, 8192], 3, ttl.tensor.Layout.TILE),      # only for 4 chip - ALREADY LISTED PREVIOUSLY
-        ([1, 1, 128, 8192], 2, ttl.tensor.Layout.ROW_MAJOR),  # double on reduction dim for 8 chip
-        ([1, 1, 128, 8192], 2, ttl.tensor.Layout.TILE),  # double on reduction dim for 8 chip
-        ([4, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
-        ([8, 8, 256, 384], 1, ttl.tensor.Layout.ROW_MAJOR),
-        ([1, 1, 256, 1024], 2, ttl.tensor.Layout.ROW_MAJOR),
-        ([1, 1, 1024, 256], 3, ttl.tensor.Layout.ROW_MAJOR),
-        ([1, 1, 256, 2048], 2, ttl.tensor.Layout.ROW_MAJOR),
-        ([1, 1, 256, 8192], 2, ttl.tensor.Layout.ROW_MAJOR),  # double on reduction dim for 8 chip
+        ([1, 1, 128, 1024], 2, ttnn.ROW_MAJOR_LAYOUT),
+        ([1, 1, 128, 1024], 2, ttnn.TILE_LAYOUT),
+        # ([1, 1, 32, 8192], 3, ttnn.ROW_MAJOR_LAYOUT), # ALREADY LISTED PREVIOUSLY
+        # ([1, 1, 32, 8192], 3, ttnn.TILE_LAYOUT),      # ALREADY LISTED PREVIOUSLY
+        ([1, 1, 128, 4096], 2, ttnn.ROW_MAJOR_LAYOUT),  #
+        ([1, 1, 128, 4096], 2, ttnn.TILE_LAYOUT),
+        # ([1, 1, 32, 16384], 3, ttnn.ROW_MAJOR_LAYOUT), # ALREADY LISTED PREVIOUSLY. Update for 8 chip, actuall 32k for 8 chip but we are halving it for our 4 chip test
+        # ([1, 1, 32, 16384], 3, ttnn.TILE_LAYOUT),      # ALREADY LISTED PREVIOUSLY. Update for 8 chip, actuall 32k for 8 chip but we are halving it for our 4 chip test
+        ([1, 1, 8192, 32], 2, ttnn.ROW_MAJOR_LAYOUT),
+        ([1, 1, 8192, 32], 2, ttnn.TILE_LAYOUT),
+        ([1, 1, 1024, 128], 3, ttnn.ROW_MAJOR_LAYOUT),  # double on reduction dim for 8 chip
+        ([1, 1, 1024, 128], 3, ttnn.TILE_LAYOUT),  # double on reduction dim for 8 chip
+        ([1, 1, 16384, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # double on reduction dim for 8 chip
+        ([1, 1, 16384, 32], 2, ttnn.TILE_LAYOUT),  # double on reduction dim for 8 chip
+        ([1, 1, 32768, 32], 2, ttnn.ROW_MAJOR_LAYOUT),  # double on reduction dim for 8 chip
+        ([1, 1, 32768, 32], 2, ttnn.TILE_LAYOUT),  # double on reduction dim for 8 chip
+        ([1, 1, 4096, 128], 3, ttnn.ROW_MAJOR_LAYOUT),  # only for 4 chip
+        ([1, 1, 4096, 128], 3, ttnn.TILE_LAYOUT),  # only for 4 chip
+        ([1, 1, 128, 2048], 2, ttnn.ROW_MAJOR_LAYOUT),  # double on reduction dim for 8 chip
+        ([1, 1, 128, 2048], 2, ttnn.TILE_LAYOUT),  # double on reduction dim for 8 chip
+        # ([1, 1, 32, 8192], 3, ttnn.ROW_MAJOR_LAYOUT), # only for 4 chip - ALREADY LISTED PREVIOUSLY
+        # ([1, 1, 32, 8192], 3, ttnn.TILE_LAYOUT),      # only for 4 chip - ALREADY LISTED PREVIOUSLY
+        ([1, 1, 128, 8192], 2, ttnn.ROW_MAJOR_LAYOUT),  # double on reduction dim for 8 chip
+        ([1, 1, 128, 8192], 2, ttnn.TILE_LAYOUT),  # double on reduction dim for 8 chip
+        ([4, 1, 256, 32], 0, ttnn.TILE_LAYOUT),
+        ([8, 8, 256, 384], 1, ttnn.ROW_MAJOR_LAYOUT),
+        ([1, 1, 256, 1024], 2, ttnn.ROW_MAJOR_LAYOUT),
+        ([1, 1, 1024, 256], 3, ttnn.ROW_MAJOR_LAYOUT),
+        ([1, 1, 256, 2048], 2, ttnn.ROW_MAJOR_LAYOUT),
+        ([1, 1, 256, 8192], 2, ttnn.ROW_MAJOR_LAYOUT),  # double on reduction dim for 8 chip
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.DataType.BFLOAT8_B,
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
-        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 def test_all_gather_on_t3000_nightly(
@@ -703,44 +806,44 @@ def test_all_gather_on_t3000_nightly(
     if (
         input_shape == [8, 8, 256, 384]
         and dim == 1
-        and layout == ttl.tensor.Layout.TILE
+        and layout == ttnn.TILE_LAYOUT
         and num_devices == 4
         and num_links == 1
-        and input_dtype == ttl.tensor.DataType.BFLOAT16
-        and mem_config.buffer_type == ttl.tensor.BufferType.DRAM
+        and input_dtype == ttnn.bfloat16
+        and mem_config.buffer_type == ttnn.BufferType.DRAM
     ):
         pytest.xfail(reason="Known failure")
 
     if (
         input_shape == [8, 8, 256, 384]
         and dim == 2
-        and layout == ttl.tensor.Layout.TILE
+        and layout == ttnn.TILE_LAYOUT
         and num_devices == 4
         and num_links == 1
-        and input_dtype == ttl.tensor.DataType.BFLOAT16
-        and mem_config.buffer_type == ttl.tensor.BufferType.DRAM
+        and input_dtype == ttnn.bfloat16
+        and mem_config.buffer_type == ttnn.BufferType.DRAM
     ):
         pytest.xfail(reason="Known failure")
 
     if (
         input_shape == [8, 8, 256, 384]
         and dim == 2
-        and layout == ttl.tensor.Layout.TILE
+        and layout == ttnn.TILE_LAYOUT
         and num_devices == 4
         and num_links == 1
-        and input_dtype == ttl.tensor.DataType.BFLOAT8_B
-        and mem_config.buffer_type == ttl.tensor.BufferType.DRAM
+        and input_dtype == ttnn.bfloat8_b
+        and mem_config.buffer_type == ttnn.BufferType.DRAM
     ):
         pytest.xfail(reason="Known failure")
 
     if (
         input_shape == [8, 8, 256, 384]
         and dim == 2
-        and layout == ttl.tensor.Layout.TILE
+        and layout == ttnn.TILE_LAYOUT
         and num_devices == 4
         and num_links == 2
-        and input_dtype == ttl.tensor.DataType.BFLOAT8_B
-        and mem_config.buffer_type == ttl.tensor.BufferType.DRAM
+        and input_dtype == ttnn.bfloat8_b
+        and mem_config.buffer_type == ttnn.BufferType.DRAM
     ):
         pytest.xfail(reason="Known failure")
 
@@ -818,28 +921,26 @@ def run_all_gather_sharded(
     logger.info(f"shard_grid: {shard_grid}")
     logger.info(f"input_shard_shape: {input_shard_shape}")
 
-    input_shard_spec = ttl.tensor.ShardSpec(
+    input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         input_shard_shape,
         orientation,
         False,
     )
-    input_mem_config = ttl.tensor.MemoryConfig(
-        tensor_mem_layout, buffer_type=ttl.tensor.BufferType.L1, shard_spec=input_shard_spec
-    )
+    input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
     output_shard_shape = list(input_shard_shape)
     if dim == 3:
         output_shard_shape[1] *= num_devices
     else:
         output_shard_shape[0] *= num_devices
-    output_shard_spec = ttl.tensor.ShardSpec(
+    output_shard_spec = ttnn.ShardSpec(
         shard_grid,
         output_shard_shape,
         orientation,
         False,
     )
-    output_mem_config = ttl.tensor.MemoryConfig(
-        tensor_mem_layout, buffer_type=ttl.tensor.BufferType.L1, shard_spec=output_shard_spec
+    output_mem_config = ttnn.MemoryConfig(
+        tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
     )
 
     if num_devices < 2:
@@ -856,10 +957,8 @@ def run_all_gather_sharded(
     tt_input_tensors = []
 
     for i, t in enumerate(input_tensors):
-        tt_input_tensors_dups.append(
-            ttl.tensor.Tensor(t, input_dtype).to(tensor_layout).to(devices[i], input_mem_config)
-        )
-        tt_input_tensors.append(ttl.tensor.Tensor(t, input_dtype).to(tensor_layout).to(devices[i], input_mem_config))
+        tt_input_tensors_dups.append(ttnn.Tensor(t, input_dtype).to(tensor_layout).to(devices[i], input_mem_config))
+        tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(tensor_layout).to(devices[i], input_mem_config))
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
 
@@ -867,14 +966,14 @@ def run_all_gather_sharded(
     tt_out_tensor = all_gather_operation(input_tensor_mesh, dim, num_links=num_links, memory_config=output_mem_config)
     ## Wait for completion
     for d in devices:
-        ttl.device.Synchronize(d)
+        ttnn.synchronize_device(d)
 
     torch.set_printoptions(sci_mode=False)
     all_eq = True
     reported_mismatch = False
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-        tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-        if input_dtype == ttl.tensor.DataType.BFLOAT16:
+        tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+        if input_dtype == ttnn.bfloat16:
             eq, output = comp_equal(tt_output_tensor, unchunked_input_tensor)
         else:
             eq, output = comp_pcc(tt_output_tensor, unchunked_input_tensor)
@@ -903,24 +1002,24 @@ def run_all_gather_sharded(
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize("dim", [3])
-@pytest.mark.parametrize("tensor_layout", [ttl.tensor.Layout.TILE])
+@pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT])
 # @pytest.mark.parametrize("num_cores", [1])
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,  # https://github.com/tenstorrent/tt-metal/issues/9686
-        # ttl.tensor.DataType.BFLOAT8_B,
+        ttnn.bfloat16,  # https://github.com/tenstorrent/tt-metal/issues/9686
+        # ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "tensor_mem_layout",
     [
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        # ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        # ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        # ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        # ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
-@pytest.mark.parametrize("orientation", [ttl.tensor.ShardOrientation.ROW_MAJOR])
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
     "input_shape, input_shard_shape,shard_grid",
@@ -929,22 +1028,22 @@ def run_all_gather_sharded(
         (
             (1, 1, 32, 1024),
             (32, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 32, 4096),
             (32, 128),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 32, 2048),
             (32, 64),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 32, 1792),
             (32, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 6))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
         ),
     ),
 )
@@ -986,23 +1085,23 @@ def test_all_gather_sharded_post_commit(
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize("dim", [3])
-@pytest.mark.parametrize("tensor_layout", [ttl.tensor.Layout.TILE])
+@pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT])
 # @pytest.mark.parametrize("num_cores", [1])
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,  # https://github.com/tenstorrent/tt-metal/issues/9686
-        # ttl.tensor.DataType.BFLOAT8_B,
+        ttnn.bfloat16,  # https://github.com/tenstorrent/tt-metal/issues/9686
+        # ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "tensor_mem_layout",
     [
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        # ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        # ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
-@pytest.mark.parametrize("orientation", [ttl.tensor.ShardOrientation.COL_MAJOR])
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.COL_MAJOR])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
     "input_shape, input_shard_shape,shard_grid",
@@ -1011,27 +1110,27 @@ def test_all_gather_sharded_post_commit(
         (
             (1, 1, 1024, 32),
             (32, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 4096, 32),
             (128, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 4096, 32),
             (128, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 2048, 32),
             (64, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 1792, 32),
             (32, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 6))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
         ),
     ),
 )
@@ -1073,22 +1172,22 @@ def test_all_gather_height_sharded_post_commit(
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize("dim", [3])
-@pytest.mark.parametrize("tensor_layout", [ttl.tensor.Layout.TILE])
+@pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT])
 # @pytest.mark.parametrize("num_cores", [1])
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,  # https://github.com/tenstorrent/tt-metal/issues/9686
-        # ttl.tensor.DataType.BFLOAT8_B,
+        ttnn.bfloat16,  # https://github.com/tenstorrent/tt-metal/issues/9686
+        # ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "tensor_mem_layout",
     [
-        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
-@pytest.mark.parametrize("orientation", [ttl.tensor.ShardOrientation.ROW_MAJOR])
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
     "input_shape, input_shard_shape,shard_grid",
@@ -1097,22 +1196,22 @@ def test_all_gather_height_sharded_post_commit(
         (
             (1, 1, 128, 256),
             (32, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
         # (  # https://github.com/tenstorrent/tt-metal/issues/9686
         #     (1, 1, 512, 32),
         #     (128, 32),
-        #     ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         # ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 512, 256),
             (128, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 512, 512),
             (128, 64),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
     ),
 )
@@ -1155,24 +1254,24 @@ def test_all_gather_block_sharded_post_commit(
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize("dim", [3])
-@pytest.mark.parametrize("tensor_layout", [ttl.tensor.Layout.TILE])
+@pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT])
 # @pytest.mark.parametrize("num_cores", [1])
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,  # https://github.com/tenstorrent/tt-metal/issues/9686
-        # ttl.tensor.DataType.BFLOAT8_B,
+        ttnn.bfloat16,  # https://github.com/tenstorrent/tt-metal/issues/9686
+        # ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "tensor_mem_layout",
     [
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        # ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        # ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        # ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        # ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
-@pytest.mark.parametrize("orientation", [ttl.tensor.ShardOrientation.ROW_MAJOR])
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
     "input_shape, input_shard_shape,shard_grid",
@@ -1181,27 +1280,27 @@ def test_all_gather_block_sharded_post_commit(
         (
             (1, 1, 32, 1024),
             (32, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 32, 4096),
             (32, 128),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 32, 4096),
             (32, 128),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 32, 2048),
             (32, 64),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 32, 1792),
             (32, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 6))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
         ),
     ),
 )
@@ -1244,24 +1343,24 @@ def test_line_all_gather_sharded_post_commit(
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize("dim", [3])
-@pytest.mark.parametrize("tensor_layout", [ttl.tensor.Layout.TILE])
+@pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT])
 # @pytest.mark.parametrize("num_cores", [1])
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,  # https://github.com/tenstorrent/tt-metal/issues/9686
-        # ttl.tensor.DataType.BFLOAT8_B,
+        ttnn.bfloat16,  # https://github.com/tenstorrent/tt-metal/issues/9686
+        # ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "tensor_mem_layout",
     [
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        # ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        # ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        # ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        # ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
-@pytest.mark.parametrize("orientation", [ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.ShardOrientation.COL_MAJOR])
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
     "input_shape, input_shard_shape,shard_grid",
@@ -1269,98 +1368,98 @@ def test_line_all_gather_sharded_post_commit(
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 32, 128),
             (32, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 1))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 32, 256),
             (32, 64),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 1))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 64, 128),
             (64, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 1))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 64, 256),
             (64, 64),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 1))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 32, 64),
             (32, 64),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 32, 128),
             (32, 128),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 32, 64),
             (32, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 32, 128),
             (32, 64),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
         ),
         (
             (1, 1, 32, 128),
             (32, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
         ),
         (
             (1, 1, 64, 128),
             (64, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
         ),
         (
             (1, 1, 32, 256),
             (32, 64),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
         ),
         (
             (1, 1, 64, 256),
             (64, 64),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 32, 256),
             (32, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 32, 512),
             (32, 64),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
         ),
         # LLama
         (
             (1, 1, 32, 1024),
             (32, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 32, 4096),
             (32, 128),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 32, 4096),
             (32, 128),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 32, 2048),
             (32, 64),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
             (1, 1, 32, 1792),
             (32, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 6))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
         ),
     ),
 )
@@ -1405,22 +1504,20 @@ def test_sharded_all_gather_nightly(
 @pytest.mark.skip("#7705: Hanging on various configs")
 @pytest.mark.parametrize(
     "input_shape, dim, layout",
-    [([4, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR), ([4, 1, 256, 32], 0, ttl.tensor.Layout.TILE)],
+    [([4, 1, 33, 256], 0, ttnn.ROW_MAJOR_LAYOUT), ([4, 1, 256, 32], 0, ttnn.TILE_LAYOUT)],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
-        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("num_links", [1, 2])
 def test_all_gather_fp32(  # https://github.com/tenstorrent/tt-metal/issues/9686 ... need to tag with post_commit
     pcie_devices, input_shape, dim, num_links, layout, mem_config, use_program_cache, function_level_defaults
 ):
-    if (
-        layout == ttl.tensor.Layout.ROW_MAJOR or num_links == 2
-    ) and mem_config.buffer_type == ttl.tensor.BufferType.DRAM:
+    if (layout == ttnn.ROW_MAJOR_LAYOUT or num_links == 2) and mem_config.buffer_type == ttnn.BufferType.DRAM:
         pytest.skip("All gather tests are hanging for RM in DRAM")
     devices = pcie_devices
     input_tensor = torch.rand(input_shape).bfloat16()
@@ -1436,12 +1533,12 @@ def test_all_gather_fp32(  # https://github.com/tenstorrent/tt-metal/issues/9686
     input_tensors = torch.chunk(input_tensor, num_devices, dim)
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttl.tensor.Tensor(t, ttl.tensor.DataType.FLOAT32).to(layout).to(devices[i], mem_config))
+        tt_input_tensors.append(ttnn.Tensor(t, ttnn.float32).to(layout).to(devices[i], mem_config))
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     tt_out_tensor = ttnn.all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-        tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
         eq, output = comp_equal(tt_output_tensor, input_tensor)
         assert eq, f"{i} FAILED: {output}"

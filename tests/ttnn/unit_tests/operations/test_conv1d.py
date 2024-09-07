@@ -7,7 +7,7 @@ from loguru import logger
 import torch
 import pytest
 from models.utility_functions import (
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
     skip_for_grayskull,
     is_grayskull,
     is_wormhole_b0,
@@ -15,7 +15,6 @@ from models.utility_functions import (
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc, check_with_pcc_without_tensor_printout
 import ttnn
-import tt_lib
 import math
 import os
 import torch.nn as nn
@@ -83,7 +82,9 @@ def run_conv(
         dtype=output_dtype,
         weights_dtype=weights_dtype,
         math_fidelity=math_fidelity,
-        height_sharding=use_1d_systolic_array,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        if use_1d_systolic_array
+        else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         input_channels_alignment=(16 if use_shallow_conv_variant else 32),
         deallocate_activation=deallocate_activation,
         fp32_dest_acc_enabled=fp32_accum,

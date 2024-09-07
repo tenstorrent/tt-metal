@@ -6,7 +6,7 @@
 
 #include <type_traits>
 
-#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -27,7 +27,7 @@ Tensor _moreh_linear(
     const std::optional<const Tensor>& bias,
     std::optional<Tensor> output,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     moreh_linear_validate(weight);
     output = moreh_matmul(input, weight, false, true, output, bias, output_mem_config);
     return output.value();
@@ -39,7 +39,7 @@ Tensor moreh_linear(
     std::optional<const Tensor> bias,
     std::optional<const Tensor> output,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     return _moreh_linear(input, weight, bias, output, output_mem_config, compute_kernel_config);
 }
 

@@ -21,7 +21,11 @@ from models.datasets.llm_dataset_utils import (
 from models.utility_functions import tt_tensors_to_torch_tensors
 
 
-def calculate_perplexity(model, dataloader, llm_mode, batch_size, seq_len, kv_cache, configuration, use_hf_model=False):
+def calculate_perplexity(
+    model, dataloader, llm_mode, batch_size, seq_len, kv_cache, configuration, use_hf_model=False, mesh_device=None
+):
+    if not use_hf_model:
+        assert mesh_device is not None
     if llm_mode == "prefill" and not use_hf_model:
         assert batch_size == 1
     use_cache = True
@@ -47,18 +51,15 @@ def calculate_perplexity(model, dataloader, llm_mode, batch_size, seq_len, kv_ca
                         use_cache=use_cache,
                     )
                     # Get outputs from all devices
-                    logits = torch.concat(
-                        [tt_out_torch.squeeze(1) for tt_out_torch in tt_tensors_to_torch_tensors(tt_logits)]
-                    )
+                    logits = tt_tensors_to_torch_tensors(tt_logits, mesh_device, concat_dim=0).squeeze(1)
                     # Deallocate tt tensors
-                    for i in range(len(tt_logits)):
-                        tt_prefill_input_ids[i].deallocate()
-                        if isinstance(tt_prefill_attention_mask[i], ttnn.experimental.tensor.Tensor):
-                            tt_prefill_attention_mask[i].deallocate()
-                        elif isinstance(tt_prefill_attention_mask[i], list):
-                            for tt_attention_mask_element in tt_prefill_attention_mask[i]:
-                                tt_attention_mask_element.deallocate()
-                        tt_logits[i].deallocate()
+                    tt_prefill_input_ids.deallocate()
+                    if isinstance(tt_prefill_attention_mask, ttnn.Tensor):
+                        tt_prefill_attention_mask.deallocate()
+                    elif isinstance(tt_prefill_attention_mask, list):
+                        for tt_attention_mask_element in tt_prefill_attention_mask:
+                            tt_attention_mask_element.deallocate()
+                    tt_logits.deallocate()
                 else:  # huggingface model
                     logits, _ = model(input_ids=input_ids, use_cache=use_cache, return_dict=False)
 
@@ -83,15 +84,12 @@ def calculate_perplexity(model, dataloader, llm_mode, batch_size, seq_len, kv_ca
                             use_cache=use_cache,
                         )
                         # Get outputs from all devices
-                        logits_cur = torch.concat(
-                            [torch_logit.squeeze(1) for torch_logit in tt_tensors_to_torch_tensors(tt_logits)], dim=-2
-                        )
+                        logits_cur = tt_tensors_to_torch_tensors(tt_logits, mesh_device, concat_dim=2).squeeze(1)
                         logits.append(logits_cur.view(-1, 1, configuration.vocab_size))
                         # Deallocate tt tensors
-                        for i in range(len(tt_logits)):
-                            tt_decode_input_ids[i].deallocate()
-                            tt_decode_attention_mask[i].deallocate()
-                            tt_logits[i].deallocate()
+                        tt_decode_input_ids.deallocate()
+                        tt_decode_attention_mask.deallocate()
+                        tt_logits.deallocate()
                     else:  # huggingface model
                         logits_cur, layer_present = model(
                             input_ids=decode_ids, past_key_values=layer_present, use_cache=use_cache, return_dict=False
@@ -122,7 +120,7 @@ def run_test_perplexity(
     model_config_str,
     model_location_generator,
     get_tt_cache_path,
-    devices,
+    mesh_device,
     num_samples,
     expected_acc_metrics,
     stride=None,
@@ -158,7 +156,7 @@ def run_test_perplexity(
         # Load tt-metal model
         logger.info("Moving weights (all layers) to device; might take some time...")
         model = TtFalconCausalLM(
-            devices,
+            mesh_device,
             state_dict,
             "",
             num_layers,
@@ -171,7 +169,7 @@ def run_test_perplexity(
 
         # Initialize kvcache
         logger.info("Initializing kvcache...")
-        kv_cache = initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, devices)
+        kv_cache = initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, mesh_device)
     else:
         model = hugging_face_reference_model
         kv_cache = None
@@ -180,7 +178,15 @@ def run_test_perplexity(
     logger.info("Evaluating perplexity...")
     start = time.time()
     nll, ppl, top1_acc, top5_acc = calculate_perplexity(
-        model, dataloader, llm_mode, batch_size, max_seq_len, kv_cache, configuration, use_hf_model=use_hf_model
+        model,
+        dataloader,
+        llm_mode,
+        batch_size,
+        max_seq_len,
+        kv_cache,
+        configuration,
+        use_hf_model=use_hf_model,
+        mesh_device=mesh_device,
     )
     logger.info(f"Perplexity evaluation time: {(time.time() - start):.2f} s")
     logger.info(f"Negative log-likelihood: {nll:.4f}")

@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/decorators.hpp"
+
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -10,8 +12,7 @@
 
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
-#include "ttnn/operations/embedding/embedding.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
@@ -50,23 +51,6 @@ std::vector<ttnn::Tensor> _atan2_bw(
     recip_mul.deallocate();
     cond.deallocate();
     grad_tensor.emplace_back(grad_b);
-    return grad_tensor;
-}
-
-
-std::vector<ttnn::Tensor> _embedding_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& weight, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_FATAL(input.get_dtype() == DataType::UINT32, "Input must be UINT32");
-    TT_FATAL(
-        grad.get_legacy_shape()[0] == 1 && grad.get_legacy_shape()[1] == 1,
-        "First two dimensions for the grad must be 1");
-    TT_FATAL(
-        input.get_legacy_shape()[1] == 1 && input.get_legacy_shape()[2] == 1,
-        "Only dim 0 && 3 for the input can be non 1");
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_a = ttnn::embedding(input, grad);
-    grad_tensor.emplace_back(grad_a);
-
     return grad_tensor;
 }
 
@@ -300,6 +284,23 @@ std::vector<ttnn::Tensor> _logaddexp2_bw(
     return grad_tensor;
 }
 
+std::vector<Tensor> ExecuteBackwardRemainder::invoke(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
+    Tensor result_div = ttnn::floor(ttnn::add(ttnn::multiply(input, ttnn::reciprocal(other)), 0.005f, std::nullopt, output_mem_config));
+    result_div = where(ttnn::eq(input, other, std::nullopt, output_mem_config), 1.0f, result_div, output_mem_config);
+    Tensor grad_b = ttnn::multiply(ttnn::neg(grad), result_div, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+
+std::vector<Tensor> ExecuteBackwardRemainder::invoke(
+    const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
+    return grad_tensor;
+}
 
 std::vector<ttnn::Tensor> _squared_difference_bw(
     const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {

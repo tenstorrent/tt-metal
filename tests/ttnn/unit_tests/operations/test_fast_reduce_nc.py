@@ -6,7 +6,6 @@ import pytest
 import torch
 from loguru import logger
 
-from ttnn import experimental as ttl
 import ttnn
 from models.utility_functions import comp_allclose_and_pcc, comp_pcc, skip_for_grayskull
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
@@ -21,7 +20,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
 def get_tensors(input_shape, output_shape, device, *, with_padding=True, use_randint=True, dataformat=ttnn.bfloat16):
     npu_dtype = dataformat
     cpu_dtype = torch.bfloat16
-    npu_layout = ttl.tensor.Layout.TILE
+    npu_layout = ttnn.TILE_LAYOUT
 
     if use_randint:
         torch_input = torch.randint(-2, 3, input_shape, dtype=cpu_dtype, requires_grad=True)
@@ -31,11 +30,11 @@ def get_tensors(input_shape, output_shape, device, *, with_padding=True, use_ran
         torch_output = torch.rand(output_shape, dtype=cpu_dtype)
 
     if with_padding:
-        tt_input = ttl.tensor.Tensor(torch_input, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
-        tt_output = ttl.tensor.Tensor(torch_output, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+        tt_input = ttnn.Tensor(torch_input, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+        tt_output = ttnn.Tensor(torch_output, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
     else:
-        tt_input = ttl.tensor.Tensor(torch_input, npu_dtype).to(npu_layout).to(device)
-        tt_output = ttl.tensor.Tensor(torch_output, npu_dtype).to(npu_layout).to(device)
+        tt_input = ttnn.Tensor(torch_input, npu_dtype).to(npu_layout).to(device)
+        tt_output = ttnn.Tensor(torch_output, npu_dtype).to(npu_layout).to(device)
 
     return tt_input, tt_output, torch_input
 
@@ -77,7 +76,7 @@ def test_fast_reduce_nc(input_shape, dims, compute_kernel_options, dataformat, d
     torch_output = torch.sum(torch_input, dims, True)
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
     tt_output = ttnn.experimental.fast_reduce_nc(
         tt_input, dims=dims, output=None, compute_kernel_config=compute_kernel_config
     )
@@ -114,37 +113,37 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device, use_program_cache):
         # shift input/output tensor by creating very small tensor between loop
         inp = torch.rand(1, 1, 32, 32)
         test_tensor = (
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 inp.reshape(-1).tolist(),
                 inp.shape,
                 ttnn.bfloat16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device)
         )
-        shard_spec_1_cores_grid = ttl.tensor.CoreRangeSet(
+        shard_spec_1_cores_grid = ttnn.CoreRangeSet(
             {
-                ttl.tensor.CoreRange(
-                    ttl.tensor.CoreCoord(0, 0),
-                    ttl.tensor.CoreCoord(0, 0),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(0, 0),
                 ),
             }
         )
-        test_mem_cfg = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
+        test_mem_cfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
                 shard_spec_1_cores_grid,  # Volume must match # of attn heads
                 [
                     32,  # Each core has 32 users
                     32,  # head dim
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
-        test_tensor = ttl.tensor.interleaved_to_sharded(test_tensor, sharded_mem_config=test_mem_cfg)
+        test_tensor = ttnn.interleaved_to_sharded(test_tensor, test_mem_cfg)
 
         # Test op
         for dim in dims:
@@ -154,7 +153,7 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device, use_program_cache):
 
         torch_output = torch.sum(torch_input, dims, True)
 
-        cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+        cpu_layout = ttnn.ROW_MAJOR_LAYOUT
         tt_output = ttnn.experimental.fast_reduce_nc(tt_input, dims=dims, output=None)
         tt_output_cpu = tt_output.cpu().to(cpu_layout).unpad_from_tile(output_shape_1).to_torch()
 
@@ -180,7 +179,7 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device, use_program_cache):
 
         torch_output = torch.sum(torch_input, dims, True)
 
-        cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+        cpu_layout = ttnn.ROW_MAJOR_LAYOUT
         tt_output = ttnn.experimental.fast_reduce_nc(tt_input, dims=dims, output=None)
         tt_output_cpu = tt_output.cpu().to(cpu_layout).unpad_from_tile(output_shape_2).to_torch()
 

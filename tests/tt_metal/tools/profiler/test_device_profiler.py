@@ -24,13 +24,16 @@ from models.utility_functions import skip_for_grayskull
 PROG_EXMP_DIR = "programming_examples/profiler"
 
 
-def run_device_profiler_test(testName=None, setup=False):
+def run_device_profiler_test(testName=None, setup=False, slowDispatch=False):
     name = inspect.stack()[1].function
     testCommand = f"build/{PROG_EXMP_DIR}/{name}"
     if testName:
         testCommand = testName
     clear_profiler_runtime_artifacts()
-    profilerRun = os.system(f"cd {TT_METAL_HOME} && {testCommand}")
+    slowDispatchEnv = ""
+    if slowDispatch:
+        slowDispatchEnv = "TT_METAL_SLOW_DISPATCH_MODE=1 "
+    profilerRun = os.system(f"cd {TT_METAL_HOME} && {slowDispatchEnv}{testCommand}")
     assert profilerRun == 0
 
     setupStr = ""
@@ -75,6 +78,28 @@ def test_multi_op():
 
     assert statName in stats.keys(), "Wrong device analysis format"
     assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
+
+
+def test_custom_cycle_count_slow_dispatch():
+    REF_CYCLE_COUNT_PER_LOOP = 52
+    LOOP_COUNT = 2000
+    REF_CYCLE_COUNT = REF_CYCLE_COUNT_PER_LOOP * LOOP_COUNT
+    REF_CYCLE_COUNT_HIGH_MULTIPLIER = 10
+    REF_CYCLE_COUNT_LOW_MULTIPLIER = 5
+
+    REF_CYCLE_COUNT_MAX = REF_CYCLE_COUNT * REF_CYCLE_COUNT_HIGH_MULTIPLIER
+    REF_CYCLE_COUNT_MIN = REF_CYCLE_COUNT // REF_CYCLE_COUNT_LOW_MULTIPLIER
+
+    devicesData = run_device_profiler_test(setup=True, slowDispatch=True)
+
+    stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
+
+    for risc in ["BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2"]:
+        statName = f"{risc} KERNEL_START->KERNEL_END"
+
+        assert statName in stats.keys(), "Wrong device analysis format"
+        assert stats[statName]["stats"]["Average"] < REF_CYCLE_COUNT_MAX, "Wrong cycle count, too high"
+        assert stats[statName]["stats"]["Average"] > REF_CYCLE_COUNT_MIN, "Wrong cycle count, too low"
 
 
 def test_custom_cycle_count():
@@ -140,12 +165,12 @@ def test_dispatch_cores():
     ZONE_COUNT = 37
     REF_COUNT_DICT = {
         "grayskull": {
-            "Tensix CQ Dispatch": 11,
-            "Tensix CQ Prefetch": 14,
+            "Tensix CQ Dispatch": 16,
+            "Tensix CQ Prefetch": 21,
         },
         "wormhole_b0": {
-            "Tensix CQ Dispatch": 11,
-            "Tensix CQ Prefetch": 14,
+            "Tensix CQ Dispatch": 16,
+            "Tensix CQ Prefetch": 21,
         },
     }
 

@@ -4,7 +4,6 @@
 
 import torch
 import ttnn
-import tt_lib
 
 from models.utility_functions import (
     torch2tt_tensor,

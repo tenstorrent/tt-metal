@@ -9,7 +9,7 @@ from datasets import load_dataset
 import torch
 from ttnn.model_preprocessing import preprocess_model_parameters
 from loguru import logger
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_blackhole
 from models.perf.perf_utils import prep_perf_report
 import time
 import ttnn
@@ -22,7 +22,7 @@ def get_expected_times(functional_whisper):
     }[functional_whisper]
 
 
-@skip_for_wormhole_b0(reason_str="Not tested on single WH")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Not tested on single WH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["openai/whisper-base"])

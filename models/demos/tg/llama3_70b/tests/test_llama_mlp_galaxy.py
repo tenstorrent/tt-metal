@@ -13,7 +13,7 @@ from models.demos.tg.llama3_70b.tt.llama_mlp_galaxy import TtLlamaMLP_galaxy
 from models.utility_functions import skip_for_grayskull
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
-    check_device_mesh,
+    check_mesh_device,
     MAX_SEQ_LEN,
     BASE_URL,
     UNIT_TEST_N_LAYER,
@@ -57,10 +57,21 @@ def tt_llama_mlp_prepare_inputs(llama_mlp_model, x):
             x,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            device=llama_mlp_model.device_mesh,
+            device=llama_mlp_model.mesh_device,
             memory_config=act_mem_config,
             mesh_mapper=ShardTensor2dMesh(
-                llama_mlp_model.device_mesh, dims=(3, None), cluster_shape=llama_mlp_model.cluster_shape
+                llama_mlp_model.mesh_device, dims=(3, None), cluster_shape=llama_mlp_model.cluster_shape
+            ),
+        )
+    elif llama_mlp_model.model_config["LLM_MODE"] == "prefill":
+        x_multichip = ttnn.from_torch(
+            x,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=llama_mlp_model.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ShardTensor2dMesh(
+                llama_mlp_model.mesh_device, dims=(3, None), cluster_shape=llama_mlp_model.cluster_shape
             ),
         )
 
@@ -68,7 +79,7 @@ def tt_llama_mlp_prepare_inputs(llama_mlp_model, x):
 
 
 def run_test_LlamaMLP_inference(
-    device_mesh,
+    mesh_device,
     cluster_shape,
     batch,
     seq_len,
@@ -103,7 +114,8 @@ def run_test_LlamaMLP_inference(
     if model_config["LLM_MODE"] == "decode":
         # shape should be (1, seq_len, batch, dim)
         pt_inp_normed = pt_inp_normed.unsqueeze(1).permute(2, 1, 0, 3)
-    else:
+    else:  # prefill
+        # shape should be (1, batch, seq_len, dim)
         pt_inp_normed = pt_inp_normed.unsqueeze(0)
 
     tt_inp = pt_inp_normed.clone()
@@ -114,7 +126,7 @@ def run_test_LlamaMLP_inference(
 
     # TT hardware execution -------------------------------------------------------------
     tt_LlamaMLP_model = TtLlamaMLP_galaxy(
-        device_mesh,
+        mesh_device,
         cluster_shape,
         state_dict,
         BASE_URL,
@@ -125,11 +137,10 @@ def run_test_LlamaMLP_inference(
     )
 
     tt_mlp_input = tt_llama_mlp_prepare_inputs(tt_LlamaMLP_model, tt_inp)
-
     tt_out = tt_LlamaMLP_model(tt_mlp_input)
 
     tt_out = ttnn.to_torch(
-        tt_out, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(3, 1), cluster_shape=cluster_shape)
+        tt_out, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(3, 1), cluster_shape=cluster_shape)
     )
     tt_out = tt_out[:, 0:1, :, :]
 
@@ -146,7 +157,7 @@ def run_test_LlamaMLP_inference(
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "cluster_shape, device_mesh", [pytest.param((4, 8), (8, 4), id="4x8_grid")], indirect=["device_mesh"]
+    "cluster_shape, mesh_device", [pytest.param((4, 8), (8, 4), id="4x8_grid")], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize(
     "llama_version",
@@ -154,8 +165,8 @@ def run_test_LlamaMLP_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    [(32, 1, 0.9997)],
-    ids=["decode"],
+    [(32, 1, 0.9997), (1, 256, 0.9995)],
+    ids=["decode", "prefill"],
 )
 @pytest.mark.parametrize(
     "max_batch_size, max_context_len",
@@ -172,7 +183,7 @@ def test_LlamaMLP_inference(
     batch,
     seq_len,
     pcc,
-    device_mesh,
+    mesh_device,
     max_batch_size,
     max_context_len,
     llama_version,
@@ -196,9 +207,9 @@ def test_LlamaMLP_inference(
         max_context_len=max_context_len,
     )
 
-    check_device_mesh(device_mesh, model_config)
+    check_mesh_device(mesh_device, model_config)
     run_test_LlamaMLP_inference(
-        device_mesh,
+        mesh_device,
         cluster_shape,
         batch,
         seq_len,

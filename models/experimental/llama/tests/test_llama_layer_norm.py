@@ -5,7 +5,7 @@
 import pytest
 import torch
 from torch import nn
-import tt_lib
+import ttnn
 from loguru import logger
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -31,16 +31,12 @@ class PytorchLlamaRMSNormModel(torch.nn.Module):
         return result
 
 
-def run_test_LlamaLayerNorm_inference(
-    device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
-):
+def run_test_LlamaLayerNorm_inference(device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc):
     model_name = model_version
     tokenizer_name = tokenizer_version
 
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype=torch.float32
-    )
+    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float32)
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
@@ -51,9 +47,7 @@ def run_test_LlamaLayerNorm_inference(
     layer_num = 0
 
     # PyTorch output ---------------------------------------------------------------------
-    pytorch_LlamaRMSNorm_model = PytorchLlamaRMSNormModel(
-        hugging_face_reference_model, layer_num
-    )
+    pytorch_LlamaRMSNorm_model = PytorchLlamaRMSNormModel(hugging_face_reference_model, layer_num)
     pytorch_out = pytorch_LlamaRMSNorm_model(llama_layer_norm_input)
 
     # TT hardware execution --------------------------------------------------------------
@@ -101,14 +95,10 @@ def run_test_LlamaLayerNorm_inference(
         ),
     ),
 )
-def test_LlamaLayerNorm_inference(
-    model_version, tokenizer_version, batch, seq_len, on_weka, pcc
-):
+def test_LlamaLayerNorm_inference(model_version, tokenizer_version, batch, seq_len, on_weka, pcc):
     # Initialize the device
-    device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.SetDefaultDevice(device)
+    device = ttnn.open_device(0)
+    ttnn.SetDefaultDevice(device)
 
-    run_test_LlamaLayerNorm_inference(
-        device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
-    )
-    tt_lib.device.CloseDevice(device)
+    run_test_LlamaLayerNorm_inference(device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc)
+    ttnn.close_device(device)

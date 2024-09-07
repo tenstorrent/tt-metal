@@ -5,13 +5,11 @@
 import os
 import pytest
 import torch
-import tt_lib
 import ttnn
 import time
 import statistics
 from loguru import logger
 
-from models.utility_functions import torch2tt_tensor
 from tests.ttnn.profiling import ops_for_profiling
 from tracy import signpost
 
@@ -19,30 +17,30 @@ from tracy import signpost
 test_sweep_args = [
     # (
     #     (1, 2, 1024, 1024),
-    #     tt_lib.tensor.DataType.BFLOAT16,
-    #     tt_lib.tensor.Layout.TILE,
-    #     tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
-    #     tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
+    #     ttnn.bfloat16,
+    #     ttnn.TILE_LAYOUT,
+    #     ttnn.DRAM_MEMORY_CONFIG,
+    #     ttnn.DRAM_MEMORY_CONFIG,
     # ),
-    (
-        (1, 4, 1024, 1024),
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
-        tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
-        tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
-    ),
+    ((1, 4, 1024, 1024), ttnn.bfloat16, ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
 ]
 
 all_num_call_to_stack = [20]  # For 10 and more test  execution spills to dispatch
-NUM_REPEATS = 5
+NUM_REPEATS = 20
 
 
-# def torch2tt_tensor(x, device, dlayout, in_mem_config, dtype):
-#     return tt_lib.tensor.Tensor(x, dtype).pad_to_tile(float("nan")).to(dlayout).to(device, in_mem_config)
+def torch2tt_tensor(x, device, dlayout, in_mem_config, dtype):
+    return ttnn.from_torch(
+        x,
+        dtype=dtype,
+        layout=dlayout,
+        device=device,
+        memory_config=in_mem_config,
+    )
 
 
 def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup):
-    tt_lib.device.Synchronize(device)
+    ttnn.synchronize_device(device)
 
     if not is_warmup:
         signpost(header=f"start {op_name}")
@@ -51,7 +49,7 @@ def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup
     for _ in range(num_call_to_stack):
         op_func()
 
-    tt_lib.device.Synchronize(device)
+    ttnn.synchronize_device(device)
 
     duration = 1000 * (time.time() - start_time)
     avg_op_time = duration / num_call_to_stack
@@ -64,7 +62,7 @@ def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup
         # signpost(header=f"ending {op_name}")
 
     dispatch_end_time = time.time()
-    tt_lib.device.Synchronize(device)
+    ttnn.synchronize_device(device)
 
     sync_time = 1000 * (time.time() - dispatch_end_time)
     dispatch_time = 1000 * (dispatch_end_time - start_time)
@@ -150,8 +148,6 @@ def measure_host_overhead_unary(
 
     if shape_func is not None:
         input_shape_0 = shape_func(input_shape)
-
-    print(f"input_shape_0 {input_shape_0} **************************")
 
     x = torch.Tensor(size=input_shape_0).uniform_(-100, 100).bfloat16()
     x = torch2tt_tensor(x, device, dlayout, in_mem_config, dtype)
@@ -242,7 +238,7 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
         logger.info(f"Profiling op {op['name']} for input shape {input_shape}")
 
         if "layout" in op and op["layout"] == "ROW_MAJOR":
-            dlayout = tt_lib.tensor.Layout.ROW_MAJOR
+            dlayout = ttnn.ROW_MAJOR_LAYOUT
 
         num_repeats = op["num_repeats"] if "num_repeats" in op else NUM_REPEATS
         shape_func = None if "shape_func" not in op else op["shape_func"]

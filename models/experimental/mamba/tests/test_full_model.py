@@ -7,7 +7,7 @@ import pytest
 from loguru import logger
 from transformers import AutoTokenizer
 
-import tt_lib
+import ttnn
 from models.experimental.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
 from models.experimental.mamba.tt.full_model import MambaTT
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
@@ -56,7 +56,7 @@ def test_mamba_model_inference(
     model_version: MambaPretrainedModelName,
     batch: int,
     pcc: float,
-    device: tt_lib.device,
+    device: ttnn.experimental.device,
 ):
     torch.manual_seed(10)
 

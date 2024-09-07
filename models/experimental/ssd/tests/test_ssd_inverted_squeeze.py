@@ -18,7 +18,6 @@ from torchvision.models.detection import (
     SSDLite320_MobileNet_V3_Large_Weights,
     ssdlite320_mobilenet_v3_large as pretrained,
 )
-import tt_lib
 
 
 @pytest.mark.parametrize(

@@ -13,14 +13,14 @@ import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.utility_functions import torch2tt_tensor, skip_for_wormhole_b0, is_grayskull
+from models.utility_functions import torch2tt_tensor, is_wormhole_b0, is_grayskull
 
 
 def rms_norm(x, dim, gamma, beta, eps):
     return x * torch.rsqrt(x.pow(2).mean([-i for i in range(1, len(dim) + 1)], keepdim=True) + eps) * gamma + beta
 
 
-# @skip_for_wormhole_b0()
+# @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize(
     "out_mem_config",
     (ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1),),
@@ -95,7 +95,7 @@ def test_layernorm_sharded_mix_precision_rm(
     in0 = torch.rand(in0_shape) * 2 - 0.95
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
     shard_shape = [M // grid_size[0], math.ceil(K / grid_size[1] / 32) * 32]
-    in0_t_shard = ttnn.experimental.tensor.interleaved_to_sharded(
+    in0_t_shard = ttnn.interleaved_to_sharded(
         in0_t,
         grid_size,
         shard_shape,
@@ -106,7 +106,7 @@ def test_layernorm_sharded_mix_precision_rm(
     if test_id <= 5:
         in1 = torch.rand(in0_shape) * 2 - 0.8
         in1_t = torch2tt_tensor(in1, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
-        in1_t_shard = ttnn.experimental.tensor.interleaved_to_sharded(
+        in1_t_shard = ttnn.interleaved_to_sharded(
             in1_t,
             grid_size,
             shard_shape,
@@ -268,7 +268,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
         )
 
-    ttz = ttnn.experimental.tensor.sharded_to_interleaved(ttz, in0_mem_config)
+    ttz = ttnn.sharded_to_interleaved(ttz, in0_mem_config)
     tt_got_back = ttz.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().float()
 
     pt_in = in0 + in1 if test_id <= 5 else in0
@@ -369,7 +369,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
     in0 = torch.rand(in0_shape) * 2 - 0.95
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
     shard_shape = [M, math.ceil(K / (grid_size[0] * grid_size[1]) / 32) * 32]
-    in0_t_shard = ttnn.experimental.tensor.interleaved_to_sharded(
+    in0_t_shard = ttnn.interleaved_to_sharded(
         in0_t,
         grid_size,
         shard_shape,
@@ -380,7 +380,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
     if test_id <= 5:
         in1 = torch.rand(in0_shape) * 2 - 0.8
         in1_t = torch2tt_tensor(in1, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
-        in1_t_shard = ttnn.experimental.tensor.interleaved_to_sharded(
+        in1_t_shard = ttnn.interleaved_to_sharded(
             in1_t,
             grid_size,
             shard_shape,
@@ -543,7 +543,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
 
-    ttz = ttnn.experimental.tensor.sharded_to_interleaved(ttz, in0_mem_config)
+    ttz = ttnn.sharded_to_interleaved(ttz, in0_mem_config)
     tt_got_back = ttz.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().float()
 
     pt_in = in0 + in1 if test_id <= 5 else in0

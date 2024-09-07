@@ -126,7 +126,7 @@ def test_run_max_pool(
     use_multicore,
     device,
 ):
-    # ttnn.experimental.device.EnableMemoryReports()
+    # ttnn.device.EnableMemoryReports()
 
     in_n, in_c, in_h, in_w = act_shape
     kernel_h, kernel_w = kernel_size
@@ -224,7 +224,7 @@ def test_run_max_pool(
             pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
 
         ttact = ttact.to(device, interleaved_mem_config)
-        ttact = ttnn.experimental.tensor.interleaved_to_sharded(
+        ttact = ttnn.interleaved_to_sharded(
             ttact,
             grid_size,
             [in_height // ncores, act_padded.shape[-1]],
@@ -252,7 +252,7 @@ def test_run_max_pool(
         use_multicore=use_multicore,
     )
     if out_mem_config.is_sharded():
-        out_padded = ttnn.experimental.tensor.sharded_to_interleaved(out_padded, interleaved_mem_config)
+        out_padded = ttnn.sharded_to_interleaved(out_padded, interleaved_mem_config)
     out_padded = out_padded.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
 
     out_shape_padded = out_padded.get_legacy_shape()

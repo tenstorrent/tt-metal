@@ -39,13 +39,13 @@ from tt_lib.utils import (
 )
 @pytest.mark.parametrize(
     "op",
-    [ttnn.experimental.tensor.BcastOpMath.ADD, ttnn.experimental.tensor.BcastOpMath.MUL],
+    [ttnn.BcastOpMath.ADD, ttnn.BcastOpMath.MUL],
 )
 @pytest.mark.parametrize("in1_batch_size", [1, 2])
 @pytest.mark.parametrize("in0_batch_size", [1, 2])
 @pytest.mark.parametrize(
     "orientation",
-    [ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, ttnn.experimental.tensor.ShardOrientation.COL_MAJOR],
+    [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
 )
 def test_bcast(
     device,
@@ -67,12 +67,12 @@ def test_bcast(
         if shard_strategy == ttnn.ShardStrategy.BLOCK:
             shard_grid = (
                 (shard_grid[0], 4)
-                if shard_grid[1] == 8 and orientation == ttnn.experimental.tensor.ShardOrientation.COL_MAJOR
+                if shard_grid[1] == 8 and orientation == ttnn.ShardOrientation.COL_MAJOR
                 else shard_grid
             )
             shard_grid = (
                 (4, shard_grid[1])
-                if shard_grid[0] == 8 and orientation == ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
+                if shard_grid[0] == 8 and orientation == ttnn.ShardOrientation.ROW_MAJOR
                 else shard_grid
             )
     input_shape = [in0_batch_size, 1, input_height, input_width]
@@ -92,7 +92,7 @@ def test_bcast(
         shard_orientation = orientation
         core_grid = (
             ttnn.CoreGrid(y=shard_grid[0], x=shard_grid[1])
-            if shard_orientation == ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
+            if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR
             else ttnn.CoreGrid(y=shard_grid[1], x=shard_grid[0])
         )
     else:
@@ -106,9 +106,11 @@ def test_bcast(
     logger.debug(f"shard_height={shard_height} and shard_width={shard_width}")
 
     in_sharded_mem_config = ttnn.create_sharded_memory_config(
-        shape=(shard_height, shard_width)
-        if shard_orientation == ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
-        else (shard_width, shard_height),
+        shape=(
+            (shard_height, shard_width)
+            if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR
+            else (shard_width, shard_height)
+        ),
         core_grid=core_grid,
         strategy=shard_strategy,
         orientation=shard_orientation,
@@ -122,9 +124,9 @@ def test_bcast(
 
     b_weights_shape = [in1_batch_size, 1, 1, input_width]
     B_pyt = torch.rand(size=b_weights_shape).bfloat16()
-    if op == ttnn.experimental.tensor.BcastOpMath.ADD:
+    if op == ttnn.BcastOpMath.ADD:
         torch_ref_output = torch.add(input, B_pyt)
-    elif op == ttnn.experimental.tensor.BcastOpMath.MUL:
+    elif op == ttnn.BcastOpMath.MUL:
         torch_ref_output = torch.mul(input, B_pyt)
 
     if in0_batch_size == 1 and in1_batch_size > 1:
@@ -132,12 +134,12 @@ def test_bcast(
 
     B_pyt = B_pyt.reshape(b_weights_shape)
     tt_weight = ttnn.from_torch(B_pyt, device=device, layout=ttnn.TILE_LAYOUT, dtype=in1_dtype)
-    tt_output = ttnn.experimental.tensor.bcast(
+    tt_output = ttnn.bcast(
         tt_input,
         tt_weight,
         op,
-        ttnn.experimental.tensor.BcastOpDim.H,
-        output_mem_config=ttnn.get_memory_config(tt_input),
+        ttnn.BcastOpDim.H,
+        memory_config=ttnn.get_memory_config(tt_input),
     )
 
     output_tensor = ttnn.to_torch(tt_output).float()

@@ -13,7 +13,7 @@ from models.utility_functions import (
 )
 
 
-import tt_lib
+import ttnn
 from tt_lib.fallback_ops import fallback_ops
 
 
@@ -56,7 +56,7 @@ class TtSwinPatchEmbeddings(nn.Module):
             pixel_values = fallback_ops.pad(pixel_values, pad_values)
         return pixel_values
 
-    def forward(self, pixel_values: Optional[tt_lib.tensor.Tensor]) -> Tuple[tt_lib.tensor.Tensor, Tuple[int]]:
+    def forward(self, pixel_values: Optional[ttnn.Tensor]) -> Tuple[ttnn.Tensor, Tuple[int]]:
         _, num_channels, height, width = pixel_values.get_legacy_shape()
         if num_channels != self.num_channels:
             raise ValueError(

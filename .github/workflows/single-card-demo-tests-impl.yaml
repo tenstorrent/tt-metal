@@ -1,0 +1,84 @@
+name: "(internal) Single-card Demo tests impl"
+
+on:
+  workflow_call:
+
+jobs:
+  single-card-demo-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          {
+            name: "N150",
+            arch: wormhole_b0,
+            runs-on: ["cloud-virtual-machine", "N150", "in-service"],
+            cmd: run_n150_tests
+          },
+          {
+            name: "N300_functionality",
+            arch: wormhole_b0,
+            runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+            cmd: run_n300_func_tests
+          },
+          {
+            name: "N300_performance",
+            arch: wormhole_b0,
+            runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
+            cmd: run_n300_perf_tests
+          }
+        ]
+    name: ${{ matrix.test-group.name }}
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.test-group.arch }}
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    runs-on: ${{ matrix.test-group.runs-on }}
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Enable Performance mode
+        if: ${{ matrix.test-group.name == 'N300_performance' }}
+        run: |
+          sudo cpupower frequency-set -g performance
+      - name: Ensure weka mount is active
+        run: |
+          sudo systemctl restart mnt-MLPerf.mount
+          sudo /etc/rc.local
+          ls -al /mnt/MLPerf/bit_error_tests
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.test-group.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
+      - name: Run demo regression tests
+        timeout-minutes: 70
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          source ${{ github.workspace }}/tests/scripts/single_card/run_single_card_demo_tests.sh
+          ${{ matrix.test-group.cmd }}
+      - name: Save environment data
+        if: ${{ matrix.test-group.name == 'N300_performance' && !cancelled() }}
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          python3 .github/scripts/data_analysis/create_benchmark_environment_csv.py
+      - name: Upload benchmark data
+        if: ${{ matrix.test-group.name == 'N300_performance' && !cancelled() }}
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+      - name: Disable Performance mode
+        if: ${{ matrix.test-group.name == 'N300_performance' }}
+        run: |
+          sudo cpupower frequency-set -g ondemand

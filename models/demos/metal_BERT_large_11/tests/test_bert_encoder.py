@@ -58,7 +58,7 @@ def run_bert_encoder_inference(
     ).to(ttnn.TILE_LAYOUT)
     if "OP1_FUSED_QKV_MM_INPUT_SHARDED_MEMCFG" in model_config:
         tt_bert_encoder_input = tt_bert_encoder_input.to(device)
-        tt_bert_encoder_input = ttnn.experimental.tensor.interleaved_to_sharded(
+        tt_bert_encoder_input = ttnn.interleaved_to_sharded(
             tt_bert_encoder_input,
             model_config["GRID_SIZE"],
             model_config["SHARD_SIZE"],
@@ -87,7 +87,7 @@ def run_bert_encoder_inference(
 
     tt_out = tt_bert_encoder_model(tt_bert_encoder_input, tt_bert_attention_mask)
     if tt_out.is_sharded():
-        tt_out = ttnn.experimental.tensor.sharded_to_interleaved(tt_out)
+        tt_out = ttnn.sharded_to_interleaved(tt_out)
     tt_out = tt_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     passing, output = comp_pcc(pytorch_out, tt_out, pcc)

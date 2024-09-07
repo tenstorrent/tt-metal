@@ -4,7 +4,7 @@
 
 from models.utility_functions import tt2torch_tensor
 import torch
-import tt_lib
+import ttnn
 from transformers import GPT2LMHeadModel
 from tt_lib.utils import pad_weight
 from pathlib import Path
@@ -16,8 +16,8 @@ def unpad_from_zero(x, desired_shape):
         x = tt2torch_tensor(x)
     else:
         x = x.cpu()
-        if x.get_layout() != tt_lib.tensor.Layout.ROW_MAJOR:
-            x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
+        if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            x = x.to(ttnn.ROW_MAJOR_LAYOUT)
         x = x.unpad(
             (0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1)
         )
@@ -41,21 +41,21 @@ def cache_weights_in_weka(device, dtype, reset_seeds):
         while len(value.shape) < 4:
             value = value.unsqueeze(0)
         if value.shape[-2] % 32 == 0 and value.shape[-1] % 32 == 0:
-            value = tt_lib.tensor.Tensor(
+            value = ttnn.Tensor(
                 value.reshape(-1).tolist(),
                 value.shape,
                 weights_dtype,
-                tt_lib.tensor.Layout.ROW_MAJOR,
-            ).to(tt_lib.tensor.Layout.TILE)
+                ttnn.ROW_MAJOR_LAYOUT,
+            ).to(ttnn.TILE_LAYOUT)
         else:
             value = pad_weight(value)
-            value = tt_lib.tensor.Tensor(
+            value = ttnn.Tensor(
                 value.reshape(-1).tolist(),
                 value.shape,
                 weights_dtype,
-                tt_lib.tensor.Layout.ROW_MAJOR,
-            ).to(tt_lib.tensor.Layout.TILE)
-        tt_lib.tensor.dump_tensor(file_name + str(key) + str(weights_dtype) + ".bin", value)
+                ttnn.ROW_MAJOR_LAYOUT,
+            ).to(ttnn.TILE_LAYOUT)
+        ttnn.dump_tensor(file_name + str(key) + str(weights_dtype) + ".bin", value)
 
 
 """This function will load weights from the state_dict and check if the needed weights are available in given path.
@@ -83,21 +83,21 @@ def store_weights(model_version, file_name, base_address, dtype):
         while len(value.shape) < 4:
             value = value.unsqueeze(0)
         if value.shape[-2] % 32 == 0 and value.shape[-1] % 32 == 0:
-            value = tt_lib.tensor.Tensor(
+            value = ttnn.Tensor(
                 value.reshape(-1).tolist(),
                 value.shape,
                 weights_dtype,
-                tt_lib.tensor.Layout.ROW_MAJOR,
-            ).to(tt_lib.tensor.Layout.TILE)
+                ttnn.ROW_MAJOR_LAYOUT,
+            ).to(ttnn.TILE_LAYOUT)
         else:
             value = pad_weight(value)
-            value = tt_lib.tensor.Tensor(
+            value = ttnn.Tensor(
                 value.reshape(-1).tolist(),
                 value.shape,
                 weights_dtype,
-                tt_lib.tensor.Layout.ROW_MAJOR,
-            ).to(tt_lib.tensor.Layout.TILE)
-        tt_lib.tensor.dump_tensor(file_name + str(key) + str(weights_dtype) + ".bin", value)
+                ttnn.ROW_MAJOR_LAYOUT,
+            ).to(ttnn.TILE_LAYOUT)
+        ttnn.dump_tensor(file_name + str(key) + str(weights_dtype) + ".bin", value)
 
 
 def get_tt_cache_path(model_version):

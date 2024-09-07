@@ -14,14 +14,13 @@ from datasets import load_dataset
 from transformers import AutoImageProcessor
 
 import ttnn
-import tt_lib
 from models.experimental.functional_vit.tt import ttnn_optimized_sharded_vit
-from models.utility_functions import torch_random, skip_for_wormhole_b0
+from models.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.utility_functions import (
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
     torch_random,
 )
 from models.perf.perf_utils import prep_perf_report
@@ -33,7 +32,7 @@ def get_expected_times(functional_vit):
     }[functional_vit]
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -113,7 +112,7 @@ def test_performance_vit_encoder(device, use_program_cache, model_name, batch_si
     logger.info(f"Samples per second: {1 / inference_time * batch_size}")
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -188,18 +187,16 @@ def test_performance_vit_e2e(
     patch_size = 16
     batch_size, _, img_h, img_w = torch_pixel_values.shape
     N, H, W, C = batch_size, img_h, img_w // patch_size, 4 * patch_size
-    shard_grid = tt_lib.tensor.CoreRangeSet(
+    shard_grid = ttnn.CoreRangeSet(
         {
-            tt_lib.tensor.CoreRange(
-                tt_lib.tensor.CoreCoord(0, 0),
-                tt_lib.tensor.CoreCoord(7, 0),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(7, 0),
             ),
         }
     )
     n_cores = 8
-    shard_spec = tt_lib.tensor.ShardSpec(
-        shard_grid, [N * H * W // n_cores, C], tt_lib.tensor.ShardOrientation.ROW_MAJOR, False
-    )
+    shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
 
     # tracyProfiler = tracy.Profiler()
     # tracyProfiler.enable()
@@ -214,9 +211,7 @@ def test_performance_vit_e2e(
             pixel_values,
             device=device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1, shard_spec
-            ),
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec),
             dtype=ttnn.bfloat16,
         )
 

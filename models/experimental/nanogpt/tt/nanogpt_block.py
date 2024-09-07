@@ -4,7 +4,6 @@
 
 import torch.nn as nn
 import ttnn
-import tt_lib
 import models.experimental.nanogpt.tt.nanogpt_mlp as nanogpt_mlp
 import models.experimental.nanogpt.tt.nanogpt_attention as nanogpt_attention
 
@@ -16,9 +15,9 @@ class TtBlock(nn.Module):
         self.device = device
         self.config = config
 
-        self.beta_1 = tt_lib.tensor.load_tensor(tt_cache_path + base_address + ".ln_1.bias" + str(dtype) + ".bin")
+        self.beta_1 = ttnn.load_tensor(tt_cache_path + base_address + ".ln_1.bias" + str(dtype) + ".bin")
 
-        self.gamma_1 = tt_lib.tensor.load_tensor(tt_cache_path + base_address + ".ln_1.weight" + str(dtype) + ".bin")
+        self.gamma_1 = ttnn.load_tensor(tt_cache_path + base_address + ".ln_1.weight" + str(dtype) + ".bin")
 
         self.ln_1 = ttnn.layer_norm
 
@@ -26,15 +25,15 @@ class TtBlock(nn.Module):
             config, f"{base_address}.attn", device, tt_cache_path, dtype
         )
 
-        self.beta_2 = tt_lib.tensor.load_tensor(tt_cache_path + base_address + ".ln_2.bias" + str(dtype) + ".bin")
+        self.beta_2 = ttnn.load_tensor(tt_cache_path + base_address + ".ln_2.bias" + str(dtype) + ".bin")
 
-        self.gamma_2 = tt_lib.tensor.load_tensor(tt_cache_path + base_address + ".ln_2.weight" + str(dtype) + ".bin")
+        self.gamma_2 = ttnn.load_tensor(tt_cache_path + base_address + ".ln_2.weight" + str(dtype) + ".bin")
 
         self.ln_2 = ttnn.layer_norm
 
         self.mlp = nanogpt_mlp.TtMLP(f"{base_address}.mlp", self.config, device, tt_cache_path, dtype)
 
-    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         tmp = self.attn.forward(self.ln_1(x, epsilon=1e-5, weight=self.gamma_1, bias=self.beta_1))
         x = ttnn.add(x, tmp)
 

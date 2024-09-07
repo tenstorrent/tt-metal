@@ -11,7 +11,9 @@ import time
 
 from models.utility_functions import (
     skip_for_grayskull,
+    is_wormhole_b0,
     comp_pcc,
+    is_blackhole,
 )
 from diffusers import LMSDiscreteScheduler
 import ttnn
@@ -61,6 +63,7 @@ def unsqueeze_all_params_to_4d(params):
 
 
 @skip_for_grayskull()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="#10923: CB / L1 buffer clash")
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 32768}], ids=["device_params=l1_small_size_24576"], indirect=True
 )

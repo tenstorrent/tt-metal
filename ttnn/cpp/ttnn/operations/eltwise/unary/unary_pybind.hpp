@@ -188,11 +188,13 @@ void bind_unary_operation_overload_complex_return_complex(py::module& module, co
 }
 
 template <typename unary_operation_t>
-void bind_unary_operation_with_fast_and_approximate_mode(py::module& module, const unary_operation_t& operation) {
+void bind_unary_operation_with_fast_and_approximate_mode(py::module& module, const unary_operation_t& operation, const std::string& info_doc = "" ) {
     auto doc = fmt::format(
         R"doc({0}(input_tensor: ttnn.Tensor, *, fast_and_approximate_mode: bool = False, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
 
             Applies {0} to :attr:`input_tensor` element-wise.
+
+            {2}
 
             .. math::
                 {0}(\\mathrm{{input\\_tensor}}_i)
@@ -212,7 +214,8 @@ void bind_unary_operation_with_fast_and_approximate_mode(py::module& module, con
                 >>> output = {1}(tensor, fast_and_approximate_mode=true)
         )doc",
         operation.base_name(),
-        operation.python_fully_qualified_name());
+        operation.python_fully_qualified_name(),
+        info_doc);
 
     bind_registered_operation(
         module,
@@ -1239,8 +1242,22 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::atan);
     detail::bind_unary_operation(module, ttnn::cos);
     detail::bind_unary_operation(module, ttnn::erfinv);
-    detail::bind_unary_operation(module, ttnn::exp2);
-    detail::bind_unary_operation(module, ttnn::expm1);
+    detail::bind_unary_operation(module, ttnn::exp2,
+    R"doc(Supported dtypes, layouts, and ranks:
+
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+)doc");
+    detail::bind_unary_operation(module, ttnn::expm1,
+    R"doc(Supported dtypes, layouts, and ranks:
+
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+)doc");
     detail::bind_unary_operation(module, ttnn::eqz);
     detail::bind_unary_operation(module, ttnn::floor, "Available for Wormhole_B0 only");
     detail::bind_unary_operation(module, ttnn::ceil, "Available for Wormhole_B0 only");
@@ -1275,7 +1292,14 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::log_sigmoid);
 
     //  Unaries with fast_and_approximate_mode
-    detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::exp);
+    detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::exp,
+    R"doc(Supported dtypes, layouts, and ranks:
+
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+)doc");
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erf);
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erfc);
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::gelu);
@@ -1327,7 +1351,7 @@ void py_module(py::module& module) {
     detail::bind_unary_composite(module, ttnn::log1p, R"doc(Performs log1p function on :attr:`input_tensor`.)doc", "[supported range -1 to 1]");
     detail::bind_unary_composite(module, ttnn::mish, R"doc(Performs mish function on :attr:`input_tensor`, not supported for grayskull.)doc");
     detail::bind_unary_composite(module, ttnn::multigammaln, R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc", "[supported range 1.6 to inf]");
-    detail::bind_unary_composite(module, ttnn::sinh, R"doc(Performs sinh function on :attr:`input_tensor`.)doc", "[supported range -9 to 9]");
+    detail::bind_unary_composite(module, ttnn::sinh, R"doc(Performs sinh function on :attr:`input_tensor`.)doc", "[supported range -88 to 88]");
     detail::bind_unary_composite(module, ttnn::softsign, R"doc(Performs softsign function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::swish, R"doc(Performs swish function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::trunc, R"doc(Performs trunc function on :attr:`input_tensor`, not supported for grayskull.)doc");

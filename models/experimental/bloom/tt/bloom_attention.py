@@ -7,7 +7,6 @@ import math
 from torch.nn import functional as F
 
 import ttnn
-import tt_lib
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_merge_heads as bloom_merge_heads
 from tt_lib.fused_ops.softmax import softmax as tt_softmax
@@ -201,9 +200,7 @@ def merge_heads(x: torch.Tensor, num_heads, head_dim) -> torch.Tensor:
 class TtBloomAttention(torch.nn.Module):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
-        self.mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
+        self.mem_config = ttnn.L1_MEMORY_CONFIG
         self.device = device
         self.hidden_size = config.hidden_size
         self.num_heads = config.n_head
@@ -317,7 +314,7 @@ class TtBloomAttention(torch.nn.Module):
 
         if head_mask is not None:
             head_mask = bloom_utils.torch2tt_tensor(head_mask, device)
-            attention_probs = tt_lib.mul(attention_probs, head_mask)
+            attention_probs = ttnn.mul(attention_probs, head_mask)
 
         # change view [batch_size x num_heads, q_length, kv_length]
         attention_probs_reshaped = ttnn.reshape_on_device(

@@ -14,7 +14,7 @@ from models.utility_functions import (
 )
 
 
-import tt_lib
+import ttnn
 from models.experimental.swin.tt.swin_patch_embedding import TtSwinPatchEmbeddings
 from tt_lib.fallback_ops import fallback_ops
 
@@ -48,9 +48,9 @@ class TtSwinEmbeddings(nn.Module):
 
     def forward(
         self,
-        pixel_values: Optional[tt_lib.tensor.Tensor],
-        bool_masked_pos: Optional[tt_lib.tensor.Tensor] = None,
-    ) -> Tuple[tt_lib.tensor.Tensor]:
+        pixel_values: Optional[ttnn.Tensor],
+        bool_masked_pos: Optional[ttnn.Tensor] = None,
+    ) -> Tuple[ttnn.Tensor]:
         embeddings, output_dimensions = self.patch_embeddings(pixel_values)
         embeddings = self.norm(embeddings)
         _, batch_size, seq_len, _ = embeddings.get_legacy_shape()

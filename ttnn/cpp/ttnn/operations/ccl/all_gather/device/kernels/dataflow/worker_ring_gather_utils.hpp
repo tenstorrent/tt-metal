@@ -7,6 +7,8 @@
 #include "debug/assert.h"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
+
 
 using ttnn::ccl::ShardType;
 using ttnn::ccl::UNINITIALIZED_VALUE_U16;
@@ -14,6 +16,104 @@ using ttnn::ccl::UNINITIALIZED_VALUE_U32;
 using ttnn::ccl::WorkerXY;
 
 
+template <typename AddrGen>
+FORCE_INLINE void write_and_send_chunk_write_to_tensor_segment(
+    uint32_t& output_page_idx,
+    uint32_t& col_idx,
+    uint32_t& row_idx,
+    const uint32_t& cb_id,
+    const AddrGen& d,
+    const uint32_t num_cols,
+    const uint32_t num_rows,
+    const uint32_t& col_offset,
+    const uint32_t& row_offset,
+    const uint32_t& num_pages,
+    const uint32_t& page_size,
+    uint32_t l1_read_addr) {
+
+    // for (uint32_t i = 0; i < num_pages; ++i) {
+    int32_t contig_pages = 1;
+    for (int32_t pages_remaining = num_pages; pages_remaining != 0; pages_remaining -= contig_pages) {
+        contig_pages = 1;
+#ifdef ROW_MAJOR_LAYOUT
+    #ifdef INTERLEAVED_MEM_LAYOUT
+        uint64_t dst_noc_addr = get_noc_addr(output_page_idx, d);
+        noc_async_write(l1_read_addr, dst_noc_addr, page_size);
+    #elif defined SHARDED_MEM_LAYOUT
+        // TODO: Make d.get_noc_addr work on host + device
+        auto const&[noc_yx, page_offset] = d.get_page_location(output_page_idx);
+        uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, d.bank_base_address + (page_offset * d.page_size) + 0);
+        ASSERT(false);  // untested && unimplemented
+    #endif
+        output_page_idx++;
+        row_idx++;
+        if (row_idx == num_rows) {
+            row_idx = 0;
+            output_page_idx += row_offset;
+        }
+#elif defined TILED_LAYOUT
+    #ifdef INTERLEAVED_MEM_LAYOUT
+        noc_async_write_tile(output_page_idx, d, l1_read_addr);
+    #elif defined SHARDED_MEM_LAYOUT
+        // TODO: Make d.get_noc_addr work on host + device
+        // auto const&[noc_yx, page_offset] = d.get_page_location(output_page_idx);
+        auto [noc_yx, page_offset, contig_pages_] = d.get_page_location_with_contiguous_pages_in_row_in_bank(output_page_idx);
+        contig_pages = std::min<int32_t>(pages_remaining, std::min<int32_t>(contig_pages_, num_cols - col_idx));
+        uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, d.bank_base_address + (page_offset * d.page_size) + 0);
+        noc_async_write(l1_read_addr, dst_noc_addr, page_size * contig_pages);
+    #endif
+        output_page_idx += contig_pages;
+        col_idx += contig_pages;
+        if (col_idx == num_cols) {
+            output_page_idx += col_offset;
+            col_idx = 0;
+            row_idx++;
+            if (row_idx == num_rows) {
+                row_idx = 0;
+                output_page_idx += row_offset;
+            }
+        }
+#endif
+        l1_read_addr += page_size * contig_pages;
+    }
+    noc_async_write_barrier();
+    cb_pop_front(cb_id, num_pages);
+}
+
+
+template <typename AddrGen, ttnn::ccl::EriscDataMoverTerminationMode termination_mode>
+FORCE_INLINE void write_and_send_chunk(
+    uint32_t& output_page_idx,
+    uint32_t& col_idx,
+    uint32_t& row_idx,
+    const uint32_t& cb_id,
+    const AddrGen& d,
+    const uint32_t num_cols,
+    const uint32_t num_rows,
+    const uint32_t& col_offset,
+    const uint32_t& row_offset,
+    const uint32_t& num_pages,
+    const uint32_t& page_size,
+    ccl::edm::WorkerToEdmSender<termination_mode> &sender_adapter) {
+    cb_wait_front(cb_id, num_pages);
+    uint32_t l1_read_addr = get_read_ptr(cb_id);
+    sender_adapter.send_payload_non_blocking(cb_id, num_pages, page_size);
+
+    write_and_send_chunk_write_to_tensor_segment(
+        output_page_idx,
+        col_idx,
+        row_idx,
+        cb_id,
+        d,
+        num_cols,
+        num_rows,
+        col_offset,
+        row_offset,
+        num_pages,
+        page_size,
+        l1_read_addr);
+
+}
 
 template <typename AddrGen>
 FORCE_INLINE void write_and_send_chunk(
@@ -35,48 +135,19 @@ FORCE_INLINE void write_and_send_chunk(
     noc_async_write(l1_read_addr, remote_l1_write_addr, page_size * num_pages);
     noc_semaphore_inc(eth_l1_sender_semaphore_addr, 1);
 
-    for (uint32_t i = 0; i < num_pages; ++i) {
-#ifdef ROW_MAJOR_LAYOUT
-    #ifdef INTERLEAVED_MEM_LAYOUT
-        uint64_t dst_noc_addr = get_noc_addr(output_page_idx, d);
-        noc_async_write(l1_read_addr, dst_noc_addr, page_size);
-    #elif defined SHARDED_MEM_LAYOUT
-        // TODO: Make d.get_noc_addr work on host + device
-        auto const&[noc_yx, page_offset] = d.get_page_location(output_page_idx);
-        uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, d.bank_base_address + (page_offset * d.page_size) + 0);
-        ASSERT(false);  // untested && unimplemented
-    #endif
-        output_page_idx++;
-        row_idx++;
-        if (row_idx == num_rows) {
-            row_idx = 0;
-            output_page_idx += row_offset;
-        }
-#elif defined TILED_LAYOUT
-    #ifdef INTERLEAVED_MEM_LAYOUT
-        noc_async_write_tile(output_page_idx, d, l1_read_addr);
-    #elif defined SHARDED_MEM_LAYOUT
-        // TODO: Make d.get_noc_addr work on host + device
-        auto const&[noc_yx, page_offset] = d.get_page_location(output_page_idx);
-        uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, d.bank_base_address + (page_offset * d.page_size) + 0);
-        noc_async_write(l1_read_addr, dst_noc_addr, page_size);
-    #endif
-        output_page_idx++;
-        col_idx++;
-        if (col_idx == num_cols) {
-            output_page_idx += col_offset;
-            col_idx = 0;
-            row_idx++;
-            if (row_idx == num_rows) {
-                row_idx = 0;
-                output_page_idx += row_offset;
-            }
-        }
-#endif
-        l1_read_addr += page_size;
-    }
-    noc_async_write_barrier();
-    cb_pop_front(cb_id, num_pages);
+    write_and_send_chunk_write_to_tensor_segment(
+        output_page_idx,
+        col_idx,
+        row_idx,
+        cb_id,
+        d,
+        num_cols,
+        num_rows,
+        col_offset,
+        row_offset,
+        num_pages,
+        page_size,
+        l1_read_addr);
 }
 
 template <typename AddrGen>
@@ -94,7 +165,10 @@ FORCE_INLINE void write_chunk(
     const uint32_t& page_size) {
     cb_wait_front(cb_id, num_pages);
     uint32_t l1_read_addr = get_read_ptr(cb_id);
-    for (uint32_t i = 0; i < num_pages; ++i) {
+    int32_t contig_pages = 1;
+
+    for (int32_t pages_remaining = num_pages; pages_remaining != 0; pages_remaining -= contig_pages) {
+        contig_pages = 1;
 #ifdef ROW_MAJOR_LAYOUT
     #ifdef INTERLEAVED_MEM_LAYOUT
         uint64_t dst_noc_addr = get_noc_addr(output_page_idx, d);
@@ -115,15 +189,15 @@ FORCE_INLINE void write_chunk(
     #ifdef INTERLEAVED_MEM_LAYOUT
         noc_async_write_tile(output_page_idx, d, l1_read_addr);
     #elif defined SHARDED_MEM_LAYOUT
-        auto const&[noc_yx, page_offset] = d.get_page_location(output_page_idx);
-
+        auto [noc_yx, page_offset, contig_pages_] = d.get_page_location_with_contiguous_pages_in_row_in_bank(output_page_idx);
+        contig_pages = std::min<int32_t>(pages_remaining, std::min<int32_t>(contig_pages_, num_cols - col_idx));
         uint32_t local_address = d.bank_base_address + (page_offset * d.page_size) + 0;
         uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), static_cast<uint32_t>(noc_yx.noc_y), local_address);
         ASSERT(((dst_noc_addr >> 32) & 0xF) == 0);
-        noc_async_write(l1_read_addr, dst_noc_addr, page_size);
+        noc_async_write(l1_read_addr, dst_noc_addr, page_size * contig_pages);
     #endif
-        output_page_idx++;
-        col_idx++;
+        output_page_idx += contig_pages;
+        col_idx += contig_pages;
         if (col_idx == num_cols) {
             output_page_idx += col_offset;
             col_idx = 0;
@@ -134,7 +208,7 @@ FORCE_INLINE void write_chunk(
             }
         }
 #endif
-        l1_read_addr += page_size;
+        l1_read_addr += page_size * contig_pages;
     }
     noc_async_write_barrier();
     cb_pop_front(cb_id, num_pages);
@@ -151,7 +225,10 @@ FORCE_INLINE void read_chunk_from_input_tensor(
     const uint32_t end_read_idx = input_page_idx + num_pages;
     cb_reserve_back(cb_id, num_pages);
     uint32_t local_l1_read_addr = get_write_ptr(cb_id);
-    for (; input_page_idx < end_read_idx; ++input_page_idx) {
+    int32_t contig_pages = 1;
+
+    for (int32_t pages_remaining = num_pages; pages_remaining != 0; pages_remaining -= contig_pages) {
+        contig_pages = 1;
 #ifdef ROW_MAJOR_LAYOUT
     // #ifdef INTERLEAVED_MEM_LAYOUT || defined SHARDED_MEM_LAYOUT
         uint64_t src_noc_addr = get_noc_addr(input_page_idx, s);
@@ -161,12 +238,14 @@ FORCE_INLINE void read_chunk_from_input_tensor(
         noc_async_read_tile(input_page_idx, s, local_l1_read_addr);
     #elif defined SHARDED_MEM_LAYOUT
         // TODO: Make d.get_noc_addr work on host + device
-        auto const&[noc_yx, page_offset] = s.get_page_location(input_page_idx);
+        auto const&[noc_yx, page_offset, contig_pages_] = s.get_page_location_with_contiguous_pages_in_row_in_bank(input_page_idx);
+        contig_pages = std::min<int32_t>(pages_remaining, contig_pages_);
         uint64_t src_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), static_cast<uint32_t>(noc_yx.noc_y), s.bank_base_address + (page_offset * s.page_size) + 0);
-        noc_async_read(src_noc_addr, local_l1_read_addr, page_size);
+        noc_async_read(src_noc_addr, local_l1_read_addr, page_size * contig_pages);
     #endif
 #endif
-        local_l1_read_addr += page_size;
+        local_l1_read_addr += (page_size * contig_pages);
+        input_page_idx += contig_pages;
     }
     noc_async_read_barrier();
     cb_push_back(cb_id, num_pages);
@@ -188,7 +267,9 @@ FORCE_INLINE void read_chunk_from_output_tensor(
     const uint32_t& page_size) {
     cb_reserve_back(cb_id, num_pages);
     uint32_t local_l1_read_addr = get_write_ptr(cb_id);
-    for (uint32_t i = 0; i < num_pages; ++i) {
+    uint32_t contig_pages = 1;
+    for (int32_t pages_remaining = num_pages; pages_remaining != 0; pages_remaining -= contig_pages) {
+        contig_pages = 1;
 #ifdef ROW_MAJOR_LAYOUT
     #ifdef INTERLEAVED_MEM_LAYOUT
         uint64_t src_noc_addr = get_noc_addr(input_page_idx, s);
@@ -211,12 +292,13 @@ FORCE_INLINE void read_chunk_from_output_tensor(
         noc_async_read_tile(input_page_idx, s, local_l1_read_addr);
     #elif defined SHARDED_MEM_LAYOUT
         // TODO: Make d.get_noc_addr work on host + device
-        auto const&[noc_yx, page_offset] = s.get_page_location(input_page_idx);
-        uint64_t src_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, s.bank_base_address + (page_offset * s.page_size) + 0);
-        noc_async_read(src_noc_addr, local_l1_read_addr, page_size);
+        auto [noc_yx, page_offset, contig_pages_] = s.get_page_location_with_contiguous_pages_in_row_in_bank(input_page_idx);
+        contig_pages = std::min<int32_t>(pages_remaining, std::min<int32_t>(contig_pages_, num_cols - col_idx));
+        uint64_t src_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), static_cast<uint32_t>(noc_yx.noc_y), s.bank_base_address + (page_offset * s.page_size) + 0);
+        noc_async_read(src_noc_addr, local_l1_read_addr, page_size * contig_pages);
     #endif
-        input_page_idx++;
-        col_idx++;
+        input_page_idx += contig_pages;
+        col_idx += contig_pages;
         if (col_idx == num_cols) {
             input_page_idx += col_offset;
             col_idx = 0;
@@ -227,7 +309,7 @@ FORCE_INLINE void read_chunk_from_output_tensor(
             }
         }
 #endif
-        local_l1_read_addr += page_size;
+        local_l1_read_addr += page_size * contig_pages;
     }
     noc_async_read_barrier();
     cb_push_back(cb_id, num_pages);

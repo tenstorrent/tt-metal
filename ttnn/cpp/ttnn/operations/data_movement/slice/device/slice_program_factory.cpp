@@ -261,7 +261,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
-std::vector<std::vector<uint32_t>> group_contiguous_values(std::vector<uint32_t>& values) {
+inline std::vector<std::vector<uint32_t>> group_contiguous_values(std::vector<uint32_t>& values) {
     std::vector<std::vector<uint32_t>> chunks;
     if (values.empty()) return chunks;
 
@@ -502,15 +502,20 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+
     uint32_t src0_cb_index = 0;
     tt::tt_metal::CircularBufferConfig cb_src0_config = tt::tt_metal::CircularBufferConfig(shard_height_padded * stick_size_padded, {{src0_cb_index, cb_data_format}})
         .set_page_size(src0_cb_index, stick_size_padded).set_globally_allocated_address(*a.buffer());
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores_padded, cb_src0_config);
+    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     uint32_t output_cb_index = tt::CB::c_out0; // output operands start at index 16
     tt::tt_metal::CircularBufferConfig cb_output_config = tt::tt_metal::CircularBufferConfig(shard_height_unpadded * stick_size_unpadded, {{output_cb_index, dst_cb_data_format}})
         .set_page_size(output_cb_index, stick_size_unpadded).set_globally_allocated_address(*output.buffer());
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores_unpadded, cb_output_config);
+    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_output_config);
 
     std::vector<uint32_t> reader_ct_args = {(std::uint32_t) stick_size_padded,
                                             (std::uint32_t) stick_size_unpadded,

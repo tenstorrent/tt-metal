@@ -4,16 +4,13 @@
 
 import pytest
 import torch
-import math
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
 
-from enum import Enum
-
-from models.utility_functions import skip_for_wormhole_b0, skip_for_grayskull
+from models.utility_functions import skip_for_grayskull
 
 
 def run_reshard_test(
@@ -30,10 +27,13 @@ def run_reshard_test(
     output_sharding_scheme,
     tt_dtype,
 ):
+    grid_size = device.compute_with_storage_grid_size()
     input_shard_grid_set = set()
     for _input_shard_grid in input_shard_grid:
         compute_grid_start = ttnn.CoreCoord(_input_shard_grid[0][0], _input_shard_grid[0][1])
         compute_grid_end = ttnn.CoreCoord(_input_shard_grid[1][0], _input_shard_grid[1][1])
+        if compute_grid_end.x > grid_size.x - 1 or compute_grid_end.y > grid_size.y - 1:
+            pytest.skip("Shard Grid exceeds device grid size")
         input_shard_grid_set.add(ttnn.CoreRange(compute_grid_start, compute_grid_end))
 
     input_shard_grid = ttnn.CoreRangeSet(input_shard_grid_set)
@@ -42,6 +42,8 @@ def run_reshard_test(
     for _output_shard_grid in output_shard_grid:
         compute_grid_start = ttnn.CoreCoord(_output_shard_grid[0][0], _output_shard_grid[0][1])
         compute_grid_end = ttnn.CoreCoord(_output_shard_grid[1][0], _output_shard_grid[1][1])
+        if compute_grid_end.x > grid_size.x - 1 or compute_grid_end.y > grid_size.y - 1:
+            pytest.skip("Shard Grid exceeds device grid size")
         output_shard_grid_set.add(ttnn.CoreRange(compute_grid_start, compute_grid_end))
 
     output_shard_grid = ttnn.CoreRangeSet(output_shard_grid_set)
@@ -58,7 +60,7 @@ def run_reshard_test(
     torch_tensor = torch.randn(input_shape).bfloat16()
     tt_tensor_sharded = ttnn.Tensor(torch_tensor, tt_dtype).to(input_layout)
     tt_tensor_sharded = tt_tensor_sharded.to(device, dram_memory_config)
-    tt_tensor_sharded = ttnn.experimental.tensor.interleaved_to_sharded(
+    tt_tensor_sharded = ttnn.interleaved_to_sharded(
         tt_tensor_sharded,
         input_shard_grid,
         input_shard_shape,
@@ -67,9 +69,9 @@ def run_reshard_test(
         output_dtype=tt_dtype,
     )
 
-    tt_tensor_reshard = ttnn.experimental.tensor.reshard(tt_tensor_sharded, output_mem_config)
+    tt_tensor_reshard = ttnn.reshard(tt_tensor_sharded, output_mem_config)
 
-    tt_tensor_interleaved = ttnn.experimental.tensor.sharded_to_interleaved(
+    tt_tensor_interleaved = ttnn.sharded_to_interleaved(
         tt_tensor_reshard,
         dram_memory_config,
     )
@@ -80,7 +82,6 @@ def run_reshard_test(
     return torch_tensor, torch_tensor_after_round_trip
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "input_shape, input_layout, input_shard_grid,  input_shard_shape, input_shard_orientation, input_sharding_scheme, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme",
     [
@@ -155,6 +156,18 @@ def run_reshard_test(
             (32, 1024),
             ttnn.ShardOrientation.COL_MAJOR,
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        (
+            [1, 1, 1320, 32],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 5)], [(0, 6), (6, 6)]],
+            (24, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            [[(0, 0), (7, 4)], [(0, 5), (1, 5)]],
+            (32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
     ],
 )

@@ -4,7 +4,6 @@
 
 import torch
 from torch import nn
-import tt_lib
 import warnings
 from copy import deepcopy
 from loguru import logger
@@ -18,7 +17,6 @@ from models.experimental.yolov3.tt.yolov3_upsample import TtUpsample
 from models.experimental.yolov3.tt.yolov3_concat import TtConcat
 from models.experimental.yolov3.tt.yolov3_detect import TtDetect
 from models.experimental.yolov3.reference.models.yolo import Segment
-from tt_lib.fallback_ops import fallback_ops
 from models.experimental.yolov3.reference.utils.general import make_divisible
 from models.experimental.yolov3.reference.utils.autoanchor import (
     check_anchor_order,
@@ -35,15 +33,11 @@ from models.experimental.yolov3.reference.utils.torch_utils import (
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 
-def parse_model(
-    state_dict, base_address, yaml_dict, ch, device
-):  # model_dict, input_channels(3)
+def parse_model(state_dict, base_address, yaml_dict, ch, device):  # model_dict, input_channels(3)
     d = yaml_dict
 
     # Parse a YOLOv3 model.yaml dictionary
-    logger.info(
-        f"{'':>3}{'from':>18}{'n':>3}{'params':>10}  {'module':<40}{'arguments':<30}"
-    )
+    logger.info(f"{'':>3}{'from':>18}{'n':>3}{'params':>10}  {'module':<40}{'arguments':<30}")
     anchors, nc, gd, gw, act = (
         d["anchors"],
         d["nc"],
@@ -53,21 +47,15 @@ def parse_model(
     )
 
     if act:
-        Conv.default_act = eval(
-            act
-        )  # redefine default activation, i.e. Conv.default_act = nn.SiLU()
+        Conv.default_act = eval(act)  # redefine default activation, i.e. Conv.default_act = nn.SiLU()
         logger.info(f"{colorstr('activation:')} {act}")  # print
 
-    na = (
-        (len(anchors[0]) // 2) if isinstance(anchors, list) else anchors
-    )  # number of anchors
+    na = (len(anchors[0]) // 2) if isinstance(anchors, list) else anchors  # number of anchors
     no = na * (nc + 5)  # number of outputs = anchors * (classes + 5)
 
     layers, save, c2 = [], [], ch[-1]  # layers, savelist, ch out
 
-    for i, (f, n, m, args) in enumerate(
-        d["backbone"] + d["head"]
-    ):  # from, number, module, args
+    for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]):  # from, number, module, args
         # m = eval(m) if isinstance(m, str) else m  # eval strings
 
         for j, a in enumerate(args):
@@ -141,9 +129,7 @@ def parse_model(
             np,
         )  # attach index, 'from' index, type, number params
 
-        save.extend(
-            x % i for x in ([f] if isinstance(f, int) else f) if x != -1
-        )  # append to savelist
+        save.extend(x % i for x in ([f] if isinstance(f, int) else f) if x != -1)  # append to savelist
         layers.append(m_)
 
         if i == 0:
@@ -157,19 +143,13 @@ def parse_model(
 class BaseModel(nn.Module):
     # YOLOv3 base model
     def forward(self, x, profile=False, visualize=False):
-        return self._forward_once(
-            x, profile, visualize
-        )  # single-scale inference, train
+        return self._forward_once(x, profile, visualize)  # single-scale inference, train
 
     def _forward_once(self, x, profile=False, visualize=False):
         y, dt = [], []  # outputs
         for m in self.model:
             if m.f != -1:  # if not from previous layer
-                x = (
-                    y[m.f]
-                    if isinstance(m.f, int)
-                    else [x if j == -1 else y[j] for j in m.f]
-                )  # from earlier layers
+                x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
             if profile:
                 self._profile_one_layer(m, x, dt)
             x = m(x)  # run
@@ -180,11 +160,7 @@ class BaseModel(nn.Module):
 
     def _profile_one_layer(self, m, x, dt):
         c = m == self.model[-1]  # is final layer, copy input as inplace fix
-        o = (
-            thop.profile(m, inputs=(x.copy() if c else x,), verbose=False)[0] / 1e9 * 2
-            if thop
-            else 0
-        )  # FLOPs
+        o = thop.profile(m, inputs=(x.copy() if c else x,), verbose=False)[0] / 1e9 * 2 if thop else 0  # FLOPs
         t = time_sync()
         for _ in range(10):
             m(x.copy() if c else x)
@@ -271,18 +247,9 @@ class TtDetectionModel(BaseModel):
             logger.info("Initialize strides and anchors")
             s = 256  # 2x min stride
             m.inplace = self.inplace
-            forward = (
-                lambda x: self.forward(x)[0]
-                if isinstance(m, Segment)
-                else self.forward(x)
-            )
+            forward = lambda x: self.forward(x)[0] if isinstance(m, Segment) else self.forward(x)
             m.stride = torch.tensor(
-                [
-                    s / x.shape[-2]
-                    for x in forward(
-                        torch2tt_tensor(torch.zeros(1, ch, s, s), self.device)
-                    )
-                ]
+                [s / x.shape[-2] for x in forward(torch2tt_tensor(torch.zeros(1, ch, s, s), self.device))]
             )  # forward
             check_anchor_order(m)
             m.anchors /= m.stride.view(-1, 1, 1)
@@ -294,9 +261,7 @@ class TtDetectionModel(BaseModel):
     def forward(self, x, augment=False, profile=False, visualize=False):
         if augment:
             return self._forward_augment(x)  # augmented inference, None
-        return self._forward_once(
-            x, profile, visualize
-        )  # single-scale inference, train
+        return self._forward_once(x, profile, visualize)  # single-scale inference, train
 
     def _forward_augment(self, x):
         raise NotImplementedError
@@ -350,9 +315,7 @@ class TtDetectionModel(BaseModel):
         y[-1] = y[-1][:, i:]  # small
         return y
 
-    def _initialize_biases(
-        self, cf=None
-    ):  # initialize biases into Detect(), cf is class frequency
+    def _initialize_biases(self, cf=None):  # initialize biases into Detect(), cf is class frequency
         # https://arxiv.org/abs/1708.02002 section 3.3
         # cf = torch.bincount(torch.tensor(np.concatenate(dataset.labels, 0)[:, 0]).long(), minlength=nc) + 1.
         raise NotImplementedError
@@ -360,13 +323,9 @@ class TtDetectionModel(BaseModel):
         m = self.model[-1]  # Detect() module
         for mi, s in zip(m.m, m.stride):  # from
             b = mi.bias.view(m.na, -1)  # conv.bias(255) to (3,85)
-            b.data[:, 4] += math.log(
-                8 / (640 / s) ** 2
-            )  # obj (8 objects per 640 image)
+            b.data[:, 4] += math.log(8 / (640 / s) ** 2)  # obj (8 objects per 640 image)
             b.data[:, 5 : 5 + m.nc] += (
-                math.log(0.6 / (m.nc - 0.99999))
-                if cf is None
-                else torch.log(cf / cf.sum())
+                math.log(0.6 / (m.nc - 0.99999)) if cf is None else torch.log(cf / cf.sum())
             )  # cls
             mi.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
 
@@ -389,9 +348,7 @@ def yolov3_fused_model(device, model_location_generator) -> TtDetectionModel:
     data_coco = str(data_path / "coco128.yaml")
     weights_loc = str(model_path / "yolov3.pt")
 
-    reference_model = DetectMultiBackend(
-        weights_loc, device=torch.device("cpu"), dnn=False, data=data_coco, fp16=False
-    )
+    reference_model = DetectMultiBackend(weights_loc, device=torch.device("cpu"), dnn=False, data=data_coco, fp16=False)
 
     tt_model = _yolov3_fused_model(
         cfg_path=cfg_path,

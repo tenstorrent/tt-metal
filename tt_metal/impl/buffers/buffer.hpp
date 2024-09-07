@@ -94,6 +94,7 @@ struct ShardSpecBuffer {
     std::array<uint32_t, 2> shape() const { return tensor_shard_spec.shape; }
     ShardOrientation orientation() const { return tensor_shard_spec.orientation; }
     bool halo() const { return tensor_shard_spec.halo; }
+    void set_shard_spec(const ShardSpec& shard_spec) { tensor_shard_spec = shard_spec; };
 
     /* Shape in pages of the full tensor, not per core */
     std::array<uint32_t, 2> shape_in_pages() const {
@@ -113,6 +114,7 @@ struct BufferConfig {
     uint64_t page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type;
     TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED;
+    bool allocate = true;
 };
 
 typedef BufferConfig InterleavedBufferConfig;
@@ -126,6 +128,7 @@ struct ShardedBufferConfig {
     BufferType buffer_type = BufferType::L1;
     TensorMemoryLayout buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED;
     ShardSpecBuffer shard_parameters;
+    bool allocate = true;
 };
 
 bool is_sharded(const TensorMemoryLayout &layout);
@@ -151,7 +154,8 @@ class Buffer {
         buffer_type_(BufferType::DRAM),
         buffer_layout_(TensorMemoryLayout::INTERLEAVED),
         shard_parameters_(std::nullopt),
-        bottom_up_(std::nullopt) {}
+        bottom_up_(std::nullopt),
+        allocate_(true) {}
 
     Buffer(
         Device *device,
@@ -174,7 +178,7 @@ class Buffer {
 
     uint32_t size() const { return static_cast<uint32_t>(size_); }
 
-    void set_size(uint64_t size) { size_ = size; }
+    void set_size(uint64_t size) { size_ = size; this->buffer_page_mapping_ = nullptr; }
     // Returns address of buffer in the first bank
     uint32_t address() const { return static_cast<uint32_t>(address_); }
 
@@ -183,6 +187,12 @@ class Buffer {
     uint32_t page_size() const { return page_size_; }
 
     uint32_t num_pages() const { return this->size() / this->page_size(); }
+
+    void set_page_size(uint64_t page_size) {
+        TT_FATAL(size_ % page_size == 0, "buffer size must be divisible by new page size");
+        page_size_ = page_size;
+        this->buffer_page_mapping_ = nullptr;
+    }
 
     uint32_t num_dev_pages() const {
         if (!is_sharded(this->buffer_layout_)) {
@@ -239,6 +249,11 @@ class Buffer {
         return this->shard_parameters_.value();
     }
 
+    void set_shard_spec(const ShardSpecBuffer& shard_spec) {
+        this->shard_parameters_ = shard_spec;
+        this->buffer_page_mapping_ = nullptr;
+    }
+
     uint32_t num_cores() const {
         if (!is_sharded(this->buffer_layout_))
             return 1;
@@ -246,6 +261,8 @@ class Buffer {
             return this->shard_spec().tensor_shard_spec.grid.num_cores();
         }
     }
+
+    const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
 
    private:
     virtual void allocate();
@@ -262,6 +279,8 @@ class Buffer {
     BufferType buffer_type_;
     TensorMemoryLayout buffer_layout_;
     std::optional<ShardSpecBuffer> shard_parameters_;
+    std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
+    bool allocate_ = true;
    protected:
     std::optional<bool> bottom_up_;
 };

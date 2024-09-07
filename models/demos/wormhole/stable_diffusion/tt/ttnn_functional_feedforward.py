@@ -37,16 +37,13 @@ class feedforward:
         self.parameters.net[2].weight = ttnn.unsqueeze_to_4D(self.parameters.net[2].weight)
         self.parameters.net[2].bias = ttnn.unsqueeze_to_4D(self.parameters.net[2].bias)
         self.geglu = geglu(device, parameters.net[0])
-        self.block_sharded_memory_config = ttnn.experimental.tensor.MemoryConfig(
-            memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            buffer_type=ttnn.experimental.tensor.BufferType.L1,
+        self.block_sharded_memory_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
         )
-        self.l1_interleaved_memory_config = ttnn.experimental.tensor.MemoryConfig(
-            memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttnn.experimental.tensor.BufferType.L1,
-        )
-        self.compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
+        self.l1_interleaved_memory_config = ttnn.L1_MEMORY_CONFIG
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
@@ -88,15 +85,15 @@ class feedforward:
             bias=self.parameters.net[2].bias,
             program_config=program_config,
             memory_config=self.l1_interleaved_memory_config if interleaved_output else self.block_sharded_memory_config,
-            dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            dtype=ttnn.bfloat8_b,
             compute_kernel_config=self.compute_kernel_config,
         )
         if interleaved_output:
-            hidden_states = ttnn.experimental.tensor.interleaved_to_sharded(
+            hidden_states = ttnn.interleaved_to_sharded(
                 hidden_states,
                 grid_size,
                 [hidden_states.shape[-2] // grid_size[1], hidden_states.shape[-1] // grid_size[0]],
-                ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
             )
         return hidden_states

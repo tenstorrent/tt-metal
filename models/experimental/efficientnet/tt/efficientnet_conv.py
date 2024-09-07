@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
 import ttnn
 
 from loguru import logger
@@ -185,10 +184,10 @@ class TtEfficientnetConv2dNormActivation(torch.nn.Module):
         running_mean = state_dict[f"{bn_base_address}.running_mean"]
         running_var = state_dict[f"{bn_base_address}.running_var"]
 
-        bnorm_weights = torch2tt_tensor(bnorm_weights, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
-        bnrom_bias = torch2tt_tensor(bnrom_bias, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
-        running_mean = torch2tt_tensor(running_mean, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
-        running_var = torch2tt_tensor(running_var, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+        bnorm_weights = torch2tt_tensor(bnorm_weights, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
+        bnrom_bias = torch2tt_tensor(bnrom_bias, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
+        running_mean = torch2tt_tensor(running_mean, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
+        running_var = torch2tt_tensor(running_var, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
 
         self.bnorm = fallback_ops.BatchNorm2d(
             weights=bnorm_weights,

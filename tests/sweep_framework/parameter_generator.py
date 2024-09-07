@@ -64,7 +64,8 @@ def export_suite_vectors(module_name, suite_name, vectors):
             query={
                 "bool": {
                     "must": [
-                        {"match": {"status": str(VectorStatus.CURRENT)}},
+                        {"match": {"tag.keyword": SWEEPS_TAG}},
+                        {"match": {"status.keyword": str(VectorStatus.CURRENT)}},
                         {"match": {"suite_name.keyword": suite_name}},
                     ]
                 }
@@ -72,36 +73,40 @@ def export_suite_vectors(module_name, suite_name, vectors):
             size=10000,
         )["hits"]["hits"]
         old_vector_ids = set(vector["_id"] for vector in response)
+        old_vector_hashes = set(vector["_source"]["input_hash"] for vector in response)
     except NotFoundError as e:
         old_vector_ids = set()
+        old_vector_hashes = set()
         pass
 
     current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-    new_vector_ids = set()
+    new_vector_hashes = set()
     serialized_vectors = dict()
     for i in range(len(vectors)):
         vector = dict()
         for elem in vectors[i].keys():
             vector[elem] = serialize(vectors[i][elem], warnings)
-        id = hashlib.sha224(str(vectors[i]).encode("utf-8")).hexdigest()
-        new_vector_ids.add(id)
+        input_hash = hashlib.sha224(str(vectors[i]).encode("utf-8")).hexdigest()
+        new_vector_hashes.add(input_hash)
         vector["timestamp"] = current_time
-        serialized_vectors[id] = vector
+        vector["input_hash"] = input_hash
+        vector["tag"] = SWEEPS_TAG
+        serialized_vectors[input_hash] = vector
 
-    if old_vector_ids == new_vector_ids:
+    if old_vector_hashes == new_vector_hashes:
         print(
-            f"SWEEPS: Vectors generated for module {module_name}, suite {suite_name} already exist, and have not changed. Skipping..."
+            f"SWEEPS: Vectors generated for module {module_name}, suite {suite_name} already exist with tag {SWEEPS_TAG}, and have not changed. Skipping..."
         )
         return
     else:
         print(
-            f"SWEEPS: New vectors found for module {module_name}, suite {suite_name}. Archiving old vectors and saving new suite. This step may take several minutes."
+            f"SWEEPS: New vectors found for module {module_name}, suite {suite_name}, with tag {SWEEPS_TAG}. Archiving old vectors and saving new suite. This step may take several minutes."
         )
         for old_vector_id in old_vector_ids:
-            client.update(index=index_name, id=old_vector_id, doc={"status.keyword": str(VectorStatus.ARCHIVED)})
-        for new_vector_id in serialized_vectors.keys():
-            client.index(index=index_name, id=new_vector_id, body=serialized_vectors[new_vector_id])
+            client.update(index=index_name, id=old_vector_id, doc={"status": str(VectorStatus.ARCHIVED)})
+        for new_vector_hash in serialized_vectors.keys():
+            client.index(index=index_name, body=serialized_vectors[new_vector_hash])
         print(f"SWEEPS: Generated {len(serialized_vectors)} test vectors for suite {suite_name}.")
 
 
@@ -127,8 +132,12 @@ def clean_module(module_name):
         exit(1)
 
     update_script = {"source": f"ctx._source.status = '{str(VectorStatus.ARCHIVED)}'", "lang": "painless"}
-    client.update_by_query(index=vector_index, query={"match_all": {}}, script=update_script, refresh=True)
-    print(f"SWEEPS: Marked all vectors in index {vector_index} as archived. Proceeding with generation...")
+    client.update_by_query(
+        index=vector_index, query={"match_all": {"tag.keyword": SWEEPS_TAG}}, script=update_script, refresh=True
+    )
+    print(
+        f"SWEEPS: Marked all vectors with tag {SWEEPS_TAG} in index {vector_index} as archived. Proceeding with generation..."
+    )
 
     client.close()
 
@@ -153,11 +162,27 @@ if __name__ == "__main__":
         default="corp",
         help="Elastic Connection String for vector database. Available presets are ['corp', 'cloud']",
     )
+    parser.add_argument(
+        "--tag",
+        required=False,
+        default=os.getenv("USER"),
+        help="Custom tag for the vectors you are generating. This is to keep copies seperate from other people's test vectors. By default, this will be your username. You are able to specify a tag when running tests using the runner.",
+    )
+    parser.add_argument("--explicit", required=False, action="store_true")
 
     args = parser.parse_args(sys.argv[1:])
 
     global ELASTIC_CONNECTION_STRING
     ELASTIC_CONNECTION_STRING = get_elastic_url(args.elastic)
+
+    global SWEEPS_TAG
+    SWEEPS_TAG = args.tag
+
+    if args.tag == "ci-main" and not args.explicit:
+        print("SWEEPS: The ci-main tag is reserved for CI only.")
+        exit(1)
+
+    print(f"SWEEPS: Running current generation with tag: {SWEEPS_TAG}.")
 
     if args.clean and not args.module_name:
         print("SWEEPS: The clean flag must be set in conjunction with a module name.")

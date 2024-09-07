@@ -340,14 +340,6 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_left_shift,
         "pytorch_op": pytorch_ops.left_shift,
     },
-    "eltwise-unary_remainder": {
-        "tt_op": tt_lib_ops.eltwise_unary_remainder,
-        "pytorch_op": pytorch_ops.unary_remainder,
-    },
-    "eltwise-remainder": {
-        "tt_op": tt_lib_ops.eltwise_remainder,
-        "pytorch_op": pytorch_ops.remainder,
-    },
     "eltwise-fmod": {
         "tt_op": tt_lib_ops.eltwise_fmod,
         "pytorch_op": pytorch_ops.fmod,
@@ -392,18 +384,6 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_signbit,
         "pytorch_op": pytorch_ops.signbit,
     },
-    "eltwise-ceil": {
-        "tt_op": tt_lib_ops.eltwise_ceil,
-        "pytorch_op": pytorch_ops.ceil,
-    },
-    "eltwise-trunc": {
-        "tt_op": tt_lib_ops.eltwise_trunc,
-        "pytorch_op": pytorch_ops.trunc,
-    },
-    "eltwise-frac": {
-        "tt_op": tt_lib_ops.eltwise_frac,
-        "pytorch_op": pytorch_ops.frac,
-    },
     "eltwise-floor_div": {
         "tt_op": tt_lib_ops.eltwise_floor_div,
         "pytorch_op": pytorch_ops.floor_div,
@@ -419,10 +399,6 @@ op_map = {
     "eltwise-rpow": {
         "tt_op": tt_lib_ops.eltwise_rpow,
         "pytorch_op": pytorch_ops.eltwise_rpow,
-    },
-    "eltwise-identity": {
-        "tt_op": tt_lib_ops.eltwise_identity,
-        "pytorch_op": pytorch_ops.eltwise_identity,
     },
     "eltwise-typecast": {
         "tt_op": tt_lib_ops.eltwise_typecast,

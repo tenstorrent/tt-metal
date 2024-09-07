@@ -118,7 +118,7 @@ def test_transpose_hc_program_cache(dtype, device, use_program_cache):
     H = H * 3
     W = W
     input_shape = (N, C, H, W)
-    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=1, input_dtype=dtype)
+    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=2, input_dtype=dtype)
 
     # changing shape, single core
     N = 1
@@ -128,7 +128,7 @@ def test_transpose_hc_program_cache(dtype, device, use_program_cache):
     input_shape = (N, C, H, W)
     # CACHE MISS since its single core
     # Cache size 2 more because of pad op in single core impl + transpose
-    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=3, input_dtype=dtype)
+    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=5, input_dtype=dtype)
 
 
 @pytest.mark.parametrize(
@@ -152,7 +152,7 @@ def test_transpose_cn_program_cache(dtype, device, use_program_cache):
     H = 32 * 4
     W = 32 * 3
     input_shape = (N, C, H, W)
-    transpose(input_shape, device, dim0=0, dim1=1, expected_program_cache_size=1, input_dtype=dtype)
+    transpose(input_shape, device, dim0=0, dim1=1, expected_program_cache_size=2, input_dtype=dtype)
 
 
 @pytest.mark.parametrize(
@@ -177,7 +177,7 @@ def test_transpose_wh_program_cache(dtype, device, use_program_cache):
     H = H * 3
     W = W
     input_shape = (N, C, H, W)
-    transpose(input_shape, device, dim0=-2, dim1=-1, expected_program_cache_size=1, input_dtype=dtype)
+    transpose(input_shape, device, dim0=-2, dim1=-1, expected_program_cache_size=2, input_dtype=dtype)
 
     # changing shape, single core
     N = 1
@@ -186,7 +186,7 @@ def test_transpose_wh_program_cache(dtype, device, use_program_cache):
     W = 32
     input_shape = (N, C, H, W)
     # CACHE MISS since its single core
-    transpose(input_shape, device, dim0=-2, dim1=-1, expected_program_cache_size=1, input_dtype=dtype)
+    transpose(input_shape, device, dim0=-2, dim1=-1, expected_program_cache_size=3, input_dtype=dtype)
 
 
 @pytest.mark.parametrize(
@@ -469,8 +469,8 @@ def run_tranpose_hw_sharded_rm_with_program_cache(device, n, c, h, w):
 
 
 @pytest.mark.parametrize("n", [16])
-@pytest.mark.parametrize("c", [2])
-@pytest.mark.parametrize("h", [16])
+@pytest.mark.parametrize("c", [128])
+@pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [16])
 def test_tranpose_hw_sharded_rm_with_program_cache(device, n, c, h, w, use_program_cache):
     for _ in range(2):
@@ -527,10 +527,10 @@ def run_tranpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cache)
     assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
 
 
-@pytest.mark.parametrize("n", [16])
-@pytest.mark.parametrize("c", [4])
+@pytest.mark.parametrize("n", [20])
+@pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [256])
-@pytest.mark.parametrize("w", [256])
+@pytest.mark.parametrize("w", [16])
 def test_tranpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cache):
     for _ in range(2):
         run_tranpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cache)
@@ -584,6 +584,10 @@ def run_tranpose_hc_sharded(device, n, c, h, w, grid_size):
         (2, 8, 4, 32, ttnn.CoreGrid(y=8, x=4)),
         (2, 2, 8, 64, ttnn.CoreGrid(y=8, x=1)),
         (16, 4, 224, 224, ttnn.CoreGrid(y=8, x=8)),
+        (20, 4, 224, 224, ttnn.CoreGrid(y=8, x=7)),
+        (24, 3, 224, 224, ttnn.CoreGrid(y=8, x=7)),
+        (16, 128, 256, 16, ttnn.CoreGrid(y=8, x=8)),
+        (16, 128, 128, 16, ttnn.CoreGrid(y=8, x=8)),
     ],
 )
 def test_tranpose_hc_sharded_with_program_cache(device, n, c, h, w, grid_size, use_program_cache):

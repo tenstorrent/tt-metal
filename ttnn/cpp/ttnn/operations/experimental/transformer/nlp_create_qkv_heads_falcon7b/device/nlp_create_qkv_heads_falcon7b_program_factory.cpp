@@ -152,8 +152,8 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_falcon7b(const T
         ]
     (
         const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
+        const std::vector<tt::tt_metal::Buffer*>& input_buffers,
+        const std::vector<tt::tt_metal::Buffer*>& output_buffers
     ) {
 
         auto src_dram_buffer = input_buffers.at(0);

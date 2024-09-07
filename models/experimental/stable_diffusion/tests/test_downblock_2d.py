@@ -10,20 +10,21 @@ from diffusers import StableDiffusionPipeline
 from loguru import logger
 
 
-import tt_lib as ttl
+import ttnn
 import pytest
 
 from models.utility_functions import (
     torch_to_tt_tensor,
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
 )
 from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 from models.experimental.stable_diffusion.tt.downblock_2d import TtDownBlock2D
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_run_downblock_real_input_inference(device, model_location_generator):
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
@@ -56,7 +57,7 @@ def test_run_downblock_real_input_inference(device, model_location_generator):
     tt_downblock = TtDownBlock2D(**kwargs, state_dict=state_dict, base_address=base_address)
 
     tt_out, tt_output_states = tt_downblock(tt_sample, tt_emb)
-    ttl.device.Synchronize(device)
+    ttnn.synchronize_device(device)
     tt_output = tt_to_torch_tensor(tt_out)
 
     passing = comp_pcc(torch_output, tt_output)

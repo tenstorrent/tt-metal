@@ -19,14 +19,14 @@ jobs:
       fail-fast: false
       matrix:
         runner-info: [
-          {arch: grayskull, runs-on: ["stress-grayskull", "self-reset"], machine-type: "bare_metal", name: "E150"},
-          {arch: wormhole_b0, runs-on: ["stress-wormhole_b0", "self-reset"], machine-type: "bare_metal", name: "N300"},
+          {arch: grayskull, runs-on: ["pipeline-stress", "E150", "bare-metal", "in-service"], machine-type: "bare_metal", name: "E150"},
+          {arch: wormhole_b0, runs-on: ["pipeline-stress", "N300", "bare-metal", "in-service"], machine-type: "bare_metal", name: "N300"},
           # E150
-          {arch: grayskull, runs-on: ["cloud-virtual-machine", "arch-grayskull", "E150", "in-service"], machine-type: "virtual_machine", name: "E150"},
+          {arch: grayskull, runs-on: ["cloud-virtual-machine", "E150", "in-service"], machine-type: "virtual_machine", name: "E150"},
           # N150
-          {arch: wormhole_b0, runs-on: ["cloud-virtual-machine", "arch-wormhole_b0", "N150", "in-service"], machine-type: "virtual_machine", name: "N150"},
+          {arch: wormhole_b0, runs-on: ["cloud-virtual-machine", "N150", "in-service"], machine-type: "virtual_machine", name: "N150"},
           # N300
-          {arch: wormhole_b0, runs-on: ["cloud-virtual-machine", "arch-wormhole_b0", "N300", "in-service"], machine-type: "virtual_machine", name: "N300"},
+          {arch: wormhole_b0, runs-on: ["cloud-virtual-machine", "N300", "in-service"], machine-type: "virtual_machine", name: "N300"},
         ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}

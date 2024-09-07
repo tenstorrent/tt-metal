@@ -47,13 +47,13 @@ class TtFalconLayernorm:
         self.model_config = model_config
         self.is_sharded = is_sharded
 
-        gamma_host = ttnn.experimental.tensor.Tensor(
+        gamma_host = ttnn.Tensor(
             gamma.reshape([1, 1, -1, 32]),
             self.model_config["LN_ATTN_WEIGHTS_DTYPE"],
         )
         self.gamma = gamma_host.to(device, self.model_config["LN_ATTN_WEIGHTS_MEMCFG"])
 
-        beta_host = ttnn.experimental.tensor.Tensor(
+        beta_host = ttnn.Tensor(
             beta.reshape([1, 1, -1, 32]),
             self.model_config["LN_ATTN_BIAS_DTYPE"],
         )
@@ -61,15 +61,15 @@ class TtFalconLayernorm:
 
         self.layernorm_eps = config.layer_norm_epsilon
 
-    def __call__(self, x: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
+    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if self.is_sharded:
             row_height = x.get_legacy_shape()[2]
             shard_width_hidden_dim_across_32_cores = x.get_legacy_shape()[3] // 32
-            shard_spec_32_cores_grid = ttnn.experimental.tensor.CoreRangeSet(
+            shard_spec_32_cores_grid = ttnn.CoreRangeSet(
                 {
-                    ttnn.experimental.tensor.CoreRange(
-                        ttnn.experimental.tensor.CoreCoord(0, 0),
-                        ttnn.experimental.tensor.CoreCoord(7, 3),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 3),
                     ),
                 }
             )
@@ -79,16 +79,16 @@ class TtFalconLayernorm:
             #     epsilon=self.layernorm_eps,
             #     weight=self.gamma,
             #     bias=self.beta,
-            #     memory_config=ttnn.experimental.tensor.MemoryConfig(
-            #         ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            #         ttnn.experimental.tensor.BufferType.L1,
-            #         ttnn.experimental.tensor.ShardSpec(
+            #     memory_config=ttnn.MemoryConfig(
+            #         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            #         ttnn.BufferType.L1,
+            #         ttnn.ShardSpec(
             #             shard_spec_32_cores_grid,
             #             [
             #                 row_height,
             #                 shard_width_hidden_dim_across_32_cores,
             #             ],
-            #             ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            #             ttnn.ShardOrientation.ROW_MAJOR,
             #             False,
             #         ),
             #     ),
@@ -107,16 +107,16 @@ class TtFalconLayernorm:
                 epsilon=self.layernorm_eps,
                 weight=self.gamma,
                 bias=self.beta,
-                memory_config=ttnn.experimental.tensor.MemoryConfig(
-                    ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                    ttnn.experimental.tensor.BufferType.L1,
-                    ttnn.experimental.tensor.ShardSpec(
+                memory_config=ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(
                         shard_spec_32_cores_grid,
                         [
                             32,
                             1024,
                         ],
-                        ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+                        ttnn.ShardOrientation.ROW_MAJOR,
                         False,
                     ),
                 ),
@@ -172,59 +172,57 @@ def run_test_FalconLayernorm_inference(pcc, device, model_location_generator, ge
     input_shape = [1, 1, seqlen, config.hidden_size]
 
     input_torch = (torch.rand(input_shape) * 2) - 1
-    input = torch2tt_tensor(
-        input_torch, None, tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B
-    )  # ttnn.experimental.tensor.DataType.BFLOAT16 # TODO: should be BF16!!
+    input = torch2tt_tensor(input_torch, None, tt_dtype=ttnn.bfloat8_b)  # ttnn.bfloat16 # TODO: should be BF16!!
     input = input.to(device, model_config["DEFAULT_MEMCFG"])
 
     if is_sharded:
         # # Option1 : width sharded; produces bad PCC
-        # shard_spec_32_cores_grid = ttnn.experimental.tensor.CoreRangeSet(
+        # shard_spec_32_cores_grid = ttnn.CoreRangeSet(
         #     {
-        #         ttnn.experimental.tensor.CoreRange(
-        #             ttnn.experimental.tensor.CoreCoord(0, 0),
-        #             ttnn.experimental.tensor.CoreCoord(7, 3),
+        #         ttnn.CoreRange(
+        #             ttnn.CoreCoord(0, 0),
+        #             ttnn.CoreCoord(7, 3),
         #         ),
         #     }
         # )
-        # input = ttnn.experimental.tensor.interleaved_to_sharded(
+        # input = ttnn.interleaved_to_sharded(
         #     input,
-        #     sharded_mem_config=ttnn.experimental.tensor.MemoryConfig(
-        #         ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        #         ttnn.experimental.tensor.BufferType.L1,
-        #         ttnn.experimental.tensor.ShardSpec(
+        #     ttnn.MemoryConfig(
+        #         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        #         ttnn.BufferType.L1,
+        #         ttnn.ShardSpec(
         #             shard_spec_32_cores_grid,
         #             [
         #                 seqlen,
         #                 config.hidden_size // 32,
         #             ],
-        #             ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+        #             ttnn.ShardOrientation.ROW_MAJOR,
         #             False,
         #         ),
         #     ),
         # )
 
         # Option 2: block sharded hardcoded for S=128 and 8x4 grid of cores; produces good PCC!
-        shard_spec_32_cores_grid = ttnn.experimental.tensor.CoreRangeSet(
+        shard_spec_32_cores_grid = ttnn.CoreRangeSet(
             {
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, 0),
-                    ttnn.experimental.tensor.CoreCoord(7, 3),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(7, 3),
                 ),
             }
         )
-        input = ttnn.experimental.tensor.interleaved_to_sharded(
+        input = ttnn.interleaved_to_sharded(
             input,
-            sharded_mem_config=ttnn.experimental.tensor.MemoryConfig(
-                ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                ttnn.experimental.tensor.BufferType.L1,
-                ttnn.experimental.tensor.ShardSpec(
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
                     shard_spec_32_cores_grid,
                     [
                         32,
                         1024,
                     ],
-                    ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+                    ttnn.ShardOrientation.ROW_MAJOR,
                     False,
                 ),
             ),

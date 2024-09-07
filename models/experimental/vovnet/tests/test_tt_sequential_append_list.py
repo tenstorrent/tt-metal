@@ -8,8 +8,6 @@ import timm
 
 from loguru import logger
 
-import tt_lib
-
 from models.utility_functions import (
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
@@ -17,6 +15,7 @@ from models.utility_functions import (
     comp_pcc,
 )
 from models.experimental.vovnet.tt.sequential_append_list import TtSequentialAppendList
+
 
 @pytest.mark.parametrize(
     "pcc",

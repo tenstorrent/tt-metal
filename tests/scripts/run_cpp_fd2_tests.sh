@@ -30,7 +30,7 @@ run_test() {
 
 run_test_with_watcher() {
     echo $1
-    TT_METAL_WATCHER=1 $1
+    TT_METAL_WATCHER=1 TT_METAL_WATCHER_NOINLINE=1 $1
     echo
 };
 

@@ -12,7 +12,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 15
+        default: 25
   workflow_dispatch:
     inputs:
       arch:
@@ -33,13 +33,14 @@ on:
       timeout:
         required: false
         type: number
-        default: 15
+        default: 25
 jobs:
   unit-tests-slow-dispatch:
     name: ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on:
       - ${{ inputs.runner-label }}
-      - "in-service"
+      - cloud-virtual-machine
+      - in-service
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ inputs.arch}}

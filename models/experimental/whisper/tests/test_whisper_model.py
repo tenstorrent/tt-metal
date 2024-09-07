@@ -9,14 +9,15 @@ from datasets import load_dataset
 from loguru import logger
 from transformers import WhisperModel, AutoFeatureExtractor
 
-import tt_lib
+import ttnn
 
 from models.experimental.whisper.tt.whisper_model import TtWhisperModel
 from models.utility_functions import (
     comp_pcc,
     torch2tt_tensor,
     tt2torch_tensor,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
 )
 
 
@@ -74,7 +75,7 @@ def run_whisper_model(device):
     tt_whisper.eval()
 
     with torch.no_grad():
-        input_features = torch2tt_tensor(input_features, device, tt_lib.tensor.Layout.ROW_MAJOR)
+        input_features = torch2tt_tensor(input_features, device, ttnn.ROW_MAJOR_LAYOUT)
         logger.info("Running tt whisper model")
 
         ttm_output = tt_whisper(input_features=input_features, decoder_input_ids=decoder_input_ids)
@@ -94,7 +95,7 @@ def run_whisper_model(device):
     assert does_pass
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_WhipserModel_inference(device):
     torch.manual_seed(1234)
     run_whisper_model(device=device)

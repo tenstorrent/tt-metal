@@ -8,20 +8,26 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "export_enum.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace py = pybind11;
 
 namespace ttnn {
 namespace activation {
+
+void py_module_types(py::module& m) {
+    using namespace ttnn::operations::unary;
+    export_enum<UnaryOpType>(m, "UnaryOpType");
+
+    py::class_<UnaryWithParam>(m, "UnaryWithParam");
+}
+
 void py_module(py::module& m) {
     using namespace ttnn::operations::unary;
 
-    export_enum<UnaryOpType>(m, "UnaryOpType");
-
-    py::class_<UnaryWithParam>(m, "UnaryWithParam")
-        .def(py::init<UnaryOpType>())
+    auto unary_with_param = static_cast<py::class_<UnaryWithParam>>(m.attr("UnaryWithParam"));
+    unary_with_param.def(py::init<UnaryOpType>())
         .def(py::init<UnaryOpType, float>())
         .def(py::init<>([](std::pair<UnaryOpType, float> arg) { return UnaryWithParam{arg.first, arg.second}; }))
         .def_readonly("op_type", &UnaryWithParam::op_type);
@@ -36,5 +42,5 @@ void py_module(py::module& m) {
     m.def("string_to_unary_with_param", &utils::string_to_unary_with_param);
 }
 
-}
-}
+}  // namespace activation
+}  // namespace ttnn

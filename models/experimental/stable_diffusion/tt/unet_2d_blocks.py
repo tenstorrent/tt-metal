@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch
 
-import tt_lib as ttl
+import ttnn
 
 from typing import Optional
 
@@ -18,7 +18,6 @@ from models.experimental.stable_diffusion.tt.transformer_2d import (
     TtTransformer2DModel as Transformer2DModel,
 )
 
-from tt_lib.fallback_ops import fallback_ops
 from models.experimental.stable_diffusion.tt.experimental_ops import concat
 
 ####################### UNet Mid Block Cross Attention #######################
@@ -53,9 +52,7 @@ class TtUNetMidBlock2DCrossAttn(nn.Module):
         self.attn_num_head_channels = attn_num_head_channels
         self.device = device
         self.host = host
-        resnet_groups = (
-            resnet_groups if resnet_groups is not None else min(in_channels // 4, 32)
-        )
+        resnet_groups = resnet_groups if resnet_groups is not None else min(in_channels // 4, 32)
 
         # there is always at least one resnet
         resnets = [
@@ -123,12 +120,12 @@ class TtUNetMidBlock2DCrossAttn(nn.Module):
 
     def forward(
         self,
-        hidden_states: ttl.tensor.Tensor,
+        hidden_states: ttnn.Tensor,
         temb=None,
         encoder_hidden_states=None,
         attention_mask=None,
         cross_attention_kwargs=None,
-    ) -> ttl.tensor.Tensor:
+    ) -> ttnn.Tensor:
         hidden_states = self.resnets[0](hidden_states, temb)
         for attn, resnet in zip(self.attentions, self.resnets[1:]):
             hidden_states = attn(
@@ -237,23 +234,28 @@ class TtCrossAttnUpBlock2D(nn.Module):
 
     def forward(
         self,
-        hidden_states: ttl.tensor.Tensor,
+        hidden_states: ttnn.Tensor,
         res_hidden_states_tuple,
         temb=None,
         encoder_hidden_states=None,
         cross_attention_kwargs=None,
         upsample_size=None,
         attention_mask=None,
-    ) -> ttl.tensor.Tensor:
+    ) -> ttnn.Tensor:
         # TODO(Patrick, William) - attention mask is not used
-        device = ttl.device.GetDefaultDevice()
+        device = ttnn.GetDefaultDevice()
         for resnet, attn in zip(self.resnets, self.attentions):
             res_hidden_states = res_hidden_states_tuple[-1]
             res_hidden_states_tuple = res_hidden_states_tuple[:-1]
-            if isinstance(res_hidden_states,(ttl.tensor.Tensor,)):
+            if isinstance(res_hidden_states, (ttnn.Tensor,)):
                 on_dev_res_hidden_states = res_hidden_states
             else:
-                on_dev_res_hidden_states = ttl.tensor.Tensor(res_hidden_states.reshape(-1).tolist(),res_hidden_states.shape,ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.ROW_MAJOR).to(device)
+                on_dev_res_hidden_states = ttnn.Tensor(
+                    res_hidden_states.reshape(-1).tolist(),
+                    res_hidden_states.shape,
+                    ttnn.bfloat16,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                ).to(device)
 
             hidden_states = concat([hidden_states, on_dev_res_hidden_states], dim=1)
             if self.training and self.gradient_checkpointing:
@@ -415,12 +417,12 @@ class TtCrossAttnDownBlock2D(nn.Module):
 
     def forward(
         self,
-        hidden_states: ttl.tensor.Tensor,
+        hidden_states: ttnn.Tensor,
         temb=None,
         encoder_hidden_states=None,
         attention_mask=None,
         cross_attention_kwargs=None,
-    ) -> ttl.tensor.Tensor:
+    ) -> ttnn.Tensor:
         output_states = ()
 
         for resnet, attn in zip(self.resnets, self.attentions):
@@ -436,9 +438,7 @@ class TtCrossAttnDownBlock2D(nn.Module):
 
                     return custom_forward
 
-                hidden_states = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(resnet), hidden_states, temb
-                )
+                hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(resnet), hidden_states, temb)
                 hidden_states = torch.utils.checkpoint.checkpoint(
                     create_custom_forward(attn, return_dict=False),
                     hidden_states,

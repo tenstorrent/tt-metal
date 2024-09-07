@@ -7,7 +7,7 @@ from loguru import logger
 from transformers.generation.configuration_utils import GenerationConfig
 from transformers.generation.logits_process import LogitsProcessorList
 from typing import List, Optional, Tuple, Union
-import tt_lib
+import ttnn
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 

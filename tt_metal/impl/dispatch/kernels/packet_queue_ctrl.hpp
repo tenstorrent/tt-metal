@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <vector>
-
 constexpr uint32_t PACKET_WORD_SIZE_BYTES = 16;
 constexpr uint32_t MAX_SWITCH_FAN_IN = 4;
 constexpr uint32_t MAX_SWITCH_FAN_OUT = 4;

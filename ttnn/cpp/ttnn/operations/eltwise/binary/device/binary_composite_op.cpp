@@ -15,6 +15,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
 namespace ttnn::operations::binary{
 
@@ -303,14 +304,6 @@ Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const std::optio
         result);
 }
 
-Tensor _logical_and_(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::logical_and(input_a, input_b, std::nullopt, output_mem_config, input_a);
-}
-
-Tensor _logical_or_(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::logical_or(input_a, input_b, std::nullopt, output_mem_config, input_a);
-}
-
 Tensor _logical_xor_(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor in_a_eq_zero = ttnn::eqz(input_a, output_mem_config, input_a );
     Tensor in_b_eq_zero = ttnn::nez(input_b, output_mem_config, input_b );
@@ -359,13 +352,14 @@ Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<
     }
     a_slim = ttnn::to_layout(a_slim, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
     b_slim = ttnn::to_layout(b_slim, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
-    Device* device = AutoFormat::GetDefaultDevice();
+
+    auto device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
     if(device != nullptr) {
         if (a_slim.storage_type() != tt::tt_metal::StorageType::DEVICE) {
-            a_slim = AutoFormat::move_tensor_to_device(a_slim, device);
+            a_slim = ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_device(a_slim, device);
         }
         if (b_slim.storage_type() != tt::tt_metal::StorageType::DEVICE) {
-            b_slim = AutoFormat::move_tensor_to_device(b_slim, device);
+            b_slim = ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_device(b_slim, device);
         }
     }
 

@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
 
 from transformers import BloomForCausalLM, BloomTokenizerFast
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -15,7 +14,7 @@ from loguru import logger
 
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_model as bloom_model
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_blackhole
 
 
 def run_bloom_model_test(device):
@@ -55,6 +54,6 @@ def run_bloom_model_test(device):
     assert does_pass
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_bloom_model(device):
     run_bloom_model_test(device)

@@ -45,14 +45,14 @@ void kernel_main() {
     constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t window_inner = get_compile_time_arg_val(7);
     constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(8);
-    constexpr uint32_t weight_size_w = get_compile_time_arg_val(10);
+    constexpr uint32_t weight_size_w = get_compile_time_arg_val(10); //Input filter window width
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(14);
     constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(15);
     constexpr uint32_t act_w_num_outer = get_compile_time_arg_val(16);
     constexpr uint32_t act_mcast_num_dests = get_compile_time_arg_val(17);
     constexpr uint32_t act_mcast_num_cores = get_compile_time_arg_val(18);
-    uint32_t act_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(19));
-    uint32_t act_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(20));
+    const uint32_t act_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(19));
+    const uint32_t act_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(20));
     constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(21);
 
     constexpr bool transpose_mcast = get_compile_time_arg_val(22) == 1;
@@ -124,7 +124,6 @@ void kernel_main() {
         uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
 
         constexpr uint32_t stride_h_bytes = (conv_act_size_w + 2) * conv_act_c_read_bytes;
-        static_assert(act_block_h_datums % 2 == 0); // need to be even to read 2 in the body, due to packing of 2 indices in 1 uint32_t word
         // #pragma GCC unroll 4 // didn't seem to help (neutral), manual unroll 2x perf drop
         for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
             uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
@@ -159,13 +158,13 @@ void kernel_main() {
 
                 uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
                 // num_dests will source, since we are copying to a different local CB as well
-                noc_async_write_multicast_loopback_src(tilized_act_start_address, act_multicast_data_addr, act_mcast_sender_size_bytes, act_mcast_num_cores + 1, false, false);
+                noc_async_write_multicast_loopback_src(tilized_act_start_address, act_multicast_data_addr, act_mcast_sender_size_bytes, act_mcast_num_cores + 1, true, true);
 
                 // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
                 // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
 
                 // We should also multicast VALID flag to destinations for receiver semaphore
-                noc_semaphore_set_multicast_loopback_src(act_mcast_sender_semaphore_valid_addr, act_mcast_receiver_semaphore_noc_addr, act_mcast_num_cores + 1, false, false);
+                noc_semaphore_set_multicast_loopback_src(act_mcast_sender_semaphore_valid_addr, act_mcast_receiver_semaphore_noc_addr, act_mcast_num_cores + 1);
 
                 noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
             } else {

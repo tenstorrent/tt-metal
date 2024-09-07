@@ -39,6 +39,7 @@ from models.utility_functions import disable_compilation_reports, disable_persis
         "decode_seq2047_bfloat16-l1_sharded",
     ],
 )
+@pytest.mark.parametrize("mesh_device", (1,), indirect=True)
 def test_device_perf_wh_bare_metal(
     model_version,
     llm_mode,
@@ -49,7 +50,7 @@ def test_device_perf_wh_bare_metal(
     model_config_str,
     model_location_generator,
     get_tt_cache_path,
-    device,
+    mesh_device,
 ):
     model_config = get_model_config(model_config_str, seq_len, batch)
     tt_cache_path = get_tt_cache_path(
@@ -69,7 +70,7 @@ def test_device_perf_wh_bare_metal(
         ][kv_cache_len]
 
     run_test_FalconCausalLM_end_to_end(
-        [device],
+        mesh_device,
         model_version,
         llm_mode,
         batch,
@@ -110,7 +111,7 @@ def test_device_perf(llm_mode, batch, seq_len, kv_cache_len, model_config_str, s
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     subdir = "falcon7b"
 
-    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch * seq_len)
+    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch * seq_len, has_signposts=True)
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
     expected_perf_cols = {inference_time_key: samples}

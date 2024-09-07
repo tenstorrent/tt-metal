@@ -9,7 +9,6 @@ import numpy as np
 from loguru import logger
 
 
-import tt_lib as ttl
 from models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
 from models.utility_functions import (
     comp_pcc,
@@ -20,9 +19,7 @@ from models.experimental.stable_diffusion.tt.upsample_2d import TtUpsample2D
 
 def test_run_upsample2d_inference(device):
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32
-    )
+    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
 
     unet = pipe.unet
     unet.eval()

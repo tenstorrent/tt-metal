@@ -4,7 +4,6 @@
 
 import torch
 import ttnn
-import tt_lib
 import math
 
 from dataclasses import dataclass

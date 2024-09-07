@@ -79,6 +79,11 @@ struct test_shard_location_t {
     device_core_location_t core_location;
     std::uint32_t page_offset;
 };
+struct test_shard_location_with_contig_t {
+    device_core_location_t core_location;
+    std::uint32_t page_offset;
+    std::uint32_t contig_pages_in_row;
+};
 
 /* Similar to interleaved address generators found in dataflow API, this acts
  * as a somewhat standardized interface to generate addresses for sharded tensors
@@ -187,7 +192,28 @@ struct WidthShardedAddressGenerator {
    public:
     constexpr WidthShardedAddressGenerator(worker_to_noc_lookup_t lookup, DEVICE_SHARD_SPEC_T const& tensor_shard_spec, uint32_t page_size, uint32_t base_address) : worker_to_noc_lookup(lookup), tensor_shard_spec(tensor_shard_spec), page_size(page_size), bank_base_address(base_address) {}
 
-    test_shard_location_t get_page_location(std::uint32_t global_page_id) const {
+    /*
+     * This function is an alternative API that allows the caller to implement a more efficient traversal/iteration of their tensor
+     * by returning the noc address of the specified `global_page_id` along with the number of contiguous pages starting at this
+     * address until the end of the logical row, in the same bank. This can be more performant for several reasons:
+     *
+     * 1. Fewer noc commands required
+     * 2. Fewer calls to this function
+     *
+     * For example, consider a shard size of [3,4] pages per shard, where the `global_page_id` resolves to an address pointing to the
+     * page marked with 'x' below. In this case, the function would return the address of the page marked with 'x' and 3, for the
+     * 3 contiguous pages, starting at 'x' until the end of the row.
+     *  ┌─┬─┬─┬─┐
+     *  │ │ │ │ │
+     *  ├─┼─┼─┼─┤
+     *  │ │x│ │ │
+     *  ├─┼─┼─┼─┤
+     *  │ │ │ │ │
+     *  └─┴─┴─┴─┘
+     *     ◄───►
+     *     3 contiguous pages until end of row
+     */
+    test_shard_location_with_contig_t get_page_location_with_contiguous_pages_in_row_in_bank(std::uint32_t global_page_id) const {
         // With width sharding, the tensor is fractured along width, but can be mapped onto a 2D grid, in such a case
         // the logical tensor is still fractured only along 1 dimension but the placement/allocation snakes through the
         // grid.
@@ -217,8 +243,18 @@ struct WidthShardedAddressGenerator {
         noc_grid_index_t noc_x = worker_to_noc_lookup.get_noc_x_from_worker_x(worker_x_logical);
         noc_grid_index_t noc_y = worker_to_noc_lookup.get_noc_y_from_worker_y(worker_y_logical);
 
-        return test_shard_location_t{device_core_location_t{noc_y, noc_x}, page_offset_in_shard};
+        return test_shard_location_with_contig_t{device_core_location_t{noc_y, noc_x}, page_offset_in_shard, tensor_shard_spec.get_pages_per_shard_x() - page_in_shard_x};
     }
+
+    /*
+     * Return the noc address for the specified global page id, where global_page_id is a flat index of the page if
+     * iterating through the tensor in a row-major order.
+     */
+    test_shard_location_t get_page_location(std::uint32_t global_page_id) const {
+        auto const& result = get_page_location_with_contiguous_pages_in_row_in_bank(global_page_id);
+        return test_shard_location_t{result.core_location, result.page_offset};
+    }
+
 
     // Upon support of macros that indicate if compiling for host or device, we can enable this by stubbing out `get_noc_addr`
     // uint64_t get_noc_addr(std::uint32_t global_page_id, std::uint32_t offset = 0) const {
@@ -285,7 +321,28 @@ struct HeightShardedAddressGenerator {
    public:
     constexpr HeightShardedAddressGenerator(worker_to_noc_lookup_t lookup, DEVICE_SHARD_SPEC_T const& tensor_shard_spec, uint32_t page_size, uint32_t base_address) : worker_to_noc_lookup(lookup), tensor_shard_spec(tensor_shard_spec), page_size(page_size), bank_base_address(base_address) {}
 
-    test_shard_location_t get_page_location(std::uint32_t global_page_id) const {
+    /*
+     * This function is an alternative API that allows the caller to implement a more efficient traversal/iteration of their tensor
+     * by returning the noc address of the specified `global_page_id` along with the number of contiguous pages starting at this
+     * address until the end of the logical row, in the same bank. This can be more performant for several reasons:
+     *
+     * 1. Fewer noc commands required
+     * 2. Fewer calls to this function
+     *
+     * For example, consider a shard size of [3,4] pages per shard, where the `global_page_id` resolves to an address pointing to the
+     * page marked with 'x' below. In this case, the function would return the address of the page marked with 'x' and 3, for the
+     * 3 contiguous pages, starting at 'x' until the end of the row.
+     *  ┌─┬─┬─┬─┐
+     *  │ │ │ │ │
+     *  ├─┼─┼─┼─┤
+     *  │ │x│ │ │
+     *  ├─┼─┼─┼─┤
+     *  │ │ │ │ │
+     *  └─┴─┴─┴─┘
+     *     ◄───►
+     *     3 contiguous pages until end of row
+     */
+    test_shard_location_with_contig_t get_page_location_with_contiguous_pages_in_row_in_bank(std::uint32_t global_page_id) const {
         // With height sharding, the tensor is fractured along height, but can be mapped onto a 2D grid, in such a case
         // the logical tensor is still fractured only along 1 dimension but the placement/allocation snakes through the
         // grid.
@@ -310,7 +367,16 @@ struct HeightShardedAddressGenerator {
         noc_grid_index_t noc_x = worker_to_noc_lookup.get_noc_x_from_worker_x(worker_x_logical);
         noc_grid_index_t noc_y = worker_to_noc_lookup.get_noc_y_from_worker_y(worker_y_logical);
 
-        return test_shard_location_t{device_core_location_t{noc_y, noc_x}, page_offset_in_shard};
+        return test_shard_location_with_contig_t{device_core_location_t{noc_y, noc_x}, page_offset_in_shard, 1};//tensor_shard_spec.get_pages_per_shard_x() - page_in_shard_x};
+    }
+
+    /*
+     * Return the noc address for the specified global page id, where global_page_id is a flat index of the page if
+     * iterating through the tensor in a row-major order.
+     */
+    test_shard_location_t get_page_location(std::uint32_t global_page_id) const {
+        auto const& result = get_page_location_with_contiguous_pages_in_row_in_bank(global_page_id);
+        return test_shard_location_t{result.core_location, result.page_offset};
     }
 
     // Upon support of macros that indicate if compiling for host or device, we can enable this by stubbing out `get_noc_addr`
@@ -380,7 +446,28 @@ struct BlockShardedAddressGenerator {
    public:
     constexpr BlockShardedAddressGenerator(worker_to_noc_lookup_t lookup, DEVICE_SHARD_SPEC_T const& tensor_shard_spec, uint32_t page_size, uint32_t base_address) : worker_to_noc_lookup(lookup), tensor_shard_spec(tensor_shard_spec), page_size(page_size), bank_base_address(base_address) {}
 
-    test_shard_location_t get_page_location(std::uint32_t global_page_id) const {
+    /*
+     * This function is an alternative API that allows the caller to implement a more efficient traversal/iteration of their tensor
+     * by returning the noc address of the specified `global_page_id` along with the number of contiguous pages starting at this
+     * address until the end of the logical row, in the same bank. This can be more performant for several reasons:
+     *
+     * 1. Fewer noc commands required
+     * 2. Fewer calls to this function
+     *
+     * For example, consider a shard size of [3,4] pages per shard, where the `global_page_id` resolves to an address pointing to the
+     * page marked with 'x' below. In this case, the function would return the address of the page marked with 'x' and 3, for the
+     * 3 contiguous pages, starting at 'x' until the end of the row.
+     *  ┌─┬─┬─┬─┐
+     *  │ │ │ │ │
+     *  ├─┼─┼─┼─┤
+     *  │ │x│ │ │
+     *  ├─┼─┼─┼─┤
+     *  │ │ │ │ │
+     *  └─┴─┴─┴─┘
+     *     ◄───►
+     *     3 contiguous pages until end of row
+     */
+    test_shard_location_with_contig_t get_page_location_with_contiguous_pages_in_row_in_bank(std::uint32_t global_page_id) const {
         // With block sharding, the tensor is fractured along height and width.
 
         // For now we don't support transposed grid for block sharding
@@ -412,7 +499,16 @@ struct BlockShardedAddressGenerator {
         noc_grid_index_t noc_x = worker_to_noc_lookup.get_noc_x_from_worker_x(worker_x_logical);
         noc_grid_index_t noc_y = worker_to_noc_lookup.get_noc_y_from_worker_y(worker_y_logical);
 
-        return test_shard_location_t{device_core_location_t{noc_y, noc_x}, page_offset_in_shard};
+        return test_shard_location_with_contig_t{device_core_location_t{noc_y, noc_x}, page_offset_in_shard, tensor_shard_spec.get_pages_per_shard_x() - page_offset_in_shard_x};
+    }
+
+    /*
+     * Return the noc address for the specified global page id, where global_page_id is a flat index of the page if
+     * iterating through the tensor in a row-major order.
+     */
+    test_shard_location_t get_page_location(std::uint32_t global_page_id) const {
+        auto const& result = get_page_location_with_contiguous_pages_in_row_in_bank(global_page_id);
+        return test_shard_location_t{result.core_location, result.page_offset};
     }
 
     // Upon support of macros that indicate if compiling for host or device, we can enable this by stubbing out `get_noc_addr`

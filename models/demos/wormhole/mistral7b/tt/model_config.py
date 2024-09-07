@@ -125,9 +125,7 @@ class TtModelArgs:
                 packer_l1_acc=True,
             )
             # Chunk values based on what works best empirically
-            self.model_config[
-                "SDPA_PROGCFG"
-            ] = lambda seqlen: ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+            self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 q_chunk_size=256 if seqlen > 8192 * 2 else (128 if seqlen >= 8192 else 64),
                 k_chunk_size=256 if seqlen > 8192 * 2 else (128 if seqlen >= 8192 else 64),
@@ -239,8 +237,8 @@ class TtModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
 
-            self.model_config["MLP_KERNEL_CONFIG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
+            self.model_config["MLP_KERNEL_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=True,
                 fp32_dest_acc_en=False,
                 packer_l1_acc=True,

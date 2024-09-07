@@ -15,7 +15,7 @@ from torch import nn
 class TtFalconDecoderLayer(nn.Module):
     def __init__(
         self,
-        devices,
+        mesh_device,
         state_dict,
         base_url,
         layer_num,
@@ -28,8 +28,6 @@ class TtFalconDecoderLayer(nn.Module):
         self.hidden_size = config.hidden_size
         self.state_dict = state_dict
         self.base_url = base_url
-        self.devices = devices
-        self.num_devices = len(devices)
         self.layer_num = layer_num
         self.max_position_embeddings = max_position_embeddings
         self.model_config = model_config
@@ -38,7 +36,7 @@ class TtFalconDecoderLayer(nn.Module):
         assert config.parallel_attn, "Path for config.parallel_attn=False is not implemented in TtFalconDecoderLayer!"
 
         self.self_attn_prefill = TtFalconAttentionPrefill(
-            devices=devices,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             base_url=base_url,
             layer_num=layer_num,
@@ -51,7 +49,7 @@ class TtFalconDecoderLayer(nn.Module):
         )
 
         self.self_attn_decode = TtFalconAttentionDecode(
-            devices=devices,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             base_url=base_url,
             layer_num=layer_num,
@@ -64,7 +62,7 @@ class TtFalconDecoderLayer(nn.Module):
         )
 
         self.mlp_prefill = TtFalconMLPPrefill(
-            devices=devices,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             base_url=base_url,
             layer_num=layer_num,
@@ -76,7 +74,7 @@ class TtFalconDecoderLayer(nn.Module):
         )
 
         self.mlp_decode = TtFalconMLPDecode(
-            devices=devices,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             base_url=base_url,
             layer_num=layer_num,
@@ -93,38 +91,36 @@ class TtFalconDecoderLayer(nn.Module):
         layernorm_bias_str = f"{layer_name}.input_layernorm.bias"
 
         self.layernorm_gamma = get_weights_cached(
-            devices,
+            mesh_device,
             model_config,
             tt_cache_path,
             layernorm_weights_str,
             weight_config_str="INPUT_LAYERNORM_WEIGHTS",
             weights_to_cache=(self.state_dict[layernorm_weights_str] if self.state_dict else None),
-            padzero=True,
         )
         self.layernorm_beta = get_weights_cached(
-            devices,
+            mesh_device,
             model_config,
             tt_cache_path,
             layernorm_bias_str,
             weight_config_str="INPUT_LAYERNORM_BIAS",
             weights_to_cache=(self.state_dict[layernorm_bias_str] if self.state_dict else None),
-            padzero=True,
         )
 
         self.layernorm_eps = config.layer_norm_epsilon
 
     def forward(
         self,
-        hidden_states: ttnn.experimental.tensor.Tensor,
+        hidden_states: ttnn.Tensor,
         alibi: torch.Tensor,
         attention_mask: torch.Tensor,
         llm_mode: str,
         user_id: int = 0,
-        layer_past: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None,
+        layer_past: Optional[Tuple[ttnn.Tensor]] = None,
         layer_past_len: int = 0,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
-    ) -> Tuple[ttnn.experimental.tensor.Tensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+    ) -> Tuple[ttnn.Tensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """Input shape: [batch, 1, seq_len, hidden_size]"""
 
         assert not output_attentions
@@ -134,7 +130,6 @@ class TtFalconDecoderLayer(nn.Module):
             self.layernorm_eps,
             self.layernorm_gamma,
             self.layernorm_beta,
-            self.num_devices,
             self.model_config,
         )
 
@@ -175,27 +170,22 @@ class TtFalconDecoderLayer(nn.Module):
         else:
             raise ValueError(f"Unknown llm_mode: {llm_mode}")
 
-        output = []
-        for i in range(self.num_devices):
-            output.append(
-                ttnn.add(
-                    mlp_output[i],
-                    attention_output[i],
-                    memory_config=self.model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"],
-                )
-            )
-            mlp_output[i].deallocate()
-            attention_output[i].deallocate()
+        output = ttnn.add(
+            mlp_output,
+            attention_output,
+            memory_config=self.model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"],
+        )
+        mlp_output.deallocate()
+        attention_output.deallocate()
 
         # dropout_add
         # For inference, this is just add
-        for i in range(self.num_devices):
-            output[i] = ttnn.add(
-                output[i],
-                residual[i],
-                memory_config=self.model_config["DROPOUT_ADD_OUTPUT_MEMCFG"],
-            )
-            residual[i].deallocate()
+        output = ttnn.add(
+            output,
+            residual,
+            memory_config=self.model_config["DROPOUT_ADD_OUTPUT_MEMCFG"],
+        )
+        residual.deallocate()
 
         if use_cache:
             outputs = (output, layer_present)

@@ -2,6 +2,7 @@
 set(UNIT_TESTS_COMMON_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/basic/test_device_init.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/common/test_bit_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/common/test_dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_flatten.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/compute/matmul/test_matmul_large_block.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/compute/matmul/test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast.cpp

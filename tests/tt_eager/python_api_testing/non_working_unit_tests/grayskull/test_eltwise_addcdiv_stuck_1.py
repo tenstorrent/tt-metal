@@ -6,7 +6,7 @@ import random
 from loguru import logger
 import pytest
 import torch
-import tt_lib as ttl
+import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import setup_tt_tensor
 from models.utility_functions import tt2torch_tensor
@@ -49,7 +49,7 @@ def run_addcdiv(input_shape, dtype, dlayout, buffer_type, output_mem_config, dat
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type[2]),
             dtype[2],
         )
-        t3 = ttl.tensor.addcdiv(t0, t1, t2, scalar, output_mem_config)
+        t3 = ttnn.addcdiv(t0, t1, t2, value=scalar, memory_config=output_mem_config)
 
         y = tt2torch_tensor(t3)
 

@@ -14,7 +14,7 @@ Tensor RotaryEmbeddingLlamaOperation::invoke(
     const Tensor &sin_cache,
     const Tensor& trans_mat,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor, cos_cache, sin_cache, trans_mat}))};
     operation::launch_op(
@@ -22,7 +22,7 @@ Tensor RotaryEmbeddingLlamaOperation::invoke(
             auto& input_tensor = input_tensors.at(0);
             uint32_t seq_len = input_tensor.get_legacy_shape()[-2];
 
-            auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
+            auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch() : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
             auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
 
             tt::tt_metal::MemoryConfig default_memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG;

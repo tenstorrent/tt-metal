@@ -142,7 +142,7 @@ Tensor reduce_min(
     ReduceOpDim reduce_dim,
     float scaler = 1.0f,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt) {
     Tensor input = input_tensor;
     if (input.get_layout() == Layout::ROW_MAJOR && input.storage_type() == StorageType::DEVICE) {
         input = ttnn::operations::unary_backward::change_layout_to_tile(input, output_mem_config);
@@ -161,7 +161,7 @@ Tensor reduce(
     float scaler,
     const MemoryConfig& output_mem_config,
     const std::optional<DataType>& output_dtype,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     if (reduce_math == ReduceOpMath::MIN) {
         return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config);
     }
@@ -171,8 +171,8 @@ Tensor reduce(
     auto is_multicore_hw = parallelization_strategy == ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     float pad_value = reduce_math == ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
 
-    DeviceComputeKernelConfig config = compute_kernel_config.value_or(
-        init_device_compute_kernel_config(input_tensor.device()->arch(), std::nullopt, MathFidelity::HiFi4));
+    ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(
+        ttnn::init_device_compute_kernel_config(input_tensor.device()->arch(), std::nullopt, MathFidelity::HiFi4));
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     if (is_multicore_hw) {
@@ -186,15 +186,15 @@ Tensor reduce(
 
                 // Get the device
                 if (input_tensor.storage_type() != StorageType::DEVICE) {
-                    device = AutoFormat::GetDefaultDevice();
+                    device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
                     TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
                 } else {
                     device = input_tensor.device();
                 }
-                auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
+                auto input_tensor_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
                 auto formatted_input_tensor = input_tensor;
-                if (!AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
-                    formatted_input_tensor = AutoFormat::format_input_tensor(
+                if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
+                    formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
                         input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
                 }
                 const Tensor output_tensor = operation::run_without_autoformat(

@@ -18,7 +18,7 @@ from tt_lib.utils import (
 )
 from models.utility_functions import print_diff_argmax, comp_pcc
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_blackhole
 
 # only use certain tests for CI to reduce run time
 # grid_sizes = [(i, j) for i in range(1, 13) for j in range(1, 9)] # (1,1) to (12,8)
@@ -27,7 +27,7 @@ grid_sizes = [[1, 1], [1, 8], [12, 1], [12, 8]]
 seq_lens = [32, 64, 256, 384, 512]
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize(
     "scale_mask",
     [True, False],
@@ -98,7 +98,7 @@ def test_softmax(device, in_dtype, causal_mask, grid_size, seq_len, scale_mask):
     input_tensor = torch.randn(input_shape).bfloat16().float()
     in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     in1_t = torch2tt_tensor(input_tensor, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
-    in1_t_shard = ttnn.experimental.tensor.interleaved_to_sharded(
+    in1_t_shard = ttnn.interleaved_to_sharded(
         in1_t,
         grid_size,
         [M // grid_size[1], K // grid_size[0]],
@@ -130,7 +130,7 @@ def test_softmax(device, in_dtype, causal_mask, grid_size, seq_len, scale_mask):
     else:
         tt_output_sharded = ttnn.softmax_in_place(in1_t_shard, program_config=program_config)
 
-    tt_output = ttnn.experimental.tensor.sharded_to_interleaved(tt_output_sharded, in0_mem_config)
+    tt_output = ttnn.sharded_to_interleaved(tt_output_sharded, in0_mem_config)
     tt_output_tensor = tt_output.cpu().to_torch().float()
     tt_output_tensor = torch.Tensor(tt_output_tensor).reshape(input_shape)
     tt_output_tensor = untilize(tt_output_tensor)

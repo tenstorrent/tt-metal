@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from torch import nn
-import tt_lib
+import ttnn
 
 from models.experimental.ssd.tt.ssd_mobilenetv3_convlayer import (
     TtMobileNetV3ConvLayer,
@@ -92,8 +92,8 @@ class TtMobileNetV3extract(nn.Module):
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
-    ) -> tt_lib.tensor.Tensor:
+        hidden_states: ttnn.Tensor,
+    ) -> ttnn.Tensor:
         for i, layer in enumerate(self.layers):
             hidden_states = layer(hidden_states)
 

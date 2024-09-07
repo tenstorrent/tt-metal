@@ -5,13 +5,13 @@
 import pytest
 
 from models.utility_functions import skip_for_grayskull
-from models.demos.t3000.llama2_70b.tt.llama_common import setup_llama_env, check_device_mesh
+from models.demos.t3000.llama2_70b.tt.llama_common import setup_llama_env, check_mesh_device
 from models.demos.tg.llama3_70b.tests.test_llama_model_galaxy import run_test_LlamaModel_inference
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "cluster_shape, device_mesh", [pytest.param((4, 8), (8, 4), id="4x8_grid")], indirect=["device_mesh"]
+    "cluster_shape, mesh_device", [pytest.param((4, 8), (8, 4), id="4x8_grid")], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize(
     "llama_version",
@@ -24,8 +24,8 @@ from models.demos.tg.llama3_70b.tests.test_llama_model_galaxy import run_test_Ll
 )
 @pytest.mark.parametrize(
     "batch, seq_len",
-    [(32, 1)],
-    ids=["decode"],
+    [(32, 1), (1, 256)],
+    ids=["decode", "prefill"],
 )
 @pytest.mark.parametrize(
     "max_batch_size, max_context_len",
@@ -37,7 +37,7 @@ def test_LlamaModel_inference(
     seq_len,
     pcc,
     n_layers,
-    device_mesh,
+    mesh_device,
     max_batch_size,
     max_context_len,
     llama_version,
@@ -61,10 +61,10 @@ def test_LlamaModel_inference(
         max_context_len=max_context_len,
     )
 
-    check_device_mesh(device_mesh, model_config)
+    check_mesh_device(mesh_device, model_config)
 
     run_test_LlamaModel_inference(
-        device_mesh,
+        mesh_device,
         cluster_shape,
         batch,
         seq_len,

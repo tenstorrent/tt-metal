@@ -11,6 +11,8 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
+TIMEOUT = 5
+
 parameters = {
     "default": {
         "batch_sizes": [(1,)],
@@ -79,5 +81,6 @@ def run(
     )
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
+    expected_pcc = 0.99
 
     return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]

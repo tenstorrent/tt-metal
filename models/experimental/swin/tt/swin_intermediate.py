@@ -11,7 +11,7 @@ from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 from models.experimental.swin.swin_helper_funcs import linear as TtLinear
-import tt_lib
+import ttnn
 
 
 class TtSwinIntermediate(nn.Module):
@@ -31,7 +31,7 @@ class TtSwinIntermediate(nn.Module):
         self.dense_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.dense.weight"], self.device)
         self.dense_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.dense.bias"], self.device)
 
-    def forward(self, hidden_states: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         hidden_states = TtLinear(hidden_states, self.dense_weight, self.dense_bias)
         if self.fall_back_to_torch_gelu:
             torch_hidden_states = tt_to_torch_tensor(hidden_states)

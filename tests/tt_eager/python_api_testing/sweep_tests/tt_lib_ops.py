@@ -29,7 +29,7 @@ def setup_tt_tensor(x, device, layout, input_mem_config, dtype):
 def setup_host_and_device(func):
     def wrap(*args, device, **kwargs):
         output = func(*args, device=device, **kwargs)
-        ttnn.experimental.device.DeallocateBuffers(device)
+        ttnn.device.DeallocateBuffers(device)
         return output
 
     return wrap
@@ -551,6 +551,26 @@ def binary_assign_bw(
 
 
 @setup_host_and_device
+def eltwise_logical_and_(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t3 = ttnn.logical_and_(t0, t1)
+
+    return tt2torch_tensor(t3)
+
+
+@setup_host_and_device
 def eltwise_lerp_binary(
     x,
     y,
@@ -774,25 +794,6 @@ def eltwise_fmod(
 
 
 @setup_host_and_device
-def eltwise_remainder(
-    x,
-    y,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttnn.remainder(t0, t1, memory_config=output_mem_config)
-
-    return tt2torch_tensor(t2)
-
-
-@setup_host_and_device
 def eltwise_floor_div(
     x,
     y,
@@ -933,24 +934,6 @@ def eltwise_left_shift(
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.bitwise_left_shift(t0, value, memory_config=output_mem_config, queue_id=0)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
-def eltwise_unary_remainder(
-    x,
-    *args,
-    value,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.remainder(t0, value, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -1818,23 +1801,6 @@ def untilize_with_unpadding(
 
 
 @setup_host_and_device
-def eltwise_identity(
-    x,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.identity(t0, memory_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
 def eltwise_typecast(
     x,
     *args,
@@ -2098,9 +2064,6 @@ eltwise_nez = make_unary_op_optional_output(ttnn.nez)
 eltwise_eqz = make_unary_op_optional_output(ttnn.eqz)
 zeros_like = make_ttnn_unary_op(ttnn.zeros_like)
 ones_like = make_ttnn_unary_op(ttnn.ones_like)
-eltwise_ceil = make_unary_op_optional_output(ttnn.ceil)
-eltwise_trunc = make_ttnn_unary_op(ttnn.trunc)
-eltwise_frac = make_ttnn_unary_op(ttnn.frac)
 
 
 def make_binary_op(ttl_tensor_binop):

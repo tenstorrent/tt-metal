@@ -21,9 +21,10 @@ from models.experimental.functional_common.attention_mask_functions import get_e
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.utility_functions import (
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
+    is_blackhole,
 )
 from models.perf.perf_utils import prep_perf_report
 
@@ -63,7 +64,7 @@ def get_expected_times(bert):
     }[bert]
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])

@@ -9,7 +9,6 @@ import torch
 from loguru import logger
 from transformers import ViTForImageClassification as HF_ViTForImageClassication
 
-import tt_lib
 
 from models.experimental.vit.tt.modeling_vit import TtViTSelfAttention
 from models.utility_functions import (

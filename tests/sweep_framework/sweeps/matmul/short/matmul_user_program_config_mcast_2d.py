@@ -13,6 +13,8 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, assert_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
+TIMEOUT = 5
+
 
 class TensorMemoryConfigs(enum.Enum):
     CUSTOM_MEMORY_CONFIG = enum.auto()
@@ -464,13 +466,6 @@ def run(
     *,
     device,
 ) -> list:
-    () = matmul_specs
-
-    # TODO: When running with python run_sweeps, same object for variable is used for successive permutations.
-    # When modifying values for transpose_mcast=True, it causes subsequent tests to have wrong initial configs.
-    # When running with pytest test_sweeps, it's a new object created for each variable every time, so there's no issues.
-    # This means these configs are only safe to write and not read... Workaround: Manually specify matmul_specs for transpose_mcast=True.
-
     # Override program_config.in0_block_w with value from in0_block_w (this is safe to do)
     program_config.in0_block_w = in0_block_w
 

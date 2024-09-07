@@ -5,7 +5,7 @@
 import os
 import torch
 import pytest
-import tt_lib
+import ttnn
 
 from loguru import logger
 from pathlib import Path
@@ -17,7 +17,7 @@ from models.experimental.vgg.vgg_utils import store_weights, get_tt_cache_path
 
 @pytest.mark.parametrize(
     "dtype",
-    (tt_lib.tensor.DataType.BFLOAT16,),
+    (ttnn.bfloat16,),
 )
 @pytest.mark.parametrize(
     "batch_size",

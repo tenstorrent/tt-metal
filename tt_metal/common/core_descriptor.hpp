@@ -20,21 +20,18 @@ struct core_descriptor_t {
 inline std::string get_core_descriptor_file(const tt::ARCH &arch, CoreType dispatch_core_type) {
 
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
-    string tt_metal_home;
+    string core_desc_dir;
     if (getenv("TT_METAL_HOME")) {
-        tt_metal_home = getenv("TT_METAL_HOME");
+        core_desc_dir = getenv("TT_METAL_HOME");
     } else {
-        tt_metal_home = "./";
+        core_desc_dir = "./";
     }
-    if (tt_metal_home.back() != '/') {
-        tt_metal_home += "/";
+    if (core_desc_dir.back() != '/') {
+        core_desc_dir += "/";
     }
-    string wh_arch = "tt_metal/core_descriptors/wormhole_b0_80_arch.yaml";
-    if (dispatch_core_type == CoreType::ETH) {
-        wh_arch = "tt_metal/core_descriptors/wormhole_b0_80_arch_eth_dispatch.yaml";
-    }
-    
-    bool targeting_sim = std::getenv("TT_METAL_SIMULATOR_EN") != nullptr; 
+    core_desc_dir += "tt_metal/core_descriptors/";
+
+    bool targeting_sim = std::getenv("TT_METAL_SIMULATOR_EN") != nullptr;
     if (targeting_sim) {
         switch (arch) {
             case tt::ARCH::Invalid: throw std::runtime_error("Invalid arch not supported"); // will be overwritten in tt_global_state constructor
@@ -42,17 +39,17 @@ inline std::string get_core_descriptor_file(const tt::ARCH &arch, CoreType dispa
             case tt::ARCH::GRAYSKULL: throw std::runtime_error("GRAYSKULL arch not supported for simulator");
             case tt::ARCH::WORMHOLE: throw std::runtime_error("WORMHOLE arch not supported for simulator");
             case tt::ARCH::WORMHOLE_B0: throw std::runtime_error("WORMHOLE_B0 arch not supported for simulator");
-            case tt::ARCH::BLACKHOLE: return tt_metal_home + "tt_metal/core_descriptors/blackhole_simulation_1x2_arch.yaml";
+            case tt::ARCH::BLACKHOLE: return core_desc_dir + "blackhole_simulation_1x2_arch.yaml";
             default: throw std::runtime_error("Unsupported device arch");
         };
     } else {
         switch (arch) {
             case tt::ARCH::Invalid: throw std::runtime_error("Invalid arch not supported"); // will be overwritten in tt_global_state constructor
             case tt::ARCH::JAWBRIDGE: throw std::runtime_error("JAWBRIDGE arch not supported");
-            case tt::ARCH::GRAYSKULL: return tt_metal_home + "tt_metal/core_descriptors/grayskull_120_arch.yaml";
+            case tt::ARCH::GRAYSKULL: return core_desc_dir + "grayskull_120_arch.yaml";
             case tt::ARCH::WORMHOLE: throw std::runtime_error("WORMHOLE arch not supported");
-            case tt::ARCH::WORMHOLE_B0: return tt_metal_home + wh_arch;
-            case tt::ARCH::BLACKHOLE: return tt_metal_home + "tt_metal/core_descriptors/blackhole_140_arch.yaml";
+            case tt::ARCH::WORMHOLE_B0: return core_desc_dir + (dispatch_core_type == CoreType::ETH ? "wormhole_b0_80_arch_eth_dispatch.yaml" : "wormhole_b0_80_arch.yaml");
+            case tt::ARCH::BLACKHOLE: return core_desc_dir + (dispatch_core_type == CoreType::ETH ? "blackhole_140_arch_eth_dispatch.yaml" : "blackhole_140_arch.yaml");
             default: throw std::runtime_error("Unsupported device arch");
         };
     }

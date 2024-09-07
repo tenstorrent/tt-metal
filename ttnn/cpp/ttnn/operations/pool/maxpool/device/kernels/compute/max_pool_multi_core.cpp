@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -52,7 +52,7 @@
     // }
 #endif
 
-template<uint32_t in_ntiles_hw, uint32_t in_ntiles_c, uint32_t out_ntiles_c, uint32_t nblocks, bool is_partial_tile, uint32_t split_reader>
+template<uint32_t in_ntiles_hw, uint32_t in_ntiles_c, uint32_t out_ntiles_c, uint32_t nblocks, bool is_partial_tile, uint32_t split_reader, uint32_t unpA_face_r_dim>
 inline void reduce_h_fused(
     const uint32_t in_cb_id,
     const uint32_t in_scalar_cb_id,
@@ -68,7 +68,7 @@ inline void reduce_h_fused(
     for (uint32_t out_elem_i = 0; out_elem_i < nblocks; ++ out_elem_i) {
         const uint32_t curr_in_cb_id = split_reader ? (in_cb_id + (in_stick_index * nblocks + out_elem_i)&0x1) : in_cb_id;
         cb_wait_front(curr_in_cb_id, 1);
-        unpack_tilizeA_B_block(curr_in_cb_id, in_scalar_cb_id, in_ntiles_hwc, 0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/, num_faces_in_tile /* unpack 1 or 2 faces ) */);
+        unpack_tilizeA_B_block(curr_in_cb_id, in_scalar_cb_id, in_ntiles_hwc, 0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/, num_faces_in_tile /* unpack 1 or 2 faces ) */, unpA_face_r_dim);
         for (uint32_t c_i = 0; c_i < in_ntiles_c; ++c_i) {
             reduce_tile_math(in_ntiles_c * out_elem_i + c_i,  num_faces_in_tile /* reduce 1 or 2 faces */);
         }
@@ -121,7 +121,7 @@ void MAIN {
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++ i) {
         // NOTE: Assuming in_ntiles_hw < 8 for now.
         // TODO: subblocking to support this.
-        reduce_h_fused<in_ntiles_hw, in_ntiles_c, out_ntiles_c, nblocks, is_partial_tile, split_reader>(in_cb_id, in_scalar_cb_id, in_ntiles_hwc, i, out_cb_id);
+        reduce_h_fused<in_ntiles_hw, in_ntiles_c, out_ntiles_c, nblocks, is_partial_tile, split_reader, window_size_hw>(in_cb_id, in_scalar_cb_id, in_ntiles_hwc, i, out_cb_id);
     }
     cb_pop_front(in_scalar_cb_id, 1);
 }

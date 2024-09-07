@@ -91,7 +91,7 @@ def summary(ctx):
                             "terms": {"field": "vector_id.keyword", "size": 10000},
                             "aggs": {
                                 "latest_timestamp": {
-                                    "top_hits": {"sort": [{"timestamp.keyword": {"order": "desc"}}], "size": 1}
+                                    "top_hits": {"sort": [{"timestamp": {"order": "desc"}}], "size": 1}
                                 }
                             },
                         }
@@ -131,7 +131,7 @@ def summary(ctx):
                                 "terms": {"field": "vector_id.keyword", "size": 10000},
                                 "aggs": {
                                     "latest_timestamp": {
-                                        "top_hits": {"sort": [{"timestamp.keyword": {"order": "desc"}}], "size": 1}
+                                        "top_hits": {"sort": [{"timestamp": {"order": "desc"}}], "size": 1}
                                     }
                                 },
                             }
@@ -186,9 +186,7 @@ def summary(ctx):
                     "group_by_vector_id": {
                         "terms": {"field": "vector_id.keyword", "size": 10000},
                         "aggs": {
-                            "latest_timestamp": {
-                                "top_hits": {"sort": [{"timestamp.keyword": {"order": "desc"}}], "size": 1}
-                            }
+                            "latest_timestamp": {"top_hits": {"sort": [{"timestamp": {"order": "desc"}}], "size": 1}}
                         },
                     }
                 },
@@ -263,7 +261,7 @@ def detail(ctx):
         results = client.search(
             index=results_index,
             size=10000,
-            sort=[{"timestamp.keyword": {"order": "asc"}}],
+            sort=[{"timestamp": {"order": "asc"}}],
             query={"bool": {"must": matches}},
         )["hits"]["hits"]
         for result in results:

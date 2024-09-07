@@ -6,6 +6,7 @@
 
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -69,8 +70,8 @@ ttnn::Tensor bound_matmul(
         }
     }
 
-    auto output_tensor = matmul(
-        input_tensor_a_adjusted, input_tensor_b_adjusted, post_process_bias ? std::nullopt : bias, parameters);
+    auto output_tensor =
+        matmul(input_tensor_a_adjusted, input_tensor_b_adjusted, post_process_bias ? std::nullopt : bias, parameters);
 
     if (post_process_bias) {
         output_tensor = ttnn::add(output_tensor, bias.value(), std::nullopt, parameters.output_mem_config);
@@ -90,6 +91,79 @@ ttnn::Tensor bound_matmul(
     }
 
     return output_tensor;
+}
+
+Tensor MatmulOperation::invoke(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const bool transpose_a,
+    const bool transpose_b,
+    const std::optional<const MemoryConfig> memory_config,
+    const std::optional<const DataType> dtype,
+    const std::optional<const MatmulProgramConfig> program_config,
+    const std::optional<const std::string>& activation,
+    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const CoreGrid> core_grid) {
+    std::optional<CoreCoord> user_core_coord;
+    if (core_grid.has_value()) {
+        user_core_coord = CoreCoord(core_grid->x, core_grid->y);
+    }
+    bool user_run_batched = detail::is_input_batched(input_tensor_b.get_shape());
+    return bound_matmul(
+        input_tensor_a,
+        input_tensor_b,
+        /*bias=*/std::nullopt,
+        Matmul{
+            program_config,
+            /*bcast_batch=*/std::nullopt,
+            memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
+            dtype,
+            compute_kernel_config,
+            /*untilize_out=*/false,
+            user_core_coord,
+            get_fused_activation(activation),
+            user_run_batched,
+            transpose_a,
+            transpose_b},
+        /*queue_id=*/0);
+}
+
+Tensor LinearOperation::invoke(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const Tensor>& bias,
+    const bool transpose_a,
+    const bool transpose_b,
+    const std::optional<const MemoryConfig> memory_config,
+    const std::optional<const DataType> dtype,
+    const std::optional<const MatmulProgramConfig> program_config,
+    const std::optional<const std::string>& activation,
+    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const CoreGrid> core_grid) {
+    std::optional<CoreCoord> user_core_coord;
+    if (core_grid.has_value()) {
+        user_core_coord = CoreCoord(core_grid->x, core_grid->y);
+    }
+    bool b_is_batched = detail::is_input_batched(input_tensor_b.get_shape());
+    TT_FATAL(!(b_is_batched && bias.has_value()), "Batched input not supported when bias exists (linear operation).");
+
+    return bound_matmul(
+        input_tensor_a,
+        input_tensor_b,
+        bias,
+        Matmul{
+            program_config,
+            /*bcast_batch=*/std::nullopt,
+            memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
+            dtype,
+            compute_kernel_config,
+            /*untilize_out=*/false,
+            user_core_coord,
+            get_fused_activation(activation),
+            /*user_run_batched=*/false,
+            transpose_a,
+            transpose_b},
+        /*queue_id=*/0);
 }
 
 }  // namespace matmul

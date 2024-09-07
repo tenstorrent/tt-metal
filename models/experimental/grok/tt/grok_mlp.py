@@ -9,11 +9,11 @@ from models.experimental.grok.tt.grok_common import LightweightModule
 
 
 class TtGrokMLP(LightweightModule):
-    def __init__(self, device_mesh, state_dict, args, layer_num, dtypes):
+    def __init__(self, mesh_device, state_dict, args, layer_num, dtypes):
         super().__init__()
 
         self.state_dict = state_dict
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
         self.dtypes = dtypes
         self.model_args = args
         self.model_config = args.get_model_config()
@@ -35,8 +35,8 @@ class TtGrokMLP(LightweightModule):
         as_tensor = lambda name: ttnn.as_tensor(
             torch_weight(name),
             dtype=dtypes[name],
-            device=self.device_mesh,
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=0),
+            device=self.mesh_device,
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=0),
             layout=self.model_config["MLP_W_LAYOUT_TILE"],
             memory_config=self.model_config["MLP_WEIGHTS_MEMCFG"],
             cache_file_name=cache_name(name),

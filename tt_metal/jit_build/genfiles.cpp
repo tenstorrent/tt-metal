@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
 #include <fstream>
 #include <filesystem>
 #include <iostream>
@@ -67,7 +68,7 @@ void jit_build_genfiles_triscs_src(const JitBuildEnv& env,
     // Note: assumes dirs (and descriptors) already created
     log_trace(tt::LogBuildKernels, "Generating defines for TRISCs");
 
-    string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";;
+    string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
     string unpack_base        = out_dir + "chlkc_unpack";
     string math_base          = out_dir + "chlkc_math";
     string pack_base          = out_dir + "chlkc_pack";
@@ -424,6 +425,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << "#include <noc/noc_parameters.h>" << endl;
     ss << endl;
 
+    ss << "#define LOG_BASE_2_OF_ALLOCATOR_ALIGNMENT " << std::bit_width(ALLOCATOR_ALIGNMENT) - 1 << endl;
     ss << "#define NUM_DRAM_BANKS " << dram_bank_map.size() << endl;
     ss << "#define NUM_L1_BANKS " << l1_bank_map.size() << endl;
 

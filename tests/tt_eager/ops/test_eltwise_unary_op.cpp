@@ -9,7 +9,7 @@
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operation.hpp"
 #include "tt_metal/host_api.hpp"
@@ -101,6 +101,7 @@ bool run_test(Device* device, const Shape& shape, float low, float high, Args...
 }
 
 void test_operation_infrastructure() {
+    using namespace tt::constants;
     tt::log_info(tt::LogTest, "Running {}", __func__);
 
     using ttnn::operations::unary::UnaryWithParam;
@@ -112,25 +113,21 @@ void test_operation_infrastructure() {
     auto shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
     auto input_tensor = tt::numpy::random::uniform(bfloat16(0), bfloat16(1), shape).to(Layout::TILE).to(device);
 
-    auto op = tt::tt_metal::operation::DeviceOperation(ttnn::operations::unary::Unary{
+    ttnn::operations::unary::operation_attributes_t op_args {
         {UnaryWithParam{UnaryOpType::SQRT}},
-        MemoryConfig{.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}});
-
-    auto program_hash = op.compute_program_hash({input_tensor}, {});
+        DataType::BFLOAT16,
+        MemoryConfig{.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+        false,
+        false};
+    ttnn::operations::unary::tensor_args_t tensor_args {input_tensor};
+    auto program_hash = ttnn::operations::unary::UnaryDeviceOperation::compute_program_hash(op_args, tensor_args);
     TT_FATAL(program_hash == 3018574135764717736ULL, fmt::format("Actual value is {}", program_hash));
-
-    auto profiler_info = op.create_profiler_info({input_tensor});
-    TT_FATAL(
-        profiler_info.preferred_name.value() == "ttnn::operations::unary::Unary",
-        fmt::format("Actual value is {}", profiler_info.preferred_name.value()));
-    TT_FATAL(
-        profiler_info.parallelization_strategy.value() == "UnaryOpParallelizationStrategy::MULTI_CORE",
-        fmt::format("Actual value is {}", profiler_info.parallelization_strategy.value()));
 
     TT_FATAL(tt::tt_metal::CloseDevice(device));
 }
 
 void test_shape_padding() {
+    using namespace tt::constants;
     tt::log_info(tt::LogTest, "Running {}", __func__);
 
     using ttnn::operations::unary::UnaryWithParam;
@@ -138,7 +135,7 @@ void test_shape_padding() {
 
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
-    tt::tt_metal::AutoFormat::SetDefaultDevice(device);
+    ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device);
 
     tt::tt_metal::Array4D input_shape = {1, 1, 13, 18};
     tt::tt_metal::Array4D padded_input_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
@@ -148,13 +145,7 @@ void test_shape_padding() {
 
     padded_input_tensor = padded_input_tensor.to(Layout::TILE);
     padded_input_tensor = padded_input_tensor.to(device);
-    auto output_tensor =
-        tt::tt_metal::operation::run(
-            ttnn::operations::unary::Unary{
-                {UnaryWithParam{UnaryOpType::SQRT}},
-                tt::tt_metal::MemoryConfig{.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}},
-            {padded_input_tensor})
-            .at(0);
+    auto output_tensor = ttnn::sqrt(padded_input_tensor);
     output_tensor = output_tensor.cpu();
 
     auto output_shape = output_tensor.get_legacy_shape();

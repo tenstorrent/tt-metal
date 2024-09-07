@@ -6,6 +6,7 @@
 
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
 void kernel_main() {
     constexpr bool core_has_output_block_work = (bool)get_compile_time_arg_val(0);
@@ -28,14 +29,27 @@ void kernel_main() {
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(14);
 
     constexpr uint32_t batch = get_compile_time_arg_val(15);
+    constexpr bool fuse_op = (bool)get_compile_time_arg_val(16);
 
-    const uint32_t sender_id = get_arg_val<uint32_t>(0);
-    const uint32_t in0_mcast_dest_noc_start_x = get_arg_val<uint32_t>(1);
-    const uint32_t in0_mcast_dest_noc_start_y = get_arg_val<uint32_t>(2);
-    const uint32_t in0_mcast_dest_noc_end_x = get_arg_val<uint32_t>(3);
-    const uint32_t in0_mcast_dest_noc_end_y = get_arg_val<uint32_t>(4);
-    tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(5));
-    tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(5 + num_x));
+    uint32_t rt_args_idx = 0;
+    const uint32_t sender_id = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in0_mcast_dest_noc_start_x = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in0_mcast_dest_noc_start_y = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in0_mcast_dest_noc_end_x = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in0_mcast_dest_noc_end_y = get_arg_val<uint32_t>(rt_args_idx++);
+    tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_x)));
+    tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_y)));
+
+
+    MatmulOpReceiver fused_op_receiver;
+    if constexpr (fuse_op) {
+        fused_op_receiver = MatmulOpReceiver(
+            true, /* wait_for_op_signal */
+            rt_args_idx,
+            num_blocks,
+            in0_block_w /* tiles_per_block (in the same dimension as tensor slice) */
+        );
+    }
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in2 = 2;  // Sharded cb
@@ -112,7 +126,11 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < batch; ++b) {
         for (uint32_t block = 0; block < num_blocks; ++block) {
-            const uint32_t block_id = block / num_blocks_per_shard;
+            uint32_t block_id = block / num_blocks_per_shard;
+            if constexpr (fuse_op) { // If used fused op, make block_id conform to ordering of tensor slices from all gather
+                block_id = fused_op_receiver.align_to_slice_and_sync(block, sender_id);
+            }
+
             cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
             // All cores in receiver grid need to participate in receiving regardless if they produce output work or
@@ -171,9 +189,7 @@ void kernel_main() {
                                 local_read_addr,
                                 in0_multicast_data_addr,
                                 in0_block_size_bytes,
-                                in0_mcast_num_cores - 1,
-                                false,
-                                false);
+                                in0_mcast_num_cores - 1);
                         }
                     }
                     // Mcast from different CB to another CB
@@ -185,8 +201,8 @@ void kernel_main() {
                             in0_multicast_data_addr,
                             in0_block_size_bytes,
                             in0_mcast_num_cores,
-                            false,
-                            false);
+                            true,
+                            true);
                     }
 
                     // We should also multicast the flag to destinations
@@ -199,9 +215,7 @@ void kernel_main() {
                         noc_semaphore_set_multicast_loopback_src(
                             in0_mcast_sender_semaphore_valid_addr,
                             in0_mcast_receiver_semaphore_noc_addr,
-                            in0_mcast_num_cores,
-                            false,
-                            false);
+                            in0_mcast_num_cores);
                     }
                 } else {
                     // If we are not part of receiver grid, always do a regular noc_async_write_multicast to all cores
@@ -211,16 +225,14 @@ void kernel_main() {
                         in0_multicast_data_addr,
                         in0_block_size_bytes,
                         in0_mcast_num_cores,
-                        false,
-                        false);
+                        true,
+                        true);
 
                     // We should also multicast the flag to destinations
                     noc_semaphore_set_multicast(
                         in0_mcast_sender_semaphore_valid_addr,
                         in0_mcast_receiver_semaphore_noc_addr,
-                        in0_mcast_num_cores,
-                        false,
-                        false);
+                        in0_mcast_num_cores);
                 }
                 // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc,
                 // same cmd_buf Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).

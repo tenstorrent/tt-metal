@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
 from models.experimental.yolov5.tt.yolov5_conv import TtYolov5Conv
 
 

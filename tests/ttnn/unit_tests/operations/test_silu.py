@@ -10,13 +10,11 @@ import torch
 
 # import torch.nn as nn
 
-# import tt_lib
-import tt_lib as ttl
 import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
-from models.utility_functions import skip_for_wormhole_b0, skip_for_grayskull
+from models.utility_functions import is_wormhole_b0, skip_for_grayskull, is_blackhole
 from tt_lib.utils import (
     _nearest_y,
 )
@@ -48,7 +46,7 @@ def run_elt_silu_relu(
     input_tensor = ttnn.from_torch(
         tt_input, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT, dtype=dtype
     )
-    interleaved_mem_config = ttnn.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    interleaved_mem_config = ttnn.L1_MEMORY_CONFIG
     input_tensor = ttnn.to_memory_config(input_tensor, interleaved_mem_config)
     # input_shape = [1, 1, _nearest_y(batch_size * input_height * input_width, 32), input_channels]
     input_2d_height = input_tensor.get_legacy_shape()[2]
@@ -60,13 +58,13 @@ def run_elt_silu_relu(
         input_2d_height_padded = _nearest_y(input_2d_height, grid_size[0] * 32)
         shard_height = math.ceil(input_2d_height_padded / grid_size[0])
         shard_width = math.ceil(input_2d_width / grid_size[1])
-        shard_orientation = ttnn.experimental.tensor.ShardOrientation.COL_MAJOR
-        tensor_memory_layout = ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
-        shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+        shard_orientation = ttnn.ShardOrientation.COL_MAJOR
+        tensor_memory_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        shard_grid = ttnn.CoreRangeSet(
             {
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, 0),
-                    ttnn.experimental.tensor.CoreCoord(grid_size[0] - 1, grid_size[1] - 1),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1),
                 )
             }
         )
@@ -75,14 +73,14 @@ def run_elt_silu_relu(
         shard_height = math.ceil(input_2d_height_padded / ncores)
         shard_grid = get_shard_grid_from_num_cores(ncores, device)
         shard_width = input_2d_width
-        shard_orientation = ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
-        tensor_memory_layout = ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED
+        shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
+        tensor_memory_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     elif shard_strategy == ttnn.ShardStrategy.WIDTH:
         shard_height = input_2d_height
         input_2d_width_padded = _nearest_y(input_2d_width, ncores * 32)
         shard_width = math.ceil(input_2d_width_padded / ncores)
-        shard_orientation = ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
-        tensor_memory_layout = ttnn.types.TensorMemoryLayout.WIDTH_SHARDED
+        shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
+        tensor_memory_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
         shard_grid = get_shard_grid_from_num_cores(ncores, device)
 
     assert shard_height % TILE_WIDTH == 0
@@ -91,8 +89,8 @@ def run_elt_silu_relu(
     logger.debug(f"shard_grid={shard_grid}")
     logger.debug(f"input_shard_height={shard_height}, input_shard_width={shard_width}")
 
-    shard_spec = ttnn.experimental.tensor.ShardSpec(shard_grid, (shard_height, shard_width), shard_orientation, False)
-    in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_height, shard_width), shard_orientation, False)
+    in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.BufferType.L1, shard_spec)
 
     logger.debug(f"shard_memory_layout={in_sharded_mem_config}")
     input_tensor = ttnn.to_memory_config(input_tensor, memory_config=in_sharded_mem_config)
@@ -119,7 +117,7 @@ def run_elt_silu_relu(
     assert passing
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize(
     "batch_size, input_channels, input_height, input_width, ncores, grid_size, shard_strategy, shard_orientation",
     (

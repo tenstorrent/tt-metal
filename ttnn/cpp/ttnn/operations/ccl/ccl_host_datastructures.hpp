@@ -48,8 +48,6 @@ struct CCLOpConfig {
     CCLOpConfig(
         std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors, Topology topology);
 
-    uint32_t get_input_shard_size_bytes() const;
-    uint32_t get_output_shard_size_bytes() const;
     uint32_t get_page_size() const;
     Topology get_topology() const;
     bool is_input_sharded() const;
@@ -60,8 +58,6 @@ struct CCLOpConfig {
     std::map<string, string> emit_worker_defines() const;
 
    private:
-    std::optional<uint32_t> input_shard_size_bytes;
-    std::optional<uint32_t> output_shard_size_bytes;
     uint32_t page_size;
     uint32_t shard_grid_size;
     Topology topology;
@@ -262,21 +258,21 @@ class EriscDatamoverBuilder {
 
         bool senders_below_receivers = active_channels.size() == 0 || this->active_channels.front().is_sender;
 
-        // Sender channel args
-        uint32_t sender_channels_offset = senders_below_receivers ? 0 : this->num_receivers;
-        args.push_back(sender_channels_offset);
-        for (auto const& channel : this->active_channels) {
-            if (!channel.is_sender) {
-                continue;
-            }
-            push_back_channel_args(args, channel);
-        }
-
         // Receiver channel args
         uint32_t receiver_channels_offset = senders_below_receivers ? this->num_senders : 0;
         args.push_back(receiver_channels_offset);
         for (auto const& channel : this->active_channels) {
             if (channel.is_sender) {
+                continue;
+            }
+            push_back_channel_args(args, channel);
+        }
+
+        // Sender channel args
+        uint32_t sender_channels_offset = senders_below_receivers ? 0 : this->num_receivers;
+        args.push_back(sender_channels_offset);
+        for (auto const& channel : this->active_channels) {
+            if (!channel.is_sender) {
                 continue;
             }
             push_back_channel_args(args, channel);

@@ -21,10 +21,9 @@ from models.experimental.stable_diffusion.tt.unet_2d_blocks import (
 from models.experimental.stable_diffusion.tt.unet_2d_blocks import (
     TtCrossAttnUpBlock2D as CrossAttnUpBlock2D,
 )
-import tt_lib as ttl
+import ttnn
 from tt_lib.fallback_ops import fallback_ops
 from models.experimental.stable_diffusion.tt.experimental_ops import Conv2d
-import ttnn
 
 
 def get_down_block(
@@ -425,14 +424,14 @@ class UNet2DConditionModel(nn.Module):
 
     def forward(
         self,
-        sample: ttl.tensor.Tensor,
+        sample: ttnn.Tensor,
         timestep: int,
         encoder_hidden_states,
         class_labels=None,
         attention_mask=None,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
-    ) -> ttl.tensor.Tensor:
+    ) -> ttnn.Tensor:
         r"""
         Args:
             sample (`torch.FloatTensor`): (batch, channel, height, width) noisy inputs tensor

@@ -28,7 +28,7 @@ using namespace tt;
 
 uint32_t iterations_g = DEFAULT_ITERATIONS;
 uint32_t warmup_iterations_g = DEFAULT_WARMUP_ITERATIONS;
-CoreRange worker_g = {{0, 0}, {0, 0}};;
+CoreRange worker_g = {{0, 0}, {0, 0}};
 CoreCoord src_worker_g = {0, 0};
 uint32_t page_size_g;
 uint32_t page_count_g;

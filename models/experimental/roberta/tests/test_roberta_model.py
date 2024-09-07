@@ -7,7 +7,6 @@ import torch
 from loguru import logger
 from transformers import AutoTokenizer, RobertaModel
 
-import tt_lib
 import pytest
 
 from models.experimental.roberta.tt.roberta_model import TtRobertaModel
@@ -15,12 +14,13 @@ from models.utility_functions import (
     tt2torch_tensor,
     comp_allclose,
     comp_pcc,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
 )
 from models.experimental.roberta.roberta_common import torch2tt_tensor
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_roberta_model_inference(device):
     torch.manual_seed(1234)
 

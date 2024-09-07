@@ -152,7 +152,7 @@ class TtMistralAttention(nn.Module):
         ]
 
         self.q_heads_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(self.grid_size.x, self.grid_size.y),
+            compute_with_storage_grid_size=ttnn.CoreCoord(self.grid_size.x, self.grid_size.y),
             in0_block_w=4,
             out_subblock_h=4,
             out_subblock_w=1,
@@ -162,7 +162,7 @@ class TtMistralAttention(nn.Module):
             fused_activation=None,
         )
         self.k_heads_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(self.grid_size.x, self.grid_size.y),
+            compute_with_storage_grid_size=ttnn.CoreCoord(self.grid_size.x, self.grid_size.y),
             in0_block_w=4,
             out_subblock_h=1,
             out_subblock_w=1,
@@ -206,7 +206,7 @@ class TtMistralAttention(nn.Module):
             for i in range(len(devices))
         ]
         self.expand_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(self.grid_size.x, self.grid_size.y),
+            compute_with_storage_grid_size=ttnn.CoreCoord(self.grid_size.x, self.grid_size.y),
             in0_block_w=4,
             out_subblock_h=2,
             out_subblock_w=2,
@@ -217,7 +217,7 @@ class TtMistralAttention(nn.Module):
         )
 
         self.reduce_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(self.grid_size.x, self.grid_size.y),
+            compute_with_storage_grid_size=ttnn.CoreCoord(self.grid_size.x, self.grid_size.y),
             in0_block_w=4,
             out_subblock_h=4,
             out_subblock_w=1,
@@ -228,7 +228,7 @@ class TtMistralAttention(nn.Module):
         )
 
         self.attn_program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(8, 4),
+            compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
             in0_block_w=1,
             out_subblock_h=1,
             out_subblock_w=4,
@@ -240,7 +240,7 @@ class TtMistralAttention(nn.Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self.attention_grid = ttnn.experimental.tensor.CoreCoord(8, 4)
+        self.attention_grid = ttnn.CoreCoord(8, 4)
         self.scale = self.head_dim**-0.5
 
     def forward_decode(
@@ -578,21 +578,17 @@ class TtMistralAttention(nn.Module):
         k_fill = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
         # sharding k_fill to deal with update_cache memory limitation
         if seq_len > 128:
-            k_fill = ttnn.experimental.tensor.interleaved_to_sharded(
-                k_fill, sharded_mem_config=self.model_config["KV_PREFILL_MEM_CFG"](seq_len)
-            )
+            k_fill = ttnn.interleaved_to_sharded(k_fill, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         v_fill = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
         # sharding v_fill to deal with update_cache memory limitation
         if seq_len > 128:
-            v_fill = ttnn.experimental.tensor.interleaved_to_sharded(
-                v_fill, sharded_mem_config=self.model_config["KV_PREFILL_MEM_CFG"](seq_len)
-            )
-        ttnn.experimental.tensor.fill_cache(
+            v_fill = ttnn.interleaved_to_sharded(v_fill, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
+        ttnn.fill_cache(
             keys_BKSD,
             k_fill,
             user_id,
         )
-        ttnn.experimental.tensor.fill_cache(
+        ttnn.fill_cache(
             values_BKSD,
             v_fill,
             user_id,
@@ -608,7 +604,7 @@ class TtMistralAttention(nn.Module):
         q_heads_84SD = ttnn.reshape(
             q_heads_1QSD, [self.n_local_kv_heads, self.n_local_heads // self.n_local_kv_heads, -1, self.head_dim]
         )
-        attn_output_84SD = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention(
+        attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
             q_heads_84SD,
             k_heads_K1SD,
             v_heads_V1SD,

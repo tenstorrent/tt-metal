@@ -8,11 +8,15 @@ from loguru import logger
 
 from models.demos.falcon7b_common.tt.falcon_attention import TtFalconAttentionDecode, TtFalconAttentionPrefill
 from models.demos.falcon7b_common.tt.model_config import get_model_config
-from models.demos.falcon7b_common.tests.test_utils import get_rand_falcon_inputs, concat_device_outputs, load_hf_model
+from models.demos.falcon7b_common.tests.test_utils import (
+    get_rand_falcon_inputs,
+    concat_device_outputs,
+    load_hf_model,
+    get_num_devices,
+)
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.utility_functions import get_devices_for_t3000
 
 
 class PytorchFalconAttentionModel(torch.nn.Module):
@@ -35,7 +39,7 @@ class PytorchFalconAttentionModel(torch.nn.Module):
 
 
 def run_test_FalconAttention_inference(
-    devices,
+    mesh_device,
     model_version,
     llm_mode,
     batch,
@@ -46,7 +50,7 @@ def run_test_FalconAttention_inference(
     tt_cache_path,
     model_location_generator,
 ):
-    num_devices = len(devices)
+    num_devices = get_num_devices(mesh_device)
     global_batch = batch * num_devices
 
     hugging_face_reference_model, state_dict = load_hf_model(model_location_generator, model_version)
@@ -76,7 +80,7 @@ def run_test_FalconAttention_inference(
         seq_len,
         batch,
         kv_cache_len,
-        devices,
+        mesh_device,
         global_batch,
         head_dim,
         max_position_embeddings,
@@ -106,7 +110,7 @@ def run_test_FalconAttention_inference(
 
     # TT hardware execution -------------------------------------------------------------
     tt_FalconAttention_model = ttFalconAttention(
-        devices,
+        mesh_device,
         state_dict,
         # None,
         base_url,
@@ -130,7 +134,7 @@ def run_test_FalconAttention_inference(
         layer_past_len=kv_cache_len,
         use_cache=use_cache,
     )
-    tt_out, tt_layer_present = concat_device_outputs(num_devices, tt_out, llm_mode, tt_layer_present, kv_len)
+    tt_out, tt_layer_present = concat_device_outputs(mesh_device, tt_out, llm_mode, tt_layer_present, kv_len)
 
     # check outputs ----------------------------------------------------------------------
     does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
@@ -153,7 +157,8 @@ def run_test_FalconAttention_inference(
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
-@pytest.mark.parametrize("num_devices", (1, 2, 4))
+@pytest.mark.parametrize("mesh_device", (1, 2, 4, (8, 4)), indirect=True, ids=["1chip", "2chip", "4chip", "32chipTG"])
+@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
     (
@@ -168,9 +173,8 @@ def run_test_FalconAttention_inference(
     "model_version, pcc",
     (("tiiuae/falcon-7b-instruct", 0.98),),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1", "BFLOAT16-L1_SHARDED"))
 def test_FalconAttention_inference(
-    num_devices,
     model_version,
     llm_mode,
     batch,
@@ -180,9 +184,11 @@ def test_FalconAttention_inference(
     model_config_str,
     model_location_generator,
     get_tt_cache_path,
-    all_devices,
+    mesh_device,
+    enable_async_mode,
 ):
-    devices = get_devices_for_t3000(all_devices, num_devices)
+    if model_config_str == "BFLOAT16-L1_SHARDED" and llm_mode == "prefill":
+        pytest.skip(f"prefill does not support L1_SHARDED")
 
     model_config = get_model_config(model_config_str, seq_len, batch)
     tt_cache_path = get_tt_cache_path(
@@ -190,7 +196,7 @@ def test_FalconAttention_inference(
     )
 
     run_test_FalconAttention_inference(
-        devices,
+        mesh_device,
         model_version,
         llm_mode,
         batch,

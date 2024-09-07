@@ -27,7 +27,7 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
     stride_h = patch_size
     stride_w = 1
 
-    folded_pixel_values = ttnn.experimental.tensor.fold(pixel_values, stride_h, stride_w)  # 1568, 1024
+    folded_pixel_values = ttnn.fold(pixel_values, stride_h, stride_w)  # 1568, 1024
     ttnn.deallocate(pixel_values)
     x = ttnn.reallocate(folded_pixel_values)
     folded_pixel_values = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
@@ -63,10 +63,7 @@ def vit_embeddings(
     # cls_token = parameters.cls_token
     # position_embeddings = parameters.position_embeddings
 
-    l1_memory_config = ttnn.experimental.tensor.MemoryConfig(
-        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttnn.experimental.tensor.BufferType.L1,
-    )
+    l1_memory_config = ttnn.L1_MEMORY_CONFIG
 
     patch_embeddings = vit_patch_embeddings(config, pixel_values, parameters=parameters.patch_embeddings)
 

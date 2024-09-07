@@ -45,9 +45,7 @@ class TtFalconSoftmax:
         self.seqlen = seqlen
         self.scalar = 1 / math.sqrt(head_dim)
 
-    def __call__(
-        self, x: ttnn.experimental.tensor.Tensor, attention_mask: ttnn.experimental.tensor.Tensor
-    ) -> ttnn.experimental.tensor.Tensor:
+    def __call__(self, x: ttnn.Tensor, attention_mask: ttnn.Tensor) -> ttnn.Tensor:
         out = ttnn.scale_causal_mask_hw_dims_softmax_in_place(
             x,
             self.scalar,
@@ -75,14 +73,12 @@ def run_test_FalconSoftmax_inference(
 
     input_shape = [1, num_attention_heads, seqlen, seqlen]
     input_torch = (torch.rand(input_shape) * 2) - 1
-    input = torch2tt_tensor(input_torch, None, tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16)
-    input = input.to(device, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM))
+    input = torch2tt_tensor(input_torch, None, tt_dtype=ttnn.bfloat16)
+    input = input.to(device, ttnn.DRAM_MEMORY_CONFIG)
 
     attention_mask_bool = torch.ones(1, 1, seqlen, seqlen, dtype=bool).triu(diagonal=1)
 
-    input = ttnn.experimental.tensor.interleaved_to_sharded(
-        input, sharded_mem_config=model_config["SOFTMAX_HEIGHT_SHARDED_MEMCFG"]
-    )
+    input = ttnn.interleaved_to_sharded(input, model_config["SOFTMAX_HEIGHT_SHARDED_MEMCFG"])
 
     attn_mask_bool = torch.ones(1, 1, seqlen, seqlen, dtype=bool)
     attn_mask_bool = attn_mask_bool.triu(diagonal=1)

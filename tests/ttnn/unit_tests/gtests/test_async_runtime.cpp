@@ -5,8 +5,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn_multi_command_queue_fixture.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum.hpp"
 #include "common/bfloat16.hpp"
 #include "ttnn/async_runtime.hpp"
 #include "tt_numpy/functions.hpp"
@@ -44,7 +44,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
                            .to(Layout::TILE)
                            .to(device);
     std::vector<int64_t> reduce_dims = {3};
-    Tensor np_out = tt::operations::primary::moreh_sum(np_tensor, reduce_dims);
+    Tensor np_out = ttnn::moreh_sum(np_tensor, reduce_dims);
     Tensor np_out_host = np_out.cpu();
     const bfloat16* golden_output = std::get<owned_buffer::Buffer<bfloat16>>(std::get<OwnedStorage>(np_out_host.get_storage()).buffer).begin();
     // Enable Asynchronous Execution and test ttnn runtime APIs
@@ -53,7 +53,6 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     auto write_event = std::make_shared<Event>();
     auto workload_event = std::make_shared<Event>();
     // Running sum-reduce with preallocated output
-    auto op = tt::operations::primary::MorehSum{.dim = 3};
     // Preallocate Input and Output Tensors on Device
     auto input_buffer = ttnn::allocate_buffer_on_device(input_buf_size_datums * datum_size_bytes, device, input_shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
     auto output_buffer = ttnn::allocate_buffer_on_device(output_buf_size_datums * datum_size_bytes, device, np_out.get_shape(), DataType::BFLOAT16, Layout::TILE, mem_cfg);
@@ -66,12 +65,12 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     // Record the completion of the write event
     ttnn::record_event(device->command_queue(io_cq), write_event);
     // Host stalls until write is completed, before sending workload
-    ttnn::event_synchronize(device, write_event);
+    ttnn::event_synchronize(write_event);
     // Dispatch workload. Preallocated output_tensor is populated by op/
-    ttnn::run_operation(workload_dispatch_cq, op, {input_tensor}, {}, {output_tensor}).at(0);
+    ttnn::moreh_sum(workload_dispatch_cq, input_tensor, /*dim*/3, false, output_tensor);
     // Record completion of workload
     ttnn::record_event(device->command_queue(workload_dispatch_cq), workload_event);
-    ttnn::event_synchronize(device, workload_event);
+    ttnn::event_synchronize(workload_event);
     // Read output back, once workload is complete
     ttnn::read_buffer(io_cq, output_tensor, {readback_data});
     // Ensure that reference count book keeping is done correctly
@@ -127,15 +126,10 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             // Wait until cq 1 write is complete
             ttnn::wait_for_event(device->command_queue(workload_dispatch_cq), write_event);
 
-            using ttnn::operations::unary::UnaryWithParam;
-            using ttnn::operations::unary::UnaryOpType;
-            auto op0 = ttnn::operations::unary::Unary{std::vector{UnaryWithParam{UnaryOpType::SQRT}}};
-            auto op1 = ttnn::operations::unary::Unary{std::vector{UnaryWithParam{UnaryOpType::NEG}}};
-
             // Run operation on cq 0
-            Tensor output_tensor = ttnn::run_operation(workload_dispatch_cq, op0, {input_tensor}).at(0);
+            Tensor output_tensor = ttnn::sqrt(workload_dispatch_cq, input_tensor);
             auto dummy_buffer_0 = ttnn::allocate_buffer_on_device(buf_size_datums * datum_size_bytes, device, shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
-            output_tensor = ttnn::run_operation(workload_dispatch_cq, op1, {output_tensor}).at(0);
+            output_tensor = ttnn::neg(workload_dispatch_cq, output_tensor);
             // Allocate this buffer to stress test async allocation across op execution and explicit allocation
             auto dummy_buffer_1 = ttnn::allocate_buffer_on_device(buf_size_datums * datum_size_bytes, device, shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
             // Record cq 0 prog execution

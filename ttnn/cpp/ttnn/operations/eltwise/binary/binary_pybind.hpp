@@ -11,7 +11,6 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/cpp/pybind11/export_enum.hpp"
 
 namespace py = pybind11;
@@ -63,18 +62,16 @@ void bind_primitive_binary_operation(py::module& module, const binary_operation_
                const ttnn::Tensor& input_tensor_a,
                const ttnn::Tensor& input_tensor_b,
                BinaryOpType binary_op_type,
-               bool in_place,
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
                const std::optional<unary::FusedActivations>& activations,
                const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) -> ttnn::Tensor {
-                return self(input_tensor_a, input_tensor_b, binary_op_type, in_place, dtype, memory_config, output_tensor, activations, input_tensor_a_activation);
+                return self(input_tensor_a, input_tensor_b, binary_op_type, dtype, memory_config, output_tensor, activations, input_tensor_a_activation);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::arg("binary_op_type"),
-            py::arg("in_place"),
             py::kw_only(),
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
@@ -163,100 +160,6 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
             py::arg("activations") = std::nullopt,
             py::arg("input_tensor_a_activation") = std::nullopt,
             py::arg("queue_id") = 0});
-}
-
-template <typename binary_operation_t>
-void bind_binary_operation_with_complex(py::module& module, const binary_operation_t& operation, const std::string& description) {
-    auto doc = fmt::format(
-        R"doc({0}(input_tensor_a: Union[ttnn.Tensor, ComplexTensor], input_tensor_b: Union[ttnn.Tensor, ComplexTensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, activations: Optional[List[str]] = None) -> ttnn.Tensor
-
-        {2}
-
-        Supports broadcasting.
-
-        Args:
-            * :attr:`input_tensor_a` (ttnn.Tensor or ComplexTensor)
-            * :attr:`input_tensor_b` (ttnn.Tensor or ComplexTensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
-
-        Keyword args:
-            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
-            * :attr:`dtype` (Optional[ttnn.DataType]): data type for the output tensor
-            * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-            * :attr:`activations` (Optional[List[str]]): list of activation functions to apply to the output tensor
-            * :attr:`queue_id` (Optional[uint8]): command queue id
-
-        Example:
-
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
-            >>> output = {1}(tensor1, tensor2)
-        )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
-        description);
-
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        // tensor and scalar
-        ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-               const ttnn::Tensor& input_tensor_a,
-               const float scalar,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const std::optional<unary::FusedActivations>& activations,
-               const std::optional<unary::UnaryWithParam>& input_tensor_a_activation,
-               const uint8_t& queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor_a, scalar, dtype, memory_config, output_tensor, activations, input_tensor_a_activation);
-            },
-            py::arg("input_tensor_a"),
-            py::arg("input_tensor_b"),
-            py::kw_only(),
-            py::arg("dtype") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("activations") = std::nullopt,
-            py::arg("input_tensor_a_activation") = std::nullopt,
-            py::arg("queue_id") = 0},
-
-        // tensor and tensor
-        ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const std::optional<unary::FusedActivations>& activations,
-               const std::optional<unary::UnaryWithParam>& input_tensor_a_activation,
-               const uint8_t& queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor_a, input_tensor_b, dtype, memory_config, output_tensor, activations, input_tensor_a_activation);
-            },
-            py::arg("input_tensor_a"),
-            py::arg("input_tensor_b"),
-            py::kw_only(),
-            py::arg("dtype") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("activations") = std::nullopt,
-            py::arg("input_tensor_a_activation") = std::nullopt,
-            py::arg("queue_id") = 0},
-
-        // ComplexTensor and ComplexTensor
-        ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-               const ComplexTensor& input_tensor_a,
-               const ComplexTensor& input_tensor_b,
-               const ttnn::MemoryConfig& memory_config) -> ComplexTensor {
-                return self(input_tensor_a, input_tensor_b, memory_config);
-            },
-            py::arg("input_tensor_a"),
-            py::arg("input_tensor_b"),
-            py::kw_only(),
-            py::arg("memory_config")});
 }
 
 template <typename binary_operation_t>
@@ -552,7 +455,6 @@ void bind_binary_overload_operation(py::module& module, const binary_operation_t
 
             Keyword Args:
                 * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
 
             Example::
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -634,42 +536,128 @@ void bind_inplace_operation(py::module& module, const binary_operation_t& operat
             py::arg("input_a"),
             py::arg("input_b")});
 }
+
+template <typename binary_operation_t>
+void bind_logical_inplace_operation(py::module& module, const binary_operation_t& operation, const std::string& description) {
+    auto doc = fmt::format(
+        R"doc({0}(input_a: ttnn.Tensor, input_b: ttnn.Tensor) -> ttnn.Tensor
+
+        {2}
+
+            Args:
+                * :attr:`input_a` (ttnn.Tensor)
+                * :attr:`input_b` (ttnn.Tensor)
+
+            Example::
+                >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = {1}(tensor1, tensor2)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        description);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+
+        ttnn::pybind_overload_t{
+            [](const binary_operation_t& self,
+            const Tensor& input_tensor_a,
+            const Tensor& input_tensor_b) {
+                return self(input_tensor_a, input_tensor_b); },
+            py::arg("input_a"),
+            py::arg("input_b")});
+}
+
+template <typename binary_operation_t>
+void bind_binary_inplace_operation(py::module& module, const binary_operation_t& operation, const std::string& description) {
+    auto doc = fmt::format(
+        R"doc({0}(input_a: ttnn.Tensor, input_b:Union[ttnn.Tensor, float]) -> ttnn.Tensor
+        {2}
+            Args:
+                * :attr:`input_a` (ttnn.Tensor)
+                * :attr:`input_b` (ttnn.Tensor or Number)
+            Keyword args:
+            * :attr:`activations` (Optional[List[str]]): list of activation functions to apply to the output tensor
+            Example::
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = {1}(tensor1, tensor2)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        description);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+
+        //tensor and scalar
+        ttnn::pybind_overload_t{
+            [](const binary_operation_t& self,
+            const Tensor& input_tensor,
+            const float scalar,
+            const std::optional<unary::FusedActivations>& activations,
+            const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
+                return self(input_tensor, scalar, activations, input_tensor_a_activation); },
+            py::arg("input_a"),
+            py::arg("input_b"),
+            py::kw_only(),
+            py::arg("activations") = std::nullopt,
+            py::arg("input_tensor_a_activation") = std::nullopt},
+
+        //tensor and tensor
+        ttnn::pybind_overload_t{
+            [](const binary_operation_t& self,
+            const Tensor& input_tensor_a,
+            const Tensor& input_tensor_b,
+            const std::optional<unary::FusedActivations>& activations,
+            const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
+                return self(input_tensor_a, input_tensor_b, activations, input_tensor_a_activation); },
+            py::arg("input_a"),
+            py::arg("input_b"),
+            py::kw_only(),
+            py::arg("activations") = std::nullopt,
+            py::arg("input_tensor_a_activation") = std::nullopt});
+}
 }  // namespace detail
 
 void py_module(py::module& module) {
     export_enum<BinaryOpType>(module, "BinaryOpType");
 
-    detail::bind_binary_operation_with_complex(
+    detail::bind_binary_operation(
         module,
         ttnn::add,
         R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{ input\_tensor\_a }}_i + \mathrm{{ input\_tensor\_b }}_i)doc");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_inplace_operation(
         module,
         ttnn::add_,
         R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place
         .. math:: \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i)doc");
 
-    detail::bind_binary_operation_with_complex(
+    detail::bind_binary_operation(
         module,
         ttnn::subtract,
         R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{ input\_tensor\_a }}_i - \mathrm{{ input\_tensor\_b }}_i)doc");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_inplace_operation(
         module,
         ttnn::subtract_,
         R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place
         .. math:: \mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc");
 
-    detail::bind_binary_operation_with_complex(
+    detail::bind_binary_operation(
         module,
         ttnn::multiply,
         R"doc(Multiplies :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{ input\_tensor\_a }}_i \times \mathrm{{ input\_tensor\_b }}_i)doc");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_inplace_operation(
         module,
         ttnn::multiply_,
         R"doc(Multiplies :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place
@@ -753,7 +741,7 @@ void py_module(py::module& module) {
         R"doc(Compute bias_gelu of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
 
-    detail::bind_binary_operation_with_complex(
+    detail::bind_binary_operation(
         module,
         ttnn::divide,
         R"doc(Divides :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
@@ -809,7 +797,7 @@ void py_module(py::module& module) {
         R"doc(Compute logical_xor :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
 
-    detail::bind_binary_composite(
+    detail::bind_logical_inplace_operation(
         module,
         ttnn::logical_or_,
         R"doc(Compute inplace logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
@@ -821,7 +809,7 @@ void py_module(py::module& module) {
         R"doc(Compute inplace logical XOR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
 
-    detail::bind_binary_composite(
+    detail::bind_logical_inplace_operation(
         module,
         ttnn::logical_and_,
         R"doc(Compute inplace logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
@@ -914,6 +902,18 @@ void py_module(py::module& module) {
         ttnn::le_,
         R"doc(Perform Less than or equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`
         .. math:: \mathrm{{input\_a}}_i <= \mathrm{{input\_b}}_i)doc");
+
+    detail::bind_inplace_operation(
+        module,
+        ttnn::eq_,
+        R"doc(Perform Equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`
+        .. math:: \mathrm{{input\_a}}_i = \mathrm{{input\_b}}_i)doc");
+
+    detail::bind_inplace_operation(
+        module,
+        ttnn::ne_,
+        R"doc(Perform Not equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`
+        .. math:: \mathrm{{input\_a}}_i != \mathrm{{input\_b}}_i)doc");
 
 }
 

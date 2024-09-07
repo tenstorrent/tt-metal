@@ -21,6 +21,7 @@
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/nlp_create_qkv_heads_decode_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/nlp_kv_cache_load_slice_pybind.hpp"
+#include "ttnn/operations/experimental/paged_cache/paged_cache_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/rotate_half/rotate_half_pybind.hpp"
@@ -28,6 +29,7 @@
 #include "ttnn/cpp/ttnn/operations/experimental/copy/typecast/typecast_pybind.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_pybind.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_pybind.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_matmul/all_gather_matmul_pybind.hpp"
 namespace ttnn::operations::experimental {
 
 void py_module(py::module& module) {
@@ -52,13 +54,19 @@ void py_module(py::module& module) {
 
     ssm::detail::bind_prefix_scan(module);
     ssm::detail::bind_repeat_and_interleave_eltwise_mul(module);
+
     ssm::detail::bind_hc_sum_reduce(module);
 
     copy::detail::py_bind_typecast(module);
 
+    paged_cache::detail::bind_experimental_paged_cache_operations(module);
     matmul::detail::bind_attn_matmul(module);
     matmul::detail::bind_attn_matmul_from_cache(module);
     matmul::detail::bind_group_attn_matmul(module);
+
+    // CCL ops
+    auto m_experimental_ccl = module.def_submodule("ccl", "experiemental collective communication operations");
+    ccl::py_bind_all_gather_matmul(m_experimental_ccl);
 }
 
 }  // namespace ttnn::operations::experimental

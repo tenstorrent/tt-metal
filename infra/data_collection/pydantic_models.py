@@ -95,6 +95,7 @@ class Pipeline(BaseModel):
         description="Version control software used for the code tested in the pipeline.",
     )
     repository_url: str = Field(description="URL of the code repository.")
+    git_branch_name: Optional[str] = Field(description="Name of the Git branch tested by the pipeline.")
     git_commit_hash: str = Field(description="Git commit that triggered the execution of the pipeline.")
     git_author: str = Field(description="Author of the Git commit.")
     orchestrator: Optional[str] = Field(None, description="CI/CD pipeline orchestration platform.")

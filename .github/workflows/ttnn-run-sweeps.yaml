@@ -1,54 +1,131 @@
 name: "ttnn - Run sweeps"
 
 on:
-  schedule:
-    - cron: "0 1,7,13,19 * * *"
   workflow_dispatch:
-  workflow_call:
+    inputs:
+      sweep_name:
+        type: choice
+        description: "Which sweep module to run?"
+        required: true
+        default: "ALL SWEEPS (Nightly)"
+        options:
+          - ALL SWEEPS (Nightly)
+          - add
+          - line_all_gather
+          - logical_and_
+          - matmul.full.matmul_default_block_sharded
+          - matmul.full.matmul_default_height_sharded
+          - matmul.full.matmul_default_interleaved
+          - matmul.full.matmul_default_width_sharded
+          - matmul.short.matmul_create_program_config
+          - matmul.short.matmul_default_sharded
+          - matmul.short.matmul_default
+          - matmul.short.matmul_user_program_config_mcast_1d
+          - matmul.short.matmul_user_program_config_mcast_2d
+          - matmul.short.matmul_user_program_config
+          - matmul.short.matmul
+          - data_movement.concat.concat_interleaved_n_tensors
+          - data_movement.concat.concat_interleaved
+          - data_movement.concat.concat_sharded
+  schedule:
+    - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
-    with:
-      arch: '["grayskull"]'
     secrets: inherit
 
-  ttnn-sweeps:
+  ttnn-generate-sweeps:
     needs: build-artifact
-    strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
-      fail-fast: false
-      matrix:
-        arch: [grayskull]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.arch }}
+      ARCH_NAME: wormhole_b0
+      ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
+      ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
-    runs-on: ${{ matrix.arch }}
+    timeout-minutes: 30
+    runs-on: [build, in-service]
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+      - uses: ./.github/actions/prepare-metal-run
         with:
-          name: TTMetal_build_${{ matrix.arch }}
-      - name: Extract files
-        run: tar -xvf ttm_${{ matrix.arch }}.tar
-      - uses: ./.github/actions/install-python-deps
-      - name: Run ttnn sweeps
-        timeout-minutes: 30
+          arch: wormhole_b0
+      - name: Run ttnn sweeps generation (single sweep)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type ttnn_sweeps
-      - name: Assert that csvs exist in expected ttnn results folder
-        run: ls -hal tests/ttnn/sweep_tests/results/*.csv
-      - name: Upload ttnn sweep reports csvs
-        uses: actions/upload-artifact@v4
+          python tests/sweep_framework/parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --elastic cloud --tag ci-main --explicit
+      - name: Run ttnn sweeps generation (all sweeps)
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          python tests/sweep_framework/parameter_generator.py --elastic cloud --tag ci-main --explicit
+
+  ttnn-run-sweeps:
+    needs: ttnn-generate-sweeps
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        test-group:
+          [
+            {
+              name: "Grayskull E150 Sweeps",
+              arch: grayskull,
+              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
+              tt-smi-cmd: "tt-smi-metal -r 0"
+            },
+            {
+              name: "Wormhole N150 Sweeps",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "N150", "in-service"],
+              tt-smi-cmd: "tt-smi-metal -r 0"
+            },
+            {
+              name: "Wormhole N300 Sweeps",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+              tt-smi-cmd: "tt-smi-metal -r 0"
+            }
+          ]
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.test-group.arch }}
+      ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
+      ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
+      TT_SMI_RESET_COMMAND: ${{ matrix.test-group.tt-smi-cmd }}
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    environment: dev
+    timeout-minutes: 720
+    runs-on: ${{ matrix.test-group.runs-on }}
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: ./.github/actions/prepare-metal-run
         with:
-          name: ttnn-sweeps-report-csv-${{ matrix.arch }}
-          path: tests/ttnn/sweep_tests/results/*.csv
+          arch: ${{ matrix.test-group.arch }}
+      - name: Run ttnn sweeps (single sweep)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          python tests/sweep_framework/runner.py --module-name ${{ github.event.inputs.sweep_name }} --elastic cloud --tag ci-main
+      - name: Run ttnn sweeps (all sweeps, nightly)
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          python tests/sweep_framework/runner.py --elastic cloud --tag ci-main --suite-name nightly

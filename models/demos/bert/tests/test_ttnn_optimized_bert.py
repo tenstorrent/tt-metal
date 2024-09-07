@@ -14,17 +14,17 @@ import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_blackhole
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [384])
 def test_bert_for_question_answering(device, use_program_cache, model_name, batch_size, sequence_size):
     torch.manual_seed(1234)
 
-    ttnn.experimental.device.EnableMemoryReports()
+    ttnn.device.EnableMemoryReports()
 
     config = transformers.BertConfig.from_pretrained(model_name)
 

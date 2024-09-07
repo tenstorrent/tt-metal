@@ -51,6 +51,8 @@ std::map <uint32_t, DeviceProfiler> tt_metal_device_profiler_map;
 std::unordered_map <uint32_t, std::vector <std::pair<uint64_t,uint64_t>>> deviceHostTimePair;
 std::unordered_map <uint32_t, uint64_t> smallestHostime;
 
+std::mutex device_mutex;
+
 constexpr CoreCoord SYNC_CORE = {0,0};
 
 void setControlBuffer(uint32_t device_id, std::vector<uint32_t>& control_buffer)
@@ -324,6 +326,7 @@ void InitDeviceProfiler(Device *device){
 
 void DumpDeviceProfileResults(Device *device, bool lastDump) {
 #if defined(TRACY_ENABLE)
+    ZoneScoped;
     std::vector<CoreCoord> workerCores;
     auto device_id = device->id();
     auto device_num_hw_cqs = device->num_hw_cqs();
@@ -336,7 +339,10 @@ void DumpDeviceProfileResults(Device *device, bool lastDump) {
         auto physicalCore = device->physical_core_from_logical_core(core, CoreType::ETH);
         workerCores.push_back(physicalCore);
     }
-    DumpDeviceProfileResults(device, workerCores, lastDump);
+    device->push_work([device, workerCores, lastDump] () mutable {
+        DumpDeviceProfileResults(device, workerCores, lastDump);
+    });
+
 #endif
 }
 
@@ -345,6 +351,7 @@ void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cor
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
+    std::scoped_lock<std::mutex> lock(device_mutex);
     auto dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
     if (tt::llrt::OptionsG.get_profiler_do_dispatch_cores()) {
         auto device_id = device->id();
@@ -431,6 +438,7 @@ void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cor
         }
 	TT_FATAL(DprintServerIsRunning() == false, "Debug print server is running, cannot dump device profiler data");
         auto device_id = device->id();
+
         if (tt_metal_device_profiler_map.find(device_id) != tt_metal_device_profiler_map.end())
         {
             if (!lastDump)
@@ -438,7 +446,7 @@ void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cor
                 syncDeviceHost (device, SYNC_CORE, tt_metal_device_profiler_map.at(device_id).sync_program, false);
             }
             tt_metal_device_profiler_map.at(device_id).setDeviceArchitecture(device->arch());
-            tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores);
+            tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores, lastDump);
             if (lastDump)
             {
                 // Process is ending, no more device dumps are coming, reset your ref on the buffer so deallocate is the last

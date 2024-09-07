@@ -25,7 +25,7 @@ void bind_fast_reduce_nc(pybind11::module& module) {
                 const std::vector<int32_t>& dims,
                 const std::optional<const Tensor> output,
                 const ttnn::MemoryConfig memory_config,
-                std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+                std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
                 uint8_t queue_id) {
                     return self(queue_id, input, dims, output, memory_config, compute_kernel_config);
                 },

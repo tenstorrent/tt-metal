@@ -7,9 +7,48 @@ import pytest
 import torch
 
 import ttnn
-import tt_lib as ttl
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+@pytest.mark.parametrize("n", [16])
+@pytest.mark.parametrize("c", [4])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [64])
+def test_reshape_sharded_rm(device, n, c, h, w):
+    if device.core_grid.y < 8:
+        pytest.skip("n300 does not have 8x8 grid")
+
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor.reshape(n, c, h * 2, w // 2)
+    torch_output_tensor = torch_output_tensor.transpose(1, 2)
+
+    core_grid = ttnn.CoreGrid(x=8, y=8)
+    sharded_mem_config = ttnn.create_sharded_memory_config(
+        torch_input_tensor.shape,
+        core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=sharded_mem_config
+    )
+
+    tt_output_tensor = tt_input_tensor.reshape(n, c, h * 2, w // 2)
+
+    sharded_mem_config = ttnn.create_sharded_memory_config(
+        tt_output_tensor.shape,
+        core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    tt_output_tensor = ttnn.transpose(tt_output_tensor, 1, 2, memory_config=sharded_mem_config)
+
+    tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
+    tt_output_tensor = ttnn.from_device(tt_output_tensor)
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
 
 
 @pytest.mark.parametrize("n", [16])

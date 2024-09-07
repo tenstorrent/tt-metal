@@ -7,9 +7,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "transformers/module.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/layernorm_pre_allgather_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/layernorm_post_allgather_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_adam/moreh_adam_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_adamw/moreh_adamw_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_arange/moreh_arange_op.hpp"
@@ -29,8 +26,8 @@
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_mean/moreh_mean_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_mean_backward/moreh_mean_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss_unreduced/moreh_nll_loss_unreduced_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss_backward/moreh_nll_loss_backward_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss_unreduced/moreh_nll_loss_unreduced_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss_unreduced_backward/moreh_nll_loss_unreduced_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_norm/moreh_norm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_norm_backward/moreh_norm_backward_op.hpp"
@@ -39,7 +36,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_softmax_backward/moreh_softmax_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_op.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 
 namespace py = pybind11;
 
@@ -47,58 +43,25 @@ namespace tt {
 namespace operations {
 namespace primary {
 
+void py_module_types(py::module& m_primary) {
+        py::enum_<MorehSoftmaxOpParallelizationStrategy>(m_primary, "MorehSoftmaxOpParallelizationStrategy")
+        .value("NONE", MorehSoftmaxOpParallelizationStrategy::NONE)
+        .value("SMALL_W", MorehSoftmaxOpParallelizationStrategy::SMALL_W)
+        .value("SMALL_H", MorehSoftmaxOpParallelizationStrategy::SMALL_H)
+        .value("LARGE_W", MorehSoftmaxOpParallelizationStrategy::LARGE_W)
+        .value("LARGE_H", MorehSoftmaxOpParallelizationStrategy::LARGE_H)
+        .value("LARGE_C", MorehSoftmaxOpParallelizationStrategy::LARGE_C);
+
+    py::enum_<MorehSoftmaxBackwardOpParallelizationStrategy>(m_primary, "MorehSoftmaxBackwardOpParallelizationStrategy")
+        .value("NONE", MorehSoftmaxBackwardOpParallelizationStrategy::NONE)
+        .value("SMALL_W", MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_W)
+        .value("SMALL_H", MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_H)
+        .value("LARGE_W", MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_W)
+        .value("LARGE_H", MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_H)
+        .value("LARGE_C", MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_C);
+}
+
 void py_module(py::module& m_primary) {
-    auto m_transformers = m_primary.def_submodule("transformers", "Primary transformers operations");
-    transformers::py_module(m_transformers);
-
-    m_primary.def(
-        "layernorm_pre_allgather",
-        tt::operations::primary::layernorm_pre_allgather,
-        py::arg("input").noconvert(),
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        py::arg("output_dtype").noconvert() = DataType::BFLOAT16,
-        R"doc(
-            Performs the first part of a distributed layernorm operation collecting local statistics E(x) and E(xˆ2).
-        )doc");
-
-    m_primary.def(
-        "rmsnorm_pre_allgather",
-        tt::operations::primary::rmsnorm_pre_allgather,
-        py::arg("input").noconvert(),
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        py::arg("output_dtype").noconvert() = DataType::BFLOAT16,
-        R"doc(
-            Performs the first part of a distributed rms norm operation collecting local statistics E(x) and E(xˆ2).
-        )doc");
-
-    m_primary.def(
-        "layernorm_post_allgather",
-        tt::operations::primary::layernorm_post_allgather,
-        py::arg("input").noconvert(),
-        py::arg("stats").noconvert(),
-        py::arg("eps").noconvert(),
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("beta").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-            Performs the second part of a distributed layernorm operation normalizing the input based on the gathered statistics input.
-        )doc");
-
-    m_primary.def(
-        "rmsnorm_post_allgather",
-        tt::operations::primary::rmsnorm_post_allgather,
-        py::arg("input").noconvert(),
-        py::arg("stats").noconvert(),
-        py::arg("eps").noconvert(),
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("beta").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-            Performs the second part of a distributed rms norm operation normalizing the input based on the gathered statistics input.
-        )doc");
-
 
     // moreh_adam
     m_primary.def(
@@ -172,7 +135,10 @@ void py_module(py::module& m_primary) {
         &moreh_bmm,
         py::arg("input").noconvert(),
         py::arg("mat2").noconvert(),
+        py::kw_only(),
+        py::arg("output").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         R"doc(
         "Performs a moreh_bmm operation.
     )doc");
@@ -182,9 +148,13 @@ void py_module(py::module& m_primary) {
         py::arg("output_grad").noconvert(),
         py::arg("input").noconvert(),
         py::arg("mat2").noconvert(),
+        py::kw_only(),
+        py::arg("are_required_outputs").noconvert() = std::vector<bool>{true, true},
         py::arg("input_grad").noconvert() = std::nullopt,
         py::arg("mat2_grad").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("input_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("mat2_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         R"doc(
         "Performs a moreh_bmm_backward operation.
     )doc");
@@ -373,60 +343,6 @@ void py_module(py::module& m_primary) {
         "Performs a moreh_layernorm_backward operation.");
 
     m_primary.def(
-        "bcast",
-        &tt::operations::primary::bcast,
-        py::arg("input_a").noconvert(),
-        py::arg("input_b").noconvert(),
-        py::arg("math_op"),
-        py::arg("dim"),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("in_place") = false,
-        py::arg("output_tensor").noconvert() = std::nullopt,
-        py::arg("queue_id").noconvert() = 0,
-        R"doc(
-        Perform a binary elementwise operation ``math_op`` between tensors ``input_a`` and ``input_b``, where values from tensor ``input_b`` are broadcast.
-
-        Let tensor ``input_a`` have shape ``[W0, Z0, Y0, X0]`` and tensor ``input_b`` shape ``[W1, Z1, Y1, X1]``. ``dim`` determines the type of broadcast performed.
-
-        For ``dim=BcastOpDim::W`` broadcast is performed on dimension ``X``. ``Y0`` and ``Y1`` must be the same and either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1).
-
-        For ``dim=BcastOpDim::H`` broadcast is performed on dimension  ``Y``. ``X0`` and ``X1`` must be the same and either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1).
-
-        For ``dim=BcastOpDim::HW`` broadcast is performed on dimensions ``X`` and ``Y``. Either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1) must hold for input shapes.
-
-        Both input tensors must have BFLOAT16 data type.
-
-        Output tensor will have BFLOAT16 data type.
-
-        Input tensors must have TILE layout. Output tensors will have TILE layout.
-
-        .. csv-table::
-            :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-            "input_a", "Input tensor", "Tensor", "Tensor of shape [W0, Z0, Y0, X0], where Y0%32=0 and X0%32=0", "Yes"
-            "input_b", "Input tensor to broadcast", "Tensor", "Tensor of shape [W1, Z1, Y1, X1], where Y1%32=0 and X1%32=0", "Yes"
-            "math_op", "Aggregating math operation", " BcastOpMath", "ADD, SUB, MUL", "Yes"
-            "dim", "Dimension on which to broadcast", "BcastOpDim", "W, H, HW", "Yes"
-            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-            "in_place", "Whether to perform bcast in place, without allocating space for output tensor", "Bool", "Default is false", "No"
-            "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-    )doc");
-
-    py::enum_<MorehSoftmaxOpParallelizationStrategy>(m_primary, "MorehSoftmaxOpParallelizationStrategy")
-        .value("NONE", MorehSoftmaxOpParallelizationStrategy::NONE)
-        .value("SMALL_W", MorehSoftmaxOpParallelizationStrategy::SMALL_W)
-        .value("SMALL_H", MorehSoftmaxOpParallelizationStrategy::SMALL_H)
-        .value("LARGE_W", MorehSoftmaxOpParallelizationStrategy::LARGE_W)
-        .value("LARGE_H", MorehSoftmaxOpParallelizationStrategy::LARGE_H)
-        .value("LARGE_C", MorehSoftmaxOpParallelizationStrategy::LARGE_C);
-    py::enum_<MorehSoftmaxBackwardOpParallelizationStrategy>(m_primary, "MorehSoftmaxBackwardOpParallelizationStrategy")
-        .value("NONE", MorehSoftmaxBackwardOpParallelizationStrategy::NONE)
-        .value("SMALL_W", MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_W)
-        .value("SMALL_H", MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_H)
-        .value("LARGE_W", MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_W)
-        .value("LARGE_H", MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_H)
-        .value("LARGE_C", MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_C);
-    m_primary.def(
         "moreh_softmax",
         &moreh_softmax,
         py::arg("input_tensor").noconvert(),
@@ -502,6 +418,7 @@ void py_module(py::module& m_primary) {
         py::arg("output").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
+        py::arg("queue_id").noconvert() = 0,
         "Performs sum operation. Returns an output tensor.");
 
     m_primary.def(
@@ -613,16 +530,26 @@ void py_module(py::module& m_primary) {
         "moreh_mean",
         &moreh_mean,
         py::arg("input").noconvert(),
-        py::arg("output").noconvert(),
         py::kw_only(),
-        py::arg("dims").noconvert() = std::vector<int64_t>(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("dim").noconvert() = std::nullopt,
+        py::arg("keepdim").noconvert() = false,
+        py::arg("divisor").noconvert() = std::nullopt,
+        py::arg("output").noconvert() = std::nullopt,
+        py::arg("memory_config").noconvert() = std::nullopt,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs mean operation. Returns an output tensor.");
+
     m_primary.def(
         "moreh_mean_backward",
         &moreh_mean_backward,
         py::arg("output_grad").noconvert(),
-        py::arg("input_grad").noconvert(),
+        py::kw_only(),
+        py::arg("dim").noconvert() = std::nullopt,
+        py::arg("keepdim").noconvert() = false,
+        py::arg("input_grad_shape").noconvert() = std::nullopt,
+        py::arg("input_grad").noconvert() = std::nullopt,
+        py::arg("memory_config").noconvert() = std::nullopt,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs mean backward operation. Returns an input_grad tensor.");
 
     m_primary.def(

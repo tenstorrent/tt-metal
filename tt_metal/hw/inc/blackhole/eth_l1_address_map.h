@@ -18,8 +18,8 @@ struct address_map {
   // active/idle eth cores have very different mem maps
   // Reserve some space at the end of l1 for l1_barrier
   static constexpr std::int32_t ERISC_BARRIER_SIZE = 32;
-  static constexpr std::int32_t MAX_SIZE = 256 * 1024 - ERISC_BARRIER_SIZE;
-  static constexpr std::int32_t MAX_L1_LOADING_SIZE = 1 * 256 * 1024 - ERISC_BARRIER_SIZE;
+  static constexpr std::int32_t MAX_SIZE = 512 * 1024 - ERISC_BARRIER_SIZE;
+  static constexpr std::int32_t MAX_L1_LOADING_SIZE = 1 * 512 * 1024 - ERISC_BARRIER_SIZE;
 
   // Sizes
   static constexpr std::int32_t FIRMWARE_SIZE = 32 * 1024;
@@ -28,7 +28,9 @@ struct address_map {
   static constexpr std::int32_t DATA_BUFFER_SIZE_ETH = 4 * 1024;
   static constexpr std::int32_t DATA_BUFFER_SIZE_NOC = 16 * 1024;
   static constexpr std::int32_t DATA_BUFFER_SIZE = 24 * 1024;
-  static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_SIZE = 96 * 4;
+  // Kernel config buffer is WIP
+  // Size is presently based on the old sizes of the RTAs + CB config + Sems
+  static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_SIZE = 96 * 4 + 8 * 16;
 
   // Base addresses
   static constexpr std::int32_t FIRMWARE_BASE = 0x9040;
@@ -50,15 +52,16 @@ struct address_map {
   static constexpr std::int32_t ERISC_BARRIER_BASE = MAX_SIZE;
   static constexpr std::int32_t ERISC_APP_ROUTING_INFO_BASE = TILE_HEADER_BUFFER_BASE;
   static constexpr std::int32_t ERISC_APP_SYNC_INFO_BASE = ERISC_APP_ROUTING_INFO_BASE + ERISC_APP_ROUTING_INFO_SIZE;
-  static constexpr std::uint32_t SEMAPHORE_BASE = ERISC_APP_SYNC_INFO_BASE + ERISC_APP_SYNC_INFO_SIZE;
 
-  static constexpr uint32_t ISSUE_CQ_CB_BASE = SEMAPHORE_BASE + SEMAPHORE_SIZE;  // SIZE from shared common addr
+  static constexpr uint32_t ISSUE_CQ_CB_BASE = ERISC_APP_SYNC_INFO_BASE + ERISC_APP_SYNC_INFO_SIZE;
   static constexpr uint32_t COMPLETION_CQ_CB_BASE = ISSUE_CQ_CB_BASE + 7 * L1_ALIGNMENT;
 
   static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = COMPLETION_CQ_CB_BASE + 7 * L1_ALIGNMENT;
   // erisc early exit functionality re-uses mailboxes_t::ncrisc_halt_msg_t::stack_save memory
   static constexpr std::int32_t ERISC_MEM_MAILBOX_STACK_SAVE = ERISC_MEM_MAILBOX_BASE + 4;
 
+  // Kernel config buffer is WIP
+  // Size is presently based on the old sizes of the RTAs + CB config + Sems
   static constexpr std::uint32_t PROFILER_L1_BUFFER_ER = ERISC_MEM_MAILBOX_BASE + 288 + 256 + 16;
   static constexpr std::uint32_t PROFILER_L1_BUFFER_CONTROL = PROFILER_L1_BUFFER_ER + PROFILER_L1_BUFFER_SIZE;
 

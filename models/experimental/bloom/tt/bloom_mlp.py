@@ -6,7 +6,6 @@ import torch
 from torch.nn import functional as F
 
 import ttnn
-import tt_lib
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_gelu_forward as bloom_gelu_forward
 from models.utility_functions import pad_by_zero
@@ -15,9 +14,7 @@ from models.utility_functions import pad_by_zero
 class TtBloomMLP(torch.nn.Module):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
-        self.mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
+        self.mem_config = ttnn.L1_MEMORY_CONFIG
         self.hidden_size = config.hidden_size
         self.hidden_dropout = config.hidden_dropout
         self.training = False

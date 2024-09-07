@@ -6,7 +6,6 @@ from torch import nn
 
 from typing import Optional, Tuple, List
 
-import tt_lib
 import ttnn
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import torch_to_tt_tensor_rm
@@ -39,7 +38,7 @@ class TtDeiTSelfAttention(nn.Module):
         self.key = TtLinear(config.hidden_size, self.all_head_size, self.key_weight, self.key_bias)
         self.value = TtLinear(config.hidden_size, self.all_head_size, self.value_weight, self.value_bias)
 
-    def transpose_for_scores(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def transpose_for_scores(self, x: ttnn.Tensor) -> ttnn.Tensor:
         new_x_shape = list(x.get_legacy_shape())[1:-1] + [
             self.num_attention_heads,
             self.attention_head_size,
@@ -50,10 +49,10 @@ class TtDeiTSelfAttention(nn.Module):
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
-        head_mask: Optional[tt_lib.tensor.Tensor],
+        hidden_states: ttnn.Tensor,
+        head_mask: Optional[ttnn.Tensor],
         output_attentions: bool = False,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.Tensor:
         key = self.key(hidden_states)
         value = self.value(hidden_states)
         mixed_query_layer = self.query(hidden_states)

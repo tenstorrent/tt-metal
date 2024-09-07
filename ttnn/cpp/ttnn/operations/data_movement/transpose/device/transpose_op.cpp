@@ -46,9 +46,6 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
             TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
             const auto shard_spec = input_tensor.shard_spec().value();
             TT_FATAL(shard_spec.shape[1] == W);
-            TT_FATAL(shard_spec.shape[0] % H == 0 or H % shard_spec.shape[0] == 0);
-            TT_FATAL(shard_spec.shape[0] % C == 0 or C % shard_spec.shape[0] == 0);
-            TT_FATAL(C % H == 0 or H % C == 0);
             TT_FATAL(this->output_mem_config.is_sharded());
             TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
         } else {
@@ -186,16 +183,6 @@ TransposeOpParallelizationStrategy Transpose::get_parallelization_strategy(const
     }
 }
 
-const operation::Hash Transpose::compute_program_hash(
-    const std::vector<Tensor> &input_tensors) const {
-    auto input_tensor = input_tensors.at(0);
-    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor.storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensor.get_storage()),__FILE__, __LINE__));
-    auto input_mem_config = std::get<DeviceStorage>(input_tensor.storage()).memory_config();
-    auto output_mem_config = this->output_mem_config;
-    auto dtype = input_tensor.dtype();
-    return operation::hash_operation<Transpose>(
-        input_mem_config, output_mem_config, dtype, this->dim, get_parallelization_strategy(input_tensors));
-}
 
 
 

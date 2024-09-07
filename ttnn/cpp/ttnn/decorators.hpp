@@ -13,6 +13,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/device_operation.hpp"
+#include "tt_metal/graph/graph_tracking.hpp"
 
 namespace ttnn {
 namespace decorators {
@@ -210,7 +211,7 @@ struct registered_operation_t {
         ZoneScopedN("Run primitive ttnn operation");
         ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
         auto [operation_attributes, tensors_args] = operation_t::invoke(std::forward<decltype(args)>(args)...);
-        return ttnn::device_operation::run<operation_t>(queue_id, operation_attributes, tensors_args);
+        return ttnn::device_operation::detail::invoke<operation_t>(queue_id, operation_attributes, tensors_args);
     }
 
     template <typename... args_t>
@@ -297,11 +298,20 @@ struct registered_operation_t {
     template <typename... args_t>
     auto operator()(args_t&&... args) const {
         tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
+        GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
         auto output = invoke(std::forward<args_t>(args)...);
+
+        // Should every output tensor be tracked?
+        /*
+        if (GraphTracker::instance().is_enabled()) {
+            output = tt::stl::reflection::transform_object_of_type<Tensor>(tt::tt_metal::set_tensor_id, output);
+        }
+        */
+
+        GraphTracker::instance().track_function_end(output);
         tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
         return output;
     }
-
 };
 
 template<reflect::fixed_string cpp_fully_qualified_name>
@@ -329,8 +339,8 @@ constexpr reflect::fixed_string prim_namespace = "ttnn::prim";
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 consteval void assert_operation_in_correct_namespace() {
     if constexpr (PrimitiveOperationConcept<operation_t>) {
-        if constexpr(cpp_fully_qualified_name.size() > sizeof(prim_namespace)) {
-            constexpr auto namespace_substring = tt::stl::reflection::fixed_string_substring<0, sizeof(prim_namespace)>(cpp_fully_qualified_name);
+        if constexpr(cpp_fully_qualified_name.size() > prim_namespace.size()) {
+            constexpr auto namespace_substring = tt::stl::reflection::fixed_string_substring<0, prim_namespace.size()>(cpp_fully_qualified_name);
             static_assert(tt::stl::reflection::fixed_string_equals(namespace_substring, prim_namespace), "Primitive operations must be in the `ttnn::prim` namespace.");
         } else {
             #ifndef DISABLE_NAMESPACE_STATIC_ASSERT
@@ -338,8 +348,8 @@ consteval void assert_operation_in_correct_namespace() {
             #endif
         }
     } else {
-        if constexpr (cpp_fully_qualified_name.size() > sizeof(prim_namespace)) {
-            constexpr auto namespace_substring = tt::stl::reflection::fixed_string_substring<0, sizeof(prim_namespace)>(cpp_fully_qualified_name);
+        if constexpr (cpp_fully_qualified_name.size() > prim_namespace.size()) {
+            constexpr auto namespace_substring = tt::stl::reflection::fixed_string_substring<0, prim_namespace.size()>(cpp_fully_qualified_name);
             static_assert(not tt::stl::reflection::fixed_string_equals(namespace_substring, prim_namespace), "Composite operations must not be in the `ttnn::prim` namespace.");
         }
     }

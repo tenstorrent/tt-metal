@@ -43,7 +43,7 @@ void get_tensor_dim(std::vector<uint32_t> &dim, const Shape& shape) {
 
         // last 2-dim
         if (idx == rank - 1 || idx == rank - 2) {
-            dim[i] = shape[idx] / TILE_HEIGHT;
+            dim[i] = shape[idx] / tt::constants::TILE_HEIGHT;
         }
         else {
             dim[i] = shape[idx];
@@ -68,7 +68,7 @@ Shape get_output_grad_shape(const Tensor &output_grad, const Tensor &input_grad,
         TT_FATAL(dim < rank, "dim {} < rank {}", dim, rank);
         bool is_tile_dim = (dim == rank - 1 || dim == rank - 2);
         if (is_tile_dim) {
-            shape[dim] = TILE_HEIGHT;
+            shape[dim] = tt::constants::TILE_HEIGHT;
             padding[dim] = Padding::PadDimension{0, 31};
         } else {
             shape[dim] = 1;
@@ -81,7 +81,7 @@ Shape get_output_grad_shape(const Tensor &output_grad, const Tensor &input_grad,
 }  // namespace
 
 operation::ProgramWithCallbacks moreh_norm_backward_(
-    const Tensor &input, const Tensor &output, const Tensor &output_grad, float p, const std::vector<int64_t> &dims, const bool &keep_batch_dim, const Tensor &input_grad, const DeviceComputeKernelConfig compute_kernel_config) {
+    const Tensor &input, const Tensor &output, const Tensor &output_grad, float p, const std::vector<int64_t> &dims, const bool &keep_batch_dim, const Tensor &input_grad, const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -117,7 +117,7 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
         }
     }
 
-    const auto num_input_grad_tiles = input_grad.volume() / TILE_HW;
+    const auto num_input_grad_tiles = input_grad.volume() / tt::constants::TILE_HW;
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(output_grad.device()->arch(), compute_kernel_config);
 
     auto [floored_p, decimal, p_is_negative] = get_floored_p_and_decimal_and_p_is_negative(p);

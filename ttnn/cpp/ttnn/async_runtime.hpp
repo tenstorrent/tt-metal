@@ -20,36 +20,11 @@ namespace ttnn {
 
     void queue_synchronize(CommandQueue& cq);
 
-    void event_synchronize(Device* device, std::shared_ptr<Event> event);
+    void event_synchronize(std::shared_ptr<Event> event);
 
     bool event_query(std::shared_ptr<Event> event);
 
     void wait_for_event(CommandQueue& cq, std::shared_ptr<Event> event);
 
     void record_event(CommandQueue& cq, std::shared_ptr<Event> event);
-
-    // Generic Device Op dispatch function. Templated on Op structs.
-    template<typename OpConfig>
-    std::vector<Tensor> run_operation(
-        queue_id cq_id,
-        OpConfig devop,
-        const tt::tt_metal::operation::Tensors& input_tensors,
-        const tt::tt_metal::operation::OptionalConstTensors& optional_input_tensors = {},
-        const tt::tt_metal::operation::OptionalTensors& optional_output_tensors = {}) {
-        static_assert(tt::tt_metal::operation::detail::is_device_operation<OpConfig>(), "ttnn::run_operation can only dispatch Device Operations!");
-        // Create output tensor vector by examining the number of output shapes created by the device operation
-        std::vector<Tensor> outputs(tt::tt_metal::operation::DeviceOperation<tt::tt_metal::operation::Tensors>(devop).compute_output_shapes(input_tensors).size());
-        // Populate the workers of the output tensors, based on the input tensors. This is needed for the async engine.
-        for (int i = 0; i < outputs.size(); i++) {
-            outputs[i] = Tensor(tt::tt_metal::operation::get_workers_for_op_output(std::move(input_tensors), std::move(optional_input_tensors)));
-        }
-        // Send the operation to the async engine, which will populate the output tensors.
-        for (auto worker : outputs.at(0).workers) {
-            tt::tt_metal::operation::launch_op(
-                [devop, worker, cq_id] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-                    return operation::run(std::move(devop), input_tensors, optional_input_tensors, optional_output_tensors, cq_id);
-                }, input_tensors, outputs, optional_input_tensors, optional_output_tensors);
-        }
-        return outputs;
-    }
 }

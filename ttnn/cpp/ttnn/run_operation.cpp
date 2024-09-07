@@ -7,7 +7,7 @@
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/tensor/tensor_utils.hpp>
 
-#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operation.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
@@ -16,10 +16,6 @@
 #include "ttnn/config.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
-
-namespace tt::tt_metal {
-    std::atomic<uint32_t> operation_id_atomic_count = 0;
-}
 
 namespace tt::tt_metal::operation {
 
@@ -43,7 +39,7 @@ Device* get_device(const Tensors& input_tensors, const OptionalConstTensors& opt
             return optional_input_tensor.value().workers.at(0);
         }
     }
-    auto device = AutoFormat::GetDefaultDevice();
+    auto device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
     TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to operation are on device");
     return device;
 }
@@ -55,7 +51,7 @@ void override_addresses(
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OutputTensors& output_tensors) {
-    std::vector<Buffer*> input_buffers;
+    std::vector<tt::tt_metal::Buffer*> input_buffers;
     for (auto& tensor : input_tensors) {
         input_buffers.push_back(tensor.buffer());
     }
@@ -64,7 +60,7 @@ void override_addresses(
         input_buffers.push_back(buffer);
     }
 
-    std::vector<Buffer*> output_buffers;
+    std::vector<tt::tt_metal::Buffer*> output_buffers;
     for (auto& tensor : output_tensors) {
         if constexpr (std::is_same_v<OptionalTensors, OutputTensors>) {
             auto buffer = tensor.has_value() ? tensor.value().buffer() : nullptr;
@@ -267,6 +263,7 @@ OutputTensors run_without_autoformat(
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors,
     uint8_t cq_id) {
+    using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
     Device* device = detail::get_device(input_tensors, optional_input_tensors);
     Tensors input_tensors_on_dev;
@@ -314,6 +311,7 @@ Tensors run_with_autoformat(
     const float pad_value,
     const bool pad_c,
     uint8_t cq_id) {
+    using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
     Device* device = detail::get_device(input_tensors, optional_input_tensors);
     auto output_shapes = operation.compute_output_shapes(input_tensors);
@@ -371,6 +369,7 @@ Tensors run_with_autoformat(
     const std::vector<std::optional<FormatParams>>& optional_input_formatting,
     const OptionalTensors& optional_output_tensors,
     uint8_t cq_id) {
+    using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
     Device* device = detail::get_device(input_tensors, optional_input_tensors);
     auto output_shapes = operation.compute_output_shapes(input_tensors);
@@ -486,6 +485,7 @@ std::vector<Device*> get_workers_for_op_output(
     const std::vector<Tensor>& inputs,
     const std::vector<std::optional<const Tensor>>& optional_inputs,
     bool enable_autoformat_device) {
+    using ttnn::operations::experimental::auto_format::AutoFormat;
     std::vector<Device*> workers_for_op = {};
     // Infer output workers from inputs. For multi-device tensors the number
     // of workers used for the op (and assigned to the ouput) is the minimum

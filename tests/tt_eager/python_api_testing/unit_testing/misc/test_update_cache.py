@@ -59,7 +59,7 @@ class TestUpdateCache:
             else:
                 xt = xt.to(device)
 
-            cachett = ttnn.experimental.tensor.fill_cache(cachett, xt, i)
+            cachett = ttnn.fill_cache(cachett, xt, i)
             cache[i : i + 1, :, : x.shape[-2], :] = x
 
         tt_got_back = cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
@@ -125,7 +125,7 @@ class TestUpdateCache:
         else:
             xt = xt.to(device)
 
-        cachett = ttnn.experimental.tensor.update_cache(cachett, xt, cache_idx, batch_offset=batch_offset)
+        cachett = ttnn.update_cache(cachett, xt, cache_idx, batch_offset=batch_offset)
         cache[0:num_users, 0:num_heads, cache_idx : cache_idx + x.shape[-2], 0 : x.shape[-1]] = x
 
         tt_got_back = cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
@@ -193,7 +193,7 @@ class TestUpdateCacheFP32:
             else:
                 xt = xt.to(device)
 
-            cachett = ttnn.experimental.tensor.fill_cache(cachett, xt, i)
+            cachett = ttnn.fill_cache(cachett, xt, i)
             cache[i : i + 1, :, : x.shape[-2], :] = x
 
         tt_got_back = cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
@@ -265,7 +265,7 @@ class TestUpdateCacheFP32:
             fp32_dest_acc_en=True,
         )
 
-        cachett = ttnn.experimental.tensor.update_cache(
+        cachett = ttnn.update_cache(
             cachett, xt, cache_idx, batch_offset=batch_offset, compute_kernel_config=compute_kernel_config
         )
         cache[0:num_users, 0:num_heads, cache_idx : cache_idx + x.shape[-2], 0 : x.shape[-1]] = x

@@ -9,7 +9,6 @@
 #include <fmt/core.h>
 
 #include "ttnn/tensor/host_buffer/functions.hpp"
-#include "utils.hpp"
 
 namespace ttnn::operations::sliding_window {
 
@@ -35,35 +34,23 @@ using uint32_pair_t = std::pair<uint32_t, uint32_t>;
 struct SlidingWindowConfig {
 
     // input tensor shape
-    uint32_t batch_size_;
-    uint32_pair_t input_hw_;
+    uint32_t batch_size = 0;
+    uint32_pair_t input_hw = {0, 0};
 
     // windowing parameters
-    uint32_pair_t window_hw_;
-    uint32_pair_t stride_hw_;
-    uint32_pair_t pad_hw_;
-    uint32_pair_t dilation_hw_;
+    uint32_pair_t window_hw  = {1, 1};
+    uint32_pair_t stride_hw  = {1, 1};
+    uint32_pair_t pad_hw = {0, 0} ;
+    uint32_pair_t dilation_hw = {1, 1};
 
     // parallel configuration
-    bool has_parallel_config_;
-    uint32_t num_cores_nhw_;        // num cores along collapsed height nhw
-    CoreRangeSet core_range_set_;   // active cores
+    uint32_t num_cores_nhw = 1;        // num cores along collapsed height nhw
+    CoreRangeSet core_range_set = std::set{CoreRange({0, 0}, {0, 0})};   // active cores
 
-    bool snap_to_tile_;
-
-    SlidingWindowConfig(uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t window_h, uint32_t window_w, uint32_t stride_h, uint32_t stride_w, uint32_t pad_h, uint32_t pad_w, uint32_t dilation_h = 1, uint32_t dilation_w = 1, uint32_t num_cores_nhw = 0, CoreRangeSet core_range = {{}}, bool snap_to_tile = false)
-        : batch_size_(batch_size), input_hw_(input_h, input_w), window_hw_(window_h, window_w), stride_hw_(stride_h, stride_w), pad_hw_(pad_h, pad_w), dilation_hw_(dilation_h, dilation_w), has_parallel_config_(false), num_cores_nhw_(num_cores_nhw), core_range_set_(core_range), snap_to_tile_(snap_to_tile) {
-            has_parallel_config_ = num_cores_nhw_ > 0 && !core_range_set_.ranges().empty();
-        }
-
-    SlidingWindowConfig(const SlidingWindowConfig& other): batch_size_(other.batch_size_), input_hw_(other.input_hw_), window_hw_(other.window_hw_), stride_hw_(other.stride_hw_), pad_hw_(other.pad_hw_), dilation_hw_(other.dilation_hw_), has_parallel_config_(other.has_parallel_config_), num_cores_nhw_(other.num_cores_nhw_), core_range_set_(other.core_range_set_), snap_to_tile_(other.snap_to_tile_) {}
-
-    SlidingWindowConfig(): core_range_set_({{{0,0}, {0,0}}}) {}
-
-
+    bool snap_to_tile = false;
 
     std::string to_string() const;
-
+    bool has_parallel_config() const;
     /**
         * Unique hash val for the sliding window configuration.
         */

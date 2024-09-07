@@ -12,7 +12,7 @@ from functools import wraps
 import pytest
 
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import (
     torch_to_tt_tensor,
     tt_to_torch_tensor,
@@ -21,13 +21,14 @@ from models.utility_functions import (
 from models.utility_functions import (
     comp_pcc,
     comp_allclose_and_pcc,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
 )
 from models.experimental.stable_diffusion.tt.unet_2d_blocks import TtCrossAttnDownBlock2D
 from models.experimental.stable_diffusion.tt.experimental_ops import UseDeviceConv
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.skip(reason="Test is failing, see issue #7536")
 @pytest.mark.parametrize("index", [1])  # FIXME: failing 0, 2 with L1 error.
 def test_run_cross_attn_down_block_real_input_inference(device, index, model_location_generator):
@@ -177,7 +178,7 @@ def test_run_cross_attn_down_block_inference(device):
         attention_mask=attention_mask,
         cross_attention_kwargs=cross_attention_kwargs,
     )
-    ttl.device.Synchronize(device)
+    ttnn.synchronize_device(device)
     tt_output = tt_to_torch_tensor(tt_output)
 
     passing = comp_pcc(torch_output, tt_output, pcc=0.95)

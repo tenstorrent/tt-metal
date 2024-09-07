@@ -132,7 +132,7 @@ inline void advance_worker_global_page_interleaved (
 
     offset_into_worker_slice++;
 
-    uint32_t flattened_offset_worker_slice = offset_worker_slice.x + (offset_worker_slice.y * tensor_shape.x);
+    uint32_t flattened_offset_worker_slice = offset_worker_slice.x + (offset_worker_slice.y * tensor_slice_shape.x);
     bool wrap_around = (flattened_offset_worker_slice + offset_into_worker_slice) % tensor_slice_shape.x == 0;
 
     bool end_of_worker_slice_row = offset_into_worker_slice == worker_slice_shape.x * worker_slice_shape.y;

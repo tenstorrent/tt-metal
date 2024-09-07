@@ -7,14 +7,15 @@ import torch
 from loguru import logger
 from transformers import WhisperModel, WhisperConfig
 
-import tt_lib
+import ttnn
 
 from models.experimental.whisper.tt.whisper_decoder import TtWhisperDecoder
 from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     comp_pcc,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
 )
 
 
@@ -67,7 +68,7 @@ def run_whisper_decoder(device):
     )
     tt_whisper_decoder.eval()
 
-    ttm_encoder_hidden_states = torch2tt_tensor(encoder_hidden_states, device, tt_lib.tensor.Layout.ROW_MAJOR)
+    ttm_encoder_hidden_states = torch2tt_tensor(encoder_hidden_states, device, ttnn.ROW_MAJOR_LAYOUT)
     with torch.no_grad():
         ttm_output = tt_whisper_decoder(
             input_ids=decoder_input_ids,
@@ -91,7 +92,7 @@ def run_whisper_decoder(device):
     assert does_pass
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_WhipserDecoder_inference(device):
     torch.manual_seed(1234)
     run_whisper_decoder(device=device)

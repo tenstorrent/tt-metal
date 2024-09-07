@@ -36,15 +36,15 @@ def run_ssm_1d_sum_reduce(H: int, W: int, latent_size: int, dtype, in_mem_config
 @pytest.mark.parametrize(
     "out_mem_config",
     (
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.L1_MEMORY_CONFIG,
     ),
 )
 @pytest.mark.parametrize(
     "in_mem_config",
     (
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.L1_MEMORY_CONFIG,
     ),
 )
 @pytest.mark.parametrize(
@@ -66,7 +66,7 @@ def test_ssm_reduce(H, W, latent_size, dtype, out_mem_config, in_mem_config, dev
 
 def test_ssm_1d_sum_reduce_with_program_cache(device, use_program_cache):
     H, W, latent = 32, 163840, 32
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    mem_config = ttnn.L1_MEMORY_CONFIG
     dtype = ttnn.bfloat16
 
     for _ in range(2):

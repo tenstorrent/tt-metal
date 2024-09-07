@@ -173,7 +173,7 @@ Tensor moreh_layernorm_backward_input_grad(
     const std::optional<const Tensor> input_grad,
     const std::optional<const Tensor> gamma,
     const std::optional<MemoryConfig> &memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
 
     auto device = input.device();
     auto compute_kernel_config_val =
@@ -212,7 +212,7 @@ std::vector<std::optional<Tensor>> moreh_layernorm_backward_gamma_beta_grad(
     const std::optional<const Tensor> gamma_grad,
     const std::optional<const Tensor> beta_grad,
     const std::optional<MemoryConfig> &memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
 
     auto device = input.device();
     auto compute_kernel_config_val =
@@ -272,7 +272,7 @@ std::vector<std::optional<Tensor>> moreh_layernorm_backward(
     const std::optional<const Tensor> gamma_grad,
     const std::optional<const Tensor> beta_grad,
     const std::optional<MemoryConfig> &memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     std::vector<std::optional<Tensor>> outputs;
     outputs.reserve(3);
 

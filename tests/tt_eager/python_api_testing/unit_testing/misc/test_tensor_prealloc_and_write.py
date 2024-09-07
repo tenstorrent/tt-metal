@@ -41,7 +41,7 @@ def test_tensor_preallocation_and_write_apis(
             # Write to prreallocated tensor multiple times
             input_tensor_a = torch.randn(tensor_shape).bfloat16()
             tt_input_tensor_a = ttnn.Tensor(input_tensor_a, in_dtype).to(tensor_layout)
-            ttnn.experimental.tensor.write_tensor(tt_input_tensor_a, preallocated_tensor)
+            ttnn.copy_host_to_device_tensor(tt_input_tensor_a, preallocated_tensor)
             readback = preallocated_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
             allclose, output = comp_pcc(readback, input_tensor_a)
             assert allclose, f"FAILED: {output}"

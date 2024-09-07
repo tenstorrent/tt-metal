@@ -8,7 +8,7 @@
 #include "ttnn/deprecated/tt_dnn/op_library/cb_utils.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
 #include "ttnn/operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split_tilize.hpp"
+#include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -211,7 +211,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     uint32_t num_tiles_per_row = output.get_legacy_shape()[-1] / TILE_WIDTH;
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
-        split_blocks_for_tilize(grid_size, num_blocks);
+        ttnn::split_blocks_for_tilize(grid_size, num_blocks);
 
     bool has_cliff = core_range_cliff.size() > 0;
 
@@ -274,7 +274,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
 
     // 1D distribution of blocks across cores
-    auto core_assignments = distribute_work(
+    auto core_assignments = ttnn::distribute_work(
         output.get_legacy_shape().without_padding(),
         output.get_legacy_shape().padding(),
         ncores,
@@ -430,7 +430,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
     };
     unary_writer_kernel_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
         all_cores,
         WriterDataMovementConfig(writer_ct_args));
 

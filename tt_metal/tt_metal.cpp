@@ -25,6 +25,8 @@
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
+#include "tt_metal/graph/graph_tracking.hpp"
+
 namespace tt {
 
 namespace tt_metal {
@@ -378,7 +380,7 @@ void print_page(
     std::cout << std::dec << std::endl;
 }
 
-void WriteToDeviceSharded(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
+void WriteToDeviceSharded(Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
     uint32_t host_buffer_size_bytes = host_buffer.size() * sizeof(uint32_t);
     TT_FATAL(
         host_buffer_size_bytes <= buffer.size(),
@@ -395,7 +397,7 @@ void WriteToDeviceSharded(const Buffer &buffer, const std::vector<uint32_t> &hos
 
     auto device = buffer.device();
 
-    auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
+    const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     auto total_pages = buffer.num_pages();
     for (int host_page_id = 0; host_page_id < total_pages; host_page_id++) {
         auto dev_page_id = buffer_page_mapping.host_page_to_dev_page_mapping_[host_page_id];
@@ -452,7 +454,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer &buffer, const std::vector<
     }
 }
 
-void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
+void WriteToDevice(Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
     ZoneScoped;
     if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
         buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK) {
@@ -464,11 +466,11 @@ void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffe
     }
 }
 
-void WriteToBuffer(std::shared_ptr<const Buffer> buffer, const std::vector<uint32_t> &host_buffer) {
+void WriteToBuffer(std::shared_ptr<Buffer> buffer, const std::vector<uint32_t> &host_buffer) {
     WriteToBuffer(*buffer, host_buffer);
 }
 
-void WriteToBuffer(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
+void WriteToBuffer(Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:  // fallthrough
         case BufferType::L1:    // fallthrough
@@ -517,7 +519,7 @@ void ReadFromDeviceInterleavedContiguous(const Buffer &buffer, std::vector<uint3
 
 void read_pages_to_host_helper(
     Device *device,
-    const Buffer &dev_buffer,
+    Buffer &dev_buffer,
     std::vector<uint32_t> &host_buffer,
     const uint32_t &page_size,
     const uint32_t &host_page_id,
@@ -530,7 +532,7 @@ void read_pages_to_host_helper(
     tt::Cluster::instance().read_core(host_buffer.data() + host_buffer_start, page_size, tt_cxy_pair(device->id(), noc_coordinates), absolute_address);
 }
 
-void ReadFromDeviceSharded(const Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
+void ReadFromDeviceSharded(Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
     TensorMemoryLayout buffer_layout = buffer.buffer_layout();
 
     auto device = buffer.device();
@@ -546,7 +548,7 @@ void ReadFromDeviceSharded(const Buffer &buffer, std::vector<uint32_t> &host_buf
 
     host_buffer = std::vector<uint32_t>(total_pages * num_entries_per_page);
 
-    auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
+    const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     for (int dev_page_id = 0; dev_page_id < total_pages; dev_page_id++) {
         auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_id]];
         auto bank_id = device->bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
@@ -562,7 +564,7 @@ void ReadFromDeviceSharded(const Buffer &buffer, std::vector<uint32_t> &host_buf
     }
 }
 
-void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
+void ReadFromDevice(Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
     ZoneScoped;
     host_buffer.clear();  // overwrite the data
     if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
@@ -575,11 +577,11 @@ void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer, bo
     }
 }
 
-void ReadFromBuffer(std::shared_ptr<const Buffer> buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
+void ReadFromBuffer(std::shared_ptr<Buffer> buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
     ReadFromBuffer(*buffer, host_buffer, shard_order);
 }
 
-void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
+void ReadFromBuffer(Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
     Device *device = buffer.device();
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:
@@ -600,7 +602,7 @@ void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer, bo
     }
 }
 
-void ReadShard(const Buffer &buffer, std::vector<uint32_t> &host_buffer, const uint32_t &core_id) {
+void ReadShard(Buffer &buffer, std::vector<uint32_t> &host_buffer, const uint32_t &core_id) {
     Device *device = buffer.device();
     TT_ASSERT(is_sharded(buffer.buffer_layout()));
     host_buffer.clear();  // overwrite the data
@@ -610,7 +612,7 @@ void ReadShard(const Buffer &buffer, std::vector<uint32_t> &host_buffer, const u
     host_buffer = std::vector<uint32_t>(num_entries_per_shard);
 
     std::vector<uint32_t> page_ids;
-    auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
+    const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     for (uint32_t i = 0; i < buffer_page_mapping.dev_page_to_core_mapping_.size(); i++) {
         if (buffer_page_mapping.dev_page_to_core_mapping_[i] == core_id) {
             page_ids.push_back(i);
@@ -629,6 +631,7 @@ void ReadShard(const Buffer &buffer, std::vector<uint32_t> &host_buffer, const u
 void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_until_cores_done, bool force_slow_dispatch) {
     LaunchProgram(device, *program, wait_until_cores_done, force_slow_dispatch);
 }
+
 
 void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done, bool force_slow_dispatch) {
     {  // Profiler scope start
@@ -716,26 +719,31 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
             // TODO: add support for CB for ethernet cores
             if (core_type == CoreType::WORKER) {
                 // CircularBufferConfigVec -- common across all kernels, so written once to the core
-                llrt::CircularBufferConfigVec circular_buffer_config_vec = llrt::create_circular_buffer_config_vector();
+                std::vector<uint32_t> circular_buffer_config_vec(NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG, 0);
 
                 auto cbs_on_core = program.circular_buffers_on_core(logical_core);
                 for (auto circular_buffer : cbs_on_core) {
                     for (uint32_t buffer_index : circular_buffer->buffer_indices()) {
-                        llrt::set_config_for_circular_buffer(
-                            circular_buffer_config_vec,
-                            buffer_index,
-                            circular_buffer->address(),
-                            circular_buffer->size(),
-                            circular_buffer->num_pages(buffer_index));
+                        uint32_t addr_in_bytes = circular_buffer->address();
+                        uint32_t size_in_bytes = circular_buffer->size();
+                        uint32_t num_pages = circular_buffer->num_pages(buffer_index);
+                        uint32_t page_size = size_in_bytes / num_pages;
+                        circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index) =
+                            addr_in_bytes >> 4;  // convert to addr in 16B words
+                        circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index + 1) =
+                            size_in_bytes >> 4;  // convert to addr in 16B words
+                        circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index + 2) = num_pages;
+                        circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index + 3) = page_size >> 4;
                     }
                 }  // PROF_END("CBS")
 
                 if (cbs_on_core.size()) {
-                    llrt::write_circular_buffer_config_vector_to_core(
-                        device_id, physical_core, circular_buffer_config_vec);
+                    uint64_t kernel_config_base = hal.get_dev_addr(index, HalMemAddrType::KERNEL_CONFIG);
+                    uint64_t addr = kernel_config_base + program.get_program_config(index).cb_offset;
+                    llrt::write_hex_vec_to_core(device_id, physical_core, circular_buffer_config_vec, addr);
                 }
             }
-            program.init_semaphores(*device, logical_core, hal.get_core_type(index));
+            program.init_semaphores(*device, logical_core, index);
         }
     }
 
@@ -750,7 +758,7 @@ void WriteRuntimeArgsToDevice(Device *device, Program &program, bool force_slow_
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
         for (auto& kg : program.get_kernel_groups(index)) {
-            uint32_t kernel_config_base = kg.launch_msg.kernel_config.kernel_config_base;
+            uint32_t kernel_config_base = kg.launch_msg.kernel_config.kernel_config_base[index];
             for (const CoreRange &core_range : kg.core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -805,10 +813,19 @@ void CompileProgram(Device *device, Program &program, bool fd_bootloader_mode) {
 }
 
 void AllocateBuffer(Buffer *buffer, bool bottom_up) {
+    if(GraphTracker::instance().hook_allocate(buffer, bottom_up)) {
+        GraphTracker::instance().track_allocate(buffer, bottom_up);
+        return;
+    }
     EnqueueAllocateBuffer(buffer->device()->command_queue(), buffer, bottom_up, false);
+    GraphTracker::instance().track_allocate(buffer, bottom_up);
 }
 
 void DeallocateBuffer(Buffer *buffer) {
+    GraphTracker::instance().track_deallocate(buffer);
+    if(GraphTracker::instance().hook_deallocate(buffer)) {
+        return;
+    }
     EnqueueDeallocateBuffer(
         buffer->device()->command_queue(),
         *(buffer->device()->allocator_),
@@ -945,7 +962,7 @@ uint32_t CreateSemaphore(
                 if (!semaphore_id.has_value()) {
                     semaphore_id = semaphore_id_candidate;
                 } else {
-                    semaphore_id = std::max(semaphore_id.value(), semaphore_id.value());
+                    semaphore_id = std::max(semaphore_id.value(), semaphore_id_candidate.value());
                 }
             }
             TT_FATAL(semaphore_id.has_value(), "Unable to initialize Semaphore!");
@@ -959,7 +976,7 @@ uint32_t CreateSemaphore(
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config) {
     return std::make_shared<Buffer>(
-        config.device, config.size, config.page_size, config.buffer_type, config.buffer_layout);
+        config.device, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt, config.allocate);
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config) {
@@ -969,13 +986,15 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config) {
         config.page_size,
         config.buffer_type,
         config.buffer_layout,
-        config.shard_parameters);
+        config.shard_parameters,
+        std::nullopt,
+        config.allocate);
 }
 
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }
 
 void AssignGlobalBufferToProgram(
-    std::shared_ptr<Buffer> buffer, std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>> program) {
+    std::shared_ptr<Buffer> buffer, Program& program) {
     detail::DispatchStateCheck(not buffer->device()->using_slow_dispatch());
     EnqueueAddBufferToProgram(buffer->device()->command_queue(), buffer, program, false);
 }

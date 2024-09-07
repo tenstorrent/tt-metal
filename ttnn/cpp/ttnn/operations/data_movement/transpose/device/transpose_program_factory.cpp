@@ -619,77 +619,117 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
 }
 
+std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runtime_args_mc_hc_rm_sharded(
+                                                                                        const Tensor &input_tensor,
+                                                                                        Tensor &output_tensor,
+                                                                                        uint32_t num_cores,
+                                                                                        uint32_t num_cores_x,
+                                                                                        uint32_t num_cores_y
+                                                                                        ){
+    auto input_buffer = input_tensor.buffer();
+    auto output_buffer = output_tensor.buffer();
+    auto input_shape = input_tensor.get_legacy_shape();
+    auto output_shape = output_tensor.get_legacy_shape();
 
-operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor &a, Tensor &output) {
+    uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
+    uint32_t W_bytes = W * input_tensor.element_size();
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-
-    tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
-    tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-    uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
-
-    tt::tt_metal::Buffer *src0_buffer = a.buffer();
-
-    const auto shape = a.get_legacy_shape();
-    uint32_t W = a.shape()[3], H = a.shape()[2], C = a.shape()[1], N = a.shape()[0];
-    uint32_t total_height = N * C * H;
-    uint32_t stick_size_bytes = W * a.element_size();
-
-    tt::tt_metal::Device *device = a.device();
-
-    auto shard_spec = a.shard_spec().value();
+    auto shard_spec = input_tensor.shard_spec().value();
     uint32_t shard_height = shard_spec.shape[0];
     uint32_t shard_width = shard_spec.shape[1];
     bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
-    auto& all_cores = shard_spec.grid;
-    uint32_t num_cores = shard_spec.num_cores();
-    auto bbox = shard_spec.grid.bounding_box();
-    CoreCoord grid_size = {bbox.end_coord.x + 1, bbox.end_coord.y+1};
-    uint32_t num_cores_x = grid_size.x;
-    uint32_t num_cores_y = grid_size.y;
+    tt::tt_metal::Device *device = input_tensor.device();
 
-    tt::log_debug("all_cores: {}", all_cores);
-    tt::log_debug("num_cores: {}", num_cores);
+    std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > ret_val(num_cores);
 
-    tt::tt_metal::Shape output_shape = output.get_legacy_shape();
+    std::vector<uint32_t> shard_grid_x_map;
+    for (uint32_t i = 0; i < num_cores_x; ++i) {
+        auto physical_core = device->worker_core_from_logical_core(CoreCoord(i, 0));
+        shard_grid_x_map.push_back(physical_core.x);
+    }
+    std::vector<uint32_t> shard_grid_y_map;
+    for (uint32_t i = 0; i < num_cores_y; ++i) {
+        auto physical_core = device->worker_core_from_logical_core(CoreCoord(0, i));
+        shard_grid_y_map.push_back(physical_core.y);
+    }
 
-    tt::tt_metal::Buffer *dst_buffer = output.buffer();
+    uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
+    for(uint32_t i = 0, curr_sticks_read = 0, curr_sticks_write = 0; i < num_cores; i++) {
+        CoreCoord core;
+        if (row_major) {
+            core = {i % num_cores_x, i / num_cores_x};
+        } else {
+            core = {i / num_cores_y, i % num_cores_y};
+        }
+        uint32_t num_sticks_per_core = shard_height;
 
-    uint32_t src0_cb_index = tt::CB::c_in0;
-    tt::tt_metal::CircularBufferConfig cb_src0_config = tt::tt_metal::CircularBufferConfig(shard_height * stick_size_bytes, {{src0_cb_index, src0_cb_data_format}})
-        .set_page_size(src0_cb_index, stick_size_bytes).set_globally_allocated_address(*a.buffer());
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+        // reader
+        std::vector<uint32_t> reader_runtime_args = {
+            num_sticks_per_core,
+            curr_sticks_read,
+            curr_c,
+            curr_h,
+            curr_n
+        };
+        reader_runtime_args.insert(reader_runtime_args.end(), shard_grid_x_map.begin(), shard_grid_x_map.end());
+        reader_runtime_args.insert(reader_runtime_args.end(), shard_grid_y_map.begin(), shard_grid_y_map.end());
 
-    uint32_t output_cb_index = tt::CB::c_out0; // output operands start at index 16
-    tt::tt_metal::CircularBufferConfig cb_output_config = tt::tt_metal::CircularBufferConfig(shard_height * stick_size_bytes, {{output_cb_index, dst_cb_data_format}})
-        .set_page_size(output_cb_index, stick_size_bytes).set_globally_allocated_address(*output.buffer());;
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+        // writer
+        std::vector<uint32_t> writer_runtime_args;
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t) src0_cb_index,
-        (std::uint32_t) output_cb_index,
-        (std::uint32_t) stick_size_bytes
-    };
+        ret_val[i] = {reader_runtime_args, writer_runtime_args};
 
-    tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/reader_unary_transpose_hc_sharded_rm.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        curr_sticks_write += num_sticks_per_core;
 
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t) src0_cb_index,
-        (std::uint32_t) output_cb_index,
-        (std::uint32_t) stick_size_bytes
-    };
+        for (uint32_t i = 0; i < num_sticks_per_core; ++i) {
+            curr_c++;
+            curr_sticks_read += H;
+            if (curr_c == C) { // end of channel dim
+                curr_h++;
+                curr_c = 0;
+                if (curr_h == H) { // end of H dim
+                    curr_n++;
+                    curr_c = 0;
+                    curr_h = 0;
+                    curr_sticks_read = curr_sticks_read - H + 1;
+                } else {
+                    curr_sticks_read = curr_sticks_read - C * H + 1;
+                }
+            }
+        }
 
-    tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/writer_unary_transpose_hc_sharded_rm.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    }
+
+    return ret_val;
+}
+
+std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runtime_args_mc_hc_rm_sharded_special_case(
+                                                                                        const Tensor &input_tensor,
+                                                                                        Tensor &output_tensor,
+                                                                                        uint32_t num_cores,
+                                                                                        uint32_t num_cores_x,
+                                                                                        uint32_t num_cores_y
+                                                                                        ){
+
+    auto input_buffer = input_tensor.buffer();
+    auto output_buffer = output_tensor.buffer();
+    auto input_shape = input_tensor.get_legacy_shape();
+    auto output_shape = output_tensor.get_legacy_shape();
+
+    uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
+    uint32_t W_bytes = W * input_tensor.element_size();
+    uint32_t total_height = N * C * H;
+    uint32_t stick_size_bytes = W * input_tensor.element_size();
+
+    auto shard_spec = input_tensor.shard_spec().value();
+    uint32_t shard_height = shard_spec.shape[0];
+    uint32_t shard_width = shard_spec.shape[1];
+    bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+
+    tt::tt_metal::Device *device = input_tensor.device();
+
+    std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > ret_val(num_cores);
 
     uint32_t height = 0;
     std::vector<CoreCoord> cores;
@@ -722,6 +762,8 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor &a,
     uint32_t num_core_per_C = C / shard_height > 0 ? C / shard_height : 1; // the number of cores for (dst) C block
     uint32_t num_core_per_H = H / shard_height > 0 ? H / shard_height : 1; // the number of cores for H block
 
+    uint32_t num_C_blocks_per_core = shard_height > C ? shard_height / C : 1;
+
     uint32_t curr_core_offset = 0;
     uint32_t curr_height = 0;
     uint32_t curr_core = 0;
@@ -731,147 +773,304 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor &a,
     uint32_t curr_C_shard = 0;
     uint32_t curr_H_shard = 0;
 
-    for (auto core : cores) {
+    uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
+    for (uint32_t i = 0, curr_sticks_read = 0; i < num_cores; i++) {
+        auto core = cores[i];
         uint32_t pre_core = curr_core;
         uint32_t pre_N = curr_N;
         std::vector<uint32_t> read_cores_indices;
         std::vector<uint32_t> read_cores_noc_x;
         std::vector<uint32_t> read_cores_noc_y;
         std::vector<uint32_t> read_stick_offset;
-        for (uint32_t i = 0; i < shard_height; ++i) {
-            auto read_stick_core = cores[curr_core];
-            uint32_t N_offset = (curr_N % num_N_per_core) * CH;
-            uint32_t C_offset = (curr_C % num_H_per_core) * H;
-            uint32_t H_offset = curr_H;
-            uint32_t read_stick_index = N_offset + C_offset + H_offset;
 
-            tt::log_debug("read_stick_core: {}", read_stick_core);
+        uint32_t num_sticks_per_core = shard_height;
 
-            auto physical_read_stick_core = device->worker_core_from_logical_core(read_stick_core);
-            read_cores_indices.push_back(curr_core);
-            read_stick_offset.push_back(read_stick_index * stick_size_bytes);
-            read_cores_noc_x.push_back(physical_read_stick_core.x);
-            read_cores_noc_y.push_back(physical_read_stick_core.y);
-
-            curr_C++;
-            if (curr_C == shard_C_per_core) {
-                curr_C = 0;
-                curr_C_shard++;
-                if (curr_C_shard == num_core_per_C) {
-                    curr_C_shard = 0;
-                    curr_H++;
-                    if (curr_H == shard_H_per_core) {
-                        curr_H = 0;
-                        curr_H_shard++;
-                        if (curr_H_shard == num_core_per_H) {
-                            curr_H_shard = 0;
-                            curr_N++;
-                        }
-                    }
-                }
-            }
-
-            if (num_N_per_core == 1) { // each core only has one CH block
-                if (num_H_per_core == 1) { // each core only has one H block or part of H block
-                    curr_core += num_core_per_H;
-                    curr_height += H;
-                    if (curr_height == CH) { // finished collect sticks for full (dst) C block
-                        curr_height = 0;
-                        if (curr_H == 0) { // finished the current shard
-                            if (curr_N != pre_N) { // next batch, change first batch core, new core offset is the top batch core
-                                uint32_t num_core_per_CH = CH / shard_height; // number of cores for a CH block
-                                curr_core_offset = num_core_per_CH * curr_N;
-                            } else { // same batch, move to next shard
-                                curr_core_offset++;
-                            }
-                            curr_core = curr_core_offset;
-                        } else { // current shard not done, start from same first batch core
-                            curr_core = curr_core_offset;
-                        }
-                    }
+        std::vector<uint32_t> stick_ids_per_core;
+        for (uint32_t j = 0; j < num_sticks_per_core; ++j) {
+            stick_ids_per_core.push_back(curr_sticks_read);
+            curr_c++;
+            curr_sticks_read += H;
+            if (curr_c == C) { // end of channel dim
+                curr_h++;
+                curr_c = 0;
+                if (curr_h == H) { // end of H dim
+                    curr_n++;
+                    curr_c = 0;
+                    curr_h = 0;
+                    curr_sticks_read = curr_sticks_read - H + 1;
                 } else {
-                    curr_height += H;
-                    if (curr_height == shard_height) {
-                        curr_core++;
-                        curr_height = 0;
-                        if (curr_C == 0 and curr_N == pre_N) {
-                            curr_core = pre_core;
-                        }
-                    }
+                    curr_sticks_read = curr_sticks_read - C * H + 1;
                 }
-
             }
         }
-        if (num_N_per_core > 1) {
-            curr_core++;
+
+        // figure out the stick id in a shard, and the core id for the stick.
+        std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> core_stick_map;
+        for (uint32_t j = 0; j < num_sticks_per_core; ++j) {
+            uint32_t stick_id = stick_ids_per_core[j];
+            uint32_t shard_id = stick_id / num_sticks_per_core;
+            uint32_t stick_id_in_shard = stick_id - (shard_id * num_sticks_per_core);
+
+            uint32_t shard_grid_inner_dim = row_major ? num_cores_x : num_cores_y;
+            uint32_t shard_grid_outer_dim_id = shard_id / shard_grid_inner_dim;
+            uint32_t shard_grid_inner_dim_id = shard_id - (shard_grid_outer_dim_id * shard_grid_inner_dim);
+
+            uint32_t worker_y_logical = row_major ? shard_grid_outer_dim_id : shard_grid_inner_dim_id;
+            uint32_t worker_x_logical = row_major ? shard_grid_inner_dim_id : shard_grid_outer_dim_id;
+
+            if (worker_x_logical < num_cores_x and worker_y_logical < num_cores_y) {
+                auto core_physical = device->worker_core_from_logical_core(CoreCoord{worker_x_logical, worker_y_logical});
+
+                read_cores_indices.push_back(shard_id);
+                read_stick_offset.push_back(stick_id_in_shard * stick_size_bytes);
+                read_cores_noc_x.push_back(core_physical.x);
+                read_cores_noc_y.push_back(core_physical.y);
+            }
         }
 
         // reader rt args
-        uint32_t non_repeat_len = read_cores_indices.size();
+        std::vector<uint32_t> non_repeat_stick_offset_values;
+        std::vector<uint32_t> non_repeat_noc_x_values;
+        std::vector<uint32_t> non_repeat_noc_y_values;
+
+        uint32_t num_sticks_per_shard_core = 0;
+        uint32_t num_sticks_per_shard_core_reader = 0, num_sticks_per_shard_core_writer = 0, writer_read_stick_offset = 0, writer_write_stick_offset = 0;
+        uint32_t num_C_blocks_per_core_reader = num_C_blocks_per_core, num_C_blocks_per_core_writer = 0;
+
+        uint32_t num_non_repeat_cores = read_cores_indices.size();
         uint32_t read_stick_stride = read_stick_offset.size() > 1 ? read_stick_offset[1] - read_stick_offset[0] : 0;
+
+        bool has_second_batch = false;
+        uint32_t num_sticks_before_second_batch = 0;
+
         if (num_H_per_core == 1) { // each core only has one H block or part of H block
             for (uint32_t i = 1; i < read_cores_indices.size(); ++i) {
                 if (read_cores_indices[i] == read_cores_indices[0]) {
-                    non_repeat_len = i;
+                    num_non_repeat_cores = i;
                     read_stick_stride = read_stick_offset[i] - read_stick_offset[0];
                     break;
                 }
             }
+
+            num_sticks_per_shard_core = shard_height / num_non_repeat_cores;
+            num_sticks_per_shard_core_reader = num_sticks_per_shard_core;
+            bool split_reader = num_sticks_per_shard_core > 2;
+            if (split_reader) {
+                num_sticks_per_shard_core_reader = num_sticks_per_shard_core / 2;
+                num_sticks_per_shard_core_writer = num_sticks_per_shard_core - num_sticks_per_shard_core_reader;
+                writer_read_stick_offset = num_sticks_per_shard_core_reader * read_stick_stride;
+                writer_write_stick_offset = writer_read_stick_offset * num_non_repeat_cores;
+            }
+
+            for (uint32_t i = 0; i < num_non_repeat_cores; ++i) {
+                non_repeat_stick_offset_values.push_back(read_stick_offset[i]);
+                non_repeat_noc_x_values.push_back(read_cores_noc_x[i]);
+                non_repeat_noc_y_values.push_back(read_cores_noc_y[i]);
+            }
+        } else { // contains multiple H blocks
+            std::set<uint32_t> unique_values(read_cores_indices.begin(), read_cores_indices.end());
+            num_non_repeat_cores = unique_values.size();
+            read_stick_stride = read_stick_offset[1] - read_stick_offset[0];
+
+            // TODO: add the second batch args (num_non_repeat_cores, read_stick_offset, non_repeat_noc_x_values, non_repeat_noc_y_values) to support multiple batch in a shard
+            for (uint32_t j = 1; j < num_sticks_per_core; ++j) {
+                num_sticks_before_second_batch ++;
+                if ((read_cores_indices[j-1] == read_cores_indices[j]) and (read_stick_offset[j] == read_stick_offset[j-1] + stick_size_bytes)) {
+                    has_second_batch = true;
+                    break;
+                }
+            }
+
+            num_sticks_per_shard_core = shard_height / num_non_repeat_cores / num_C_blocks_per_core;
+            num_sticks_per_shard_core_reader = num_sticks_per_shard_core;
+            num_sticks_per_shard_core_writer = num_sticks_per_shard_core;
+            bool split_reader = num_C_blocks_per_core > 2;
+            if (split_reader) {
+                num_C_blocks_per_core_reader = num_C_blocks_per_core / 2;
+                num_C_blocks_per_core_writer = num_C_blocks_per_core - num_C_blocks_per_core_reader;
+                writer_read_stick_offset = num_C_blocks_per_core_reader * stick_size_bytes;
+                writer_write_stick_offset = num_C_blocks_per_core_reader * num_non_repeat_cores * num_sticks_per_shard_core * stick_size_bytes;
+            }
+
+            for (uint32_t i = 0; i < num_non_repeat_cores; ++i) {
+                non_repeat_stick_offset_values.push_back(read_stick_offset[i * num_sticks_per_shard_core]);
+                non_repeat_noc_x_values.push_back(read_cores_noc_x[i * num_sticks_per_shard_core]);
+                non_repeat_noc_y_values.push_back(read_cores_noc_y[i * num_sticks_per_shard_core]);
+            }
         }
 
-        uint32_t num_sticks_per_shard_core = shard_height / non_repeat_len;
+        bool read_single_h_block_per_core = num_H_per_core == 1;
 
-        uint32_t num_sticks_per_shard_core_reader = num_sticks_per_shard_core, num_sticks_per_shard_core_writer = 0, writer_read_stick_offset = 0;
-        bool split_reader = num_sticks_per_shard_core > 2;
-        if (split_reader) {
-            num_sticks_per_shard_core_reader = num_sticks_per_shard_core / 2;
-            num_sticks_per_shard_core_writer = num_sticks_per_shard_core - num_sticks_per_shard_core_reader;
-            writer_read_stick_offset = num_sticks_per_shard_core_reader * read_stick_stride;
-        }
-
-        // reader rt args
         std::vector<uint32_t> reader_runtime_args = {
+            (std::uint32_t) read_single_h_block_per_core,
+            (std::uint32_t) num_C_blocks_per_core_reader,
             (std::uint32_t) num_sticks_per_shard_core_reader,
-            (std::uint32_t) non_repeat_len,
+            (std::uint32_t) num_non_repeat_cores,
             (std::uint32_t) read_stick_stride,
+        };
+
+        reader_runtime_args.insert(reader_runtime_args.end(), non_repeat_stick_offset_values.begin(), non_repeat_stick_offset_values.end());
+        reader_runtime_args.insert(reader_runtime_args.end(), non_repeat_noc_x_values.begin(), non_repeat_noc_x_values.end());
+        reader_runtime_args.insert(reader_runtime_args.end(), non_repeat_noc_y_values.begin(), non_repeat_noc_y_values.end());
+
+        // writer rt args
+        std::vector<uint32_t> writer_runtime_args = {
+            (std::uint32_t) read_single_h_block_per_core,
+            (std::uint32_t) num_C_blocks_per_core_writer,
+            (std::uint32_t) num_sticks_per_shard_core_writer,
+            (std::uint32_t) num_non_repeat_cores,
+            (std::uint32_t) read_stick_stride,
+            (std::uint32_t) writer_read_stick_offset,
+            (std::uint32_t) writer_write_stick_offset,
 
         };
 
-        reader_runtime_args.insert(reader_runtime_args.end(), read_stick_offset.begin(), read_stick_offset.begin() + non_repeat_len);
-        reader_runtime_args.insert(reader_runtime_args.end(), read_cores_noc_x.begin(), read_cores_noc_x.begin() + non_repeat_len);
-        reader_runtime_args.insert(reader_runtime_args.end(), read_cores_noc_y.begin(), read_cores_noc_y.begin() + non_repeat_len);
+        writer_runtime_args.insert(writer_runtime_args.end(), non_repeat_stick_offset_values.begin(), non_repeat_stick_offset_values.end());
+        writer_runtime_args.insert(writer_runtime_args.end(), non_repeat_noc_x_values.begin(), non_repeat_noc_x_values.end());
+        writer_runtime_args.insert(writer_runtime_args.end(), non_repeat_noc_y_values.begin(), non_repeat_noc_y_values.end());
+
+        ret_val[i] = {reader_runtime_args, writer_runtime_args};
+    }
+
+    return ret_val;
+}
+
+operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor &a, Tensor &output) {
+
+
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+
+    tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
+    tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
+
+    tt::tt_metal::Buffer *src0_buffer = a.buffer();
+
+    const auto shape = a.get_legacy_shape();
+    uint32_t W = a.shape()[3], H = a.shape()[2], C = a.shape()[1], N = a.shape()[0];
+    uint32_t total_height = N * C * H;
+    uint32_t stick_size_bytes = W * a.element_size();
+
+    tt::tt_metal::Device *device = a.device();
+
+    auto shard_spec = a.shard_spec().value();
+    uint32_t shard_height = shard_spec.shape[0];
+    uint32_t shard_width = shard_spec.shape[1];
+    bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+
+    bool is_special_case = false;
+    if ((shard_spec.shape[0] % H == 0 or H % shard_spec.shape[0] == 0) &&
+        (shard_spec.shape[0] % C == 0 or C % shard_spec.shape[0] == 0) &&
+        (C % H == 0 or H % C == 0) &&
+        (shard_height <= C * H)) {
+        is_special_case = true;
+    }
+
+    auto& all_cores = shard_spec.grid;
+    uint32_t num_cores = shard_spec.num_cores();
+    auto bbox = shard_spec.grid.bounding_box();
+    CoreCoord grid_size = {bbox.end_coord.x + 1, bbox.end_coord.y+1};
+    uint32_t num_cores_x = grid_size.x;
+    uint32_t num_cores_y = grid_size.y;
+
+    tt::log_debug("all_cores: {}", all_cores);
+    tt::log_debug("num_cores: {}", num_cores);
+
+    tt::tt_metal::Shape output_shape = output.get_legacy_shape();
+
+    tt::tt_metal::Buffer *dst_buffer = output.buffer();
+
+    uint32_t src0_cb_index = tt::CB::c_in0;
+    tt::tt_metal::CircularBufferConfig cb_src0_config = tt::tt_metal::CircularBufferConfig(shard_height * stick_size_bytes, {{src0_cb_index, src0_cb_data_format}})
+        .set_page_size(src0_cb_index, stick_size_bytes).set_globally_allocated_address(*a.buffer());
+    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+
+    uint32_t output_cb_index = tt::CB::c_out0; // output operands start at index 16
+    tt::tt_metal::CircularBufferConfig cb_output_config = tt::tt_metal::CircularBufferConfig(shard_height * stick_size_bytes, {{output_cb_index, dst_cb_data_format}})
+        .set_page_size(output_cb_index, stick_size_bytes).set_globally_allocated_address(*output.buffer());
+    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+
+    std::vector<uint32_t> reader_compile_time_args;
+    if (is_special_case) {
+        reader_compile_time_args = {
+            (std::uint32_t) src0_cb_index,
+            (std::uint32_t) output_cb_index,
+            (std::uint32_t) stick_size_bytes
+        };
+    } else {
+        reader_compile_time_args = {
+            (std::uint32_t) src0_cb_index,
+            (std::uint32_t) output_cb_index,
+            (std::uint32_t) N,
+            (std::uint32_t) H,
+            (std::uint32_t) C,
+            (std::uint32_t) stick_size_bytes,
+            (std::uint32_t) row_major,
+            (std::uint32_t) num_cores_x,
+            (std::uint32_t) num_cores_y
+        };
+    }
+
+    // defines
+    std::map<string, string> reader_defines;
+    if (is_special_case) {
+        reader_defines["USE_SPECIAL_CASE"] = "1";
+    }
+
+    tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/reader_unary_transpose_hc_sharded_rm.cpp",
+        all_cores,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
+
+    tt::tt_metal::KernelHandle writer_kernel_id;
+    if (is_special_case) {
+        std::vector<uint32_t> writer_compile_time_args = {
+            (std::uint32_t) src0_cb_index,
+            (std::uint32_t) output_cb_index,
+            (std::uint32_t) stick_size_bytes
+        };
+
+        writer_kernel_id = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/writer_unary_transpose_hc_sharded_rm.cpp",
+            all_cores,
+            tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    }
+
+    std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > all_runtime_args;
+    if (is_special_case) {
+        all_runtime_args = get_runtime_args_mc_hc_rm_sharded_special_case(a, output, num_cores, num_cores_x, num_cores_y);
+    } else {
+        all_runtime_args = get_runtime_args_mc_hc_rm_sharded(a, output, num_cores, num_cores_x, num_cores_y);
+    }
+
+    for(uint32_t i = 0; i < num_cores; i++) {
+        CoreCoord core;
+        if (row_major) {
+            core = {i % num_cores_x, i / num_cores_x};
+        } else {
+            core = {i / num_cores_y, i % num_cores_y};
+        }
 
         tt::tt_metal::SetRuntimeArgs(
             program,
             reader_kernel_id,
             core,
-            reader_runtime_args
+            all_runtime_args[i].first
         );
-
-        // writer rt args
-        std::vector<uint32_t> writer_runtime_args = {
-            (std::uint32_t) num_sticks_per_shard_core_writer,
-            (std::uint32_t) non_repeat_len,
-            (std::uint32_t) read_stick_stride,
-            (std::uint32_t) writer_read_stick_offset,
-
-        };
-
-        writer_runtime_args.insert(writer_runtime_args.end(), read_stick_offset.begin(), read_stick_offset.begin() + non_repeat_len);
-        writer_runtime_args.insert(writer_runtime_args.end(), read_cores_noc_x.begin(), read_cores_noc_x.begin() + non_repeat_len);
-        writer_runtime_args.insert(writer_runtime_args.end(), read_cores_noc_y.begin(), read_cores_noc_y.begin() + non_repeat_len);
 
         tt::tt_metal::SetRuntimeArgs(
             program,
             writer_kernel_id,
             core,
-            writer_runtime_args
+            all_runtime_args[i].second
+
         );
     }
 
-
     auto override_runtime_args_callback = [
-            reader_kernel_id,
             cb_src0,
             cb_output,
             src0_single_tile_size,
@@ -1394,7 +1593,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
     uint32_t output_cb_index = tt::CB::c_out0; // output operands start at index 16
     uint32_t num_output_tiles = num_tiles_per_shard;
     tt::tt_metal::CircularBufferConfig cb_output_config = tt::tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
-		.set_page_size(output_cb_index, dst_single_tile_size).set_globally_allocated_address(*output.buffer());;
+		.set_page_size(output_cb_index, dst_single_tile_size).set_globally_allocated_address(*output.buffer());
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_output_config);
 
     std::vector<uint32_t> reader_compile_time_args = {
@@ -1418,7 +1617,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -1537,10 +1736,48 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor 
     uint32_t ht = (H + TILE_HEIGHT - 1) / TILE_HEIGHT;
     uint32_t wt = (W + TILE_WIDTH - 1) / TILE_WIDTH;
 
+    uint32_t output_page_size, pack_num_pages, pack_num_pages_last_col, pack_num_pages_last_row, pack_num_pages_last_row_col;
+    if ((W % TILE_WIDTH) != 0 and (H % TILE_HEIGHT) != 0) {
+        output_page_size = (W % TILE_WIDTH) * (H % TILE_HEIGHT) * output.element_size();
+        pack_num_pages = dst_single_tile_size / output_page_size;
+        auto output_page_size_last_col = TILE_WIDTH * (H % TILE_HEIGHT) * output.element_size();
+        pack_num_pages_last_col = dst_single_tile_size / output_page_size_last_col;
+        auto output_page_size_last_row = TILE_HEIGHT * (W % TILE_WIDTH) * output.element_size();
+        pack_num_pages_last_row = dst_single_tile_size / output_page_size_last_row;
+        pack_num_pages_last_row_col = 1;
+    } else if ((W % TILE_WIDTH) != 0 and (H % TILE_HEIGHT) == 0) {
+        output_page_size = (W % TILE_WIDTH) * (TILE_HEIGHT) * output.element_size();
+        pack_num_pages = dst_single_tile_size / output_page_size;
+        pack_num_pages_last_col = pack_num_pages;
+        pack_num_pages_last_row = 1;
+        pack_num_pages_last_row_col = 1;
+    } else if ((W % TILE_WIDTH) == 0 and (H % TILE_HEIGHT) != 0) {
+        output_page_size = (TILE_WIDTH) * (H % TILE_HEIGHT) * output.element_size();
+        pack_num_pages = dst_single_tile_size / output_page_size;
+        pack_num_pages_last_col = 1;
+        pack_num_pages_last_row = pack_num_pages;
+        pack_num_pages_last_row_col = 1;
+    } else {
+        output_page_size = dst_single_tile_size;
+        pack_num_pages = 1;
+        pack_num_pages_last_col = 1;
+        pack_num_pages_last_row = 1;
+        pack_num_pages_last_row_col = 1;
+    }
+
+    tt::log_debug("output_page_size: {}", output_page_size);
+    tt::log_debug("pack_num_pages: {}", pack_num_pages);
+    tt::log_debug("pack_num_pages_last_col: {}", pack_num_pages_last_col);
+    tt::log_debug("pack_num_pages_last_row: {}", pack_num_pages_last_row);
+    tt::log_debug("pack_num_pages_last_row_col: {}", pack_num_pages_last_row_col);
+
     auto shard_spec = a.shard_spec().value();
     uint32_t shard_height = shard_spec.shape[0];
     uint32_t shard_width = shard_spec.shape[1];
     uint32_t num_hw_blocks_per_core = shard_height / H;
+
+    tt::log_debug("shard_height: {}", shard_height);
+    tt::log_debug("dst_single_tile_size: {}", dst_single_tile_size);
 
     bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
@@ -1568,8 +1805,8 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor 
 
     // sharded cb
     uint32_t output_cb_index = tt::CB::c_out0; // output operands start at index 16
-    tt::tt_metal::CircularBufferConfig cb_output_config = tt::tt_metal::CircularBufferConfig(shard_height * stick_size_bytes, {{output_cb_index, dst_cb_data_format}})
-        .set_page_size(output_cb_index, stick_size_bytes).set_globally_allocated_address(*output.buffer());;
+    tt::tt_metal::CircularBufferConfig cb_output_config = tt::tt_metal::CircularBufferConfig(stick_size_bytes * shard_height, {{output_cb_index, dst_cb_data_format}})
+        .set_page_size(output_cb_index, output_page_size).set_globally_allocated_address(*output.buffer());
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     // cb_in
@@ -1593,14 +1830,14 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor 
         tt::tt_metal::CircularBufferConfig cb_im2_config = tt::tt_metal::CircularBufferConfig(num_im2_tiles * dst_single_tile_size, {{im2_cb_index, dst_cb_data_format}})
             .set_page_size(im2_cb_index, dst_single_tile_size);
         auto cb_im2 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im2_config);
-    }
 
-    // output_cb
-    uint32_t out_cb_index = tt::CB::c_intermed3;
-    uint32_t num_out_tiles = ht * 2; // double buffer
-    tt::tt_metal::CircularBufferConfig cb_out_config = tt::tt_metal::CircularBufferConfig(num_out_tiles * dst_single_tile_size, {{out_cb_index, dst_cb_data_format}})
-        .set_page_size(out_cb_index, dst_single_tile_size);
-    auto cb_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+        // compute_output_cb
+        uint32_t out_cb_index = tt::CB::c_intermed3;
+        uint32_t num_out_tiles = ht * 2; // double buffer
+        tt::tt_metal::CircularBufferConfig cb_out_config = tt::tt_metal::CircularBufferConfig(num_out_tiles * dst_single_tile_size, {{out_cb_index, dst_cb_data_format}})
+            .set_page_size(out_cb_index, dst_single_tile_size);
+        auto cb_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+    }
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t) num_hw_blocks_per_core,
@@ -1641,6 +1878,11 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor 
         (std::uint32_t) wt,
         (std::uint32_t) ht * wt,
         (std::uint32_t) num_hw_blocks_per_core,
+        (std::uint32_t) H % TILE_HEIGHT == 0 ? TILE_HEIGHT : H % TILE_HEIGHT, // last_output_row_num_datums
+        (std::uint32_t) pack_num_pages,
+        (std::uint32_t) pack_num_pages_last_col,
+        (std::uint32_t) pack_num_pages_last_row,
+        (std::uint32_t) pack_num_pages_last_row_col,
     };
 
     std::map<string, string> compute_defines;

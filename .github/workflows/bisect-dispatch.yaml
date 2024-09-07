@@ -9,6 +9,7 @@ on:
         options:
           - grayskull
           - wormhole_b0
+          - blackhole
       runner-label:
         required: true
         type: string
@@ -40,7 +41,9 @@ jobs:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ inputs.arch }}
     environment: dev
-    runs-on: ${{ inputs.runner-label }}
+    runs-on:
+      - ${{ inputs.runner-label }}
+      - "in-service"
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dyanmic env vars for build

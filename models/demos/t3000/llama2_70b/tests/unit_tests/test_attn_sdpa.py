@@ -237,7 +237,7 @@ def run_test_LlamaSDPA(
     # attn_mask_shard_shape[-1] = max_seq_len
     # attn_mask_mem_config.shard_spec.shape = attn_mask_shard_shape
 
-    # attn_mask = ttnn.experimental.tensor.interleaved_to_sharded(attn_mask, attn_mask_mem_config)
+    # attn_mask = ttnn.interleaved_to_sharded(attn_mask, attn_mask_mem_config)
     # tt_inp[3] = attn_mask
 
     tt_out = tt_model(*tt_inp)

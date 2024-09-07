@@ -43,7 +43,7 @@ std::vector<ValueType> generate_constant_vector(
 
 template <typename ValueType>
 std::vector<ValueType> generate_uniform_random_vector(
-    ValueType min, ValueType max, const size_t numel, const float seed = 0) {
+    ValueType min, ValueType max, const size_t numel, const uint32_t seed = 0) {
     std::mt19937 gen(seed);
     std::vector<ValueType> results(numel);
     if constexpr (std::is_integral<ValueType>::value) {
@@ -61,7 +61,7 @@ std::vector<ValueType> generate_uniform_random_vector(
 
 template <typename ValueType>
 std::vector<ValueType> generate_normal_random_vector(
-    ValueType mean, ValueType stdev, const size_t numel, const float seed = 0) {
+    ValueType mean, ValueType stdev, const size_t numel, const uint32_t seed = 0) {
     std::mt19937 gen(seed);
     std::vector<ValueType> results(numel);
     if constexpr (std::is_integral<ValueType>::value or std::is_floating_point<ValueType>::value) {
@@ -77,7 +77,7 @@ std::vector<ValueType> generate_normal_random_vector(
 // Will randomize values in the generated vector from the input vector
 template <typename ValueType>
 std::vector<ValueType> generate_random_vector_from_vector(
-    std::vector<ValueType>& possible_values, const size_t numel, const float seed = 0) {
+    std::vector<ValueType>& possible_values, const size_t numel, const uint32_t seed = 0) {
     TT_FATAL(possible_values.size(), "possible_values.size()={} > 0", possible_values.size());
     std::mt19937 gen(seed);
     std::vector<ValueType> results(numel);
@@ -88,19 +88,19 @@ std::vector<ValueType> generate_random_vector_from_vector(
 
 template <typename PackType, typename ValueType>
 std::vector<PackType> generate_packed_uniform_random_vector(
-    ValueType min, ValueType max, const size_t numel, const float seed = 0) {
+    ValueType min, ValueType max, const size_t numel, const uint32_t seed = 0) {
     return pack_vector<PackType, ValueType>(generate_uniform_random_vector(min, max, numel, seed));
 }
 
 template <typename PackType, typename ValueType>
 std::vector<PackType> generate_packed_normal_random_vector(
-    ValueType mean, ValueType stdev, const size_t numel, const float seed = 0) {
+    ValueType mean, ValueType stdev, const size_t numel, const uint32_t seed = 0) {
     return pack_vector<PackType, ValueType>(generate_normal_random_vector(mean, stdev, numel, seed));
 }
 
 template <typename PackType, typename ValueType>
 std::vector<PackType> generate_packed_random_vector_from_vector(
-    std::vector<ValueType>& possible_values, const size_t numel, const float seed = 0) {
+    std::vector<ValueType>& possible_values, const size_t numel, const uint32_t seed = 0) {
     return pack_vector<PackType, ValueType>(generate_random_vector_from_vector(possible_values, numel, seed));
 }
 

@@ -22,93 +22,100 @@ jobs:
             {
               name: "Common models GS",
               arch: grayskull,
-              runs-on: ["cloud-virtual-machine", "arch-grayskull", "E150-32GB", "in-service", "mount-cloud-weka"],
+              runs-on: ["cloud-virtual-machine", "E150-32GB", "in-service"],
               cmd: tests/scripts/single_card/nightly/run_common_models.sh,
               timeout: 40
             },
             {
               name: "Common models N300-32GB WH B0",
               arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "arch-wormhole_b0", "N300-32GB", "in-service", "mount-cloud-weka"],
+              runs-on: ["cloud-virtual-machine", "N300-32GB", "in-service"],
               cmd: tests/scripts/single_card/nightly/run_common_models.sh,
               timeout: 40,
             },
             {
               name: "Common models N150-32GB WH BO",
               arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "arch-wormhole_b0", "N150-32GB", "in-service", "mount-cloud-weka"],
+              runs-on: ["cloud-virtual-machine", "N150-32GB", "in-service"],
               cmd: tests/scripts/single_card/nightly/run_common_models.sh,
               timeout: 40,
             },
             {
               name: "GS ttnn nightly",
               arch: grayskull,
-              runs-on: ["cloud-virtual-machine", "arch-grayskull", "E150-32GB", "in-service", "mount-cloud-weka"],
+              runs-on: ["cloud-virtual-machine", "E150-32GB", "in-service"],
               cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
               timeout: 40
             },
             {
               name: "WH N150-32GB ttnn nightly",
               arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "arch-wormhole_b0", "N150-32GB", "in-service", "mount-cloud-weka"],
+              runs-on: ["cloud-virtual-machine", "N150-32GB", "in-service"],
               cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
               timeout: 70
             },
             {
               name: "WH N300-32GB ttnn nightly",
               arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "arch-wormhole_b0", "N300-32GB", "in-service", "mount-cloud-weka"],
+              runs-on: ["cloud-virtual-machine", "N300-32GB", "in-service"],
               cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
               timeout: 70
             },
             {
               name: "GS-only models",
               arch: grayskull,
-              runs-on: ["cloud-virtual-machine", "arch-grayskull", "E150-32GB", "in-service", "mount-cloud-weka"],
+              runs-on: ["cloud-virtual-machine", "E150-32GB", "in-service"],
               cmd: tests/scripts/single_card/nightly/run_gs_only.sh,
               timeout: 40
             },
             {
               name: "N300-32GB WH-only models",
               arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "arch-wormhole_b0", "N300-32GB", "in-service", "mount-cloud-weka"],
+              runs-on: ["cloud-virtual-machine", "N300-32GB", "in-service"],
               cmd: tests/scripts/single_card/nightly/run_wh_b0_only.sh,
               timeout: 80
             },
             {
               name: "N150-32GB WH-only models",
               arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "arch-wormhole_b0", "N150-32GB", "in-service", "mount-cloud-weka"],
+              runs-on: ["cloud-virtual-machine", "N150-32GB", "in-service"],
               cmd: tests/scripts/single_card/nightly/run_wh_b0_only.sh,
               timeout: 80
             },
             {
               name: "API tests GS",
               arch: grayskull,
-              runs-on: ["cloud-virtual-machine", "arch-grayskull", "E150-32GB", "in-service", "mount-cloud-weka"],
+              runs-on: ["cloud-virtual-machine", "E150-32GB", "in-service"],
               cmd: ./tests/scripts/run_tests.sh --tt-arch grayskull --pipeline-type frequent_api --dispatch-mode fast,
               timeout: 40
             },
             {
               name: "API tests N300-32GB WH B0",
               arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "arch-wormhole_b0", "N300-32GB", "in-service", "mount-cloud-weka"],
+              runs-on: ["cloud-virtual-machine", "N300-32GB", "in-service"],
               cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast,
               timeout: 40
             },
             {
               name: "API tests N150-32GB WH B0",
               arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "arch-wormhole_b0", "N150-32GB", "in-service", "mount-cloud-weka"],
+              runs-on: ["cloud-virtual-machine", "N150-32GB", "in-service"],
               cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast,
               timeout: 40
             },
             {
-              name: "[Unstable] N300-32GB models",
+              name: "[Unstable] N150 models",
               arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "arch-wormhole_b0", "N300-32GB", "in-service", "mount-cloud-weka"],
+              runs-on: ["cloud-virtual-machine", "N150-32GB", "in-service"],
               cmd: tests/scripts/single_card/nightly/run_wh_b0_unstable.sh,
-              timeout: 45
+              timeout: 55
+            },
+            {
+              name: "[Unstable] N300 models",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "N300-32GB", "in-service"],
+              cmd: tests/scripts/single_card/nightly/run_wh_b0_unstable.sh,
+              timeout: 55
             },
           ]
     name: FD ${{ matrix.test-group.name }} ${{ matrix.test-group.arch }}

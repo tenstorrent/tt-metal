@@ -72,6 +72,8 @@ option(ENABLE_CODE_TIMERS "Enable code timers" OFF)
 
 option(ENABLE_TRACY "Enable Tracy Profiling" OFF)
 
+option(ENABLE_LIBCXX "Enable using libc++" ON)
+
 
 option(ENABLE_BUILD_TIME_TRACE "Enable build time trace (Clang only -ftime-trace)" OFF)
 if(ENABLE_BUILD_TIME_TRACE)
@@ -90,6 +92,38 @@ else()
     option(BUILD_SHARED_LIBS "Create shared library" ON)
 endif()
 message(STATUS "Build shared libs: ${BUILD_SHARED_LIBS}")
+
+option(ENABLE_ASAN "Enable build with AddressSanitizer" OFF)
+message(STATUS "Build with ASAN: ${ENABLE_ASAN}")
+
+set(SANITIZER_ENABLED ${ENABLE_ASAN})
+
+option(ENABLE_MSAN "Enable build with MemorySanitizer" OFF)
+message(STATUS "Build with MSAN: ${ENABLE_MSAN}")
+
+if(SANITIZER_ENABLED AND ENABLE_MSAN)
+    message(FATAL_ERROR "Multiple sanitizers are not supported")
+elseif(ENABLE_MSAN)
+    set(SANITIZER_ENABLED ${ENABLE_MSAN})
+endif()
+
+option(ENABLE_TSAN "Enable build with ThreadSanitizer" OFF)
+message(STATUS "Build with TSAN: ${ENABLE_TSAN}")
+
+if(SANITIZER_ENABLED AND ENABLE_TSAN)
+    message(FATAL_ERROR "Multiple sanitizers are not supported")
+elseif(ENABLE_TSAN)
+    set(SANITIZER_ENABLED ${ENABLE_TSAN})
+endif()
+
+option(ENABLE_UBSAN "Enable build with UndefinedBehaviorSanitizer" OFF)
+message(STATUS "Build with UBSAN: ${ENABLE_UBSAN}")
+
+if(SANITIZER_ENABLED AND ENABLE_UBSAN)
+    message(FATAL_ERROR "Multiple sanitizers are not supported")
+endif()
+
+unset(SANITIZER_ENABLED)
 
 include(GNUInstallDirs)
 set(CMAKE_INSTALL_PREFIX "${PROJECT_BINARY_DIR}")
@@ -123,7 +157,7 @@ add_subdirectory(${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd)
 #   in order to propogate to the rest of tt_metal, tt_eager, etc.
 ############################################################################################################################
 add_library(stdlib INTERFACE)
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND ENABLE_LIBCXX)
     find_library(LIBC++ c++)
     find_library(LIBC++ABI c++abi)
     if(NOT LIBC++ OR NOT LIBC++ABI)
@@ -134,6 +168,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(stdlib INTERFACE -stdlib=libc++)
 else()
     target_link_libraries(stdlib INTERFACE stdc++)
+    target_compile_options(stdlib INTERFACE -fsized-deallocation)
 endif()
 
 add_library(metal_common_libs INTERFACE)
@@ -153,7 +188,7 @@ target_compile_options(compiler_warnings INTERFACE -Werror -Wdelete-non-virtual-
 ADJUST_COMPILER_WARNINGS()
 
 add_library(compiler_flags INTERFACE)
-target_link_libraries(compiler_flags INTERFACE compiler_warnings stdlib)
+target_link_libraries(compiler_flags INTERFACE linker_flags compiler_warnings stdlib)
 target_compile_options(compiler_flags INTERFACE -mavx2 -fPIC -DFMT_HEADER_ONLY -fvisibility-inlines-hidden -fno-lto)
 
 if(ENABLE_CODE_TIMERS)
@@ -163,6 +198,19 @@ if(ENABLE_TRACY)
     target_compile_options(compiler_flags INTERFACE -DTRACY_ENABLE -fno-omit-frame-pointer)
     target_link_options(linker_flags INTERFACE -rdynamic)
 endif()
+target_compile_options(
+    compiler_flags
+    INTERFACE $<$<BOOL:${ENABLE_ASAN}>:-fsanitize=address>
+              $<$<BOOL:${ENABLE_MSAN}>:-fsanitize=memory>
+              $<$<BOOL:${ENABLE_TSAN}>:-fsanitize=thread>
+              $<$<BOOL:${ENABLE_UBSAN}>:-fsanitize=undefined>)
+target_link_options(
+    linker_flags
+    INTERFACE
+    $<$<BOOL:${ENABLE_ASAN}>:-fsanitize=address>
+    $<$<BOOL:${ENABLE_MSAN}>:-fsanitize=memory>
+    $<$<BOOL:${ENABLE_TSAN}>:-fsanitize=thread>
+    $<$<BOOL:${ENABLE_UBSAN}>:-fsanitize=undefined>)
 
 string(TOUPPER $ENV{ARCH_NAME} ARCH_NAME_DEF)
 target_compile_options(compiler_flags INTERFACE -DARCH_${ARCH_NAME_DEF})

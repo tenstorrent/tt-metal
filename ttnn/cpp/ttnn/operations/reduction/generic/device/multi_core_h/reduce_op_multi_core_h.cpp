@@ -18,7 +18,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     const Tensor &a,
     Tensor &output,
     ReduceOpMath reduce_op,
-    const DeviceComputeKernelConfig &compute_kernel_config,
+    const ttnn::DeviceComputeKernelConfig &compute_kernel_config,
     float scaler) {
     const auto shape = a.get_legacy_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
@@ -154,7 +154,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
         };
         writer_kernel_id = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
+            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
             all_cores,
             WriterDataMovementConfig(writer_ct_args));
     } else {

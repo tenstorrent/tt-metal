@@ -22,17 +22,17 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-20.04, ubuntu-22.04]
-        arch: [grayskull, wormhole_b0]
-    runs-on: ${{ matrix.os }}
+        runner-hw-info: [
+          {arch: grayskull, type: E150},
+          {arch: wormhole_b0, type: N150}
+        ]
+    runs-on: ["cloud-virtual-machine", "${{ matrix.runner-hw-info.type }}", "in-service"]
     environment: production
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/install-metal-deps
-        with:
-          os: ${{ matrix.os }}
       - uses: actions/download-artifact@v4
         with:
-          name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
+          name: eager-dist-${{ matrix.os }}-${{ matrix.runner-hw-info.arch }}
       - name: Set up end-to-end tests environment
         run: ./tests/scripts/set_up_end_to_end_tests_env.sh
       - name: Activate env and run release tests - host
@@ -47,10 +47,11 @@ jobs:
       matrix:
         os: [ubuntu-20.04]
         runner-hw-info: [
-          {arch: grayskull},
-          {arch: wormhole_b0},
+          {arch: grayskull, type: E150},
+          {arch: wormhole_b0, type: N150},
+          {arch: wormhole_b0, type: N300}
         ]
-    runs-on: ["Linux", "${{ matrix.runner-hw-info.arch }}"]
+    runs-on: ["cloud-virtual-machine", "${{ matrix.runner-hw-info.type }}", "in-service"]
     environment: production
     steps:
       - uses: actions/checkout@v4

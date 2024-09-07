@@ -80,9 +80,8 @@ if is_wormhole_b0():
                 "acosh",
                 "atanh",
                 "atan2",
-                # TO-DO:
                 "subalpha",
-                # "bias_gelu_unary",
+                "bias_gelu_unary",
                 "addalpha",
                 "logit",
                 "logical_xor",
@@ -92,8 +91,9 @@ if is_wormhole_b0():
                 "multigammaln",
                 "polygamma",
                 "nextafter",
+                "celu",
+                # TO-DO:
                 # "scatter",
-                # "celu",
             ),
             shapes,
         )

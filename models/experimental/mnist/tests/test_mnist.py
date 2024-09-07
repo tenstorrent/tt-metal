@@ -7,18 +7,18 @@ from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
 from loguru import logger
 from numpy import argmax
-import tt_lib
 
 from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     comp_pcc,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
 )
 from models.experimental.mnist.tt.mnist_model import mnist_model
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_mnist_inference(device, model_location_generator):
     # Data preprocessing/loading
     transform = transforms.Compose([transforms.ToTensor()])
@@ -30,7 +30,7 @@ def test_mnist_inference(device, model_location_generator):
 
     with torch.no_grad():
         test_input, _ = next(iter(dataloader))
-        tt_input = torch2tt_tensor(test_input, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+        tt_input = torch2tt_tensor(test_input, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
 
         pt_output = pt_model(test_input)
         tt_output = tt_model(tt_input)

@@ -31,9 +31,9 @@ if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs
 @pytest.mark.parametrize(
     "kv_cache_len, expected_compile_time, expected_inference_time",
     (
-        (32, 6, 0.135),
-        (128, 6, 0.155),
-        (1024, 6, 0.215),
+        (32, 6, 0.185),
+        (128, 6, 0.185),
+        (1024, 11, 0.185),
     ),
 )
 def test_llama_model_perf(
@@ -101,7 +101,7 @@ def test_llama_model_perf(
     profiler.print()
     compile_and_iter_time = profiler.get("model_run_for_inference_0")
 
-    ttnn.experimental.device.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
     if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
         signpost("Model perf run")

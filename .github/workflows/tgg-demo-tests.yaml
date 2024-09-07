@@ -20,7 +20,7 @@ jobs:
           {
             name: "TGG demo tests",
             arch: wormhole_b0,
-            runs-on: [arch-wormhole_b0, "config-tgg", "in-service", "runner-test", "bare-metal", "pipeline-functional"],
+            runs-on: ["arch-wormhole_b0", "config-tgg", "in-service", "bare-metal", "pipeline-functional"],
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tgg_device --dispatch-mode ""'
           },
         ]

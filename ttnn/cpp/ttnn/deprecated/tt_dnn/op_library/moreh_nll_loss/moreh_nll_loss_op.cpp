@@ -19,20 +19,6 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-namespace {
-bool is_output_wh_dim(uint32_t input_dim, uint32_t input_rank) {
-    if (input_rank == 2 || input_rank == 3) {
-        return true;
-    }
-    if (input_rank >= 4) {
-        if (input_dim >= input_rank - 2) {
-            return true;
-        }
-    }
-    return false;
-}
-}  // namespace
-
 void MorehNllLossStep1::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
@@ -148,8 +134,8 @@ std::vector<Shape> MorehNllLossStep2::compute_output_shapes(const std::vector<Te
 
     // Need extend 1d output to 2d, because TT not support 1d tensor
     if (input_rank == 2) {
-        output_shape_vec.push_back(32);
-        dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = 31});
+        output_shape_vec.push_back(1);
+        dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = 0});
     }
 
     for (uint32_t dim = 0; dim < input_rank; dim++) {
@@ -158,15 +144,19 @@ std::vector<Shape> MorehNllLossStep2::compute_output_shapes(const std::vector<Te
             continue;
         }
 
-        // padding if output is w, h dim
-        if (is_output_wh_dim(dim, input_rank)) {
-            uint32_t up32_shape = round_up(input_shape[dim], 32);
-            uint32_t padding_back = up32_shape - input_shape_without_padding[dim];
-            output_shape_vec.push_back(up32_shape);
-            dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = padding_back});
-        } else {
-            output_shape_vec.push_back(input_shape_without_padding[dim]);
-            dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = 0});
+        output_shape_vec.push_back(input_shape_without_padding[dim]);
+        dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = 0});
+    }
+
+    // padding output
+    {
+        uint32_t output_rank = output_shape_vec.size();
+        for (uint32_t dim = output_rank - 2; dim < output_rank; dim++) {
+            uint32_t up32_shape = round_up(output_shape_vec[dim], 32);
+            uint32_t padding_back = up32_shape - output_shape_vec[dim];
+
+            output_shape_vec[dim] = up32_shape;
+            dimensions_pads[dim].back = padding_back;
         }
     }
 
@@ -212,7 +202,7 @@ Tensor moreh_nll_loss_step1(
     const DataType output_dtype,
     const uint32_t channel_size,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto device = target_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
@@ -257,7 +247,7 @@ Tensor moreh_nll_loss_step2(
     const int32_t ignore_index,
     const bool reduction_mean,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto device = input_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
@@ -301,7 +291,7 @@ Tensor moreh_nll_loss(
     const int32_t ignore_index,
     const bool reduction_mean,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     if (reduction_mean) {
         TT_ASSERT(divisor_tensor.has_value());
 

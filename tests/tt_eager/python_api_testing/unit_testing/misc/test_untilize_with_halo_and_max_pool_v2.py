@@ -19,7 +19,7 @@ from ttnn.operations.pool import max_pool2d_legacy as ttnn_max_pool2d_legacy
 
 from tt_lib.utils import _nearest_32
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from models.utility_functions import is_wormhole_b0, skip_for_wormhole_b0, skip_for_grayskull
+from models.utility_functions import is_wormhole_b0, is_wormhole_b0, skip_for_grayskull
 
 
 def volume(shape):
@@ -77,7 +77,7 @@ def test_run_max_pool(
     device,
     dtype,
 ):
-    # ttnn.experimental.device.EnableMemoryReports()
+    # ttnn.device.EnableMemoryReports()
     if act_shape[0] >= 16 and dtype == ttnn.bfloat16:
         pytest.skip("Configuration does not fit in L1")
 

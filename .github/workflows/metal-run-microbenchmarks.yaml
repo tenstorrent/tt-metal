@@ -14,11 +14,11 @@ jobs:
       fail-fast: false
       matrix:
         runner-info: [
-          {arch: grayskull, runs-on: ["arch-grayskull", "E150", "pipeline-perf", "bare-metal", "in-service"]},
+          {arch: grayskull, runs-on: ["E150", "pipeline-perf", "bare-metal", "in-service"]},
           # Do not run N150 on microbenchmarks for now as we do not have the machines for it
-          # {arch: wormhole_b0, runs-on: ["perf-wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1", "self-reset"]},
+          # {arch: wormhole_b0, runs-on: ["pipeline-perf", "N150", "bare-metal", "in-service"]},
           # N300
-          {arch: wormhole_b0, runs-on: ["arch-wormhole_b0", "N300", "pipeline-perf", "bare-metal", "in-service"]},
+          {arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"]},
         ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}

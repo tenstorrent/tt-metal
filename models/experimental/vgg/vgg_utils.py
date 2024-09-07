@@ -4,7 +4,7 @@
 
 import os
 import torch
-import tt_lib
+import ttnn
 from tt_lib.utils import pad_weight
 
 from pathlib import Path
@@ -15,19 +15,15 @@ def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):
     if x.get_layout() == target_layout:
         return x
 
-    if x.get_layout() == tt_lib.tensor.Layout.ROW_MAJOR and target_layout == tt_lib.tensor.Layout.TILE:
-        x_padded_shape = tt_lib.tensor.pad_to_tile_shape(x.get_legacy_shape(), False, False, True, True)
+    if x.get_layout() == ttnn.ROW_MAJOR_LAYOUT and target_layout == ttnn.TILE_LAYOUT:
+        x_padded_shape = ttnn.pad_to_tile_shape(x.get_legacy_shape(), False, False, True, True)
         if x.get_legacy_shape() != x_padded_shape:
-            return tt_lib.tensor.format_input_tensor(
-                x, device, x_padded_shape, pad_value, target_layout, output_mem_config
-            )
+            return ttnn.format_input_tensor(x, device, x_padded_shape, pad_value, target_layout, output_mem_config)
         else:
             return ttnn.tilize(x, memory_config=output_mem_config, use_multicore=True)
-    elif x.get_layout() == tt_lib.tensor.Layout.TILE and target_layout == tt_lib.tensor.Layout.ROW_MAJOR:
+    elif x.get_layout() == ttnn.TILE_LAYOUT and target_layout == ttnn.ROW_MAJOR_LAYOUT:
         if x.get_legacy_shape() != x.shape_without_padding():
-            return tt_lib.tensor.format_output_tensor(
-                x, x.shape_without_padding(), device, target_layout, output_mem_config
-            )
+            return ttnn.format_output_tensor(x, x.shape_without_padding(), device, target_layout, output_mem_config)
         else:
             return ttnn.untilize(x, memory_config=output_mem_config, use_multicore=True)
     else:
@@ -46,45 +42,45 @@ def cache_weights_in_weka(device, model_location_generator):
         if "classifier" in key:
             if "weight" in key:
                 if "0" in key or "3" in key:
-                    value = tt_lib.tensor.Tensor(
+                    value = ttnn.Tensor(
                         value.reshape(-1).tolist(),
                         value.shape,
-                        tt_lib.tensor.DataType.BFLOAT16,
-                        tt_lib.tensor.Layout.ROW_MAJOR,
-                    ).to(tt_lib.tensor.Layout.TILE)
+                        ttnn.bfloat16,
+                        ttnn.ROW_MAJOR_LAYOUT,
+                    ).to(ttnn.TILE_LAYOUT)
                 else:
                     value = pad_weight(value)
-                    value = tt_lib.tensor.Tensor(
+                    value = ttnn.Tensor(
                         value.reshape(-1).tolist(),
                         value.shape,
-                        tt_lib.tensor.DataType.BFLOAT16,
-                        tt_lib.tensor.Layout.ROW_MAJOR,
-                    ).to(tt_lib.tensor.Layout.TILE)
+                        ttnn.bfloat16,
+                        ttnn.ROW_MAJOR_LAYOUT,
+                    ).to(ttnn.TILE_LAYOUT)
             else:
                 if "0" in key or "3" in key:
-                    value = tt_lib.tensor.Tensor(
+                    value = ttnn.Tensor(
                         value.reshape(-1).tolist(),
                         value.shape,
-                        tt_lib.tensor.DataType.BFLOAT16,
-                        tt_lib.tensor.Layout.ROW_MAJOR,
+                        ttnn.bfloat16,
+                        ttnn.ROW_MAJOR_LAYOUT,
                     )
                 else:
                     extra_zeros = torch.zeros(1, 1, 1, 24)
                     value = torch.cat((value, extra_zeros), dim=-1)
-                    value = tt_lib.tensor.Tensor(
+                    value = ttnn.Tensor(
                         value.reshape(-1).tolist(),
                         value.shape,
-                        tt_lib.tensor.DataType.BFLOAT16,
-                        tt_lib.tensor.Layout.ROW_MAJOR,
+                        ttnn.bfloat16,
+                        ttnn.ROW_MAJOR_LAYOUT,
                     )
         else:
-            value = tt_lib.tensor.Tensor(
+            value = ttnn.Tensor(
                 value.reshape(-1).tolist(),
                 value.shape,
-                tt_lib.tensor.DataType.BFLOAT16,
-                tt_lib.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-        tt_lib.tensor.dump_tensor(file_name + str(key) + ".bin", value)
+        ttnn.dump_tensor(file_name + str(key) + ".bin", value)
 
 
 def store_weights(model_version, file_name, dtype, base_addresses):
@@ -104,21 +100,21 @@ def store_weights(model_version, file_name, dtype, base_addresses):
             value = value.unsqueeze(0)
 
         if value.shape[-2] % 32 == 0 and value.shape[-1] % 32 == 0:
-            value = tt_lib.tensor.Tensor(
+            value = ttnn.Tensor(
                 value.reshape(-1).tolist(),
                 value.shape,
                 dtype,
-                tt_lib.tensor.Layout.ROW_MAJOR,
-            ).to(tt_lib.tensor.Layout.TILE)
+                ttnn.ROW_MAJOR_LAYOUT,
+            ).to(ttnn.TILE_LAYOUT)
         else:
-            value = tt_lib.tensor.Tensor(
+            value = ttnn.Tensor(
                 value.reshape(-1).tolist(),
                 value.shape,
                 dtype,
-                tt_lib.tensor.Layout.ROW_MAJOR,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
 
-        tt_lib.tensor.dump_tensor(file_name + str(key) + str(dtype) + ".bin", value)
+        ttnn.dump_tensor(file_name + str(key) + str(dtype) + ".bin", value)
 
 
 def get_tt_cache_path(model_version):

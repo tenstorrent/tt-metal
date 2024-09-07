@@ -10,42 +10,13 @@ from datetime import datetime
 
 from loguru import logger
 
-PIPELINE_CSV_FIELDS = (
-    "github_pipeline_id",
-    "pipeline_submission_ts",
-    "pipeline_start_ts",
-    "pipeline_end_ts",
-    "name",
-    "project",
-    "trigger",
-    "vcs_platform",
-    "git_commit_hash",
-    "git_author",
-    "orchestrator",
-)
-
-JOB_CSV_FIELDS = (
-    "github_job_id",
-    "host_name",
-    "card_type",
-    "os",
-    "location",
-    "name",
-    "job_submission_ts",
-    "job_start_ts",
-    "job_end_ts",
-    "job_success",
-    "is_build_job",
-    "job_matrix_config",
-    "docker_image",
-)
-
-
 BENCHMARK_ENVIRONMENT_CSV_FIELDS = (
     "git_repo_name",
     "git_commit_hash",
     "git_commit_ts",
+    "git_branch_name",
     "github_pipeline_id",
+    "github_pipeline_link",
     "github_job_id",
     "user_name",
     "docker_image",
@@ -88,7 +59,17 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
 
     jobs = github_jobs_json["jobs"]
     jobs_start_times = list(map(lambda job_: get_datetime_from_github_datetime(job_["started_at"]), jobs))
-    sorted_jobs_start_times = sorted(jobs_start_times)
+    # We filter out jobs that started before because that means they're from a previous attempt for that pipeline
+    eligible_jobs_start_times = list(
+        filter(
+            lambda job_start_time_: job_start_time_ >= get_datetime_from_github_datetime(pipeline_submission_ts),
+            jobs_start_times,
+        )
+    )
+    sorted_jobs_start_times = sorted(eligible_jobs_start_times)
+    assert (
+        sorted_jobs_start_times
+    ), f"It seems that this pipeline does not have any jobs that started on or after the pipeline was submitted, which should be impossible. Please directly inspect the JSON objects"
     pipeline_start_ts = get_data_pipeline_datetime_from_datetime(sorted_jobs_start_times[0])
 
     pipeline_end_ts = github_pipeline_json["updated_at"]
@@ -101,6 +82,8 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
 
     logger.warning("Using hardcoded value github for vcs_platform value")
     vcs_platform = "github"
+
+    git_branch_name = github_pipeline_json["head_branch"]
 
     git_commit_hash = github_pipeline_json["head_sha"]
 
@@ -119,6 +102,7 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
         "project": project,
         "trigger": trigger,
         "vcs_platform": vcs_platform,
+        "git_branch_name": git_branch_name,
         "git_commit_hash": git_commit_hash,
         "git_author": git_author,
         "orchestrator": orchestrator,
@@ -183,11 +167,11 @@ def get_job_row_from_github_job(github_job):
         logger.info("Seems to have no config- label, so assuming no special config requested")
         detected_config = None
 
-    if labels_have_overlap(["grayskull", "arch-grayskull"], labels):
+    if labels_have_overlap(["E150", "grayskull", "arch-grayskull"], labels):
         detected_arch = "grayskull"
-    elif labels_have_overlap(["wormhole_b0", "arch-wormhole_b0"], labels):
+    elif labels_have_overlap(["N150", "N300", "wormhole_b0", "arch-wormhole_b0"], labels):
         detected_arch = "wormhole_b0"
-    elif labels_have_overlap(["arch-blackhole"], labels):
+    elif labels_have_overlap(["BH", "arch-blackhole"], labels):
         detected_arch = "blackhole"
     else:
         detected_arch = None
@@ -254,36 +238,6 @@ def get_job_rows_from_github_info(github_pipeline_json, github_jobs_json):
     return list(map(get_job_row_from_github_job, github_jobs_json["jobs"]))
 
 
-def create_csvs_for_data_analysis(
-    github_runner_environment,
-    github_pipeline_json_filename,
-    github_jobs_json_filename,
-    github_pipeline_csv_filename=None,
-    github_jobs_csv_filename=None,
-):
-    with open(github_pipeline_json_filename) as github_pipeline_json_file:
-        github_pipeline_json = json.load(github_pipeline_json_file)
-
-    with open(github_jobs_json_filename) as github_jobs_json_file:
-        github_jobs_json = json.load(github_jobs_json_file)
-
-    pipeline_row = get_pipeline_row_from_github_info(github_runner_environment, github_pipeline_json, github_jobs_json)
-
-    job_rows = get_job_rows_from_github_info(github_pipeline_json, github_jobs_json)
-
-    github_pipeline_id = pipeline_row["github_pipeline_id"]
-    github_pipeline_start_ts = pipeline_row["pipeline_start_ts"]
-
-    if not github_pipeline_csv_filename:
-        github_pipeline_csv_filename = f"pipeline_{github_pipeline_id}_{github_pipeline_start_ts}.csv"
-
-    if not github_jobs_csv_filename:
-        github_jobs_csv_filename = f"job_{github_pipeline_id}_{github_pipeline_start_ts}.csv"
-
-    create_csv(github_pipeline_csv_filename, PIPELINE_CSV_FIELDS, [pipeline_row])
-    create_csv(github_jobs_csv_filename, JOB_CSV_FIELDS, job_rows)
-
-
 def get_github_benchmark_environment_csv_filenames():
     logger.info("We are assuming generated/benchmark_data exists from previous passing test")
 
@@ -328,8 +282,13 @@ def create_csv_for_github_benchmark_environment(github_benchmark_environment_csv
     logger.warning("Hardcoded null for git_commit_ts")
     git_commit_ts = ""
 
+    assert "GITHUB_REF_NAME" in os.environ
+    git_branch_name = os.environ["GITHUB_REF_NAME"]
+
     assert "GITHUB_RUN_ID" in os.environ
     github_pipeline_id = os.environ["GITHUB_RUN_ID"]
+
+    github_pipeline_link = f"https://github.com/{git_repo_name}/actions/runs/{github_pipeline_id}"
 
     logger.warning("Hardcoded null for github_job_id")
     github_job_id = ""
@@ -355,8 +314,8 @@ def create_csv_for_github_benchmark_environment(github_benchmark_environment_csv
 
     device_info = json.dumps(
         {
-            "device_type": device_type,
-            "device_memory_size": device_memory_size,
+            "card_type": device_type,
+            "dram_size": device_memory_size,
         }
     )
 
@@ -364,7 +323,9 @@ def create_csv_for_github_benchmark_environment(github_benchmark_environment_csv
         "git_repo_name": git_repo_name,
         "git_commit_hash": git_commit_hash,
         "git_commit_ts": git_commit_ts,
+        "git_branch_name": git_branch_name,
         "github_pipeline_id": github_pipeline_id,
+        "github_pipeline_link": github_pipeline_link,
         "github_job_id": github_job_id,
         "user_name": user_name,
         "docker_image": docker_image,

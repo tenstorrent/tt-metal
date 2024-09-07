@@ -44,6 +44,8 @@ jobs:
       matrix:
         test-group: [
           {name: C++, cmd: ./tests/scripts/run_cpp_unit_tests.sh},
+          {name: ttnn cpp tests, cmd: ./build/test/ttnn/unit_tests_ttnn},
+          {name: ttnn ccl cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn_ccl},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     env:
@@ -53,7 +55,8 @@ jobs:
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on:
       - ${{ inputs.runner-label }}
-      - "in-service"
+      - cloud-virtual-machine
+      - in-service
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dynamic env vars for build

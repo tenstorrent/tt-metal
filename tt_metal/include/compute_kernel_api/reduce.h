@@ -20,7 +20,6 @@ namespace ckernel {
 template<bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
 ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb = 16)
 {
-    UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_AB_hw_configure_disaggregated<DST_ACCUM_MODE>(icb, icb_scaler) ));
     UNPACK(( llk_unpack_AB_reduce_init<reduce_dim>(icb, icb_scaler) ));
 
@@ -30,7 +29,6 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb = 16)
 
     PACK(( llk_pack_init() ));
     PACK(( llk_pack_reduce_config_v2<reduce_dim, at_start, false, DST_ACCUM_MODE>(ocb) ));
-    PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<false, DST_ACCUM_MODE>() ));
 }
 

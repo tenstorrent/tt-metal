@@ -25,7 +25,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 class TtLlamaModel_optimized:
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         n_layers,
@@ -35,8 +35,8 @@ class TtLlamaModel_optimized:
         read_cache=False,
     ):
         self.state_dict = state_dict
-        self.device_mesh = device_mesh
-        self.num_devices = device_mesh.get_num_devices()
+        self.mesh_device = mesh_device
+        self.num_devices = mesh_device.get_num_devices()
         self.model_config = model_config
         self.read_cache = read_cache
 
@@ -59,16 +59,16 @@ class TtLlamaModel_optimized:
             transformation_mat_torch,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            device=device_mesh,
+            device=mesh_device,
             memory_config=model_config["DRAM_MEMCFG"],
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
-        transformation_mats = ttnn.to_device(transformation_mats, device_mesh)
+        transformation_mats = ttnn.to_device(transformation_mats, mesh_device)
 
         logger.info("Creating Layers")
         self.layers = [
             TtLlamaDecoder_optimized(
-                device_mesh,
+                mesh_device,
                 state_dict,
                 base_url,
                 layer_num,
@@ -89,7 +89,7 @@ class TtLlamaModel_optimized:
         self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
         # Embedding
         self.tt_embd = TtLlamaEmbedding(
-            device_mesh,
+            mesh_device,
             state_dict,
             cache_path,
         )
@@ -123,34 +123,34 @@ class TtLlamaModel_optimized:
             padded_lm_head,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=self.model_config["DRAM_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=3),
             cache_file_name=self.cache_path / lm_head_str,
         )
-        self.lm_head = ttnn.to_device(padded_lm_head_ttnn, self.device_mesh)
+        self.lm_head = ttnn.to_device(padded_lm_head_ttnn, self.mesh_device)
 
         norm_ttnn = ttnn.as_tensor(
             pt_norm_weight,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=self.model_config["DRAM_MEMCFG"],
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             cache_file_name=self.cache_path / norm_str,
         )
-        self.norm = ttnn.to_device(norm_ttnn, self.device_mesh)
+        self.norm = ttnn.to_device(norm_ttnn, self.mesh_device)
 
         norm_sharded_ttnn = ttnn.as_tensor(
             pt_norm_weight,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=self.model_config["DRAM_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=2),
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=2),
             cache_file_name=self.cache_path / norm_sharded_str,
         )
-        self.norm_sharded = ttnn.to_device(norm_sharded_ttnn, self.device_mesh)
+        self.norm_sharded = ttnn.to_device(norm_sharded_ttnn, self.mesh_device)
 
     def prepare_inputs(self, inp_ids, start_pos, valid_seq_len=None):
         """
@@ -184,11 +184,11 @@ class TtLlamaModel_optimized:
             inp_ids,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=self.model_config["DRAM_MEMCFG"],
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
         )
-        x = ttnn.to_device(x, self.device_mesh)
+        x = ttnn.to_device(x, self.mesh_device)
 
         xs = self.tt_embd(x)
 
@@ -211,8 +211,8 @@ class TtLlamaModel_optimized:
                 layout=ttnn.TILE_LAYOUT,
                 cache_file_name=cache_name(f"cos_gathered_prefill_{seq_len}"),
                 memory_config=self.model_config["DRAM_MEMCFG"],
-                device=self.device_mesh,
-                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                device=self.mesh_device,
+                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             )
             sin_gathereds = ttnn.as_tensor(
                 sin_gathered,
@@ -220,11 +220,11 @@ class TtLlamaModel_optimized:
                 layout=ttnn.TILE_LAYOUT,
                 cache_file_name=cache_name(f"sin_gathered_prefill_{seq_len}"),
                 memory_config=self.model_config["DRAM_MEMCFG"],
-                device=self.device_mesh,
-                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                device=self.mesh_device,
+                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             )
-            cos_gathereds = ttnn.to_device(cos_gathereds, self.device_mesh)
-            sin_gathereds = ttnn.to_device(sin_gathereds, self.device_mesh)
+            cos_gathereds = ttnn.to_device(cos_gathereds, self.mesh_device)
+            sin_gathereds = ttnn.to_device(sin_gathereds, self.mesh_device)
             rot_mats = [cos_gathereds, sin_gathereds]
 
             attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
@@ -243,11 +243,11 @@ class TtLlamaModel_optimized:
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 cache_file_name=cache_name(f"attn_masks_prefill_{seq_len}"),
-                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
                 memory_config=self.model_config["DRAM_MEMCFG"],
-                device=self.device_mesh,
+                device=self.mesh_device,
             )
-            attn_masks = ttnn.to_device(attn_masks, self.device_mesh)
+            attn_masks = ttnn.to_device(attn_masks, self.mesh_device)
 
         elif self.model_config["LLM_MODE"] == "decode":
             assert seq_len == 1, "Decode mode only supports seq_len=1"
@@ -258,9 +258,7 @@ class TtLlamaModel_optimized:
                 self.hidden_size // self.num_devices,
             )
 
-            xs = ttnn.experimental.tensor.interleaved_to_sharded(
-                xs, sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
-            )
+            xs = ttnn.interleaved_to_sharded(xs, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
 
             rot_mat = get_rotation_mat(self.rot_emb, start_pos, seq_len, batch=batch)
             assert rot_mat.size() == (1, batch, self.head_dim, self.head_dim)
@@ -269,16 +267,14 @@ class TtLlamaModel_optimized:
                 rot_mat,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                device=self.device_mesh,
+                device=self.mesh_device,
                 cache_file_name=cache_name(f"rot_mat_decode_b{batch}_{start_pos}"),
                 memory_config=self.model_config["DRAM_MEMCFG"],
-                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             )
-            rot_mats = ttnn.to_device(rot_mats, self.device_mesh)
+            rot_mats = ttnn.to_device(rot_mats, self.mesh_device)
 
-            rot_mats = ttnn.experimental.tensor.interleaved_to_sharded(
-                rot_mats, sharded_mem_config=self.model_config["ROT_MAT_MM_IN1_MEMCFG"]
-            )
+            rot_mats = ttnn.interleaved_to_sharded(rot_mats, self.model_config["ROT_MAT_MM_IN1_MEMCFG"])
 
             attn_masks = None
 
@@ -351,8 +347,8 @@ class TtLlamaModel_optimized:
 
     def tt_distributed_rmsnorm(self, inp, epsilon, gamma):
         # Run distributed rmsnorm part 1
-        tt_stats = ttnn.experimental.operations.primary.rmsnorm_pre_allgather(
-            inp, compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"], output_dtype=ttnn.bfloat16
+        tt_stats = ttnn.rms_norm_pre_all_gather(
+            inp, compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"], dtype=ttnn.bfloat16
         )
 
         # AllGather stats
@@ -364,8 +360,12 @@ class TtLlamaModel_optimized:
         )
 
         # Run distributed rmsnorm part 2
-        tt_out = ttnn.experimental.operations.primary.rmsnorm_post_allgather(
-            inp, tt_stats, epsilon, gamma, compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"]
+        tt_out = ttnn.rms_norm_post_all_gather(
+            inp,
+            tt_stats,
+            epsilon=epsilon,
+            weight=gamma,
+            compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"],
         )
 
         tt_stats.deallocate(True)

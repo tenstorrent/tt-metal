@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <cstdint>
 
 #include "dataflow_api.h"
 
@@ -45,7 +46,7 @@ inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
     return true;
 }
 
-template <uint32_t stick_nbytes, bool is_block_sharded, bool is_read, bool is_col_major>
+template <uint32_t stick_nbytes, bool is_block_sharded, bool is_width_sharded, bool is_read, bool is_col_major>
 void copy_sticks_async(
     tt_l1_ptr uint16_t const* config_data,
     const uint16_t my_noc_x,
@@ -54,9 +55,11 @@ void copy_sticks_async(
     uint32_t const out_base_l1_addr) {
     int i = 0;
     int length = config_data[i + 2];
+
+
     while (length) {
-        uint16_t noc_x = is_block_sharded && !is_col_major ? my_noc_x : config_data[i + 0];
-        uint16_t noc_y = is_block_sharded && is_col_major ? my_noc_y : config_data[i + 1];
+        uint16_t noc_x =((is_block_sharded && !is_col_major) || is_width_sharded )? my_noc_x : config_data[i + 0];
+        uint16_t noc_y =((is_block_sharded && is_col_major) || is_width_sharded )? my_noc_y : config_data[i + 1];
         length = config_data[i + 2];
         i += 3;
 
@@ -68,7 +71,6 @@ void copy_sticks_async(
             uint32_t size = nsticks * stick_nbytes;
             uint32_t dst_offset = dst_local_idx * stick_nbytes;
             uint32_t src_offset = src_local_idx * stick_nbytes;
-
             if constexpr (is_read) {
                 uint32_t dst_addr = out_base_l1_addr + dst_offset;
                 uint64_t src_addr = base_addr + src_offset;
@@ -98,6 +100,7 @@ void kernel_main() {
     constexpr uint32_t is_block_sharded = get_compile_time_arg_val(10);
     constexpr uint32_t remote_read = get_compile_time_arg_val(11);
     constexpr bool is_col_major = get_compile_time_arg_val(12) == 1;
+    constexpr uint32_t is_width_sharded = get_compile_time_arg_val(13);
 
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr uint16_t pad_core_id = 0xFFFF;
@@ -141,18 +144,17 @@ void kernel_main() {
     }
 
     cb_wait_front(in_cb_id, in_nsticks);    // make sure untilized data is available
-
     if constexpr (remote_config_cb_id) {
         uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
         tt_l1_ptr uint16_t const* config_data = reinterpret_cast<tt_l1_ptr uint16_t const*>(config_data_l1_addr);
-        copy_sticks_async<stick_nbytes, is_block_sharded, remote_read, is_col_major>(
+        copy_sticks_async<stick_nbytes, is_block_sharded, is_width_sharded, remote_read, is_col_major>(
             config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
     }
 
     if constexpr (local_config_cb_id) {
         uint32_t config_data_l1_addr = get_read_ptr(local_config_cb_id);
         tt_l1_ptr uint16_t const* config_data = reinterpret_cast<tt_l1_ptr uint16_t const*>(config_data_l1_addr);
-        copy_sticks_async<stick_nbytes, is_block_sharded, false, is_col_major>(
+        copy_sticks_async<stick_nbytes, is_block_sharded, is_width_sharded, false, is_col_major>(
             config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
     }
 

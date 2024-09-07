@@ -10,12 +10,15 @@ from ttnn import ReplicateTensorToMesh
 from models.demos.t3000.llama2_70b.tt.llama_common import ShardTensor2dMesh, ConcatMesh2DToTensor
 from models.utility_functions import nearest_32
 from models.demos.tg.llama3_70b.tt.llama_common import tt_all_reduce
+from models.demos.t3000.falcon40b.tt.model_utils import (
+    matmul_2d_config_from_tensor_shapes as get_matmul_2d_config_from_tensor_shapes,
+)
 
 
 class TtLlamaMLP_galaxy:
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         cluster_shape,
         state_dict,
         base_url,
@@ -26,8 +29,8 @@ class TtLlamaMLP_galaxy:
         read_cache=False,
     ):
         self.state_dict = state_dict
-        self.device_mesh = device_mesh
-        self.num_devices = device_mesh.get_num_devices()
+        self.mesh_device = mesh_device
+        self.num_devices = mesh_device.get_num_devices()
         assert self.num_devices == 32, "Only 32 devices supported for TG"
         self.model_config = model_config
         self.read_cache = read_cache
@@ -52,8 +55,8 @@ class TtLlamaMLP_galaxy:
                     ttnn.CoreRange(
                         ttnn.CoreCoord(0, 0),
                         ttnn.CoreCoord(
-                            self.device_mesh.get_device(0).dram_grid_size().x - 1,
-                            self.device_mesh.get_device(0).dram_grid_size().y - 1,
+                            self.mesh_device.get_device(0).dram_grid_size().x - 1,
+                            self.mesh_device.get_device(0).dram_grid_size().y - 1,
                         ),
                     )
                 }
@@ -138,6 +141,38 @@ class TtLlamaMLP_galaxy:
                 use_height_and_width_as_shard_shape=True,
             )
 
+        elif self.model_config["LLM_MODE"] == "prefill":
+            hidden_dim_per_chip = self.hidden_size // self.cluster_shape[0]  # 2048
+            ff_outer_dim_per_chip = (
+                self.state_dict["layers.0.feed_forward.w1.weight"].shape[0] // self.cluster_shape[1]
+            )  # 3584
+            self.FF1_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
+                (
+                    1,
+                    1,
+                    self.model_config["MAX_MM_SEQ_LEN"],
+                    hidden_dim_per_chip,
+                ),  # (1, 1, self.model_config["MAX_MM_SEQ_LEN"], 2048)
+                (1, 1, hidden_dim_per_chip, ff_outer_dim_per_chip),  # (1, 1, 2048, 3584)
+                grid=ttnn.CoreGrid(x=8, y=4),
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
+                fuse_batch=False,
+            )
+            self.FF2_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
+                (
+                    1,
+                    1,
+                    self.model_config["MAX_MM_SEQ_LEN"],
+                    ff_outer_dim_per_chip,
+                ),  # (1, 1, self.model_config["MAX_MM_SEQ_LEN"], 3584)
+                (1, 1, ff_outer_dim_per_chip, hidden_dim_per_chip),  # (1, 1, 3584, 2048)
+                grid=ttnn.CoreGrid(x=8, y=4),
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
+                fuse_batch=False,
+            )
+
     def load_weights(self):
         assert not hasattr(self, "w1_list"), "w1_list is already an attribute of this object"
         assert not hasattr(self, "w3_list"), "w3_list is already an attribute of this object"
@@ -171,10 +206,10 @@ class TtLlamaMLP_galaxy:
             w1,
             dtype=w1_dtype,
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             # memory_config=self.w1_mem_config,  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(2, 3), cluster_shape=self.cluster_shape),
+            mesh_mapper=ShardTensor2dMesh(self.mesh_device, dims=(2, 3), cluster_shape=self.cluster_shape),
             cache_file_name=self.cache_path / w1_cache_str,
         )
 
@@ -182,10 +217,10 @@ class TtLlamaMLP_galaxy:
             w3,
             dtype=w3_dtype,
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             # memory_config=self.w1_mem_config,  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(2, 3), cluster_shape=self.cluster_shape),
+            mesh_mapper=ShardTensor2dMesh(self.mesh_device, dims=(2, 3), cluster_shape=self.cluster_shape),
             cache_file_name=self.cache_path / w3_cache_str,
         )
 
@@ -193,10 +228,10 @@ class TtLlamaMLP_galaxy:
             w2,
             dtype=w2_dtype,
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             # memory_config=self.w2_mem_config,  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(3, 2), cluster_shape=self.cluster_shape),
+            mesh_mapper=ShardTensor2dMesh(self.mesh_device, dims=(3, 2), cluster_shape=self.cluster_shape),
             cache_file_name=self.cache_path / w2_cache_str,
         )
 
@@ -204,6 +239,8 @@ class TtLlamaMLP_galaxy:
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
         if self.model_config["LLM_MODE"] == "decode":
             return self.decode_forward(x)
+        elif self.model_config["LLM_MODE"] == "prefill":
+            return self.prefill_forward(x)
         else:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
@@ -230,10 +267,10 @@ class TtLlamaMLP_galaxy:
         x.deallocate(True)
 
         w1_out = tt_all_reduce(
-            w1_out, self.device_mesh, cluster_axis=1, num_links=2, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+            w1_out, self.mesh_device, cluster_axis=1, num_links=2, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         )
         w3_out = tt_all_reduce(
-            w3_out, self.device_mesh, cluster_axis=1, num_links=2, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+            w3_out, self.mesh_device, cluster_axis=1, num_links=2, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         )
 
         w1_out = ttnn.to_memory_config(w1_out, self.FULL_GRID_MEMCFG)
@@ -262,12 +299,80 @@ class TtLlamaMLP_galaxy:
 
         hidden_states = tt_all_reduce(
             hidden_states,
-            self.device_mesh,
+            self.mesh_device,
             cluster_axis=0,
             num_links=2,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
 
         hidden_states = ttnn.to_memory_config(hidden_states, self.FF1_ACT_MEMCFG)
+
+        return hidden_states
+
+    def prefill_forward(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
+        _, _, seq_len, _ = x.shape
+        max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
+        batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
+        x = ttnn.reshape(x, (1, batch_dim, seq_len // batch_dim, -1))
+
+        w1_out = ttnn.matmul(
+            x,
+            self.w1,
+            dtype=ttnn.bfloat16,
+            program_config=self.FF1_PROGCFG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        w3_out = ttnn.matmul(
+            x,
+            self.w3,
+            dtype=ttnn.bfloat16,
+            program_config=self.FF1_PROGCFG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        w1_out = ttnn.reshape(w1_out, (1, 1, seq_len, -1))
+
+        w1_out = tt_all_reduce(
+            w1_out,
+            self.mesh_device,
+            cluster_axis=1,
+            num_links=2,
+        )
+
+        w3_out = ttnn.reshape(w3_out, (1, 1, seq_len, -1))
+        w3_out = tt_all_reduce(
+            w3_out,
+            self.mesh_device,
+            cluster_axis=1,
+            num_links=2,
+        )
+
+        # w1_out.deallocate(True)
+
+        hidden_states = ttnn.mul(
+            w1_out,
+            w3_out,
+            input_tensor_a_activation=ttnn.UnaryOpType.SILU,
+            dtype=ttnn.bfloat16,
+        )
+
+        # hidden_states = ttnn.to_memory_config(hidden_states, self.FF2_ACT_MEMCFG)
+        hidden_states = ttnn.reshape(hidden_states, (1, batch_dim, seq_len // batch_dim, -1))
+        hidden_states = ttnn.matmul(
+            hidden_states,
+            self.w2,
+            dtype=ttnn.bfloat16,
+            program_config=self.FF2_PROGCFG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        hidden_states = ttnn.reshape(hidden_states, (1, 1, seq_len, -1))
+
+        hidden_states = tt_all_reduce(
+            hidden_states,
+            self.mesh_device,
+            cluster_axis=0,
+            num_links=2,
+        )
 
         return hidden_states

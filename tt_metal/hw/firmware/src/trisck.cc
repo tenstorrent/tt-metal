@@ -43,7 +43,10 @@ void kernel_launch()
 #else
     tt_l1_ptr uint *local_l1_start_addr = (tt_l1_ptr uint *)PREPROCESSOR_EXPAND(MEM_TRISC, COMPILE_FOR_TRISC, _INIT_LOCAL_L1_BASE);
     firmware_kernel_common_init(local_l1_start_addr);
-
+#if defined(UCK_CHLKC_UNPACK)
+    // Make sure DBG_FEATURE_DISABLE register is cleared before every kernel is executed
+    memory_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);
+#endif
     run_kernel();
 #endif
 }

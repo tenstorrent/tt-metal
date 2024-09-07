@@ -52,7 +52,7 @@ class TestEltwiseUnary:
         input_mem_config,
         output_mem_config,
     ):
-        if fn_kind == "silu":
+        if fn_kind in ["silu", "identity"]:
             is_ttnn_op = True
         else:
             is_ttnn_op = False
@@ -650,7 +650,7 @@ class TestEltwiseUnary:
         )
 
     @skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder op")
-    def test_run_eltwise_unary_remainder(
+    def test_run_unary_remainder(
         self,
         input_shapes,
         device,
@@ -662,7 +662,7 @@ class TestEltwiseUnary:
             generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-1e5, high=1e5), torch.bfloat16)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args.update({"value": np.random.randint(-100, 100) + 0.5})
+        test_args.update({"scalar": np.random.randint(-100, 100) + 0.5})
         test_args.update(
             {
                 "input_mem_config": [input_mem_config],
@@ -671,12 +671,13 @@ class TestEltwiseUnary:
         )
         comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
-            "eltwise-unary_remainder",
+            "unary-remainder",
             input_shapes,
             datagen_func,
             comparison_func,
             device,
             test_args,
+            ttnn_op=True,
         )
 
     @skip_for_grayskull("#ToDo: GS implementation needs to be done for fmod op")

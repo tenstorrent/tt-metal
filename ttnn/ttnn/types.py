@@ -44,10 +44,10 @@ Tensor = ttnn._ttnn.deprecated.tensor.Tensor
 
 CoreGrid = ttnn._ttnn.types.CoreGrid
 
-DeviceComputeKernelConfig = ttnn._ttnn.deprecated.tensor.DeviceComputeKernelConfig
-WormholeComputeKernelConfig = ttnn._ttnn.deprecated.tensor.WormholeComputeKernelConfig
+DeviceComputeKernelConfig = ttnn._ttnn.operations.core.DeviceComputeKernelConfig
+WormholeComputeKernelConfig = ttnn._ttnn.operations.core.WormholeComputeKernelConfig
 BlackholeComputeKernelConfig = WormholeComputeKernelConfig
-GrayskullComputeKernelConfig = ttnn._ttnn.deprecated.tensor.GrayskullComputeKernelConfig
+GrayskullComputeKernelConfig = ttnn._ttnn.operations.core.GrayskullComputeKernelConfig
 
 
 @dataclasses.dataclass
@@ -57,7 +57,7 @@ class CoreRange:
 
 
 @dataclasses.dataclass
-class DeviceGrid:
+class MeshShape:
     y: int
     x: int
 
@@ -85,3 +85,6 @@ CoreCoord = ttnn._ttnn.deprecated.tensor.CoreCoord
 UnaryWithParam = ttnn._ttnn.activation.UnaryWithParam
 UnaryOpType = ttnn._ttnn.activation.UnaryOpType
 BinaryOpType = ttnn._ttnn.operations.binary.BinaryOpType
+
+BcastOpMath = ttnn._ttnn.types.BcastOpMath
+BcastOpDim = ttnn._ttnn.types.BcastOpDim

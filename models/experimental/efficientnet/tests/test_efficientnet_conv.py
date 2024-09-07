@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib
+import ttnn
 import torch
 from loguru import logger
 import torchvision
@@ -54,9 +54,7 @@ def run_efficientnet_conv2d(state_dict, base_address, reference_module, device):
         conv_on_device=False,
     )
 
-    test_input = torch2tt_tensor(
-        test_input, tt_device=device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-    )
+    test_input = torch2tt_tensor(test_input, tt_device=device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
     tt_out = tt_module(test_input)
     tt_out = tt2torch_tensor(tt_out)
 
@@ -136,9 +134,7 @@ def run_efficientnet_conv_norm_activation(
         is_lite=is_lite,
     )
 
-    test_input = torch2tt_tensor(
-        test_input, tt_device=device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-    )
+    test_input = torch2tt_tensor(test_input, tt_device=device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
     tt_out = tt_module(test_input)
     tt_out = tt2torch_tensor(tt_out)
 

@@ -43,6 +43,16 @@ static inline const char *get_core_type_name(CoreType ct) {
     }
 }
 
+// TODO: This should come from the HAL
+enum DebugHartFlags : unsigned int {
+    RISCV_NC  = 1,
+    RISCV_TR0 = 2,
+    RISCV_TR1 = 4,
+    RISCV_TR2 = 8,
+    RISCV_BR  = 16,
+    RISCV_ER  = 32
+};
+
 // Enumerates the debug features that can be enabled at runtime. These features allow for
 // fine-grained control over targeted cores, chips, harts, etc.
 enum RunTimeDebugFeatures {
@@ -50,18 +60,28 @@ enum RunTimeDebugFeatures {
     RunTimeDebugFeatureReadDebugDelay,
     RunTimeDebugFeatureWriteDebugDelay,
     RunTimeDebugFeatureAtomicDebugDelay,
+    RunTimeDebugFeatureDisableL1DataCache,
     // NOTE: Update RunTimeDebugFeatureNames if adding new features
     RunTimeDebugFeatureCount
 };
 
+// Enumerates a class of cores to enable features on at runtime.
+enum RunTimeDebugClass {
+    RunTimeDebugClassNoneSpecified,
+    RunTimeDebugClassWorker,
+    RunTimeDebugClassDispatch,
+    RunTimeDebugClassAll,
+    RunTimeDebugClassCount
+};
+
 extern const char *RunTimeDebugFeatureNames[RunTimeDebugFeatureCount];
+extern const char *RunTimeDebugClassNames[RunTimeDebugClassCount];
 
 // TargetSelection stores the targets for a given debug feature. I.e. for which chips, cores, harts
 // to enable the feature.
 struct TargetSelection {
     std::map<CoreType, std::vector<CoreCoord>> cores;
-    std::map<CoreType, bool> all_cores;
-    std::map<CoreType, std::unordered_set<CoreCoord>> disabled_cores;
+    std::map<CoreType, int> all_cores;
     bool enabled;
     std::vector<int> chip_ids;
     bool all_chips = false;
@@ -93,6 +113,8 @@ class RunTimeOptions {
     bool null_kernels = false;
 
     bool clear_l1 = false;
+
+    bool skip_loading_fw = false;
 
     bool riscv_debug_info_enabled = false;
     uint32_t watcher_debug_delay = 0;
@@ -146,18 +168,11 @@ class RunTimeOptions {
     inline void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<CoreCoord>> cores) {
         feature_targets[feature].cores = cores;
     }
-    inline std::map<CoreType, std::unordered_set<CoreCoord>> &get_feature_disabled_cores(RunTimeDebugFeatures feature) {
-        return feature_targets[feature].disabled_cores;
-    }
-    inline void set_feature_disabled_cores(
-        RunTimeDebugFeatures feature, std::map<CoreType, std::unordered_set<CoreCoord>> disabled_cores) {
-        feature_targets[feature].disabled_cores = disabled_cores;
-    }
     // An alternative to setting cores by range, a flag to enable all.
-    inline void set_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type, bool all_cores) {
+    inline void set_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type, int all_cores) {
         feature_targets[feature].all_cores[core_type] = all_cores;
     }
-    inline bool get_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type) {
+    inline int get_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type) {
         return feature_targets[feature].all_cores[core_type];
     }
     // Note: core range is inclusive
@@ -214,6 +229,7 @@ class RunTimeOptions {
                 } else {
                     return "false";
                 }
+            case RunTimeDebugFeatureDisableL1DataCache: return std::to_string(get_feature_enabled(feature));
             default: return "";
         }
     }
@@ -235,6 +251,8 @@ class RunTimeOptions {
 
     inline bool get_clear_l1() { return clear_l1; }
     inline void set_clear_l1(bool clear) { clear_l1 = clear; }
+
+    inline bool get_skip_loading_fw() { return skip_loading_fw; }
 
     // Whether to compile with -g to include DWARF debug info in the binary.
     inline bool get_riscv_debug_info_enabled() { return riscv_debug_info_enabled; }

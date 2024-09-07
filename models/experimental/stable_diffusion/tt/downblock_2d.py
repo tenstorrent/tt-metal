@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch
 
-import tt_lib as ttl
+import ttnn
 from tt_lib.fallback_ops import fallback_ops
 
 from models.experimental.stable_diffusion.tt.residual_block import TtResnetBlock2D
@@ -28,9 +28,9 @@ class TtDownBlock2D(nn.Module):
         resnet_act_fn: str = "swish",
         resnet_groups: int = 32,
         resnet_pre_norm: bool = True,
-        output_scale_factor:float=1.0,
-        add_downsample:bool=True,
-        downsample_padding:int=1,
+        output_scale_factor: float = 1.0,
+        add_downsample: bool = True,
+        downsample_padding: int = 1,
         state_dict=None,
         base_address=None,
     ):
@@ -53,20 +53,30 @@ class TtDownBlock2D(nn.Module):
                     output_scale_factor=output_scale_factor,
                     pre_norm=resnet_pre_norm,
                     state_dict=self.state_dict,
-                    base_address=f"{base_address}.resnets.{i}"
+                    base_address=f"{base_address}.resnets.{i}",
                 )
             )
 
         self.resnets = resnets
 
         if add_downsample:
-            self.downsamplers = [TtDownsample2D(out_channels, use_conv=True, out_channels=out_channels, padding=downsample_padding, name="op", state_dict=self.state_dict, base_address=f"{base_address}.downsamplers.0")]
+            self.downsamplers = [
+                TtDownsample2D(
+                    out_channels,
+                    use_conv=True,
+                    out_channels=out_channels,
+                    padding=downsample_padding,
+                    name="op",
+                    state_dict=self.state_dict,
+                    base_address=f"{base_address}.downsamplers.0",
+                )
+            ]
         else:
             self.downsamplers = None
 
         self.gradient_checkpointing = False
 
-    def forward(self, hidden_states: ttl.tensor.Tensor, temb: Optional[ttl.tensor.Tensor]) -> ttl.tensor.Tensor:
+    def forward(self, hidden_states: ttnn.Tensor, temb: Optional[ttnn.Tensor]) -> ttnn.Tensor:
         output_states = ()
 
         for resnet in self.resnets:

@@ -13,12 +13,12 @@ from models.demos.falcon7b_common.tests.test_utils import (
     get_rand_falcon_inputs,
     concat_device_out_layer_present,
     load_hf_model,
+    get_num_devices,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
     comp_pcc,
 )
-from models.utility_functions import tt2torch_tensor, get_devices_for_t3000
+from models.utility_functions import tt_tensors_to_torch_tensors
 
 
 class PytorchFalconModel(torch.nn.Module):
@@ -40,7 +40,7 @@ class PytorchFalconModel(torch.nn.Module):
 
 
 def run_test_FalconModel_inference(
-    devices,
+    mesh_device,
     model_version,
     llm_mode,
     batch,
@@ -52,7 +52,7 @@ def run_test_FalconModel_inference(
     tt_cache_path,
     model_location_generator,
 ):
-    num_devices = len(devices)
+    num_devices = get_num_devices(mesh_device)
     global_batch = batch * num_devices
     hugging_face_reference_model, state_dict = load_hf_model(model_location_generator, model_version)
     configuration = hugging_face_reference_model.config
@@ -80,7 +80,7 @@ def run_test_FalconModel_inference(
         seq_len,
         batch,
         kv_cache_len,
-        devices,
+        mesh_device,
         global_batch,
         head_dim,
         max_position_embeddings,
@@ -97,7 +97,7 @@ def run_test_FalconModel_inference(
     )
 
     tt_FalconModel = TtFalconModel(
-        devices,
+        mesh_device,
         state_dict,
         base_url,
         num_layers,
@@ -129,7 +129,7 @@ def run_test_FalconModel_inference(
                 use_cache=use_cache,
             )
             # Get outputs from all devices
-            tt_outs[user_id::batch] = torch.concat([tt2torch_tensor(tt_out[i]).squeeze(1) for i in range(num_devices)])
+            tt_outs[user_id::batch] = tt_tensors_to_torch_tensors(tt_out, mesh_device, concat_dim=0).squeeze(1)
         tt_out = tt_outs
 
     elif llm_mode == "decode":
@@ -144,9 +144,7 @@ def run_test_FalconModel_inference(
             layer_past_len=kv_cache_len,
             use_cache=use_cache,
         )
-        for i in range(num_devices):
-            tt_out[i] = tt2torch_tensor(tt_out[i]).squeeze(1).transpose(0, 1)
-        tt_out = torch.concat(tt_out)
+        tt_out = tt_tensors_to_torch_tensors(tt_out, mesh_device, concat_dim=2).squeeze(1).transpose(0, 1)
 
     # check outputs ----------------------------------------------------------------------
     does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
@@ -155,14 +153,14 @@ def run_test_FalconModel_inference(
     for i in range(num_layers):
         if llm_mode == "prefill":
             pytorch_layer_pres = (pytorch_layer_present[i][0].squeeze(1), pytorch_layer_present[i][1].squeeze(1))
-            tt_layer_pres = concat_device_out_layer_present(num_devices, tt_layer_present[i], kv_len)
+            tt_layer_pres = concat_device_out_layer_present(mesh_device, tt_layer_present[i], kv_len)
         elif llm_mode == "decode":
             pytorch_layer_pres = (
                 pytorch_layer_present[i][0].squeeze(1)[:, kv_cache_len, :],
                 pytorch_layer_present[i][1].squeeze(1)[:, kv_cache_len, :],
             )
             tt_layer_pres = concat_device_out_layer_present(
-                num_devices, tt_layer_present[i], kv_cache_len, end_idx_only=True
+                mesh_device, tt_layer_present[i], kv_cache_len, end_idx_only=True
             )
 
         does_pass2, output_pcc = comp_pcc(pytorch_layer_pres[0], tt_layer_pres[0], pcc)
@@ -182,7 +180,8 @@ def run_test_FalconModel_inference(
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
-@pytest.mark.parametrize("num_devices", (1, 2, 4))
+@pytest.mark.parametrize("mesh_device", (1, 2, 4, (8, 4)), indirect=True, ids=["1chip", "2chip", "4chip", "32chipTG"])
+@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
     (
@@ -201,9 +200,8 @@ def run_test_FalconModel_inference(
     ("tiiuae/falcon-7b-instruct",),
     ids=["falcon_7b"],
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1", "BFLOAT16-L1_SHARDED"))
 def test_FalconModel_inference(
-    num_devices,
     model_version,
     llm_mode,
     batch,
@@ -214,16 +212,18 @@ def test_FalconModel_inference(
     model_config_str,
     model_location_generator,
     get_tt_cache_path,
-    all_devices,
+    mesh_device,
+    enable_async_mode,
 ):
-    devices = get_devices_for_t3000(all_devices, num_devices)
+    if model_config_str == "BFLOAT16-L1_SHARDED" and llm_mode == "prefill":
+        pytest.skip(f"prefill does not support L1_SHARDED")
 
     model_config = get_model_config(model_config_str, seq_len, batch)
     tt_cache_path = get_tt_cache_path(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
     )
     run_test_FalconModel_inference(
-        devices,
+        mesh_device,
         model_version,
         llm_mode,
         batch,

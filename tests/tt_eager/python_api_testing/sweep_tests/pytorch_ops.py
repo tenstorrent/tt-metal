@@ -559,7 +559,7 @@ def left_shift(x, *args, **kwargs):
 
 
 def unary_remainder(x, *args, **kwargs):
-    value = kwargs.pop("value")
+    value = kwargs.pop("scalar")
     result = torch.remainder(x, value)
     return result
 
@@ -1752,6 +1752,37 @@ def addalpha_bw(x, y, z, alpha, *args, **kwargs):
     return [in_data.grad, other_data1.grad]
 
 
+def subalpha_bw(x, y, z, alpha, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data1 = z
+
+    in_data.requires_grad = True
+    other_data1.requires_grad = True
+
+    in_data.retain_grad()
+    other_data1.retain_grad()
+    other_data1.retain_grad()
+    pyt_y = torch.sub(in_data, other_data1, alpha=alpha)
+    pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data1.grad]
+
+
+def unary_remainder_bw(x, y, *args, **kwargs):
+    value = kwargs.pop("scalar")
+
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.remainder(in_data, torch.tensor(value))
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
 def abs_bw(x, y, *args, **kwargs):
     grad_data = x
     in_data = y
@@ -2426,3 +2457,57 @@ def complex_conj_bw(x, y, *args, **kwargs):
     pyt_y.backward(gradient=grad_data)
 
     return in_data.grad
+
+
+def topk(x, largest, k, *args, **kwargs):
+    values, indices = torch.topk(x, k, dim=-1, largest=largest, sorted=True)
+    return [values, indices]
+
+
+def argmax(x, *args, **kwargs):
+    dim = kwargs.pop("dim")
+    return torch.argmax(x, dim=dim)
+
+
+def complex_imag_bw(x, y, *args, **kwargs):
+    grad_data = x.real
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.imag(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def complex_real_bw(x, y, *args, **kwargs):
+    grad_data = x.real
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.real(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def complex_angle_bw(x, y, *args, **kwargs):
+    grad_data = x.real
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.angle(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def complex_is_real(x, *args, **kwargs):
+    return torch.isreal(x)
+
+
+def complex_is_imag(x, *args, **kwargs):
+    return torch.isreal(x)

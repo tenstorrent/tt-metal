@@ -4,7 +4,6 @@
 
 import torch
 import pytest
-import tt_lib
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_pt_tt, compare_results
 
 
@@ -29,7 +28,7 @@ def test_bw_fill(input_shapes, device):
     grad_sum = grad_data.sum()
     pyt_y.fill_(grad_sum)
 
-    tt_output_tensor_on_device = tt_lib.tensor.fill_bw(grad_tensor)
+    tt_output_tensor_on_device = ttnn.fill_bw(grad_tensor)
 
     golden_tensor = [pyt_y]
     comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor)

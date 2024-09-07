@@ -201,12 +201,12 @@ class resnetBlock2D:
         if not self.fallback_on_groupnorm:
             if (
                 self.first_gn_expected_input_sharded_memory_config.memory_layout
-                == ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
+                == ttnn.TensorMemoryLayout.BLOCK_SHARDED
             ):
                 num_cores_across_channel = self.first_group_norm_core_grid.y
             elif (
                 self.first_gn_expected_input_sharded_memory_config.memory_layout
-                == ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED
+                == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
             ):
                 num_cores_across_channel = 1
             else:
@@ -225,7 +225,7 @@ class resnetBlock2D:
 
             self.norm1_input_mask = ttnn.from_torch(
                 self.norm1_input_mask_torch_tensor,
-                dtype=ttnn.DataType.BFLOAT8_B,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -233,26 +233,26 @@ class resnetBlock2D:
 
             self.parameters.norm1.weight = ttnn.from_torch(
                 self.parameters.norm1.weight,
-                dtype=ttnn.DataType.BFLOAT16,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             self.parameters.norm1.bias = ttnn.from_torch(
                 self.parameters.norm1.bias,
-                dtype=ttnn.DataType.BFLOAT16,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             if (
                 self.second_gn_expected_input_sharded_memory_config.memory_layout
-                == ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
+                == ttnn.TensorMemoryLayout.BLOCK_SHARDED
             ):
                 num_cores_across_channel = self.second_group_norm_core_grid.y
             elif (
                 self.second_gn_expected_input_sharded_memory_config.memory_layout
-                == ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED
+                == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
             ):
                 num_cores_across_channel = 1
             else:
@@ -266,14 +266,14 @@ class resnetBlock2D:
             )
             self.parameters.norm2.weight = ttnn.from_torch(
                 self.parameters.norm2.weight,
-                dtype=ttnn.DataType.BFLOAT16,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             self.parameters.norm2.bias = ttnn.from_torch(
                 self.parameters.norm2.bias,
-                dtype=ttnn.DataType.BFLOAT16,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -284,7 +284,7 @@ class resnetBlock2D:
             )
             self.norm2_input_mask = ttnn.from_torch(
                 self.norm2_input_mask_torch_tensor,
-                dtype=ttnn.DataType.BFLOAT8_B,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -293,42 +293,42 @@ class resnetBlock2D:
             self.parameters.time_emb_proj.bias = weight_to_bfp8(self.parameters.time_emb_proj.bias)
 
     def reshard_to(self, tensor, grid_size, layout):
-        if layout == ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED:
+        if layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
             shard_spec = [tensor.volume() // tensor.shape[-1] // grid_size[0], tensor.shape[-1] // grid_size[1]]
-        elif layout == ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED:
+        elif layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
             num_cores = grid_size[0] * grid_size[1]
             shard_spec = [tensor.volume() // tensor.shape[-1] // num_cores, tensor.shape[-1]]
-        output_shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+        output_shard_grid = ttnn.CoreRangeSet(
             {
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, 0),
-                    ttnn.experimental.tensor.CoreCoord(grid_size[0] - 1, grid_size[1] - 1),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1),
                 )
             }
         )
-        output_shard_spec = ttnn.experimental.tensor.ShardSpec(
+        output_shard_spec = ttnn.ShardSpec(
             output_shard_grid,
             shard_spec,
-            ttnn.experimental.tensor.ShardOrientation.COL_MAJOR,
+            ttnn.ShardOrientation.COL_MAJOR,
             False,
         )
-        output_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        output_mem_config = ttnn.MemoryConfig(
             layout,
-            ttnn.experimental.tensor.BufferType.L1,
+            ttnn.BufferType.L1,
             output_shard_spec,
         )
         if tensor.is_sharded():
-            tensor = ttnn.experimental.tensor.reshard(
+            tensor = ttnn.reshard(
                 tensor,
                 output_mem_config,
             )
         else:
-            tensor = ttnn.experimental.tensor.interleaved_to_sharded(
+            tensor = ttnn.interleaved_to_sharded(
                 tensor,
                 grid_size,
                 shard_spec,
                 layout,
-                ttnn.experimental.tensor.ShardOrientation.COL_MAJOR,
+                ttnn.ShardOrientation.COL_MAJOR,
             )
         return tensor
 
@@ -389,13 +389,11 @@ class resnetBlock2D:
         conv1_split_chunks = len(self.conv1s)
         if conv1_split_chunks == 1:
             # Once https://github.com/tenstorrent/tt-metal/issues/7071 is in convert to reshard
-            # hidden_states = ttnn.experimental.tensor.interleaved_to_sharded(
+            # hidden_states = ttnn.interleaved_to_sharded(
             #     hidden_states, self.conv1s[0].conv.input_sharded_memory_config, hidden_states.dtype
             # )
             hidden_states = nonlinearity(hidden_states, memory_config=ttnn.get_memory_config(hidden_states))
-            hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
-                hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype
-            )
+            hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype)
             hidden_states = ttnn.reallocate(hidden_states)
             # hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
 
@@ -409,7 +407,7 @@ class resnetBlock2D:
                 weights_dtype=ttnn.bfloat8_b,
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 activation="",
-                height_sharding=False,
+                shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 math_approx_mode_enabled=True,
                 fp32_dest_acc_enabled=True,
                 packer_l1_accum_enabled=False,
@@ -443,9 +441,7 @@ class resnetBlock2D:
             split_input_channels = in_channels // conv1_split_chunks
 
             # unpad sharded causes output mismatch
-            hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
-                hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype
-            )
+            hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype)
             output_tensor_end_width_dim = split_input_channels
             for i in range(conv1_split_chunks):
                 # TODO: Can we replace this with interleaved_to_sharded_partial
@@ -466,7 +462,7 @@ class resnetBlock2D:
                 output_tensor_end_width_dim += split_input_channels
 
                 split_hidden_states[i] = ttnn.to_layout(split_hidden_states[i], ttnn.TILE_LAYOUT)
-                # split_hidden_states[i] = ttnn.experimental.tensor.interleaved_to_sharded(
+                # split_hidden_states[i] = ttnn.interleaved_to_sharded(
                 #     split_hidden_states[i],
                 #     self.conv1s[i].conv.input_sharded_memory_config,
                 #     split_hidden_states[i].dtype,
@@ -481,7 +477,7 @@ class resnetBlock2D:
                     weights_dtype=ttnn.bfloat8_b,
                     math_fidelity=ttnn.MathFidelity.LoFi,
                     activation="",
-                    height_sharding=False,
+                    shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                     math_approx_mode_enabled=True,
                     fp32_dest_acc_enabled=True,
                     packer_l1_accum_enabled=False,
@@ -528,7 +524,7 @@ class resnetBlock2D:
         if temb is not None:
             grid_size = (2, 5)  # 5 is the Magic Number!
             # num_cores = grid_size[0] * grid_size[1]
-            # temb = self.reshard_to(temb, grid_size, ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED)
+            # temb = self.reshard_to(temb, grid_size, ttnn.TensorMemoryLayout.BLOCK_SHARDED)
             temb = nonlinearity(temb, memory_config=temb.memory_config())
             if temb_channels is not None:
                 if time_embedding_norm == "default":
@@ -547,33 +543,30 @@ class resnetBlock2D:
                     transpose_mcast=True,
                     fused_activation=None,
                 )
-                compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-                    math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
+                compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=ttnn.MathFidelity.LoFi,
                     math_approx_mode=True,
                     fp32_dest_acc_en=False,
                     packer_l1_acc=False,
                 )
-                l1_memory_config = ttnn.experimental.tensor.MemoryConfig(
-                    memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
-                    buffer_type=ttnn.experimental.tensor.BufferType.L1,
-                )
+                l1_memory_config = ttnn.L1_MEMORY_CONFIG
                 temb = ttnn.linear(
                     temb,
                     self.parameters.time_emb_proj.weight,
                     bias=self.parameters.time_emb_proj.bias,
                     program_config=program_config,
                     memory_config=l1_memory_config,
-                    dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+                    dtype=ttnn.bfloat8_b,
                     compute_kernel_config=compute_kernel_config,
                 )
 
         if temb is not None and time_embedding_norm == "default":
-            hidden_states = ttnn.experimental.tensor.bcast(
+            hidden_states = ttnn.bcast(
                 hidden_states,
                 temb,
-                ttnn.experimental.tensor.BcastOpMath.ADD,
-                ttnn.experimental.tensor.BcastOpDim.H,
-                output_mem_config=hidden_states.memory_config(),
+                ttnn.BcastOpMath.ADD,
+                ttnn.BcastOpDim.H,
+                memory_config=hidden_states.memory_config(),
             )
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -594,18 +587,16 @@ class resnetBlock2D:
             (1, 1, self.batch_size * self.conv2_input_height * self.conv2_input_width, out_channels),
         )
 
-        # hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
+        # hidden_states = ttnn.sharded_to_interleaved(
         #     hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype
         # )
-        # hidden_states = ttnn.experimental.tensor.interleaved_to_sharded(
+        # hidden_states = ttnn.interleaved_to_sharded(
         #     hidden_states, self.conv2.conv.input_sharded_memory_config, hidden_states.dtype
         # )
 
         hidden_states = nonlinearity(hidden_states, memory_config=ttnn.get_memory_config(hidden_states))
         # hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
-            hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype
-        )
+        hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype)
 
         # hidden_states = self.conv2(hidden_states)
 
@@ -614,7 +605,7 @@ class resnetBlock2D:
             weights_dtype=ttnn.bfloat8_b,
             math_fidelity=ttnn.MathFidelity.LoFi,
             activation="",
-            height_sharding=False,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             math_approx_mode_enabled=True,
             fp32_dest_acc_enabled=True,
             packer_l1_accum_enabled=False,
@@ -646,10 +637,10 @@ class resnetBlock2D:
             # if ttnn.get_memory_config(input_tensor) != self.conv_shortcut.conv.input_sharded_memory_config:
             #     # TODO: Once reshard fix is in, store input tensor in sharded
             #     if input_tensor.memory_config().is_sharded():
-            #         input_tensor = ttnn.experimental.tensor.sharded_to_interleaved(
+            #         input_tensor = ttnn.sharded_to_interleaved(
             #             input_tensor, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype
             #         )
-            #     input_tensor = ttnn.experimental.tensor.interleaved_to_sharded(
+            #     input_tensor = ttnn.interleaved_to_sharded(
             #         input_tensor, self.conv_shortcut.conv.input_sharded_memory_config, hidden_states.dtype
             #     )
             # input_tensor = self.conv_shortcut(input_tensor)
@@ -658,7 +649,7 @@ class resnetBlock2D:
                 weights_dtype=ttnn.bfloat8_b,
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 activation="",
-                height_sharding=False,
+                shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 math_approx_mode_enabled=True,
                 fp32_dest_acc_enabled=True,
                 packer_l1_accum_enabled=False,

@@ -21,6 +21,7 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
+#include "tt_metal/graph/graph_tracking.hpp"
 
 namespace tt::tt_metal {
 
@@ -164,8 +165,10 @@ KernelGroup::KernelGroup(
 
     // Slow dispatch uses fixed addresses for the kernel config, configured here statically
     // Fast dispatch kernel config mangement happens under the CQ and will re-program the base
-    this->launch_msg.kernel_config.kernel_config_base =
-        hal.get_dev_addr(hal.get_programmable_core_type(programmable_core_type_index), HalMemAddrType::KERNEL_CONFIG);
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        this->launch_msg.kernel_config.kernel_config_base[index] =
+            hal.get_dev_addr(index, HalMemAddrType::KERNEL_CONFIG);
+    }
 
     for (int class_id = 0; class_id < DISPATCH_CLASS_MAX; class_id++) {
         auto& optional_id = kernel_ids[class_id];
@@ -480,7 +483,7 @@ void Program::allocate_circular_buffers() {
                 }
             }
         }
-
+        tt::tt_metal::GraphTracker::instance().track_allocate_cb(circular_buffer->core_ranges(), computed_addr, circular_buffer->size());
         circular_buffer->set_locally_allocated_address(computed_addr);
     }
     this->local_circular_buffer_allocation_needed_ = false;
@@ -522,14 +525,18 @@ size_t Program::num_semaphores(const CoreCoord &core) const { return semaphores_
 
 size_t Program::num_semaphores() const { return semaphores_.size(); }
 
-void Program::init_semaphores(const Device &device, const CoreCoord &logical_core, CoreType core_type) const {
+void Program::init_semaphores(const Device &device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const {
     auto semaphores_on_core = this->semaphores_on_core(logical_core);
+
+    uint64_t kernel_config_base = hal.get_dev_addr(programmable_core_type_index, HalMemAddrType::KERNEL_CONFIG);
+    uint64_t addr = kernel_config_base + this->program_configs_[programmable_core_type_index].sem_offset;
+    CoreType core_type = hal.get_core_type(programmable_core_type_index);
     for (auto semaphore : semaphores_on_core) {
         llrt::write_hex_vec_to_core(
             device.id(),
             device.physical_core_from_logical_core(logical_core, core_type),
             {semaphore.get().initial_value()},
-            semaphore.get().address());
+            addr + semaphore.get().offset());
     }
 }
 
@@ -620,24 +627,27 @@ void Program::populate_dispatch_data(Device *device) {
 
         // TODO: use semaphore.core_type from main
         if (semaphore.core_type() == CoreType::WORKER) {
+            uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
             vector<pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
                 device->extract_dst_noc_multicast_info<std::set<CoreRange>>(
                     semaphore.core_range_set().ranges(), CoreType::WORKER);
             transfer_info transfer_info = {
-                .dst_base_addr = semaphore.address(),
+                .dst_base_addr = semaphore.offset(),
                 .dst_noc_info = dst_noc_multicast_info,
                 .linked = false,
                 .data = semaphore_data};
-            this->program_transfer_info.multicast_semaphores[semaphore.address()].push_back(transfer_info);
+            this->program_transfer_info.multicast_semaphores[semaphore.offset()].push_back(transfer_info);
         } else if (semaphore.core_type() == CoreType::ETH) {
+            // TODO: we only fast dispatch to active eth...
+            uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
             vector<pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
                 extract_dst_noc_unicast_info(semaphore.core_range_set().ranges(), CoreType::ETH);
             transfer_info transfer_info = {
-                .dst_base_addr = semaphore.address(),
+                .dst_base_addr = semaphore.offset(),
                 .dst_noc_info = dst_noc_unicast_info,
                 .linked = false,
                 .data = semaphore_data};
-            this->program_transfer_info.unicast_semaphores[semaphore.address()].push_back(transfer_info);
+            this->program_transfer_info.unicast_semaphores[semaphore.offset()].push_back(transfer_info);
         }
     }
 
@@ -754,9 +764,6 @@ void Program::populate_dispatch_data(Device *device) {
     return;
 }
 
-template <typename T, std::size_t dim2, std::size_t dim1, std::size_t dim0>
-using Array3D = std::array<std::array<std::array<T, dim0>, dim1>, dim2>;
-
 uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32_t base_offset) {
 
     // Iterate over kernels in the program and "level" the number of RTAs based on the max
@@ -817,7 +824,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
         auto kernel = detail::GetKernel(*this, kernel_id);
         // TODO: kernels should be stored by programmable core type
         if (core_type == kernel->get_kernel_core_type() &&
-            programmable_core_type == HalProgrammableCoreType::IDLE_ETH == kernel->is_idle_eth()) {
+            (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) == kernel->is_idle_eth()) {
             uint32_t dispatch_class = kernel->dispatch_class();
             max_crtas[dispatch_class] =
                 std::max(max_crtas[dispatch_class], (uint32_t)kernel->common_runtime_args().size());
@@ -840,7 +847,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
         auto kernel = detail::GetKernel(*this, kernel_id);
         // TODO: as above, fix when kernels are stored by programmable core type
         if (core_type == kernel->get_kernel_core_type() &&
-            programmable_core_type == HalProgrammableCoreType::IDLE_ETH == kernel->is_idle_eth()) {
+            (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) == kernel->is_idle_eth()) {
             uint32_t dispatch_class = kernel->dispatch_class();
             kernel->set_common_runtime_args_count(max_crtas[dispatch_class]);
         }
@@ -862,11 +869,63 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
 
 ProgramConfig& Program::get_program_config(uint32_t programmable_core_type_index) {
     return this->program_configs_[programmable_core_type_index];
- }
+}
+
+uint32_t Program::finalize_sems(uint32_t programmable_core_type_index, uint32_t base_offset) {
+
+    int max_id = -1;
+    CoreType core_type = hal.get_core_type(programmable_core_type_index);
+    for (const auto & sem : this->semaphores_) {
+        if (sem.core_type() == core_type && (int)sem.id() > max_id) {
+            max_id = sem.id();
+        }
+    }
+
+    uint32_t sem_size = (max_id + 1) * L1_ALIGNMENT;
+
+    this->program_configs_[programmable_core_type_index].sem_offset = base_offset;
+    this->program_configs_[programmable_core_type_index].sem_size = sem_size;
+
+    return base_offset + sem_size;
+}
+
+void Program::set_launch_msg_sem_offsets() {
+
+    for (uint32_t kg_type_index = 0; kg_type_index < hal.get_programmable_core_type_count(); kg_type_index++) {
+        for (auto& kg : this->get_kernel_groups(kg_type_index)) {
+            for (uint32_t sem_type_index = 0; sem_type_index < hal.get_programmable_core_type_count(); sem_type_index++) {
+                kg.launch_msg.kernel_config.sem_offset[sem_type_index] =
+                    this->program_configs_[sem_type_index].sem_offset;
+            }
+        }
+    }
+}
+
+uint32_t Program::finalize_cbs(uint32_t programmable_core_type_index, uint32_t base_offset) {
+
+    int max_id = -1;
+
+    // TODO: has to be better way to do this and don't read from volatile
+    for (auto& kg : this->get_kernel_groups(programmable_core_type_index)) {
+        int32_t id = kg.launch_msg.kernel_config.max_cb_index;
+        if (id > max_id) {
+            max_id = id;
+        }
+
+        kg.launch_msg.kernel_config.cb_offset = base_offset;
+    }
+
+    uint32_t cb_size = (max_id + 1) * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+
+    this->program_configs_[programmable_core_type_index].cb_offset = base_offset;
+    this->program_configs_[programmable_core_type_index].cb_size = cb_size;
+
+    return base_offset + cb_size;
+}
 
 uint32_t& Program::get_program_config_size(uint32_t programmable_core_type_index) {
     return this->program_config_sizes_[programmable_core_type_index];
- }
+}
 
 void Program::finalize() {
     // Store the number of tensix "go signals" for use by CQ
@@ -884,9 +943,17 @@ void Program::finalize() {
 
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         uint32_t offset = 0;
-        offset = finalize_rt_args(index, 0);
+        offset = finalize_rt_args(index, offset);
+        TT_ASSERT(offset == align(offset, L1_ALIGNMENT));
+        offset = finalize_sems(index, offset);
+        TT_ASSERT(offset == align(offset, L1_ALIGNMENT));
+        offset = finalize_cbs(index, offset);
+        TT_ASSERT(offset == align(offset, L1_ALIGNMENT));
         this->get_program_config_size(index) = offset;
     }
+
+    // The sem offsets cross programmable_core_types so must be set after the loop above
+    this->set_launch_msg_sem_offsets();
 
     finalized_ = true;
 }
@@ -1003,6 +1070,50 @@ void Program::compile(Device *device, bool fd_bootloader_mode) {
 }
 
 void Program::set_runtime_id(uint64_t id) { this->runtime_id = id; }
+
+uint32_t Program::get_sem_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) const {
+
+    CoreCoord phys_core = device->physical_core_from_logical_core(logical_core, core_type);
+    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
+    uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
+
+    uint32_t base_addr = device->using_fast_dispatch ?
+        device->sysmem_manager().get_config_buffer_mgr().get_last_slot_addr(programmable_core_type) :
+        hal.get_dev_addr(programmable_core_type, HalMemAddrType::KERNEL_CONFIG);
+
+    return base_addr + this->program_configs_[index].sem_offset;
+}
+
+uint32_t Program::get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) const {
+
+    CoreCoord phys_core = device->physical_core_from_logical_core(logical_core, core_type);
+    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
+    uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
+
+    uint32_t base_addr = device->using_fast_dispatch ?
+        device->sysmem_manager().get_config_buffer_mgr().get_last_slot_addr(programmable_core_type) :
+        hal.get_dev_addr(programmable_core_type, HalMemAddrType::KERNEL_CONFIG);
+
+    return base_addr + this->program_configs_[index].cb_offset;
+}
+
+uint32_t Program::get_sem_size(Device *device, CoreCoord logical_core, CoreType core_type) const {
+
+    CoreCoord phys_core = device->physical_core_from_logical_core(logical_core, core_type);
+    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
+    uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
+
+    return this->program_configs_[index].sem_size;
+}
+
+uint32_t Program::get_cb_size(Device *device, CoreCoord logical_core, CoreType core_type) const {
+
+    CoreCoord phys_core = device->physical_core_from_logical_core(logical_core, core_type);
+    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
+    uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
+
+    return this->program_configs_[index].cb_size;
+}
 
 Program::~Program() {}
 }  // namespace tt::tt_metal

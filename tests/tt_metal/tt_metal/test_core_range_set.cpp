@@ -46,18 +46,22 @@ void check_program_is_mapped_to_correct_cores(const tt_metal::Program &program, 
     }
 }
 
-void check_semaphores_are_initialized(tt_metal::Device *device, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &golden_sem_values) {
+void check_semaphores_are_initialized(tt_metal::Device *device, tt_metal::Program& program, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &golden_sem_values) {
     for (auto core_range : core_range_set.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 auto logical_core = CoreCoord{x, y};
                 std::vector<uint32_t> res;
-                tt_metal::detail::ReadFromDeviceL1(device, logical_core, SEMAPHORE_BASE, SEMAPHORE_SIZE, res);
+                tt_metal::detail::ReadFromDeviceL1(device, logical_core,
+                    program.get_sem_base_addr(device, logical_core, CoreType::WORKER),
+                    program.get_sem_size(device, logical_core, CoreType::WORKER),
+                    res);
                 std::vector<uint32_t> filtered_res;
-                constexpr static uint32_t num_u32_to_skip = sizeof(uint32_t);
+                constexpr static uint32_t num_u32_to_skip = L1_ALIGNMENT / sizeof(uint32_t);
                 for (int i = 0; i < res.size(); i+=num_u32_to_skip) {
                     filtered_res.push_back(res.at(i));
                 }
+
                 TT_FATAL(filtered_res == golden_sem_values);
             }
         }
@@ -142,9 +146,8 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );
 
-    auto size_per_semaphore = SEMAPHORE_SIZE / NUM_SEMAPHORES;
     std::vector<uint32_t> golden_sem_values;
-    for (uint32_t i = 0; i < NUM_SEMAPHORES; i++) {
+    for (uint32_t i = 0; i < tt_metal::NUM_SEMAPHORES; i++) {
         uint32_t initial_value = i;
         tt_metal::CreateSemaphore(program, core_range_set, initial_value);
         golden_sem_values.push_back(initial_value);
@@ -153,10 +156,6 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
     check_program_is_mapped_to_correct_cores(program, core_range_set, compute_kernel_args);
 
     tt_metal::detail::CompileProgram(device, program);
-
-    pass &= tt_metal::detail::ConfigureDeviceWithProgram(device, program);
-
-    check_semaphores_are_initialized(device, core_range_set, golden_sem_values);
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
             buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
@@ -190,6 +189,8 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
 
 
     tt_metal::detail::LaunchProgram(device, program);
+
+    check_semaphores_are_initialized(device, program, core_range_set, golden_sem_values);
 
     for (const auto &[core, dst_l1_buffer] : core_to_l1_buffer) {
         std::vector<uint32_t> result_vec;

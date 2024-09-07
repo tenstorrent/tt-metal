@@ -172,11 +172,54 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 
 Vectors marked invalid will not be run by the test runner, but it will be recorded that it was skipped due to its invalidity.
 
+### Device Fixture
+Each op test file can optionally have a `mesh_device_fixture` generator which will be picked up by the infra for when a developer wants to use a custom (multi-chip, mesh, or otherwise) device configuration.
+
+This function should have two stages, setup and teardown of the device. These stages will be executed before, and after the test suite is executed. They are separated by the yield statement.
+
+The `yield` statement in the generator should yield all of the devices at once, if there are multiple. This object will be passed to `run()` when the tests are executed as the `device` parameter.
+
+The `yield` statement must give a tuple of your device object, and a label for this device configuration. See the below example.
+
+#### Example
+
+```
+def mesh_device_fixture():
+    # SETUP (called before test suite is executed)
+    import tt_lib as ttl
+
+    assert ttnn.get_num_devices() >= 8, "Not T3000!"
+
+    device_ids = [0, 4, 5, 1, 2, 6, 7, 3]
+    num_devices_requested = len(device_ids)
+
+    mesh_device = ttnn.open_mesh_device(
+        ttnn.MeshShape(1, num_devices_requested), device_ids[:num_devices_requested]
+    )
+
+    print("ADD: Opened device mesh")
+    # YIELD to test infrastructure
+    # IMPORTANT: Whatever device object(s) you want to pass to your run function need to be ONE object here, as this generator will only be referenced once before executing the tests.
+    # i.e. If you have four separate devices to use in your test, use 'yield ([device1, device2, device3, device4], "4 Device Setup")' inside of a list.
+    yield (mesh_device, "T3000 Mesh")
+
+    # TEARDOWN (called after test suite is finished executing)
+    print("ADD: Closing device mesh")
+
+    for device in mesh_device.get_devices():
+        ttnn.DumpDeviceProfiler(device)
+
+    ttnn.close_mesh_device(mesh_device)
+    del mesh_device
+```
+
 ### Run Function
 
 The run function will be called by the test runner with all defined parameters passed in, along with the device.
 
 This is where to define the test case itself including setup and teardown and golden comparison.
+
+If you defined a `mesh_device_fixture` generator, the object you yielded will be passed into this function as `device`. Otherwise, `device` will be the default ttnn device opened by the infra.
 
 The runner expects one of two returns from the run function:
 
@@ -260,7 +303,11 @@ Options:
 
 `--module-name <sweep_name>` OPTIONAL: Select the sweep file to generate parameters for. This should be only the name and not extension of the file. If not set, the generator will generate vectors for all sweep files in the sweeps folder.
 
-`--elastic <elastic_url>` OPTIONAL: Default is `http://yyz-elk:9200`, which in almost all cases should be overridden unless running with a local instance of Elasticsearch.
+`--elastic <corp/cloud/custom_url>` OPTIONAL: Default is `corp` which should be used on the internal VPN. Users on tt-cloud should set this to `cloud`. If there is a custom URL required, use `--elastic <custom_url>`.
+
+`--clean` OPTIONAL: This setting is used to recover from mistakes in parameter generation, or if you have removed some test suites. If set, this flag will mark ALL vectors in the sweep as "archived", and regenerate all suites based on the current parameters in the sweep file.
+
+`--tag <tag>` OPTIONAL: This setting is used to assign a custom tag that will be assigned to your test vectors. This is to keep copies of vectors seperate from other developers / CI. By default, this will be your username. You are able to specify a tag when running tests using the runner.
 
 ## Test Runner
 
@@ -269,6 +316,8 @@ The test runner reads in test vectors from the test vector database and executes
 ### Features
 
 - Hang Detection / Timeout: Default timeout for one single test is 30 seconds. This can be overridden by setting a global `TIMEOUT` variable in the test file. Test processes are killed after this timeout and tt-smi is automatically run to reset the chip after a hang, before continuing the test suite.
+- NOTE ON HANGS: When specifying one test vector to run, hang detection will be disabled. This is because the test is run in the parent process to allow debug tools like gdb/lldb to be used easily.
+- NOTE ON TT-SMI: To ensure the best stability, set the TT-SMI reset command in an environment variable `TT_SMI_RESET_COMMAND`. For example `TT_SMI_RESET_COMMAND="tt-smi -tr 0"`. If this is not set, the system will attempt to find tt-smi and use default flags, but this is not guaranteed to work on every system because of version mismatches of tt-smi.
 - Result Classification: Tests will be assigned one of the following statuses after a run:
     1. PASS: The test met expected criteria. In this case the test message response is stored with the status, typically this is a PCC value.
     2. FAIL: ASSERT / EXCEPTION: The test failed due to an assertion in the op itself, failed PCC assertion, or any other exception that is raised during execution. The exception is stored with the test result.
@@ -294,15 +343,17 @@ Options:
 
 `--suite-name <suite_name>` OPTIONAL: This must be set in conjunction with module name. If set, only the vectors from the specified suite will be run.
 
-`--elastic <elastic_url>` OPTIONAL: Default is `http://localhost:9200`, which in almost all cases should be overridden unless running with a local instance of Elasticsearch.
+`--elastic <corp/cloud/custom_url>` OPTIONAL: Default is `corp` which should be used on the internal VPN. Users on tt-cloud should set this to `cloud`. If there is a custom URL required, use `--elastic <custom_url>`.
 
-`--vector-id <vector_id>` OPTIONAL This must be set in conjunction with module name. If set, only the vector specified will be run.
+`--vector-id <vector_id>` OPTIONAL This must be set in conjunction with module name. If set, only the vector specified will be run. When vector id is specified, the test does not run in a subprocess which allows developers to use debug tools like gdb/lldb easily.
 
 `--watcher` OPTIONAL: This will run the tests with Watcher enabled. Watcher logs will be written to `generated/watcher/` and any Watcher exceptions raised will be caught.
 
 `--perf` OPTIONAL: This will enable e2e perf testing on the op tests that are written to support it. Each test will be run twice and the second result will be kept to avoid measuring compile time.
 
 `--dry-run` EXPERIMENTAL: This flag will print all the test vectors that would be run without the flag. This is best used piping stdout to a text file to avoid flooding the terminal.
+
+`--tag <tag>` OPTIONAL: This setting is used to assign a custom tag that will be used to search for test vectors. This is to keep copies of vectors seperate from other developers / CI. By default, this will be your username. You are able to specify a tag when generating tests using the generator. To run the CI suites of tests locally, use the `ci-main` tag.
 
 ## Query Tool
 
@@ -324,15 +375,15 @@ The vector and result commands will show a detailed view of the data, including 
 
 Options:
 
-  `--module-name TEXT`  Name of the module to be queried.
+  `--module-name <sweep_name>`  Name of the sweep module to be queried.
 
-  `--suite-name TEXT`   Suite name to filter by.
+  `--suite-name <suite_name>`   Suite name to filter by.
 
-  `--vector-id TEXT`    Individual Vector ID to filter by.
+  `--vector-id <vector_id>`    Individual Vector ID to filter by.
 
-  `--run-id TEXT`       Individual Run ID to filter by.
+  `--run-id <run_id>`       Individual Run ID to filter by.
 
-  `--elastic TEXT`      Elastic Connection String
+  `--elastic <corp/cloud/custom_url>`   Default is `corp` which should be used on the internal VPN. Users on tt-cloud should set this to `cloud`. If there is a custom URL required, use `--elastic <custom_url>`.
 
   `--all`               Displays total run statistics instead of the most recent run.
 
@@ -347,7 +398,7 @@ Commands:
 #### Examples
 
 ```
-$ python3 tests/sweep_framework/query.py --elastic http://172.18.0.2:9200 --module-name add summary
+$ python3 tests/sweep_framework/query.py --elastic corp --module-name add summary
 
 +------+------+-------------------------+-------------------+---------+
 |      | PASS | FAIL (ASSERT/EXCEPTION) | FAIL (CRASH/HANG) | NOT RUN |
@@ -359,7 +410,7 @@ $ python3 tests/sweep_framework/query.py --elastic http://172.18.0.2:9200 --modu
 ```
 
 ```
-$ python3 tests/sweep_framework/query.py --elastic http://172.18.0.2:9200 --module-name matmul_default_sharded --all summary
+$ python3 tests/sweep_framework/query.py --elastic corp --module-name matmul_default_sharded --all summary
 
 +---------+------+-------------------------+-------------------+---------+
 |         | PASS | FAIL (ASSERT/EXCEPTION) | FAIL (CRASH/HANG) | NOT RUN |
@@ -369,7 +420,7 @@ $ python3 tests/sweep_framework/query.py --elastic http://172.18.0.2:9200 --modu
 ```
 
 ```
-$ python3 tests/sweep_framework/query.py --elastic http://172.18.0.2:9200 --module-name add --suite-name dram summary
+$ python3 tests/sweep_framework/query.py --elastic corp --module-name add --suite-name dram summary
 
 +----------------------+------+-------------------------+-------------------+---------+
 | vector_id            | PASS | FAIL (ASSERT/EXCEPTION) | FAIL (CRASH/HANG) | NOT RUN |
@@ -410,7 +461,7 @@ $ python3 tests/sweep_framework/query.py --elastic http://172.18.0.2:9200 --modu
 
 
 ```
-$ python3 tests/sweep_framework/query.py --elastic http://172.18.0.2:9200 --module-name add detail
+$ python3 tests/sweep_framework/query.py --elastic corp --module-name add detail
 
                         Sweep   Suite        Vector ID              Timestamp               Status                                              Details                                       Git Hash
 ---------------------- ------- ------- ---------------------- --------------------- ----------------------- -------------------------------------------------------------------------------- -----------
@@ -446,7 +497,7 @@ $ python3 tests/sweep_framework/query.py --elastic http://172.18.0.2:9200 --modu
 
 
 ```
-$ python3 tests/sweep_framework/query.py --elastic http://172.18.0.2:9200 --module-name add --suite-name dram detail
+$ python3 tests/sweep_framework/query.py --elastic corp --module-name add --suite-name dram detail
 
     run_id              Sweep   Suite        Vector ID              Timestamp        Status   Details   Git Hash
 ---------------------- ------- ------- ---------------------- --------------------- -------- --------- -----------
@@ -485,7 +536,7 @@ $ python3 tests/sweep_framework/query.py --elastic http://172.18.0.2:9200 --modu
 ```
 
 ```
-$ python3 tests/sweep_framework/query.py --elastic http://172.18.0.2:9200 --module-name add --vector-id 6Va9k5ABKWg1nzaMCbVL vector
+$ python3 tests/sweep_framework/query.py --elastic corp --module-name add --vector-id 6Va9k5ABKWg1nzaMCbVL vector
 
 {'sweep_name': 'add',
  'timestamp': '2024-07-08_19-05-57',
@@ -511,7 +562,7 @@ $ python3 tests/sweep_framework/query.py --elastic http://172.18.0.2:9200 --modu
 ```
 
 ```
-$ python3 tests/sweep_framework/query.py --elastic http://172.18.0.2:9200 --module-name add --run-id TlbZmJABKWg1nzaMPbiV result
+$ python3 tests/sweep_framework/query.py --elastic corp --module-name add --run-id TlbZmJABKWg1nzaMPbiV result
 
 {'sweep_name': 'add',
  'suite_name': 'l1',
@@ -525,9 +576,9 @@ $ python3 tests/sweep_framework/query.py --elastic http://172.18.0.2:9200 --modu
 
 ## Database
 
-Elasticsearch instance shared with DevInfra hosted on yyz-elk.
+Elasticsearch instances are hosted on tt-corp and tt-cloud networks. Use the appropriate flag depending on your environment.
 
-Access credentials to be shared separately.
+Access credentials are shared separately.
 
 
 ## FAQ / Troubleshooting
@@ -559,5 +610,4 @@ Traceback (most recent call last):
 ModuleNotFoundError: No module named 'elasticsearch'
 ```
 
-- TTNN class pybinds need to use the `tt_pybind_class` wrapper to enable serialization/deserialization within this framework. There is a template in `tt_lib_bindings_tensor.cpp` which should replace `py::class_` and automatically add these bindings to your type. (TODO: Move the template from this location to a common location.)
-- Enum types do not need these pybinds.
+- TTNN class pybinds need to use the `tt_pybind_class` wrapper to enable serialization/deserialization within this framework. There is a template in `tt_lib_bindings_tensor.cpp` which should replace `py::class_` and automatically add these bindings to your type. (TODO: Move the template from this location to a common location.) Enum types do not need these pybinds.

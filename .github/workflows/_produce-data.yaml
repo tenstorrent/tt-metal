@@ -8,6 +8,10 @@ on:
         description: "Unique GitHub workflow run ID to use for data"
         default: 10066309412
         type: number
+      test_workflow_run_attempt:
+        description: "Run attempt of the workflow run"
+        default: 1
+        type: number
   workflow_run:
     workflows:
       - "All post-commit tests"
@@ -44,7 +48,7 @@ jobs:
           event_name="${{ github.event_name }}"
           if [[ "$event_name" == "workflow_dispatch" ]]; then
             run_id="${{ inputs.test_workflow_run_id }}"
-            attempt_number="1"
+            attempt_number="${{ inputs.test_workflow_run_attempt }}"
           elif [[ "$event_name" == "workflow_run" ]]; then
             run_id="${{ github.event.workflow_run.id }}"
             attempt_number="${{ github.event.workflow_run.run_attempt }}"
@@ -67,7 +71,8 @@ jobs:
           gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} > workflow.json
           echo "[Info] Workflow run attempt jobs"
           gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs --paginate
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs --paginate > workflow_jobs.json
+          # GitHub chunks the jobs array into multiple objects side-by-side if there are more than 100 jobs, so we need to slurp them into one giant object for later Python processing
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs --paginate | jq -s '{total_count: .[0].total_count, jobs: map(.jobs) | add}' > workflow_jobs.json
       - name: Collect workflow artifact and job logs
         shell: bash
         env:
@@ -89,7 +94,7 @@ jobs:
         run: ls -hal
       - name: Upload cicd data
         uses: ./.github/actions/upload-data-via-sftp
-        if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'main' }}
+        if: ${{ github.event_name == 'workflow_run' }}
         with:
           ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/cicd_data_batchfile.txt

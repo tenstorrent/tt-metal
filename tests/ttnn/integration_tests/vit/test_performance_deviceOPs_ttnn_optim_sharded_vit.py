@@ -14,13 +14,13 @@ from datasets import load_dataset
 from transformers import AutoImageProcessor
 
 import ttnn
-import tt_lib
 from models.experimental.functional_vit.tt import ttnn_optimized_sharded_vit
-from models.utility_functions import torch_random, skip_for_wormhole_b0, torch2tt_tensor
+from models.utility_functions import torch_random, is_wormhole_b0, torch2tt_tensor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.utility_functions import (
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
     torch_random,
@@ -36,14 +36,14 @@ def get_expected_times(functional_vit):
 
 
 @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("image_size", [224])
 @pytest.mark.parametrize("image_channels", [3])
 @pytest.mark.parametrize("functional_vit", [ttnn_optimized_sharded_vit])
 def test_performance_vit_embeddings(device, model_name, batch_size, image_size, image_channels, functional_vit):
-    # tt_lib.device.EnableMemoryReports()
+    # ttnn.experimental.device.EnableMemoryReports()
 
     config = transformers.ViTConfig.from_pretrained(model_name)
     model = transformers.ViTForImageClassification.from_pretrained("google/vit-base-patch16-224")
@@ -83,27 +83,23 @@ def test_performance_vit_embeddings(device, model_name, batch_size, image_size, 
     patch_size = 16
     torch_pixel_values = torch_pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
     N, H, W, C = torch_pixel_values.shape
-    shard_grid = tt_lib.tensor.CoreRangeSet(
+    shard_grid = ttnn.CoreRangeSet(
         {
-            tt_lib.tensor.CoreRange(
-                tt_lib.tensor.CoreCoord(0, 0),
-                tt_lib.tensor.CoreCoord(7, 0),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(7, 0),
             ),
         }
     )
     n_cores = 8
-    shard_spec = tt_lib.tensor.ShardSpec(
-        shard_grid, [N * H * W // n_cores, C], tt_lib.tensor.ShardOrientation.ROW_MAJOR, False
-    )
+    shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
 
     pixel_values = torch2tt_tensor(
         torch_pixel_values,
         device,
-        tt_lib.tensor.Layout.ROW_MAJOR,
-        tt_memory_config=tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1, shard_spec
-        ),
-        tt_dtype=tt_lib.tensor.DataType.BFLOAT16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec),
+        tt_dtype=ttnn.bfloat16,
     )
     # pixel_values = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
@@ -126,7 +122,7 @@ def test_performance_vit_embeddings(device, model_name, batch_size, image_size, 
 
 
 @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -197,7 +193,7 @@ def test_performance_vit_encoder(device, use_program_cache, model_name, batch_si
 
 
 @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -279,27 +275,23 @@ def test_performance_vit_e2e(
         patch_size = 16
         torch_pixel_values = torch_pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
         N, H, W, C = torch_pixel_values.shape
-        shard_grid = tt_lib.tensor.CoreRangeSet(
+        shard_grid = ttnn.CoreRangeSet(
             {
-                tt_lib.tensor.CoreRange(
-                    tt_lib.tensor.CoreCoord(0, 0),
-                    tt_lib.tensor.CoreCoord(7, 0),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(7, 0),
                 ),
             }
         )
         n_cores = 8
-        shard_spec = tt_lib.tensor.ShardSpec(
-            shard_grid, [N * H * W // n_cores, C], tt_lib.tensor.ShardOrientation.ROW_MAJOR, False
-        )
+        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
 
         pixel_values = torch2tt_tensor(
             torch_pixel_values,
             device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
-            tt_memory_config=tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1, shard_spec
-            ),
-            tt_dtype=tt_lib.tensor.DataType.BFLOAT16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec),
+            tt_dtype=ttnn.bfloat16,
         )
         # pixel_values = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 

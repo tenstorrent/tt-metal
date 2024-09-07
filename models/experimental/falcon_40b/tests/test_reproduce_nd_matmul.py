@@ -5,7 +5,6 @@
 from loguru import logger
 import pytest
 
-import tt_lib as ttl
 import ttnn
 from models.utility_functions import comp_pcc, tt2torch_tensor, torch2tt_tensor
 import torch
@@ -36,13 +35,13 @@ def test_reproduce_matmul_1d(
 ):
     torch.manual_seed(1234)
 
-    in0_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
-    in1_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
-    out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+    in0_mem_config = ttnn.DRAM_MEMORY_CONFIG
+    in1_mem_config = ttnn.DRAM_MEMORY_CONFIG
+    out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
-    in0_dtype = ttl.tensor.DataType.BFLOAT8_B
-    in1_dtype = ttl.tensor.DataType.BFLOAT8_B
-    out_dtype = ttl.tensor.DataType.BFLOAT8_B
+    in0_dtype = ttnn.bfloat8_b
+    in1_dtype = ttnn.bfloat8_b
+    out_dtype = ttnn.bfloat8_b
 
     a_shape = [1, 1, seq_len, inner_dim]
     b_shape = [1, 1, inner_dim, weights_n]
@@ -50,8 +49,8 @@ def test_reproduce_matmul_1d(
     A = torch.randn(a_shape)
     B = torch.randn(b_shape)
 
-    a_t = torch2tt_tensor(A, device, ttl.tensor.Layout.TILE, in0_mem_config, in0_dtype)
-    b_t = torch2tt_tensor(B, device, ttl.tensor.Layout.TILE, in1_mem_config, in1_dtype)
+    a_t = torch2tt_tensor(A, device, ttnn.TILE_LAYOUT, in0_mem_config, in0_dtype)
+    b_t = torch2tt_tensor(B, device, ttnn.TILE_LAYOUT, in1_mem_config, in1_dtype)
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 8),
@@ -65,8 +64,8 @@ def test_reproduce_matmul_1d(
         mcast_in0=True,
     )
 
-    compute_config = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.LoFi,
+    compute_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=True,
         packer_l1_acc=False,  # fails with l1 acc turned on as well, just needs more iterations
@@ -138,13 +137,13 @@ def test_reproduce_matmul_2d(
 ):
     torch.manual_seed(1234)
 
-    in0_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
-    in1_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
-    out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+    in0_mem_config = ttnn.DRAM_MEMORY_CONFIG
+    in1_mem_config = ttnn.DRAM_MEMORY_CONFIG
+    out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
-    in0_dtype = ttl.tensor.DataType.BFLOAT8_B
-    in1_dtype = ttl.tensor.DataType.BFLOAT8_B
-    out_dtype = ttl.tensor.DataType.BFLOAT8_B
+    in0_dtype = ttnn.bfloat8_b
+    in1_dtype = ttnn.bfloat8_b
+    out_dtype = ttnn.bfloat8_b
 
     a_shape = [1, 1, seq_len, inner_dim]
     b_shape = [1, 1, inner_dim, weights_n]
@@ -152,8 +151,8 @@ def test_reproduce_matmul_2d(
     A = torch.randn(a_shape)
     B = torch.randn(b_shape)
 
-    a_t = torch2tt_tensor(A, device, ttl.tensor.Layout.TILE, in0_mem_config, in0_dtype)
-    b_t = torch2tt_tensor(B, device, ttl.tensor.Layout.TILE, in1_mem_config, in1_dtype)
+    a_t = torch2tt_tensor(A, device, ttnn.TILE_LAYOUT, in0_mem_config, in0_dtype)
+    b_t = torch2tt_tensor(B, device, ttnn.TILE_LAYOUT, in1_mem_config, in1_dtype)
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(8, 8),
@@ -166,8 +165,8 @@ def test_reproduce_matmul_2d(
         fused_activation=None,
     )
 
-    compute_config = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.LoFi,
+    compute_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,

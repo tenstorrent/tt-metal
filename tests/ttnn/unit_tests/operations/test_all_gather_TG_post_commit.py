@@ -5,7 +5,6 @@
 import torch
 import pytest
 from loguru import logger
-import tt_lib as ttl
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
@@ -46,7 +45,7 @@ def print_tile_corners_of_tensor(t):
 
 
 def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
-    device_mesh,
+    mesh_device,
     num_devices_per_line,
     input_shape_per_all_gather,
     dim,
@@ -61,9 +60,9 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     num_iters=1,
     cluster_axis=0,
 ):
-    if len(device_mesh.get_devices()) != 32:
+    if len(mesh_device.get_devices()) != 32:
         pytest.skip("Not TG!")
-    for device in device_mesh.get_devices():
+    for device in mesh_device.get_devices():
         device.enable_async(enable_async)
 
     input_shape_per_chip = list(input_shape_per_all_gather)
@@ -125,23 +124,23 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     ttnn_tensor = ttnn.from_torch(
         full_tensor,
         dtype=input_dtype,
-        device=device_mesh,
+        device=mesh_device,
         layout=layout,
         memory_config=mem_config,
-        mesh_mapper=ShardTensor2dMesh(device_mesh, mesh_shape=mesh_shape, dims=shard_dims),
+        mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dims),
     )
-    ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh)
+    ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
 
-    # ttnn.visualize_device_mesh(device_mesh, tensor=ttnn_tensor)
+    # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
     for _ in range(num_iters):
         ttnn_tensor_out = ttnn.line_all_gather(
-            ttnn_tensor, dim=dim, cluster_axis=cluster_axis, device_mesh=device_mesh, num_links=num_links
+            ttnn_tensor, dim=dim, cluster_axis=cluster_axis, mesh_device=mesh_device, num_links=num_links
         )
 
     concat_dims = (3, 2) if cluster_axis == 0 else (2, 3)
     if debug:
         readback_input_tensor = ttnn.to_torch(
-            ttnn_tensor, mesh_composer=ConcatMesh2dToTensor(device_mesh, mesh_shape=mesh_shape, dims=concat_dims)
+            ttnn_tensor, mesh_composer=ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=concat_dims)
         )
         print(f"readback_input_tensor")
         print_tile_corners_of_tensor(readback_input_tensor)
@@ -153,14 +152,14 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
 
     if debug:
         for i, t in enumerate(ttnn.get_device_tensors(ttnn_tensor_out)):
-            t = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+            t = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
             print(f"OUTPUT TENSOR {i}")
             print_tile_corners_of_tensor(t)
 
-    # ttnn.visualize_device_mesh(device_mesh, tensor=ttnn_tensor_out)
+    # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor_out)
     logger.info(f"concat_dims: {concat_dims}")
     tt_output_tensor = ttnn.to_torch(
-        ttnn_tensor_out, mesh_composer=ConcatMesh2dToTensor(device_mesh, mesh_shape=mesh_shape, dims=concat_dims)
+        ttnn_tensor_out, mesh_composer=ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=concat_dims)
     )
     logger.info(f"tt_output_tensor.shape: {tt_output_tensor.shape}")
 
@@ -169,7 +168,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         print_tile_corners_of_tensor(tt_output_tensor)
 
     ## This full_tensor will only be 1/num_devices_per_line of the tt_output_tensor. We should just be able to concatenate it along the
-    if input_dtype == ttl.tensor.DataType.BFLOAT16:
+    if input_dtype == ttnn.bfloat16:
         eq, output = comp_equal(tt_output_tensor, full_mesh_output_golden)
         if not eq and debug:
             report_mismatches(full_mesh_output_golden, tt_output_tensor)
@@ -185,32 +184,32 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
-        (4, 3, [1, 1, 32, 1280], 0, ttl.tensor.Layout.TILE),
-        (4, 3, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
-        (4, 3, [1, 1, 32, 2304], 1, ttl.tensor.Layout.TILE),
-        (4, 3, [1, 1, 32, 4096], 1, ttl.tensor.Layout.TILE),
-        (4, 3, [1, 1, 32, 6656], 1, ttl.tensor.Layout.TILE),
+        (4, 3, [1, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
+        (4, 3, [1, 1, 32, 16384], 3, ttnn.TILE_LAYOUT),
+        (4, 3, [1, 1, 32, 2304], 1, ttnn.TILE_LAYOUT),
+        (4, 3, [1, 1, 32, 4096], 1, ttnn.TILE_LAYOUT),
+        (4, 3, [1, 1, 32, 6656], 1, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.DataType.BFLOAT8_B,
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
-        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("replication_factor", [8])  # 1, 8])
 @pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 def test_line_all_gather_on_TG_rows_post_commit(
-    device_mesh,
+    mesh_device,
     num_devices,
     input_shape,
     dim,
@@ -225,7 +224,7 @@ def test_line_all_gather_on_TG_rows_post_commit(
     num_iters=1,
 ):
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
-        device_mesh,
+        mesh_device,
         num_devices,
         input_shape,
         dim,
@@ -246,31 +245,31 @@ def test_line_all_gather_on_TG_rows_post_commit(
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
-        # (8, 4, [1, 1, 32, 1280], 1, ttl.tensor.Layout.TILE), # Rightmost column of tiles per input not copied to final output
-        (8, 4, [1, 1, 32, 2048], 1, ttl.tensor.Layout.TILE),  # passes
-        (8, 4, [1, 1, 32, 2304], 1, ttl.tensor.Layout.TILE),  # passes
-        (8, 4, [1, 1, 32, 4096], 1, ttl.tensor.Layout.TILE),  # passes
+        # (8, 4, [1, 1, 32, 1280], 1, ttnn.TILE_LAYOUT), # Rightmost column of tiles per input not copied to final output
+        (8, 4, [1, 1, 32, 2048], 1, ttnn.TILE_LAYOUT),  # passes
+        (8, 4, [1, 1, 32, 2304], 1, ttnn.TILE_LAYOUT),  # passes
+        (8, 4, [1, 1, 32, 4096], 1, ttnn.TILE_LAYOUT),  # passes
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,
-        # ttl.tensor.DataType.BFLOAT8_B,
+        ttnn.bfloat16,
+        # ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
-        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.DRAM),
-        # ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("enable_async", [False])
 @pytest.mark.parametrize("replication_factor", [4])  # 1, 4])
-@pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 def test_line_all_gather_on_TG_cols_post_commit(
-    device_mesh,
+    mesh_device,
     num_devices,
     input_shape,
     dim,
@@ -285,7 +284,7 @@ def test_line_all_gather_on_TG_cols_post_commit(
     num_iters=1,
 ):
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
-        device_mesh,
+        mesh_device,
         num_devices,
         input_shape,
         dim,

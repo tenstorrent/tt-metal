@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 import torch
 from torch import nn
-import tt_lib
+import ttnn
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
@@ -47,17 +47,13 @@ def run_test_llama_decoder_inference(
 
     # Load Pytorch model ===================================================================
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_version)
-    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(
-        model_version, torch_dtype=torch.float32
-    )
+    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(model_version, torch_dtype=torch.float32)
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
 
     # PyTorch output =========================================================================
-    pytorch_LlamaDecoder_model = PytorchLlamaDecoderModelStacked(
-        hugging_face_reference_model, decoder_stack_list
-    )
+    pytorch_LlamaDecoder_model = PytorchLlamaDecoderModelStacked(hugging_face_reference_model, decoder_stack_list)
     logger.info(f"inputs: {llama_input}")
     logger.info(f"shape: {llama_input.shape}")
     logger.info(f"positions: {position_ids}")
@@ -130,8 +126,8 @@ def test_llama_decoder_inference(pcc, reset_seeds):
     llama_input = (torch.rand(batch, seq_len, 4096) * 2) - 1
 
     # Initialize the device
-    device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.SetDefaultDevice(device)
+    device = ttnn.open_device(0)
+    ttnn.SetDefaultDevice(device)
 
     run_test_llama_decoder_inference(
         device,
@@ -146,4 +142,4 @@ def test_llama_decoder_inference(pcc, reset_seeds):
         on_weka,
         pcc,
     )
-    tt_lib.device.CloseDevice(device)
+    ttnn.close_device(device)

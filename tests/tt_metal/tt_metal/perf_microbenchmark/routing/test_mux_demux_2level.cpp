@@ -86,6 +86,11 @@ int main(int argc, char **argv) {
                  "MAX_SWITCH_FAN_IN and MAX_SWITCH_FAN_OUT expected to be 4");
 
     bool pass = true;
+
+    std::map<string, string> defines = {
+        {"FD_CORE_TYPE", std::to_string(0)}, // todo, support dispatch on eth
+    };
+
     try {
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
@@ -175,7 +180,7 @@ int main(int argc, char **argv) {
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                     .compile_args = compile_args,
-                    .defines = {}
+                    .defines = defines,
                 }
             );
         }
@@ -214,7 +219,7 @@ int main(int argc, char **argv) {
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                     .compile_args = compile_args,
-                    .defines = {}
+                    .defines = defines,
                 }
             );
         }
@@ -265,7 +270,7 @@ int main(int argc, char **argv) {
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                     .compile_args = mux_l1_compile_args,
-                    .defines = {}
+                    .defines = defines,
                 }
             );
         }
@@ -313,7 +318,7 @@ int main(int argc, char **argv) {
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = mux_l2_compile_args,
-                .defines = {}
+                .defines = defines,
             }
         );
 
@@ -374,7 +379,7 @@ int main(int argc, char **argv) {
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = demux_l1_compile_args,
-                .defines = {}
+                .defines = defines,
             }
         );
 
@@ -439,7 +444,7 @@ int main(int argc, char **argv) {
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                     .compile_args = demux_l2_compile_args,
-                    .defines = {}
+                    .defines = defines,
                 }
             );
 

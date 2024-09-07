@@ -4,7 +4,6 @@
 import os
 import torch
 import json
-import tt_lib as ttl
 import pytest
 from loguru import logger
 from time import time
@@ -54,7 +53,7 @@ def load_inputs(user_input, batch):
     return in_prompt
 
 
-def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, instruct, device_mesh):
+def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, instruct, mesh_device):
     """
     Run tokenizer on inputs, and create embeddings for the first token of each input
     """
@@ -83,20 +82,20 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, instruct, dev
     input_tokens_tt = [
         ttnn.from_torch(
             input_tokens[:, i].unsqueeze(0),
-            device=device_mesh,
+            device=mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
         for i in range(max_prompt_len)
     ]
     input_mask_tt = [
         ttnn.from_torch(
             input_mask[:, i].unsqueeze(0),
-            device=device_mesh,
+            device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
         for i in range(max_prompt_len)
     ]
@@ -104,7 +103,7 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, instruct, dev
 
 
 @torch.no_grad()
-def run_grok_demo(user_input, batch_size, device_mesh, instruct_mode):
+def run_grok_demo(user_input, batch_size, mesh_device, instruct_mode):
     assert batch_size == 32, "Batch size must be 32"
 
     dtype = ttnn.bfloat8_b
@@ -119,7 +118,7 @@ def run_grok_demo(user_input, batch_size, device_mesh, instruct_mode):
         input_prompts = load_inputs(user_input, 32)
 
     # Load model args, weights, and tokenizer
-    model_args = TtModelArgs(device_mesh.get_device(0), instruct=instruct_mode)
+    model_args = TtModelArgs(mesh_device.get_device(0), instruct=instruct_mode)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     model_args.n_layers = 32  # Full model
@@ -142,7 +141,7 @@ def run_grok_demo(user_input, batch_size, device_mesh, instruct_mode):
 
     # Preprocess initial prompt inputs
     input_tokens_tt, max_prompt_len, input_mask, input_tokens_pt, input_mask_pt = preprocess_inputs(
-        input_prompts, tokenizer, model_args, dtype, instruct_mode, device_mesh
+        input_prompts, tokenizer, model_args, dtype, instruct_mode, mesh_device
     )
 
     # TODO should we just change the pad after initial pad of the inputs?
@@ -152,7 +151,7 @@ def run_grok_demo(user_input, batch_size, device_mesh, instruct_mode):
     # Load TTNN grok model
     logger.info("Loading weights to device...")
     tt_model = TtTransformer(
-        device_mesh=device_mesh,
+        mesh_device=mesh_device,
         state_dict=state_dict,
         args=model_args,
         layers=list(range(model_args.n_layers)),
@@ -161,7 +160,7 @@ def run_grok_demo(user_input, batch_size, device_mesh, instruct_mode):
 
     if not embed_on_host:
         tt_embds = TtGrokEmbedding(
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             args=model_args,
             weight_cache_path=model_args.weight_cache_path(dtype),
             state_dict=state_dict,
@@ -184,13 +183,13 @@ def run_grok_demo(user_input, batch_size, device_mesh, instruct_mode):
     rot_mats = prepare_rotation_mat_ttnn(
         model_args.head_dim,
         model_args.max_seq_len,
-        tt_model.device_mesh,
+        tt_model.mesh_device,
     )
 
     generation_start_pos = 0
     max_generated_tokens = 50
 
-    cache_attention(device_mesh, state_dict, model_args, rot_mats, generation_start_pos, max_generated_tokens, dtype)
+    cache_attention(mesh_device, state_dict, model_args, rot_mats, generation_start_pos, max_generated_tokens, dtype)
 
     logger.info("Starting inference...")
 
@@ -201,8 +200,8 @@ def run_grok_demo(user_input, batch_size, device_mesh, instruct_mode):
     finished_generation = [False] * batch_size
 
     # TODO Debug (only device 0 is doing argmax, otherwise it throws an error)
-    # Alternatively, send the output back to device: tt_lib.tensor.Tensor.to()
-    ttl.device.SetDefaultDevice(device_mesh.get_device(0))
+    # Alternatively, send the output back to device: ttnn.Tensor.to()
+    ttnn.SetDefaultDevice(mesh_device.get_device(0))
 
     # Keep running inference as long as there is a user in the batch still decoding or max tokens per user are decoded
     for iteration in range(max_generated_tokens):
@@ -221,7 +220,7 @@ def run_grok_demo(user_input, batch_size, device_mesh, instruct_mode):
                 model_args.dim,
                 start_pos,
                 model_args.sliding_window,
-                tt_model.device_mesh,
+                tt_model.mesh_device,
             )
 
         # Run ttnn grok model
@@ -231,7 +230,7 @@ def run_grok_demo(user_input, batch_size, device_mesh, instruct_mode):
         if embed_on_host:
             # Convert ttnn tensor to torch tensor
             tt_output_torch = (
-                ttnn.to_torch(tt_out_11BH, mesh_composer=ConcatMeshToTensor(device_mesh, dim=0))[0]
+                ttnn.to_torch(tt_out_11BH, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))[0]
                 .squeeze(1)
                 .view(batch_size, seqlen, -1)
                 .detach()
@@ -307,7 +306,7 @@ def run_grok_demo(user_input, batch_size, device_mesh, instruct_mode):
     ],
     ids=["general_weights", "instruct_weights"],
 )
-def test_grok8x7b_demo(t3k_device_mesh, use_program_cache, input_prompts, instruct_weights):
+def test_grok8x7b_demo(t3k_mesh_device, use_program_cache, input_prompts, instruct_weights):
     return run_grok_demo(
-        user_input=input_prompts, batch_size=32, device_mesh=t3k_device_mesh, instruct_mode=instruct_weights
+        user_input=input_prompts, batch_size=32, mesh_device=t3k_mesh_device, instruct_mode=instruct_weights
     )

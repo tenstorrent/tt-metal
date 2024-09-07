@@ -32,10 +32,10 @@ def find_max_subblock(out_block_h, out_block_w):
     return best_h, best_w, max_product
 
 
-from models.utility_functions import is_wormhole_b0, is_grayskull, skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b0, is_blackhole
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.skipif(is_grayskull(), reason="no llama2 test on GS")
 @pytest.mark.parametrize(
     "packer_l1_acc",
@@ -126,7 +126,7 @@ def test_llama2_matmul(
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=ttnn.bfloat8_b)
 
     if in0_sharded:
-        in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
+        in0_t = ttnn.interleaved_to_sharded(
             in0_t,
             grid_size,
             [M, int(in0_block_w * 32)],
@@ -162,7 +162,7 @@ def test_llama2_matmul(
         compute_kernel_config=compute_kernel_config,
     )
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
     pt_out = in0 @ in1 + bias
 
     tt_out = tt2torch_tensor(output_t)
@@ -172,7 +172,7 @@ def test_llama2_matmul(
     assert passing
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
@@ -451,7 +451,7 @@ def test_multi_core_matmul_2d_wh(
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config_L1
 
     if in0_sharded:
-        in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
+        in0_t = ttnn.interleaved_to_sharded(
             in0_t,
             grid_size,
             [M // grid_size[1], K // grid_size[0]],
@@ -486,7 +486,7 @@ def test_multi_core_matmul_2d_wh(
     )
 
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
 
     pt_out = in0 @ in1
 
@@ -502,7 +502,7 @@ def test_multi_core_matmul_2d_wh(
     assert passing
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
@@ -778,7 +778,7 @@ def test_multi_core_matmul_1d_wh(
     output_mem_config = sharded_mem_config
 
     if in0_sharded:
-        in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
+        in0_t = ttnn.interleaved_to_sharded(
             in0_t,
             grid_size,
             [M, int(out_block_w * 32)],
@@ -814,7 +814,7 @@ def test_multi_core_matmul_1d_wh(
         compute_kernel_config=compute_kernel_config,
     )
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
     pt_out = in0 @ in1 + bias
 
     tt_out = tt2torch_tensor(output_t)
@@ -824,7 +824,7 @@ def test_multi_core_matmul_1d_wh(
     assert passing
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
     "in1_in_dram, out_sharded, in0_sharded, M, K, N, activation, dtype, fidelity",
@@ -984,7 +984,7 @@ def test_multi_core_matmul_2d_gs(
     bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config_L1, tt_dtype=ttnn.bfloat8_b)[0]
 
     if in0_sharded:
-        in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
+        in0_t = ttnn.interleaved_to_sharded(
             in0_t,
             grid_size,
             [M // grid_size[0], K // grid_size[1]],
@@ -1024,7 +1024,7 @@ def test_multi_core_matmul_2d_gs(
         )
 
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
 
     pt_out = in0 @ in1
 
@@ -1040,7 +1040,7 @@ def test_multi_core_matmul_2d_gs(
     assert passing
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
     "in1_in_dram, out_sharded, in0_sharded, M, K, N, activation, dtype, fidelity",
@@ -1144,7 +1144,7 @@ def test_multi_core_matmul_1d_gs(
     output_mem_config = sharded_mem_config
 
     if in0_sharded:
-        in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
+        in0_t = ttnn.interleaved_to_sharded(
             in0_t,
             grid_size,
             [M, int(out_block_w * 32)],
@@ -1178,7 +1178,7 @@ def test_multi_core_matmul_1d_gs(
         compute_kernel_config=compute_kernel_config,
     )
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
     pt_out = in0 @ in1 + bias
 
     tt_out = tt2torch_tensor(output_t)

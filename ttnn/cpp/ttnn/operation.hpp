@@ -26,7 +26,7 @@ static Hash hash_operation(const Types&... objects) {
 }
 
 using OverrideAddressesCallback =
-    std::function<void(const Program&, const std::vector<Buffer*>&, const std::vector<Buffer*>&)>;
+    std::function<void(const Program&, const std::vector<tt::tt_metal::Buffer*>&, const std::vector<tt::tt_metal::Buffer*>&)>;
 
 using Tensors = std::vector<Tensor>;
 using OptionalTensors = std::vector<std::optional<Tensor>>;
@@ -802,7 +802,3 @@ using Operation = std::variant<
 }  // namespace operation
 }  // namespace tt_metal
 }  // namespace tt
-
-namespace ttnn {
-inline std::int64_t OPERATION_ID = -1;
-}

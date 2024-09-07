@@ -8,17 +8,18 @@ import torch.nn as nn
 from typing import Optional, Tuple, Union
 from dataclasses import dataclass
 
-import tt_lib
+import ttnn
 
 from models.experimental.roberta.tt.roberta_model import TtRobertaModel
 from models.experimental.roberta.tt.roberta_classification_head import TtRobertaClassificationHead
 
+
 @dataclass
 class TtSequenceClassifierOutput:
-    loss: tt_lib.tensor.Tensor = None
-    logits: tt_lib.tensor.Tensor = None
-    hidden_states: tt_lib.tensor.Tensor = None
-    attentions: tt_lib.tensor.Tensor = None
+    loss: ttnn.Tensor = None
+    logits: ttnn.Tensor = None
+    hidden_states: ttnn.Tensor = None
+    attentions: ttnn.Tensor = None
 
 
 class TtRobertaForSequenceClassification(nn.Module):
@@ -46,25 +47,23 @@ class TtRobertaForSequenceClassification(nn.Module):
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,
+        attention_mask: Optional[ttnn.Tensor] = None,
         token_type_ids: Optional[torch.LongTensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
-        inputs_embeds: Optional[tt_lib.tensor.Tensor] = None,
+        head_mask: Optional[ttnn.Tensor] = None,
+        inputs_embeds: Optional[ttnn.Tensor] = None,
         labels: Optional[torch.LongTensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[Tuple[tt_lib.tensor.Tensor], TtSequenceClassifierOutput]:
+    ) -> Union[Tuple[ttnn.Tensor], TtSequenceClassifierOutput]:
         r"""
         labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
             Labels for computing the sequence classification/regression loss. Indices should be in `[0, ...,
             config.num_labels - 1]`. If `config.num_labels == 1` a regression loss is computed (Mean-Square loss), If
             `config.num_labels > 1` a classification loss is computed (Cross-Entropy).
         """
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         outputs = self.roberta(
             input_ids,
@@ -90,9 +89,7 @@ class TtRobertaForSequenceClassification(nn.Module):
             if self.config.problem_type is None:
                 if self.num_labels == 1:
                     self.config.problem_type = "regression"
-                elif self.num_labels > 1 and (
-                    labels.dtype == torch.long or labels.dtype == torch.int
-                ):
+                elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
                     self.config.problem_type = "single_label_classification"
                 else:
                     self.config.problem_type = "multi_label_classification"

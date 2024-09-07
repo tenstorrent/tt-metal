@@ -43,8 +43,8 @@ class TtLlamaKVUpdate(torch.nn.Module):
         self.layer_past = layer_past
 
     def forward(self, xk, xv, layer_past_len):
-        ttnn.experimental.tensor.update_cache(self.layer_past[0], xk, layer_past_len)
-        ttnn.experimental.tensor.update_cache(self.layer_past[1], xv, layer_past_len)
+        ttnn.update_cache(self.layer_past[0], xk, layer_past_len)
+        ttnn.update_cache(self.layer_past[1], xv, layer_past_len)
 
         return self.layer_past
 

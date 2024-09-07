@@ -350,17 +350,17 @@ MaxPoolNew::MultiCore::cached_program_t MaxPoolNew::MultiCore::create(const oper
 
     tt::tt_metal::detail::AddConfigBuffer(program, reader_indices_on_device.device_buffer());
 
-    auto in_n = sliding_window_config.batch_size_;
-    auto in_h = sliding_window_config.input_hw_.first;
-    auto in_w = sliding_window_config.input_hw_.second;
-    auto kernel_size_h = sliding_window_config.window_hw_.first;
-    auto kernel_size_w = sliding_window_config.window_hw_.second;
-    auto stride_h = sliding_window_config.stride_hw_.first;
-    auto stride_w = sliding_window_config.stride_hw_.second;
-    auto pad_h = sliding_window_config.pad_hw_.first;
-    auto pad_w = sliding_window_config.pad_hw_.second;
-    auto dilation_h = sliding_window_config.dilation_hw_.first;
-    auto dilation_w = sliding_window_config.dilation_hw_.second;
+    auto in_n = sliding_window_config.batch_size;
+    auto in_h = sliding_window_config.input_hw.first;
+    auto in_w = sliding_window_config.input_hw.second;
+    auto kernel_size_h = sliding_window_config.window_hw.first;
+    auto kernel_size_w = sliding_window_config.window_hw.second;
+    auto stride_h = sliding_window_config.stride_hw.first;
+    auto stride_w = sliding_window_config.stride_hw.second;
+    auto pad_h = sliding_window_config.pad_hw.first;
+    auto pad_w = sliding_window_config.pad_hw.second;
+    auto dilation_h = sliding_window_config.dilation_hw.first;
+    auto dilation_w = sliding_window_config.dilation_hw.second;
 
     return max_pool_2d_multi_core_sharded_with_halo_v2_impl_new(
         program,

@@ -8,44 +8,61 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
 )
+from models.utility_functions import skip_for_grayskull
 from loguru import logger
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
+    "batch_size, seq_len, embedding_dim, num_embeddings",
+    [
+        (2, 64, 160, 96),
+        (3, 32, 384, 320),
+        (2, 1024, 4096, 3200),
+    ],
 )
-def test_embedding_bw(input_shapes, device):
+@pytest.mark.parametrize(
+    "output_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.uint32,
+    ],
+)
+def test_embedding_bw(input_dtype, output_dtype, batch_size, seq_len, embedding_dim, num_embeddings, device):
     torch.manual_seed(1234)
 
-    batch_size = input_shapes[0]
-    no_of_embeddings = input_shapes[1] * input_shapes[2]
-    embedding_dim = input_shapes[3]
+    if input_dtype == ttnn.bfloat16 and num_embeddings > 256:
+        pytest.skip("Skipping tests with large vocab sizes for bfloat16 indices!")
 
-    input_shape = [batch_size, 1, 1, no_of_embeddings]
-    input_index = torch.reshape(torch.arange(0, batch_size * no_of_embeddings), shape=input_shape)
-    weights_shape = [batch_size, 1, no_of_embeddings, embedding_dim]
+    input_shape = (batch_size, seq_len)
+    input_index = torch.randint(0, num_embeddings, input_shape)
+    input_tensor = ttnn.from_torch(input_index, dtype=input_dtype, device=device)
+
+    weights_shape = (num_embeddings, embedding_dim)
     weights = torch.randn(weights_shape, requires_grad=True)
-    grad_shape = [1, 1, batch_size * no_of_embeddings, embedding_dim]
+    weights_ttnn = ttnn.from_torch(weights, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    grad_shape = (1, 1, batch_size * seq_len, embedding_dim)
     grad_data = torch.randn(grad_shape, requires_grad=True)
+    grad_tensor = ttnn.from_torch(grad_data, dtype=output_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    grad_tensor = ttnn.Tensor(grad_data, ttnn.bfloat16).to(ttnn.ROW_MAJOR_LAYOUT).to(device)
+    tt_output_tensor_on_device = ttnn.embedding_bw(input_tensor, weights_ttnn, grad_tensor, dtype=output_dtype)
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor_on_device)
 
-    input_tensor = ttnn.Tensor(input_index, ttnn.uint32).to(device)
+    # PyTorch reference
+    weights.retain_grad()
+    pyt_y = torch.nn.functional.embedding(input_index, weights).reshape(grad_shape)
+    pyt_y.backward(gradient=grad_data)
+    golden_output_tensor = weights.grad
 
-    weights_tensor = ttnn.Tensor(weights, ttnn.bfloat16).to(ttnn.ROW_MAJOR_LAYOUT).to(device)
+    comp_pass, comp_out = comparison_funcs.comp_pcc(golden_output_tensor, tt_output_tensor)
 
-    tt_output_tensor_on_device = ttnn.embedding_bw(grad_tensor, input_tensor, weights_tensor)
-    tt_output_tensor_a = tt_output_tensor_on_device[0].cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
-
-    golden_function = ttnn.get_golden_function(ttnn.embedding_bw)
-    golden_tensor = golden_function(grad_data, input_index, weights, input_shapes)
-
-    comp_pass_a, comp_out_a = comparison_funcs.comp_pcc(golden_tensor, tt_output_tensor_a)
-
-    logger.debug(comp_out_a)
-    assert comp_pass_a
+    logger.debug(comp_out)
+    assert comp_pass

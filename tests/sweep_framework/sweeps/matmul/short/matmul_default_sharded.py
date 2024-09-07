@@ -14,6 +14,9 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.utility_functions import torch_random
 
 
+TIMEOUT = 5
+
+
 class TensorMemoryConfigs(enum.Enum):
     BLOCK_Y5_X7 = enum.auto()
     BLOCK_Y7_X5_COL = enum.auto()
@@ -28,43 +31,43 @@ parameters = {
         "batch_sizes": [(2, 3)],
         "input_shapes": [(1600, 224, 896)],
         "batch_matrix_multiply": [False],
-        "input_a_sharded_memory_config_specs": [TensorMemoryConfigs.BLOCK_Y5_X7],
+        "input_a_sharded_memory_config_specs": [TensorMemoryConfigs.BLOCK_Y5_X7.name],
         "input_b_sharded_memory_config_specs": [None],
     },
     "mcast_2d_transposed": {
         "batch_sizes": [(2, 3)],
         "input_shapes": [(1600, 224, 896)],
         "batch_matrix_multiply": [False],
-        "input_a_sharded_memory_config_specs": [TensorMemoryConfigs.BLOCK_Y7_X5_COL],
+        "input_a_sharded_memory_config_specs": [TensorMemoryConfigs.BLOCK_Y7_X5_COL.name],
         "input_b_sharded_memory_config_specs": [None],
     },
     "mcast_2d_shard_width_gt_1_TILE": {
         "batch_sizes": [(2, 1)],
         "input_shapes": [(128, 256, 512)],
         "batch_matrix_multiply": [False],
-        "input_a_sharded_memory_config_specs": [TensorMemoryConfigs.BLOCK_Y2_X2],
+        "input_a_sharded_memory_config_specs": [TensorMemoryConfigs.BLOCK_Y2_X2.name],
         "input_b_sharded_memory_config_specs": [None],
     },
     "mcast_in0": {
         "batch_sizes": [(2, 3)],
         "input_shapes": [(64, 32 * 7, 1024)],
         "batch_matrix_multiply": [False],
-        "input_a_sharded_memory_config_specs": [TensorMemoryConfigs.WIDTH_Y1_X7],
+        "input_a_sharded_memory_config_specs": [TensorMemoryConfigs.WIDTH_Y1_X7.name],
         "input_b_sharded_memory_config_specs": [None],
     },
     "mcast_in1": {
         "batch_sizes": [(2, 3)],
         "input_shapes": [(160 * 7, 64, 64)],
         "batch_matrix_multiply": [False],
-        "input_a_sharded_memory_config_specs": [TensorMemoryConfigs.HEIGHT_Y7_X1],
+        "input_a_sharded_memory_config_specs": [TensorMemoryConfigs.HEIGHT_Y7_X1.name],
         "input_b_sharded_memory_config_specs": [None],
     },
     "bmm": {
         "batch_sizes": [(7, 7)],
         "input_shapes": [(384, 64, 384)],
         "batch_matrix_multiply": [True],
-        "input_a_sharded_memory_config_specs": [TensorMemoryConfigs.HEIGHT_Y7_X7_USE_H_W],
-        "input_b_sharded_memory_config_specs": [TensorMemoryConfigs.HEIGHT_Y7_X7_USE_H_W],
+        "input_a_sharded_memory_config_specs": [TensorMemoryConfigs.HEIGHT_Y7_X7_USE_H_W.name],
+        "input_b_sharded_memory_config_specs": [TensorMemoryConfigs.HEIGHT_Y7_X7_USE_H_W.name],
     },
 }
 # Add the rest of the parameters.
@@ -80,34 +83,34 @@ for p in parameters.values():
 
 
 def get_config_dict(config):
-    if config == TensorMemoryConfigs.BLOCK_Y5_X7:
+    if config == TensorMemoryConfigs.BLOCK_Y5_X7.name:
         return dict(core_grid=ttnn.CoreGrid(y=5, x=7), strategy=ttnn.ShardStrategy.BLOCK)
-    elif config == TensorMemoryConfigs.BLOCK_Y7_X5_COL:
+    elif config == TensorMemoryConfigs.BLOCK_Y7_X5_COL.name:
         return dict(
             core_grid=ttnn.CoreGrid(y=7, x=5),
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.COL_MAJOR,
         )
-    elif config == TensorMemoryConfigs.BLOCK_Y2_X2:
+    elif config == TensorMemoryConfigs.BLOCK_Y2_X2.name:
         return dict(core_grid=ttnn.CoreGrid(y=2, x=2), strategy=ttnn.ShardStrategy.BLOCK)
-    elif config == TensorMemoryConfigs.BLOCK_Y1_X7:
+    elif config == TensorMemoryConfigs.WIDTH_Y1_X7.name:
         return dict(
             core_grid=ttnn.CoreGrid(y=1, x=7),
             strategy=ttnn.ShardStrategy.WIDTH,
         )
-    elif config == TensorMemoryConfigs.HEIGHT_Y7_X1:
+    elif config == TensorMemoryConfigs.HEIGHT_Y7_X1.name:
         return dict(
             core_grid=ttnn.CoreGrid(y=7, x=1),
             strategy=ttnn.ShardStrategy.HEIGHT,
         )
-    elif config == TensorMemoryConfigs.HEIGHT_Y7_X7_USE_H_W:
+    elif config == TensorMemoryConfigs.HEIGHT_Y7_X7_USE_H_W.name:
         return dict(
             core_grid=ttnn.CoreGrid(y=7, x=7),
             strategy=ttnn.ShardStrategy.HEIGHT,
             use_height_and_width_as_shard_shape=True,
         )
     else:
-        raise Exception("config is not a supported enum")
+        raise Exception(f"config {config} is not a supported enum.")
 
 
 def run(

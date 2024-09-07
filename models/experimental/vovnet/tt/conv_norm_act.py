@@ -9,7 +9,6 @@ import ttnn
 from models.utility_functions import torch_to_tt_tensor_rm
 from models.experimental.vovnet.vovnet_utils import create_batchnorm
 
-import tt_lib
 from tt_lib.fallback_ops import fallback_ops
 
 
@@ -54,7 +53,7 @@ class TtConvNormAct(nn.Module):
             device=self.device,
         )
 
-    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.conv(x)
         x = self.bn(x)
         x = ttnn.relu(x)

@@ -20,6 +20,7 @@
 #include "dev_msgs.h"
 #include "noc/noc_parameters.h"
 #include "tt_metal/impl/device/device_pool.hpp"
+#include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "llrt/hal.hpp"
 
 namespace tt {
@@ -263,19 +264,23 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) 
         auto active_eth_cores = this->get_active_ethernet_cores();
 
         if (active_eth_cores.find(logical_core_from_ethernet_core(phys_core)) != active_eth_cores.end()) {
-            int eriscv_id = build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 0;
-            ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""));
-            uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, eriscv_id);
-            log_debug(LogDevice, "ERISC fw binary size: {} in bytes", kernel_size16 * 16);
-            llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
+            if (not llrt::OptionsG.get_skip_loading_fw()) {
+                int eriscv_id = build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 0;
+                ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""));
+                uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, eriscv_id);
+                log_debug(LogDevice, "ERISC fw binary size: {} in bytes", kernel_size16 * 16);
+                llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
+            }
             llrt::launch_erisc_app_fw_on_core(this->id(), phys_core);
         } else {
             tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), phys_core));
-            int eriscv_id = build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 1;
-            ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""));
-            uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, eriscv_id);
-            log_debug(LogDevice, "ERISC fw binary size: {} in bytes", kernel_size16 * 16);
-            llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
+            if (not llrt::OptionsG.get_skip_loading_fw()) {
+                int eriscv_id = build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 1;
+                ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""));
+                uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, eriscv_id);
+                log_debug(LogDevice, "ERISC fw binary size: {} in bytes", kernel_size16 * 16);
+                llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
+            }
             llrt::program_risc_startup_addr(this->id(), phys_core);
         }
     } else {
@@ -288,7 +293,9 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) 
                 launch_msg->kernel_config.ncrisc_kernel_size16 = kernel_size16;
             }
             log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, kernel_size16 * 16);
-            llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, riscv_id);
+            if (not llrt::OptionsG.get_skip_loading_fw()) {
+                llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, riscv_id);
+            }
         }
     }
     //This is an initialization launch message.
@@ -461,7 +468,7 @@ void Device::clear_l1_state() {
     // These L1 ranges are restricted becase UMD base routing FW uses L1 below FIRMWARE_BASE and
     // between TILE_HEADER_BUFFER_BASE to COMMAND_Q_BASE
     std::vector<uint32_t> zero_vec_above_tile_header_buffer(
-        (eth_l1_mem::address_map::SEMAPHORE_BASE - eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE) / sizeof(uint32_t),
+        (eth_l1_mem::address_map::ISSUE_CQ_CB_BASE - eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE) / sizeof(uint32_t),
         0);
 
     // Clear erisc sync info
@@ -502,6 +509,12 @@ void Device::configure_kernel_variant(
 
     const auto& grid_size = this->grid_size();
 
+    // TODO: just pass in the programmable index
+    uint32_t programmable_core_type_index = (dispatch_core_type == CoreType::WORKER) ?
+        hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX) :
+        is_active_eth_core ? hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) :
+        hal.get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
+
     std::map<string, string> defines = {
         {"DISPATCH_KERNEL", "1"},
         {"MY_NOC_X", std::to_string(NOC_0_X(my_noc_index, grid_size.x, kernel_physical_core.x))},
@@ -511,6 +524,7 @@ void Device::configure_kernel_variant(
         {"UPSTREAM_NOC_Y", std::to_string(NOC_0_Y(upstream_noc_index, grid_size.y, upstream_physical_core.y))},
         {"DOWNSTREAM_NOC_X", std::to_string(NOC_0_X(downstream_noc_index, grid_size.x, downstream_physical_core.x))},
         {"DOWNSTREAM_NOC_Y", std::to_string(NOC_0_Y(downstream_noc_index, grid_size.y, downstream_physical_core.y))},
+        {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
     };
     defines.insert(defines_in.begin(), defines_in.end());
 
@@ -1863,7 +1877,14 @@ void Device::init_command_queue_host() {
 
 void Device::init_command_queue_device() {
 
-    this->compile_command_queue_programs();
+    if (llrt::OptionsG.get_skip_loading_fw()) {
+        detail::EnablePersistentKernelCache();
+        this->compile_command_queue_programs();
+        detail::DisablePersistentKernelCache();
+    } else {
+        this->compile_command_queue_programs();
+    }
+
     if (this->is_mmio_capable()) {
         TT_ASSERT(this->command_queue_programs.size() == 1);
     } else {
@@ -2237,6 +2258,33 @@ float Device::sfpu_eps() const {
     return std::numeric_limits<float>::epsilon();
 }
 
+float Device::sfpu_nan() const {
+    switch (arch()) {
+        case tt::ARCH::GRAYSKULL: return tt::tt_metal::NAN_GS;
+        case tt::ARCH::WORMHOLE_B0: return tt::tt_metal::NAN_WHB0;
+        case tt::ARCH::BLACKHOLE: return tt::tt_metal::NAN_BH;
+        default: return std::numeric_limits<float>::quiet_NaN();
+    }
+
+    return std::numeric_limits<float>::quiet_NaN();
+}
+
+// machine inf
+float Device::sfpu_inf() const{
+
+    switch (arch()) {
+        case tt::ARCH::GRAYSKULL:
+            return tt::tt_metal::INF_GS;
+        case tt::ARCH::WORMHOLE_B0:
+            return tt::tt_metal::INF_WHB0;
+        case tt::ARCH::BLACKHOLE:
+            return tt::tt_metal::INF_BH;
+        default:
+            return std::numeric_limits<float>::infinity();
+    }
+    return std::numeric_limits<float>::infinity();
+}
+
 pair<int, int> Device::build_processor_type_to_index(JitBuildProcessorType t) const {
     constexpr int DataMovementBuildCount = 2;
     constexpr int ComputeBuildCount = 3;
@@ -2374,11 +2422,11 @@ std::shared_ptr<TraceBuffer> Device::get_trace(const uint32_t tid) {
     }
 }
 
-void Device::DisableAllocs() { 
-    tt::tt_metal::allocator::disable_allocs(*(this->allocator_)); 
+void Device::DisableAllocs() {
+    tt::tt_metal::allocator::disable_allocs(*(this->allocator_));
 }
 
-void Device::EnableAllocs() { 
+void Device::EnableAllocs() {
     tt::tt_metal::allocator::enable_allocs(*(this->allocator_));
 }
 

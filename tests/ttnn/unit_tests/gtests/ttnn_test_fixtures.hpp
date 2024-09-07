@@ -15,7 +15,7 @@
 #include "tests/tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_values.hpp"
-#include "tt_metal/impl/device/device_mesh.hpp"
+#include "tt_metal/impl/device/mesh_device.hpp"
 
 namespace ttnn {
 
@@ -46,6 +46,8 @@ class TTNNFixtureWithDevice : public TTNNFixture {
         TTNNFixture::TearDown();
         tt::tt_metal::CloseDevice(device_);
     }
+
+    tt::tt_metal::Device& getDevice() { return *device_; }
 };
 
 }  // namespace ttnn
@@ -67,8 +69,8 @@ class T3kMultiDeviceFixture : public ::testing::Test {
         }
         const auto T3K_DEVICE_IDS = DeviceIds{0, 4, 5, 1, 2, 6, 7, 3};
         constexpr auto DEFAULT_NUM_COMMAND_QUEUES = 1;
-        device_mesh_ = std::make_unique<DeviceMesh>(
-            DeviceGrid{1, num_devices},
+        mesh_device_ = std::make_unique<MeshDevice>(
+            MeshShape{1, num_devices},
             T3K_DEVICE_IDS,
             DEFAULT_L1_SMALL_SIZE,
             DEFAULT_TRACE_REGION_SIZE,
@@ -76,8 +78,8 @@ class T3kMultiDeviceFixture : public ::testing::Test {
             DispatchCoreType::WORKER);
     }
 
-    void TearDown() override { device_mesh_.reset(); }
-    std::unique_ptr<DeviceMesh> device_mesh_;
+    void TearDown() override { mesh_device_.reset(); }
+    std::unique_ptr<MeshDevice> mesh_device_;
 };
 
 }  // namespace ttnn::multi_device::test

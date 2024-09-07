@@ -70,22 +70,22 @@ ttnn.attach_golden_function(ttnn.interleaved_to_sharded_partial, _golden_functio
 
 def _golden_function(in0, in1, op, dir, *args, **kwargs):
     in0 = in0.reshape((in1.shape[0], 1, -1, in0.shape[-1]))
-    if op == ttnn.experimental.tensor.BcastOpMath.ADD:
+    if op == ttnn.BcastOpMath.ADD:
         res = in0 + in1
-    elif op == ttnn.experimental.tensor.BcastOpMath.SUB:
+    elif op == ttnn.BcastOpMath.SUB:
         res = in0 - in1
-    elif op == ttnn.experimental.tensor.BcastOpMath.MUL:
+    elif op == ttnn.BcastOpMath.MUL:
         res = in0 * in1
     return res
 
 
-ttnn.attach_golden_function(ttnn.experimental.tensor.bcast, _golden_function)
+ttnn.attach_golden_function(ttnn.bcast, _golden_function)
 
 
 def _nop_golden_function(input_tensor, *args, **kwargs):
     return input_tensor
 
 
-ttnn.attach_golden_function(ttnn.experimental.tensor.interleaved_to_sharded, _nop_golden_function)
-ttnn.attach_golden_function(ttnn.experimental.tensor.reshard, _nop_golden_function)
+ttnn.attach_golden_function(ttnn.interleaved_to_sharded, _nop_golden_function)
+ttnn.attach_golden_function(ttnn.reshard, _nop_golden_function)
 ttnn.attach_golden_function(ttnn.tilize, _nop_golden_function)

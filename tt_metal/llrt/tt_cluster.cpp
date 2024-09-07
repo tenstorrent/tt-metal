@@ -14,6 +14,7 @@
 #include "hostdevcommon/dprint_common.h"
 #include "rtoptions.hpp"
 #include "third_party/umd/device/tt_silicon_driver_common.hpp"
+#include "third_party/umd/device/simulation/tt_simulation_device.h"
 #include "tools/profiler/profiler.hpp"
 #include "tt_metal/impl/debug/sanitize_noc_host.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
@@ -95,10 +96,10 @@ void Cluster::detect_arch_and_target() {
 std::filesystem::path get_cluster_desc_yaml() {
     namespace fs = std::filesystem;
 
-    // RK: We eventually need to take out the create-ethernet-map binary and use it
-    // as a binary in the environment
+    // TODO: The interface into create-ethernet-map should be through an API rather a
+    // subprocess call to the binary
     const fs::path tt_metal_dir = fs::path(tt::llrt::OptionsG.get_root_dir()) / "tt_metal";
-    const fs::path umd_path = tt_metal_dir / ".umd";
+    const fs::path umd_path = fs::path(tt::llrt::OptionsG.get_root_dir()) / ".umd";
     fs::create_directory(umd_path);
     const fs::path cluster_desc_path = umd_path / "cluster_desc.yaml";
     if (!fs::exists(cluster_desc_path)) {
@@ -791,10 +792,6 @@ std::unordered_set<chip_id_t> Cluster::get_ethernet_connected_device_ids(chip_id
 std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
     chip_id_t chip_id, bool skip_reserved_tunnel_cores) const {
     std::unordered_set<CoreCoord> active_ethernet_cores;
-    if (this->arch_ == tt::ARCH::BLACKHOLE) {
-        // TODO (abhullar): Uplift with #9823
-        return active_ethernet_cores;
-    }
     const auto &connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
     for (const auto &[other_chip_id, eth_cores] : connected_chips) {
         for (const auto &eth_core : eth_cores) {
@@ -811,18 +808,15 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
 std::unordered_set<CoreCoord> Cluster::get_inactive_ethernet_cores(chip_id_t chip_id) const {
     std::unordered_set<CoreCoord> active_ethernet_cores = this->get_active_ethernet_cores(chip_id);
     std::unordered_set<CoreCoord> inactive_ethernet_cores;
-    if (this->arch_ == tt::ARCH::BLACKHOLE) {
-        // TODO (abhullar): Uplift with #9823
-        return inactive_ethernet_cores;
-    }
     std::unordered_set<int> channels_to_skip = {};
     // UMD routing FW uses these cores for base routing
     // channel 15 is used by syseng tools.
+    // TODO (abhullar): For BH single-chip bringup we assume all ethernet cores are inactive. Update this with (#9823)
     if (this->is_galaxy_cluster()) {
         // TODO: This may need to change, if we need additional eth cores for dispatch on Galaxy
         channels_to_skip = {0, 1, 2, 3, 15};
     }
-    else {
+    else if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
         channels_to_skip = {8, 9, 15};
     }
     for (const auto &[eth_core, chan] : get_soc_desc(chip_id).logical_eth_core_to_chan_map) {

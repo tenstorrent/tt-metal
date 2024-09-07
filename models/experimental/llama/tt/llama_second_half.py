@@ -5,7 +5,7 @@
 import torch
 from typing import List, Optional, Tuple, Union
 from loguru import logger
-import tt_lib
+import ttnn
 from models.experimental.llama.llama_utils import _make_causal_mask, _expand_mask, linear
 
 from models.utility_functions import (
@@ -120,7 +120,7 @@ class TtLlamaModelSecondHFModel(torch.nn.Module):
 
     def forward(
         self,
-        input_ids: tt_lib.tensor.Tensor,
+        input_ids: ttnn.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[torch.FloatTensor]] = None,

@@ -93,7 +93,7 @@ class upsample2d:
             weights_dtype=ttnn.bfloat8_b,
             math_fidelity=ttnn.MathFidelity.LoFi,
             activation="",
-            height_sharding=False,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             math_approx_mode_enabled=True,
             fp32_dest_acc_enabled=True,
             packer_l1_accum_enabled=False,

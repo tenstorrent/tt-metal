@@ -11,6 +11,11 @@ Device
    ttnn/close_device
    ttnn/manage_device
    ttnn/synchronize_device
+   ttnn/SetDefaultDevice
+   ttnn/GetDefaultDevice
+   ttnn/format_input_tensor
+   ttnn/format_output_tensor
+   ttnn/pad_to_tile_shape
 
 Memory Config
 *************
@@ -307,6 +312,8 @@ Pointwise Binary
    ttnn/lt_
    ttnn/ge_
    ttnn/le_
+   ttnn/eq_
+   ttnn/ne_
    ttnn/ge
    ttnn/lt
    ttnn/le
@@ -417,6 +424,9 @@ Transformer
    ttnn/transformer/attention_softmax
    ttnn/transformer/attention_softmax_
    ttnn/transformer/rotary_embedding
+   ttnn/transformer/sdpa
+   ttnn/transformer/sdpa_decode
+   ttnn/transformer/sdpa_decode_gqa
 
 Embedding
 =========

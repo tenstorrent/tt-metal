@@ -14,7 +14,7 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 import torch
 from loguru import logger
-import tt_lib
+import ttnn
 
 from models.utility_functions import (
     tt2torch_tensor,
@@ -25,9 +25,9 @@ from models.experimental.convnet_mnist.convnet_mnist_utils import get_test_data
 
 
 def test_mnist_inference():
-    device = tt_lib.device.CreateDevice(0)
+    device = ttnn.open_device(0)
 
-    tt_lib.device.SetDefaultDevice(device)
+    ttnn.SetDefaultDevice(device)
 
     tt_convnet, pt_convnet = convnet_mnist(device)
 
@@ -37,13 +37,11 @@ def test_mnist_inference():
     logger.info(f"Input image saved to {input_path}")
 
     with torch.no_grad():
-        tt_input = torch2tt_tensor(
-            test_input, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        tt_input = torch2tt_tensor(test_input, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
         tt_output = tt_convnet(tt_input)
         tt_output = tt2torch_tensor(tt_output)
 
         _, tt_predicted = torch.max(tt_output.data, -1)
         logger.info(f"tt_predicted {tt_predicted.squeeze()}")
 
-    tt_lib.device.CloseDevice(device)
+    ttnn.close_device(device)

@@ -13,7 +13,7 @@ import random
 import pytest
 import torch
 
-import tt_lib as ttl
+import ttnn
 
 from tt_lib.utils import (
     pad_weight,
@@ -32,7 +32,6 @@ def run_rpow_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, d
     torch.manual_seed(data_seed)
 
     # Initialize the device
-    tensor = ttl.tensor
     dev = device
 
     test_dims = (input_shape,)
@@ -48,7 +47,7 @@ def run_rpow_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, d
                 x = x.reshape(-1).tolist()
 
             if in_mem_config == "SYSTEM_MEMORY":
-                ttx = tensor.Tensor(
+                ttx = ttnn.Tensor(
                     x,
                     [N, C, H, W],
                     dtype,
@@ -56,7 +55,7 @@ def run_rpow_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, d
                     dev,
                 ).cpu()
             else:
-                ttx = tensor.Tensor(
+                ttx = ttnn.Tensor(
                     x,
                     [N, C, H, W],
                     dtype,
@@ -66,7 +65,7 @@ def run_rpow_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, d
                 )
 
             logger.info("Running rpow test")
-            ttz = tensor.rpow(ttx, factor, output_mem_config=out_mem_config)
+            ttz = ttnn.rpow(ttx, factor, memory_config=out_mem_config)
 
             logger.info("Done")
 

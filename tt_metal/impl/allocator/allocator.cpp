@@ -37,8 +37,8 @@ void validate_num_banks(uint32_t num_banks, const BufferType &buffer_type) {
     // Dataflow API does not have a working implementation of generic modulo to determine bank_id for interleaved
     // address gen For non pow2 num banks, special cases need to be added to avoid falling back to generic
     // implementation. See https://github.com/tenstorrent/tt-metal/issues/3321
-    bool custom_mod_bank_id_calculation_exists =
-        (num_banks == 12 or num_banks == 56 or num_banks == 94 or num_banks == 124 or num_banks == 130);
+    std::unordered_set<uint32_t> acceptable_num_non_pow2_mem_banks = {12, 56, 94, 124, 130, 140};
+    bool custom_mod_bank_id_calculation_exists = acceptable_num_non_pow2_mem_banks.count(num_banks) > 0;
     bool doesnt_support_interleaved = buffer_type == BufferType::L1_SMALL;
     bool valid_num_banks = (is_pow2_num_banks or custom_mod_bank_id_calculation_exists or doesnt_support_interleaved);
     if (not valid_num_banks) {
@@ -120,7 +120,7 @@ uint64_t BankManager::allocate_buffer(
         is_sharded = true;
         TT_FATAL(
             num_shards.value() <= num_compute_banks,
-            "Expected number of shards to be less than or equal to total number of L1 banks in compute cores");
+            fmt::format("Expected number of shards {} to be less than or equal to total number of L1 banks {} in compute cores", num_shards.value(), num_compute_banks));
         num_banks = num_shards.value();
     }
     uint32_t size_per_bank = tt::tt_metal::detail::SizeBytesPerBank(size, page_size, num_banks, this->alignment_bytes_);
@@ -211,21 +211,19 @@ void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &allo
         allocator.dram_channel_to_bank_ids.insert({bank_id, {bank_id}});
         allocator.logical_core_to_bank_ids[BufferType::DRAM].insert({logical_core, {bank_id}});
     }
-    if (alloc_config.trace_region_size > 0) {
-        // Trace buffers are allocated in this region (top-down). Trace region is offset at dram_bank_size + UNRESERVED
-        // offset
-        allocator.trace_buffer_manager = BankManager(
-            BufferType::TRACE,
-            bank_offsets,
-            alloc_config.trace_region_size,
-            ALLOCATOR_ALIGNMENT,
-            dram_bank_size + DRAM_UNRESERVED_BASE);
-        for (uint32_t bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
-            CoreCoord logical_core = CoreCoord{bank_id, 0};
-            allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
-            allocator.dram_channel_to_bank_ids.insert({bank_id, {bank_id}});
-            allocator.logical_core_to_bank_ids[BufferType::TRACE].insert({logical_core, {bank_id}});
-        }
+    // Trace buffers are allocated in this region (top-down). Trace region is offset at dram_bank_size + UNRESERVED
+    // offset
+    allocator.trace_buffer_manager = BankManager(
+        BufferType::TRACE,
+        bank_offsets,
+        alloc_config.trace_region_size,
+        ALLOCATOR_ALIGNMENT,
+        dram_bank_size + DRAM_UNRESERVED_BASE);
+    for (uint32_t bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
+        CoreCoord logical_core = CoreCoord{bank_id, 0};
+        allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
+        allocator.dram_channel_to_bank_ids.insert({bank_id, {bank_id}});
+        allocator.logical_core_to_bank_ids[BufferType::TRACE].insert({logical_core, {bank_id}});
     }
 }
 

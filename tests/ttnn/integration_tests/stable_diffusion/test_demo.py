@@ -8,6 +8,7 @@ from models.demos.wormhole.stable_diffusion.demo.demo import test_demo as demo
 from models.demos.wormhole.stable_diffusion.demo.demo import test_demo_diffusiondb as demo_db
 
 
+@pytest.mark.timeout(600)
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
@@ -31,6 +32,7 @@ def test_demo_sd(device, reset_seeds, input_path, num_prompts, num_inference_ste
     demo(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size)
 
 
+@pytest.mark.timeout(600)
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(

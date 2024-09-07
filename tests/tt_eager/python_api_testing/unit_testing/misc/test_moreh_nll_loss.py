@@ -35,8 +35,6 @@ def get_torch_tensors(shape):
 
 
 def get_tt_tensors(torch_input, torch_target, torch_weight, torch_divisor, torch_output, device):
-    C = torch_input.shape[1]
-
     npu_index_dtype = ttnn.int32
 
     tt_input = to_npu(torch_input, device)
@@ -141,12 +139,7 @@ def run_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weight
 
 @pytest.mark.parametrize(
     "shape",
-    [
-        (5, 10),
-        (3000, 100),
-        (200, 100, 90),
-        (5, 50, 2, 7, 50, 70),
-    ],
+    [[5, 10], [3000, 100], [200, 100, 90], [5, 50, 2, 7, 50, 70]],
 )
 @pytest.mark.parametrize("ignore_index", [1])
 @pytest.mark.parametrize("reduction", ["mean", "sum"])
@@ -160,9 +153,9 @@ def test_moreh_nll_loss(shape, ignore_index, reduction, none_weight, device):
 @pytest.mark.parametrize(
     "shape",
     [
-        (5, 10),
-        (5, 6, 7),
-        (5, 6, 8, 9),
+        [5, 10],
+        [5, 6, 7],
+        [5, 6, 8, 9],
     ],
 )
 @pytest.mark.parametrize("reduction", ["mean", "sum"])
@@ -174,15 +167,17 @@ def test_moreh_nll_loss_callback(shape, reduction, none_weight, device, use_prog
 
     for _ in range(2):
         run_moreh_nll_loss(shape, ignore_idx, reduction, none_weight, device)
+        torch_dummy = torch.randn([32, 32])
+        tt_dummy = to_npu(torch_dummy, device)
 
 
 @pytest.mark.parametrize(
     "shape",
     [
-        (400, 300),
-        (20, 300, 320),
-        (3, 4, 32 * 5, 32 * 6),
-        (5, 2, 5, 40, 70),
+        [400, 300],
+        [20, 300, 320],
+        [3, 4, 32 * 5, 32 * 6],
+        [5, 2, 5, 40, 70],
     ],
 )
 @pytest.mark.parametrize("ignore_index", [1])
@@ -197,9 +192,9 @@ def test_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weigh
 @pytest.mark.parametrize(
     "shape",
     [
-        (2, 3),
-        (2, 3, 4),
-        (2, 3, 5, 4),
+        [2, 3],
+        [2, 3, 4],
+        [2, 3, 5, 4],
     ],
 )
 @pytest.mark.parametrize("reduction_mean", [True, False])
@@ -211,14 +206,16 @@ def test_moreh_nll_loss_backward_test_callback(shape, reduction_mean, none_weigh
 
     for _ in range(2):
         run_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weight, device)
+        torch_dummy = torch.randn([32, 32])
+        tt_dummy = to_npu(torch_dummy, device)
 
 
 @pytest.mark.parametrize(
     "shape",
     [
-        (5, 10),
-        (10, 20, 30),
-        (10, 20, 30, 40),
+        [5, 10],
+        [10, 20, 30],
+        [10, 20, 30, 40],
     ],
 )
 @pytest.mark.parametrize("ignore_index", [1])
@@ -238,9 +235,9 @@ def test_moreh_nll_loss_compute_kernel_options(
 @pytest.mark.parametrize(
     "shape",
     [
-        (5, 10),
-        (10, 20, 30),
-        (10, 20, 30, 40),
+        [5, 10],
+        [10, 20, 30],
+        [10, 20, 30, 40],
     ],
 )
 @pytest.mark.parametrize("reduction_mean", [True, False])

@@ -21,8 +21,11 @@ void kernel_main() {
     // ublocks size defined in pages
     constexpr uint32_t ublock_size_pages = 1;
 
-    InterleavedAddrGen<false> l1_src_addr_gens[num_tensors];
-    InterleavedAddrGen<true> dram_src_addr_gens[num_tensors];
+    uint8_t l1_src_addr_gens_memblk[sizeof(InterleavedAddrGen<false>) * num_tensors];
+    uint8_t dram_src_addr_gens_memblk[sizeof(InterleavedAddrGen<true>) * num_tensors];
+
+    InterleavedAddrGen<false> *l1_src_addr_gens = reinterpret_cast<InterleavedAddrGen<false>*>(l1_src_addr_gens_memblk);
+    InterleavedAddrGen<true> *dram_src_addr_gens = reinterpret_cast<InterleavedAddrGen<true>*>(dram_src_addr_gens_memblk);
 
     bool is_dram[num_tensors];
     uint32_t num_pages_per_block[num_tensors];
@@ -39,12 +42,12 @@ void kernel_main() {
         num_pages_per_block[i] = arg_ptr[num_pages_per_block_base_offset + i];
         page_id_per_tensor[i] = arg_ptr[page_id_per_tensor_offset + i];
         if (is_dram[i]) {
-            dram_src_addr_gens[i] = {
+            new(&dram_src_addr_gens[i]) InterleavedAddrGen<true>{
                 .bank_base_address = src_addr,
                 .page_size = arg_ptr[page_size_per_tensor_offset + i]
             };
         } else {
-            l1_src_addr_gens[i] = {
+            new(&l1_src_addr_gens[i]) InterleavedAddrGen<false>{
                 .bank_base_address = src_addr,
                 .page_size = arg_ptr[page_size_per_tensor_offset + i]
             };

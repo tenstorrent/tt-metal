@@ -3,14 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
 import ttnn
 
 
 def linear(x, weight, bias=None):
-    out_mem_config_l1 = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-    )
+    out_mem_config_l1 = ttnn.L1_MEMORY_CONFIG
 
     weight = ttnn.transpose(weight, -2, -1)
     x = ttnn.matmul(x, weight)

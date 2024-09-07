@@ -30,12 +30,12 @@
 
 #define MEM_ETH_BASE 0x0
 // -32 for ETH barrier, see comment in eth_l1_address_map
-#define MEM_ETH_SIZE (256 * 1024 - 32)
+#define MEM_ETH_SIZE (512 * 1024 - 32)
 
 #define MEM_LOCAL_BASE 0xFFB00000
 #define MEM_BRISC_LOCAL_SIZE (8 * 1024)
 #define MEM_NCRISC_LOCAL_SIZE (8 * 1024)
-#define MEM_IERISC_LOCAL_SIZE (4 * 1024)
+#define MEM_IERISC_LOCAL_SIZE (8 * 1024)
 #define MEM_TRISC_LOCAL_SIZE (4 * 1024)
 
 /////////////
@@ -43,7 +43,7 @@
 #define MEM_BOOT_CODE_SIZE 4
 #define MEM_BRISC_FIRMWARE_SIZE (10 * 1024)
 #define MEM_NCRISC_FIRMWARE_SIZE (16 * 1024)
-#define MEM_IERISC_FIRMWARE_SIZE (16 * 1024)
+#define MEM_IERISC_FIRMWARE_SIZE (24 * 1024)
 #define MEM_TRISC0_FIRMWARE_SIZE (16 * 1024)
 #define MEM_TRISC1_FIRMWARE_SIZE (16 * 1024)
 #define MEM_TRISC2_FIRMWARE_SIZE (16 * 1024)
@@ -52,7 +52,8 @@
 #define MEM_BOOT_CODE_BASE 0
 #define MEM_L1_BARRIER 12
 #define MEM_MAILBOX_BASE 16
-#define MEM_MAILBOX_END (MEM_MAILBOX_BASE + 1344)
+// Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
+#define MEM_MAILBOX_END (MEM_MAILBOX_BASE + 1356)
 #define MEM_IERISC_MAILBOX_BASE 1024
 #define MEM_IERISC_MAILBOX_END (MEM_IERISC_MAILBOX_BASE + 128)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
@@ -81,8 +82,8 @@
 // Stack info
 // Increasing the stack size comes at the expense of less local memory for globals
 #define MEM_BRISC_STACK_SIZE 768
-#define MEM_NCRISC_STACK_SIZE 768
-#define MEM_IERISC_STACK_SIZE 1024
+#define MEM_NCRISC_STACK_SIZE 1040
+#define MEM_IERISC_STACK_SIZE 768
 #define MEM_TRISC0_STACK_SIZE 320
 #define MEM_TRISC1_STACK_SIZE 256
 #define MEM_TRISC2_STACK_SIZE 768

@@ -9,21 +9,20 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/decorators.hpp"
+#include "tt_metal/tt_stl/reflection.hpp"
 
 namespace ttnn {
 namespace operations::complex {
 
-class ComplexTensor {
-    private:
-        std::array<Tensor, 2> m_real_imag;
+struct ComplexTensor {
+    std::array<Tensor, 2> m_real_imag;
 
-    public:
-        ComplexTensor(std::array<Tensor, 2> val);
-        const Tensor& operator[](uint32_t index) const;
-        const Tensor& real() const;
-        const Tensor& imag() const;
-        void deallocate();
+    const Tensor& operator[](uint32_t index) const;
+    const Tensor& real() const;
+    const Tensor& imag() const;
+    void deallocate();
 };
+
 
 struct CreateComplexTensor {
 
