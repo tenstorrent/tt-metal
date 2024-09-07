@@ -85,6 +85,8 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
     bool out_is_dram = output_buffers[0]->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
+    uint32_t x_tiles_per_bank = num_tiles_x_dim / num_chunks;
+
     uint32_t z_stride_read = num_tiles_x_dim * num_tiles_y_dim; // increase z by going through an x-y plane.
     uint32_t y_stride_read = num_tiles_x_dim; // advance by the width to go down in height
 
@@ -98,13 +100,13 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
                                                       (std::uint32_t)z_stride_read,
                                                       (std::uint32_t)y_stride_read,
                                                       (std::uint32_t)y_tiles_per_core,
-                                                      (std::uint32_t)x_tiles_per_core
+                                                      (std::uint32_t)x_tiles_per_core,
+                                                      (std::uint32_t)x_tiles_per_bank,
+                                                      (std::uint32_t)num_chunks
                                                     };
 
     uint32_t z_stride_write = (num_tiles_x_dim * num_tiles_y_dim) / num_chunks;
     uint32_t y_stride_write = num_tiles_x_dim / num_chunks;
-
-    uint32_t x_tiles_per_bank = num_tiles_x_dim / num_chunks;
 
     std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
                                                       (std::uint32_t)tile_dtype_is_bfloat16,
@@ -155,7 +157,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
     auto setup_reader_runtime_args = [&](const CoreCoord &core) {
         uint32_t reader_core_id = core.y * num_cores_r + core.x;
-        uint32_t start_tile = tiles_per_core * reader_core_id; // start tile within the input tensor
+        uint32_t start_tile = xy_tiles_per_core * reader_core_id; // start tile within the input tensor
         std::cout << std::format("Reader {} has start_tile {}", reader_core_id, start_tile) << std::endl;
         std::vector<uint32_t> reader_runtime_args = {
             (std::uint32_t)start_tile,
