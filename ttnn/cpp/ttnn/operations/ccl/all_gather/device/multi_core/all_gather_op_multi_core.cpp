@@ -385,21 +385,6 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
             input_tensor.device()->id());
     }
 
-    // KERNEL CREATION
-    auto const& [all_receiver_workers, all_sender_workers, worker_core_map] = get_all_worker_cores(all_gather_config, num_links, num_full_send_directions, core_grid_offset, is_linear, ring_size, ring_index);
-    auto all_sender_worker_cores = corerange_to_cores(all_sender_workers, std::nullopt, true);
-    auto all_receiver_worker_cores = corerange_to_cores(all_receiver_workers, std::nullopt, true);
-
-    // Circular Buffer Setup
-    uint32_t cb_page_size = input_page_size;
-    log_trace(tt::LogOp, "input_page_size: {}", input_page_size);
-    uint32_t cb_num_pages = 2 * max_pages_per_chunk;
-    log_trace(tt::LogOp, "cb_num_pages: {}", cb_num_pages);
-    uint32_t src0_cb_index = tt::CB::c_in0;
-    CircularBufferConfig cb_src0_config = CircularBufferConfig(cb_num_pages * cb_page_size, {{src0_cb_index, df}})
-    .set_page_size(src0_cb_index, cb_page_size);
-    CBHandle cb_src0_sender_workers = CreateCircularBuffer(program, all_sender_workers, cb_src0_config);
-    CBHandle cb_src0_receiver_workers = CreateCircularBuffer(program, all_receiver_workers, cb_src0_config);
 
     std::optional<KernelHandle> worker_sender_reader_kernel_id;
     std::optional<KernelHandle> worker_sender_writer_kernel_id;
@@ -413,7 +398,24 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     // Potentially avoid overflow by having it actually decrement (using noc atomic inc with value of -1)
     std::optional<uint32_t> sender_worker_reader_semaphore_id;
 
+    // KERNEL CREATION
+    auto const& [all_receiver_workers, all_sender_workers, worker_core_map] = get_all_worker_cores(all_gather_config, num_links, num_full_send_directions, core_grid_offset, is_linear, ring_size, ring_index);
+    auto all_sender_worker_cores = corerange_to_cores(all_sender_workers, std::nullopt, true);
+    auto all_receiver_worker_cores = corerange_to_cores(all_receiver_workers, std::nullopt, true);
+
     if (build_worker_kernels) {
+    // Circular Buffer Setup
+    uint32_t cb_page_size = input_page_size;
+    log_trace(tt::LogOp, "input_page_size: {}", input_page_size);
+    uint32_t cb_num_pages = 2 * max_pages_per_chunk;
+    log_trace(tt::LogOp, "cb_num_pages: {}", cb_num_pages);
+
+    uint32_t src0_cb_index = tt::CB::c_in0;
+    CircularBufferConfig cb_src0_config = CircularBufferConfig(cb_num_pages * cb_page_size, {{src0_cb_index, df}})
+        .set_page_size(src0_cb_index, cb_page_size);
+    CBHandle cb_src0_sender_workers = CreateCircularBuffer(program, all_sender_workers, cb_src0_config);
+    CBHandle cb_src0_receiver_workers = CreateCircularBuffer(program, all_receiver_workers, cb_src0_config);
+
     // This semaphore is used by the receiver core to tell workers that data is available to read
     receiver_worker_semaphore_id = CreateSemaphore(program, all_receiver_workers, 0);
     // This semaphore is used by the receiver core to tell the worker sender writer that sender buffer is available to write to
@@ -568,7 +570,6 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
         receiver_writer_kernel_path,
         all_receiver_workers,
         tt::tt_metal::WriterDataMovementConfig(worker_receive_writer_ct_args, worker_defines));
-    }
 
     for (uint32_t direction = 0; direction < num_full_send_directions; direction++) {
         // if we're in ring topology, we'll always need to transfer all ring indices (except the last one)
@@ -1155,6 +1156,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
             }
         }
     } // num_full_send_directions
+
+    }
 
     log_info(tt::LogOp, "generate_edm_kernels_for_ring_or_linear_topology for device {}", device->id());
     ttnn::ccl::generate_edm_kernels_for_ring_or_linear_topology(
