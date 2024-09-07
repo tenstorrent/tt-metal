@@ -1322,3 +1322,11 @@ When multiple workers are present, each worker takes alternating slices out of t
 ## Special Attributes
 
 Reduce-scatter has a special attribute where the op produces partial outputs for each timestep and each rank and that partial output is used as input for another rank and on another timestep. This is relevant to the CCL design space because it enforces that there is no direct path from input to output tensor without some form of synchronization between ranks or workers coordinating production and consumption of partials.
+
+# Invoking CCL Operations
+
+CCL operations can be dispatched across various chips and sub-topologies of a multi-chip cluster. Programming APIs are made available, via TT-NN, to express collective operations at higher levels and across entire clusters. 
+
+For example, it is possible to describe an operation such as an all-gathering along the rows of a multichip cluster that has multiple rows or columns, where the TT-NN infrastructure can decide the appropriate way to dispatch the underlying CCL operations..
+
+Refer to the ["Programming Mesh of Devices with TT-NN"](tech_reports/Programming Mesh of Devices/Programming Mesh of Devices with TT-NN.md) guide for programming examples and further information.
