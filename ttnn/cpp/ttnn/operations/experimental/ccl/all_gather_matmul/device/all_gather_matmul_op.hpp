@@ -13,6 +13,7 @@
 #include "tt_metal/host_api.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/ccl_fabric.hpp"
 
 #include "ttnn/run_operation.hpp"
 
@@ -67,6 +68,7 @@ operation::ProgramWithCallbacks all_gather_matmul_multi_core_with_workers(
     const std::optional<chip_id_t> sender_device_id,
     all_gather_op::Topology topology,
     const CoreCoord core_grid_offset,
+    ttnn::ccl::OpBuildMode op_build_mode,
 
     /* Matmul Params */
     const std::optional<const Tensor> bias,

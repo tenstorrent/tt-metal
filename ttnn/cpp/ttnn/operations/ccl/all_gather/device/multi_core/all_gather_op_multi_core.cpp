@@ -244,8 +244,23 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     const std::optional<chip_id_t> sender_device_id = args.sender_device_id;
     all_gather_op::Topology topology = args.topology;
 
-    bool build_edm_kernels = build_mode != ccl::OpBuildMode::PERSISTENT_BUILD_NON_PERSISTENT_WORKERS;
     bool build_worker_kernels = build_mode != ccl::OpBuildMode::PERSISTENT_BUILD_PERSISTENT_EDM;
+    switch (build_mode) {
+        case ccl::OpBuildMode::NON_PERSISTENT:
+            log_info(tt::LogOp, "OpBuildMode::Standard Edm");
+            break;
+        case ccl::OpBuildMode::PERSISTENT_BUILD_PERSISTENT_EDM:
+            log_info(tt::LogOp, "OpBuildMode::Persistent mode, building EDM");
+            break;
+        case ccl::OpBuildMode::PERSISTENT_BUILD_NON_PERSISTENT_WORKERS:
+            log_info(tt::LogOp, "OpBuildMode::Persistent mode, building workers");
+            break;
+    }
+    if (build_worker_kernels) {
+        log_info(tt::LogOp, "Building workers");
+    } else {
+        log_info(tt::LogOp, "Not building workers");
+    }
 
     TT_FATAL(!(receiver_device_id == std::nullopt && sender_device_id == std::nullopt), "At least one of receiver_device_id or sender_device_id must be specified");
 
@@ -386,14 +401,27 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     CBHandle cb_src0_sender_workers = CreateCircularBuffer(program, all_sender_workers, cb_src0_config);
     CBHandle cb_src0_receiver_workers = CreateCircularBuffer(program, all_receiver_workers, cb_src0_config);
 
-    // This semaphore is used by the receiver core to tell workers that data is available to read
-    auto receiver_worker_semaphore_id = CreateSemaphore(program, all_receiver_workers, 0);
+    std::optional<KernelHandle> worker_sender_reader_kernel_id;
+    std::optional<KernelHandle> worker_sender_writer_kernel_id;
+    std::optional<KernelHandle> worker_receiver_reader_kernel_id;
+    std::optional<KernelHandle> worker_receiver_writer_kernel_id;
+    std::optional<uint32_t> receiver_worker_semaphore_id;
     // This semaphore is used by the receiver core to tell the worker sender writer that sender buffer is available to write to
-    auto sender_worker_writer_semaphore_id = CreateSemaphore(program, all_sender_workers, 0);
+    std::optional<uint32_t> sender_worker_writer_semaphore_id;
     // This semaphore is used by the worker receiver writer to tell the worker sender reader that data has been committed to memory
     // This is currently a running counter of how many chunks were committed since the sender worker never decrements this buffer
     // Potentially avoid overflow by having it actually decrement (using noc atomic inc with value of -1)
-    auto sender_worker_reader_semaphore_id = CreateSemaphore(program, all_sender_workers, 0);
+    std::optional<uint32_t> sender_worker_reader_semaphore_id;
+
+    if (build_worker_kernels) {
+    // This semaphore is used by the receiver core to tell workers that data is available to read
+    receiver_worker_semaphore_id = CreateSemaphore(program, all_receiver_workers, 0);
+    // This semaphore is used by the receiver core to tell the worker sender writer that sender buffer is available to write to
+    sender_worker_writer_semaphore_id = CreateSemaphore(program, all_sender_workers, 0);
+    // This semaphore is used by the worker receiver writer to tell the worker sender reader that data has been committed to memory
+    // This is currently a running counter of how many chunks were committed since the sender worker never decrements this buffer
+    // Potentially avoid overflow by having it actually decrement (using noc atomic inc with value of -1)
+    sender_worker_reader_semaphore_id = CreateSemaphore(program, all_sender_workers, 0);
 
     // Sender Reader
     auto build_worker_send_reader_ct_args = [&]() {
@@ -403,7 +431,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
             static_cast<uint32_t>(input_page_size),
             static_cast<uint32_t>(output_page_size),
             static_cast<uint32_t>(ring_index),
-            static_cast<uint32_t>(sender_worker_reader_semaphore_id),
+            static_cast<uint32_t>(sender_worker_reader_semaphore_id.value()),
             static_cast<uint32_t>(cb_num_pages / 2),
             static_cast<uint32_t>(ring_size)
         };
@@ -431,7 +459,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     std::vector<uint32_t> const& worker_send_reader_ct_args = build_worker_send_reader_ct_args();
 
     std::string const& send_reader_kernel_path = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_interleaved_ring_gather_send_reader.cpp";
-    KernelHandle worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
+    worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         send_reader_kernel_path,
         all_sender_workers,
@@ -446,7 +474,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
             static_cast<uint32_t>(ring_index),
 
             // worker local L1 address of semaphore
-            static_cast<uint32_t>(sender_worker_writer_semaphore_id),
+            static_cast<uint32_t>(sender_worker_writer_semaphore_id.value()),
             static_cast<uint32_t>(cb_num_pages / 2),
             static_cast<uint32_t>(num_edm_buffers_per_channel),
         };
@@ -471,7 +499,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     std::vector<uint32_t> const& worker_sender_writer_ct_args = build_worker_sender_writer_ct_args();
 
     std::string const& sender_writer_kernel_path = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_interleaved_ring_gather_send_writer.cpp";
-    KernelHandle worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
+    worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         sender_writer_kernel_path,
         all_sender_workers,
@@ -481,21 +509,21 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     auto build_worker_receiver_reader_ct_args = [&]() {
         std::vector<uint32_t> worker_receiver_reader_ct_args = {
             static_cast<uint32_t>(input_page_size),
-            static_cast<uint32_t>(receiver_worker_semaphore_id),
+            static_cast<uint32_t>(receiver_worker_semaphore_id.value()),
             static_cast<uint32_t>(cb_num_pages / 2),
             static_cast<uint32_t>(num_edm_buffers_per_channel)
         };
 
         log_trace(tt::LogOp, "Worker RR ct args");
         log_trace(tt::LogOp, "\tinput_page_size: {}", input_page_size);
-        log_trace(tt::LogOp, "\treceiver_worker_semaphore_id: {}", receiver_worker_semaphore_id);
+        log_trace(tt::LogOp, "\treceiver_worker_semaphore_id: {}", receiver_worker_semaphore_id.value());
         log_trace(tt::LogOp, "\thalf_cb_num_pages : {}", cb_num_pages / 2);
         return worker_receiver_reader_ct_args;
     };
     std::vector<uint32_t> const& worker_receiver_reader_ct_args = build_worker_receiver_reader_ct_args();
 
     std::string const& receiver_reader_kernel_path = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_interleaved_ring_gather_receive_reader.cpp";
-    KernelHandle worker_receiver_reader_kernel_id = tt::tt_metal::CreateKernel(
+    worker_receiver_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         receiver_reader_kernel_path,
         all_receiver_workers,
@@ -507,7 +535,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
             static_cast<uint32_t>(all_gather_config.is_output_dram()),
             static_cast<uint32_t>(input_page_size),
             static_cast<uint32_t>(output_page_size),
-            static_cast<uint32_t>(sender_worker_reader_semaphore_id),
+            static_cast<uint32_t>(sender_worker_reader_semaphore_id.value()),
             static_cast<uint32_t>(cb_num_pages / 2),
             static_cast<uint32_t>(ring_size),
             static_cast<bool>(fuse_op)
@@ -535,11 +563,12 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     std::vector<uint32_t> const& worker_receive_writer_ct_args = build_worker_receive_writer_ct_args();
 
     std::string const& receiver_writer_kernel_path = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_interleaved_ring_gather_receive_writer.cpp";
-    KernelHandle worker_receiver_writer_kernel_id = tt::tt_metal::CreateKernel(
+    worker_receiver_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         receiver_writer_kernel_path,
         all_receiver_workers,
         tt::tt_metal::WriterDataMovementConfig(worker_receive_writer_ct_args, worker_defines));
+    }
 
     for (uint32_t direction = 0; direction < num_full_send_directions; direction++) {
         // if we're in ring topology, we'll always need to transfer all ring indices (except the last one)
@@ -736,6 +765,9 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                 log_trace(tt::LogOp, "counter_clockwise_link_buffer_num_messages_to_send[{}]: {}", b, counter_clockwise_link_buffer_num_messages_to_send.at(b));
             }
 
+            //
+            // Add sender and receiver EDM channel connections
+            //
             std::vector<uint32_t> receiver_semaphores_base_address;
             std::vector<uint32_t> link_buffer_receiver_addresses;
             receiver_semaphores_base_address.reserve(all_gather_config.get_num_workers_per_link());
@@ -758,8 +790,9 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                             device->worker_core_from_logical_core(sender_worker_cores.at(b)).y));
                     auto &sender_edm_builder = is_buffer_in_clockwise_direction(b) ? clockwise_edm_builders.at(i) : counter_clockwise_edm_builders.at(i);
                     log_trace(tt::LogOp, "Adding sender EDM channel");
+                    TT_ASSERT(sender_worker_writer_semaphore_id.has_value(), "sender_worker_writer_semaphore_id was not initialized for all-gather");
                     EriscDatamoverBuilder::ChannelBufferInterface const& sender_channel_buffer_info =
-                        sender_edm_builder.add_sender_channel(sender_worker_writer_semaphore_id, clockwise_link_buffer_num_messages_to_send.at(b), sender_worker_coords);
+                        sender_edm_builder.add_sender_channel(sender_worker_writer_semaphore_id.value(), clockwise_link_buffer_num_messages_to_send.at(b), sender_worker_coords);
                     if (is_channel_shrinkable.at(b) && largest_packets_per_channel.at(b) > 0) {
                         TT_ASSERT(largest_packets_per_channel.at(b) > 0);
                         log_trace(tt::LogOp, "\tsetting channel_max_size to {} for channel {}", largest_packets_per_channel.at(b), b);
@@ -778,8 +811,10 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                             device->worker_core_from_logical_core(receiver_worker_cores.at(b)).y));
                     auto &receiver_edm_builder = is_buffer_in_clockwise_direction(b) ? counter_clockwise_edm_builders.at(i) : clockwise_edm_builders.at(i);
                     log_trace(tt::LogOp, "Adding receiver EDM channel");
+
+                    TT_ASSERT(receiver_worker_semaphore_id.has_value(), "receiver_worker_semaphore_id was not initialized for all-gather");
                     EriscDatamoverBuilder::ChannelBufferInterface const& receiver_channel_buffer_info =
-                        receiver_edm_builder.add_receiver_channel(receiver_worker_semaphore_id, counter_clockwise_link_buffer_num_messages_to_send.at(b), receiver_worker_coords);
+                        receiver_edm_builder.add_receiver_channel(receiver_worker_semaphore_id.value(), counter_clockwise_link_buffer_num_messages_to_send.at(b), receiver_worker_coords);
                     if (is_channel_shrinkable.at(b) && largest_packets_per_channel.at(b) > 0) {
                         TT_ASSERT(largest_packets_per_channel.at(b) > 0);
                         log_trace(tt::LogOp, "\tsetting channel_max_size to {} for channel {}", largest_packets_per_channel.at(b), b);
@@ -790,6 +825,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                 }
             }
 
+            if (build_worker_kernels) { // move to separate arg builder function
             for (uint32_t b = 0; b < all_gather_config.get_num_workers_per_link(); ++b) {
                 uint32_t global_worker_index = all_gather_config.get_num_workers_per_link() * i + b;
 
@@ -862,9 +898,10 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                     };
                     std::vector<uint32_t> const& worker_send_reader_rt_args = build_worker_send_reader_rt_args();
 
+                    TT_ASSERT(worker_sender_reader_kernel_id.has_value(), "Worker kernel worker_sender_reader_kernel_id not initialized properly for all-gather");
                     tt::tt_metal::SetRuntimeArgs(
                         program,
-                        worker_sender_reader_kernel_id,
+                        worker_sender_reader_kernel_id.value(),
                         sender_worker_cores.at(b),
                         worker_send_reader_rt_args);
 
@@ -936,9 +973,10 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                     };
                     std::vector<uint32_t> const& worker_sender_writer_rt_args = build_worker_sender_writer_rt_args();
 
+                    TT_ASSERT(worker_sender_writer_kernel_id.has_value(), "Worker kernel worker_sender_writer_kernel_id not initialized properly for all-gather");
                     tt::tt_metal::SetRuntimeArgs(
                         program,
-                        worker_sender_writer_kernel_id,
+                        worker_sender_writer_kernel_id.value(),
                         sender_worker_cores.at(b),
                         worker_sender_writer_rt_args);
                 }
@@ -1013,9 +1051,10 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                     };
                     std::vector<uint32_t> worker_receiver_reader_rt_args = build_worker_receiver_reader_rt_args();
 
+                    TT_ASSERT(worker_receiver_reader_kernel_id.has_value(), "Worker kernel worker_receiver_reader_kernel_id not initialized properly for all-gather");
                     tt::tt_metal::SetRuntimeArgs(
                         program,
-                        worker_receiver_reader_kernel_id,
+                        worker_receiver_reader_kernel_id.value(),
                         receiver_worker_cores.at(b),
                         worker_receiver_reader_rt_args);
 
@@ -1093,9 +1132,10 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                     };
                     std::vector<uint32_t> worker_receive_writer_rt_args = build_worker_receive_writer_rt_args();
 
+                    TT_ASSERT(worker_receiver_writer_kernel_id.has_value(), "Worker kernel worker_receiver_writer_kernel_id not initialized properly for all-gather");
                     tt::tt_metal::SetRuntimeArgs(
                         program,
-                        worker_receiver_writer_kernel_id,
+                        worker_receiver_writer_kernel_id.value(),
                         receiver_worker_cores.at(b),
                         worker_receive_writer_rt_args);
                 }
@@ -1103,6 +1143,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                 uint32_t pages_per_worker = num_full_chunks_per_worker.at(b) * pages_per_chunk + rem_pages_per_worker.at(b);
                 tensor_slicer.increment(pages_per_worker);
 
+            }
             }
 
             if (receiver_device_id == sender_device_id) {
@@ -1115,24 +1156,17 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
         }
     } // num_full_send_directions
 
-    if (build_edm_kernels) {
-        // If we are building in persistent mode but we are building the workers
-        // then we must avoid building the erisc kernels so that
-        ttnn::ccl::generate_edm_kernels_for_ring_or_linear_topology(
-            program,
-            device,
-            topology_config,
-            clockwise_edm_builders,
-            counter_clockwise_edm_builders,
-            receiver_device_id,
-            sender_device_id);
-    }
+    log_info(tt::LogOp, "generate_edm_kernels_for_ring_or_linear_topology for device {}", device->id());
+    ttnn::ccl::generate_edm_kernels_for_ring_or_linear_topology(
+        program,
+        device,
+        topology_config,
+        clockwise_edm_builders,
+        counter_clockwise_edm_builders,
+        receiver_device_id,
+        sender_device_id,
+        build_mode);
 
-
-    bool update_worker_rt_args = build_mode != ccl::OpBuildMode::PERSISTENT_BUILD_PERSISTENT_EDM;
-    bool update_edm_rt_args = build_mode == ccl::OpBuildMode::PERSISTENT_BUILD_PERSISTENT_EDM;
-
-    TT_ASSERT(update_worker_rt_args ^ update_edm_rt_args, "Internal error. Both workers and EDM are set to override args in same all-gather program.");
 
     auto override_runtime_arguments_callback =
         [worker_sender_reader_kernel_id,
@@ -1141,18 +1175,27 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
         worker_receiver_writer_kernel_id,
         num_links,
         all_sender_worker_cores,
-        all_receiver_worker_cores] (
+        all_receiver_worker_cores,
+        build_mode] (
         const void* operation,
         Program& program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
     ) {
+        if (build_mode == ccl::OpBuildMode::PERSISTENT_BUILD_PERSISTENT_EDM) {
+            return;
+        }
+
+        TT_ASSERT(worker_receiver_writer_kernel_id.has_value());
+        TT_ASSERT(worker_sender_reader_kernel_id.has_value());
+        TT_ASSERT(worker_sender_writer_kernel_id.has_value());
+
         const auto& input = input_tensors[0];
         const auto& output = output_tensors[0];
 
         // update receivers
-        auto &worker_writer_receiver_runtime_args_by_core = GetRuntimeArgs(program, worker_receiver_writer_kernel_id);
+        auto &worker_writer_receiver_runtime_args_by_core = GetRuntimeArgs(program, worker_receiver_writer_kernel_id.value());
         for (auto const& core : all_receiver_worker_cores) {
             //writer
             auto &worker_writer_receiver_runtime_args = worker_writer_receiver_runtime_args_by_core[core.x][core.y];
@@ -1160,8 +1203,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
         }
 
         // update senders
-        auto &worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);
-        auto &worker_writer_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_writer_kernel_id);
+        auto &worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id.value());
+        auto &worker_writer_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_writer_kernel_id.value());
         for (auto const& core : all_sender_worker_cores) {
             // reader
             auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];

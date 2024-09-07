@@ -7,6 +7,7 @@
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/ccl/line_all_gather/line_all_gather.hpp"
+#include "ttnn/operations/ccl/ccl_fabric.hpp"
 #include "ttnn/types.hpp"
 
 
@@ -25,14 +26,16 @@ void bind_line_all_gather(pybind11::module& module, const ccl_operation_t& opera
                const ttnn::Tensor& input_tensor,
                const uint32_t dim,
                const uint32_t num_links,
-               const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(input_tensor, dim, num_links, memory_config);
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const ttnn::ccl::OpFabricMode op_fabric_mode) -> ttnn::Tensor {
+                return self(input_tensor, dim, num_links, memory_config, op_fabric_mode);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
             py::kw_only(),
             py::arg("num_links") = 1,
-            py::arg("memory_config") = std::nullopt},
+            py::arg("memory_config") = std::nullopt,
+            py::arg("op_fabric_mode") = ttnn::ccl::OpFabricMode::TEMPORARY_EDM},
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
@@ -40,8 +43,9 @@ void bind_line_all_gather(pybind11::module& module, const ccl_operation_t& opera
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
                const uint32_t num_links,
-               const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(input_tensor, dim, cluster_axis, mesh_device, num_links, memory_config);
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const ttnn::ccl::OpFabricMode op_fabric_mode) -> ttnn::Tensor {
+                return self(input_tensor, dim, cluster_axis, mesh_device, num_links, memory_config, op_fabric_mode);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
@@ -49,7 +53,8 @@ void bind_line_all_gather(pybind11::module& module, const ccl_operation_t& opera
             py::arg("mesh_device"),
             py::kw_only(),
             py::arg("num_links") = 1,
-            py::arg("memory_config") = std::nullopt});
+            py::arg("memory_config") = std::nullopt,
+            py::arg("op_fabric_mode") = ttnn::ccl::OpFabricMode::TEMPORARY_EDM});
 }
 
 }  // namespace detail
@@ -79,6 +84,7 @@ void py_bind_line_all_gather(pybind11::module& module) {
         Keyword Args:
             * :attr:`num_links` (int): Number of links to use for the all-gather operation.
             * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+            * :attr:`op_fabric_mode` (Optional[ttnn.ccl.FabricMode]): Specifies to the op if it should try to reuse presistent EriscDataMover (EDM) kernels to avoid dispatch/recompile for erisc cores
 
         Example:
 

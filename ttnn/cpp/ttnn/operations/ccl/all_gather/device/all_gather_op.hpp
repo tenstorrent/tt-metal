@@ -132,6 +132,7 @@ struct AllGather {
     const std::optional<chip_id_t> sender_device_id;
     const MemoryConfig output_mem_config;
     const all_gather_op::Topology topology;
+    const ccl::OpBuildMode op_build_mode;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -140,11 +141,14 @@ struct AllGather {
 };
 
 AllGather create_all_gather_struct(
-    const Tensor& input_tensor,
+    const MemoryConfig &input_tensor_memory_config,
+    const Device* input_tensor_device,
     const uint32_t dim,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
-    const std::vector<Device*>& devices
+    const std::vector<Device*>& devices,
+    const ttnn::ccl::Topology topology,
+    const ccl::OpBuildMode op_build_mode
 );
 
 // All Gather Variants

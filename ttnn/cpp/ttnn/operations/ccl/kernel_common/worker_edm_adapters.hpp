@@ -36,7 +36,9 @@ struct WorkerToEdmReader{
     {}
 
     FORCE_INLINE void wait_for_payload_available() const {
+        DPRINT << "Receive Worker Wait EDM\n";
         noc_semaphore_wait(this->worker_sem_addr, 1);
+        DPRINT << "Receive Worker Wait EDM\n";
         noc_semaphore_set(this->worker_sem_addr, 0);
     }
 
@@ -95,7 +97,9 @@ struct WorkerToEdmSender{
     }
 
     FORCE_INLINE void wait_for_empty_write_slot() const {
+        DPRINT << "Send Worker Wait EDM\n";
         noc_semaphore_wait(this->worker_sem_addr, 1);
+        DPRINT << "Send Worker Got Go from EDM\n";
         noc_semaphore_set(this->worker_sem_addr, 0);
     }
 
@@ -129,6 +133,7 @@ struct WorkerToEdmSender{
     template<ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_impl(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
         uint64_t buffer_address = this->edm_buffer_addr + (this->buffer_index * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
+        DPRINT << "WorkerSender sending to " << buffer_address << " with size " << page_size * num_pages << "\n";
         send_chunk<blocking_mode>(cb_id, num_pages, page_size, buffer_address);
         noc_semaphore_inc(edm_semaphore_addr, 1);
         this->buffer_index = (this->buffer_index == this->last_buffer_index) ? 0 : this->buffer_index + 1;

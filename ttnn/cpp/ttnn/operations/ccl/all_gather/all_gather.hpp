@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
+#include "ttnn/operations/ccl/ccl_fabric.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -15,7 +16,8 @@ struct ExecuteAllGather {
         const ttnn::Tensor& input_tensor,
         const uint32_t dim,
         const uint32_t num_links = 1,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+        const ttnn::ccl::OpFabricMode op_fabric_mode = ttnn::ccl::OpFabricMode::TEMPORARY_EDM);
 };
 
 }  // namespace ccl

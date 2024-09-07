@@ -963,7 +963,13 @@ def run_all_gather_sharded(
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
 
     ## Run the actual allgather operation
-    tt_out_tensor = all_gather_operation(input_tensor_mesh, dim, num_links=num_links, memory_config=output_mem_config)
+    tt_out_tensor = all_gather_operation(
+        input_tensor_mesh,
+        dim,
+        num_links=num_links,
+        memory_config=output_mem_config,
+        op_fabric_mode=ttnn.CclFabricMode.EDM,
+    )
     ## Wait for completion
     for d in devices:
         ttnn.synchronize_device(d)

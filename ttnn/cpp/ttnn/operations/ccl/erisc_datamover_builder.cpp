@@ -63,7 +63,6 @@ EriscDatamoverBuilder::EriscDatamoverBuilder(
     TT_ASSERT(num_buffers_per_channel > 0);
     TT_ASSERT(local_buffer_addresses.size() == local_semaphore_addresses.size());
     active_channels.reserve(num_channel_buffers);
-    TT_ASSERT(eth_buffer_size_bytes < 163000);
     log_trace(tt::LogOp, "EriscDatamoverBuilder:");
     for (auto const& addr : local_semaphore_addresses) {
         TT_ASSERT(addr > 0);
@@ -127,29 +126,30 @@ EriscDatamoverBuilder::ChannelBufferInterface EriscDatamoverBuilder::add_receive
 
 std::vector<uint32_t> EriscDatamoverBuilder::emit_compile_time_args() const {
     return std::vector<uint32_t>{
-        static_cast<uint32_t>(this->enable_sender ? 1 : 0),
-        static_cast<uint32_t>(this->enable_receiver ? 1 : 0),
-        this->num_senders,
-        this->num_receivers,
         this->buffer_sharing_mode,
         this->termination_mode,
-        1,
-        static_cast<uint32_t>(this->num_senders > 0 && active_channels.at(0).is_sender),
-        this->num_buffers_per_channel,
         chip_id
         };
 }
 
 std::vector<uint32_t> EriscDatamoverBuilder::emit_runtime_args() const {
+    log_info(tt::LogOp, "EriscDatamoverBuilder::emit_runtime_args()");
     std::vector<uint32_t> args;
-    uint32_t size = 3 + active_channels.size() * 6;
+    uint32_t size = 8 + active_channels.size() * 6;
     for (auto const& channel : active_channels) {
         size += channel.worker_coords.size();
     }
     args.reserve(size);
 
+    // is_handshake_master
+    bool is_handshake_master = this->num_senders > 0 && active_channels.at(0).is_sender;
+    args.push_back(static_cast<uint32_t>(is_handshake_master));
     // Handshake address
     args.push_back(handshake_addr);
+
+    args.push_back(static_cast<uint32_t>(this->num_senders));
+    args.push_back(static_cast<uint32_t>(this->num_receivers));
+    args.push_back(static_cast<uint32_t>(this->num_buffers_per_channel));
 
     bool senders_below_receivers = active_channels.size() == 0 || this->active_channels.front().is_sender;
 
@@ -177,6 +177,7 @@ std::vector<uint32_t> EriscDatamoverBuilder::emit_runtime_args() const {
 }
 
 void EriscDatamoverBuilder::dump_to_log() const {
+    log_info(tt::LogOp, "Dumping args to log");
     auto const& rt_args = this->emit_runtime_args();
     log_trace(tt::LogOp, "EDM RT Args:");
     for (auto const& arg : rt_args) {

@@ -718,6 +718,9 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
    ttnn::ccl::Topology topology) {
+    OpBuildMode op_build_mode = OpBuildMode::NON_PERSISTENT;
+    TT_ASSERT(op_build_mode == OpBuildMode::NON_PERSISTENT, "Reduce scatter only supports non-persistent mode EDM mode until support is added in the op");
+
     log_trace(tt::LogOp, "reduce_scatter_with_workers entry");
     TT_ASSERT(
         input_tensor.get_legacy_shape()[scatter_split_dim] ==
@@ -916,7 +919,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         cw_per_link_edm_builders,
         ccw_per_link_edm_builders,
         receiver_device_id,
-        sender_device_id);
+        sender_device_id,
+        op_build_mode);
 
     uint32_t total_num_workers = worker_cores.size();
     auto override_runtime_arguments_callback =
