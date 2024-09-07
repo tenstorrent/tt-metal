@@ -1328,4 +1328,4 @@ CCL operations can be dispatched across various chips and sub-topologies of a mu
 
 For example, it is possible to describe an operation such as an all-gathering along the rows of a multichip cluster that has multiple rows or columns, where the TT-NN infrastructure can decide the appropriate way to dispatch the underlying CCL operations..
 
-Refer to the ["Programming Mesh of Devices with TT-NN"](tech_reports/Programming Mesh of Devices/Programming Mesh of Devices with TT-NN.md) guide for programming examples and further information.
+Refer to the ["Programming Mesh of Devices with TT-NN"](../Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md) guide for programming examples and further information.
