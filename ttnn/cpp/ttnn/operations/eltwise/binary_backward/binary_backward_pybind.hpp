@@ -736,6 +736,17 @@ void py_module(py::module& module) {
         |    BFLOAT16                |       ROW_MAJOR, TILE           |      2, 3, 4      |
         +----------------------------+---------------------------------+-------------------+)doc");
 
+    detail::bind_binary_backward_overload(
+        module,
+        ttnn::fmod_bw,
+        R"doc(Performs backward operations for fmod of :attr:`input_tensor_a`, :attr:`scalar` or attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
+        R"doc(
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16                |       ROW_MAJOR, TILE           |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+)doc");
+
     detail::bind_binary_backward_ops(
         module,
         ttnn::atan2_bw,
