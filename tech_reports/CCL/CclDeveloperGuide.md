@@ -178,7 +178,7 @@ The T3000 part is a desktop form factor machine which contains a total of eight 
 
 #### Galaxy
 
-The Galaxy part is larger compared to the prior two parts, and is intended to be used as a building block for large scaleout systems. Each Galaxy part contains 32 Wormhole chips assembled in a 4x8 2D mesh. In this configuration, all non-edge and non-corner chips utilize all 16 of their Ethernet links. The corner and edge chips use fewer links. However, They have unconnected Ethernet cores which can be connected to Ethernet links which can be used to connect multiple Galaxies to each other in a larger mesh, or they can be used to convert this mesh into a torus. As with all other scaleout Wormhole parts, Ethernet link speeds are the same at 12.5 GBps per direction per link with a total of 25 GBps bidirectional.
+The Galaxy part is larger compared to the prior two parts, and is intended to be used as a building block for large scaleout systems. Each Galaxy part contains 32 Wormhole chips assembled in a 4x8 2D mesh. In this configuration, all non-edge and non-corner chips utilize all 16 of their Ethernet links. The corner and edge chips use fewer links. However, They have unconnected Ethernet cores which can be connected to Ethernet links which can be used to connect multiple Galaxies to each other in a larger mesh, or they can be used to convert this mesh into a torus. As with all other scaleout Wormhole parts, Ethernet link speeds are the same at 12.5 GB/s per direction per link with a total of 25 GB/s bidirectional.
 
 
 ![TG](images/TG.png)
@@ -1061,7 +1061,7 @@ Additionally, with these ring and line algorithms where all transfers are only t
 
 ## EDM Performance
 
-Plot TODO but measured upwards of 20 GBps link util
+Plot TODO but measured upwards of 20 GB/s link util
 
 # Host CCL Op Builder Components {#host-ccl-op-builder-components}
 
