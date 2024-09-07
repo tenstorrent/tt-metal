@@ -34,8 +34,9 @@ void bind_all_gather(pybind11::module& module, const ccl_operation_t& operation,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<size_t> num_workers,
                const std::optional<size_t> num_buffers_per_channel,
-               const ttnn::ccl::Topology topology) -> ttnn::Tensor {
-                return self(input_tensor, dim, num_links, memory_config, num_workers, num_buffers_per_channel, topology);
+               const ttnn::ccl::Topology topology,
+               const ttnn::ccl::OpFabricMode op_fabric_mode) -> ttnn::Tensor {
+                return self(input_tensor, dim, num_links, memory_config, num_workers, num_buffers_per_channel, topology, op_fabric_mode);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
@@ -44,7 +45,8 @@ void bind_all_gather(pybind11::module& module, const ccl_operation_t& operation,
             py::arg("memory_config") = std::nullopt,
             py::arg("num_workers") = std::nullopt,
             py::arg("num_buffers_per_channel") = std::nullopt,
-            py::arg("topology") = ttnn::ccl::Topology::Ring},
+            py::arg("topology") = ttnn::ccl::Topology::Ring,
+            py::arg("op_fabric_mode") = ttnn::ccl::OpFabricMode::TEMPORARY_EDM},
 
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
@@ -68,7 +70,8 @@ void bind_all_gather(pybind11::module& module, const ccl_operation_t& operation,
             py::arg("memory_config") = std::nullopt,
             py::arg("num_workers") = std::nullopt,
             py::arg("num_buffers_per_channel") = std::nullopt,
-            py::arg("topology") = ttnn::ccl::Topology::Ring});
+            py::arg("topology") = ttnn::ccl::Topology::Ring,
+            py::arg("op_fabric_mode") = ttnn::ccl::OpFabricMode::TEMPORARY_EDM});
 }
 
 }  // namespace detail
@@ -97,6 +100,7 @@ void py_bind_all_gather(pybind11::module& module) {
             num_workers (int, optional): Number of workers to use for the operation. Defaults to `None`.
             num_buffers_per_channel (int, optional): Number of buffers per channel to use for the operation. Defaults to `None`.
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
+            op_fabric_mode (Optional[ttnn.ccl.FabricMode]): Specifies to the op if it should try to reuse presistent EriscDataMover (EDM) kernels to avoid dispatch/recompile for erisc cores
 
         Returns:
             ttnn.Tensor: the output tensor.

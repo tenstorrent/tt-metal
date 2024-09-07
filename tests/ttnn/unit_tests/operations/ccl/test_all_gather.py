@@ -76,6 +76,7 @@ def run_with_trace(
     n_worker,
     n_buffer,
     num_iter,
+    op_fabric_mode,
 ):
     # Compile Run
     logger.info("Compiling model")
@@ -87,6 +88,7 @@ def run_with_trace(
         num_workers=n_worker,
         num_buffers_per_channel=n_buffer,
         topology=all_gather_topology,
+        op_fabric_mode=op_fabric_mode
     )
     for d in mesh_device.get_devices():
         ttnn.synchronize_device(d)
@@ -103,6 +105,7 @@ def run_with_trace(
             num_workers=n_worker,
             num_buffers_per_channel=n_buffer,
             topology=all_gather_topology,
+            op_fabric_mode=op_fabric_mode
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     for d in mesh_device.get_devices():
@@ -1113,6 +1116,7 @@ def run_all_gather_sharded(
     n_buffer=None,
     num_iter=1,
     trace_mode=False,
+    fabric_mode=ttnn.CclFabricMode.EDM,
 ):
     numel = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3] * num_devices
     unchunked_input_shape = list(input_shape)
@@ -1181,7 +1185,6 @@ def run_all_gather_sharded(
     ):
         pytest.skip("Unsupported test case")
 
-    tt_input_tensors_dups = []
     tt_input_tensors = []
 
     for i, t in enumerate(input_tensors):
@@ -1205,6 +1208,7 @@ def run_all_gather_sharded(
             n_worker,
             n_buffer,
             num_iter,
+            op_fabric_mode=fabric_mode,
         )
     else:
         ## Run the actual allgather operation
@@ -1217,6 +1221,7 @@ def run_all_gather_sharded(
                 num_workers=n_worker,
                 num_buffers_per_channel=n_buffer,
                 topology=all_gather_topology,
+                op_fabric_mode=fabric_mode,
             )
         ## Wait for completion
         for d in mesh_device.get_devices():
@@ -1404,6 +1409,7 @@ def run_all_gather_sharded_n300(
     ),
 )
 @pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 122880}], indirect=True)
 def test_all_gather_sharded_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -1438,6 +1444,7 @@ def test_all_gather_sharded_post_commit(
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
         enable_async=enable_async,
+        fabric_mode=ttnn.CclFabricMode.PersistentEDM,
     )
 
 

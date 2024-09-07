@@ -139,14 +139,16 @@ struct AllGather {
 };
 
 AllGather create_all_gather_struct(
-    const Tensor& input_tensor,
+    const MemoryConfig &input_tensor_memory_config,
+    const Device* input_tensor_device,
     const uint32_t dim,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> user_defined_num_workersm,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
     const std::vector<Device*>& devices,
-    const ccl::Topology topology
+    const ccl::Topology topology,
+    const ccl::OpBuildMode op_build_mode
 );
 
 // All Gather Variants

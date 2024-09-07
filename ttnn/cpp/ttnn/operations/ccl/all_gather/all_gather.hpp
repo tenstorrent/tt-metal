@@ -6,6 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/operations/ccl/ccl_fabric.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -19,7 +20,8 @@ struct ExecuteAllGather {
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<size_t> num_workers = std::nullopt,
         const std::optional<size_t> num_buffers_per_channel = std::nullopt,
-        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
+        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+        const ttnn::ccl::OpFabricMode op_fabric_mode = ttnn::ccl::OpFabricMode::TEMPORARY_EDM);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
@@ -30,7 +32,9 @@ struct ExecuteAllGather {
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<size_t> num_workers = std::nullopt,
         const std::optional<size_t> num_buffers_per_channel = std::nullopt,
-        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
+        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+        const ttnn::ccl::OpFabricMode op_fabric_mode = ttnn::ccl::OpFabricMode::TEMPORARY_EDM);
+        const ttnn::ccl::OpFabricMode op_fabric_mode = ttnn::ccl::OpFabricMode::TEMPORARY_EDM);
 };
 
 }  // namespace ccl

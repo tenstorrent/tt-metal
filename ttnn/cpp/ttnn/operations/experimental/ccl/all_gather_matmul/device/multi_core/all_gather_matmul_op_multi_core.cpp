@@ -219,7 +219,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
     const std::optional<chip_id_t> sender_device_id,
     ttnn::ccl::Topology topology,
     const CoreCoord core_grid_offset,
-
+    ttnn::ccl::OpBuildMode op_build_mode,
 
     /* Matmul Params */
     const std::optional<const Tensor> bias,
@@ -227,7 +227,6 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
     DeviceComputeKernelConfig compute_kernel_config,
     const operations::matmul::MatmulProgramConfig program_config,
     bool untilize_out
-
 ) {
     tt::tt_metal::Program program{};
     bool use_datacopy = false; /* Enable for debugging purposes */
@@ -343,6 +342,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
         matmul_program_with_callbacks->program,
         input_tensor,
         all_gather_output_tensor,
+        all_gather_op_builder_args_t {
         dim,
         num_links,
         ring_size,
@@ -353,6 +353,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
         user_defined_num_workers,
         user_defined_num_buffers_per_channel,
         all_gather_fused_op_signaler,
+        op_build_mode,
         core_grid_offset);
     const auto all_gather_override_runtime_arguments_callback = program_with_callbacks.override_runtime_arguments_callback;
 
