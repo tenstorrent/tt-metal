@@ -1,4 +1,5 @@
 #!/bin/bash
+set +e
 
 run_common_func_tests() {
   # working on both n150 and n300
