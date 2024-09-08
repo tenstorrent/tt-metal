@@ -879,6 +879,8 @@ def run_all_gather_sharded(
     function_level_defaults,
     all_gather_operation,
     num_iters,
+    enable_trace=False,
+    fabric_mode=ttnn.CclFabricMode.EDM,
 ):
     if t3k_mesh_device.get_num_devices() != 8:
         pytest.skip("Not T3000!")
@@ -962,17 +964,7 @@ def run_all_gather_sharded(
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     # compile
-    tt_out_tensor = all_gather_operation(
-        input_tensor_mesh,
-        dim,
-        num_links=num_links,
-        memory_config=output_mem_config,
-        op_fabric_mode=ttnn.CclFabricMode.PersistentEDM,
-    )
-
-    trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
-    for _ in range(num_iters):
-        ## Run the actual allgather operation
+    for _ in range(1 if enable_trace else num_iters):
         tt_out_tensor = all_gather_operation(
             input_tensor_mesh,
             dim,
@@ -980,14 +972,27 @@ def run_all_gather_sharded(
             memory_config=output_mem_config,
             op_fabric_mode=ttnn.CclFabricMode.PersistentEDM,
         )
-    ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
-    logger.info(f"Running {num_iters} iterations")
 
-    ttnn.execute_trace(t3k_mesh_device, trace_id, cq_id=0, blocking=False)
+    if enable_trace:
+        trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
+        for _ in range(num_iters):
+            ## Run the actual allgather operation
+            tt_out_tensor = all_gather_operation(
+                input_tensor_mesh,
+                dim,
+                num_links=num_links,
+                memory_config=output_mem_config,
+                op_fabric_mode=ttnn.CclFabricMode.PersistentEDM,
+            )
+        ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
+        logger.info(f"Running {num_iters} iterations")
+
+        ttnn.execute_trace(t3k_mesh_device, trace_id, cq_id=0, blocking=False)
 
     for d in t3k_mesh_device.get_devices():
         ttnn.synchronize_device(d)
-    ttnn.release_trace(t3k_mesh_device, trace_id)
+    if enable_trace:
+        ttnn.release_trace(t3k_mesh_device, trace_id)
 
     torch.set_printoptions(sci_mode=False)
     all_eq = True
@@ -1028,7 +1033,8 @@ def run_all_gather_sharded(
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttnn.bfloat16,  # https://github.com/tenstorrent/tt-metal/issues/9686
+        ttnn.bfloat16,
+        s  # https://github.com/tenstorrent/tt-metal/issues/9686
         # ttnn.bfloat8_b,
     ],
 )
@@ -1051,21 +1057,21 @@ def run_all_gather_sharded(
             (32, 32),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
-        # (  # https://github.com/tenstorrent/tt-metal/issues/9686
-        #     (1, 1, 32, 4096),
-        #     (32, 128),
-        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-        # ),
-        # (  # https://github.com/tenstorrent/tt-metal/issues/9686
-        #     (1, 1, 32, 2048),
-        #     (32, 64),
-        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-        # ),
-        # (  # https://github.com/tenstorrent/tt-metal/issues/9686
-        #     (1, 1, 32, 1792),
-        #     (32, 32),
-        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
-        # ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 4096),
+            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 2048),
+            (32, 64),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        ),
+        (  # https://github.com/tenstorrent/tt-metal/issues/9686
+            (1, 1, 32, 1792),
+            (32, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
+        ),
     ),
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 122880}], indirect=True)
@@ -1101,7 +1107,77 @@ def test_all_gather_sharded_post_commit(
         use_program_cache,
         function_level_defaults,
         all_gather_operation=ttnn.all_gather,
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("num_devices", [8])
+@pytest.mark.parametrize("dim", [3])
+@pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT])
+# @pytest.mark.parametrize("num_cores", [1])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "tensor_mem_layout",
+    [
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        # ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        # ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
+)
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize(
+    "input_shape, input_shard_shape,shard_grid",
+    (
+        # LLama
+        (
+            (1, 1, 32, 1024),
+            (32, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        ),
+    ),
+)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 122880}], indirect=True)
+def test_all_gather_sharded_post_commit_with_persistent_kernel(
+    t3k_mesh_device,
+    num_devices,
+    input_shape,
+    input_shard_shape,
+    shard_grid,
+    dim,
+    num_links,
+    orientation,
+    input_dtype,
+    tensor_layout,
+    tensor_mem_layout,
+    # num_cores,
+    use_program_cache,
+    function_level_defaults,
+):
+    run_all_gather_sharded(
+        t3k_mesh_device,
+        num_devices,
+        input_shape,
+        input_shard_shape,
+        shard_grid,
+        dim,
+        num_links,
+        orientation,
+        input_dtype,
+        tensor_layout,
+        tensor_mem_layout,
+        # num_cores,
+        use_program_cache,
+        function_level_defaults,
+        all_gather_operation=ttnn.all_gather,
         num_iters=16,
+        enable_trace=True,
+        fabric_mode=ttnn.CclFabricMode.PersistentEDM,
     )
 
 
@@ -1158,7 +1234,7 @@ def test_all_gather_sharded_post_commit(
     ),
 )
 def test_all_gather_height_sharded_post_commit(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -1174,7 +1250,7 @@ def test_all_gather_height_sharded_post_commit(
     function_level_defaults,
 ):
     run_all_gather_sharded(
-        all_devices,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         input_shard_shape,
@@ -1189,6 +1265,7 @@ def test_all_gather_height_sharded_post_commit(
         use_program_cache,
         function_level_defaults,
         all_gather_operation=ttnn.all_gather,
+        num_iters=1,
     )
 
 
@@ -1239,7 +1316,7 @@ def test_all_gather_height_sharded_post_commit(
     ),
 )
 def test_all_gather_block_sharded_post_commit(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -1255,7 +1332,7 @@ def test_all_gather_block_sharded_post_commit(
     function_level_defaults,
 ):
     run_all_gather_sharded(
-        all_devices,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         input_shard_shape,
@@ -1328,7 +1405,7 @@ def test_all_gather_block_sharded_post_commit(
     ),
 )
 def test_line_all_gather_sharded_post_commit(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -1344,7 +1421,7 @@ def test_line_all_gather_sharded_post_commit(
     function_level_defaults,
 ):
     run_all_gather_sharded(
-        all_devices,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         input_shard_shape,
@@ -1488,7 +1565,7 @@ def test_line_all_gather_sharded_post_commit(
 )
 @pytest.mark.parametrize("all_gather_operation", [ttnn.all_gather, ttnn.line_all_gather])
 def test_sharded_all_gather_nightly(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -1505,7 +1582,7 @@ def test_sharded_all_gather_nightly(
     all_gather_operation,
 ):
     run_all_gather_sharded(
-        all_devices,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         input_shard_shape,
