@@ -1170,6 +1170,13 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
         sender_device_id,
         build_mode);
 
+    TT_ASSERT((!build_worker_kernels) ^ worker_sender_reader_kernel_id.has_value());
+    TT_ASSERT((!build_worker_kernels) ^ worker_sender_writer_kernel_id.has_value());
+    TT_ASSERT((!build_worker_kernels) ^ worker_receiver_reader_kernel_id.has_value());
+    TT_ASSERT((!build_worker_kernels) ^ worker_receiver_writer_kernel_id.has_value());
+    TT_ASSERT((!build_worker_kernels) ^ receiver_worker_semaphore_id.has_value());
+    TT_ASSERT((!build_worker_kernels) ^ sender_worker_writer_semaphore_id.has_value());
+    TT_ASSERT((!build_worker_kernels) ^ sender_worker_reader_semaphore_id.has_value());
 
     auto override_runtime_arguments_callback =
         [worker_sender_reader_kernel_id,
