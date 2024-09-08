@@ -21,6 +21,8 @@ CHIP_ID_TO_COORDINATES_T3K[5] = (0, 1)
 CHIP_ID_TO_COORDINATES_T3K[6] = (3, 1)
 CHIP_ID_TO_COORDINATES_T3K[7] = (3, 0)
 
+NUM_ITERATIONS = 100000
+
 
 @pytest.mark.parametrize("num_devices", [1, 2, 8], ids=["1chips", "2chips", "8chips"])
 def test_reproduce_lm_head_nd_32(
@@ -125,7 +127,7 @@ def test_reproduce_lm_head_nd_32(
         )
 
     logger.info("Starting iterations")
-    for i in range(100000):
+    for i in range(NUM_ITERATIONS):
         # run matmul on all devices
         for device_idx in range(num_devices):
             out[device_idx] = ttnn.matmul(

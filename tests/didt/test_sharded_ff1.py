@@ -11,7 +11,9 @@ import tt_lib as ttl
 from models.utility_functions import comp_pcc, torch2tt_tensor, tt2torch_tensor, get_devices_for_t3000
 import torch
 
-FF1_HANG_PARAMETRIZATION = (1024, 4608, 18432, 4, 72, 3, 1, 8, 100000)
+NUM_ITERATIONS = 100000
+
+FF1_HANG_PARAMETRIZATION = (1024, 4608, 18432, 4, 72, 3, 1, 8, NUM_ITERATIONS)
 
 CHIP_ID_TO_COORDINATES_T3K = [None] * 8
 CHIP_ID_TO_COORDINATES_T3K[0] = (1, 0)
@@ -254,7 +256,7 @@ def test_specific_chip_reproduce_matmul_2d_hang_t3000(all_devices, logical_chip_
     )
     target_device = all_devices[logical_chip_index]
     devices = [target_device]
-    test_reproduce_matmul_2d_hang(1, devices, 1024, 4608, 18432, 4, 72, 3, 1, 8, 100000, use_program_cache)
+    test_reproduce_matmul_2d_hang(1, devices, 1024, 4608, 18432, 4, 72, 3, 1, 8, NUM_ITERATIONS, use_program_cache)
 
 
 @pytest.mark.parametrize(
