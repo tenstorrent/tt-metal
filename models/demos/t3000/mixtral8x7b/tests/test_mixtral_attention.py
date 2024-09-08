@@ -25,7 +25,11 @@ def test_mixtral_attention_inference(t3k_mesh_device, use_program_cache, reset_s
 
     pcc = 0.99
     dtype = ttnn.bfloat8_b
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0))
+    batch = 32
+    seq_len = 1  # Decode one token at a time
+
+    # Update the model batch size to 32 and max_seq_len to 16384 to fit on device.
+    model_args = TtModelArgs(t3k_mesh_device.get_device(0), max_batch_size=batch, max_seq_len=16384)
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -33,9 +37,6 @@ def test_mixtral_attention_inference(t3k_mesh_device, use_program_cache, reset_s
 
     reference_model = Attention(args=model_args)
     reference_model.load_state_dict(partial_state_dict)
-
-    batch = 32
-    seq_len = 1  # Decode one token at a time
 
     tt_model = TtMixtralAttention(t3k_mesh_device, state_dict, args=model_args, layer_num=0, dtype=dtype)
 
