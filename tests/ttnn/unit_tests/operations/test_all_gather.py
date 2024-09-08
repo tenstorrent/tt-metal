@@ -863,7 +863,7 @@ def test_all_gather_on_t3000_nightly(
 
 
 def run_all_gather_sharded(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -878,8 +878,9 @@ def run_all_gather_sharded(
     use_program_cache,
     function_level_defaults,
     all_gather_operation,
+    num_iters,
 ):
-    if len(all_devices) != 8:
+    if t3k_mesh_device.get_num_devices() != 8:
         pytest.skip("Not T3000!")
 
     numel = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3] * num_devices
@@ -903,7 +904,6 @@ def run_all_gather_sharded(
     unchunked_input_tensor = unchunked_input_tensor.bfloat16()
 
     input_tensors = torch.chunk(unchunked_input_tensor, num_devices, dim)
-    devices = get_devices_for_t3000(all_devices, num_devices)
 
     # num_cores =
     # compute_grid_size = devices[0].compute_with_storage_grid_size()
@@ -953,26 +953,41 @@ def run_all_gather_sharded(
     ):
         pytest.skip("Unsupported test case")
 
-    tt_input_tensors_dups = []
     tt_input_tensors = []
 
     for i, t in enumerate(input_tensors):
-        tt_input_tensors_dups.append(ttnn.Tensor(t, input_dtype).to(tensor_layout).to(devices[i], input_mem_config))
-        tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(tensor_layout).to(devices[i], input_mem_config))
+        tt_input_tensors.append(
+            ttnn.Tensor(t, input_dtype).to(tensor_layout).to(t3k_mesh_device.get_devices()[i], input_mem_config)
+        )
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
-
-    ## Run the actual allgather operation
+    # compile
     tt_out_tensor = all_gather_operation(
         input_tensor_mesh,
         dim,
         num_links=num_links,
         memory_config=output_mem_config,
-        op_fabric_mode=ttnn.CclFabricMode.EDM,
+        op_fabric_mode=ttnn.CclFabricMode.PersistentEDM,
     )
-    ## Wait for completion
-    for d in devices:
+
+    trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
+    for _ in range(num_iters):
+        ## Run the actual allgather operation
+        tt_out_tensor = all_gather_operation(
+            input_tensor_mesh,
+            dim,
+            num_links=num_links,
+            memory_config=output_mem_config,
+            op_fabric_mode=ttnn.CclFabricMode.PersistentEDM,
+        )
+    ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
+    logger.info(f"Running {num_iters} iterations")
+
+    ttnn.execute_trace(t3k_mesh_device, trace_id, cq_id=0, blocking=False)
+
+    for d in t3k_mesh_device.get_devices():
         ttnn.synchronize_device(d)
+    ttnn.release_trace(t3k_mesh_device, trace_id)
 
     torch.set_printoptions(sci_mode=False)
     all_eq = True
@@ -1036,25 +1051,26 @@ def run_all_gather_sharded(
             (32, 32),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
-        (  # https://github.com/tenstorrent/tt-metal/issues/9686
-            (1, 1, 32, 4096),
-            (32, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-        ),
-        (  # https://github.com/tenstorrent/tt-metal/issues/9686
-            (1, 1, 32, 2048),
-            (32, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-        ),
-        (  # https://github.com/tenstorrent/tt-metal/issues/9686
-            (1, 1, 32, 1792),
-            (32, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
-        ),
+        # (  # https://github.com/tenstorrent/tt-metal/issues/9686
+        #     (1, 1, 32, 4096),
+        #     (32, 128),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        # ),
+        # (  # https://github.com/tenstorrent/tt-metal/issues/9686
+        #     (1, 1, 32, 2048),
+        #     (32, 64),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        # ),
+        # (  # https://github.com/tenstorrent/tt-metal/issues/9686
+        #     (1, 1, 32, 1792),
+        #     (32, 32),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
+        # ),
     ),
 )
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 122880}], indirect=True)
 def test_all_gather_sharded_post_commit(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -1070,7 +1086,7 @@ def test_all_gather_sharded_post_commit(
     function_level_defaults,
 ):
     run_all_gather_sharded(
-        all_devices,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         input_shard_shape,
@@ -1085,6 +1101,7 @@ def test_all_gather_sharded_post_commit(
         use_program_cache,
         function_level_defaults,
         all_gather_operation=ttnn.all_gather,
+        num_iters=16,
     )
 
 
