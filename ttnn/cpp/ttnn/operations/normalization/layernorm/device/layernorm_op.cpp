@@ -16,13 +16,14 @@ using namespace tt::constants;
 namespace ttnn::operations::normalization {
 
 void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+    std::cout << "Input_Size : " << input_tensors.size() << "Optional Tensors Size : "<<optional_input_tensors.size()<< std::endl;
     if (this->distributed_type == LayerNormStageType::POST_ALL_GATHER)
     {
         TT_FATAL(input_tensors.size() == 1 and optional_input_tensors.size() <= 4, "Must have between 1 to 5 input tensors");
     }
     else
     {
-        TT_FATAL(input_tensors.size() == 1 and optional_input_tensors.size() <= 3, "Must have between 1 to 4 input tensors");
+        TT_FATAL(input_tensors.size() == 1 and optional_input_tensors.size() <= 4, "Must have between 1 to 4 input tensors");
     }
     auto& a = input_tensors.at(0);
     const auto& b = optional_input_tensors.at(0);
@@ -34,7 +35,7 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
         TT_FATAL(stats.has_value());
         TT_FATAL(stats.value().get_layout() == Layout::TILE);
         TT_FATAL(stats.value().get_dtype() == DataType::BFLOAT16);
-        TT_FATAL(stats.value().storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
+        TT_FATAL(stats.value().storage_type() == StorageType::DEVICE || stats.value().storage_type() == StorageType::MULTI_DEVICE, "Operands to layernorm need to be on device!");
         TT_FATAL(stats.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         if(this->norm_type == LayerNormType::LAYERNORM) {
             TT_FATAL(stats.value().get_legacy_shape()[-1] % (2 * TILE_WIDTH) == 0, "Stats is expected to have E(x) and E(x^2) for each device stacked interleaved in the last dimension");
@@ -44,7 +45,7 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
     }
     TT_FATAL(a.get_layout() == Layout::TILE);
     TT_FATAL(a.get_dtype() == DataType::FLOAT32 or a.get_dtype() == DataType::BFLOAT16 or a.get_dtype() == DataType::BFLOAT8_B);
-    TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
+    TT_FATAL(a.storage_type() == StorageType::DEVICE || a.storage_type() == StorageType::MULTI_DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
 
     if (b.has_value()) {
