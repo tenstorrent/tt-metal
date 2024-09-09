@@ -170,12 +170,14 @@ static Tensor ones(
 }
 
 template <typename T>
-static Tensor full_like(
+static Tensor full_like_impl(
+    uint8_t queue_id,
     const Tensor& input_tensor,
     const T value,
     std::optional<DataType> data_type = std::nullopt,
     std::optional<Layout> layout = std::nullopt,
-    std::optional<MemoryConfig> output_mem_config = std::nullopt) {
+    std::optional<MemoryConfig> output_mem_config = std::nullopt,
+    std::optional<Tensor> optional_output_tensor = std::nullopt) {
     DataType data_type_to_use = input_tensor.get_dtype();
     if (data_type.has_value()) {
         data_type_to_use = data_type.value();
@@ -189,16 +191,29 @@ static Tensor full_like(
         if (output_mem_config.has_value()) {
             output_mem_config_to_use = output_mem_config.value();
         }
-        return full(
+        return full_impl(
+            queue_id,
             input_tensor.get_legacy_shape(),
             value,
             data_type_to_use,
             layout_to_use,
             input_tensor.device(),
-            output_mem_config_to_use);
+            output_mem_config_to_use,
+            optional_output_tensor);
     } else {
-        return full(input_tensor.get_legacy_shape(), value, data_type_to_use, layout_to_use);
+        return full_impl(queue_id, input_tensor.get_legacy_shape(), value, data_type_to_use, layout_to_use,{}, {}, optional_output_tensor);
     }
+}
+
+template <typename T>
+static Tensor full_like(
+    const Tensor& input_tensor,
+    const T value,
+    std::optional<DataType> data_type = std::nullopt,
+    std::optional<Layout> layout = std::nullopt,
+    std::optional<MemoryConfig> output_mem_config = std::nullopt) {
+
+    return full_like_impl(ttnn::DefaultQueueId, input_tensor, value, data_type, layout, output_mem_config, std::nullopt);
 }
 
 static Tensor zeros_like(
