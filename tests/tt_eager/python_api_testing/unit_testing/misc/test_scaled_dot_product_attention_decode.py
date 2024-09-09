@@ -629,8 +629,7 @@ def run_test_sdpa_decode_paged_attention(
 
         assert out_pass
 
-        # max_start_idx += 71 if max_start_idx < 4096 else 3001
-        max_start_idx += 100
+        max_start_idx += 71 if max_start_idx < 4096 else 3001
         # return
 
 
