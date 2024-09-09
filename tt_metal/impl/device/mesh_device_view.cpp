@@ -121,7 +121,7 @@ template<typename Pred>
 MeshDeviceView MeshDeviceView::subview(Pred&& predicate) const {
     std::vector<device_pointer> filtered_devices;
     std::copy_if(devices_.begin(), devices_.end(), std::back_inserter(filtered_devices), std::forward<Pred>(predicate));
-    return MeshDeviceView(filtered_devices, [this](int device_id) {
+    return MeshDeviceView(filtered_devices, [this](auto device_id) {
         auto it = device_coordinates_.find(device_id);
         return it != device_coordinates_.end() ? std::optional<Coordinate>(it->second) : std::nullopt;
     });

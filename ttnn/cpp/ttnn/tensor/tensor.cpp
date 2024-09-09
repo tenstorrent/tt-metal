@@ -58,7 +58,7 @@ Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, L
                     auto device_id = storage.ordered_device_ids[i];
                     auto buffer = storage.get_buffer_for_device_id(device_id);
                     TT_ASSERT(buffer->device() != nullptr);
-                    TT_ASSERT(buffer->device()->id() == device_id);
+                    TT_ASSERT(static_cast<int>(buffer->device()->id()) == device_id);
                     tensor_impl::validate_on_device_dtype_and_layout(buffer->device(), shape.value, dtype, layout);
                     workers.push_back(buffer->device());
                 }

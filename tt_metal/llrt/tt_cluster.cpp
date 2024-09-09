@@ -148,9 +148,9 @@ void Cluster::generate_cluster_descriptor() {
         } else{
             physical_mmio_device_ids = tt_SiliconDevice::detect_available_device_ids();
         }
-        for (chip_id_t logical_mmio_device_id = 0; logical_mmio_device_id < physical_mmio_device_ids.size();
+        for (std::size_t logical_mmio_device_id = 0; logical_mmio_device_id < physical_mmio_device_ids.size();
              logical_mmio_device_id++) {
-            logical_mmio_device_ids.insert(logical_mmio_device_id);
+            logical_mmio_device_ids.insert(umd::chip_id{logical_mmio_device_id});
         }
         this->cluster_desc_ =
             tt_ClusterDescriptor::create_for_grayskull_cluster(logical_mmio_device_ids, physical_mmio_device_ids);
@@ -166,9 +166,9 @@ void Cluster::generate_cluster_descriptor() {
 
     // Use cluster descriptor to map MMIO device id to all devices on the same card (including the MMIO device)
     if (this->target_type_ == TargetDevice::Simulator) {
-        std::set<chip_id_t> dummy_card = {0};
-        this->devices_grouped_by_assoc_mmio_device_[0] = dummy_card;
-        this->device_to_mmio_device_[0] = 0;
+        std::set<chip_id_t> dummy_card = {{}};
+        this->devices_grouped_by_assoc_mmio_device_[{}] = dummy_card;
+        this->device_to_mmio_device_[{}] = {};
     } else {
         for (chip_id_t device_id : this->cluster_desc_->get_all_chips()) {
             chip_id_t closest_mmio_device_id = this->cluster_desc_->get_closest_mmio_capable_chip(device_id);
@@ -396,8 +396,7 @@ inline uint64_t get_sys_addr(uint32_t chip_x, uint32_t chip_y, uint32_t noc_x, u
 }
 
 void Cluster::write_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access) const {
-    int chip_id, d_chan, d_subchannel;
-    std::tie(chip_id, d_chan, d_subchannel) = dram;
+    const auto [chip_id, d_chan, d_subchannel] = dram;
     const metal_SocDescriptor &desc_to_use = get_soc_desc(chip_id);
     TT_FATAL(
         d_chan < desc_to_use.dram_cores.size(),
@@ -414,8 +413,7 @@ void Cluster::write_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint64_
 
 void Cluster::read_dram_vec(
     vector<uint32_t> &vec, uint32_t sz_in_bytes, tt_target_dram dram, uint64_t addr, bool small_access) const {
-    int chip_id, d_chan, d_subchannel;
-    std::tie(chip_id, d_chan, d_subchannel) = dram;
+    const auto [chip_id, d_chan, d_subchannel] = dram;
     const metal_SocDescriptor &desc_to_use = get_soc_desc(chip_id);
     TT_FATAL(
         d_chan < desc_to_use.dram_cores.size(),
@@ -447,7 +445,7 @@ void Cluster::write_core(
 
 void Cluster::read_core(
     void *mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access) const {
-    int chip_id = core.chip;
+    auto chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
@@ -466,7 +464,7 @@ void Cluster::read_core(
 
 void Cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const {
     const unsigned int size_in_bytes = sizeof(uint32_t);
-    int chip_id = target.chip;
+    auto chip_id = target.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
@@ -482,7 +480,7 @@ void Cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64
 
 void Cluster::read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const {
     const unsigned int size_in_bytes = sizeof(uint32_t);
-    int chip_id = target.chip;
+    auto chip_id = target.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
@@ -505,7 +503,7 @@ void Cluster::read_sysmem(
 }
 
 void Cluster::verify_sw_fw_versions(
-    int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const {
+    umd::chip_id device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const {
     tt_version sw(sw_version), fw_first_eth_core(fw_versions.at(0));
     tt::log_info(
         tt::LogDevice,
@@ -806,18 +804,19 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
 }
 
 std::unordered_set<CoreCoord> Cluster::get_inactive_ethernet_cores(chip_id_t chip_id) const {
+    using channel_t = umd::ethernet_channel;
     std::unordered_set<CoreCoord> active_ethernet_cores = this->get_active_ethernet_cores(chip_id);
     std::unordered_set<CoreCoord> inactive_ethernet_cores;
-    std::unordered_set<int> channels_to_skip = {};
+    std::unordered_set<channel_t> channels_to_skip = {};
     // UMD routing FW uses these cores for base routing
     // channel 15 is used by syseng tools.
     // TODO (abhullar): For BH single-chip bringup we assume all ethernet cores are inactive. Update this with (#9823)
     if (this->is_galaxy_cluster()) {
         // TODO: This may need to change, if we need additional eth cores for dispatch on Galaxy
-        channels_to_skip = {0, 1, 2, 3, 15};
+        channels_to_skip = {channel_t{0}, channel_t{1}, channel_t{2}, channel_t{3}, channel_t{15}};
     }
     else if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
-        channels_to_skip = {8, 9, 15};
+        channels_to_skip = {channel_t{8}, channel_t{9}, channel_t{15}};
     }
     for (const auto &[eth_core, chan] : get_soc_desc(chip_id).logical_eth_core_to_chan_map) {
         if (this->cluster_desc_->is_chip_mmio_capable(chip_id) and (channels_to_skip.find(chan) != channels_to_skip.end())) {
@@ -981,7 +980,7 @@ uint32_t Cluster::get_device_tunnel_depth(chip_id_t chip_id) const {
 }  // namespace tt
 
 std::ostream &operator<<(std::ostream &os, tt_target_dram const &dram) {
-    os << "Target DRAM chip = " << std::get<0>(dram) << ", chan = " << std::get<1>(dram)
+    os << "Target DRAM chip = " << static_cast<int>(std::get<0>(dram)) << ", chan = " << std::get<1>(dram)
        << ", subchan = " << std::get<2>(dram);
     return os;
 }

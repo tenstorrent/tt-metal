@@ -40,7 +40,7 @@ int get_cpu_core_for_device_worker_thread(
     int core_assigned_to_device = 0;
     if (numa_available() != -1) {
         // Get NUMA node that the current device is mapped to through UMD
-        int numa_node_for_device = tt::Cluster::instance().get_numa_node_for_device(mmio_controlled_device_id);
+        int numa_node_for_device = tt::Cluster::instance().get_numa_node_for_device(umd::chip_id{mmio_controlled_device_id});
         if (cpu_cores_per_numa_node.find(numa_node_for_device) != cpu_cores_per_numa_node.end()) {
             // NUMA node reported by UMD exists on host. Choose a core on this numa-node using round robin policy
             int num_cores_in_numa_node = cpu_cores_per_numa_node.at(numa_node_for_device).size();
@@ -72,13 +72,13 @@ std::unordered_map<uint32_t, uint32_t> get_device_id_to_core_map(
         auto cpu_cores_per_numa_node = device_cpu_allocator::get_cpu_cores_per_numa_node(free_cores);
         for (const auto& device_id : device_ids) {
             device_to_core_map.insert(
-                {device_id,
+                {static_cast<int>(device_id),
                  device_cpu_allocator::get_cpu_core_for_device_worker_thread(
-                     device_id, cpu_cores_per_numa_node, free_cores)});
+                     static_cast<int>(device_id), cpu_cores_per_numa_node, free_cores)});
         }
     } else {
         for (const auto& device_id : device_ids) {
-            device_to_core_map.insert({device_id, device_id % sysconf(_SC_NPROCESSORS_ONLN)});
+            device_to_core_map.insert({static_cast<int>(device_id), static_cast<int>(device_id) % sysconf(_SC_NPROCESSORS_ONLN)});
         }
     }
     return device_to_core_map;
@@ -129,7 +129,7 @@ void DevicePool::initialize(
      // Never skip for TG Cluster
     bool skip = not tt::Cluster::instance().is_galaxy_cluster();
     for (const auto& device_id : device_ids) {
-        TT_FATAL(device_id < tt::Cluster::instance().number_of_devices(),
+        TT_FATAL(static_cast<int>(device_id) < tt::Cluster::instance().number_of_devices(),
         fmt::format("Device index {} out of range. There are {} devices available.", device_id, tt::Cluster::instance().number_of_devices()));
         const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         skip &= (device_id == mmio_device_id);
@@ -171,7 +171,8 @@ void DevicePool::initialize_device(Device* dev) const {
     detail::InitDeviceProfiler(dev);
 }
 
-void DevicePool::activate_device(chip_id_t id) {
+void DevicePool::activate_device(chip_id_t device_id) {
+    const auto id = static_cast<int>(device_id);
     TT_FATAL(id < tt::Cluster::instance().number_of_devices(),
         fmt::format("Device index {} out of range. There are {} devices available.", id, tt::Cluster::instance().number_of_devices()));
     const std::lock_guard<std::mutex> lock(this->lock);
@@ -182,7 +183,7 @@ void DevicePool::activate_device(chip_id_t id) {
         log_debug(tt::LogMetal, "DevicePool new device {}", id);
         int core_assigned_to_device = this->device_to_core_map.at(id);
         auto dev =
-            new Device(id, this->num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap, false, core_assigned_to_device);
+            new Device(device_id, this->num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap, false, core_assigned_to_device);
         dev->update_dispatch_cores_for_multi_cq_eth_dispatch();
         if (!this->firmware_built_keys.contains(dev->build_key())) {
             dev->build_firmware();
@@ -204,7 +205,8 @@ void DevicePool::activate_device(chip_id_t id) {
     }
 }
 
-bool DevicePool::is_device_active(chip_id_t id) const {
+bool DevicePool::is_device_active(chip_id_t device_id) const {
+    const auto id = static_cast<int>(device_id);
     if (this->devices.size() < id + 1 || this->devices[id] == nullptr) {
         return false;
     } else {
@@ -265,7 +267,7 @@ void DevicePool::init_firmware_on_active_devices() const {
             for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
                 // Need to create devices from farthest to the closest.
                 for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
-                    uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
+                    auto mmio_controlled_device_id = static_cast<uint32_t>(tunnels_from_mmio[t][ts]);
                     log_debug(tt::LogMetal, "Tunnel {} Device {} Tunnel Stop: {}", t, mmio_controlled_device_id, ts);
                     this->initialize_device(this->devices[mmio_controlled_device_id].get());
                 }
@@ -298,13 +300,13 @@ DevicePool::DevicePool(
 
 Device* DevicePool::get_active_device(chip_id_t device_id) const {
     TT_ASSERT(this->is_device_active(device_id), "DevicePool does not contain active device {}", device_id);
-    return this->devices[device_id].get();
+    return this->devices[static_cast<int>(device_id)].get();
 }
 
 std::vector<Device*> DevicePool::get_all_active_devices() const {
     std::vector<Device*> user_devices;
     for (int id = 0; id < this->devices.size(); id++) {
-        if (this->is_device_active(id)) {
+        if (this->is_device_active(umd::chip_id{id})) {
             user_devices.emplace_back(this->devices[id].get());
         }
     }
@@ -318,7 +320,7 @@ bool DevicePool::close_device(chip_id_t device_id) const {
     for (const auto& mmio_controlled_device_id :
          tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
         if (this->is_device_active(mmio_controlled_device_id)) {
-            pass &= this->devices[mmio_controlled_device_id]->close();
+            pass &= this->devices[static_cast<int>(mmio_controlled_device_id)]->close();
         }
     }
     return pass;

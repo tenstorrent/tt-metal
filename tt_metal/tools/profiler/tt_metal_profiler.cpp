@@ -46,16 +46,16 @@ void DumpDeviceProfileResults(Device* device, const Program& program) {
 
 namespace detail {
 
-std::map <uint32_t, DeviceProfiler> tt_metal_device_profiler_map;
+std::map <umd::chip_id, DeviceProfiler> tt_metal_device_profiler_map;
 
-std::unordered_map <uint32_t, std::vector <std::pair<uint64_t,uint64_t>>> deviceHostTimePair;
-std::unordered_map <uint32_t, uint64_t> smallestHostime;
+std::unordered_map <umd::chip_id, std::vector <std::pair<uint64_t,uint64_t>>> deviceHostTimePair;
+std::unordered_map <umd::chip_id, uint64_t> smallestHostime;
 
 std::mutex device_mutex;
 
 constexpr CoreCoord SYNC_CORE = {0,0};
 
-void setControlBuffer(uint32_t device_id, std::vector<uint32_t>& control_buffer)
+void setControlBuffer(umd::chip_id device_id, std::vector<uint32_t>& control_buffer)
 {
 #if defined(TRACY_ENABLE)
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device_id);

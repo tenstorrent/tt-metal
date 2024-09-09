@@ -146,7 +146,7 @@ class EriscDatamoverBuilder {
         ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
         ccl::EriscDataMoverTerminationMode termination_mode = ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED,
         std::size_t num_buffers_per_channel = 1,
-        chip_id_t chip_id = -1) :
+        chip_id_t chip_id = tt::umd::chip_id::none) :
         local_semaphore_addresses(local_semaphore_addresses),
         local_buffer_addresses(local_buffer_addresses),
         eth_buffer_size_bytes(eth_buffer_size),
@@ -240,7 +240,7 @@ class EriscDatamoverBuilder {
             1,
             static_cast<uint32_t>(this->num_senders > 0 && active_channels.at(0).is_sender),
             this->num_buffers_per_channel,
-            chip_id
+            static_cast<int>(chip_id)
             };
     }
 

@@ -9,13 +9,14 @@ namespace ttnn {
 
 namespace device {
 
-Device &open_device(int device_id, size_t l1_small_size, size_t trace_region_size, tt::tt_metal::DispatchCoreType dispatch_core_type) {
+Device &open_device(int id, size_t l1_small_size, size_t trace_region_size, tt::tt_metal::DispatchCoreType dispatch_core_type) {
+    const tt::umd::chip_id device_id{id};
     tt::DevicePool::initialize({device_id}, 1, l1_small_size, trace_region_size, dispatch_core_type, {});
     return *(tt::DevicePool::instance().get_active_device(device_id));
 }
 
 bool is_device_open(int device_id){
-    return tt::DevicePool::instance().is_device_active(device_id);
+    return tt::DevicePool::instance().is_device_active(tt::umd::chip_id{device_id});
 }
 
 void enable_program_cache(Device &device) {

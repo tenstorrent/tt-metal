@@ -22,7 +22,7 @@ void py_module(py::module& module) {
     auto py_mesh_device = static_cast<py::class_<MeshDevice>>(module.attr("MeshDevice"));
     py_mesh_device
         .def(
-            py::init<MeshShape, std::vector<int>, size_t, size_t, size_t, DispatchCoreType>(),
+            py::init<MeshShape, std::vector<tt::umd::chip_id>, size_t, size_t, size_t, DispatchCoreType>(),
             py::kw_only(),
             py::arg("mesh_shape"),
             py::arg("device_ids"),
@@ -34,7 +34,7 @@ void py_module(py::module& module) {
         .def("get_device_ids", &MeshDevice::get_device_ids)
         .def(
             "get_device",
-            py::overload_cast<int>(&MeshDevice::get_device, py::const_),
+            py::overload_cast<tt::umd::chip_id>(&MeshDevice::get_device, py::const_),
             py::return_value_policy::reference)
         .def(
             "get_device",

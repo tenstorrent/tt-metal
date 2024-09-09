@@ -11,6 +11,7 @@
 #include "common/metal_soc_descriptor.h"
 #include "common/test_common.hpp"
 #include "common/tt_backend_api_types.hpp"
+#include "device/tt_cluster_descriptor_types.h"
 #include "host_mem_address_map.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "third_party/umd/device/device_api_metal.h"
@@ -25,7 +26,7 @@
 
 static constexpr std::uint32_t SW_VERSION = 0x00020000;
 
-using tt_target_dram = std::tuple<int, int, int>;
+using tt_target_dram = std::tuple<tt::umd::chip_id, int, int>;
 using tt::TargetDevice;
 
 enum EthRouterMode : uint32_t {
@@ -71,7 +72,7 @@ class Cluster {
 
     //! device driver and misc apis
     void verify_eth_fw() const;
-    void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const;
+    void verify_sw_fw_versions(umd::chip_id device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const;
 
     void deassert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const;
     void assert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const;
@@ -109,7 +110,7 @@ class Cluster {
     }
 
     std::function<void(uint32_t, uint32_t, const uint8_t *)> get_fast_pcie_static_tlb_write_callable(
-        int chip_id) const {
+        umd::chip_id chip_id) const {
         chip_id_t mmio_device_id = device_to_mmio_device_.at(chip_id);
         tt_SiliconDevice *device =
             dynamic_cast<tt_SiliconDevice *>(this->mmio_device_id_to_driver_.at(mmio_device_id).get());
@@ -126,8 +127,8 @@ class Cluster {
         return device->get_static_tlb_writer(virtual_target);
     }
 
-    std::uint32_t get_numa_node_for_device(uint32_t device_id) const {
-        uint32_t associated_mmio_device_id = this->get_associated_mmio_device(device_id);
+    std::uint32_t get_numa_node_for_device(umd::chip_id device_id) const {
+        auto associated_mmio_device_id = this->get_associated_mmio_device(device_id);
         tt_SiliconDevice* driver = dynamic_cast<tt_SiliconDevice*>(this->mmio_device_id_to_driver_.at(associated_mmio_device_id).get());
         return driver->get_numa_node_for_pcie_device(associated_mmio_device_id);
     }

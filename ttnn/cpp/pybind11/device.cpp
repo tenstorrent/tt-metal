@@ -70,10 +70,12 @@ void py_device_module_types(py::module &m_device) {
 
 void device_module(py::module &m_device) {
 
+    py::enum_<tt::umd::chip_id> chip_id(m_device, "chip_id", py::arithmetic());
+
     auto pyDevice = static_cast<py::class_<Device, std::unique_ptr<Device, py::nodelete>>>(m_device.attr("Device"));
     pyDevice
         .def(
-            py::init<>([](int device_id, size_t l1_small_size, size_t trace_region_size) { return Device(device_id, 1, l1_small_size, trace_region_size); }),
+            py::init<>([](tt::umd::chip_id device_id, size_t l1_small_size, size_t trace_region_size) { return Device(device_id, 1, l1_small_size, trace_region_size); }),
             "Create device.",
             py::arg("device_id"),
             py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
@@ -132,7 +134,7 @@ void device_module(py::module &m_device) {
 
     m_device.def(
         "CreateDevice",
-        [](int device_id, uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::tt_metal::DispatchCoreType dispatch_core_type) { return tt::tt_metal::CreateDevice(device_id, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type); },
+        [](tt::umd::chip_id device_id, uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::tt_metal::DispatchCoreType dispatch_core_type) { return tt::tt_metal::CreateDevice(device_id, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type); },
         R"doc(
         Creates an instance of TT device.
 
@@ -149,7 +151,7 @@ void device_module(py::module &m_device) {
         py::arg("dispatch_core_type") = tt::tt_metal::DispatchCoreType::WORKER);
     m_device.def(
         "CreateDevices",
-        [](std::vector<int> device_ids, uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::tt_metal::DispatchCoreType dispatch_core_type) {
+        [](std::vector<tt::umd::chip_id> device_ids, uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::tt_metal::DispatchCoreType dispatch_core_type) {
             return tt::tt_metal::detail::CreateDevices(device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type);
         },
         R"doc(

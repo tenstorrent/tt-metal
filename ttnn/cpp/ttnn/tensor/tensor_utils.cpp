@@ -521,7 +521,7 @@ Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id)
 }
 
 Tensor get_device_tensor(const Tensor& multi_device_tensor, const Device* device) {
-    return get_device_tensor(multi_device_tensor, device->id());
+    return get_device_tensor(multi_device_tensor, static_cast<int>(device->id()));
 }
 
 bool is_multi_device_tensor(const Tensor& tensor) {
@@ -586,7 +586,7 @@ Tensor create_multi_device_tensor(
         for (const auto& tensor : tensors) {
             TT_ASSERT(std::holds_alternative<DeviceStorage>(tensor.get_storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(tensor.get_storage()),__FILE__, __LINE__));
             Device* device = std::get<DeviceStorage>(tensor.get_storage()).buffer->device();
-            auto device_id = device->id();
+            auto device_id = static_cast<int>(device->id());
             ordered_device_ids.push_back(device_id);
             device_buffers.insert({device_id, std::get<DeviceStorage>(tensor.get_storage()).buffer});
             shapes.insert({device_id, tensor.get_legacy_shape()});

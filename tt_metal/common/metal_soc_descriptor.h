@@ -6,6 +6,7 @@
 
 #include "common/tt_backend_api_types.hpp"
 #include "core_coord.h"
+#include "third_party/umd/device/tt_cluster_descriptor_types.h"
 #include "third_party/umd/device/tt_soc_descriptor.h"
 
 //! tt_SocDescriptor contains information regarding the SOC configuration targetted.
@@ -34,8 +35,8 @@ struct metal_SocDescriptor : public tt_SocDescriptor {
     std::unordered_map<int, int> physical_routing_to_virtual_routing_x;
     std::unordered_map<int, int> physical_routing_to_virtual_routing_y;
 
-    std::map<CoreCoord, int> logical_eth_core_to_chan_map;
-    std::map<int, CoreCoord> chan_to_logical_eth_core_map;
+    std::map<CoreCoord, tt::umd::ethernet_channel> logical_eth_core_to_chan_map;
+    std::map<tt::umd::ethernet_channel, CoreCoord> chan_to_logical_eth_core_map;
 
     metal_SocDescriptor(const tt_SocDescriptor& other, uint32_t harvesting_mask);
     metal_SocDescriptor() = default;

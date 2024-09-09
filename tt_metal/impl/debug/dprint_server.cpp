@@ -54,7 +54,7 @@ static inline uint64_t GetBaseAddr(Device *device, const CoreCoord &phys_core, i
     return reinterpret_cast<uint64_t>(buf->data[hart_id]);
 }
 
-static inline int GetNumRiscs(int chip_id, const CoreCoord &core) {
+static inline int GetNumRiscs(umd::chip_id chip_id, const CoreCoord &core) {
     return (tt::llrt::is_ethernet_core(core, chip_id))? DPRINT_NRISCVS_ETH : DPRINT_NRISCVS;
 }
 
@@ -88,8 +88,8 @@ static map<CoreType, set<CoreCoord>> get_dispatch_physical_printable_cores(Devic
     map<CoreType, set<CoreCoord>> physical_printable_dispatch_cores;
     unsigned num_cqs = tt::llrt::OptionsG.get_num_hw_cqs();
     for (unsigned int id = 0; id < tt::Cluster::instance().number_of_user_devices(); id++) {
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(id);
-        for (auto logical_core : tt::get_logical_dispatch_cores(id, num_cqs, dispatch_core_type)) {
+        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(umd::chip_id{id});
+        for (auto logical_core : tt::get_logical_dispatch_cores(umd::chip_id{id}, num_cqs, dispatch_core_type)) {
             CoreCoord physical_core = device->physical_core_from_logical_core(logical_core, dispatch_core_type);
             physical_printable_dispatch_cores[dispatch_core_type].insert(physical_core);
         }
@@ -445,9 +445,9 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
 
     // If RTOptions doesn't enable DPRINT on this device, return here and don't actually attach it
     // to the server.
-    vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
+    auto chip_ids = tt::llrt::OptionsG.get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
     if (!tt::llrt::OptionsG.get_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint))
-        if (std::find(chip_ids.begin(), chip_ids.end(), device->id()) == chip_ids.end())
+        if (std::find(chip_ids.begin(), chip_ids.end(), static_cast<int>(device->id())) == chip_ids.end())
             return;
 
     // Core range depends on whether dprint_all_cores flag is set.
@@ -550,9 +550,9 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
 
 void DebugPrintServerContext::DetachDevice(Device* device) {
     // Don't detach the device if it's disabled by env vars - in this case it wasn't attached.
-    vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
+    auto chip_ids = tt::llrt::OptionsG.get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
     if (!tt::llrt::OptionsG.get_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint))
-        if (std::find(chip_ids.begin(), chip_ids.end(), device->id()) == chip_ids.end())
+        if (std::find(chip_ids.begin(), chip_ids.end(), static_cast<int>(device->id())) == chip_ids.end())
             return;
 
     // When we detach a device, we should poll to make sure there's no outstanding prints.
@@ -653,7 +653,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
     ostream& stream = (mute_print_server_)? null_stream : *stream_;
 
     // Check whether this hart is currently waiting on a WAIT to be fulfilled.
-    std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> hart_key {chip_id, core.x, core.y, hart_id};
+    std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> hart_key {static_cast<int>(chip_id), core.x, core.y, hart_id};
     raise_wait_lock_.lock();
     if (hart_waiting_on_signal_.count(hart_key) > 0) {
         // Check if the signal the hart is wairint for has been raised.
@@ -872,7 +872,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     memcpy (&sigval, ptr, sizeof(uint32_t));
                     // Given that we break immediately on a wait, this core should never be waiting
                     // on multiple signals at the same time.
-                    std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> hart_key {chip_id, core.x, core.y, hart_id};
+                    std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> hart_key {static_cast<int>(chip_id), core.x, core.y, hart_id};
                     raise_wait_lock_.lock();
                     TT_ASSERT(hart_waiting_on_signal_.count(hart_key) == 0);
                     // Set that this hart is waiting on this signal, and then stop reading for now.

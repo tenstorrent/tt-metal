@@ -15,8 +15,8 @@ namespace ccl {
 RingTopology::RingTopology(
     Device const* device,
     Topology topology,
-    std::optional<uint32_t> sender_device_id,
-    std::optional<uint32_t> receiver_device_id,
+    std::optional<tt::umd::chip_id> sender_device_id,
+    std::optional<tt::umd::chip_id> receiver_device_id,
     uint32_t num_links,
     uint32_t ring_size,
     uint32_t ring_index) :
@@ -37,7 +37,7 @@ RingTopology::RingTopology(
     for (uint32_t l = 0; l < num_links; ++l) {
         // Get the cores for the sender and receiver worker cores
         if (!is_linear || ring_index != ring_size - 1) {
-            uint32_t receiver_device = receiver_device_id.value();
+            auto receiver_device = receiver_device_id.value();
             auto const& sockets = device->get_ethernet_sockets(receiver_device);
             auto eth_sender_core = sockets.at(sender_socket_idx);
             eth_sender_cores.push_back(eth_sender_core);
@@ -45,7 +45,7 @@ RingTopology::RingTopology(
                 tt::LogOp, "\teth_sender_core on link {}: (x={},y={})", l, eth_sender_core.x, eth_sender_core.y);
         }
         if (!is_linear || ring_index != 0) {
-            uint32_t sender_device = sender_device_id.value();
+            auto sender_device = sender_device_id.value();
             auto const& sockets = device->get_ethernet_sockets(sender_device);
             auto eth_receiver_core = sockets.at(receiver_socket_idx);
             eth_receiver_cores.push_back(eth_receiver_core);
@@ -209,8 +209,8 @@ void generate_edm_kernels_for_ring_or_linear_topology(
     RingTopology const& topology_config,
     std::vector<ccl::EriscDatamoverBuilder> const& clockwise_edm_builders,
     std::vector<ccl::EriscDatamoverBuilder> const& counter_clockwise_edm_builders,
-    std::optional<uint32_t> receiver_device_id,
-    std::optional<uint32_t> sender_device_id) {
+    std::optional<tt::umd::chip_id> receiver_device_id,
+    std::optional<tt::umd::chip_id> sender_device_id) {
     auto sender_noc = detail::GetPreferredNOCForDRAMRead(tt::Cluster::instance().arch());
     auto receiver_noc = detail::GetPreferredNOCForDRAMWrite(tt::Cluster::instance().arch());
     uint32_t sender_socket_idx = 0;
