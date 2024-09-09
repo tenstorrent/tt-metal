@@ -40,14 +40,20 @@ void MAIN {
     uint32_t in1_index = 0;
     uint32_t interm_index = 0;
 
+    #if RELOAD_IMPL == 0
     cb_wait_front(sin_cb, sin_cos_cb_size_in_tiles);
     cb_wait_front(cos_cb, sin_cos_cb_size_in_tiles);
+    #endif
 
     uint32_t sin_cos_row_cnt = 0;
 
     for (uint32_t i = 0; i < num_rows_per_core; ++i) {
         // input cb wait and reserve
         cb_wait_front(in_cb, Wt);
+        #if RELOAD_IMPL == 1
+        cb_wait_front(sin_cb, Wt);
+        cb_wait_front(cos_cb, Wt);
+        #endif
 
         cb_reserve_back(rotated_in_interm_cb, Wt);
         cb_reserve_back(sin_interm_cb, Wt);
@@ -85,6 +91,10 @@ void MAIN {
         REL();
         cb_push_back(cos_interm_cb, Wt);
         cb_pop_front(in_cb, Wt); // Done with input
+        #if RELOAD_IMPL == 1
+        cb_pop_front(sin_cb, Wt);
+        cb_pop_front(cos_cb, Wt);
+        #endif
 
         cb_wait_front(cos_interm_cb, Wt);
         cb_wait_front(sin_interm_cb, Wt);
@@ -100,15 +110,21 @@ void MAIN {
         cb_pop_front(cos_interm_cb, Wt);
         cb_pop_front(sin_interm_cb, Wt);
 
+        #if RELOAD_IMPL == 0
+        // no-reload needs to increment this counter
         // Used a sin/cos row
         sin_cos_row_cnt++;
         // Loop back to the beginning of the sin/cos rows
         if (sin_cos_row_cnt == num_sin_cos_rows_per_core) {
             sin_cos_row_cnt = 0;
         }
+        #endif
     }
+
+    #if RELOAD_IMPL == 0
     cb_pop_front(sin_cb, sin_cos_cb_size_in_tiles);
     cb_pop_front(cos_cb, sin_cos_cb_size_in_tiles);
+    #endif
 
 
     // Done with the transformation matrix, so remove from CB
