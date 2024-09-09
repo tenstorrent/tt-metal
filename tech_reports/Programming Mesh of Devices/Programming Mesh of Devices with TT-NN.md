@@ -47,14 +47,20 @@ With the N300 form-factor, it houses two wormhole chips. The host is connected t
 <!-- ![image1](images/image1.png){width=15 height=15} -->
 <img src="../CCL/images/t3000.png" style="width:500px;"/>
 
-*Figure 1: T3000 System Topology. T3000 is composed of four N300 wormhole cards that are physically connected in a 2x4 mesh configuration.*
+*Figure 1: T3000 System Topology. T3000 is composed of 4x N300 wormhole cards, totalling 8 wormhole chips, connected in a 2x4 mesh configuration. Each pair of wormhole-chips are connected via two ethernet links.*
+
+
+<img src="../CCL/images/TG.png" style="width:500px;"/>
+
+*Figure 2: TG System Topology. TG is composed of 16x N300 wormhole cards, totalling 32 wormhole chips, connected in a 8x4 mesh configuration. Each pair of wormhole-chips are connected via four ethernet links.*
 
 
 [tt-topology](https://github.com/tenstorrent/tt-topology) can be used to flash multiple wormhole cards on a system to a specific ethernet routing configuration (linear, ring, mesh) and used to visualize the organization of the chip layout.
 
 <img src="images/image3.png" style="width:500px;"/>
 
-*Figure 2: T3000 Chip Layout dumped from tt-topology*
+*Figure 3: T3000 Chip Layout dumped from tt-topology*
+
 
 ### 2.2 MeshDevice Management
 
@@ -65,10 +71,11 @@ Using an N300, we can instantiate a MeshDevice over 1x2 Wormhole devices:
 ```py
 > import ttnn
 > mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1,2))
+```
+
+```py
 > mesh_device
 > <MeshDevice: 1x2 grid, 2 devices>
-...
-> ttnn.close_mesh_device(mesh_device)
 ```
 
 ####
@@ -180,8 +187,6 @@ ttnn.visualize_mesh_device(mesh_device, tensor=mesh_tensor)
 │            (0, 0)            │            (0, 1)            │
 │  ttnn.Shape([1, 1, 32, 32])  │  ttnn.Shape([1, 1, 32, 32])  │
 └──────────────────────────────┴──────────────────────────────┘
-
-
 ```
 
 ## 4\. Single-Program Multiple Device
@@ -216,12 +221,11 @@ output_tensor = ttnn.gelu(ttnn_tensor)
 
 ####
 
-#### 4.2.1 Mesh Device Execution
+#### 4.2.2 Mesh Device Execution
 
 ```py
 # Open MeshDevice
 mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1,4))
-
 
 # Create test tensor of data; 4 chunks of 32x32
 torch_tensor = torch.rand((1,1,32,128), dtype=torch.bfloat16)
@@ -241,7 +245,90 @@ output_tensor = ttnn.gelu(ttnn_tensor)
 <!-- ![image1](images/image2.png){width=10 height=10} -->
 <img src="images/image2.png" style="width:500px;"/>
 
-*Figure 1: Parallel execution of gelu operation on 4 devices*
+*Figure 4: Parallel execution of gelu operation on 4 devices*
+
+
+## 5\. MeshDevice and Collective Communication Library (CCL)
+
+The Collective Communication Library (CCL) provides a set of operations for efficient device-to-device communication in a MeshDevice. See the [CCL Developer Guide](../CCL/CclDeveloperGuide.md) for more comprehensive coverage. These operations are used as building blocks for implementing tensor-parallel and other distributed computing strategies.
+
+### 5.1 CCL Operations
+
+CCL supports several collective operations, including:
+
+1. All-Gather (Ring, Line)
+2. Reduce-Scatter (Ring)
+3. All-Reduce (planned)
+4. Send/Receive (planned)
+
+Our library of supported operations can be found [here](../CCL/CclDeveloperGuide.md#op-list-op-list).
+
+### 5.2 All-Gather
+
+
+The All-Gather operation is a fundamental collective communication primitive used to aggregate data from all participating devices and makes the aggregated result available on each device.
+
+Each device in the MeshDevice begins with a local tensor. The all-gather operation effectively "gathers" these local tensors along some specified dimension(s), with each device receiving a full copy of the fully gathered/concatenated tensor. The concatenation order reflects the position of the device in the ring all-gather.
+
+
+#### 5.2.1 Programming Example: All-Gather (Ring)
+
+Let's see an example of how to use the Ring All-Gather operation:
+
+
+<img src="images/image4_ring_all_gather.png" style="width:500px;"/>
+
+*Figure 5: Ring All-Gather execution on 2x4 MeshDevice*
+
+```py
+import ttnn
+
+mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
+
+# Construct test tensor of data; 8 chunks of 32x32
+torch_tensor = torch.rand((1,1,32,128), dtype=torch.bfloat16)
+
+# Convert to ttnn.Tensor, tilize and move onto devices across mesh DRAM
+mesh_tensor = ttnn.from_torch(
+    torch_input_tensor,
+    layout=ttnn.TILE_LAYOUT,
+    device=mesh_device,
+    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+)
+
+# Execute All-Gather on the tensor; `num_links=1` specifies the number of ethernet links to use
+output_tensor = ttnn.all_gather(mesh_tensor, dim=3, num_links=1)
+```
+
+
+#### 5.2.2 Programming Example: All-Gather (Line)
+
+This time, we'll issue the CCL Line All-Gather operation along the cluster y-axis:
+
+<img src="images/image5_line_all_gather.png" style="width:500px;"/>
+
+*Figure 6: Line All-Gather execution on 2x4 MeshDevice *
+
+```py
+import ttnn
+
+mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
+
+# Construct test tensor of data; 8 chunks of 32x32
+torch_tensor = torch.rand((1,1,32,128), dtype=torch.bfloat16)
+
+# Convert to ttnn.Tensor, tilize and move onto devices across mesh DRAM
+mesh_tensor = ttnn.from_torch(
+    torch_input_tensor,
+    layout=ttnn.TILE_LAYOUT,
+    device=mesh_device,
+    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+)
+
+# Execute Line All-Gather on the tensor
+output_tensor = ttnn.line_all_gather(mesh_tensor, dim=3, cluster_axis=0, mesh_device=mesh_device)
+```
+
 
 ## 5\. Programming Mesh of Devices Using Data Parallel
 
@@ -325,6 +412,8 @@ ttnn.close_device(device)
 
 4. **Executing TT-NN Falcon-7B MLP Module on MeshDevice with Data Parallel**
 
+Full code example can be found in `tests/ttnn/multichip_unit_tests/test_data_parallel_example_TG.py`
+
 ```py
 # Load Falcon MLP model from huggingface
 config = transformers.FalconConfig.from_pretrained("tiiuae/falcon-7b-instruct")
@@ -336,7 +425,7 @@ torch_hidden_states = (torch.rand(batch_size, 1, sequence_length, config.hidden_
 torch_output = model.forward(torch_hidden_states)
 
 # Device Initialization
-mesh_device = ttnn.open_device_mesh(ttnn.DeviceGrid(y=1, x=4))
+mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(y=1, x=4))
 
 # Shard input activations on batch dimension to devices in the mesh
 with ttnn.distribute(ttnn.ShardTensorToMesh(mesh_device, dim=0)):
@@ -359,5 +448,94 @@ ttnn_model = TtFalconMLP(parameters)
 ttnn_output = ttnn_model(hidden_states)
 
 with ttnn.distribute(ttnn.ConcatMeshToTensor(mesh_device, dim=0)):
+    assert_with_pcc(torch_output, ttnn.to_torch(ttnn_output), 0.98)
+```
+
+
+## 6\. Programming Mesh of Devices Using Tensor Parallel
+
+When your model is too large to fit on a single device, tensor parallelism provides a solution by sharding the model parameters across the distributed SRAM/DRAM of multiple devices. Each device then performs computations on its portion of the data, with communication between devices occurring as needed to aggregate results via CCL primitives.
+
+Key benefits of tensor parallelism include:
+1. Ability to run larger models that exceed single-device memory capacity
+2. Potential for increased computational throughput
+3. Efficient utilization of multi-device systems
+
+###
+
+### 6.1 Tensor Parallel Programming Example:
+
+Let's re-use the same example as the data-parallel example above, but this time we'll run it with tensor-parallel. In this example, we'll implement a simple tensor-parallel where we shard all model parameters on the width dimension.
+
+
+1. **Create a TT-NN Falcon-7B MLP Module implementation**
+
+```py
+import ttnn
+
+class TtFalconMLP:
+    def __init__(self, parameters):
+        super().__init__()
+        self.dense_h_to_4h_weights = parameters.dense_h_to_4h.weight
+        self.dense_4h_to_h_weights = parameters.dense_4h_to_h.weight
+
+    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        ff1_linear: ttnn.Tensor = ttnn.linear(x, self.dense_h_to_4h_weights)
+        gelu = ttnn.gelu(ff1_linear)
+
+        # Invoke CCL Ring All-Gather on gelu before passing to ff2_linear
+        gelu = ttnn.all_gather(gelu, dim=3, num_links=1)
+
+        ff2_linear: ttnn.Tensor = ttnn.linear(gelu, self.dense_4h_to_h_weights)
+
+        return ff2_linear
+```
+
+2. **Instantiate torch model for comparison**
+
+```py
+# Load Falcon MLP model from huggingface
+config = transformers.FalconConfig.from_pretrained("tiiuae/falcon-7b-instruct")
+model = transformers.models.falcon.modeling_falcon.FalconMLP(config).eval()
+```
+
+3. **Executing TT-NN Falcon-7B MLP Module on MeshDevice with Tensor Parallel**
+
+See full code example in `tests/ttnn/multichip_unit_tests/test_tensor_parallel_example_T3000.py`
+
+```py
+# Initialize hidden states
+batch_size, sequence_length = 1, 256
+torch_hidden_states = (torch.rand(batch_size, 1, sequence_length, config.hidden_size, dtype=torch.float32) * 2) - 1
+torch_output = model.forward(torch_hidden_states)
+
+# Device Initialization
+mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2,4))
+
+# Initialize input activations on all devices in the mesh
+# Alternatively, we can shard the input activations on the height dimension and
+# subsequently invoke all-gather on the height dimension to form a complete tensor per device.
+with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
+    hidden_states = ttnn.from_torch(
+        torch_hidden_states,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+    )
+
+# Shard model parameters on width dimension to devices in the mesh
+with ttnn.distribute(ttnn.ShardTensorToMesh(t3k_mesh_device, dim=-1)):
+    parameters = ttnn.model_preprocessing.preprocess_model_parameters(
+        initialize_model=lambda: model,
+        device=t3k_mesh_device,
+    )
+
+# Initialize Model
+ttnn_model = TtFalconMLP(parameters)
+
+# Run Model
+ttnn_output = ttnn_model(hidden_states)
+
+with ttnn.distribute(ttnn.ConcatMeshToTensor(mesh_device, dim=3)):
     assert_with_pcc(torch_output, ttnn.to_torch(ttnn_output), 0.98)
 ```
