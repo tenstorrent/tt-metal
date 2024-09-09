@@ -86,14 +86,15 @@ uint32_t calculate_tensor_l1_allocation_size_per_core(
 }
 
 #include "binary_constraints.hpp" // for EltwiseOpConstraintsDirector::GetEltwiseOpType(..)
-std::unique_ptr<EltwiseOpL1Usage> EltwiseOpL1UsageFactory::Make(const EltwiseOpParams& input_a, const EltwiseOpParams& input_b, const std::optional<EltwiseOpParams>& output)
+std::unique_ptr<EltwiseOpL1Usage> EltwiseOpL1UsageFactory::Make(const EltwiseOpParams& input_a, const EltwiseOpParams& input_b, const EltwiseOpParams& output)
 {
     const auto input_shape_a = std::get<ttnn::types::Shape>(input_a);
     const auto memory_config_a = std::get<tt::tt_metal::MemoryConfig>(input_a);
     const auto input_shape_b = std::get<ttnn::types::Shape>(input_b);
     const auto memory_config_b = std::get<tt::tt_metal::MemoryConfig>(input_b);
+    const auto memory_config_o = std::get<tt::tt_metal::MemoryConfig>(output);
 
-    auto eltwise_op_type = EltwiseOpConstraintsFactory::GetEltwiseOpType(input_shape_a, memory_config_a, input_shape_b, memory_config_b);
+    auto eltwise_op_type = EltwiseOpConstraintsFactory::GetEltwiseOpType(input_shape_a, memory_config_a, input_shape_b, memory_config_b, memory_config_o);
 
     switch (eltwise_op_type) {
         case EltwiseOpTypes::ElementWiseMultiCore:

@@ -96,5 +96,5 @@ class EltwiseOpL1UsageFactory
 {
     public:
     EltwiseOpL1UsageFactory() = delete;
-    static std::unique_ptr<EltwiseOpL1Usage> Make(const EltwiseOpParams& input_a, const EltwiseOpParams& input_b, const std::optional<EltwiseOpParams>& output = std::nullopt);
+    static std::unique_ptr<EltwiseOpL1Usage> Make(const EltwiseOpParams& input_a, const EltwiseOpParams& input_b, const EltwiseOpParams& output);
 };
