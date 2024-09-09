@@ -6,7 +6,7 @@
 
 #include "dataflow_api.h"
 
-// #define DEBUG
+#define DEBUG
 #ifdef DEBUG
 #include "debug/dprint.h"
 #endif

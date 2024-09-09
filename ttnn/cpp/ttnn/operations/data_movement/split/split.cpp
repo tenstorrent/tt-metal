@@ -21,7 +21,7 @@ namespace detail {
         auto input_shape = input_tensor.get_legacy_shape();
         auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_shape);
         FormatParams input_format_params = {.pad_shape = padded_input_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
-        return operation::run_with_autoformat(SplitDeviceOperation{2, 3, mem_config}, {input_tensor}, {input_format_params}, {Layout::TILE, Layout::TILE});
+        return operation::run_with_autoformat(SplitDeviceOperation{4, 3, mem_config}, {input_tensor}, {input_format_params}, {Layout::TILE, Layout::TILE});
     }
 
     std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor &input_tensor, const MemoryConfig &mem_config) {
@@ -71,9 +71,8 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
     const std::optional<MemoryConfig>& memory_config_arg) {
 
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
-    TT_FATAL(num_splits == 2, "Currently only supporting split in 2");
+    // FIXME: dispatch here
     return detail::split_dim_two_chunks_tiled(input_tensor, dim, memory_config);
-
 }
 
 std::vector<ttnn::Tensor> SplitOperation::invoke(
