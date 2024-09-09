@@ -17,17 +17,8 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
 )
 
 
-def create_tt_tensor(tensor, device):
-    ret = (
-        ttnn.Tensor(
-            tensor,
-            ttnn.bfloat16,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device)
-    )
-
-    return ret
+def create_tt_tensor(tensor: torch.Tensor, device):
+    return ttnn.from_torch(tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
 
 @pytest.mark.parametrize(
@@ -55,6 +46,7 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_
             return torch.mul(x, self.weight)
 
     model = SimpleModel()
+
     cpu_exp_avg = torch.zeros_like(model.weight)
     cpu_exp_avg_sq = torch.zeros_like(model.weight)
     cpu_max_exp_avg_sq = torch.zeros_like(model.weight)
@@ -78,14 +70,7 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_
     loss.backward()
 
     cpu_grad = model.weight.grad.clone()
-    dev_grad = (
-        ttnn.Tensor(
-            cpu_grad,
-            ttnn.bfloat16,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device)
-    )
+    dev_grad = create_tt_tensor(cpu_grad, device)
 
     optimizer.step()
     optimizer_state_dict = optimizer.state_dict()
@@ -106,23 +91,23 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_
         dev_exp_avg_out,
         dev_exp_avg_sq_out,
         dev_max_exp_avg_sq_out,
-    ) = ttnn.experimental.operations.primary.moreh_adam(
+    ) = ttnn.operations.moreh.adam(
         dev_param,
         dev_grad,
         dev_exp_avg,
         dev_exp_avg_sq,
-        lr,
-        betas[0],
-        betas[1],
-        eps,
-        weight_decay,
-        step,
-        amsgrad,
-        dev_max_exp_avg_sq,
-        dev_param_out,
-        dev_exp_avg_out,
-        dev_exp_avg_sq_out,
-        dev_max_exp_avg_sq_out,
+        lr=lr,
+        beta1=betas[0],
+        beta2=betas[1],
+        eps=eps,
+        weight_decay=weight_decay,
+        step=step,
+        amsgrad=amsgrad,
+        max_exp_avg_sq_in=dev_max_exp_avg_sq,
+        param_out=dev_param_out,
+        exp_avg_out=dev_exp_avg_out,
+        exp_avg_sq_out=dev_exp_avg_sq_out,
+        max_exp_avg_sq_out=dev_max_exp_avg_sq_out,
         compute_kernel_config=compute_kernel_config,
     )
 
