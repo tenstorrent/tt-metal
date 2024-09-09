@@ -17,8 +17,30 @@ import sys
 import numpy
 import pytest
 import os
+import itertools
 
 debug = False
+
+two_tests = list(
+    zip(
+        [
+            [1, 2, 64, 128],
+            [1, 2, 1024, 128],
+            [1, 2, 256, 2560],
+            [1, 2, 1024, 2560],
+            [1, 2, 256, 5120],
+            [1, 2, 64, 10240],
+            [1, 1, 64, 64],
+            [1, 2, 64, 64],
+        ],
+        itertools.repeat(2),
+    )
+)
+
+four_tests = list(zip([[1, 2, 128, k] for k in (2**x for x in range(7, 14))], itertools.repeat(4)))
+
+two_ids = ["x".join(map(str, x)) + "->2" for x in two_tests]
+four_ids = ["x".join(map(str, x)) + "->4" for x in four_tests]
 
 
 @pytest.mark.parametrize(
@@ -37,19 +59,19 @@ debug = False
     ),
     ids=["out_DRAM", "out_L1"],
 )
-@pytest.mark.parametrize("dim", (2, 3))  # 0, 1 ),
 @pytest.mark.parametrize(
-    "refshape",
-    ([1, 1, 128, 128],),
-    ids=["1x1x128x128"],
+    "refshape_and_chunks",
+    (*two_tests, *four_tests),
+    ids=two_ids + four_ids,
 )
-def test_split_tiled_w(dim, refshape, in_mem_config, out_mem_config, device, dtype=ttnn.bfloat16):
+@pytest.mark.parametrize("dim", (2, 3))  # 0, 1 ),
+def test_split_tiled_w(dim, refshape_and_chunks, in_mem_config, out_mem_config, device, dtype=ttnn.bfloat16):
+    (refshape, num_splits) = refshape_and_chunks
     profile_location = "splitTwoChunks/"
     os.system(f"rm -rf {profile_location}")
 
     _shape = refshape
     assert _shape[0] == 1
-    num_splits = 4
     torch.manual_seed(1234)
 
     tile_size = 32
