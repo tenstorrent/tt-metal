@@ -87,6 +87,46 @@ def test_full_like(device, input_shape, fill_value):
         [5, 96, 64],
     ],
 )
+@pytest.mark.parametrize(
+    "fill_value",
+    [-5, 3, 15, 25],
+)
+@pytest.mark.parametrize(
+    "layout",
+    [ttnn.Layout.ROW_MAJOR, ttnn.Layout.TILE],
+)
+def test_full_like_opt_tensor(device, input_shape, fill_value, layout):
+    torch_input_tensor = torch.rand((input_shape), dtype=torch.bfloat16)
+    torch_output_tensor = torch.full_like(torch_input_tensor, fill_value)
+
+    opt_tensor = torch.ones(input_shape, dtype=torch.bfloat16)
+    opt_tensor = ttnn.from_torch(
+        opt_tensor, ttnn.bfloat16, layout=layout, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+
+    input_tensor = ttnn.from_torch(torch_input_tensor)
+    input_tensor = ttnn.to_device(input_tensor, device)
+
+    cq_id = 0
+    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    ttnn.full_like(input_tensor, fill_value=fill_value, optional_tensor=opt_tensor, queue_id=cq_id)
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+
+    assert ttnn.is_tensor_storage_on_device(opt_tensor)
+    opt_tensor = ttnn.from_device(opt_tensor)
+    opt_tensor = ttnn.to_torch(opt_tensor)
+
+    assert_with_pcc(torch_output_tensor, opt_tensor, 0.9999)
+    assert torch.allclose(torch_output_tensor, opt_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [32, 32],
+        [5, 96, 64],
+    ],
+)
 def test_ones(device, input_shape):
     torch_tensor = torch.ones(input_shape, dtype=torch.bfloat16)
 
