@@ -58,7 +58,7 @@ inline uint32_t calculate_tensor_l1_allocation_size_per_core(EltwiseOpParams inp
         std::get<tt::tt_metal::MemoryConfig>(input));
 }
 
-uint32_t get_num_of_cores(const std::optional<tt::tt_metal::ShardSpec>& shard_spec);
+uint32_t get_num_of_cores(const std::optional<tt::tt_metal::ShardSpec>& shard_spec = std::nullopt);
 
 uint32_t get_num_pages(const tt::tt_metal::ShardSpec& shard_spec);
 
