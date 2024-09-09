@@ -5,3 +5,4 @@
 import ttnn
 
 arange = ttnn._ttnn.operations.moreh.moreh_arange
+adam = ttnn._ttnn.operations.moreh.moreh_adam
