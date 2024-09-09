@@ -16,7 +16,6 @@
 #include "tt_metal/common/math.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/conv/conv2d/device/optimized_conv_op.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv_op.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
