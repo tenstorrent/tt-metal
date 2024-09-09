@@ -190,6 +190,7 @@ def run_test_rotary_embedding_llama(
         (1, 4096),
         (1, 8192),
         (1, 16384),
+        (1, 128 * 1024),
     ),
     ids=(
         "prefill_32",
@@ -200,6 +201,7 @@ def run_test_rotary_embedding_llama(
         "prefill_4k",
         "prefill_8k",
         "prefill_16k",
+        "prefill_128k",
     ),
 )
 @pytest.mark.parametrize(
@@ -229,6 +231,9 @@ def test_rotary_embedding_llama(
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if compute_grid_size.x < 8 or compute_grid_size.y < 8:
         pytest.skip(f"Requires grid size of at least {(8, 8)} to run")
+
+    if seq_len == 128 * 1024 and (n_heads, n_kv_heads, head_dim) != (8, 1, 128):
+        pytest.skip("Only testing for (8, 1, 128) due to time constraints")
 
     max_seq_len = max(4096, seq_len)
 

@@ -167,8 +167,6 @@ def test_mixtral_model_inference_CI(t3k_mesh_device, use_program_cache, reset_se
         decode_input = prepare_inputs_ttnn(
             decode_input_torch,
             model_args.dim,
-            start_pos,
-            model_args,
             tt_model.mesh_device,
         )
         tt_out = tt_model(decode_input, start_pos_ids, mode="decode")

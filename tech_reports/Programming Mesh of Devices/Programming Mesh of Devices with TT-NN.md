@@ -1,87 +1,60 @@
-# Programming Mesh of Devices with TT-NN {#programming-mesh-of-devices-with-tt-nn}
+# Programming Mesh of Devices with TT-NN
 
 Author: Joseph Chu
 
-# Table of Contents {#table-of-contents}
+## Contents
 
-[Programming Mesh of Devices with TT-NN](\#programming-mesh-of-devices-with-tt-nn)
-
-[Table of Contents](\#table-of-contents)
-
-[1\. Overview](\#1.-overview)
-
-[2\. MeshDevice](\#2.-meshdevice)
-
-[2.1 System Topology](\#2.1-system-topology)
-
-[2.2 MeshDevice Management](\#2.2-meshdevice-management)
-
-[2.2.1 MeshDevice Initialization/Close](\#2.2.1-meshdevice-initialization/close)
-
-[2.2.1 MeshDevice Visualization](\#2.2.1-meshdevice-visualization)
-
-[3\. Distributing Tensor to MeshDevice](\#3.-distributing-tensor-to-meshdevice)
-
-[3.1 Distribution Strategies](\#3.1-distribution-strategies)
-
-[3.2 Programming Example: Sharding](\#3.2-programming-example:-sharding)
-
-[4\. Single-Program Multiple Device](\#4.-single-program-multiple-device)
-
-[4.1 Execution Model](\#4.1-execution-model)
-
-[4.2 Single Device to Multiple Device Execution](\#4.2-single-device-to-multiple-device-execution)
-
-[4.2.1 Single Device Execution](\#4.2.1-single-device-execution)
-
-[4.2.1 Mesh Device Execution](\#4.2.1-mesh-device-execution)
-
-[5\. Programming Mesh of Devices Using Data Parallel](\#5.-programming-mesh-of-devices-using-data-parallel)
-
-[5.1 Data Parallel Programming Example:](\#5.1-data-parallel-programming-example:)
+- [Programming Mesh of Devices with TT-NN](#programming-mesh-of-devices-with-tt-nn)
+- [1. Overview](#1-overview)
+- [2. MeshDevice](#2-meshdevice)
+  - [2.1 System Topology](#21-system-topology)
+  - [2.2 MeshDevice Management](#22-meshdevice-management)
+    - [2.2.1 MeshDevice Initialization/Close](#221-meshdevice-initializationclose)
+    - [2.2.2 MeshDevice Visualization](#222-meshdevice-visualization)
+- [3. Distributing Tensor to MeshDevice](#3-distributing-tensor-to-meshdevice)
+  - [3.1 Distribution Strategies](#31-distribution-strategies)
+  - [3.2 Programming Example: Sharding](#32-programming-example-sharding)
+- [4. Single-Program Multiple Device](#4-single-program-multiple-device)
+  - [4.1 Execution Model](#41-execution-model)
+  - [4.2 Single Device to Multiple Device Execution](#42-single-device-to-multiple-device-execution)
+    - [4.2.1 Single Device Execution](#421-single-device-execution)
+    - [4.2.2 Mesh Device Execution](#422-mesh-device-execution)
+- [5. Programming Mesh of Devices Using Data Parallel](#5-programming-mesh-of-devices-using-data-parallel)
+  - [5.1 Data Parallel Programming Example](#51-data-parallel-programming-example)
 
 
-##
-
-## 1\. Overview {#1.-overview}
+## 1. Overview
 
 TT-NN library natively supports multi-device operations, enabling users to scale their single-device application code to multiple devices seamlessly. TT-NN employs a Single-Program Multiple-Device (SPMD) technique to parallelize a computation across a set of connected devices operating on different input data. This is achieved through a few key components:
 
-- **MeshDevice**: This “virtual device” abstraction defines a logical 2-D mesh of connected physical devices. Operations that “run on device” are distributed through SPMD across all devices captured in the mesh.
+- **MeshDevice**: This "virtual device" abstraction defines a logical 2-D mesh of connected physical devices. Operations that "run on device" are distributed through SPMD across all devices captured in the mesh.
 
 - **Input Data Distribution**: Defines how input data resident in host-memory is distributed to DeviceMesh on-device memory. When operations are distributed to MeshDevice, the operation within a single-device scope works on its local input data.
 
 - **Tensor**: Defines a N-dimensional matrix containing elements of a single data type. In a MeshDevice context, a Tensor, or colloquially referred to as MeshTensor, represents a collection of tensor shards distributed across devices in a 2D Mesh.
 
 
-These concepts are key to understanding how we scale models using **Data-Parallel**, **Tensor-Parallel**, and **Hybrid Data \+ Tensor Parallel.**
+These concepts are key to understanding how we scale models using **Data-Parallel**, **Tensor-Parallel**, and **Hybrid Data + Tensor Parallel.**
 
-##
-
-## 2\. MeshDevice
+## 2. MeshDevice
 
 ### 2.1 System Topology
 
 A MeshDevice can be instantiated over a collection of physically connected devices. The supported configurations are N300 (1x2), T3000 (2x4), Galaxy (8x4).
 
-With the N300 form-factor, it houses two wormhole chips. The host is connected to the “left” chip via PCIe and the “left” chip is connected to the “right” chip via two ethernet links. Each ethernet link has a 200 Gbps bi-directional bandwidth. For N300, one of the ethernet links connecting the “left” chip to the “right” chip is reserved for fast-dispatch. At the user-level, this means only a single ethernet link is made available for use. The N300 represents the smallest multi-device configuration that we can instantiate a MeshDevice over.
-
-T3000 is composed of four N300 wormhole cards that are physically connected in a 2x4 mesh configuration.
+With the N300 form-factor, it houses two wormhole chips. The host is connected to the "left" chip via PCIe and the "left" chip is connected to the "right" chip via two ethernet links. Each ethernet link has a 200 Gbps bi-directional bandwidth. For N300, one of the ethernet links connecting the "left" chip to the "right" chip is reserved for fast-dispatch. At the user-level, this means only a single ethernet link is made available for use. The N300 represents the smallest multi-device configuration that we can instantiate a MeshDevice over.
 
 <!-- ![image1](images/image1.png){width=15 height=15} -->
-<img src="images/image1.png" style="width:500px;"/>
+<img src="../CCL/images/t3000.png" style="width:500px;"/>
 
-*Figure 1: T3000 System Topology*
+*Figure 1: T3000 System Topology. T3000 is composed of four N300 wormhole cards that are physically connected in a 2x4 mesh configuration.*
 
 
 [tt-topology](https://github.com/tenstorrent/tt-topology) can be used to flash multiple wormhole cards on a system to a specific ethernet routing configuration (linear, ring, mesh) and used to visualize the organization of the chip layout.
 
-<!-- ![image1](images/image3.png){width=15 height=15} -->
 <img src="images/image3.png" style="width:500px;"/>
 
 *Figure 2: T3000 Chip Layout dumped from tt-topology*
-
-###
 
 ### 2.2 MeshDevice Management
 
@@ -366,7 +339,7 @@ torch_output = model.forward(torch_hidden_states)
 mesh_device = ttnn.open_device_mesh(ttnn.DeviceGrid(y=1, x=4))
 
 # Shard input activations on batch dimension to devices in the mesh
-with ttnn.distribute(mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)):
+with ttnn.distribute(ttnn.ShardTensorToMesh(mesh_device, dim=0)):
     hidden_states = ttnn.from_torch(
         torch_hidden_states,
         dtype=ttnn.bfloat16,
@@ -375,7 +348,7 @@ with ttnn.distribute(mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)):
     )
 
 # Replicate model parameters to devices in the mesh
-with ttnn.distribute(mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)):
+with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
     parameters = ttnn.model_preprocessing.preprocess_model_parameters(
         initialize_model=lambda: model,
         device=mesh_device,
@@ -385,6 +358,6 @@ with ttnn.distribute(mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)):
 ttnn_model = TtFalconMLP(parameters)
 ttnn_output = ttnn_model(hidden_states)
 
-with ttnn.distribute(mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)):
+with ttnn.distribute(ttnn.ConcatMeshToTensor(mesh_device, dim=0)):
     assert_with_pcc(torch_output, ttnn.to_torch(ttnn_output), 0.98)
 ```

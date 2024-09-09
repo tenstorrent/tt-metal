@@ -8,7 +8,7 @@
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/serialization.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
 #include "type_caster.hpp"
 
@@ -226,15 +226,6 @@ void TensorModule(py::module& m_tensor) {
             "Returns a CoreRange i.e. bounding box covering all the core ranges in the CoreRangeSet")
         .def("num_cores", &CoreRangeSet::num_cores, "Returns total number of cores in the CoreRangeSet");
 
-    m_tensor.def(
-        "num_cores_to_core_range_set",
-        &num_cores_to_core_range_set,
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg("row_wise").noconvert() = false,
-        R"doc(
-            Returns a CoreRangeSet from number of cores
-        )doc");
 
     auto pyShardSpec = static_cast<py::class_<ShardSpec>>(m_tensor.attr("ShardSpec"));
     pyShardSpec
@@ -338,13 +329,6 @@ void TensorModule(py::module& m_tensor) {
         py::arg("file_name"),
         py::arg("device") = nullptr,
         R"doc(Load tensor to file)doc");
-
-    m_tensor.def(
-        "num_cores_to_corerange_set",
-        py::overload_cast<const uint32_t, const CoreCoord, const bool>(&num_cores_to_corerange_set),
-        R"doc(
-            Create a CoreRangeSet containing the specified number of cores
-        )doc");
 
     m_tensor.def(
         "allocate_tensor_on_device",

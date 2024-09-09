@@ -7,7 +7,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 namespace ttnn::operations::binary {
 
@@ -198,7 +198,7 @@ BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_outpu
                 auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
                 uint32_t num_grid_cores = core_grid.x * core_grid.y;
                 uint32_t target_num_cores = num_blocks < num_grid_cores ? num_blocks : num_grid_cores;
-                shard_spec.grid = num_cores_to_corerange_set(target_num_cores, core_grid, true);
+                shard_spec.grid = tt::tt_metal::num_cores_to_corerange_set(target_num_cores, core_grid, true);
                 shard_spec.shape = {
                     num_blocks / target_num_cores * TILE_HEIGHT, input_tensor_a.get_legacy_shape()[-1]};
                 shard_spec.orientation = ShardOrientation::ROW_MAJOR;
