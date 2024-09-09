@@ -61,7 +61,7 @@ For the latest model updates and features, please see [MODEL_UPDATES.md](models/
 
 ## TT-NN Tech Reports
 - [Advanced Performance Optimizations for Models](./tech_reports/AdvancedPerformanceOperationsForModels/AdvancedPerformanceOptimizationsForModels.md) (updated Sept 8th)
-- [Programming Mesh of Devices](./tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md) (updated Sept 6th)
+- [Programming Mesh of Devices](./tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md) (updated Sept 9th)
 ---
 
 <div align="center">
