@@ -5,7 +5,7 @@
 import pytest
 import ttnn
 
-from models.demos.ttnn_resnet.tests.ttnn_resnet_test_infra import create_test_infra
+from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra
 from models.utility_functions import (
     is_wormhole_b0,
     enable_memory_reports,

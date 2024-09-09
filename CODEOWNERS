@@ -138,8 +138,7 @@ models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
 models/demos/tg/llama3_70b @cglagovichTT @caixunshiren @uaydonat
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/grayskull @uaydonat @eyonland
-models/demos/resnet @mywoodstock @shwetankTT @tt-aho
-models/demos/ttnn_resnet @mywoodstock @shwetankTT @tt-aho
+models/demos/**/*resnet* @mywoodstock @shwetankTT @tt-aho
 models/experimental/functional_unet @esmalTT @uaydonat @mywoodstock
 models/perf/ @uaydonat @tt-rkim
 models/perf/benchmarking_utils.py @skhorasganiTT @tt-rkim

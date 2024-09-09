@@ -4,30 +4,20 @@
 
 import torch
 from loguru import logger
-import torchvision
 from transformers import AutoImageProcessor
 import pytest
 import ttnn
-from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
-)
 
 from models.utility_functions import (
-    is_grayskull,
-    is_wormhole_b0,
     profiler,
     disable_persistent_kernel_cache,
-    run_for_wormhole_b0,
-    run_for_grayskull,
 )
 
-from models.demos.ttnn_resnet.tests.ttnn_resnet_test_infra import create_test_infra
+from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra
 
 from models.perf.perf_utils import prep_perf_report
 
-from models.demos.ttnn_resnet.tests.ttnn_resnet_test_infra import load_resnet50_model
-from models.demos.ttnn_resnet.tt.custom_preprocessing import create_custom_mesh_preprocessor
-from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_new_conv_api import resnet50
+from models.demos.ttnn_resnet.tests.resnet50_test_infra import load_resnet50_model
 
 try:
     from tracy import signpost
@@ -199,6 +189,8 @@ def run_trace_model(device, tt_inputs, test_infra, num_warmup_iterations, num_me
         signpost(header="stop")
     ttnn.DumpDeviceProfiler(device)
 
+    ttnn.release_trace(device, tid)
+
 
 def run_trace_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations):
     ops_parallel_config = {}
@@ -292,6 +284,8 @@ def run_trace_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, nu
         signpost(header="stop")
     ttnn.DumpDeviceProfiler(device)
 
+    ttnn.release_trace(device, tid)
+
 
 def run_perf_resnet(
     batch_size,
@@ -325,9 +319,6 @@ def run_perf_resnet(
     torch_resnet50 = load_resnet50_model(model_location_generator)
     torch_resnet50.eval()
 
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: torch_resnet50, custom_preprocessor=create_custom_mesh_preprocessor(None), device=None
-    )
     torch_resnet50.to(torch.bfloat16)
 
     test_infra = create_test_infra(
@@ -383,235 +374,3 @@ def run_perf_resnet(
 
     logger.info(f"{model_name} {comments} inference time (avg): {inference_time_avg}")
     logger.info(f"{model_name} compile time: {compile_time}")
-
-
-@run_for_grayskull()
-@pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-@pytest.mark.parametrize(
-    "batch_size, expected_inference_time, expected_compile_time",
-    ((20, 0.0080, 20),),
-)
-def test_perf_bare_metal_gs(
-    device,
-    use_program_cache,
-    batch_size,
-    expected_inference_time,
-    expected_compile_time,
-    hf_cat_image_sample_input,
-    model_location_generator,
-):
-    run_perf_resnet(
-        batch_size,
-        expected_inference_time,
-        expected_compile_time,
-        hf_cat_image_sample_input,
-        device,
-        "resnet50",
-        model_location_generator,
-    )
-
-
-@run_for_grayskull()
-@pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 1332224}], indirect=True)
-@pytest.mark.parametrize(
-    "batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    (
-        (20, True, 0.0064, 10),
-        (20, False, 0.0064, 5),
-    ),
-    indirect=["enable_async_mode"],
-)
-def test_perf_trace_bare_metal_gs(
-    device,
-    use_program_cache,
-    batch_size,
-    expected_inference_time,
-    expected_compile_time,
-    hf_cat_image_sample_input,
-    enable_async_mode,
-    model_location_generator,
-):
-    mode = "async" if enable_async_mode else "sync"
-    run_perf_resnet(
-        batch_size,
-        expected_inference_time,
-        expected_compile_time,
-        hf_cat_image_sample_input,
-        device,
-        f"resnet50_trace_{mode}",
-        model_location_generator,
-    )
-
-
-@run_for_grayskull()
-@pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_hw_cqs": 2}], indirect=True)
-@pytest.mark.parametrize(
-    "batch_size, expected_inference_time, expected_compile_time",
-    ((20, 0.0100, 19),),
-)
-def test_perf_2cqs_bare_metal_gs(
-    device,
-    use_program_cache,
-    batch_size,
-    expected_inference_time,
-    expected_compile_time,
-    hf_cat_image_sample_input,
-    model_location_generator,
-):
-    run_perf_resnet(
-        batch_size,
-        expected_inference_time,
-        expected_compile_time,
-        hf_cat_image_sample_input,
-        device,
-        "resnet50_2cqs",
-        model_location_generator,
-    )
-
-
-@run_for_grayskull()
-@pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768, "trace_region_size": 1332224, "num_hw_cqs": 2}], indirect=True
-)
-@pytest.mark.parametrize(
-    "batch_size, expected_inference_time, expected_compile_time",
-    ((20, 0.004, 5),),
-)
-def test_perf_trace_2cqs_bare_metal_gs(
-    device,
-    use_program_cache,
-    batch_size,
-    expected_inference_time,
-    expected_compile_time,
-    hf_cat_image_sample_input,
-    model_location_generator,
-):
-    run_perf_resnet(
-        batch_size,
-        expected_inference_time,
-        expected_compile_time,
-        hf_cat_image_sample_input,
-        device,
-        "resnet50_trace_2cqs",
-        model_location_generator,
-    )
-
-
-@run_for_wormhole_b0()
-@pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.0070, 28),),
-)
-def test_perf_bare_metal_wh(
-    device,
-    use_program_cache,
-    batch_size,
-    expected_inference_time,
-    expected_compile_time,
-    hf_cat_image_sample_input,
-    model_location_generator,
-):
-    run_perf_resnet(
-        batch_size,
-        expected_inference_time,
-        expected_compile_time,
-        hf_cat_image_sample_input,
-        device,
-        "resnet50",
-        model_location_generator,
-    )
-
-
-@run_for_wormhole_b0()
-@pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 1500000}], indirect=True)
-@pytest.mark.parametrize(
-    "batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    (
-        (16, True, 0.005, 25),
-        (16, False, 0.0046, 25),
-    ),
-    indirect=["enable_async_mode"],
-)
-def test_perf_trace_bare_metal_wh(
-    device,
-    use_program_cache,
-    batch_size,
-    expected_inference_time,
-    expected_compile_time,
-    hf_cat_image_sample_input,
-    enable_async_mode,
-    model_location_generator,
-):
-    mode = "async" if enable_async_mode else "sync"
-    run_perf_resnet(
-        batch_size,
-        expected_inference_time,
-        expected_compile_time,
-        hf_cat_image_sample_input,
-        device,
-        f"resnet50_trace_{mode}",
-        model_location_generator,
-    )
-
-
-@run_for_wormhole_b0()
-@pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_hw_cqs": 2}], indirect=True)
-@pytest.mark.parametrize(
-    "batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.0070, 26),),
-)
-def test_perf_2cqs_bare_metal_wh(
-    device,
-    use_program_cache,
-    batch_size,
-    expected_inference_time,
-    expected_compile_time,
-    hf_cat_image_sample_input,
-    model_location_generator,
-):
-    run_perf_resnet(
-        batch_size,
-        expected_inference_time,
-        expected_compile_time,
-        hf_cat_image_sample_input,
-        device,
-        "resnet50_2cqs",
-        model_location_generator,
-    )
-
-
-@run_for_wormhole_b0()
-@pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768, "num_hw_cqs": 2, "trace_region_size": 1332224}], indirect=True
-)
-@pytest.mark.parametrize(
-    "batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.004, 25),),
-)
-def test_perf_trace_2cqs_bare_metal_wh(
-    device,
-    use_program_cache,
-    batch_size,
-    expected_inference_time,
-    expected_compile_time,
-    hf_cat_image_sample_input,
-    model_location_generator,
-):
-    run_perf_resnet(
-        batch_size,
-        expected_inference_time,
-        expected_compile_time,
-        hf_cat_image_sample_input,
-        device,
-        "resnet50_trace_2cqs",
-        model_location_generator,
-    )

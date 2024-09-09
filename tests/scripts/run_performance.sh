@@ -12,11 +12,11 @@ run_perf_models_other() {
     local test_marker=$2
 
     if [ "$tt_arch" == "grayskull" ]; then
-        env pytest models/demos/ttnn_resnet/tests/test_perf_ttnn_resnet.py -m $test_marker
+        env pytest models/demos/grayskull/resnet50/tests/test_perf_e2e_resnet50.py -m $test_marker
     fi
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
-        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/ttnn_resnet/tests/test_perf_ttnn_resnet.py -m $test_marker
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py -m $test_marker
     fi
 
     env pytest -n auto tests/ttnn/integration_tests/bert/test_performance.py -m $test_marker
@@ -70,7 +70,7 @@ run_device_perf_models() {
         #Model Device perf regression tests to make sure thy run on no-soft-reset BMs
         tests/scripts/run_profiler_regressions.sh PROFILER_NO_RESET
 
-        env pytest models/demos/ttnn_resnet/tests -m $test_marker
+        env pytest models/demos/grayskull/resnet50/tests -m $test_marker
 
         env pytest models/demos/metal_BERT_large_11/tests -m $test_marker
 
@@ -80,7 +80,7 @@ run_device_perf_models() {
     fi
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
-        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/ttnn_resnet/tests -m $test_marker
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/resnet50/tests -m $test_marker
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/mamba/tests -m $test_marker
 
