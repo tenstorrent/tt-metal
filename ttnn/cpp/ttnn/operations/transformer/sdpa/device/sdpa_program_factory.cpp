@@ -107,7 +107,6 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     auto k_buffer = input_tensor_k.buffer();
     auto v_buffer = input_tensor_v.buffer();
     auto mask_buffer = attn_mask.has_value() ? attn_mask.value().buffer() : nullptr;
-    // TT_FATAL(mask_buffer != nullptr);
 
     auto out0_buffer = output_tensor.buffer();
 
@@ -542,7 +541,6 @@ operation::ProgramWithCallbacks sdpa_multi_core(
             auto v_buffer = input_tensors.at(2).buffer();
             auto mask_buffer =
                 optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer() : nullptr;
-            // TT_FATAL(mask_buffer != nullptr);
 
             auto out0_buffer = output_tensors.at(0).buffer();
             uint32_t q_addr = q_buffer->address();
