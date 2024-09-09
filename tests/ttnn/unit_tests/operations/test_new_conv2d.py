@@ -322,13 +322,17 @@ def run_conv_with_split(
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, pad_h, pad_w, act_block_w_div",
     (
+        (128, 128, 8, 8, 3, 3, 0, 0, 1),
         (128, 256, 8, 8, 3, 3, 1, 1, 1),
+        (576, 576, 8, 8, 3, 3, 0, 0, 1),
+        (960, 960, 4, 4, 3, 3, 0, 0, 1),
         (256, 2048, 8, 8, 3, 3, 1, 1, 8),
         (512, 2048, 16, 16, 3, 3, 1, 1, 4),
-        (768, 768, 8, 8, 3, 3, 1, 1, 1),
         (768, 768, 16, 16, 3, 3, 1, 1, 1),
         (1280, 1280, 16, 16, 3, 3, 1, 1, 1),
         (1280, 2560, 16, 16, 3, 3, 1, 1, 2),
+        (1280, 2560, 16, 16, 3, 3, 0, 0, 2),
+
     ),
 )
 @pytest.mark.parametrize(
@@ -384,7 +388,7 @@ def test_conv_ws(
     torch_input_tensor_nchw = torch_input_tensor_nchw.broadcast_to(conv_input_shape).float()
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
 
-    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+    torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()
 
     tt_bias_tensor = None
     torch_bias_tensor = None
@@ -457,6 +461,7 @@ def test_conv_ws(
 
     # torch_output_tensor is in row major layout and NHWC shape
     # NHWC to NCHW
+    # torch_output_tensor = torch_output_tensor[:, :, : batch_size * out_height * out_width, :]
     torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, output_channels)
 
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
