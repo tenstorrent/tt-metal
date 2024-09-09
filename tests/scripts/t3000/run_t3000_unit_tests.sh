@@ -1,5 +1,4 @@
-
-#/bin/bash
+#!/bin/bash
 # set -eo pipefail
 
 run_t3000_ttmetal_tests() {
