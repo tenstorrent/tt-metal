@@ -7,7 +7,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/normalization/softmax/device/softmax_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/run_operation.hpp"
 
 #include "tt_metal/host_api.hpp"
@@ -143,7 +143,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     uint32_t num_tile_rows = NC * Ht;
     auto grid_size = device->compute_with_storage_grid_size();
     auto all_device_cores = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = split_work_to_cores(grid_size, num_tile_rows, true);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     bool out0_is_dram = out0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
@@ -351,7 +351,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         uint32_t NCHt = NC*Ht;
         uint32_t num_tile_rows = NC * Ht;
         auto all_device_cores = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-        auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = split_work_to_cores(grid_size, num_tile_rows, true);
+        auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
 
         UpdateCircularBufferTotalSize(program, cb_in0_id, in0_t * in0_tile_size);
         UpdateCircularBufferTotalSize(program, cb_out0_id, out0_t * out0_tile_size);

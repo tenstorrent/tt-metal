@@ -7,7 +7,6 @@ import torch
 import ttnn
 import pytest
 from loguru import logger
-
 from models.utility_functions import tt2torch_tensor, comp_pcc, skip_for_grayskull
 
 
@@ -36,9 +35,7 @@ def run_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
     if num_availible_cores < num_cores:
         pytest.skip(f"Not enough cores availible (was {num_availible_cores} but need {num_cores})")
 
-    shard_grid = ttnn.CoreRangeSet(
-        ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
-    )
+    shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
     shard_spec = ttnn.ShardSpec(
         shard_grid,
         [L, E * N // num_cores],
@@ -122,9 +119,7 @@ def run_chunked_ssm_prefix_scan(L: int, E: int, N: int, chunk_size: int, num_cor
     if num_availible_cores < num_cores:
         pytest.skip(f"Not enough cores availible (was {num_availible_cores} but need {num_cores})")
 
-    shard_grid = ttnn.CoreRangeSet(
-        ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
-    )
+    shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
     shard_spec = ttnn.ShardSpec(
         shard_grid,
         [L, E * N // num_cores],

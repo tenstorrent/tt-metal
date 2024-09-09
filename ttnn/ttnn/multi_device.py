@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
+import functools
 
 from typing import List, Dict, Optional, Callable, Tuple, Optional, Callable, Union
 
@@ -395,7 +396,9 @@ class ConcatMesh2dToTensor(MeshToTensor):
         """
         import torch
 
-        device_shards = [ttnn.to_torch(tt_input_tensor) for tt_input_tensor in ttnn.get_device_tensors(tensor)]
+        device_shards = [
+            ttnn.to_torch(tt_input_tensor, mesh_composer=None) for tt_input_tensor in ttnn.get_device_tensors(tensor)
+        ]
 
         rows, cols = self.mesh_shape
         row_dim, col_dim = self.dims
@@ -433,7 +436,7 @@ class ConcatMeshToTensor(MeshToTensor):
         import torch
 
         device_shards_converted_to_torch = [
-            ttnn.to_torch(tt_input_tensor) for tt_input_tensor in ttnn.get_device_tensors(tensor)
+            ttnn.to_torch(tt_input_tensor, mesh_composer=None) for tt_input_tensor in ttnn.get_device_tensors(tensor)
         ]
         return torch.cat(device_shards_converted_to_torch, dim=self.concat_dim)
 
@@ -443,7 +446,47 @@ class ListMeshToTensor(MeshToTensor):
         self.mesh_device = mesh_device
 
     def compose(self, tensor: ttnn.Tensor) -> List["torch.Tensor"]:
-        return [ttnn.to_torch(tt_input_tensor) for tt_input_tensor in ttnn.get_device_tensors(tensor)]
+        return [
+            ttnn.to_torch(tt_input_tensor, mesh_composer=None) for tt_input_tensor in ttnn.get_device_tensors(tensor)
+        ]
+
+
+@contextlib.contextmanager
+def distribute(default: Union[TensorToMesh, MeshToTensor]):
+    """
+    Context manager to temporarily modify the behavior of ttnn.from_torch and ttnn.to_torch to use the specified
+    mesh_mapper or mesh_composer for tensor distribution and composition to/from MeshDevice.
+    Invocations of ttnn.from_torch(..) will use the mesh_mapper as defined by the default in ttnn.distribute.
+    Invocations of ttnn.to_torch(..) will use the mesh_composer as defined by the default in ttnn.distribute.
+
+    Args:
+        mesh_mapper_or_composer (Union[TensorToMesh, MeshToTensor]): An instance of either TensorToMesh or MeshToTensor
+            used to map tensors to a mesh or compose tensors from a mesh.
+
+    Example:
+        with distribute(ShardTensorToMesh(mesh_device, dim=3)):
+            # Code here will use the default mapper
+            result = ttnn.from_torch(torch_tensor)
+
+        is equivalent to:
+        result = ttnn.from_torch(torch_tensor, mesh_mapper=ShardTensorToMesh(mesh_device, dim=3))
+    """
+    _original_to_torch = ttnn.to_torch
+    _original_from_torch = ttnn.from_torch
+
+    try:
+        if isinstance(default, TensorToMesh):
+            ttnn.from_torch = functools.partial(_original_from_torch, mesh_mapper=default)
+        elif isinstance(default, MeshToTensor):
+            ttnn.to_torch = functools.partial(_original_to_torch, mesh_composer=default)
+        else:
+            raise ValueError("Argument must be an instance of either TensorToMesh or MeshToTensor.")
+        yield
+
+    finally:
+        # Restore the original functions
+        ttnn.from_torch = _original_from_torch
+        ttnn.to_torch = _original_to_torch
 
 
 __all__ = []

@@ -114,6 +114,7 @@ struct BufferConfig {
     uint64_t page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type;
     TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED;
+    bool allocate = true;
 };
 
 typedef BufferConfig InterleavedBufferConfig;
@@ -127,6 +128,7 @@ struct ShardedBufferConfig {
     BufferType buffer_type = BufferType::L1;
     TensorMemoryLayout buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED;
     ShardSpecBuffer shard_parameters;
+    bool allocate = true;
 };
 
 bool is_sharded(const TensorMemoryLayout &layout);
@@ -152,7 +154,8 @@ class Buffer {
         buffer_type_(BufferType::DRAM),
         buffer_layout_(TensorMemoryLayout::INTERLEAVED),
         shard_parameters_(std::nullopt),
-        bottom_up_(std::nullopt) {}
+        bottom_up_(std::nullopt),
+        allocate_(true) {}
 
     Buffer(
         Device *device,
@@ -277,6 +280,7 @@ class Buffer {
     TensorMemoryLayout buffer_layout_;
     std::optional<ShardSpecBuffer> shard_parameters_;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
+    bool allocate_ = true;
    protected:
     std::optional<bool> bottom_up_;
 };

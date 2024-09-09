@@ -4,6 +4,7 @@ run_tg_tests() {
   # Add tests here
   echo "LOG_METAL: running run_tg_frequent_tests"
 
+  pytest -n auto tests/ttnn/multichip_unit_tests/test_data_parallel_example_TG.py --timeout=900 ; fail+=$?
   pytest -n auto tests/ttnn/multichip_unit_tests/test_multidevice_TG.py --timeout=900 ; fail+=$?
   pytest -n auto models/demos/tg/llama3_70b/tests/test_llama_mlp_galaxy.py --timeout=300 ; fail+=$?
   pytest -n auto models/demos/tg/llama3_70b/tests/test_llama_attention_galaxy.py --timeout=480 ; fail+=$?

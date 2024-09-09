@@ -5,7 +5,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss_backward/moreh_nll_loss_backward_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 

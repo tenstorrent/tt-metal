@@ -4,7 +4,7 @@
 
 #include "optional"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -95,7 +95,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
         if (num_sticks_per_core != 0) {
             auto num_sticks_per_core_pad32 = num_sticks_per_core + (32 - num_sticks_per_core % 32) % 32;
-            num_sticks_per_core_read = merge_num_sticks_to_read(num_sticks_per_core_pad32, unpadded_row_size_bytes_offset, max_read_size);
+            num_sticks_per_core_read = tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, unpadded_row_size_bytes_offset, max_read_size);
             num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
         }
 
@@ -144,7 +144,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
     uint32_t num_cores_total = num_cores_x * num_cores_y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
@@ -170,7 +170,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
     if (num_input_pages != 0) {
         auto num_sticks_per_core_pad32 = num_input_pages + (32 - num_input_pages % 32) % 32;
-        num_sticks_per_core_read = merge_num_sticks_to_read(num_sticks_per_core_pad32, cb_page_size, max_read_size);
+        num_sticks_per_core_read = tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, cb_page_size, max_read_size);
         num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
     }
     tt::tt_metal::CircularBufferConfig cb_src0_config =
@@ -233,7 +233,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
                  core_group_2,
                  num_sticks_per_core_group_1,
                  num_sticks_per_core_group_2] =
-                    split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
+                    tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
             const auto tensor_start = static_cast<const ttnn::operations::data_movement::SliceDeviceOperation *>(operation)->slice_start;
             auto all_runtime_args = get_slice_runtime_args_rm(
@@ -736,7 +736,7 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
@@ -819,7 +819,7 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
 
         auto
             [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-                split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
+                tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
         const auto& tensor_start = static_cast<const ttnn::operations::data_movement::SliceDeviceOperation *>(operation)->slice_start;
         set_slice_runtime_args_tile<false>(

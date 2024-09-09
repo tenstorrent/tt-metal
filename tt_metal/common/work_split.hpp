@@ -156,12 +156,6 @@ inline std::set<CoreRange> num_cores_to_corerange_set(
     return num_cores_to_corerange_set({0, 0}, target_num_cores, grid_size, row_wise);
 }
 
-// TODO: Switch num_cores_to_corerange_set to always return CoreRangeSet
-inline CoreRangeSet num_cores_to_core_range_set(
-    const uint32_t target_num_cores, const CoreCoord grid_size, const bool row_wise = false) {
-    return CoreRangeSet(num_cores_to_corerange_set({0, 0}, target_num_cores, grid_size, row_wise));
-}
-
 // This function takes in the core grid size, as well as the number of units of work to divide between the cores
 // This function returns the number of cores, the CoreRangeSet of all cores, and then the CoreRangeSet that does
 // the greater amount of work, and the CoreRangeSet that does less work if work cannot be evenly divided
