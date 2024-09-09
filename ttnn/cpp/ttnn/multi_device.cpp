@@ -71,10 +71,10 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards)
         std::unordered_map<int, DeviceBuffer> device_buffers;
         for (const auto &shard : tensor_shards) {
             Device* device = std::get<DeviceStorage>(shard.get_storage()).buffer->device();
-            auto device_id = device->id();
+            auto device_id = static_cast<int>(device->id());
             ordered_device_ids.push_back(device_id);
-            device_buffers.insert({device->id(), std::get<DeviceStorage>(shard.get_storage()).buffer});
-            shapes.insert({device->id(), shard.get_legacy_shape()});
+            device_buffers.insert({device_id, std::get<DeviceStorage>(shard.get_storage()).buffer});
+            shapes.insert({device_id, shard.get_legacy_shape()});
         }
         auto storage = MultiDeviceStorage{AllGatherTensor(), ordered_device_ids, std::move(device_buffers), shapes};
         return Tensor(std::move(storage), tensor_shards.at(0).get_legacy_shape(), tensor_shards.at(0).get_dtype(),  tensor_shards.at(0).get_layout());

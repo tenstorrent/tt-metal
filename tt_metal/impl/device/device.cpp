@@ -574,7 +574,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::PREFETCH]) {
                     auto dispatch_core_type = settings.dispatch_core_type;
                     uint32_t downstream_cb_base = mux_settings.cb_start_address + mux_settings.cb_size_bytes * mux_sem;
-                    settings.upstream_cores.push_back(tt_cxy_pair(0, 0, 0));
+                    settings.upstream_cores.emplace_back();
                     settings.downstream_cores.push_back(mux_settings.worker_physical_core);
                     settings.compile_args.resize(23);
                     auto& compile_args = settings.compile_args;
@@ -772,7 +772,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     auto prefetch_physical_core = prefetch_h_settings.worker_physical_core;
                     auto dispatch_core_type = settings.dispatch_core_type;
                     settings.upstream_cores.push_back(demux_settings.worker_physical_core);
-                    settings.downstream_cores.push_back(tt_cxy_pair(0, 0, 0));
+                    settings.downstream_cores.emplace_back();
                     settings.compile_args.resize(22);
                     auto& compile_args = settings.compile_args;
                     compile_args[0] = settings.cb_start_address;

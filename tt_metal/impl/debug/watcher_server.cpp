@@ -969,9 +969,9 @@ void watcher_init(Device *device) {
     for (tt::llrt::RunTimeDebugFeatures delay_feature = tt::llrt::RunTimeDebugFeatureReadDebugDelay;
          (int)delay_feature <= tt::llrt::RunTimeDebugFeatureAtomicDebugDelay;
          delay_feature = (tt::llrt::RunTimeDebugFeatures)((int)delay_feature + 1)) {
-        vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_feature_chip_ids(delay_feature);
+        auto chip_ids = tt::llrt::OptionsG.get_feature_chip_ids(delay_feature);
         bool this_chip_enabled = tt::llrt::OptionsG.get_feature_all_chips(delay_feature) ||
-                                 std::find(chip_ids.begin(), chip_ids.end(), device->id()) != chip_ids.end();
+                                 std::find(chip_ids.begin(), chip_ids.end(), static_cast<int>(device->id())) != chip_ids.end();
         if (this_chip_enabled) {
             static_assert(sizeof(debug_sanitize_noc_addr_msg_t) % sizeof(uint32_t) == 0);
             debug_insert_delays_msg_t delay_setup;
@@ -1106,7 +1106,7 @@ void watcher_attach(Device *device) {
     }
 
     if (watcher::logfile != nullptr) {
-        fprintf(watcher::logfile, "At %.3lfs attach device %d\n", watcher::get_elapsed_secs(), device->id());
+        fprintf(watcher::logfile, "At %.3lfs attach device %d\n", watcher::get_elapsed_secs(), static_cast<int>(device->id()));
     }
 
     if (watcher::enabled) {
@@ -1125,7 +1125,7 @@ void watcher_detach(Device *old) {
         TT_ASSERT(watcher::devices.find(old) != watcher::devices.end());
         if (watcher::enabled && watcher::logfile != nullptr) {
             log_info(LogLLRuntime, "Watcher detached device {}", old->id());
-            fprintf(watcher::logfile, "At %.3lfs detach device %d\n", watcher::get_elapsed_secs(), old->id());
+            fprintf(watcher::logfile, "At %.3lfs detach device %d\n", watcher::get_elapsed_secs(), static_cast<int>(old->id()));
         }
         watcher::devices.erase(old);
         if (watcher::enabled && watcher::devices.empty()) {

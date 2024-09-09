@@ -59,7 +59,7 @@ public:
     using const_device_pointer = const Device*;
     using DeviceView = std::vector<device_pointer>;
     using DeviceViews = std::vector<std::vector<device_pointer>>;
-    using CoordinateMapper = std::function<std::optional<Coordinate>(int device_id)>;
+    using CoordinateMapper = std::function<std::optional<Coordinate>(umd::chip_id device_id)>;
 
     MeshDeviceView(const MeshDevice& mesh);
     MeshDeviceView(const MeshDevice& mesh, Coordinate top_left, Coordinate bottom_right);

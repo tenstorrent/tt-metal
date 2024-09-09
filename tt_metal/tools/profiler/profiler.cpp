@@ -31,7 +31,7 @@ void DeviceProfiler::readRiscProfilerResults(
 
     std::pair<uint32_t, CoreCoord> deviceCore = {device_id,worker_core};
 
-    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device_id);
+    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(umd::chip_id{device_id});
     uint32_t coreFlatID = soc_d.physical_routing_to_profiler_flat_id.at(worker_core);
     uint32_t startIndex = coreFlatID * PROFILER_RISC_COUNT * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
 
@@ -44,7 +44,7 @@ void DeviceProfiler::readRiscProfilerResults(
     if (std::find(ethCores.begin(), ethCores.end(), worker_core) == ethCores.end())
     {
         control_buffer = tt::llrt::read_hex_vec_from_core(
-            device_id,
+            umd::chip_id{device_id},
             worker_core,
             PROFILER_L1_BUFFER_CONTROL,
             PROFILER_L1_CONTROL_BUFFER_SIZE);
@@ -58,7 +58,7 @@ void DeviceProfiler::readRiscProfilerResults(
     else
     {
         control_buffer = tt::llrt::read_hex_vec_from_core(
-            device_id,
+            umd::chip_id{device_id},
             worker_core,
             eth_l1_mem::address_map::PROFILER_L1_BUFFER_CONTROL,
             PROFILER_L1_CONTROL_BUFFER_SIZE);
@@ -190,7 +190,7 @@ void DeviceProfiler::readRiscProfilerResults(
     control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS] = output_dram_buffer->address();
 
     tt::llrt::write_hex_vec_to_core(
-            device_id,
+            umd::chip_id{device_id},
             worker_core,
             control_buffer_reset,
             PROFILER_L1_BUFFER_CONTROL);

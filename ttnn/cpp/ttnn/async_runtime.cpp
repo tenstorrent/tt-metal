@@ -74,7 +74,7 @@ void write_buffer(
     const std::optional<std::size_t> transfer_size) {
     uint32_t dst_ref_count = dst.tensor_attributes->record_main_thread_ref_count();
     for (const auto worker : dst.get_workers()) {
-        auto src_for_device = (src.size() == 1) ? src.at(0) : src.at(worker->id());
+        auto src_for_device = (src.size() == 1) ? src.at(0) : src.at(static_cast<int>(worker->id()));
         worker->push_work([worker, src_for_device, dst, cq_id, transfer_size]() {
             auto shard = tt::tt_metal::get_shard_for_device(dst, worker);
             tt::tt_metal::memcpy(worker->command_queue(cq_id), shard, src_for_device.get(), transfer_size);
@@ -93,7 +93,7 @@ void read_buffer(
     TT_ASSERT(src_offset == 0, "src_offset is not supported");
     uint32_t src_ref_count = src.tensor_attributes->record_main_thread_ref_count();
     for (const auto worker : src.get_workers()) {
-        auto dst_for_device = (dst.size() == 1) ? dst.at(0) : dst.at(worker->id());
+        auto dst_for_device = (dst.size() == 1) ? dst.at(0) : dst.at(static_cast<int>(worker->id()));
         worker->push_work([worker, dst_for_device, src, cq_id, transfer_size, src_offset, blocking]() {
             const auto& shard = tt::tt_metal::get_shard_for_device(src, worker);
             tt::tt_metal::memcpy(worker->command_queue(cq_id), dst_for_device.get(), shard, transfer_size, blocking);

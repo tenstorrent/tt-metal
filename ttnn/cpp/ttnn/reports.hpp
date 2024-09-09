@@ -56,7 +56,7 @@ DeviceInfo get_device_info(const Device &device) {
 }
 
 struct BufferInfo {
-    uint32_t device_id;
+    tt::umd::chip_id device_id;
     uint32_t address;
     uint32_t max_size_per_bank;
     BufferType buffer_type;
@@ -112,7 +112,7 @@ std::vector<BufferInfo> get_buffers() {
 }
 
 struct BufferPageInfo {
-    uint32_t device_id;
+    tt::umd::chip_id device_id;
     uint32_t address;
     uint32_t core_y;
     uint32_t core_x;

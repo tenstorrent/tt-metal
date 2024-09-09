@@ -159,7 +159,7 @@ struct Tensor {
                     workers.cend(),
                     std::back_inserter(
                         std::get<MultiDeviceStorage>(this->tensor_attributes->storage).ordered_device_ids),
-                    [](const Device *worker) { return worker->id(); });
+                    [](const Device *worker) { return static_cast<int>(worker->id()); });
             }
             this->tensor_attributes->num_shards_to_be_populated = workers.size();
         } else if (num_buffers) {

@@ -101,7 +101,7 @@ CoreCoord metal_SocDescriptor::get_physical_ethernet_core_from_logical(const Cor
         (eth_chan_map.find(logical_coord) != eth_chan_map.end()),
         "Bounds-Error -- Logical_core={} is outside of ethernet logical grid",
         logical_coord.str());
-    return this->physical_ethernet_cores.at(eth_chan_map.at(logical_coord));
+    return this->physical_ethernet_cores.at(static_cast<int>(eth_chan_map.at(logical_coord)));
 }
 
 CoreCoord metal_SocDescriptor::get_logical_ethernet_core_from_physical(const CoreCoord &physical_coord) const {
@@ -113,7 +113,7 @@ CoreCoord metal_SocDescriptor::get_logical_ethernet_core_from_physical(const Cor
         "Bounds-Error -- Physical_core={} is outside of ethernet physical grid",
         physical_coord.str());
 
-    int chan = it - phys_eth_map.begin();
+    auto chan = tt::umd::ethernet_channel{it - phys_eth_map.begin()};
     return this->chan_to_logical_eth_core_map.at(chan);
 }
 
@@ -327,8 +327,8 @@ void metal_SocDescriptor::generate_logical_eth_coords_mapping() {
     this->physical_ethernet_cores = this->ethernet_cores;
     for (int i = 0; i < this->physical_ethernet_cores.size(); i++) {
         CoreCoord core = {0, static_cast<size_t>(i)};
-        this->logical_eth_core_to_chan_map.insert({core, i});
-        this->chan_to_logical_eth_core_map.insert({i, core});
+        this->logical_eth_core_to_chan_map.insert({core, tt::umd::ethernet_channel{i}});
+        this->chan_to_logical_eth_core_map.insert({tt::umd::ethernet_channel{i}, core});
         this->logical_ethernet_cores.emplace_back(core);
     }
 }

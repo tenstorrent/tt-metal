@@ -609,7 +609,7 @@ std::string to_string(const Tensor& tensor, std::optional<DataType> original_dty
                 auto device_index = 0;
                 std::stringstream ss;
                 apply(host_tensor, [&](const Tensor& device_tensor) {
-                    ss << "device_id:" << devices.at(device_index++)->id() << std::endl;
+                    ss << "device_id:" << static_cast<int>(devices.at(device_index++)->id()) << std::endl;
                     ss << to_string<T>(device_tensor) << std::endl;
                 });
                 return ss.str();

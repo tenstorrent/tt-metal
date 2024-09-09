@@ -17,6 +17,7 @@
 #include "lock_free_queue.hpp"
 #include "tt_metal/third_party/tracy/public/common/TracySystem.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tt_metal/third_party/umd/device/tt_cluster_descriptor_types.h"
 
 #if defined(TRACY_ENABLE)
 #define TracyTTThreadName(name, id)                     \
@@ -79,11 +80,11 @@ class WorkExecutor {
    public:
     LockFreeQueue<std::function<void()>> worker_queue;
 
-    WorkExecutor(int cpu_core, int device_id) : cpu_core_for_worker(cpu_core), managed_device_id(device_id) {}
+    WorkExecutor(int cpu_core, umd::chip_id device_id) : cpu_core_for_worker(cpu_core), managed_device_id(device_id) {}
 
     WorkExecutor(WorkExecutor&& other) {
         worker_state = std::move(other.worker_state);
-        cpu_core_for_worker = std::move(other.managed_device_id);
+        cpu_core_for_worker = std::move(other.cpu_core_for_worker);
         managed_device_id = std::move(other.managed_device_id);
     }
 
@@ -230,7 +231,7 @@ class WorkExecutor {
     std::thread worker_thread;
     WorkerState worker_state;
     int cpu_core_for_worker;
-    int managed_device_id;
+    umd::chip_id managed_device_id;
     std::condition_variable cv;
     std::mutex cv_mutex;
 

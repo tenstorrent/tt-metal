@@ -94,8 +94,8 @@ Tensor line_all_gather(
             uint32_t num_devices = devices.size();
 
             uint32_t device_index = 0; // Initialize device index
-            std::optional<uint32_t> receiver_device_id = std::nullopt; // Initialize receiver device ID
-            std::optional<uint32_t> sender_device_id = std::nullopt; // Initialize sender device ID
+            std::optional<tt::umd::chip_id> receiver_device_id = std::nullopt; // Initialize receiver device ID
+            std::optional<tt::umd::chip_id> sender_device_id = std::nullopt; // Initialize sender device ID
 
             for (uint32_t i = 0; i < num_devices; ++i) {
                 if (devices[i] == input_tensor.device()) {

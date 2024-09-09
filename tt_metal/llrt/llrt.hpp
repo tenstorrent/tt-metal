@@ -76,7 +76,7 @@ void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg,
 
 void launch_erisc_app_fw_on_core(chip_id_t chip, CoreCoord core);
 
-void print_worker_cores(chip_id_t chip_id = 0);
+void print_worker_cores(chip_id_t chip_id = {});
 
 inline bool is_worker_core(const CoreCoord &core, chip_id_t chip_id) {
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
@@ -98,7 +98,7 @@ bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, co
 bool test_load_write_read_trisc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int triscv_id);
 
 // subchannel hard-coded to 0 for now
-CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id = 0);
+CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id = {});
 
 namespace internal_ {
 

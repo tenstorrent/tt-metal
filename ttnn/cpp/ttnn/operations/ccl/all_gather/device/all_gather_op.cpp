@@ -23,8 +23,8 @@ AllGather create_all_gather_struct(
     uint32_t num_devices = devices.size();
 
     uint32_t device_index = 0; // Initialize device index
-    uint32_t receiver_device_id = 0; // Initialize receiver device ID
-    uint32_t sender_device_id = 0; // Initialize sender device ID
+    tt::umd::chip_id receiver_device_id{}; // Initialize receiver device ID
+    tt::umd::chip_id sender_device_id{}; // Initialize sender device ID
 
     for (uint32_t i = 0; i < num_devices; ++i) {
         if (devices[i] == input_tensor.device()) {

@@ -103,7 +103,7 @@ class dispatch_core_manager {
         if (_inst == nullptr) {
             static dispatch_core_manager dispatch_core_manager(internal_core_type);
             _inst = &dispatch_core_manager;
-        } else if (_inst->dispatch_core_type_by_device[0] != internal_core_type) {
+        } else if (_inst->dispatch_core_type_by_device[{}] != internal_core_type) {
             _inst->reset_dispatch_core_manager(internal_core_type);
         }
     }
@@ -279,7 +279,7 @@ class dispatch_core_manager {
             return assignment.tunneler_d.value();
         }
         TT_ASSERT(false, "Device {} has no allocation for Local Upstream Tunneler Core.", device_id);
-        assignment.tunneler_d = tt_cxy_pair(0, 0, 0);
+        assignment.tunneler_d = tt_cxy_pair{};
         return assignment.tunneler_d.value();
     }
 
@@ -386,7 +386,8 @@ class dispatch_core_manager {
         this->dispatch_core_assignments.clear();
         this->available_dispatch_cores_by_device.clear();
         this->dispatch_core_type_by_device.clear();
-        for (chip_id_t device_id = 0; device_id < tt::Cluster::instance().number_of_devices(); device_id++) {
+        for (std::size_t device_index = 0; device_index < tt::Cluster::instance().number_of_devices(); device_index++) {
+            const umd::chip_id device_id{device_index};
             std::list<CoreCoord> &logical_dispatch_cores = this->available_dispatch_cores_by_device[device_id];
             for (const CoreCoord &logical_dispatch_core :
                  tt::get_logical_dispatch_cores(device_id, MAX_NUM_HW_CQS, dispatch_core_type)) {

@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "tt_metal/impl/device/mesh_device.hpp"
+#include "device/tt_cluster_descriptor_types.h"
 #include "tt_metal/impl/device/mesh_device_view.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -25,14 +26,14 @@ MeshDevice::MeshDevice(const MeshShape& mesh_shape, const DeviceIds &device_ids,
     if (this->is_galaxy_) {
         // Temp solution until we add algorithmic way to determine chip connectivity
         // Map col to tunnel depth and row to tunnel count
-        int cluster_tunnel_depth = tt::Cluster::instance().get_mmio_device_max_tunnel_depth(0);
-        int cluster_tunnel_count = tt::Cluster::instance().get_mmio_device_tunnel_count(0);
+        int cluster_tunnel_depth = tt::Cluster::instance().get_mmio_device_max_tunnel_depth({});
+        int cluster_tunnel_count = tt::Cluster::instance().get_mmio_device_tunnel_count({});
         int num_mmio_devices = tt::Cluster::instance().number_of_pci_devices();
         TT_FATAL(num_cols <= cluster_tunnel_depth and num_rows <= cluster_tunnel_count * num_mmio_devices, "Unsupported Galaxy mesh shape");
 
         DeviceIds galaxy_device_ids;
         for (int mmio_device_id = 0; mmio_device_id < num_mmio_devices; mmio_device_id++) {
-            auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id);
+            auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(umd::chip_id{mmio_device_id});
             for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
                 if (galaxy_device_ids.size() == num_requested_devices) {
                     break;
@@ -71,7 +72,7 @@ MeshDevice::~MeshDevice() {
     }
 }
 
-Device* MeshDevice::get_device(int logical_device_id) const {
+Device* MeshDevice::get_device(umd::chip_id logical_device_id) const {
     for (const auto& [device_id, device] : mesh_devices) {
         if (device_id == logical_device_id) {
             return device;

@@ -14,7 +14,7 @@
 
 namespace tt::tt_metal {
 
-using DeviceIds = std::vector<int>;
+using DeviceIds = std::vector<umd::chip_id>;
 class MeshDeviceView;
 
 class MeshDevice
@@ -22,7 +22,7 @@ class MeshDevice
 public:
     MeshShape mesh_shape;
     std::map<chip_id_t, Device *> managed_devices;
-    std::vector<std::pair<int, Device *>> mesh_devices;
+    std::vector<std::pair<umd::chip_id, Device *>> mesh_devices;
     std::shared_ptr<MeshDeviceView> view;
 
     MeshDevice(const MeshShape &mesh_shape, const DeviceIds &device_ids, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues, DispatchCoreType dispatch_core_type);
@@ -35,7 +35,7 @@ public:
     MeshDevice &operator=(MeshDevice &&) = delete;
 
     std::vector<Device*> get_devices() const;
-    Device *get_device(int logical_device_id) const;
+    Device *get_device(umd::chip_id logical_device_id) const;
     Device *get_device(int row_idx, int col_idx) const;
     std::vector<Device *> get_devices_on_row(int row_idx) const;
     std::vector<Device *> get_devices_on_column(int col_idx) const;

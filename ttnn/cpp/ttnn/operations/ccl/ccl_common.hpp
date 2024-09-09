@@ -22,8 +22,8 @@ struct RingTopology {
     RingTopology(
         Device const* device,
         Topology topology,
-        std::optional<uint32_t> sender_device_id,
-        std::optional<uint32_t> receiver_device_id,
+        std::optional<tt::umd::chip_id> sender_device_id,
+        std::optional<tt::umd::chip_id> receiver_device_id,
         uint32_t num_links,
         uint32_t ring_size,
         uint32_t ring_index);
@@ -449,8 +449,8 @@ void generate_edm_kernels_for_ring_or_linear_topology(
     RingTopology const& topology_config,
     std::vector<ccl::EriscDatamoverBuilder> const& clockwise_edm_builders,
     std::vector<ccl::EriscDatamoverBuilder> const& counter_clockwise_edm_builders,
-    std::optional<uint32_t> receiver_device_id,
-    std::optional<uint32_t> sender_device_id);
+    std::optional<tt::umd::chip_id> receiver_device_id,
+    std::optional<tt::umd::chip_id> sender_device_id);
 
 ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
     std::size_t num_channels,

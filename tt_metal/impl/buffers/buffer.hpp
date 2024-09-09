@@ -289,7 +289,7 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer);
 
 namespace detail {
 using PageAddress = uint32_t;
-using Deviceid = uint32_t;
+using Deviceid = umd::chip_id;
 
 class buffer_map_t {
    public:

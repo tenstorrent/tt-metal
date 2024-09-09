@@ -132,13 +132,14 @@ uint8_t ComputeKernel::expected_num_binaries() const {
 
 std::vector<ll_api::memory> const &Kernel::binaries(uint32_t build_key) const {
     int expected_num_binaries = this->expected_num_binaries();
-    if (this->binaries_.find(build_key) != this->binaries_.end() and
-        this->binaries_.at(build_key).size() != expected_num_binaries) {
+    const umd::chip_id device_id{build_key};
+    if (this->binaries_.find(device_id) != this->binaries_.end() and
+        this->binaries_.at(device_id).size() != expected_num_binaries) {
         TT_THROW(
             "Expected " + std::to_string(expected_num_binaries) + " binaries but have " +
-            std::to_string(this->binaries_.at(build_key).size()) + " for kernel " + this->name());
+            std::to_string(this->binaries_.at(device_id).size()) + " for kernel " + this->name());
     }
-    return this->binaries_.at(build_key);
+    return this->binaries_.at(device_id);
 }
 
 std::string DataMovementKernel::config_hash() const {
@@ -335,10 +336,11 @@ void ComputeKernel::generate_binaries(Device *device, JitBuildOptions &build_opt
 }
 
 void Kernel::set_binaries(uint32_t build_key, std::vector<ll_api::memory> &&binaries) {
-    if (this->binaries_.find(build_key) != this->binaries_.end()) {
-        TT_ASSERT(this->binaries_.at(build_key) == binaries);
+    const umd::chip_id device_id{build_key};
+    if (this->binaries_.find(device_id) != this->binaries_.end()) {
+        TT_ASSERT(this->binaries_.at(device_id) == binaries);
     } else {
-        this->binaries_[build_key] = std::move(binaries);
+        this->binaries_[device_id] = std::move(binaries);
     }
 }
 
