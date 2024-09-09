@@ -34,6 +34,8 @@ run_common_perf_tests(){
 
   # Mamba
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py --timeout 420; fail+=$?
+
+  return $fail
 }
 
 run_n150_tests(){
