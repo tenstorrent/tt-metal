@@ -26,7 +26,6 @@ enum class UnaryBackwardOpType {
     GT_BW,
     LT_BW,
     LGAMMA_BW,
-    FILL_BW,
     HARDSIGMOID_BW,
     COS_BW,
     ACOSH_BW,
@@ -549,13 +548,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::LGAMMA_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
         return _lgamma_bw(grad, input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::FILL_BW> {
-    static std::vector<std::optional<Tensor>> handle(uint8_t queue_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
-        return _fill_bw(queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
     }
 };
 

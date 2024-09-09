@@ -46,19 +46,16 @@ def test_bw_fill(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("are_required_outputs", [[True]])
-def test_bw_fill_opt_tensor(input_shapes, are_required_outputs, device):
+def test_bw_fill_opt_tensor(input_shapes, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)
 
-    input_grad = None
-    if are_required_outputs[0]:
-        _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
-
+    _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
+    input_grad = ttnn.to_memory_config(input_grad, ttnn.L1_MEMORY_CONFIG)
     cq_id = 0
-    ttnn.fill_bw(
-        grad_tensor, input_tensor, are_required_outputs=are_required_outputs, input_grad=input_grad, queue_id=cq_id
-    )
+    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    ttnn.fill_bw(grad_tensor, input_tensor, input_grad=input_grad, queue_id=cq_id)
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
 
     golden_function = ttnn.get_golden_function(ttnn.fill_bw)
     golden_tensor = golden_function(grad_data, in_data)
