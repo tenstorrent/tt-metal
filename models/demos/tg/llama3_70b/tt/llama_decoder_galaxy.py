@@ -243,6 +243,53 @@ class TtLlamaDecoder_galaxy:
 
         return tt_out
 
+    def tt_sharded_distributed_rmsnorm(self, inp, epsilon, gamma):
+        core_grid = (4, 8)
+        num_cores = core_grid[0] * core_grid[1]
+        input_sharded_memory_config = ttnn.create_sharded_memory_config(
+            shape=(1, 1, 32, 2048),
+            core_grid=ttnn.CoreGrid(y=core_grid[0], x=core_grid[1]),
+            strategy=ttnn.ShardStrategy.WIDTH,
+        )
+
+        sharded_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
+            subblock_w=(2048 // num_cores) // 32,
+            block_h=1,
+            block_w=(2048 // num_cores) // 32,
+            inplace=False,
+        )
+        gathered_stats_sharded_memory_config = ttnn.create_sharded_memory_config(
+            shape=[1, 1, 32, 32 * 4],
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+            strategy=ttnn.ShardStrategy.WIDTH,
+        )
+        inp = ttnn.experimental.tensor.interleaved_to_sharded(inp, sharded_mem_config=input_sharded_memory_config)
+
+        tt_stats = ttnn.rmsnorm_pre_all_gather(inp, program_config=sharded_program_config)
+
+        tt_stats = ttnn.line_all_gather(
+            tt_stats,
+            3,
+            num_links=1,
+            cluster_axis=1,
+            device_mesh=self.device_mesh,
+            memory_config=gathered_stats_sharded_memory_config,
+        )
+
+        tt_out = ttnn.rmsnorm_post_all_gather(
+            inp,
+            epsilon=epsilon,
+            weight=gamma,
+            program_config=sharded_program_config,
+            memory_config=input_sharded_memory_config,
+            stats=tt_stats,
+        )
+
+        tt_stats.deallocate(True)
+
+        return tt_out
+
     def decode_forward(
         self,
         xs: List[ttnn.Tensor],
@@ -252,7 +299,7 @@ class TtLlamaDecoder_galaxy:
     ) -> List[ttnn.Tensor]:
         xs_interleaved = ttnn.to_memory_config(xs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        attn_norm_out = self.tt_distributed_rmsnorm(
+        attn_norm_out = self.tt_sharded_distributed_rmsnorm(
             xs_interleaved,
             epsilon=self.norm_eps,
             gamma=self.attn_norm_sharded,
@@ -271,7 +318,7 @@ class TtLlamaDecoder_galaxy:
         attn_outs.deallocate(True)
 
         output_interleaved = ttnn.to_memory_config(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ffn_norm_out = self.tt_distributed_rmsnorm(
+        ffn_norm_out = self.tt_sharded_distributed_rmsnorm(
             output_interleaved,
             epsilon=self.norm_eps,
             gamma=self.ffn_norm_sharded,
