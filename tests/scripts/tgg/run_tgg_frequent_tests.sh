@@ -4,7 +4,8 @@ set -eo pipefail
 
 run_tgg_tests() {
   # Add tests here
-  echo "Fill me!"
+  echo "LOG_METAL: running run_tgg_frequent_tests"
+  pytest -n auto tests/ttnn/unit_tests/test_multi_device_trace_tgg.py --timeout=1500 ; fail+=$?
 }
 
 main() {
