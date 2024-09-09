@@ -23,7 +23,7 @@ struct AllGatherFusedOpSignaler {
     uint32_t num_fused_op_cores_to_signal;
     std::vector<CoreCoord> fused_op_receiver_cores_noc;
     std::vector<uint32_t> fused_op_receiver_signal_semaphores;
-    bool mcast_fused_op_cores;
+    bool mcast_fused_op_cores = true;
 
     /* All Gather specific */
     std::vector<CoreCoord> all_gather_worker_cores_noc;
@@ -37,7 +37,7 @@ struct AllGatherFusedOpSignaler {
     void init_fused_op(
         const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
         const std::vector<uint32_t>& fused_op_receiver_signal_semaphores,
-        bool mcast_fused_op_cores = true
+        const bool mcast_fused_op_cores = true
     );
 
     void init_all_gather(
@@ -63,7 +63,7 @@ struct MatmulFusedOpSignaler {
     uint32_t num_fused_op_cores_to_signal;
     std::vector<CoreCoord> fused_op_receiver_cores_noc;
     std::vector<uint32_t> fused_op_receiver_signal_semaphores; // [dir0, dir1]
-    bool mcast_fused_op_cores;
+    bool mcast_fused_op_cores = true;
 
     /* All Gather specs */
     uint32_t num_transfers;
