@@ -189,8 +189,56 @@ template<typename operation_t>
 concept CompositeOperationConcept = !PrimitiveOperationConcept<operation_t>;
 
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t, bool auto_launch_op>
-struct registered_operation_t {
-    static constexpr auto is_primitive = PrimitiveOperationConcept<operation_t>;
+struct registered_operation_t;
+
+template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t, bool auto_launch_op>
+requires PrimitiveOperationConcept<operation_t>
+struct registered_operation_t<cpp_fully_qualified_name, operation_t, auto_launch_op> {
+    static constexpr auto is_primitive = true;
+
+    using tensor_args_t = operation_t::tensor_args_t;
+    using operation_attributes_t = operation_t::operation_attributes_t;
+
+    // Get "add" from "ttnn::add"
+    const std::string base_name() const { return detail::base_name(std::string{cpp_fully_qualified_name}); }
+
+    // Convert "ttnn::add" to "add_t"
+    const std::string class_name() const { return detail::class_name(std::string{cpp_fully_qualified_name}); }
+
+    // Convert "ttnn::add" to "ttnn.add"
+    const std::string python_fully_qualified_name() const {
+        return detail::python_fully_qualified_name(std::string{cpp_fully_qualified_name});
+    }
+
+    auto operator()(uint8_t queue_id, const tensor_args_t& tensor_args, const operation_attributes_t& operation_attributes = {}) const {
+        ZoneScopedN("Run primitive ttnn operation");
+        ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
+
+        tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
+        GraphTracker::instance().track_function_start(cpp_fully_qualified_name, tensor_args, operation_attributes);
+
+        auto output = ttnn::device_operation::detail::invoke<operation_t>(queue_id, operation_attributes, tensor_args);
+        // Should every output tensor be tracked?
+        /*
+        if (GraphTracker::instance().is_enabled()) {
+            output = tt::stl::reflection::transform_object_of_type<Tensor>(tt::tt_metal::set_tensor_id, output);
+        }
+        */
+
+        GraphTracker::instance().track_function_end(output);
+        tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
+        return output;
+    }
+
+    auto operator()(const tensor_args_t& tensor_args, const operation_attributes_t& operation_attributes = {}) const {
+        return this->operator()(DefaultQueueId, tensor_args, operation_attributes);
+    }
+};
+
+template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t, bool auto_launch_op>
+requires CompositeOperationConcept<operation_t>
+struct registered_operation_t<cpp_fully_qualified_name, operation_t, auto_launch_op> {
+    static constexpr auto is_primitive = false;
 
     // Get "add" from "ttnn::add"
     const std::string base_name() const { return detail::base_name(std::string{cpp_fully_qualified_name}); }
@@ -204,26 +252,8 @@ struct registered_operation_t {
     }
 
     template <typename... args_t>
-    requires PrimitiveOperationConcept<operation_t>
-    auto invoke(uint8_t queue_id, args_t&&... args) const {
-        static_assert(requires { operation_t::invoke(std::forward<decltype(args)>(args)...); },
-                      "Primitive Operation must implement operator() method to be invoked.");
-        ZoneScopedN("Run primitive ttnn operation");
-        ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
-        auto [operation_attributes, tensors_args] = operation_t::invoke(std::forward<decltype(args)>(args)...);
-        return ttnn::device_operation::detail::invoke<operation_t>(queue_id, operation_attributes, tensors_args);
-    }
-
-    template <typename... args_t>
-    requires(PrimitiveOperationConcept<operation_t>)
-    auto invoke(args_t&&... args) const {
-        return invoke(DefaultQueueId, std::forward<args_t>(args)...);
-    }
-
-
-    template <typename... args_t>
         requires(not auto_launch_op)
-    auto invoke_composite(args_t&&... args) const {
+    auto invoke(args_t&&... args) const {
         ZoneScopedN("Run composite ttnn operation ");
         ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
         return operation_t::invoke(std::forward<decltype(args)>(args)...);
@@ -231,23 +261,21 @@ struct registered_operation_t {
 
     template <typename... args_t>
         requires(auto_launch_op)
-    auto invoke_composite(args_t&&... args) const {
+    auto invoke(args_t&&... args) const {
         ZoneScopedN("Run composite ttnn operation (using auto async)");
         ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
 
         // #8479: Fix and re-enable logging in cpp operation decorator
         // detail::log("Arguments: ", std::forward<args_t>(args)...);
 
-        using execute_on_worker_thread_return_t =
-            decltype(operation_t::invoke(std::forward<decltype(args)>(args)...));
+        using execute_on_worker_thread_return_t = decltype(operation_t::invoke(std::forward<decltype(args)>(args)...));
 
         const Tensors input_tensors = detail::extract_args_to_vector<ttnn::Tensor>(std::forward<args_t>(args)...);
         const OptionalConstTensors optional_input_tensors =
             detail::extract_args_to_vector<std::optional<const ttnn::Tensor>>(std::forward<args_t>(args)...);
 
-        auto output_tensors =
-            detail::create_async_output_tensors<operation_t, execute_on_worker_thread_return_t>(
-                input_tensors, optional_input_tensors);
+        auto output_tensors = detail::create_async_output_tensors<operation_t, execute_on_worker_thread_return_t>(
+            input_tensors, optional_input_tensors);
 
         const OptionalTensors optional_output_tensors =
             detail::extract_args_to_vector<std::optional<ttnn::Tensor>>(std::forward<args_t>(args)...);
@@ -273,7 +301,6 @@ struct registered_operation_t {
             optional_output_tensors,
             enable_autoformat);
 
-
         if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, Tensor>) {
             return output_tensors.at(0);
         } else if constexpr (std::is_same_v<execute_on_worker_thread_return_t, Tensors>) {
@@ -287,12 +314,6 @@ struct registered_operation_t {
                 "vector of "
                 "Tensor(s).");
         }
-    }
-
-    template <typename... args_t>
-    requires(CompositeOperationConcept<operation_t>)
-    auto invoke(args_t&&... args) const {
-        return invoke_composite(std::forward<args_t>(args)...);
     }
 
     template <typename... args_t>
@@ -359,6 +380,9 @@ template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t, 
 constexpr auto register_operation_impl() {
     assert_operation_in_correct_namespace<cpp_fully_qualified_name, operation_t>();
     constexpr auto operation = registered_operation_t<cpp_fully_qualified_name, operation_t, auto_launch_op>{};
+    if constexpr(PrimitiveOperationConcept<operation_t>) {
+        static_assert(not auto_launch_op, "Primitive operations cannot be auto launched.");
+    }
     static_assert(not requires(operation_name_key_t<cpp_fully_qualified_name> key) { get(key); }, "Operation with this `cpp_fully_qualified_name` was already registered. Please use a different name.");
     static_assert(not requires(operation_key_t<operation_t> key) { get(key); }, "Operation with this `operation_t` was already registered. Please use a different type.");
     static_assert(set_operation_t<cpp_fully_qualified_name, operation_t, operation>::value);

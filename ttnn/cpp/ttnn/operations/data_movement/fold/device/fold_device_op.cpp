@@ -77,19 +77,5 @@ Fold::tensor_return_value_t Fold::create_output_tensors(const operation_attribut
     }
 }
 
-std::tuple<Fold::operation_attributes_t, Fold::tensor_args_t>
- Fold::invoke(
-            const ttnn::Tensor &input_tensor,
-            uint32_t stride_h,
-            uint32_t stride_w,
-            const std::optional<const tt::tt_metal::Shape> &output_shape,
-            uint32_t pad_c,
-            uint32_t pad_h,
-            uint32_t pad_w) {
-    bool is_sharded = input_tensor.is_sharded();
-    Fold::operation_attributes_t op_attr = {.stride_h = stride_h, .stride_w = stride_w, .is_sharded = is_sharded};
-    return {op_attr, Fold::tensor_args_t{.input_tensor = input_tensor}};
-}
-
 
 } // namespace ttnn::operations::data_movement

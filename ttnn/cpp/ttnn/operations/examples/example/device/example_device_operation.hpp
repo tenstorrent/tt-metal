@@ -27,12 +27,12 @@ struct ExampleDeviceOperation {
     // tensors, etc.
     struct tensor_args_t {
         // This example will use a tensor that can only be used as an input
-        const Tensor& input_tensor;
+        const Tensor input_tensor{};
 
         // However, the following examples show what else can be done with tensor_args_t
 
         // An example of the tensor that can be used for input/output or just for pre-allocated output
-        // Tensor& io_tensor;
+        // Tensor io_tensor;
 
         // An example of an optional tensor
         // std::optional<Tensor> optional_output_tensor;
@@ -123,13 +123,6 @@ struct ExampleDeviceOperation {
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    // API call to map user arguments to operation attributes and tensor args.
-    // This is the only method that is called by the user
-    // The user will be able to call the operation using `tensor_return_value_t output = ttnn::prim::example(input_tensor)` after the op is registered
-    // Keep in mind that the the overload with `queue_id` argument will be added automatically for primitive operations
-    // So, the user can also call this operation using `tensor_return_value_t output = ttnn::prim::example(queue_id, input_tensor)`
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(const Tensor& input_tensor);
-
     // Optional methods
 
     // In case the operation need a custom hash function, the following method can be implemented
@@ -149,6 +142,9 @@ struct ExampleDeviceOperation {
 }  // namespace ttnn::operations::examples
 
 // Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
+// The user will be able to call the operation using `tensor_return_value_t output = ttnn::prim::example({.input_tensor=input_tensor}, {.attribute=true, .some_other_attribute=42})` after the op is registered
+// Keep in mind that the the overload with `queue_id` argument will be added automatically for primitive operations
+// So, the user can also call this operation using `tensor_return_value_t output = ttnn::prim::example(queue_id, {.input_tensor=input_tensor}, {.attribute=true, .some_other_attribute=42})`
 namespace ttnn::prim {
 constexpr auto example = ttnn::register_operation<
     "ttnn::prim::example",
