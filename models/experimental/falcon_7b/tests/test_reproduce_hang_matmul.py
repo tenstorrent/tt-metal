@@ -259,14 +259,15 @@ def test_reproduce_matmul_2d_hang(
         "logical_chip7",
     ],
 )
-def test_specific_chip_reproduce_matmul_2d_hang_t3000(all_devices, logical_chip_index, use_program_cache):
+def test_specific_chip_reproduce_matmul_2d_hang(all_devices, logical_chip_index, use_program_cache):
     num_devices_t3000 = 8
-    if len(all_devices) != num_devices_t3000:
-        pytest.skip("Test is only valid for t3000 machines")
 
-    logger.info(
-        f"Selecting device id: {logical_chip_index} coordinates: {CHIP_ID_TO_COORDINATES_T3K[logical_chip_index]}"
-    )
+    if len(all_devices) == num_devices_t3000:
+        logger.info(
+            f"Selecting device id: {logical_chip_index} coordinates: {CHIP_ID_TO_COORDINATES_T3K[logical_chip_index]}"
+        )
+    else:
+        logger.info(f"Selecting device id: {logical_chip_index}")
     target_device = all_devices[logical_chip_index]
     devices = [target_device]
 
@@ -351,12 +352,13 @@ def test_determinism_specific_chip(
     determinism_check_iterations,
 ):
     num_devices_t3000 = 8
-    if len(all_devices) != num_devices_t3000:
-        pytest.skip("Test is only valid for t3000 machines")
 
-    logger.info(
-        f"Selecting device id: {logical_chip_index} coordinates: {CHIP_ID_TO_COORDINATES_T3K[logical_chip_index]}"
-    )
+    if len(all_devices) == num_devices_t3000:
+        logger.info(
+            f"Selecting device id: {logical_chip_index} coordinates: {CHIP_ID_TO_COORDINATES_T3K[logical_chip_index]}"
+        )
+    else:
+        logger.info(f"Selecting device id: {logical_chip_index}")
     target_device = all_devices[logical_chip_index]
     devices = [target_device]
 

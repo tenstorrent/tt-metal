@@ -209,14 +209,15 @@ def test_reproduce_lm_head_nd_32(
         "logical_chip7",
     ],
 )
-def test_specific_chip_lm_head_nd_32_t3000(all_devices, logical_chip_index, use_program_cache):
+def test_specific_chip_lm_head_nd_32(all_devices, logical_chip_index, use_program_cache):
     num_devices_t3000 = 8
-    if len(all_devices) != num_devices_t3000:
-        pytest.skip("Test is only valid for t3000 machines")
+    if len(all_devices) == num_devices_t3000:
+        logger.info(
+            f"Selecting device id: {logical_chip_index} eth coordinates: {CHIP_ID_TO_COORDINATES_T3K[logical_chip_index]}"
+        )
+    else:
+        logger.info(f"Selecting device id: {logical_chip_index}")
 
-    logger.info(
-        f"Selecting device id: {logical_chip_index} eth coordinates: {CHIP_ID_TO_COORDINATES_T3K[logical_chip_index]}"
-    )
     target_device = all_devices[logical_chip_index]
     devices = [target_device]
     test_reproduce_lm_head_nd_32(devices, 1, use_program_cache)
@@ -249,12 +250,13 @@ def test_determinism(all_devices, num_devices, use_program_cache, determinism_ch
 )
 def test_determinism_specific_chip(all_devices, logical_chip_index, use_program_cache, determinism_check_iterations):
     num_devices_t3000 = 8
-    if len(all_devices) != num_devices_t3000:
-        pytest.skip("Test is only valid for t3000 machines")
+    if len(all_devices) == num_devices_t3000:
+        logger.info(
+            f"Selecting device id: {logical_chip_index} eth coordinates: {CHIP_ID_TO_COORDINATES_T3K[logical_chip_index]}"
+        )
+    else:
+        logger.info(f"Selecting device id: {logical_chip_index}")
 
-    logger.info(
-        f"Selecting device id: {logical_chip_index} eth coordinates: {CHIP_ID_TO_COORDINATES_T3K[logical_chip_index]}"
-    )
     target_device = all_devices[logical_chip_index]
     devices = [target_device]
 
