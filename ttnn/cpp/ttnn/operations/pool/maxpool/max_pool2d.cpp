@@ -96,7 +96,7 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id, const Tensor& input_tensor, uint32_
         input_tensor_sharded.memory_config(),
         is_out_tiled);
 
-    return ttnn::prim::max_pool_new(
+    return ttnn::prim::max_pool2d(
         queue_id,
         haloed_tensor,
         sliding_window_config,
