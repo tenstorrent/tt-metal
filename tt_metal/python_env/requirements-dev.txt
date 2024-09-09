@@ -29,7 +29,7 @@ jsbeautifier==1.14.7
 datasets==2.9.0
 torch==2.3.1+cpu
 networkx==3.1
-torchvision
+torchvision==0.18.1
 torchmetrics
 torch-fidelity
 transformers==4.38.0
