@@ -392,7 +392,7 @@ std::vector<Tensor> _concat_bw(
         input.get_legacy_shape()[2] - 1,
         input.get_legacy_shape()[3] - 1};
 
-    Tensor grad_a = ttnn::slice(0, grad, start_index, end_index, std::nullopt);
+    Tensor grad_a = ttnn::slice(0, grad, start_index, end_index, std::nullopt, std::nullopt);
     grad_tensor.emplace_back(grad_a);
 
     std::vector<uint32_t> start_index_2 = {0, 0, 0, 0};
@@ -411,7 +411,7 @@ std::vector<Tensor> _concat_bw(
         grad.get_legacy_shape()[1] - 1,
         grad.get_legacy_shape()[2] - 1,
         grad.get_legacy_shape()[3] - 1};
-    Tensor grad_b = ttnn::slice(0, grad, start_index_2, end_index_2, std::nullopt);
+    Tensor grad_b = ttnn::slice(0, grad, start_index_2, end_index_2, std::nullopt, std::nullopt);
     grad_tensor.emplace_back(grad_b);
 
     return grad_tensor;

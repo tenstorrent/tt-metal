@@ -31,6 +31,7 @@ void bind_slice(py::module& module) {
                 * :attr:`input_tensor`: Input Tensor.
                 * :attr:`slice_start`: Start indices of input tensor. Values along each dim must be < input_tensor_shape[i].
                 * :attr:`slice_end`: End indices of input tensor. Values along each dim must be < input_tensor_shape[i].
+                * :attr:`step` (Optional[List[int[tensor rank]]): Step size for each dim. Default is None, which works out be 1 for each dimension.
 
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor
@@ -47,13 +48,15 @@ void bind_slice(py::module& module) {
                 const ttnn::Tensor& input_tensor,
                 const tt::tt_metal::Array4D & slice_start,
                 const tt::tt_metal::Array4D & slice_end,
+                const std::optional<tt::tt_metal::Array4D> &step,
                 const std::optional<ttnn::MemoryConfig>& memory_config,
                 uint8_t queue_id) {
-                    return self(queue_id, input_tensor, slice_start, slice_end, memory_config);
+                    return self(queue_id, input_tensor, slice_start, slice_end, step, memory_config);
                 },
                 py::arg("input_tensor"),
                 py::arg("slice_start"),
                 py::arg("slice_end"),
+                py::arg("step") = std::nullopt,
                 py::kw_only(),
                 py::arg("memory_config") = std::nullopt,
                 py::arg("queue_id") = 0,
