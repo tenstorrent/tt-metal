@@ -184,7 +184,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 /*************************************************************************
  * LLK PACK UNTILIZE
  *************************************************************************/
-template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim, bool diagonal = false>
+template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim, bool diagonal = false, bool narrow_row = false /* unused */, std::uint32_t row_num_datums = TILE_C_DIM /* unused */>
 inline void llk_pack_untilize_init(std::uint32_t output, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4) {
     static_assert(diagonal==false && "Diagonal packing is not supported for BH!");
     const std::uint32_t output_id = get_output_id(output);
@@ -213,7 +213,7 @@ inline void llk_pack_untilize_uninit(std::uint32_t output) {
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);
 }
 
-template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim, bool diagonal = false>
+template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim, bool diagonal = false, bool narrow_row = false /* unused */, std::uint32_t row_num_datums = TILE_C_DIM /* unused */>
 inline void llk_pack_untilize(
     std::uint32_t block_rt_dim,
     std::uint32_t output,
