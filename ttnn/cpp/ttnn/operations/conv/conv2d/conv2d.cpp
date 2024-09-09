@@ -9,7 +9,7 @@
 #include "ttnn/operations/pool/downsample/device/downsample_op.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "ttnn/operations/core/to_dtype/to_dtype_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 using namespace tt;
@@ -89,14 +89,14 @@ ParallelConfig determine_parallel_config(
 
     auto calculate_grid = [&](uint32_t num_cores_nhw) {
         if (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-            CoreRangeSet grid = num_cores_to_core_range_set(num_cores_nhw, device_grid_size_coord, true);
+            CoreRangeSet grid = num_cores_to_corerange_set(num_cores_nhw, device_grid_size_coord, true);
             return grid;
 
         } else if(shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             uint32_t num_cores_channels = find_closest_common_largest_divisor(
                 conv_out_2d_matrix_width_ntiles, std::ceil((double)input_channels / (double)tt::constants::TILE_WIDTH), max_num_cores);
              log_debug(LogOp, "Num cores for Width Sharding : {}", num_cores_channels);
-            CoreRangeSet grid = num_cores_to_core_range_set(num_cores_channels, device_grid_size_coord, true);
+            CoreRangeSet grid = num_cores_to_corerange_set(num_cores_channels, device_grid_size_coord, true);
             return grid;
 
         } else if(shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {

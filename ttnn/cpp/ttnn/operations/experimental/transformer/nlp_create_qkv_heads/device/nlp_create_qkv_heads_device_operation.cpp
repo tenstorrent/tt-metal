@@ -4,7 +4,7 @@
 
 #include "nlp_create_qkv_heads_device_operation.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 

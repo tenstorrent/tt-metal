@@ -6,7 +6,7 @@
 #include <algorithm>
 
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -31,7 +31,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_units = 1;  // single-core
     auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_units);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_units);
 
     const auto &input_shape = input.get_legacy_shape();
     const uint32_t B = input_shape[0];

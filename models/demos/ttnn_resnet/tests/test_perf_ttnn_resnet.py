@@ -142,29 +142,40 @@ def run_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, num_meas
 
 def run_trace_model(device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations):
     ops_parallel_config = {}
-    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
-    tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
+    tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
+
     # Compile
     profiler.start("compile")
-    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res)
-    test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
+    test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
+    shape = test_infra.input_tensor.shape
+    dtype = test_infra.input_tensor.dtype
+    layout = test_infra.input_tensor.layout
     _ = ttnn.from_device(test_infra.run(), blocking=True)
     profiler.end("compile")
     ttnn.DumpDeviceProfiler(device)
+    test_infra.output_tensor.deallocate(force=True)
 
     profiler.start("cache")
-    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res)
-    test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
+    test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
     _ = ttnn.from_device(test_infra.run(), blocking=True)
     profiler.end("cache")
     ttnn.DumpDeviceProfiler(device)
 
     # Capture
-    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res)
+    test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
+    test_infra.output_tensor.deallocate(force=True)
+    trace_input_addr = test_infra.input_tensor.buffer_address()
     tid = ttnn.begin_trace_capture(device, cq_id=0)
-    test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
     tt_output_res = test_infra.run()
+    tt_image_res = ttnn.allocate_tensor_on_device(
+        shape,
+        dtype,
+        layout,
+        device,
+        input_mem_config,
+    )
     ttnn.end_trace_capture(device, tid, cq_id=0)
+    assert trace_input_addr == tt_image_res.buffer_address()
     ttnn.DumpDeviceProfiler(device)
 
     for iter in range(0, num_warmup_iterations):
@@ -219,8 +230,10 @@ def run_trace_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, nu
     ttnn.record_event(1, write_event)
     ttnn.wait_for_event(0, write_event)
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    first_out_addr = test_infra.input_tensor.buffer_address()
     ttnn.record_event(0, op_event)
+    # Deallocate the previous output tensor here to make allocation match capture setup
+    # This allows us to allocate the input tensor after at the same address
+    test_infra.output_tensor.deallocate(force=True)
     _ = ttnn.from_device(test_infra.run(), blocking=True)
     profiler.end("cache")
     ttnn.DumpDeviceProfiler(device)
@@ -233,7 +246,8 @@ def run_trace_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, nu
     ttnn.wait_for_event(0, write_event)
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
     ttnn.record_event(0, op_event)
-
+    test_infra.output_tensor.deallocate(force=True)
+    trace_input_addr = test_infra.input_tensor.buffer_address()
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     tt_output_res = test_infra.run()
     reshard_out = ttnn.allocate_tensor_on_device(
@@ -244,7 +258,7 @@ def run_trace_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, nu
         input_mem_config,
     )
     ttnn.end_trace_capture(device, tid, cq_id=0)
-    assert first_out_addr == reshard_out.buffer_address()
+    assert trace_input_addr == reshard_out.buffer_address()
     ttnn.DumpDeviceProfiler(device)
 
     for iter in range(0, num_warmup_iterations):
@@ -323,7 +337,7 @@ def run_perf_resnet(
         model_config["WEIGHTS_DTYPE"],
         model_config["MATH_FIDELITY"],
         dealloc_input=True,
-        final_output_mem_config=ttnn.DRAM_MEMORY_CONFIG if "trace" in model_version else ttnn.L1_MEMORY_CONFIG,
+        final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
         model_location_generator=model_location_generator,
     )
 

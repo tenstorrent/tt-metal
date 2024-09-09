@@ -190,6 +190,7 @@ from ttnn.multi_device import (
     ListMeshToTensor,
     visualize_mesh_device,
     ConcatMesh2dToTensor,
+    distribute,
 )
 
 from ttnn.core import (
@@ -204,6 +205,7 @@ from ttnn.core import (
     dump_memory_config,
     load_memory_config,
     dump_stack_trace_on_segfault,
+    num_cores_to_corerange_set,
 )
 
 import ttnn.reflection

@@ -8,7 +8,7 @@
 #include "impl/buffers/buffer.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -93,7 +93,7 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
         row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
     }
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles, row_major);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles, row_major);
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
 
@@ -308,7 +308,7 @@ void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_a
         row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
     }
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles, row_major);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles, row_major);
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
 

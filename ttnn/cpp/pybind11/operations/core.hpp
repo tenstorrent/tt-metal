@@ -9,6 +9,7 @@
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 namespace py = pybind11;
 
@@ -309,6 +310,11 @@ void py_module(py::module& module) {
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("device") = nullptr});
+
+    module.def(
+        "num_cores_to_corerange_set",
+        py::overload_cast<const uint32_t, const CoreCoord, const bool>(&tt::tt_metal::num_cores_to_corerange_set),
+        R"doc(Create a CoreRangeSet containing the specified number of cores)doc");
 
 }
 
