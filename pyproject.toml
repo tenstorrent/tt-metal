@@ -15,7 +15,7 @@ authors = [
 ]
 dependencies = [
   "pyyaml>=5.4",
-  "numpy>=1.24.4",
+  "numpy>=1.24.4,<2",
   "loguru==0.6.0",
   "toolz==0.12.0",
   "matplotlib==3.7.1",
