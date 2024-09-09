@@ -234,13 +234,20 @@ struct dprint_buf_msg_t {
     uint32_t pad; // to 1024 bytes
 };
 
+
+// NOC aligment max from BH
+static constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
+
 // TODO: when device specific headers specify number of processors
 // (and hal abstracts them on host), get these from there (same as above for dprint)
 #if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
-constexpr static std::uint32_t PROFILER_RISC_COUNT = 1;
+static constexpr uint32_t PROFILER_RISC_COUNT = 1;
 #else
-constexpr static std::uint32_t PROFILER_RISC_COUNT = 5;
+static constexpr uint32_t PROFILER_RISC_COUNT = 5;
 #endif
+
+static constexpr uint32_t LAUNCH_NOC_ALIGMENT_PAD_COUNT = 1;
+static constexpr uint32_t PROFILER_NOC_ALIGMENT_PAD_COUNT = 2;
 
 struct profiler_msg_t {
     uint32_t control_vector[kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE];
@@ -250,12 +257,11 @@ struct profiler_msg_t {
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
     struct slave_sync_msg_t slave_sync;
-    uint32_t pad;
+    uint32_t pads_1[LAUNCH_NOC_ALIGMENT_PAD_COUNT];
     struct launch_msg_t launch;
     struct watcher_msg_t watcher;
     struct dprint_buf_msg_t dprint_buf;
-    uint32_t pad1;
-    uint32_t pad2;
+    uint32_t pads_2[PROFILER_NOC_ALIGMENT_PAD_COUNT];
     struct profiler_msg_t profiler;
 };
 
@@ -265,16 +271,26 @@ static_assert(sizeof(kernel_config_msg_t) % sizeof(uint32_t) == 0);
 
 #ifndef TENSIX_FIRMWARE
 // Validate assumptions on mailbox layout on host compile
-static_assert((MEM_MAILBOX_BASE + offsetof(mailboxes_t, launch)) % 32 == 0);
-static_assert((eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE + offsetof(mailboxes_t, launch)) % 32 == 0);
-static_assert((MEM_MAILBOX_BASE + offsetof(mailboxes_t, profiler)) % L1_ALIGNMENT == 0);
+// Constexpr definitions allow for printing of breaking values at compile time
 #ifdef NCRISC_HAS_IRAM
 // These are only used in ncrisc-halt.S
 static_assert(MEM_MAILBOX_BASE + offsetof(mailboxes_t, slave_sync.ncrisc) == MEM_SLAVE_RUN_MAILBOX_ADDRESS);
 static_assert(
     MEM_MAILBOX_BASE + offsetof(mailboxes_t, ncrisc_halt.stack_save) == MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS);
 #endif
+#if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
+static_assert( eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE + sizeof(mailboxes_t) < eth_l1_mem::address_map::ERISC_MEM_MAILBOX_END);
+static constexpr uint32_t ETH_LAUNCH_CHECK = (eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE  + offsetof(mailboxes_t, launch)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
+static constexpr uint32_t ETH_PROFILER_CHECK = (eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE  + offsetof(mailboxes_t, profiler)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
+static_assert( ETH_LAUNCH_CHECK == 0);
+static_assert( ETH_PROFILER_CHECK == 0);
+#else
 static_assert(MEM_MAILBOX_BASE + sizeof(mailboxes_t) < MEM_MAILBOX_END);
+static constexpr uint32_t TENSIX_LAUNCH_CHECK = (MEM_MAILBOX_BASE + offsetof(mailboxes_t, launch)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
+static constexpr uint32_t TENSIX_PROFILER_CHECK = (MEM_MAILBOX_BASE + offsetof(mailboxes_t, profiler)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
+static_assert( TENSIX_LAUNCH_CHECK == 0);
+static_assert( TENSIX_PROFILER_CHECK == 0);
+#endif
 #endif
 
 struct eth_word_t {
