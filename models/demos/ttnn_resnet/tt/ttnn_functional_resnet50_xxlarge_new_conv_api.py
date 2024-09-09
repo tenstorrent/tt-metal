@@ -451,25 +451,6 @@ class resnet50:
         self.conv1_output_channels = self.conv1_weight_tensor.shape[0]
         assert self.conv1_weight_tensor.shape[2] == 4
 
-        self.max_pool_reader_patterns_cache = {}
-        max_pool_parallel_config_override = {}
-
-        self.max_pool = ttnn.MaxPool2d(
-            kernel_size=(3, 3),
-            stride=(2, 2),
-            padding=(1, 1),
-            dilation=(1, 1),
-            dtype=ttnn.bfloat16,
-            device=self.device,
-            batch_size=self.batch_size,
-            input_height=512,
-            input_width=512,
-            reader_patterns_cache=self.max_pool_reader_patterns_cache,
-            deallocate_activation=True,
-            parallel_config_override=max_pool_parallel_config_override,
-            channels=self.conv1_output_channels,
-        )
-
         self.layer1 = self._make_layer(
             parameters=parameters.layer1,
             planes=64,
@@ -537,7 +518,6 @@ class resnet50:
     def __del__(self):
         # Need to clear global configs for each Resnet run
         self.conv_op_cache.clear()
-        self.max_pool_reader_patterns_cache.clear()
 
     def _make_layer(
         self,
@@ -639,8 +619,20 @@ class resnet50:
             x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(x)
             x = ttnn.reallocate(x_rm)
-            x = ttnn.to_memory_config(x, self.max_pool.max_pool.input_sharded_memory_config)
-        x = self.max_pool(x)
+            # x = ttnn.to_memory_config(x, self.max_pool.max_pool.input_sharded_memory_config)
+
+        x = ttnn.max_pool2d(
+            input_tensor=x,
+            batch_size=self.batch_size,
+            input_h=x_height,
+            input_w=x_width,
+            channels=self.conv1_output_channels,
+            kernel_size=[3, 3],
+            stride=[2, 2],
+            padding=[1, 1],
+            dilation=[1, 1],
+            device=device,
+        )
 
         x_height = 256
         x_width = 256
@@ -961,8 +953,20 @@ class resnet50:
             x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(x)
             x = ttnn.reallocate(x_rm)
-            x = ttnn.to_memory_config(x, self.max_pool.max_pool.input_sharded_memory_config)
-        x = self.max_pool(x)
+            # x = ttnn.to_memory_config(x, self.max_pool.max_pool.input_sharded_memory_config)
+
+        x = ttnn.max_pool2d(
+            input_tensor=x,
+            batch_size=self.batch_size,
+            input_h=x_height,
+            input_w=x_width,
+            channels=self.conv1_output_channels,
+            kernel_size=[3, 3],
+            stride=[2, 2],
+            padding=[1, 1],
+            dilation=[1, 1],
+            device=device,
+        )
 
         x_height = 256
         x_width = 256

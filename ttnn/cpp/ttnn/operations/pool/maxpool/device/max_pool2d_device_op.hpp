@@ -24,7 +24,7 @@ inline uint32_t ceil_multiple_of(uint32_t n, uint32_t m) {
 }
 
 // new maxpool uop -- called from the macro-op
-struct MaxPoolNew {
+struct MaxPool2D {
     struct operation_attributes_t {
         sliding_window::SlidingWindowConfig sliding_window_config_;
         DataType output_dtype_;
@@ -81,5 +81,5 @@ struct MaxPoolNew {
 }  // namespace ttnn::operations
 
 namespace ttnn::prim {
-constexpr auto max_pool_new = ttnn::register_operation<"ttnn::prim::max_pool_new", ttnn::operations::pool::MaxPoolNew>();
+constexpr auto max_pool2d = ttnn::register_operation<"ttnn::prim::max_pool2d", ttnn::operations::pool::MaxPool2D>();
 }  // namespace ttnn::prim

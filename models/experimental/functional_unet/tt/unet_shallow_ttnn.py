@@ -198,7 +198,7 @@ class UNetMaxPool2D:
         self.device = device
 
     def __call__(self, x):
-        x = ttnn.max_pool2d_new(
+        x = ttnn.max_pool2d(
             input_tensor=x,
             batch_size=self.pool.batch_size,
             input_h=self.pool.input_height,
