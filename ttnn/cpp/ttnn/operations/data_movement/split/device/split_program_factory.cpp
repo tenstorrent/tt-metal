@@ -6,7 +6,7 @@
 #include <iterator>
 #include <ranges>
 #include <vector>
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "ttnn/tensor/tensor.hpp"

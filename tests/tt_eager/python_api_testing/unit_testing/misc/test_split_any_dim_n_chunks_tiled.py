@@ -17,6 +17,30 @@ import sys
 import numpy
 import pytest
 import os
+import itertools
+
+debug = False
+
+two_tests = list(
+    zip(
+        [
+            [1, 2, 64, 128],
+            [1, 2, 1024, 128],
+            [1, 2, 256, 2560],
+            [1, 2, 1024, 2560],
+            [1, 2, 256, 5120],
+            [1, 2, 64, 10240],
+            [1, 1, 64, 64],
+            [1, 2, 64, 64],
+        ],
+        itertools.repeat(2),
+    )
+)
+
+four_tests = list(zip([[1, 2, 128, k] for k in (2**x for x in range(7, 14))], itertools.repeat(4)))
+
+two_ids = ["x".join(map(str, x)) + "->2" for x in two_tests]
+four_ids = ["x".join(map(str, x)) + "->4" for x in four_tests]
 
 
 @pytest.mark.parametrize(
@@ -35,33 +59,19 @@ import os
     ),
     ids=["out_DRAM", "out_L1"],
 )
-@pytest.mark.parametrize("dim", (2, 3))  # 0, 1 ),
 @pytest.mark.parametrize(
-    "refshape",
-    (
-        [1, 2, 64, 128],
-        [1, 2, 1024, 128],
-        [1, 2, 256, 2560],
-        [1, 2, 1024, 2560],
-        [1, 2, 256, 5120],
-        [1, 2, 64, 10240],
-    ),
-    ids=[
-        "1x2x64x64",
-        "1x2x64x128",
-        "1x2x256x2560",
-        "1x2x1024x2560",
-        "1x2x256x5120",
-        "1x2x64x10240",
-    ],
+    "refshape_and_chunks",
+    (*two_tests, *four_tests),
+    ids=two_ids + four_ids,
 )
-def test_split_tiled_w(dim, refshape, in_mem_config, out_mem_config, device, dtype=ttnn.bfloat16):
+@pytest.mark.parametrize("dim", (2, 3))  # 0, 1 ),
+def test_split_tiled_w(dim, refshape_and_chunks, in_mem_config, out_mem_config, device, dtype=ttnn.bfloat16):
+    (refshape, num_splits) = refshape_and_chunks
     profile_location = "splitTwoChunks/"
     os.system(f"rm -rf {profile_location}")
 
     _shape = refshape
     assert _shape[0] == 1
-    num_splits = 2
     torch.manual_seed(1234)
 
     tile_size = 32
@@ -83,13 +93,13 @@ def test_split_tiled_w(dim, refshape, in_mem_config, out_mem_config, device, dty
         Y = 64
 
     if dim == 3:
-        chunk_shape = [W, Z, Y, X // 2]
+        chunk_shape = [W, Z, Y, X // num_splits]
     elif dim == 2:
-        chunk_shape = [W, Z, Y // 2, X]
+        chunk_shape = [W, Z, Y // num_splits, X]
     elif dim == 1:
-        chunk_shape = [W, Z // 2, Y, X]
+        chunk_shape = [W, Z // num_splits, Y, X]
     elif dim == 0:
-        chunk_shape = [W // 2, Z, Y, X]
+        chunk_shape = [W // num_splits, Z, Y, X]
 
     a_shape = [W, Z, Y, X]
     logger.info(f"Split tensor of size: {str(a_shape)}")
@@ -121,7 +131,7 @@ def test_split_tiled_w(dim, refshape, in_mem_config, out_mem_config, device, dty
             ttnn.ROW_MAJOR_LAYOUT,
         ).to(device)
 
-    dev_buffers = ttnn.split(a_t, 2, dim, memory_config=out_mem_config)
+    dev_buffers = ttnn.split(a_t, num_splits, dim, memory_config=out_mem_config)
 
     # Check memory of inputs and outputs
     logger.debug(f"in0 is on: {a_t.memory_config().buffer_type}")
@@ -138,6 +148,11 @@ def test_split_tiled_w(dim, refshape, in_mem_config, out_mem_config, device, dty
 
     golden_buffers = torch.chunk(A, num_splits, dim=dim)
     assert len(pyt_buff_list) == len(golden_buffers)
+    if debug:
+        for i in range(0, num_splits):
+            print(f"torch result [{i+1}]: ", golden_buffers[i][0, 0, 0])
+            print(f"our result [{i+1}]: ", pyt_buff_list[i][0, 0, 0])
+            print()
 
     for index, pyt_buff in enumerate(pyt_buff_list):
         golden_buff = golden_buffers[index]
