@@ -21,6 +21,7 @@
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 
 #include "tt_metal/common/constants.hpp"
+#include "ttnn/cpp/ttnn/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/ternary/where.hpp"
@@ -631,6 +632,10 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardMul::invoke(
     return result;
 }
 
+std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardMul::invoke(const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
+    return ExecuteBackwardMul::invoke(DefaultQueueId, grad, input, scalar, output_mem_config);
+}
+
 std::vector<ComplexTensor> ExecuteBackwardMul::invoke(
     const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
@@ -650,28 +655,25 @@ std::vector<std::optional<Tensor>> ExecuteBackwardMul::invoke(
     const std::vector<bool>& are_required_outputs,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
-    std::vector<std::optional<Tensor>> result;
+    std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
+    preallocated_tensors_check(input_grad, other_grad, input, other, {are_required_outputs[0], are_required_outputs[1]});
+
     if (are_required_outputs.at(0)) {
-        if(input_grad.has_value()){
-            ttnn::multiply(queue_id, grad, other, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, input_grad);
-        } else {
-            input_grad = ttnn::multiply(queue_id, grad, other, std::nullopt, output_mem_config);
-        }
-        result.emplace_back(input_grad);
-    } else {
-        result.emplace_back(std::nullopt);
+        ttnn::multiply(queue_id, grad, other, std::nullopt, output_mem_config, input_grad);
+        result[0] = input_grad;
     }
     if (are_required_outputs.at(1)) {
-        if(other_grad.has_value()){
-            ttnn::multiply(queue_id, grad, input, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, other_grad);
-        } else {
-            other_grad = ttnn::multiply(queue_id, grad, input, std::nullopt, output_mem_config);
-        }
-        result.emplace_back(other_grad);
-    } else {
-        result.emplace_back(std::nullopt);
+        ttnn::multiply(queue_id, grad, input, std::nullopt, output_mem_config, other_grad);
+        result[1] = other_grad;
     }
-    return std::move(result);
+    return result;
 }
 
+std::vector<std::optional<Tensor>> ExecuteBackwardMul::invoke(
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& other,
+    const std::optional<MemoryConfig>& output_mem_config) {
+        return  ExecuteBackwardMul::invoke(DefaultQueueId, grad, input, other, output_mem_config);
+}
 }  // namespace ttnn::operations::binary_backward

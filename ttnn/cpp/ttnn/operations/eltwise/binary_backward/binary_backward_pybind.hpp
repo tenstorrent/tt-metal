@@ -403,7 +403,7 @@ void bind_binary_bw_mul(py::module& module, const binary_backward_operation_t& o
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("input_grad") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId},
+            py::arg("queue_id") = ttnn::DefaultQueueId},
 
         // tensor and tensor
         ttnn::pybind_overload_t{
@@ -426,7 +426,7 @@ void bind_binary_bw_mul(py::module& module, const binary_backward_operation_t& o
             py::arg("are_required_outputs") = std::vector<bool>{true, true},
             py::arg("input_grad") = std::nullopt,
             py::arg("other_grad") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId},
+            py::arg("queue_id") = ttnn::DefaultQueueId},
 
         // complex tensor
         ttnn::pybind_overload_t{
