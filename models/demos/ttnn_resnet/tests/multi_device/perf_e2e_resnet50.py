@@ -14,16 +14,14 @@ from ttnn.model_preprocessing import (
 from models.utility_functions import (
     profiler,
     disable_persistent_kernel_cache,
-    run_for_wormhole_b0,
 )
 
-from models.demos.ttnn_resnet.tests.ttnn_resnet_test_infra import create_test_infra
+from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra
 
 from models.perf.perf_utils import prep_perf_report
 
-from models.demos.ttnn_resnet.tests.ttnn_resnet_test_infra import load_resnet50_model
+from models.demos.ttnn_resnet.tests.resnet50_test_infra import load_resnet50_model
 from models.demos.ttnn_resnet.tt.custom_preprocessing import create_custom_mesh_preprocessor
-from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_new_conv_api import resnet50
 
 try:
     from tracy import signpost
@@ -230,6 +228,8 @@ def run_trace_model(
         signpost(header="stop")
     ttnn.dump_device_profiler(device)
 
+    ttnn.release_trace(device, tid)
+
 
 def run_trace_2cq_model(
     device, tt_inputs, test_infra, mesh_mapper, mesh_composer, num_warmup_iterations, num_measurement_iterations
@@ -327,6 +327,8 @@ def run_trace_2cq_model(
     if use_signpost:
         signpost(header="stop")
     ttnn.dump_device_profiler(device)
+
+    ttnn.release_trace(device, tid)
 
 
 def run_perf_resnet(
@@ -457,125 +459,3 @@ def run_perf_resnet(
 
     logger.info(f"{model_name} {comments} inference time (avg): {inference_time_avg}")
     logger.info(f"{model_name} compile time: {compile_time}")
-
-
-@run_for_wormhole_b0()
-@pytest.mark.model_perf_t3000
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    ((16, True, 0.0100, 60),),
-    indirect=["enable_async_mode"],
-)
-def test_perf_t3000(
-    mesh_device,
-    use_program_cache,
-    device_batch_size,
-    expected_inference_time,
-    expected_compile_time,
-    hf_cat_image_sample_input,
-    enable_async_mode,
-    model_location_generator,
-):
-    mode = "async" if enable_async_mode else "sync"
-    run_perf_resnet(
-        device_batch_size,
-        expected_inference_time,
-        expected_compile_time,
-        hf_cat_image_sample_input,
-        mesh_device,
-        f"resnet50_{mode}",
-        model_location_generator,
-    )
-
-
-@run_for_wormhole_b0()
-@pytest.mark.model_perf_t3000
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 1500000}], indirect=True)
-@pytest.mark.parametrize(
-    "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    ((16, True, 0.0068, 60),),
-    indirect=["enable_async_mode"],
-)
-def test_perf_trace_t3000(
-    mesh_device,
-    use_program_cache,
-    device_batch_size,
-    expected_inference_time,
-    expected_compile_time,
-    hf_cat_image_sample_input,
-    enable_async_mode,
-    model_location_generator,
-):
-    mode = "async" if enable_async_mode else "sync"
-    run_perf_resnet(
-        device_batch_size,
-        expected_inference_time,
-        expected_compile_time,
-        hf_cat_image_sample_input,
-        mesh_device,
-        f"resnet50_trace_{mode}",
-        model_location_generator,
-    )
-
-
-@run_for_wormhole_b0()
-@pytest.mark.model_perf_t3000
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_command_queues": 2}], indirect=True)
-@pytest.mark.parametrize(
-    "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    ((16, True, 0.0110, 60),),
-    indirect=["enable_async_mode"],
-)
-def test_perf_2cqs_t3000(
-    mesh_device,
-    use_program_cache,
-    device_batch_size,
-    expected_inference_time,
-    expected_compile_time,
-    hf_cat_image_sample_input,
-    enable_async_mode,
-    model_location_generator,
-):
-    mode = "async" if enable_async_mode else "sync"
-    run_perf_resnet(
-        device_batch_size,
-        expected_inference_time,
-        expected_compile_time,
-        hf_cat_image_sample_input,
-        mesh_device,
-        f"resnet50_2cqs_{mode}",
-        model_location_generator,
-    )
-
-
-@run_for_wormhole_b0()
-@pytest.mark.model_perf_t3000
-@pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1332224}], indirect=True
-)
-@pytest.mark.parametrize(
-    "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    ((16, True, 0.0043, 60),),
-    indirect=["enable_async_mode"],
-)
-def test_perf_trace_2cqs_t3000(
-    mesh_device,
-    use_program_cache,
-    device_batch_size,
-    expected_inference_time,
-    expected_compile_time,
-    hf_cat_image_sample_input,
-    enable_async_mode,
-    model_location_generator,
-):
-    mode = "async" if enable_async_mode else "sync"
-    run_perf_resnet(
-        device_batch_size,
-        expected_inference_time,
-        expected_compile_time,
-        hf_cat_image_sample_input,
-        mesh_device,
-        f"resnet50_trace_2cqs_{mode}",
-        model_location_generator,
-    )
