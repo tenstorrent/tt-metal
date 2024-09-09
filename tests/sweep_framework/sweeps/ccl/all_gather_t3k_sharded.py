@@ -30,16 +30,38 @@ TIMEOUT = 30
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 
-input_shapes = []
 height_shard_shapes = []
 width_shard_shapes = []
 block_shard_shapes = []
 
-for batch_size in range(1, 10):  # Increment by 1
-    for channels in range(1, 10):  # Increment by 1
-        for height in range(32, 128, 32):  # Increment by 32
-            for width in range(32, 1024, 32):  # Increment by 32
-                input_shapes.append([batch_size, channels, height, width])
+tile_batch_size = [1, 2, 3, 7, 8, 57, 127, 128]
+row_batch_size = [1, 3, 96]
+
+width_shard_Y = [1, 2, 3, 8, 7, 40, 128, 512]
+height_shard_Y = [1, 2, 3, 4, 6, 7, 8, 16, 40, 31, 32, 33, 67]
+block_shard_Y = height_shard_Y
+
+width_shard_X = height_shard_Y
+height_shard_X = width_shard_Y
+block_shard_X = block_shard_Y
+
+
+def generate_shard_input_shapes(batch_sizes, shard_Y, shard_X):
+    input_shapes = []
+    for batch_size in batch_sizes:
+        for channels in batch_sizes:
+            for height in shard_Y:
+                for width in shard_X:
+                    input_shapes.append([batch_size, channels, height, width])
+    return input_shapes
+
+
+tile_width_shard_input_shapes = generate_shard_input_shapes(tile_batch_size, width_shard_Y, width_shard_X)
+row_width_shard_input_shapes = generate_shard_input_shapes(row_batch_size, width_shard_Y, width_shard_X)
+tile_height_shard_input_shapes = generate_shard_input_shapes(tile_batch_size, height_shard_Y, height_shard_X)
+row_height_shard_input_shapes = generate_shard_input_shapes(row_batch_size, height_shard_Y, height_shard_X)
+tile_block_shard_input_shapes = generate_shard_input_shapes(tile_batch_size, block_shard_Y, block_shard_X)
+row_block_shard_input_shapes = generate_shard_input_shapes(row_batch_size, block_shard_Y, block_shard_X)
 
 
 for height in range(32, 128, 32):  # Increment by 32
@@ -52,27 +74,29 @@ for height in range(32, 128, 32):  # Increment by 32
     for width in range(32, 1024, 32):  # Increment by 32
         block_shard_shapes.append([height, width])
 
+shard_grid = [
+    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
+    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(10, 7))}),
+    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 4))}),
+    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 4))}),
+    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7))}),
+]
+
 parameters = {
     "all_gather_tile_height_sharded": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
-        "input_shape": input_shapes,
+        "input_shape": tile_height_shard_input_shapes,
         "input_shard_shape": height_shard_shapes,
-        "shard_grid": [
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(10, 7))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 4))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 4))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7))}),
-        ],
+        "shard_grid": shard_grid,
         "dim": [0, 1, 2, 3],
         "tensor_layout": [ttnn.TILE_LAYOUT],
         "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -85,23 +109,9 @@ parameters = {
     "all_gather_tile_width_sharded": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
-        "input_shape": input_shapes,
+        "input_shape": tile_width_shard_input_shapes,
         "input_shard_shape": width_shard_shapes,
-        "shard_grid": [
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(10, 7))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 4))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 4))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7))}),
-        ],
+        "shard_grid": shard_grid,
         "dim": [0, 1, 2, 3],
         "tensor_layout": [ttnn.TILE_LAYOUT],
         "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -114,23 +124,9 @@ parameters = {
     "all_gather_tile_block_sharded": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
-        "input_shape": input_shapes,
+        "input_shape": tile_block_shard_input_shapes,
         "input_shard_shape": block_shard_shapes,
-        "shard_grid": [
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(10, 7))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 4))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 4))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7))}),
-        ],
+        "shard_grid": shard_grid,
         "dim": [0, 1, 2, 3],
         "tensor_layout": [ttnn.TILE_LAYOUT],
         "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -140,42 +136,47 @@ parameters = {
         ],
         "all_gather_operation": ["all_gather", "line_all_gather"],
     },
-    "all_gather_row_major_sharded": {
+    "all_gather_row_height_sharded": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
-        "input_shape": input_shapes,
-        "input_shard_shape": [
-            [32, 1024],
-            [32, 128],
-            [32, 32],
-            [128, 32],
-            [64, 64],
-            [64, 32],
-            [32, 64],
-            [128, 128],
+        "input_shape": row_height_shard_input_shapes,
+        "input_shard_shape": height_shard_shapes,
+        "shard_grid": shard_grid,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ],
-        "shard_grid": [
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(10, 7))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 4))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 4))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7))}),
-        ],
+        "all_gather_operation": ["all_gather", "line_all_gather"],
+    },
+    "all_gather_row_width_sharded": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": row_width_shard_input_shapes,
+        "input_shard_shape": width_shard_shapes,
+        "shard_grid": shard_grid,
         "dim": [0, 1, 2, 3],
         "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
         "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
         "tensor_mem_layout": [
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ],
+        "all_gather_operation": ["all_gather", "line_all_gather"],
+    },
+    "all_gather_row_block_sharded": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": row_block_shard_input_shapes,
+        "input_shard_shape": block_shard_shapes,
+        "shard_grid": shard_grid,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+        "tensor_mem_layout": [
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ],
         "all_gather_operation": ["all_gather", "line_all_gather"],
@@ -183,7 +184,13 @@ parameters = {
     "all_gather_non_sharded": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
-        "input_shape": input_shapes,
+        "input_shape": [
+            [1, 1, 32, 1024],
+            [4, 1, 32, 128],
+            [8, 1, 32, 1024],
+            [4, 1, 32, 32],
+            [1, 8, 32, 1024],
+        ],
         "input_shard_shape": [
             [32, 1024],
             [32, 128],
