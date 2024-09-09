@@ -2511,3 +2511,15 @@ def complex_is_real(x, *args, **kwargs):
 
 def complex_is_imag(x, *args, **kwargs):
     return torch.isreal(x)
+
+
+def relu6_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.nn.functional.relu6(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad

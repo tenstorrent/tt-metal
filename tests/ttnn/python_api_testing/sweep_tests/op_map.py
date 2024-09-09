@@ -1070,4 +1070,8 @@ op_map = {
         "tt_op": ttnn_ops.complex_is_real,
         "pytorch_op": pytorch_ops.complex_is_real,
     },
+    "relu6-bw": {
+        "tt_op": ttnn_ops.relu6_bw,
+        "pytorch_op": pytorch_ops.relu6_bw,
+    },
 }
