@@ -18,6 +18,8 @@ import numpy
 import pytest
 import os
 
+debug = False
+
 
 @pytest.mark.parametrize(
     "in_mem_config",
@@ -124,11 +126,11 @@ def test_split_tiled_w(dim, refshape, in_mem_config, out_mem_config, device, dty
 
     golden_buffers = torch.chunk(A, num_splits, dim=dim)
     assert len(pyt_buff_list) == len(golden_buffers)
-    # import pdb; pdb.set_trace()
-    for i in range(0, num_splits):
-        print(f"torch result [{i+1}]: ", golden_buffers[i][0, 0, 0])
-        print(f"our result [{i+1}]: ", pyt_buff_list[i][0, 0, 0])
-        print()
+    if debug:
+        for i in range(0, num_splits):
+            print(f"torch result [{i+1}]: ", golden_buffers[i][0, 0, 0])
+            print(f"our result [{i+1}]: ", pyt_buff_list[i][0, 0, 0])
+            print()
 
     for index, pyt_buff in enumerate(pyt_buff_list):
         golden_buff = golden_buffers[index]

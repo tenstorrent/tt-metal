@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <iterator>
 #include <ranges>
+#include <vector>
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -137,82 +138,85 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
             .set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    // dump basically every local so far
-    std::cout << "Input shape: ";
-    for (auto dim : input_shape) {
-        std::cout << dim << "x";
-    }
-    std::cout << std::endl;
-    std::cout << std::format("num_cores: {}\n", num_cores);
-    std::cout << std::format("num_cores_used: {}\n", num_cores_used);
-    std::cout << std::format("y_tiles_per_core: {}\n", y_tiles_per_core);
-    std::cout << std::format("x_tiles_per_core: {}\n", x_tiles_per_core);
-    std::cout << std::format("tiles_per_core: {}\n", tiles_per_core);
-    std::cout << std::format("num_cores_c: {}\n", num_cores_c);
-    std::cout << std::format("num_cores_r: {}\n", num_cores_r);
-    std::cout << std::format("num_cores_x_limit: {}\n", num_cores_x_limit);
-    std::cout << std::format("num_cores_y_limit: {}\n", num_cores_y_limit);
-    std::cout << std::format("num_tiles_y_dim: {}\n", num_tiles_y_dim);
-    std::cout << std::format("num_tiles_x_dim: {}\n", num_tiles_x_dim);
+    auto setup_reader_runtime_args =
+        [xy_tiles_per_core,
+         num_cores_r,
+         num_chunks,
+         &program,
+         reader_kernel_id
+         ](const CoreCoord &core, Buffer* in0_buffer) {
+            uint32_t reader_core_id = core.y * num_cores_r + core.x;
+            uint32_t start_tile = xy_tiles_per_core * reader_core_id; // start tile within the input tensor
+            std::vector<uint32_t> reader_runtime_args = {
+                (std::uint32_t)start_tile,
+                (std::uint32_t)(in0_buffer->address()),  // in0_tensor_addr
+                (std::uint32_t)reader_core_id,
+            };
 
-    auto setup_reader_runtime_args = [&](const CoreCoord &core) {
-        uint32_t reader_core_id = core.y * num_cores_r + core.x;
-        uint32_t start_tile = xy_tiles_per_core * reader_core_id; // start tile within the input tensor
-        std::cout << std::format("Reader {} has start_tile {}", reader_core_id, start_tile) << std::endl;
-        std::vector<uint32_t> reader_runtime_args = {
-            (std::uint32_t)start_tile,
-            (std::uint32_t)(in0_buffer->address()),  // in0_tensor_addr
-            (std::uint32_t)reader_core_id,
+            tt::tt_metal::SetRuntimeArgs(program,
+                                         reader_kernel_id,
+                                         core,
+                                         reader_runtime_args);
         };
 
-        tt::tt_metal::SetRuntimeArgs(program,
-                                     reader_kernel_id,
-                                     core,
-                                     reader_runtime_args);
-    };
+    auto setup_writer_runtime_args =
+        [xy_tiles_per_core,
+         num_cores_r,
+         num_chunks,
+         &program,
+         writer_kernel_id](const CoreCoord &core, const std::vector<Buffer*> &output_buffers) {
+            std::vector<uint32_t> output_addrs;
+            output_addrs.reserve(output_buffers.size());
+            std::transform(output_buffers.begin(),
+                           output_buffers.end(),
+                           std::back_inserter(output_addrs),
+                           [](tt::tt_metal::Buffer *buf) { return buf->address(); });
 
-    std::vector<uint32_t> output_addrs;
-    output_addrs.reserve(output_buffers.size());
-    std::transform(output_buffers.begin(),
-                   output_buffers.end(),
-                   std::back_inserter(output_addrs),
-                   [](tt::tt_metal::Buffer *buf) { return buf->address(); });
+            uint32_t writer_core_id = core.y * num_cores_r + core.x;
+            uint32_t writer_start_tile = (xy_tiles_per_core / num_chunks) * writer_core_id; // start tile within each output bank
 
-    auto setup_writer_runtime_args = [&](const CoreCoord &core) {
-        uint32_t writer_core_id = core.y * num_cores_r + core.x;
-        uint32_t writer_start_tile = (xy_tiles_per_core / num_chunks) * writer_core_id; // start tile within each output bank
+            std::vector<uint32_t> control_args = {writer_core_id, writer_start_tile};
+            std::vector<uint32_t> writer_runtime_args;
+            writer_runtime_args.reserve(output_addrs.size()+control_args.size());
 
-        std::cout << std::format("Writer {} has start_tile {}", writer_core_id, writer_start_tile) << std::endl;
-        std::vector<uint32_t> control_args = {writer_core_id, writer_start_tile};
+            writer_runtime_args.insert(writer_runtime_args.end(),
+                                       output_addrs.begin(),
+                                       output_addrs.end());
 
-        std::vector<uint32_t> writer_runtime_args;
-        writer_runtime_args.reserve(output_buffers.size()+control_args.size());
+            // add writer_core_id and start_tile to the end of the writer_runtime_args
+            writer_runtime_args.insert(writer_runtime_args.end(),
+                                       control_args.begin(),
+                                       control_args.end());
 
-        writer_runtime_args.insert(writer_runtime_args.end(),
-                                   output_addrs.begin(),
-                                   output_addrs.end());
+            tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+        };
 
-        // add writer_core_id and start_tile to the end of the writer_runtime_args
-        writer_runtime_args.insert(writer_runtime_args.end(),
-                                   control_args.begin(),
-                                   control_args.end());
-
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
-    };
+    auto setup_runtime_args =
+        [setup_reader_runtime_args,
+         setup_writer_runtime_args]
+        (const CoreCoord &core,
+         Buffer* in0_buffer,
+         const std::vector<Buffer*> &output_buffers) {
+            setup_reader_runtime_args(core, in0_buffer);
+            setup_writer_runtime_args(core, output_buffers);
+        };
 
     for (auto core : all_cores) {
-        setup_reader_runtime_args(core);
-        setup_writer_runtime_args(core);
+        setup_reader_runtime_args(core, in0_buffer);
+        setup_writer_runtime_args(core, output_buffers);
     };
 
     auto override_runtime_args_callback =
-        [](
-            const Program &program,
-            const std::vector<Buffer *> &input_buffers,
-            const std::vector<Buffer *> &output_buffers) {
-            // FIXME FIXME FIXME
-            return;
-        };
+        [all_cores,
+         setup_runtime_args](const Program &program,
+                             const std::vector<Buffer *> &input_buffers,
+                             const std::vector<Buffer *> &output_buffers) {
+                                 const auto in0_buffer = input_buffers[0];
+                                 for (auto core : all_cores) {
+                                     setup_runtime_args(core, in0_buffer, output_buffers);
+                                 }
+                                 return;
+                             };
 
     return {std::move(program), override_runtime_args_callback};
 }
