@@ -5,7 +5,7 @@
 #include "rotary_embedding_device_operation.hpp"
 #include "rotary_embedding_program_factory.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 

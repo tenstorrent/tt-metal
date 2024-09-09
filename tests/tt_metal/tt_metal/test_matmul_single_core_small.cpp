@@ -376,7 +376,7 @@ int main(int argc, char **argv) {
             result_untilized,
             [&](const bfloat16& a, const bfloat16& b) { return tt::test_utils::is_close<bfloat16>(a, b, 0.015f); }
         );
-        pass &= tt_metal::CloseDevice(device);;
+        pass &= tt_metal::CloseDevice(device);
         log_info(LogTest, "Closing device");
 
     } catch (const std::exception &e) {

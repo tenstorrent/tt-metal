@@ -4,12 +4,13 @@
 
 #include "nlp_create_qkv_heads_device_operation.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
 // Generic NLP CreateHeads op
 void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    using namespace tt::constants;
     const auto& input_tensor = tensor_args.input_tensor_q;
     const auto input_shape = input_tensor.get_legacy_shape();
 
@@ -73,6 +74,7 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_hit(const operatio
 }
 
 NlpCreateHeadsDeviceOperation::shape_return_value_t NlpCreateHeadsDeviceOperation::compute_output_shapes(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    using namespace tt::constants;
     const auto& input_tensor = tensor_args.input_tensor_q;
     const auto input_shape = input_tensor.get_legacy_shape();
 
@@ -95,6 +97,7 @@ NlpCreateHeadsDeviceOperation::shape_return_value_t NlpCreateHeadsDeviceOperatio
 }
 
 NlpCreateHeadsDeviceOperation::tensor_return_value_t NlpCreateHeadsDeviceOperation::create_output_tensors(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    using namespace tt::constants;
     const auto& input_tensor = tensor_args.input_tensor_q;
     if (tensor_args.optional_output_tensors.size() == 3) {
         const auto& output_tensors = tensor_args.optional_output_tensors;

@@ -5,7 +5,7 @@
 #include "untilize_op.hpp"
 
 #include "ttnn/run_operation.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "untilize_program_factory.hpp"
 
 namespace ttnn::operations::data_movement {
@@ -26,6 +26,7 @@ uint32_t get_num_cores(CoreCoord grid_size, uint32_t nblocks) {
 }  // namespace untilize_helpers
 
 void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
+    using namespace tt::constants;
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to untilize need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to untilize need to be allocated in buffers on device!");
@@ -64,6 +65,7 @@ std::vector<tt::tt_metal::Shape> Untilize::compute_output_shapes(const std::vect
 
 std::vector<Tensor> Untilize::create_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
     DataType output_dtype =
         input_tensor.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.get_dtype();
@@ -84,7 +86,7 @@ std::vector<Tensor> Untilize::create_output_tensors(
             auto num_cores =
                 untilize_helpers::get_num_cores(input_tensor.device()->compute_with_storage_grid_size(), nblocks);
             auto shard_grid =
-                num_cores_to_corerange_set(num_cores, input_tensor.device()->compute_with_storage_grid_size(), true);
+                tt::tt_metal::num_cores_to_corerange_set(num_cores, input_tensor.device()->compute_with_storage_grid_size(), true);
             uint32_t fused_height = input_tensor.volume() / input_tensor.get_legacy_shape()[-1];
             std::array<uint32_t, 2> shard_shape = {fused_height / num_cores, input_tensor.get_legacy_shape()[-1]};
             ShardSpec shard_spec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};

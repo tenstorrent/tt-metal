@@ -16,7 +16,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -58,7 +58,7 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
 
     if (keepdim) {
         bool ranks_are_equal = (input_rank == output_rank);
-        input_shape[dim] = (is_tile_dim) ? (TILE_HEIGHT) : (1);
+        input_shape[dim] = (is_tile_dim) ? (tt::constants::TILE_HEIGHT) : (1);
         input_shape_wo_padding[dim] = 1;
 
         if (!ranks_are_equal) {
@@ -138,6 +138,7 @@ void MorehNorm::validate_with_output_tensors(
 }
 
 std::vector<Shape> MorehNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    using namespace tt::constants;
     const auto& input = input_tensors.at(0);
     const auto& input_shape = input.get_legacy_shape();
     const auto input_rank = input_shape.rank();

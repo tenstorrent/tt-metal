@@ -5,12 +5,13 @@
 #include "untilize_with_halo_v2_op.hpp"
 
 #include "ttnn/run_operation.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "untilize_with_halo_v2_program_factory.hpp"
 
 namespace ttnn::operations::data_movement {
 
 void UntilizeWithHaloV2::validate(const std::vector<Tensor>& input_tensors) const {
+    using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
 
     // validate input data tensor

@@ -394,7 +394,7 @@ Tensor Tensor::cpu_sharded() const {
 
 Tensor Tensor::extract_shard(const CoreCoord& core) const {
     ZoneScoped;
-    auto buffer_page_mapping = generate_buffer_page_mapping(*this->buffer());
+    const auto& buffer_page_mapping = *this->buffer()->get_buffer_page_mapping();
     auto core_id = buffer_page_mapping.core_to_core_id_.at(core);
     return this->extract_shard(core_id);
 }
@@ -458,7 +458,7 @@ bool Tensor::is_allocated() const {
 }
 
 std::vector<uint32_t> Tensor::host_page_ordering() {
-    auto buffer_page_mapping = generate_buffer_page_mapping(*this->buffer());
+    const auto& buffer_page_mapping = *this->buffer()->get_buffer_page_mapping();
     auto cores = buffer_page_mapping.all_cores_;
     auto shard_size = buffer()->shard_spec().size();
     auto num_pages = cores.size() * shard_size;
@@ -494,19 +494,7 @@ StorageType Tensor::storage_type() const {
         this->get_storage());
 }
 
-namespace detail {
-const Shape compute_strides(const Shape& shape) {
-    auto num_elements = compute_volume(shape);
-    std::vector<std::uint32_t> strides;
-    for (std::int32_t index = 0; index < shape.rank(); index++) {
-        num_elements /= shape[index];
-        strides.push_back(num_elements);
-    }
-    return strides;
-}
-}  // namespace detail
-
-const Shape Tensor::strides() const { return detail::compute_strides(this->get_legacy_shape()); }
+const Shape Tensor::strides() const { return Shape(tt::tt_metal::compute_strides(this->get_legacy_shape())); }
 
 uint32_t Tensor::volume() const { return tt::tt_metal::compute_volume(this->get_legacy_shape()); }
 
@@ -805,8 +793,7 @@ Tensor set_tensor_id(const Tensor& tensor) {
         return tensor;
     }
     auto output = tensor;
-    ttnn::increment_tensor_id();
-    output.tensor_id = ttnn::get_tensor_id();
+    output.tensor_id = ttnn::CoreIDs::instance().fetch_and_increment_tensor_id();
     return output;
 };
 

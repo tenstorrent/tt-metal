@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "create_qkv_heads_from_separate_tensors_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 #include "tt_metal/host_api.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
 void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Tensor> &input_tensors) const {
+    using namespace tt::constants;
     const auto& q_input_tensor = input_tensors.at(0);
     const auto& kv_input_tensor = input_tensors.at(1);
 

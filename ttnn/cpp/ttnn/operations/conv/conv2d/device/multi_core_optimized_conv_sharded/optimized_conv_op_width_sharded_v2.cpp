@@ -6,7 +6,7 @@
 #include "ttnn/operations/conv/conv2d/device/optimized_conv_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharding_utilities.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -41,8 +41,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     const Shape& ashape,
     std::optional<const Tensor> bias,
     const std::optional<const Tensor> conv_reader_indices,
-    vector<int> conv_params,
+    sliding_window::SlidingWindowConfig sliding_window_config,
     uint32_t output_channels,
+    uint32_t groups,
     bool untilize_out,
     bool has_bias,
     bool fuse_relu,
@@ -113,11 +114,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     if (fp32_dest_acc_en and (out_subblock_h_ntiles * out_subblock_w_ntiles > 4)) {
         if (out_subblock_w_ntiles >= 4) {
             out_subblock_h_ntiles = 1;
-            out_subblock_w_ntiles = find_max_block_size(out_subblock_w_ntiles, 4);
+            out_subblock_w_ntiles = tt::tt_metal::find_max_block_size(out_subblock_w_ntiles, 4);
         } else {
             while (out_subblock_h_ntiles * out_subblock_w_ntiles > 4) {
-                uint32_t div = find_max_divisor(out_subblock_h_ntiles, out_subblock_h_ntiles - 1);
-                out_subblock_h_ntiles = find_max_block_size(out_subblock_h_ntiles, div);
+                uint32_t div = tt::tt_metal::find_max_divisor(out_subblock_h_ntiles, out_subblock_h_ntiles - 1);
+                out_subblock_h_ntiles = tt::tt_metal::find_max_block_size(out_subblock_h_ntiles, div);
             }
         }
     }
@@ -214,12 +215,12 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t conv_act_size_h = ashape_with_channels_padded[1];
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];
     uint32_t conv_act_size_c = ashape_with_channels_padded[3];
-    uint32_t weight_size_h = (uint32_t)conv_params[0];  // filter_h
-    uint32_t weight_size_w = (uint32_t)conv_params[1];  // filter_W
-    uint32_t stride_h = (uint32_t)conv_params[2];
-    uint32_t stride_w = (uint32_t)conv_params[3];
-    uint32_t pad_h = (uint32_t)conv_params[4];
-    uint32_t pad_w = (uint32_t)conv_params[5];
+    uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;  // filter_h
+    uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
+    uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw.first;
+    uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
+    uint32_t pad_h = (uint32_t)sliding_window_config.pad_hw.first;
+    uint32_t pad_w = (uint32_t)sliding_window_config.pad_hw.second;
     uint32_t input_size_h = conv_act_size_h + (pad_h*2);
     uint32_t input_size_w = conv_act_size_w + (pad_w*2);
 
@@ -227,7 +228,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] =
         optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(
-            ashape_with_channels_padded.value, conv_params, out_block_h_ntiles, extra_padding_for_32B_alignment);
+            ashape_with_channels_padded.value, sliding_window_config, out_block_h_ntiles, extra_padding_for_32B_alignment);
     TT_FATAL(act_matrix_shape.size() == 3);
     TT_FATAL(act_matrix_shape[0] == 1);
     uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
@@ -309,10 +310,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     log_debug(LogOp, "act_block_num_tiles_split_last: {}", act_block_num_tiles_split_last);
     log_debug(LogOp, "act_block_w_datums: {}", act_block_w_datums);
     log_debug(LogOp, "conv_act_size_c: {}", conv_act_size_c);
-    log_debug(LogOp, "weight_size_w: {}", weight_size_w);
+    log_debug(LogOp, "filter_w: {}", filter_w);
 
     // TT_FATAL(
-    //     (act_block_w_datums == round_up(conv_act_size_c * weight_size_w, TILE_WIDTH)) ||
+    //     (act_block_w_datums == round_up(conv_act_size_c * filter_w, TILE_WIDTH)) ||
     //     ((act_block_w_datums <= conv_act_size_c)
     //      && (conv_act_size_c % act_block_w_datums == 0)
     //      ));
@@ -389,8 +390,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     auto [conv_output_size_h, conv_output_size_w] = optimized_conv_op_utils::compute_opt_conv_output_face_shape(
         conv_act_size_h,
         conv_act_size_w,
-        weight_size_h,
-        weight_size_w,
+        filter_h,
+        filter_w,
         stride_h,
         stride_w,
         pad_h,
@@ -528,8 +529,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         (uint32_t)input_size_w,
         (uint32_t)conv_output_size_w,  // conv_output_w_last_index
         (uint32_t)conv_act_c_read_bytes,
-        (uint32_t)weight_size_h, //Input filter window height
-        (uint32_t)weight_size_w, //Input filter window width
+        (uint32_t)filter_h, //Input filter window height
+        (uint32_t)filter_w, //Input filter window width
         (uint32_t)act_block_h_datums,
         (uint32_t)act_block_num_tiles,
         (uint32_t)total_num_cores,
@@ -545,8 +546,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     };
     weights_kernel_compile_args = {
         weight_cb,                                                  //cb_id_weight
-        act_block_w_ntiles/(weight_size_h*weight_size_w),           //core_in_channels_ntiles
-        weight_size_h*weight_size_w,                                //window_size_hw
+        act_block_w_ntiles/(filter_h*filter_w),           //core_in_channels_ntiles
+        filter_h*filter_w,                                //window_size_hw
         weight_block_w_ntiles,                                      //weight_block_width_ntiles
         weight_block_num_tiles,                                     //weight_block_num_tiles
         weight_matrix_width_ntiles,                                 //weight_matrix_width_ntiles

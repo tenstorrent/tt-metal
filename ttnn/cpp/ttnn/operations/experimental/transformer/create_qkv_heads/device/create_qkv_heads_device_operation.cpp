@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "create_qkv_heads_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 #include "tt_metal/host_api.hpp"
 
@@ -28,7 +28,7 @@ void CreateQKVHeadsDeviceOperation::validate(const std::vector<Tensor> &input_te
     uint32_t num_w_cores = rm ? bbox.end_coord.x + 1 : bbox.end_coord.y + 1;
 
     TT_FATAL(this->num_q_heads % this->num_kv_heads == 0, fmt::format("Number of q heads {} must fit evenly into number of kv heads {}", this->num_q_heads, this->num_kv_heads));
-    TT_FATAL(input_shape[3] % (num_w_cores * TILE_WIDTH) == 0, fmt::format("Flattened hidden dimension {} must be a multiple of width cores {} * tile width {} to ensure that each core gets an even amount of tiles", input_shape[3], num_w_cores, TILE_WIDTH));
+    TT_FATAL(input_shape[3] % (num_w_cores * tt::constants::TILE_WIDTH) == 0, fmt::format("Flattened hidden dimension {} must be a multiple of width cores {} * tile width {} to ensure that each core gets an even amount of tiles", input_shape[3], num_w_cores, tt::constants::TILE_WIDTH));
 
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
     TT_FATAL(input_shape[0] == num_h_cores, fmt::format("Batch size  {} must be equal to num cores {}", input_shape[0], num_h_cores));

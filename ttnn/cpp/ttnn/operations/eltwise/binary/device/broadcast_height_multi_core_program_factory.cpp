@@ -5,7 +5,7 @@
 #include "binary_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -31,6 +31,7 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::constants;
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
@@ -78,7 +79,7 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
 
     constexpr bool row_major = false;
     auto [num_cores, all_cores, core_group_1, core_group_2, Ht_per_core_group_1, Ht_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, Ht, row_major);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, Ht, row_major);
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
 
@@ -214,6 +215,7 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCore::override_runtime_argument
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::constants;
 
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
@@ -256,7 +258,7 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCore::override_runtime_argument
 
     constexpr bool row_major = false;
     auto [num_cores, all_cores, core_group_1, core_group_2, Ht_per_core_group_1, Ht_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, Ht, row_major);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, Ht, row_major);
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
 

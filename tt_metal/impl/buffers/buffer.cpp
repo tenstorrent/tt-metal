@@ -128,7 +128,9 @@ Buffer::Buffer(
     buffer_type_(buffer_type),
     buffer_layout_(buffer_layout),
     shard_parameters_(shard_parameters),
-    bottom_up_(bottom_up) {
+    bottom_up_(bottom_up),
+    buffer_page_mapping_(nullptr),
+    allocate_(allocate) {
     TT_FATAL(this->device_ != nullptr and this->device_->allocator_ != nullptr);
     validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
     if (allocate) {
@@ -203,8 +205,12 @@ Buffer::Buffer(const Buffer &other) :
     buffer_type_(other.buffer_type_),
     buffer_layout_(other.buffer_layout_),
     shard_parameters_(other.shard_parameters_),
-    bottom_up_(other.bottom_up_) {
-    this->allocate();
+    bottom_up_(other.bottom_up_),
+    buffer_page_mapping_(other.buffer_page_mapping_),
+    allocate_(other.allocate_) {
+    if (this->allocate_) {
+        this->allocate();
+    }
 }
 
 Buffer &Buffer::operator=(const Buffer &other) {
@@ -216,7 +222,11 @@ Buffer &Buffer::operator=(const Buffer &other) {
         this->buffer_layout_ = other.buffer_layout_;
         this->shard_parameters_ = other.shard_parameters_;
         this->bottom_up_ = other.bottom_up_;
-        this->allocate();
+        this->buffer_page_mapping_ = other.buffer_page_mapping_;
+        this->allocate_ = other.allocate_;
+        if (this->allocate_) {
+            this->allocate();
+        }
     }
     return *this;
 }
@@ -228,8 +238,10 @@ Buffer::Buffer(Buffer &&other) :
     page_size_(other.page_size_),
     buffer_type_(other.buffer_type_),
     buffer_layout_(other.buffer_layout_),
-    shard_parameters_(other.shard_parameters_),
-    bottom_up_(other.bottom_up_) {
+    shard_parameters_(std::move(other.shard_parameters_)),
+    bottom_up_(other.bottom_up_),
+    buffer_page_mapping_(std::move(other.buffer_page_mapping_)),
+    allocate_(other.allocate_) {
     // Set `other.device_` to be nullptr so destroying other does not deallocate reserved address space that is
     // transferred to `this`
     other.device_ = nullptr;
@@ -243,8 +255,10 @@ Buffer &Buffer::operator=(Buffer &&other) {
         this->page_size_ = other.page_size_;
         this->buffer_type_ = other.buffer_type_;
         this->buffer_layout_ = other.buffer_layout_;
-        this->shard_parameters_ = other.shard_parameters_;
+        this->shard_parameters_ = std::move(other.shard_parameters_);
         this->bottom_up_ = other.bottom_up_;
+        this->buffer_page_mapping_ = std::move(other.buffer_page_mapping_);
+        this->allocate_ = other.allocate_;
         // Set `other.device_` to be nullptr so destroying other does not deallocate reserved address space that is
         // transferred to `this`
         other.device_ = nullptr;
@@ -311,8 +325,17 @@ uint64_t Buffer::translate_page_address(uint64_t offset, uint32_t bank_id) const
     return base_page_address + offset;
 }
 
+const std::shared_ptr<const BufferPageMapping>& Buffer::get_buffer_page_mapping() {
+    TT_ASSERT(is_sharded(this->buffer_layout_), "Buffer not sharded");
+    if (!this->buffer_page_mapping_) {
+        this->buffer_page_mapping_ = std::make_shared<const BufferPageMapping>(generate_buffer_page_mapping(*this));
+    }
+    return this->buffer_page_mapping_;
+}
+
 void Buffer::deallocate() {
-    if (this->device_ == nullptr or not this->device_->initialized_ or this->size_ == 0) {
+
+    if (this->device_ == nullptr or not this->device_->initialized_ or this->size_ == 0 or not this->allocate_) {
         return;
     }
     // Mark as deallocated

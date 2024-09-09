@@ -105,9 +105,9 @@ TEST_F(SingleDeviceTraceFixture, InstantiateTraceSanity) {
     }
     Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
     auto simple_program = std::make_shared<Program>(create_simple_unary_program(input, output));
-    EnqueueProgram(command_queue, simple_program, true);
+    EnqueueProgram(command_queue, *simple_program, true);
     uint32_t tid = BeginTraceCapture(this->device_, command_queue.id());
-    EnqueueProgram(command_queue, simple_program, kNonBlocking);
+    EnqueueProgram(command_queue, *simple_program, kNonBlocking);
     EndTraceCapture(this->device_, command_queue.id(), tid);
 
     // Instantiate a trace on a device bound command queue
@@ -186,7 +186,7 @@ TEST_F(SingleDeviceTraceFixture, EnqueueProgramDeviceCapture) {
     if (has_eager) {
         simple_program = std::make_shared<Program>(create_simple_unary_program(input, output));
         EnqueueWriteBuffer(command_queue, input, input_data.data(), true);
-        EnqueueProgram(command_queue, simple_program, true);
+        EnqueueProgram(command_queue, *simple_program, true);
         EnqueueReadBuffer(command_queue, output, eager_output_data.data(), true);
     }
 
@@ -199,7 +199,7 @@ TEST_F(SingleDeviceTraceFixture, EnqueueProgramDeviceCapture) {
         if (!has_trace) {
             // Program must be cached first
             tid = BeginTraceCapture(this->device_, command_queue.id());
-            EnqueueProgram(command_queue, simple_program, false);
+            EnqueueProgram(command_queue, *simple_program, false);
             EndTraceCapture(this->device_, command_queue.id(), tid);
             has_trace = true;
         }

@@ -35,15 +35,19 @@ void bind_full_operation(py::module& module, const creation_operation_t& operati
                const std::optional<DataType>& dtype,
                const std::optional<Layout>& layout,
                const std::optional<std::reference_wrapper<Device>>& device,
-               const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(ttnn::Shape{tt::tt_metal::Shape{shape}}, fill_value, dtype, layout, device, memory_config);
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<ttnn::Tensor> &optional_output_tensor,
+               uint8_t queue_id) -> ttnn::Tensor {
+                return self(queue_id, ttnn::Shape{tt::tt_metal::Shape{shape}}, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
             },
             py::arg("shape"),
             py::arg("fill_value"),
             py::arg("dtype") = std::nullopt,
             py::arg("layout") = std::nullopt,
             py::arg("device") = std::nullopt,
-            py::arg("memory_config") = std::nullopt},
+            py::arg("memory_config") = std::nullopt,
+            py::arg("optional_tensor") = std::nullopt,
+            py::arg("queue_id") = ttnn::DefaultQueueId},
         ttnn::pybind_overload_t{
             [](const creation_operation_t& self,
                const std::vector<uint32_t>& shape,
@@ -51,15 +55,19 @@ void bind_full_operation(py::module& module, const creation_operation_t& operati
                const std::optional<DataType>& dtype,
                const std::optional<Layout>& layout,
                const std::optional<std::reference_wrapper<Device>>& device,
-               const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(ttnn::Shape{tt::tt_metal::Shape{shape}}, fill_value, dtype, layout, device, memory_config);
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<ttnn::Tensor> &optional_output_tensor,
+               uint8_t queue_id) -> ttnn::Tensor {
+                return self(queue_id, ttnn::Shape{tt::tt_metal::Shape{shape}}, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
             },
             py::arg("shape"),
             py::arg("fill_value"),
             py::arg("dtype") = std::nullopt,
             py::arg("layout") = std::nullopt,
             py::arg("device") = std::nullopt,
-            py::arg("memory_config") = std::nullopt});
+            py::arg("memory_config") = std::nullopt,
+            py::arg("optional_tensor") = std::nullopt,
+            py::arg("queue_id") = ttnn::DefaultQueueId});
 }
 
 template <typename creation_operation_t>

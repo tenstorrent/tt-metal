@@ -74,6 +74,7 @@ def test_mixtral_model_inference(t3k_mesh_device, use_program_cache, reset_seeds
         state_dict=state_dict,
         args=model_args,
         layers=list(range(model_args.n_layers)),
+        start_pos_ids=[generation_start_pos for _ in range(batch)],
         dtype=dtype,
     )
 
@@ -94,18 +95,16 @@ def test_mixtral_model_inference(t3k_mesh_device, use_program_cache, reset_seeds
         logger.info(f"[Decode] Generating token {i}")
 
         start_pos = generation_start_pos + i
-        current_pos = start_pos
+        start_pos_ids = [start_pos for _ in range(batch)]
 
         decode_input = prepare_inputs_ttnn(
             tt_decode_input,
             model_args.dim,
-            start_pos,
-            model_args,
             tt_model.mesh_device,
         )
 
         # Run TT model
-        tt_out = tt_model(decode_input, start_pos, current_pos)
+        tt_out = tt_model(decode_input, start_pos_ids)
 
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (

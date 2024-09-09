@@ -5,7 +5,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sgd/moreh_sgd_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -212,7 +212,7 @@ operation::ProgramWithCallbacks moreh_sgd_(
                 runtime_args[0] = param_in.buffer()->address();
                 runtime_args[1] = grad.buffer()->address();
                 if (momentum_buffer_in.has_value()) {
-                    runtime_args[2] = momentum_buffer_in.value().buffer()->address();;
+                    runtime_args[2] = momentum_buffer_in.value().buffer()->address();
                 }
             }
 

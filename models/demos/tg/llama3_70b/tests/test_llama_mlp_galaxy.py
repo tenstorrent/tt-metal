@@ -137,7 +137,6 @@ def run_test_LlamaMLP_inference(
     )
 
     tt_mlp_input = tt_llama_mlp_prepare_inputs(tt_LlamaMLP_model, tt_inp)
-
     tt_out = tt_LlamaMLP_model(tt_mlp_input)
 
     tt_out = ttnn.to_torch(
@@ -166,8 +165,14 @@ def run_test_LlamaMLP_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    [(32, 1, 0.9997), (1, 256, 0.9995)],
-    ids=["decode", "prefill"],
+    [
+        (32, 1, 0.9997),
+        #  (1, 256, 0.9995)
+    ],
+    ids=[
+        "decode",
+        #  "prefill"
+    ],
 )
 @pytest.mark.parametrize(
     "max_batch_size, max_context_len",

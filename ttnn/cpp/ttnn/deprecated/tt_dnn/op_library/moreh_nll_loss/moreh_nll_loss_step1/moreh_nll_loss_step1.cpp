@@ -6,7 +6,7 @@
 #include "tt_metal/host_api.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/run_operation.hpp"
 
 using namespace tt::constants;
@@ -73,7 +73,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_step1_impl(
     uint32_t cb_usage = target_num_tile * target_tile_size + weight_num_tile * data_tile_size +
                         intermed_num_tile * intermed_tile_size + output_num_tile * data_tile_size;
 
-    const bool use_large_algorithm = cb_usage >= available_L1;;
+    const bool use_large_algorithm = cb_usage >= available_L1;
 
     if (use_large_algorithm) {
         CreateCircularBuffer(

@@ -26,7 +26,7 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "tests/tt_metal/tt_metal/unit_tests_common/compute/matmul/matmul_utils.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 using namespace tt;
 ////////////////////////////////////////////////////////////////////////////////
@@ -362,11 +362,11 @@ int main(int argc, char** argv) {
         std::shared_ptr<tt::tt_metal::Buffer> input_buffer1;
         std::shared_ptr<tt::tt_metal::Buffer> output_buffer;
         SHAPE shape_in0 = {1, 1, M, K};
-        tt::deprecated::Tensor<bfloat16> tensor_in0_fp16 = tt::deprecated::initialize_tensor<bfloat16>(shape_in0, tt::deprecated::Initialize::ONES, 100, std::chrono::system_clock::now().time_since_epoch().count());;
-        tt::deprecated::Tensor<float> tensor_in0_fp8 = tt::deprecated::initialize_tensor<float>(shape_in0, tt::deprecated::Initialize::ONES, 100, std::chrono::system_clock::now().time_since_epoch().count());;
+        tt::deprecated::Tensor<bfloat16> tensor_in0_fp16 = tt::deprecated::initialize_tensor<bfloat16>(shape_in0, tt::deprecated::Initialize::ONES, 100, std::chrono::system_clock::now().time_since_epoch().count());
+        tt::deprecated::Tensor<float> tensor_in0_fp8 = tt::deprecated::initialize_tensor<float>(shape_in0, tt::deprecated::Initialize::ONES, 100, std::chrono::system_clock::now().time_since_epoch().count());
         SHAPE shape_in1 = {1, 1, K, N};
-        tt::deprecated::Tensor<bfloat16> tensor_in1_fp16 = tt::deprecated::initialize_tensor<bfloat16>(shape_in1, tt::deprecated::Initialize::ONES, 100, std::chrono::system_clock::now().time_since_epoch().count());;
-        tt::deprecated::Tensor<float> tensor_in1_fp8 = tt::deprecated::initialize_tensor<float>(shape_in1, tt::deprecated::Initialize::ONES, 100, std::chrono::system_clock::now().time_since_epoch().count());;
+        tt::deprecated::Tensor<bfloat16> tensor_in1_fp16 = tt::deprecated::initialize_tensor<bfloat16>(shape_in1, tt::deprecated::Initialize::ONES, 100, std::chrono::system_clock::now().time_since_epoch().count());
+        tt::deprecated::Tensor<float> tensor_in1_fp8 = tt::deprecated::initialize_tensor<float>(shape_in1, tt::deprecated::Initialize::ONES, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
         if (single_core) {
             if (dtype == 1) {
@@ -384,7 +384,7 @@ int main(int argc, char** argv) {
 
                 // output
                 SHAPE output_hsape = {1, 1, M, N};
-                tt::deprecated::Tensor<bfloat16> out_tensor = tt::deprecated::initialize_tensor<bfloat16>(output_hsape, tt::deprecated::Initialize::ZEROS, 100, std::chrono::system_clock::now().time_since_epoch().count());;
+                tt::deprecated::Tensor<bfloat16> out_tensor = tt::deprecated::initialize_tensor<bfloat16>(output_hsape, tt::deprecated::Initialize::ZEROS, 100, std::chrono::system_clock::now().time_since_epoch().count());
                 vector<uint32_t> outputs = pack_bfloat16_vec_into_uint32_vec(out_tensor.get_values());
                 output_buffer = create_and_transfer_data_sharded_cb(device, outputs, Mt, Nt);
 
@@ -401,7 +401,7 @@ int main(int argc, char** argv) {
 
                 // output
                 SHAPE output_hsape = {1, 1, M, N};
-                tt::deprecated::Tensor<float> out_tensor = tt::deprecated::initialize_tensor<float>(output_hsape, tt::deprecated::Initialize::ZEROS, 100, std::chrono::system_clock::now().time_since_epoch().count());;
+                tt::deprecated::Tensor<float> out_tensor = tt::deprecated::initialize_tensor<float>(output_hsape, tt::deprecated::Initialize::ZEROS, 100, std::chrono::system_clock::now().time_since_epoch().count());
                 auto output_tilized = tilize(out_tensor.get_values(), M, N);
                 auto outputs = pack_fp32_vec_as_bfp8_tiles(output_tilized, true, false);
                 output_buffer = create_and_transfer_data_sharded_cb_fp8(device, outputs, Mt, Nt);
@@ -423,11 +423,11 @@ int main(int argc, char** argv) {
         if (fp32_dest_acc_en and (out_subblock_h * out_subblock_w > 4)) {
             if (out_subblock_w >= 4) {
                 out_subblock_h = 1;
-                out_subblock_w = find_max_block_size(out_subblock_w, 4);
+                out_subblock_w = tt::tt_metal::find_max_block_size(out_subblock_w, 4);
             } else {
                 while (out_subblock_h * out_subblock_w > 4) {
-                    uint32_t div = find_max_divisor(out_subblock_h, out_subblock_h-1);
-                    out_subblock_h = find_max_block_size(out_subblock_h, div);
+                    uint32_t div = tt::tt_metal::find_max_divisor(out_subblock_h, out_subblock_h-1);
+                    out_subblock_h = tt::tt_metal::find_max_block_size(out_subblock_h, div);
                 }
             }
         }

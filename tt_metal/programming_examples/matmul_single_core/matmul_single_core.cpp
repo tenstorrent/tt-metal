@@ -38,7 +38,7 @@ void golden_matmul(std::vector<bfloat16>& a, std::vector<bfloat16>& b, std::vect
                 float_tmp = a[idx_a].to_float() * b[idx_b].to_float();
                 c_f += float_tmp;
                 idx_a += 1;
-                idx_b += K;
+                idx_b += N;
             }
             output.at(idx_c) = bfloat16(c_f);
         }

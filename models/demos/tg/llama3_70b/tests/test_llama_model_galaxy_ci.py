@@ -24,8 +24,14 @@ from models.demos.tg.llama3_70b.tests.test_llama_model_galaxy import run_test_Ll
 )
 @pytest.mark.parametrize(
     "batch, seq_len",
-    [(32, 1)],
-    ids=["decode"],
+    [
+        (32, 1),
+        #  (1, 256)
+    ],
+    ids=[
+        "decode",
+        #  "prefill"
+    ],
 )
 @pytest.mark.parametrize(
     "max_batch_size, max_context_len",

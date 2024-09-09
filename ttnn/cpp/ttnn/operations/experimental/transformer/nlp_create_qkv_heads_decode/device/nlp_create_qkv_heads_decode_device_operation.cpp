@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "nlp_create_qkv_heads_decode_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 #include "tt_metal/host_api.hpp"
 
@@ -11,6 +11,7 @@ namespace ttnn::operations::experimental::transformer {
 
 // Generic NLP CreateHeads op for decode
 void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
+    using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
     const auto input_shape = input_tensor.get_legacy_shape();
     // TODO: Rewrite validation for this decode case
@@ -43,6 +44,7 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
 }
 
 std::vector<tt::tt_metal::Shape> NLPCreateHeadsDecodeDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    using namespace tt::constants;
     std::vector<Shape> output_shape_vec;
     const auto& input_tensor = input_tensors.at(0);
     const auto input_shape = input_tensor.get_legacy_shape();
@@ -62,6 +64,7 @@ std::vector<tt::tt_metal::Shape> NLPCreateHeadsDecodeDeviceOperation::compute_ou
 }
 
 std::vector<Tensor> NLPCreateHeadsDecodeDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+    using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
     const auto input_shape = input_tensor.get_legacy_shape();
     auto output_shapes = this->compute_output_shapes(input_tensors);

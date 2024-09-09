@@ -34,7 +34,8 @@ from models.utility_functions import (
     disable_compilation_reports,
     is_e75,
     is_wormhole_b0,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
 )
 from models.perf.perf_utils import prep_perf_report
 import ttnn
@@ -354,7 +355,7 @@ def run_test_FalconCausalLM_end_to_end(
             assert does_pass, f"PCC value is lower than {pcc}"
 
 
-@skip_for_wormhole_b0(reason_str="Does not run on single WH")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Does not run on single WH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len, expected_inference_time",

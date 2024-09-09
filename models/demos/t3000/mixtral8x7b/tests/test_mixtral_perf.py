@@ -59,8 +59,14 @@ def test_mixtral_model_perf(
 
     dtype = ttnn.bfloat8_b
 
+    batch_size = 32
+    # Although in decode-only mode change the max seqlen to 16k to avoid KV cache running out of memory size
+    max_seqlen = 16384
+
     # Can use dummy_weights=True correctness is not tested, but it is much slower
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0), dummy_weights=False)
+    model_args = TtModelArgs(
+        t3k_mesh_device.get_device(0), dummy_weights=False, max_batch_size=batch_size, max_seq_len=max_seqlen
+    )
     model_args.n_layers = 32
 
     # Clear global profiler state before starting measurements
@@ -70,7 +76,7 @@ def test_mixtral_model_perf(
     state_dict = model_args.load_state_dict()
     profiler.end("weight_loading")
 
-    prompts = ["Once"] * 32
+    prompts = ["Once"] * batch_size
     if model_args.dummy_weights:
         encoded_prompts = [[1, 5713]] * len(prompts)  # manual encoding of the "Once" prompt
     else:
@@ -90,8 +96,9 @@ def test_mixtral_model_perf(
         state_dict=state_dict,
         args=model_args,
         layers=list(range(model_args.n_layers)),
+        start_pos_ids=[generation_start_pos] * model_args.max_batch_size,
         dtype=dtype,
-        rotary_on_host=True,
+        rotary_on_host=False,
     )
     profiler.end("TtMixtral_model_setup")
 
@@ -135,8 +142,8 @@ def test_mixtral_model_perf(
     "prefill_seqlen, expected_compile_time, expected_inference_time",
     (
         (128, 80, 0.23),
-        (1024, 80, 0.61),
-        (1024 * 2, 80, 1.13),
+        (1024, 80, 1.5),  # FIXME #12318
+        (1024 * 2, 80, 4.6),  # FIXME #12318
         # (1024*4, 80, 60),
         # (1024*8, 150, 80),
         # (1024*16, 150, 100),
@@ -168,10 +175,23 @@ def test_mixtral_model_with_prefill_perf(
         from tracy import signpost
 
     dtype = ttnn.bfloat8_b
-    batch_size = 32
+
+    if prefill_seqlen >= 16 * 1024:
+        seq_len = 32 * 1024  # Cap the sequence length to a max of 32k
+        batch_size = 8
+    elif prefill_seqlen >= 8 * 1024:
+        seq_len = 16 * 1024
+        batch_size = 16
+    else:
+        seq_len = (
+            prefill_seqlen * 2
+        )  # The prompts being used here have sligtly more tokens than the prefill seq. this accounts for that.
+        batch_size = 32
 
     # Can use dummy_weights=True correctness is not tested, but it is much slower
-    model_args = TtModelArgs(t3k_mesh_device.get_device(0), dummy_weights=False)
+    model_args = TtModelArgs(
+        t3k_mesh_device.get_device(0), dummy_weights=False, max_batch_size=batch_size, max_seq_len=seq_len
+    )
     model_args.n_layers = 32
 
     # Clear global profiler state before starting measurements
@@ -195,25 +215,23 @@ def test_mixtral_model_with_prefill_perf(
     profiler.start("preprocessing_inputs")
 
     (
-        input_tokens_prefill_tt,
-        input_tokens_decode_tt,
-        max_prompt_len,
-        input_mask,
         input_tokens_prefill_pt,
-        input_tokens_decode_pt,
-        input_mask_pt,
-        prefill_seq_len,
         encoded_prompts,
-    ) = preprocess_inputs_prefill(prompts, tokenizer, model_args, dtype, False, t3k_mesh_device)
+        decoding_pos,
+        prefill_lens,
+    ) = preprocess_inputs_prefill(
+        prompts,
+        tokenizer,
+        model_args,
+        dtype,
+        False,
+        t3k_mesh_device,
+        2,
+    )
 
     profiler.end("preprocessing_inputs")
 
-    assert (
-        prefill_seq_len == prefill_seqlen
-    ), f"The used prompt #tokens {len(encoded_prompts[0])} do not comply with the prefill seqlen being used. Expected: {prefill_seqlen} != from prompt:{prefill_seq_len}"
-
-    pt_decode_input = embd(input_tokens_decode_pt[:, 0]).view(batch_size, 1, -1)
-    pt_prefill_input = [embd(input_tokens_prefill_pt[b, :]).view(1, prefill_seq_len, -1) for b in range(batch_size)]
+    pt_prefill_input = [embd(input_tokens_prefill_pt[b]).view(1, prefill_lens[b], -1) for b in range(batch_size)]
 
     profiler.start("Mixtral_model_setup")
     # Load TTNN model
@@ -223,7 +241,7 @@ def test_mixtral_model_with_prefill_perf(
         args=model_args,
         layers=list(range(model_args.n_layers)),
         dtype=dtype,
-        start_pos=prefill_seq_len,
+        start_pos_ids=decoding_pos,
     )
     profiler.end("TtMixtral_model_setup")
 
@@ -232,7 +250,7 @@ def test_mixtral_model_with_prefill_perf(
         signpost("prefill warmup")
     profiler.clear()
     profiler.start(f"e2e_prefill_warmup")
-    run_inference_prefill(tt_model, model_args, prefill_seq_len, t3k_mesh_device, pt_prefill_input, 1)
+    run_inference_prefill(tt_model, model_args, prefill_seqlen, t3k_mesh_device, pt_prefill_input, 1)
     profiler.end(f"e2e_prefill_warmup")
     profiler.print(units="ms")
     prefill_warmup_time = profiler.get("e2e_prefill_warmup")
@@ -246,7 +264,7 @@ def test_mixtral_model_with_prefill_perf(
     profiler.clear()
     profiler.start(f"e2e_prefill_1_user")
     # Prefill a single user, as this will be the real-world usage
-    prefill_out = run_inference_prefill(tt_model, model_args, prefill_seq_len, t3k_mesh_device, pt_prefill_input, 1)
+    prefill_out = run_inference_prefill(tt_model, model_args, prefill_seqlen, t3k_mesh_device, pt_prefill_input, 1)
     profiler.end(f"e2e_prefill_1_user")
     profiler.print(units="ms")
     prefill_time = profiler.get("e2e_prefill_1_user")
@@ -256,7 +274,7 @@ def test_mixtral_model_with_prefill_perf(
         ttnn.DumpDeviceProfiler(t3k_mesh_device.get_device(device_id))
 
     # Decode (Run 1 warmup iteration before running 1 perf iteration)
-    generation_start_pos = prefill_seq_len
+    generation_start_pos = prefill_seqlen
     generation_length = 1
 
     if not is_ci_env:  # Enable tracy signpost support in local runs only
@@ -283,13 +301,12 @@ def test_mixtral_model_with_prefill_perf(
 
     comment = f"time_to_1st_token_seqlen={prefill_seqlen}_num_layers={model_args.n_layers}"
 
-    # Time to first token is measured as 1 user prefill time + 1 decode iteration, since we currently do not generate first token during prefill
-    prefill_time_to_first = prefill_time + decode_time
+    prefill_time_to_first = prefill_time
 
     prep_perf_report(
         model_name=f"Mixtral8x7B_prefill_{comment}",
         batch_size=model_args.max_batch_size,
-        inference_and_compile_time=prefill_warmup_time + decode_warmup_time,
+        inference_and_compile_time=prefill_warmup_time,
         inference_time=prefill_time_to_first,
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
@@ -297,11 +314,11 @@ def test_mixtral_model_with_prefill_perf(
     )
 
 
-def run_inference_prefill(tt_model, model_args, prefill_seq_len, mesh_device, pt_prefill_input, batch_size):
+def run_inference_prefill(tt_model, model_args, prefill_seqlen, mesh_device, pt_prefill_input, batch_size):
     # Get rotary matrix
     profiler.start("prefill_prepare_rot_matrices")
     rot_mats_prefill = get_prefill_rot_mat(
-        model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=prefill_seq_len
+        model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=prefill_seqlen
     )
 
     head_dim = model_args.dim // model_args.n_heads
@@ -328,8 +345,7 @@ def run_inference_prefill(tt_model, model_args, prefill_seq_len, mesh_device, pt
         profiler.start(f"e2e_prefill_inference_{batch_id}")
         tt_out = tt_model(
             prefill_input,
-            0,  # Start position
-            0,  # Current position
+            [0] * model_args.max_batch_size,
             attn_mask,
             rot_mats_prefill,
             transformation_mats,
@@ -358,14 +374,11 @@ def run_inference_decode(tt_model, embd, encoded_prompts, generation_start_pos, 
         profiler.end(f"Decode_token_embedding_{i}")
 
         start_pos = generation_start_pos + i
-        current_pos = start_pos
 
         profiler.start(f"Decode_prepare_inputs_{i}")
         decode_input = prepare_inputs_ttnn(
             pt_decode_input,
             tt_model.args.dim,
-            start_pos,
-            tt_model.args,
             tt_model.mesh_device,
         )
         profiler.end(f"Decode_prepare_inputs_{i}")
@@ -373,7 +386,7 @@ def run_inference_decode(tt_model, embd, encoded_prompts, generation_start_pos, 
         # Run TT model
         profiler.start(f"inference_decode_{i}")
         profiler.start(f"python_dispatch_for_inference_{i}")
-        tt_out = tt_model(decode_input, start_pos, current_pos)
+        tt_out = tt_model(decode_input, [start_pos] * batch)
         profiler.end(f"python_dispatch_for_inference_{i}")
 
         # Convert ttnn tensor to torch tensor

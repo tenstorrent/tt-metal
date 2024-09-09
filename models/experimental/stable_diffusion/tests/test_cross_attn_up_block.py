@@ -16,7 +16,8 @@ from models.utility_functions import (
     torch_to_tt_tensor,
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
 )
 from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 from models.experimental.stable_diffusion.tt.unet_2d_blocks import TtCrossAttnUpBlock2D
@@ -24,7 +25,7 @@ from models.experimental.stable_diffusion.tt.experimental_ops import UseDeviceCo
 
 
 # low PCC for value 2, 3: 0.9851282356324425 etc.
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.skip(reason="Test is failing, see issue #7536")
 @pytest.mark.parametrize("index", [1, 2, 3])
 def test_run_cross_attn_up_block_real_input_inference(device, index, model_location_generator):

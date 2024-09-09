@@ -161,6 +161,66 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
         )
 
         attn_masks = None
+
+    elif llama_decoder_model.model_config["LLM_MODE"] == "prefill":
+        x = x.unsqueeze(1)  # [batch, seq_len, hidden_dim] -> [batch, 1, seq_len, hidden_dim]
+
+        xs = ttnn.from_torch(
+            x,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=llama_decoder_model.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ShardTensor2dMesh(
+                llama_decoder_model.mesh_device, dims=(3, None), cluster_shape=llama_decoder_model.cluster_shape
+            ),
+        )
+
+        cos, sin = precompute_freqs(
+            llama_decoder_model.head_dim,
+            llama_decoder_model.max_seq_len * 2,
+            llama_decoder_model.rope_theta,
+            use_scaled=False,
+        )
+        cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
+
+        assert cos_gathered.size() == (1, 1, seq_len, llama_decoder_model.head_dim)
+        assert sin_gathered.size() == (1, 1, seq_len, llama_decoder_model.head_dim)
+
+        cos_gathereds = ttnn.as_tensor(
+            cos_gathered,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            # cache_file_name=cache_name(f"cos_gathered_prefill_{seq_len}"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            device=llama_decoder_model.mesh_device,
+            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.mesh_device),
+        )
+        sin_gathereds = ttnn.as_tensor(
+            sin_gathered,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            # cache_file_name=cache_name(f"sin_gathered_prefill_{seq_len}"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            device=llama_decoder_model.mesh_device,
+            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.mesh_device),
+        )
+
+        rot_mats = [cos_gathereds, sin_gathereds]
+
+        attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
+        attn_mask = torch.triu(attn_mask, diagonal=1)
+        attn_mask = attn_mask.expand(1, batch, -1, -1)
+        attn_masks = ttnn.as_tensor(
+            attn_mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            # cache_file_name=cache_name(f"attn_mask_prefill_{seq_len}"),
+            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            device=llama_decoder_model.mesh_device,
+        )
+
     return (
         xs,
         start_pos,
@@ -337,8 +397,14 @@ def run_test_LlamaDecoder_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    [(32, 1, 0.995)],
-    ids=["decode"],
+    [
+        (32, 1, 0.995),
+        #  (1, 256, 0.995)
+    ],
+    ids=[
+        "decode",
+        #  "prefill"
+    ],
 )
 @pytest.mark.parametrize(
     "max_batch_size, max_context_len",

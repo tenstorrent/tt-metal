@@ -18,8 +18,8 @@ namespace ttnn::operations::data_movement::detail {
 
 std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
     Buffer* input_buffer, Buffer* output_buffer) {
-    auto output_buffer_page_mapping = generate_buffer_page_mapping(*output_buffer);
-    auto input_buffer_page_mapping = generate_buffer_page_mapping(*input_buffer);
+    const auto& output_buffer_page_mapping = *output_buffer->get_buffer_page_mapping();
+    const auto& input_buffer_page_mapping = *input_buffer->get_buffer_page_mapping();
 
     const auto& output_shard_to_host_mapping = output_buffer_page_mapping.dev_page_to_host_page_mapping_;
     const auto& input_page_to_local_page_mapping = input_buffer_page_mapping.host_page_to_local_shard_page_mapping_;

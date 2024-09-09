@@ -4,13 +4,18 @@
 
 import pytest
 
-from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0
+from models.utility_functions import skip_for_grayskull, is_wormhole_b0, is_blackhole
 from models.demos.t3000.llama2_70b.tt.llama_common import setup_llama_env, check_mesh_device
 from models.demos.t3000.llama2_70b.tests.test_llama_model import run_test_LlamaModel_inference
 
 
+N_LAYERS_TO_PCC = {
+    1: 0.99,
+}
+
+
 @skip_for_grayskull("Requires eth connected devices to run")
-# @skip_for_wormhole_b0("See GH Issue #10317")
+# @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="See GH Issue #10317")
 @pytest.mark.parametrize(
     "llama_version",
     (
@@ -18,11 +23,7 @@ from models.demos.t3000.llama2_70b.tests.test_llama_model import run_test_LlamaM
         ("llama3"),
     ),
 )
-@pytest.mark.parametrize(
-    "pcc, n_layers",
-    ((0.99, 1),),
-    ids=("1L",),
-)
+@pytest.mark.parametrize("n_layers", (1,), ids=("1L",))
 @pytest.mark.parametrize(
     "batch, seq_len",
     ((32, 1), (1, 128), (1, 2048), (1, 8192)),
@@ -42,7 +43,6 @@ from models.demos.t3000.llama2_70b.tests.test_llama_model import run_test_LlamaM
 def test_LlamaModel_inference(
     batch,
     seq_len,
-    pcc,
     n_layers,
     t3k_mesh_device,
     max_batch_size,
@@ -73,7 +73,7 @@ def test_LlamaModel_inference(
         t3k_mesh_device,
         batch,
         seq_len,
-        pcc,
+        N_LAYERS_TO_PCC[n_layers],
         model_config,
         n_layers,
         llama_version,
