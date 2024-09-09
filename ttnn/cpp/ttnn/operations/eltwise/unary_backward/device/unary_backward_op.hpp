@@ -19,10 +19,6 @@ enum class UnaryBackwardOpType {
     SOFTPLUS_BW,
     DIV_BW,
     RDIV_BW,
-    POW_BW,
-    TANH_BW,
-    EXP_BW,
-    SQRT_BW,
     ASSIGN_BW,
     MULTIGAMMALN_BW,
     ADD_BW,
@@ -171,12 +167,6 @@ std::vector<Tensor> _rdiv_bw( const Tensor& grad, const Tensor& input, float sca
 std::vector<Tensor> _gelu_bw( const Tensor& grad, const Tensor& input, string approximate = "none", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 std::vector<Tensor> _repeat_bw(const Tensor& grad, const Tensor& input, const tt::tt_metal::Shape& shape, const std::optional<MemoryConfig>& output_mem_config);
-
-std::vector<std::optional<Tensor>> _pow_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config , std::optional<Tensor> input_grad);
-
-std::vector<std::optional<Tensor>> _exp_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad);
-std::vector<std::optional<Tensor>> _tanh_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad);
-std::vector<std::optional<Tensor>> _sqrt_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad);
 
 std::vector<Tensor> _prod_bw( const Tensor& grad, const Tensor& input, bool all_dimensions = true, int64_t dim = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config);
@@ -644,34 +634,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::RDIV_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, string round_mode, const std::optional<MemoryConfig>& output_mem_config ) {
         return _rdiv_bw(grad, input, scalar, round_mode, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::POW_BW> {
-    static std::vector<std::optional<Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad ) {
-        return _pow_bw(queue_id, grad, input, exponent, output_mem_config, input_grad);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::EXP_BW> {
-    static std::vector<std::optional<Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad ) {
-        return _exp_bw(queue_id, grad, input, output_mem_config, input_grad);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::TANH_BW> {
-    static std::vector<std::optional<Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad ) {
-        return _tanh_bw(queue_id, grad, input, output_mem_config, input_grad);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::SQRT_BW> {
-    static std::vector<std::optional<Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad ) {
-        return _sqrt_bw(queue_id, grad, input, output_mem_config, input_grad);
     }
 };
 
