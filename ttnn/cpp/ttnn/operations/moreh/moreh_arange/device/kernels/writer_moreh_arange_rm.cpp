@@ -40,7 +40,7 @@ void kernel_main() {
 
         uint32_t w_addr = get_write_ptr(cb_out);
 
-        #ifdef OUTPUT_DTYPE_BFLOAT16
+#ifdef OUTPUT_DTYPE_BFLOAT16
         auto ptr = reinterpret_cast<uint16_t *>(w_addr);
 
         for (uint32_t w = 0; w < TILE_WIDTH; w++) {
@@ -49,8 +49,8 @@ void kernel_main() {
             val.f = start_u.f + step_u.f * idx;
             ptr[w] = uint16_t(val.u >> 16);
         }
-        #endif
-        #ifdef OUTPUT_DTYPE_INT32
+#endif
+#ifdef OUTPUT_DTYPE_INT32
         auto ptr = reinterpret_cast<uint32_t *>(w_addr);
 
         for (uint32_t w = 0; w < TILE_WIDTH; w++) {
@@ -59,8 +59,8 @@ void kernel_main() {
             val = start_u.f + step_u.f * idx;
             ptr[w] = val;
         }
-        #endif
-        #ifdef OUTPUT_DTYPE_FLOAT32
+#endif
+#ifdef OUTPUT_DTYPE_FLOAT32
         auto ptr = reinterpret_cast<uint32_t *>(w_addr);
 
         for (uint32_t w = 0; w < TILE_WIDTH; w++) {
@@ -69,7 +69,7 @@ void kernel_main() {
             val.f = start_u.f + step_u.f * idx;
             ptr[w] = val.u;
         }
-        #endif
+#endif
 
         uint32_t noc_offfset = tile_idx * TILE_WIDTH * element_size;
         uint64_t dst_noc_addr = get_noc_addr(0, s0, noc_offfset);
