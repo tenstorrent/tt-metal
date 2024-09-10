@@ -14,7 +14,7 @@ REGION_ALIAS("REGION_LDM", LOCAL_DATA_MEM)
 
 __firmware_start = ORIGIN(ERISC_CODE);
 __firmware_stack_size = 1024;
-__firmware_global_pointer = ORIGIN(ERISC_DATA) + 2048;
+__firmware_global_pointer = ORIGIN(ERISC_DATA) + 0x7fc;
 
 
 INCLUDE "erisc-b0-app-sections.ld"
