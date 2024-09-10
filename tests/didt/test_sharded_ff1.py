@@ -225,7 +225,7 @@ def test_reproduce_matmul_2d_hang(
 
         for device_idx in range(num_devices):
             out[device_idx].deallocate(True)
-            logger.info(f"Iteration = {i}")
+        logger.info(f"Iteration = {i}")
 
     if determinism_check_enabled:
         for device_idx in range(num_devices):
