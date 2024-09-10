@@ -7,7 +7,7 @@
 #include "ttnn/run_operation.hpp"
 #include "device/interleaved_to_sharded_op.hpp"
 #include "interleaved_to_sharded.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 namespace ttnn::operations::data_movement{
 
@@ -58,7 +58,7 @@ ttnn::Tensor InterleavedToShardedOperation::invoke(
                         break;
                     default: TT_ASSERT(false, "Unsupported sharding scheme");
                 }
-                grid_set = num_cores_to_corerange_set(num_cores, grid_size, row_wise);
+                grid_set = tt::tt_metal::num_cores_to_corerange_set(num_cores, grid_size, row_wise);
             } else if constexpr (std::is_same_v<GridType, CoreRangeSet>) {
                 auto bbox = grid.bounding_box();
                 grid_size = CoreCoord{bbox.end_coord.x + 1, bbox.end_coord.y + 1};

@@ -39,7 +39,7 @@ void golden_matmul(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16>& o
                 float_tmp = a[idx_a].to_float() * b[idx_b].to_float();
                 c_f += float_tmp;
                 idx_a += 1;
-                idx_b += K;
+                idx_b += N;
             }
             output.at(idx_c) = bfloat16(c_f);
         }

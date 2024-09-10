@@ -138,8 +138,7 @@ models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
 models/demos/tg/llama3_70b @cglagovichTT @caixunshiren @uaydonat
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/grayskull @uaydonat @eyonland
-models/demos/resnet @mywoodstock @shwetankTT @tt-aho
-models/demos/ttnn_resnet @mywoodstock @shwetankTT @tt-aho
+models/demos/**/*resnet* @mywoodstock @shwetankTT @tt-aho
 models/experimental/functional_unet @esmalTT @uaydonat @mywoodstock
 models/perf/ @uaydonat @tt-rkim
 models/perf/benchmarking_utils.py @skhorasganiTT @tt-rkim
@@ -160,6 +159,7 @@ tests/python_api_testing/unit_testing/fallback_ops @tt-aho
 tests/ttnn/integration_tests/stable_diffusion @esmalTT @uaydonat @mywoodstock
 tests/device_perf_tests/stable_diffusion/test_perf_stable_diffusion.py @esmalTT @uaydonat @mywoodstock
 tests/ttnn/integration_tests/unet @esmalTT @uaydonat @mywoodstock
+tests/nightly/wh_b0_only_eth/experimental/functional_unet @esmalTT @uaydonat @mywoodstock
 scripts/profiler/ @mo-tenstorrent
 scripts/docker @ttmchiou @TT-billteng @tt-rkim
 

@@ -7,7 +7,7 @@
 #include "ttnn/operations/conv/conv2d/device/optimized_conv_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharding_utilities.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -412,11 +412,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     if (fp32_dest_acc_en and (out_subblock_h_ntiles * out_subblock_w_ntiles > 4)) {
         if (out_subblock_w_ntiles >= 4) {
             out_subblock_h_ntiles = 1;
-            out_subblock_w_ntiles = find_max_block_size(out_subblock_w_ntiles, 4);
+            out_subblock_w_ntiles = tt::tt_metal::find_max_block_size(out_subblock_w_ntiles, 4);
         } else {
             while (out_subblock_h_ntiles * out_subblock_w_ntiles > 4) {
-                uint32_t div = find_max_divisor(out_subblock_h_ntiles, out_subblock_h_ntiles - 1);
-                out_subblock_h_ntiles = find_max_block_size(out_subblock_h_ntiles, div);
+                uint32_t div = tt::tt_metal::find_max_divisor(out_subblock_h_ntiles, out_subblock_h_ntiles - 1);
+                out_subblock_h_ntiles = tt::tt_metal::find_max_block_size(out_subblock_h_ntiles, div);
             }
         }
     }
@@ -1672,79 +1672,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             }
         };
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
-}
-
-operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(
-    const Tensor& a,
-    const Tensor& b,
-    const Shape& ashape,
-    std::optional<const Tensor> bias,
-    const std::optional<const Tensor> conv_reader_indices,
-    sliding_window::SlidingWindowConfig sliding_window_config,
-    uint32_t output_channels,
-    uint32_t groups,
-    bool untilize_out,
-    bool has_bias,
-    bool fuse_relu,
-    const OptimizedConvParallelizationConfig& parallelization_config,
-    const OptimizedConvBlockConfig& block_config,
-    uint32_t extra_padding_for_32B_alignment,
-    bool use_shallow_conv_variant,
-    bool transpose_mcast,
-    Tensor& output,
-    DeviceComputeKernelConfig compute_kernel_config,
-    bool enable_act_double_buffer,
-    bool enable_split_reader,
-    bool enable_subblock_padding) {
-    tt_metal::Program program = tt_metal::CreateProgram();
-    if(a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        return multi_core_optimized_conv_width_sharded_v2_impl(
-        program,
-        a,
-        b,
-        ashape,
-        bias,
-        conv_reader_indices,
-        sliding_window_config,
-        output_channels,
-        groups,
-        untilize_out,
-        has_bias,
-        fuse_relu,
-        parallelization_config,
-        block_config,
-        extra_padding_for_32B_alignment,
-        use_shallow_conv_variant,
-        transpose_mcast,
-        output,
-        compute_kernel_config,
-        enable_act_double_buffer,
-        enable_split_reader,
-        enable_subblock_padding);
-    }
-    return multi_core_optimized_conv_sharded_v2_impl(
-        program,
-        a,
-        b,
-        ashape,
-        bias,
-        conv_reader_indices,
-        sliding_window_config,
-        output_channels,
-        groups,
-        untilize_out,
-        has_bias,
-        fuse_relu,
-        parallelization_config,
-        block_config,
-        extra_padding_for_32B_alignment,
-        use_shallow_conv_variant,
-        transpose_mcast,
-        output,
-        compute_kernel_config,
-        enable_act_double_buffer,
-        enable_split_reader,
-        enable_subblock_padding);
 }
 
 operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(

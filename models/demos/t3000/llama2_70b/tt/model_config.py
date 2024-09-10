@@ -33,7 +33,7 @@ def get_model_config(
     llm_mode = "decode" if seq_len == 1 else "prefill"
     assert num_devices == 8
     assert batch in (1, 16, 32)
-    assert seq_len in (1, 128, 256, 2048, 8192, 32 * 1024, 128 * 1024)
+    assert seq_len in (1, 128, 256, 2048, 4096, 8192, 32 * 1024, 128 * 1024)
 
     # Supported values, TODO update for larger TT chips
     if max_context_len == 8192:

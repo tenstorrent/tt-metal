@@ -21,8 +21,12 @@ class TtModelArgs:
     norm_eps = 1e-05
     vocab_size = 32000
 
-    max_batch_size = 32  # default
-    max_seq_len = 32768  # default
+    # On a T3000 (8 chips) machine, we support up to a batch size of 32, if the max_seq_len is 8k. Below is a summary of batch_size <-> seqlen pairings:
+    # Seqlen >= 16k -> Batch_size = 8
+    # Seqlen >= 8k -> Batch_size = 16
+    # Seqlen < 8k -> Batch_size = 32
+    max_batch_size = 8  # Max batch size supported when max_seq_len = 32768
+    max_seq_len = 32768  # Maximum supported sequence length
     moe = True
     num_experts = 8
     num_experts_per_tok = 2
@@ -66,7 +70,7 @@ class TtModelArgs:
         "OUTPUT_MM",
     )
 
-    def __init__(self, device=None, instruct=False, dummy_weights=False, max_seq_len=32768, max_batch_size=32):
+    def __init__(self, device=None, instruct=False, dummy_weights=False, max_seq_len=32768, max_batch_size=8):
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
 

@@ -33,6 +33,10 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 import gc
 
 
+DEVICE_PERF_START_SIGNPOST = "START_PERF_RUN"
+DEVICE_PERF_END_SIGNPOST = "END_PERF_RUN"
+
+
 class PytorchLlamaModel(torch.nn.Module):
     def __init__(self, hf_reference_model):
         super().__init__()
@@ -70,7 +74,12 @@ def run_test_LlamaModel_inference(
     tokenizer_path,
     cache_path,
     prompt_file=None,
+    generation_start_pos=0,
+    device_perf=False,  # set to True when measuring device perf
 ):
+    if device_perf:  # Enable tracy signpost support in device perf runs only
+        from tracy import signpost
+
     # Load prompt file if provided
     prompt = None
     if prompt_file:
@@ -110,11 +119,9 @@ def run_test_LlamaModel_inference(
         cache_path=cache_path,
     )
 
-    if model_config["LLM_MODE"] == "prefill":
-        generation_start_pos = 0
+    if model_config["LLM_MODE"] == "prefill" or device_perf:
         generation_length = 1
     else:
-        generation_start_pos = UNIT_TEST_START_POS
         generation_length = UNIT_TEST_GENERATION_LENGTH
 
     # Pre-process inputs in prompt mode
@@ -148,6 +155,8 @@ def run_test_LlamaModel_inference(
             start_pos,
         )
 
+        if device_perf:
+            signpost(DEVICE_PERF_START_SIGNPOST)  # start for device perf measurement
         # TT hardware execution -------------------------------------------------------------
         tt_inp_emb, start_pos, rot_mat, attn_mask, cache_idxs = tt_model.prepare_inputs(tt_inp_ids, start_pos)
 
@@ -170,6 +179,10 @@ def run_test_LlamaModel_inference(
 
         tt_out = ttnn.from_device(tt_out)
         tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
+
+        if device_perf:
+            signpost(DEVICE_PERF_END_SIGNPOST)  # end for device perf measurement
+
         tt_out = tt_out[..., : configuration.vocab_size]
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze()  # [batch, hidden_dim]
         if model_config["LLM_MODE"] == "decode":

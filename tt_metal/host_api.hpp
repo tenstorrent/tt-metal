@@ -262,10 +262,9 @@ void DeallocateBuffer(Buffer &buffer);
 *  | Argument | Description                                  | Type                           | Valid Range | Required |
 *  |----------|----------------------------------------------|--------------------------------|-------------|----------|
 *  | buffer   | The buffer that will be owned by the program | std::shared_ptr<Buffer> buffer |             | Yes      |
-*  | program  | The program getting ownership of the buffer  | std::shared_ptr<Buffer> buffer |             | Yes      |
+*  | program  | The program getting ownership of the buffer  | Program &                      |             | Yes      |
 */
-void AssignGlobalBufferToProgram(
-    std::shared_ptr<Buffer> buffer, std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>> program);
+void AssignGlobalBufferToProgram(std::shared_ptr<Buffer> buffer, Program& program);
 
 // ==================================================
 //           COMPILE & EXECUTE KENRNELS
@@ -480,8 +479,7 @@ void EnqueueWriteBuffer(
  * | program      | The program that will be executed on the device that cq is bound to    | Program &                          |                                    | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                               |                                    | Yes      |
  */
-void EnqueueProgram(
-    CommandQueue &cq, std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>> program, bool blocking);
+void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
 
 /**
  * Blocks until all previously dispatched commands on the device have completed
