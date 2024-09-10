@@ -349,18 +349,9 @@ bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(tt_metal::Device *device){
     uint32_t M = 16 * num_cores_r;
     uint32_t K = 16 * 12;
     uint32_t N = 16 * num_cores_c;
-    int out_subblock_h;
-    int out_subblock_w;
-    int in0_block_w;
-    if (device->arch() == tt::ARCH::BLACKHOLE and not getenv("TT_METAL_DISABLE_BH_ND_WORKAROUND")) {
-        out_subblock_h = 1;
-        out_subblock_w = 1;
-        in0_block_w = 1;
-    } else {
-        out_subblock_h = 4;
-        out_subblock_w = 2;
-        in0_block_w = 2;
-    }
+    int out_subblock_h = 4;
+    int out_subblock_w = 2;
+    int in0_block_w = 2;
     int per_core_M = M / num_cores_r;
     int per_core_N = N / num_cores_c;
     uint32_t single_tile_size = 2 * 1024;
