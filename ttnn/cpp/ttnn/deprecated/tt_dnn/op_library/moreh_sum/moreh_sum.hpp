@@ -5,7 +5,6 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
-
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn {
@@ -33,6 +32,7 @@ struct MorehSumOperation {
 }  // namespace operations::moreh
 
 // TODO: remove launch_op from device operation
-constexpr auto moreh_sum = ttnn::register_operation<"ttnn::moreh_sum", ttnn::operations::moreh::MorehSumOperation>();
+constexpr auto moreh_sum =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_sum", ttnn::operations::moreh::MorehSumOperation>();
 
 }  // namespace ttnn
