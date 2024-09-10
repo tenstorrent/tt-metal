@@ -1070,4 +1070,20 @@ op_map = {
         "tt_op": ttnn_ops.complex_is_real,
         "pytorch_op": pytorch_ops.complex_is_real,
     },
+    "eltwise-bitwise_xor": {
+        "tt_op": ttnn_ops.eltwise_bitwise_xor,
+        "pytorch_op": pytorch_ops.bitwise_xor,
+    },
+    "eltwise-bitwise_not": {
+        "tt_op": ttnn_ops.eltwise_bitwise_not,
+        "pytorch_op": pytorch_ops.bitwise_not,
+    },
+    "eltwise-right_shift": {
+        "tt_op": ttnn_ops.eltwise_right_shift,
+        "pytorch_op": pytorch_ops.right_shift,
+    },
+    "eltwise-left_shift": {
+        "tt_op": ttnn_ops.eltwise_left_shift,
+        "pytorch_op": pytorch_ops.left_shift,
+    },
 }

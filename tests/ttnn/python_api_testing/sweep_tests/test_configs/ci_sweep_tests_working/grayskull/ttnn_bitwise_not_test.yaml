@@ -1,12 +1,12 @@
 ---
 test-list:
-  - bitwise-and:
+  - eltwise-bitwise_not:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
         interval: [1, 1, 32, 32]
         num-dims: [2, 3, 4]
-        num-shapes: 1
+        num-shapes: 2
         num-samples: 128
         args-sampling-strategy: "all"
       env:
@@ -26,4 +26,4 @@ test-list:
         data-type: ["INT32"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
-      output-file: bitwise_and_sweep.csv
+      output-file: bitwise_not_sweep.csv
