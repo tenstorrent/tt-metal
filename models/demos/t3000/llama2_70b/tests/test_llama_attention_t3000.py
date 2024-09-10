@@ -30,6 +30,11 @@ from models.demos.t3000.llama2_70b.tests.test_llama_attention import run_test_Ll
         # "long_context",
     ),
 )
+@pytest.mark.parametrize(
+    "paged_attention",
+    (False,),
+    ids=("non_paged_attention",),
+)
 def test_LlamaAttention_inference_t3000(
     batch,
     seq_len,
@@ -38,6 +43,7 @@ def test_LlamaAttention_inference_t3000(
     max_batch_size,
     max_context_len,
     llama_version,
+    paged_attention,
     use_program_cache,
 ):
     if seq_len == 1 and batch != max_batch_size:
@@ -60,6 +66,7 @@ def test_LlamaAttention_inference_t3000(
     check_mesh_device(t3k_mesh_device, model_config)
     run_test_LlamaAttention_inference(
         t3k_mesh_device,
+        max_batch_size,
         batch,
         seq_len,
         pcc,
@@ -68,4 +75,5 @@ def test_LlamaAttention_inference_t3000(
         ckpt_dir,
         tokenizer_path,
         cache_path,
+        paged_attention,
     )

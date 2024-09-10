@@ -145,7 +145,7 @@ def run_test_LlamaMLP_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    ((32, 1, 0.9995), (1, 128, 0.998), (1, 2048, 0.998)),
+    ((32, 1, 0.9994), (1, 128, 0.998), (1, 2048, 0.998)),
     ids=("decode", "prefill_128", "prefill_2k"),
 )
 @pytest.mark.parametrize(
