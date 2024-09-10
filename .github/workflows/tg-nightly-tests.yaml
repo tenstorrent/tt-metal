@@ -48,7 +48,7 @@ jobs:
         shell: bash {0}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
+          source ${{ github.workspace }}/python_env_numpy124/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           source ${{ github.workspace }}/tests/scripts/tg/run_tg_nightly_tests.sh

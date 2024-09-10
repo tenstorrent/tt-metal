@@ -45,7 +45,7 @@ jobs:
       - name: Run unit regression tests
         timeout-minutes: 45
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
+          source ${{ github.workspace }}/python_env_numpy124/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ${{ matrix.test-group.cmd }}

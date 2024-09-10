@@ -46,7 +46,7 @@ jobs:
         shell: bash {0}
         timeout-minutes: 480
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
+          source ${{ github.workspace }}/python_env_numpy124/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_perplexity_tests.sh

@@ -58,7 +58,7 @@ jobs:
       - name: Run pre/post regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
+          source ${{ github.workspace }}/python_env_numpy124/bin/activate
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit --dispatch-mode slow
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}

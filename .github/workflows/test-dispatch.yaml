@@ -70,7 +70,7 @@ jobs:
       - uses: ./.github/actions/install-python-deps
       - name: Run pre/post regression tests in a loop
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
+          source ${{ github.workspace }}/python_env_numpy124/bin/activate
           pip install pytest-repeat
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME

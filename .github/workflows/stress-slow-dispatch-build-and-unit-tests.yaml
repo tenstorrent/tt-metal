@@ -47,7 +47,7 @@ jobs:
       - uses: ./.github/actions/install-python-deps
       - name: Run pre/post regression tests in a loop
         run: |
-          source python_env/bin/activate
+          source python_env_numpy124/bin/activate
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type stress_post_commit --dispatch-mode slow
       - name: Upload watcher log
         if: always()

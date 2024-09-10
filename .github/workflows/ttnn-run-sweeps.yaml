@@ -57,14 +57,14 @@ jobs:
       - name: Run ttnn sweeps generation (single sweep)
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
+          source ${{ github.workspace }}/python_env_numpy124/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           python tests/sweep_framework/parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --elastic cloud --tag ci-main --explicit
       - name: Run ttnn sweeps generation (all sweeps)
         if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
+          source ${{ github.workspace }}/python_env_numpy124/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           python tests/sweep_framework/parameter_generator.py --elastic cloud --tag ci-main --explicit
@@ -118,14 +118,14 @@ jobs:
       - name: Run ttnn sweeps (single sweep)
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
+          source ${{ github.workspace }}/python_env_numpy124/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           python tests/sweep_framework/runner.py --module-name ${{ github.event.inputs.sweep_name }} --elastic cloud --tag ci-main
       - name: Run ttnn sweeps (all sweeps, nightly)
         if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
+          source ${{ github.workspace }}/python_env_numpy124/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           python tests/sweep_framework/runner.py --elastic cloud --tag ci-main --suite-name nightly

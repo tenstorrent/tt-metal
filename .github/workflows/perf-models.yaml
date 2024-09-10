@@ -54,7 +54,7 @@ jobs:
         id: performance_tests
         timeout-minutes: 70
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
+          source ${{ github.workspace }}/python_env_numpy124/bin/activate
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type ${{ matrix.model-type }}_models_performance_${{ matrix.test-info.machine-type }}
       # TODO: Fix the pipeline before enabling notifications.
       #- uses: ./.github/actions/slack-report

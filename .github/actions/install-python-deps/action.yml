@@ -20,4 +20,4 @@ runs:
           docs/requirements-docs.txt
           pyproject.toml
           create_venv.sh
-        install-cmd: ./create_venv.sh
+        install-cmd: PYTHON_ENV_DIR=${{ github.workspace }}/python_env_numpy124 ./create_venv.sh

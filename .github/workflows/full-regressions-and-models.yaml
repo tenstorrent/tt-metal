@@ -45,7 +45,7 @@ jobs:
       - name: Run frequent reg tests scripts
         timeout-minutes: 210
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
+          source ${{ github.workspace }}/python_env_numpy124/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type frequent_${{ matrix.frequent-type }} --dispatch-mode slow

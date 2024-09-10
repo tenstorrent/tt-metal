@@ -41,7 +41,7 @@ jobs:
       - name: Run device performance regressions
         timeout-minutes: ${{ matrix.test-info.timeout }}
         run: |
-          source python_env/bin/activate
+          source python_env_numpy124/bin/activate
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_device_performance_${{ matrix.test-info.machine-type }}
       - name: Check device perf report exists
         id: check-device-perf-report
