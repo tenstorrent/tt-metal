@@ -52,7 +52,7 @@ def generate_shard_input_shapes(batch_sizes, shard_Y, shard_X):
         for channels in batch_sizes:
             for height in shard_Y:
                 for width in shard_X:
-                    input_shapes.append([batch_size, channels, height, width])
+                    input_shapes.append([batch_size, channels, height * batch_size * channels, width])
     return input_shapes
 
 
