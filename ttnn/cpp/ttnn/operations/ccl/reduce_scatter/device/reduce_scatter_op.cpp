@@ -60,7 +60,7 @@ static ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_typ
         case ttnn::operations::reduction::ReduceType::Sum:
             return ttnn::operations::binary::BinaryOpType::ADD;
         default:
-            tt::log_warning(tt::LogOp, "Reduce scatter only supports reduce_type Sum. Ignoring type of {} and acting as if that were passed in.", reduce_op);
+            TT_THROW("Reduce scatter only supports reduce_type Sum. Op type {} not supported.", reduce_op);
             return ttnn::operations::binary::BinaryOpType::ADD;
     }
 }
