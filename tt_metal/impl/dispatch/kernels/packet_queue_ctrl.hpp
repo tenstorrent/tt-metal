@@ -7,6 +7,7 @@
 constexpr uint32_t PACKET_WORD_SIZE_BYTES = 16;
 constexpr uint32_t MAX_SWITCH_FAN_IN = 4;
 constexpr uint32_t MAX_SWITCH_FAN_OUT = 4;
+constexpr uint32_t MAX_TUNNEL_LANES = 10;
 
 constexpr uint32_t MAX_SRC_ENDPOINTS = 32;
 constexpr uint32_t MAX_DEST_ENDPOINTS = 32;
@@ -38,7 +39,7 @@ enum DispatchPacketFlag : uint32_t {
     PACKET_TEST_LAST = (0x1 << 15),  // test only
 };
 
-enum DispatchRemoteNetworkType : uint32_t {
+enum DispatchRemoteNetworkType : uint8_t {
     NOC0 = 0,
     NOC1 = 1,
     ETH = 2,

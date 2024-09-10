@@ -1747,7 +1747,7 @@ void configure_for_single_chip(Device *device,
                 (prefetch_relay_demux_queue_size_bytes >> 4), // 9: remote_tx_queue_size_words
                 (uint32_t)phys_prefetch_relay_demux_core.x, // 10: remote_tx_x
                 (uint32_t)phys_prefetch_relay_demux_core.y, // 11: remote_tx_y
-                num_dest_endpoints, // 12: remote_tx_queue_id
+                0, // 12: remote_tx_queue_id
                 (uint32_t)DispatchRemoteNetworkType::NOC0, // 13: tx_network_type
                 packetized_path_test_results_addr, // 14: test_results_addr
                 packetized_path_test_results_size, // 15: test_results_size
@@ -1987,7 +1987,7 @@ void configure_for_single_chip(Device *device,
                 (dispatch_relay_demux_queue_size_bytes >> 4), // 9: remote_tx_queue_size_words
                 (uint32_t)phys_dispatch_relay_demux_core.x, // 10: remote_tx_x
                 (uint32_t)phys_dispatch_relay_demux_core.y, // 11: remote_tx_y
-                num_dest_endpoints, // 12: remote_tx_queue_id
+                0, // 12: remote_tx_queue_id
                 (uint32_t)DispatchRemoteNetworkType::NOC0, // 13: tx_network_type
                 packetized_path_test_results_addr, // 14: test_results_addr
                 packetized_path_test_results_size, // 15: test_results_size
