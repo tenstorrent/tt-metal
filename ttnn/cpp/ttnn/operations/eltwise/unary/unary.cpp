@@ -132,7 +132,7 @@ template struct ExecuteUnary<UnaryOpType::TAN>;
 template struct ExecuteUnary<UnaryOpType::TANH>;
 template struct ExecuteUnary<UnaryOpType::SIGMOID, UnaryOpType::LOG>;
 template struct ExecuteUnary<UnaryOpType::TILED_PROD>;
-template struct ExecuteUnary<UnaryOpType::DROPOUT>;
+
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFastAndApproximateMode<unary_op_type>::invoke(
     uint8_t queue_id,
@@ -293,15 +293,15 @@ Tensor Softplus::invoke(
 Tensor Dropout::invoke(
     const Tensor& input,
     const uint32_t seed,
-    const uint32_t probability,
-    const uint32_t scale,
+    const float probability,
+    const float scale,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     TT_ASSERT(input.device()->arch() != tt::ARCH::GRAYSKULL, "Dropout is not currently supported on Grayskull");
     return detail::unary_impl(
         DefaultQueueId,
         input,
-        {UnaryWithParam{UnaryOpType::DROPOUT, {seed, probability, scale}}},
+        {UnaryWithParam{UnaryOpType::DROPOUT, {static_cast<float>(seed), probability, scale}}},
         memory_config,
         optional_output_tensor);
 }
@@ -310,15 +310,15 @@ Tensor Dropout::invoke(
     uint8_t queue_id,
     const Tensor& input,
     const uint32_t seed,
-    const uint32_t probability,
-    const uint32_t scale,
+    const float probability,
+    const float scale,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     TT_ASSERT(input.device()->arch() != tt::ARCH::GRAYSKULL, "Dropout is not currently supported on Grayskull");
     return detail::unary_impl(
         queue_id,
         input,
-        {UnaryWithParam{UnaryOpType::DROPOUT, {seed, probability, scale}}},
+        {UnaryWithParam{UnaryOpType::DROPOUT, {static_cast<float>(seed), probability, scale}}},
         memory_config,
         optional_output_tensor);
 }

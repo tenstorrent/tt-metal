@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "unary_op_utils.hpp"
+#include <climits>
+#include <string>
 
 namespace ttnn::operations::unary::utils {
 
@@ -69,6 +71,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
         case UnaryOpType::LEFT_SHIFT: defines["SFPU_OP_LEFT_SHIFT_INCLUDE"] = "1"; break;
         case UnaryOpType::REMAINDER: defines["SFPU_OP_REMAINDER_INCLUDE"] = "1"; break;
         case UnaryOpType::FMOD: defines["SFPU_OP_FMOD_INCLUDE"] = "1"; break;
+        case UnaryOpType::DROPOUT: defines["SFPU_OP_DROPOUT_INCLUDE"] = "1"; break;
         default: defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1"; break;
     };
 }
@@ -234,11 +237,13 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             break;
         case UnaryOpType::DROPOUT: {
             TT_ASSERT(params.size() == 3, "Expected Dropout to take 3 parameters: seed, probability and scale factor");
-            float param1 = params[1];
-            float param2 = params[2];
+            float prob = params[1];
+            float scale = params[2];
+            uint32_t uprob = static_cast<uint32_t>((double)INT_MAX * prob);
             op_init_and_name = {
-                fmt::format("dropout_tile_init({}u);", Converter::to_hex(param0)),
-                fmt::format("dropout_tile({}, {}u, {}u);", idst, Converter::to_hex(param1), Converter::to_hex(param2))};
+                fmt::format("dropout_tile_init({}u);", (uint32_t)param0),
+                fmt::format("dropout_tile({}, {}u, {}u);", idst, uprob, Converter::to_hex(scale))
+            };
 
             break;
         }

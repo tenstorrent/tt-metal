@@ -124,8 +124,8 @@ struct Dropout {
     static Tensor invoke(
         const Tensor& input,
         const uint32_t seed,
-        const uint32_t probability,
-        const uint32_t scale,
+        const float probability,
+        const float scale,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
@@ -133,8 +133,8 @@ struct Dropout {
         uint8_t queue_id,
         const Tensor& input,
         const uint32_t seed,
-        const uint32_t probability,
-        const uint32_t scale,
+        const float probability,
+        const float scale,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
