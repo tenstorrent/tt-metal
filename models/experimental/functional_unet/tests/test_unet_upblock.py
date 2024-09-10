@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
 import pytest
 import ttnn
 
@@ -31,15 +32,29 @@ from models.experimental.functional_unet.tests.common import (
         ("upblock4", 16, 528, 80, 16),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 3 * 32768}], indirect=True)
 def test_unet_upblock(
-    batch, groups, block_name, input_channels, input_height, input_width, residual_channels, device, reset_seeds
+    batch,
+    groups,
+    block_name,
+    input_channels,
+    input_height,
+    input_width,
+    residual_channels,
+    device,
+    reset_seeds,
+    use_program_cache
 ):
     torch_input, ttnn_input = create_unet_input_tensors(device, batch, groups, pad_input=False)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
 
     parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=device)
     ttnn_model = unet_shallow_ttnn.UNet(parameters, device)
+
+    logger.info(f"Run compilation run")
+    output_tensor = ttnn_model(ttnn_input).cpu()
+    output_tensor = ttnn_model(ttnn_input).cpu()
+    logger.info(f"Done running compilztion")
 
     torch_input, ttnn_input = create_unet_input_tensors(
         device,
@@ -59,12 +74,39 @@ def test_unet_upblock(
         input_height=input_height * 2,
         input_width=input_width * 2,
     )
-    torch_output = getattr(model, block_name)(torch_input, torch_residual)
+    # torch_output = getattr(model, block_name)(torch_input, torch_residual)
 
-    ttnn_input, ttnn_residual = ttnn_input.to(device), ttnn_residual.to(device)
-    ttnn_output = getattr(ttnn_model, block_name)(ttnn_input, ttnn_residual)
+    logger.info(f"RUNNING TORCH UPBLOCK STEP BY STEP")
+    u1 = model.u1(torch_input)
+    conc4 = torch.cat([u1, torch_residual], dim=1)
+    c8 = model.c8(conc4)
+    b8 = model.b8(c8)
+    r8 = model.r8(b8)
+    c8_2 = model.c8_2(r8)
+    b8_2 = model.b8_2(c8_2)
+    r8_2 = model.r8_2(b8_2)
+    # c8_3 = model.c8_3(r8_2)
+    # b8_3 = model.b8_3(c8_3)
+    # r8_3 = model.r8_3(b8_3)
+    torch_output = r8_2
 
-    check_pcc_conv(torch_output, ttnn_output, pcc=0.998)
+    # ttnn_output = block(ttnn_input, ttnn_residual)
+
+    logger.info(f"RUNNING TTNN UPBLOCK STEP BY STEP")
+    x, residual = ttnn_input.to(device), ttnn_residual.to(device)
+    block = getattr(ttnn_model, block_name)
+    residual = ttnn.to_layout(residual, ttnn.ROW_MAJOR_LAYOUT)
+    x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+    x = block.upsample(x)
+    y = unet_shallow_ttnn.unet_concat([x, residual], dim=-1)
+    ttnn.deallocate(x)
+    ttnn.deallocate(residual)
+    y = block.conv1(y)
+    breakpoint()
+    y = block.conv2(y)
+    # y = block.conv3(y)
+
+    check_pcc_conv(torch_output, y, pcc=0.999)
 
 
 @pytest.mark.parametrize("batch, groups", [(2, 1)])

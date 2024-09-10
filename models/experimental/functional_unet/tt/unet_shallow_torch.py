@@ -230,14 +230,4 @@ class UNet(nn.Module):
     def from_random_weights(groups=1):
         model = UNet(groups=groups)
         model.eval()
-
-        new_state_dict = {}
-        for name, parameter in model.state_dict().items():
-            if isinstance(parameter, torch.FloatTensor):
-                if "b1" or "b2" or "b3" or "b4" or "bnb" in name:
-                    new_state_dict[name] = parameter
-                else:
-                    new_state_dict[name] = parameter + 1000
-
-        model.load_state_dict(new_state_dict)
         return model
