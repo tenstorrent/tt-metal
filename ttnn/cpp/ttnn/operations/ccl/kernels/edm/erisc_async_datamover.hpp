@@ -477,33 +477,6 @@ FORCE_INLINE void initialize_transaction_buffer_addresses(
 /////////////////////////////////////////////
 //   SENDER SIDE HELPERS
 /////////////////////////////////////////////
-template <typename EDM_CONFIG>
-FORCE_INLINE bool sender_eth_send_data_sequence(ChannelBuffer<EDM_CONFIG> &sender_buffer_channel) {
-    bool did_something = false;
-    if (sender_buffer_channel.eth_is_receiver_channel_send_done()) {
-        bool need_to_send_completion = sender_buffer_channel.is_send_completion_pending();
-        if (!eth_txq_is_busy()) {
-            static constexpr std::size_t ETH_BYTES_TO_WORDS_SHIFT = 4;
-            ASSERT((uint32_t)sender_buffer_channel.get_channel_bytes_sent_address() ==
-                ((uint32_t)sender_buffer_channel.get_buffer_address() + (uint32_t)sender_buffer_channel.get_current_payload_size() - (uint32_t)sizeof(eth_channel_sync_t)));
-            *sender_buffer_channel.get_channel_bytes_sent_address() = sender_buffer_channel.get_current_payload_size();
-            *sender_buffer_channel.get_channel_bytes_acked_address() = 0;
-
-            eth_send_bytes_over_channel_payload_only(
-                sender_buffer_channel.get_buffer_address(),
-                sender_buffer_channel.get_remote_eth_buffer_address(),
-                sender_buffer_channel.get_current_payload_size(),
-                sender_buffer_channel.get_current_payload_size(),
-                sender_buffer_channel.get_current_payload_size() >> ETH_BYTES_TO_WORDS_SHIFT);
-
-            sender_buffer_channel.advance_buffer_index();
-            sender_buffer_channel.goto_state(ChannelBuffer<EDM_CONFIG>::SENDER_WAITING_FOR_ETH);
-            did_something = true;
-        }
-    }
-
-    return did_something;
-}
 
 template <typename EDM_CONFIG>
 FORCE_INLINE bool sender_notify_workers_if_buffer_available_sequence(
@@ -519,6 +492,7 @@ FORCE_INLINE bool sender_notify_workers_if_buffer_available_sequence(
     }
 
     sender_buffer_channel.clear_local_semaphore();
+
     sender_buffer_channel.increment_worker_semaphores();
 
     if (!channel_done) {
@@ -553,6 +527,38 @@ FORCE_INLINE bool sender_eth_check_receiver_ack_sequence(
 
 
 template <typename EDM_CONFIG>
+FORCE_INLINE bool sender_eth_send_data_sequence(ChannelBuffer<EDM_CONFIG> &sender_buffer_channel, uint32_t &num_senders_complete) {
+
+    // // DeviceZoneScopedN("EDM_S::send_data");
+    bool did_something = false;
+    if (sender_buffer_channel.eth_is_receiver_channel_send_done()) {
+        bool need_to_send_completion = sender_buffer_channel.is_send_completion_pending();
+        if (!eth_txq_is_busy()) {
+            static constexpr std::size_t ETH_BYTES_TO_WORDS_SHIFT = 4;
+            ASSERT((uint32_t)sender_buffer_channel.get_channel_bytes_sent_address() ==
+                ((uint32_t)sender_buffer_channel.get_buffer_address() + (uint32_t)sender_buffer_channel.get_current_payload_size() - (uint32_t)sizeof(eth_channel_sync_t)));
+            *sender_buffer_channel.get_channel_bytes_sent_address() = sender_buffer_channel.get_current_payload_size();
+            *sender_buffer_channel.get_channel_bytes_acked_address() = 0;
+
+            eth_send_bytes_over_channel_payload_only(
+                sender_buffer_channel.get_buffer_address(),
+                sender_buffer_channel.get_remote_eth_buffer_address(),
+                sender_buffer_channel.get_current_payload_size(),
+                sender_buffer_channel.get_current_payload_size(),
+                sender_buffer_channel.get_current_payload_size() >> ETH_BYTES_TO_WORDS_SHIFT);
+
+            sender_buffer_channel.advance_buffer_index();
+            sender_buffer_channel.goto_state(ChannelBuffer<EDM_CONFIG>::SENDER_WAITING_FOR_ETH);
+            did_something = true;
+
+            sender_eth_check_receiver_ack_sequence(sender_buffer_channel, num_senders_complete);
+        }
+    }
+
+    return did_something;
+}
+
+template <typename EDM_CONFIG>
 FORCE_INLINE bool sender_noc_receive_payload_ack_check_sequence(
     ChannelBuffer<EDM_CONFIG> &sender_channel_buffer, uint32_t &num_senders_complete) {
     bool did_something = false;
@@ -570,7 +576,7 @@ FORCE_INLINE bool sender_noc_receive_payload_ack_check_sequence(
     if (read_finished) {
         sender_channel_buffer.goto_state(ChannelBuffer<EDM_CONFIG>::SENDER_READY_FOR_ETH_TRANSFER);
 
-        erisc::datamover::sender_eth_send_data_sequence(sender_channel_buffer);
+        erisc::datamover::sender_eth_send_data_sequence(sender_channel_buffer, num_senders_complete);
         did_something = true;
     }
 
@@ -607,6 +613,7 @@ FORCE_INLINE bool receiver_eth_accept_payload_sequence(
     bool did_something = false;
 
     if (buffer_channel.eth_bytes_are_available_on_channel()) {
+
         if (!eth_txq_is_busy()) {
             buffer_channel.eth_receiver_channel_ack(eth_transaction_ack_word_addr);
             buffer_channel.goto_state(ChannelBuffer<EDM_CONFIG>::RECEIVER_SIGNALING_WORKER);
@@ -632,7 +639,8 @@ FORCE_INLINE bool receiver_eth_accept_payload_sequence(
 template <typename EDM_CONFIG>
 FORCE_INLINE bool receiver_noc_read_worker_completion_check_sequence(
     ChannelBuffer<EDM_CONFIG> &buffer_channel,
-    uint32_t &num_receivers_complete) {
+    uint32_t &num_receivers_complete,
+    uint32_t eth_transaction_ack_word_addr) {
     bool did_something = false;
 
     bool workers_are_finished_reading = buffer_channel.is_local_semaphore_full();
@@ -667,6 +675,8 @@ FORCE_INLINE bool receiver_noc_read_worker_completion_check_sequence(
                 buffer_channel.goto_state(ChannelBuffer<EDM_CONFIG>::DONE);
                 num_receivers_complete++;
             }
+
+            erisc::datamover::receiver_eth_accept_payload_sequence(buffer_channel, num_receivers_complete, eth_transaction_ack_word_addr);
             did_something = true;
         }
     }
