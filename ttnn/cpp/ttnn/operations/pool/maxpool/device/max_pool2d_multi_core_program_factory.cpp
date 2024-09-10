@@ -142,8 +142,8 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     auto in_reader_indices_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, in_reader_indices_cb_config);
 
     auto in_cb_sz =
-        (input_shape[3] * kernel_size_hw_padded) > (conv_op_utils::constants::TILE_HW * MAX_TILES_PER_REDUCTION)
-            ? (conv_op_utils::constants::TILE_HW * MAX_TILES_PER_REDUCTION)
+        (input_shape[3] * kernel_size_hw_padded) > (tt::constants::TILE_HW * MAX_TILES_PER_REDUCTION)
+            ? (tt::constants::TILE_HW * MAX_TILES_PER_REDUCTION)
             : input_shape[3] * kernel_size_hw_padded;
     // reader output == input to tilize
     uint32_t in_cb_id_0 = tt::CB::c_in0;  // input rows for "multiple (out_nelems)" output pixels
