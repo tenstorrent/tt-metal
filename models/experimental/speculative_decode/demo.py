@@ -25,6 +25,9 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import T
 from models.experimental.speculative_decode.draft_models import NGramModel, load_data
 from rich.table import Table
 from rich.live import Live
+from rich.panel import Panel
+from rich.text import Text
+from rich.console import Console
 
 
 # load from json, return as a list
@@ -117,6 +120,25 @@ def generate_prints(text, tok_per_s) -> Table:
     return table
 
 
+def generate_scrollable_panel(text: Text, tok_per_s, max_lines=60, console: Console = None) -> Panel:
+    # Wrap the text to simulate lines based on terminal width
+    wrapped_text = text.wrap(console=console, width=120)  # Adjust width as needed
+
+    # Limit the text to the last `max_lines` lines
+    visible_text = Text()
+    for line in wrapped_text[-max_lines:]:
+        visible_text.append(line)
+
+    # Create a panel for display with the token speed at the bottom
+    panel = Panel(
+        visible_text,
+        title=f"Tokens/s: {tok_per_s:.2f}",
+        border_style="magenta",
+        padding=(1, 2),
+    )
+    return panel
+
+
 def run_llama_demo(user_input, batch_size, device, instruct_mode, GENERATION_LENGTH=10, SPECULATION_LENGTH=3):
     # This module requires the env paths above for CI runs
     from models.demos.wormhole.llama31_8b.tt.model_config import TtModelArgs
@@ -202,18 +224,23 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, GENERATION_LEN
     # Keep track of generated outputs to print out every iteration
     all_outputs = []
     user_done = False  # Keeps track when a user reaches EoD token
-    text = ""
+    text = Text()
 
     # compile run
     dummy_input = torch.zeros(1, 1, 32, model_args.dim)
     dummy_input = ttnn.from_torch(dummy_input, device=tt_model.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     tt_out = tt_model(dummy_input, list(range(0, SPECULATION_LENGTH + 1)), rot_mat=current_rot_mat)
+    tt_out = ttnn.untilize(tt_out, use_multicore=False)
 
     breakpoint()
 
+    # Initialize the console for use in wrapping text
+    console = Console()
+
     iteration = 0
+    num_calls_to_tt_model = 0
     total_start_time = time()
-    with Live(generate_prints("", 0), refresh_per_second=4) as live:
+    with Live(generate_scrollable_panel(text, 0, console=console), refresh_per_second=10, console=console) as live:
         # Keep running inference as long as there is a user in the batch still decoding or max tokens per user are decoded
         while users_decoding:
             iteration_time_start = time()
@@ -240,6 +267,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, GENERATION_LEN
 
             # Run ttnn llama model
             tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
+            tt_out = ttnn.untilize(tt_out, use_multicore=False)
             tt_output_torch = (
                 ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[: model_args.max_batch_size, :, :]
             )  # [batch, seq, hidden_dim]
@@ -299,13 +327,17 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, GENERATION_LEN
             if tok_index > 0:
                 # highlight the speculated tokens
                 decoded_tokens_spec = tokenizer.decode(new_tokens[-tok_index:])
-                decoded_tokens = decoded_tokens_non_spec + "[green]" + decoded_tokens_spec + "[/green]"
+                text.append(decoded_tokens_non_spec)
+                text.append(decoded_tokens_spec, style="green")
+                # decoded_tokens = decoded_tokens_non_spec + "[green]" + decoded_tokens_spec + "[/green]"
             else:
-                decoded_tokens = decoded_tokens_non_spec
-            text = text + "".join(decoded_tokens)
-            live.update(generate_prints(text, tokens_per_second_per_user))
+                text.append(decoded_tokens_non_spec)
+                # decoded_tokens = decoded_tokens_non_spec
+            # text = text + "".join(decoded_tokens)
+            live.update(generate_scrollable_panel(text, tokens_per_second_per_user, console=console))
 
             iteration += num_generated_tokens
+            num_calls_to_tt_model += 1
 
             # Upper limit of generated tokens for each user (to avoid infinite generation in case eos is not seen)
             if iteration >= max_generated_tokens:
@@ -314,13 +346,14 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, GENERATION_LEN
     total_time = time() - total_start_time
     logger.info(f"Total time taken: {total_time:.2f} seconds")
     logger.info(f"Average tokens per second: {iteration / total_time:.2f}")
+    logger.info(f"Average tokens per second (w/o speculative tokens): {num_calls_to_tt_model / total_time:.2f}")
     logger.info(f"Number of correct speculations: {num_correct_speculations}")
 
 
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights, generation_length, speculation_length",
     [
-        ("models/experimental/speculative_decode/input_data_questions.json", True, 600, 3),
+        ("models/experimental/speculative_decode/input_data_questions.json", True, 1000, 3),
     ],
     ids=["llama3.1_8b"],
 )
