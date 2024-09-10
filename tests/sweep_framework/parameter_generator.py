@@ -96,7 +96,7 @@ def export_suite_vectors(module_name, suite_name, vectors):
 
     if old_vector_hashes == new_vector_hashes:
         print(
-            f"SWEEPS: Vectors generated for module {module_name}, suite {suite_name} already exist with tag {SWEEPS_TAG}, and have not changed. Skipping..."
+            f"SWEEPS: Vectors generated for module {module_name}, suite {suite_name} already exist with tag {SWEEPS_TAG}, and have not changed. ({len(old_vector_hashes)} existing tests). Skipping..."
         )
         return
     else:
