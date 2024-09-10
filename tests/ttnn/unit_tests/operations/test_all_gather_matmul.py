@@ -161,6 +161,10 @@ def run_all_gather_matmul_on_t3000_impl(
         # Execute trace
         ttnn.execute_trace(t3k_mesh_device, trace_id, cq_id=0, blocking=False)
         logger.info(f"Done executing trace")
+
+        # Synchronize the devices
+        for d in devices:
+            ttnn.synchronize_device(d)
     else:
         for i in range(num_iters):
             tt_all_gather_out_tensor, tt_matmul_out_tensor, tt_datacopy_out_tensor = run_op()
