@@ -1,9 +1,9 @@
 #include "ttnn/common/op_constraints.hpp"
-#include "ttnn/cpp/ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/cpp/ttnn/tensor/tensor_impl.hpp"
 
-bool OpConstraintsBuilder::is_valid_external_constraint(const OpConstraint& constraint) const
-{
+#include "ttnn/cpp/ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/cpp/ttnn/tensor/tensor_utils.hpp"
+
+bool OpConstraintsBuilder::is_valid_external_constraint(const OpConstraint& constraint) const {
     if (data_type_a.has_value() && constraint.getDataTypeA().value() != data_type_a.value()) {
         return false;
     }
@@ -34,10 +34,12 @@ bool OpConstraintsBuilder::is_valid_external_constraint(const OpConstraint& cons
     return true;
 }
 
-bool OpConstraintsBuilder::is_tensor_valid(const MemoryConfig& memory_config, const ttnn::Shape& shape, const Layout& layout, const DataType& data_type) const
-{
-    if (!memory_config.is_sharded())
-    {
+bool OpConstraintsBuilder::is_tensor_valid(
+    const MemoryConfig& memory_config,
+    const ttnn::Shape& shape,
+    const Layout& layout,
+    const DataType& data_type) const {
+    if (!memory_config.is_sharded()) {
         return true;
     }
     uint32_t total_height = tt::tt_metal::compute_volume(shape) / shape[-1];
@@ -45,34 +47,29 @@ bool OpConstraintsBuilder::is_tensor_valid(const MemoryConfig& memory_config, co
     if (memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         const auto& shard_spec = memory_config.shard_spec.value();
         const auto& shard_shape = shard_spec.shape;
-        if (total_width != shard_shape[1])
-        {
+        if (total_width != shard_shape[1]) {
             return false;
         }
         uint32_t num_shards = tt::div_up(total_height, shard_shape[0]);
         uint32_t num_cores = memory_config.shard_spec.value().grid.num_cores();
-        if (num_shards > num_cores)
-        {
+        if (num_shards > num_cores) {
             return false;
         }
     } else if (memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         const auto& shard_spec = memory_config.shard_spec.value();
         const auto& shard_shape = shard_spec.shape;
-        if (total_height != shard_shape[0])
-        {
+        if (total_height != shard_shape[0]) {
             return false;
         }
         uint32_t num_shards = tt::div_up(total_width, shard_shape[1]);
         uint32_t num_cores = shard_spec.grid.num_cores();
-        if (num_shards > num_cores)
-        {
+        if (num_shards > num_cores) {
             return false;
         }
     } else if (memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         const auto& shard_spec = memory_config.shard_spec.value();
         const auto& shard_shape = shard_spec.shape;
-        if (shard_spec.grid.ranges().size() != 1)
-        {
+        if (shard_spec.grid.ranges().size() != 1) {
             return false;
         }
         uint32_t num_shards_along_height = tt::div_up(total_height, shard_shape[0]);
@@ -80,23 +77,18 @@ bool OpConstraintsBuilder::is_tensor_valid(const MemoryConfig& memory_config, co
 
         // Additionally check that number of cores along height and width matches shard grid
         const CoreCoord shard_grid = shard_spec.grid.bounding_box().grid_size();
-        if (shard_spec.orientation == ShardOrientation::ROW_MAJOR)
-        {
-            if (num_shards_along_height > shard_grid.y)
-            {
+        if (shard_spec.orientation == ShardOrientation::ROW_MAJOR) {
+            if (num_shards_along_height > shard_grid.y) {
                 return false;
             }
-            if (num_shards_along_width > shard_grid.x)
-            {
+            if (num_shards_along_width > shard_grid.x) {
                 return false;
             }
         } else {
-            if (num_shards_along_height > shard_grid.x)
-            {
+            if (num_shards_along_height > shard_grid.x) {
                 return false;
             }
-            if (num_shards_along_width > shard_grid.y)
-            {
+            if (num_shards_along_width > shard_grid.y) {
                 return false;
             }
         }
@@ -106,23 +98,20 @@ bool OpConstraintsBuilder::is_tensor_valid(const MemoryConfig& memory_config, co
     if (layout == Layout::TILE) {
         const auto& shard_spec = memory_config.shard_spec.value();
         const auto& shard_shape = shard_spec.shape;
-        if(!(shard_shape[0] % tt::constants::TILE_HEIGHT == 0 && shard_shape[1] % tt::constants::TILE_WIDTH == 0))
-        {
+        if (!(shard_shape[0] % tt::constants::TILE_HEIGHT == 0 && shard_shape[1] % tt::constants::TILE_WIDTH == 0)) {
             return false;
         }
     } else if (layout == Layout::ROW_MAJOR) {
         const auto& shard_spec = memory_config.shard_spec.value();
         const auto& shard_shape = shard_spec.shape;
-        if (!(shard_shape[1] * tensor_impl::element_size_bytes(data_type) % sizeof(uint32_t) == 0))
-        {
+        if (!(shard_shape[1] * tensor_impl::element_size_bytes(data_type) % sizeof(uint32_t) == 0)) {
             return false;
         }
     }
     return true;
 }
 
-bool OpConstraintsBuilder::can_build_constraints() const
-{
+bool OpConstraintsBuilder::can_build_constraints() const {
     return data_type_a.has_value() && data_type_b.has_value() && data_type_o.has_value();
 }
 
@@ -137,8 +126,7 @@ OpConstraintsBuilder& OpConstraintsBuilder::setTileLayoutA(tt::tt_metal::Layout 
     return *this;
 }
 
-OpConstraintsBuilder& OpConstraintsBuilder::setStorageTypeA(tt::tt_metal::StorageType storageType)
-{
+OpConstraintsBuilder& OpConstraintsBuilder::setStorageTypeA(tt::tt_metal::StorageType storageType) {
     storage_type_a = storageType;
     return *this;
 }
@@ -154,8 +142,7 @@ OpConstraintsBuilder& OpConstraintsBuilder::setTileLayoutB(tt::tt_metal::Layout 
     return *this;
 }
 
-OpConstraintsBuilder& OpConstraintsBuilder::setStorageTypeB(tt::tt_metal::StorageType storageType)
-{
+OpConstraintsBuilder& OpConstraintsBuilder::setStorageTypeB(tt::tt_metal::StorageType storageType) {
     storage_type_b = storageType;
     return *this;
 }
@@ -171,8 +158,7 @@ OpConstraintsBuilder& OpConstraintsBuilder::setTileLayoutO(tt::tt_metal::Layout 
     return *this;
 }
 
-OpConstraintsBuilder& OpConstraintsBuilder::setStorageTypeO(tt::tt_metal::StorageType storageType)
-{
+OpConstraintsBuilder& OpConstraintsBuilder::setStorageTypeO(tt::tt_metal::StorageType storageType) {
     storage_type_o = storageType;
     return *this;
 }

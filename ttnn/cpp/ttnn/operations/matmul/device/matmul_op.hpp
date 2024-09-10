@@ -5,15 +5,14 @@
 #pragma once
 #include <optional>
 
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/matmul/device/matmul_types.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/operations/matmul/device/matmul_types.hpp"
 #include "ttnn/types.hpp"
-
-#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 namespace ttnn {
 
@@ -21,8 +20,8 @@ namespace operations {
 
 namespace matmul {
 
-using ttnn::operations::unary::UnaryWithParam;
 using tt::tt_metal::Shape;
+using ttnn::operations::unary::UnaryWithParam;
 
 /*
  * GENERAL MATMUL AND BMM
@@ -129,13 +128,10 @@ struct Matmul {
 };
 
 Matmul create_matmul_struct(
-    const Tensor &input_tensor_a,
-    const Tensor &input_tensor_b,
-    const struct Matmul &parameters
-);
+    const Tensor &input_tensor_a, const Tensor &input_tensor_b, const struct Matmul &parameters);
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::Program &program,
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
     const std::optional<const Tensor> bias,
@@ -146,7 +142,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helpe
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler);
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helper(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::Program &program,
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
     const std::optional<const Tensor> bias,
@@ -179,6 +175,7 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
     const bool per_core_N_equals_subblock_w_constraint,
     const bool fp32_dest_acc_en);
 
-void add_stagger_defines_if_needed(const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines);
+void add_stagger_defines_if_needed(
+    const tt::ARCH arch, const int num_cores, std::map<string, string> &mm_kernel_defines);
 
 }  // namespace bmm_op_utils
