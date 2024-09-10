@@ -12,16 +12,20 @@ from models.utility_functions import is_grayskull
 
 
 def run_test_update_cache_decode(
-    cache_idx, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+    cache_idx, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device, share_cache=False
 ):
     input_shape = [1, num_users, num_heads, head_dim]
     cache_shape = [num_users, num_heads, max_seq_len, head_dim]
-    cache = torch.randn(cache_shape).bfloat16().float()
+    if share_cache:
+        cache = torch.randn([1, num_heads, max_seq_len, head_dim]).bfloat16().float()
+    else:
+        cache = torch.randn(cache_shape).bfloat16().float()
     cachett = ttnn.Tensor(cache, cache_dtype).to(ttnn.TILE_LAYOUT).to(device)
     x = torch.randn(input_shape).bfloat16().float()
     x_pad = torch.nn.functional.pad(x, (0, 0, 0, 32 - num_heads), "constant", 0)
 
     xt = ttnn.Tensor(x_pad, input_dtype).to(ttnn.TILE_LAYOUT)
+    xt = ttnn.reshape(xt, ttnn.Shape(input_shape, x_pad.shape))
     # Input is sharded
     compute_grid_size = device.compute_with_storage_grid_size()
     num_cores = num_users
@@ -39,23 +43,28 @@ def run_test_update_cache_decode(
     xt = xt.to(device, input_mem_config)
 
     # Create arbitrary update indices
-    cache_idxs = [cache_idx + i * 17 for i in range(num_users)]
-
-    cachett = ttnn.experimental.paged_update_cache(cachett, xt, update_idxs=cache_idxs)
+    if share_cache:
+        cache_idxs = [cache_idx + i for i in range(num_users)]
+    else:
+        cache_idxs = [cache_idx + i * 17 for i in range(num_users)]
+    print(f"cache_idxs: {cache_idxs}")
+    cachett = ttnn.experimental.paged_update_cache(cachett, xt, update_idxs=cache_idxs, share_cache=share_cache)
 
     for i in range(num_users):
         update_idx = cache_idxs[i]
-        x_view = x.permute(1, 0, 2, 3)[i, ...]
-        cache[i, 0:num_heads, update_idx : update_idx + x.shape[-2], 0 : x.shape[-1]] = x_view
+        x_view = x.permute(1, 2, 0, 3)[i, ...]
+        i = 0 if share_cache else i
+        cache[i, 0:num_heads, update_idx : update_idx + 1, 0 : x.shape[-1]] = x_view
 
     tt_got_back = cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     tt_updated_slice = []
     for i in range(num_users):
         update_idx = cache_idxs[i]
-        tt_slice = tt_got_back[i, 0:num_heads, update_idx : update_idx + x.shape[-2], 0 : x.shape[-1]]
+        i = 0 if share_cache else i
+        tt_slice = tt_got_back[i, 0:num_heads, update_idx : update_idx + 1, 0 : x.shape[-1]]  # n_heads, 1, head_dim
         tt_updated_slice.append(tt_slice)
-    tt_updated_slice = torch.stack(tt_updated_slice, dim=0).permute(1, 0, 2, 3)
+    tt_updated_slice = torch.stack(tt_updated_slice, dim=0).permute(2, 0, 1, 3)
 
     if input_dtype == ttnn.bfloat16 and cache_dtype == input_dtype:
         eq_cache, output_cache = comp_equal(cache, tt_got_back)  # checks the entire kv cache
@@ -65,20 +74,41 @@ def run_test_update_cache_decode(
         eq_update, output_update = comp_pcc(x, tt_updated_slice)  # checks the updated parts
     logger.debug(output_cache)
     logger.debug(output_update)
+
+    if not eq_cache or not eq_update:
+        # find deltas between cache and tt_got_back
+        cache_delta = cache - tt_got_back
+        for i in range(max_seq_len):
+            if cache_dtype == ttnn.bfloat16:
+                if not torch.sum(cache_delta[:, :, i, :]) == 0:
+                    logger.error(f"cache_delta at {i}: {cache_delta[:, :, i, :]}")
+                    logger.info(f"cache at {i}: {cache[:, :, i, :]}")
+                    logger.info(f"tt_got_back at {i}: {tt_got_back[:, :, i, :]}")
+            else:
+                eq, pcc = comp_pcc(cache[:, :, i, :], tt_got_back[:, :, i, :])
+                if not eq:
+                    logger.error(f"cache_delta {pcc} pcc at {i}: {cache_delta[:, :, i, :]}")
+                    logger.info(f"cache at {i}: {cache[:, :, i, :]}")
+                    logger.info(f"tt_got_back at {i}: {tt_got_back[:, :, i, :]}")
+
+        breakpoint()
+
     assert eq_cache and eq_update
 
 
-@pytest.mark.skip("Test case covered by others")
+# @pytest.mark.skip("Test case covered by others")
 @pytest.mark.parametrize("check_memory", [False])
+@pytest.mark.parametrize("share_cache", [True])
 @pytest.mark.parametrize("head_dim", [128])
 @pytest.mark.parametrize("max_seq_len", [2048])
-@pytest.mark.parametrize("num_users", [32])
-@pytest.mark.parametrize("num_heads", [1])
-@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("cache_idx", [0, 1, 127, 1057])
-@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("num_users", [4])
+@pytest.mark.parametrize("num_heads", [8])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("cache_idx", [16])
+@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b])
 def test_update_cache_decode(
     check_memory,
+    share_cache,
     cache_idx,
     head_dim,
     max_seq_len,
@@ -89,6 +119,8 @@ def test_update_cache_decode(
     device,
     use_program_cache,
 ):
+    torch.manual_seed(0)
+
     if check_memory:
         # Create dram tensors to check for overflow
         cache_shape = [num_users, num_heads, max_seq_len, head_dim]
@@ -124,9 +156,10 @@ def test_update_cache_decode(
         sharded_high = ttnn.Tensor(x_pad, input_dtype).to(ttnn.TILE_LAYOUT).to(device, input_mem_config)
         sharded_reserved.deallocate(True)
 
-    run_test_update_cache_decode(
-        cache_idx, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
-    )
+    for idx in range(1000):
+        run_test_update_cache_decode(
+            idx, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device, share_cache
+        )
 
     if check_memory:
         # Check for overflow

@@ -17,7 +17,7 @@ void PagedUpdateCacheDeviceOperation::validate(const std::vector<Tensor>& input_
     TT_FATAL(input_tensor.device() == cache_tensor.device(), "Operands to update_cache need to be on the same device!");
     TT_FATAL(input_tensor.buffer() != nullptr and cache_tensor.buffer() != nullptr, "Operands to update_cache need to be allocated in buffers on device!");
     TT_FATAL((input_tensor.get_layout() == Layout::TILE && cache_tensor.get_layout() == Layout::TILE), "Inputs to update_cache must be tilized");
-    TT_FATAL(input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B, "Error");
+    TT_FATAL(input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16, "Error");
     TT_FATAL(cache_tensor.get_dtype() == DataType::FLOAT32 || cache_tensor.get_dtype() == DataType::BFLOAT16 || cache_tensor.get_dtype() == DataType::BFLOAT8_B, "Error");
 
     // input_tensor: [1, b, padded_heads, head_dim]
@@ -31,8 +31,14 @@ void PagedUpdateCacheDeviceOperation::validate(const std::vector<Tensor>& input_
         const bool paged_cache = optional_input_tensors.at(1).has_value();
         uint32_t batch_size;
         if (!paged_cache) {
-            TT_FATAL(cache_tensor.get_legacy_shape()[1] == 1, "Only supports 1 head now.");
-            TT_FATAL(input_tensor.get_legacy_shape()[1] == cache_tensor.get_legacy_shape()[0], "Error");
+            // TT_FATAL(cache_tensor.get_legacy_shape()[1] == 1, "Only supports 1 head now.");
+            TT_FATAL(input_tensor.get_shape()[2] == cache_tensor.get_shape()[1]);
+            if (this->share_cache){
+                TT_FATAL(cache_tensor.get_legacy_shape()[0] == 1);
+            }
+            else {
+                TT_FATAL(input_tensor.get_legacy_shape()[1] == cache_tensor.get_legacy_shape()[0]);
+            }
         } else {
             TT_FATAL(optional_input_tensors.at(0).has_value(), "Paged cache requires update_idxs tensor");
             // TODO: How to validate page_table and paged_cache?
@@ -122,7 +128,7 @@ operation::ProgramWithCallbacks PagedUpdateCacheDeviceOperation::create_program(
             if (this->op_type == PagedUpdateCacheOpType::UPDATE) {
                 const auto update_idxs_tensor = optional_input_tensors.at(0); // TODO: Is this tensor passed around by value?
                 const auto page_table = optional_input_tensors.at(1);
-                return detail::paged_update_cache_multi_core(cache_tensor, input_tensor, update_idxs_tensor, page_table, this->update_idxs, this->batch_offset, this->compute_kernel_config);
+                return detail::paged_update_cache_multi_core(cache_tensor, input_tensor, update_idxs_tensor, page_table, this->update_idxs, this->batch_offset, this->compute_kernel_config, this->share_cache);
             } else {
                 const auto& page_table = input_tensors.at(2);
                 return detail::paged_fill_cache_multi_core(cache_tensor, input_tensor, page_table, this->batch_idx);
