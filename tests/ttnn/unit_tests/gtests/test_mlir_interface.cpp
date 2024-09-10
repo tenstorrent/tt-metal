@@ -13,7 +13,7 @@
 #include "ttnn/operations/eltwise/binary/binary_constraints.hpp"
 #include "ttnn/operations/matmul/matmul_constraints.hpp"
 #include "ttnn/operations/normalization/softmax/softmax_constraints.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_constraints.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/unary/unary_constraints.hpp"
 #include "ttnn/operations/eltwise/binary/binary_l1_interface.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation.hpp"
@@ -90,7 +90,7 @@ TEST_P(MlirInterfaceTestFixture, MlirInterfaceTest) {
         if (builder)
         {
             const auto op_constraints = (*builder)
-                .setDataTypeA(input_b.data_type)
+                .setDataTypeA(input_a.data_type)
                 .setDataTypeB(input_b.data_type)
                 .setDataTypeO(input_a.data_type) // assuming output data type is the same as input_a
                 .build_constraints();
