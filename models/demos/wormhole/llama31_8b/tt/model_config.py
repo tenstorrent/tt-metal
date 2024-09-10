@@ -5,11 +5,7 @@
 import os
 import ttnn
 from pathlib import Path
-from models.utility_functions import is_wormhole_b0
-from conftest import is_ci_env
 from loguru import logger
-import tarfile
-import urllib.request
 
 
 class TtModelArgs:
@@ -95,8 +91,8 @@ class TtModelArgs:
 
         self.instruct = instruct
 
-        # CI does not set DI_DT_WORKAROUND but we want to apply it there too for now
-        self.di_dt_workaround = os.getenv("DI_DT_WORKAROUND") == "1" or is_ci_env()
+        # Enable workarounds by default until di/dt issues are fixed
+        self.di_dt_workaround = os.getenv("DISABLE_DI_DT_WORKAROUND") != "1"
 
         DRAM_MEMCFG = ttnn.DRAM_MEMORY_CONFIG
         L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
