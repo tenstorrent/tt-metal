@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "unary_op_utils.hpp"
-#include <climits>
-#include <string>
 
 namespace ttnn::operations::unary::utils {
 
@@ -23,6 +21,7 @@ union Converter {
         return ss.str();
     }
 };
+
 
 // update split eltwise ops include macros
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines) {
@@ -117,23 +116,19 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             break;
         case UnaryOpType::BITWISE_XOR:
             op_init_and_name = {
-                "bitwise_xor_tile_init();",
-                fmt::format("bitwise_xor_tile({}, {}u);", idst, std::to_string((uint)param0))};
+                "bitwise_xor_tile_init();", fmt::format("bitwise_xor_tile({}, {}u);", idst, std::to_string((uint)param0))};
             break;
         case UnaryOpType::BITWISE_NOT:
             op_init_and_name = {
-                "bitwise_not_tile_init();",
-                fmt::format("bitwise_not_tile({}, {}u);", idst, std::to_string((uint)param0))};
+                "bitwise_not_tile_init();", fmt::format("bitwise_not_tile({}, {}u);", idst, std::to_string((uint)param0))};
             break;
         case UnaryOpType::BITWISE_AND:
             op_init_and_name = {
-                "bitwise_and_tile_init();",
-                fmt::format("bitwise_and_tile({}, {}u);", idst, std::to_string((uint)param0))};
+                "bitwise_and_tile_init();", fmt::format("bitwise_and_tile({}, {}u);", idst, std::to_string((uint)param0))};
             break;
         case UnaryOpType::BITWISE_OR:
             op_init_and_name = {
-                "bitwise_or_tile_init();",
-                fmt::format("bitwise_or_tile({}, {}u);", idst, std::to_string((uint)param0))};
+                "bitwise_or_tile_init();", fmt::format("bitwise_or_tile({}, {}u);", idst, std::to_string((uint)param0))};
             break;
         case UnaryOpType::RIGHT_SHIFT:
             op_init_and_name = {
@@ -157,8 +152,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::FMOD:
             op_init_and_name = {
                 "fmod_tile_init();",
-                fmt::format(
-                    "fmod_tile({}, {}u, {}u);", idst, Converter::to_hex(param0), Converter::to_hex(1.0f / param0))};
+                fmt::format("fmod_tile({}, {}u, {}u);", idst, Converter::to_hex(param0), Converter::to_hex(1.0f/param0))};
             break;
         case UnaryOpType::EXP:
             op_init_and_name = {
@@ -334,6 +328,7 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, std:
     }
     return op_init_and_name;
 }
+
 std::map<string, string> get_defines_impl(
     UnaryOpType op_type,
     const std::vector<float>& params,
@@ -345,7 +340,7 @@ std::map<string, string> get_defines_impl(
     update_macro_defines(op_type, defines);
     return defines;
 }
-}  // namespace
+}
 
 bool get_op_approx_mode(UnaryOpType op_type) {
     switch (op_type) {
@@ -392,18 +387,14 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
 }
 
 std::map<string, string> get_defines(
-    UnaryOpType op_type,
-    const std::optional<std::vector<float>>& params,
-    const std::string& id,
-    const std::string& idst) {
+    UnaryOpType op_type, const std::optional<std::vector<float>>& params, const std::string& id, const std::string& idst) {
     std::string init_def = fmt::format("SFPU_OP_INIT_{}", id);
     std::string func_def = fmt::format("SFPU_OP_FUNC_{}", id);
     return get_defines_impl(
         op_type, params.has_value() ? params.value() : std::vector<float>{}, idst, init_def, func_def);
 }
 
-std::pair<string, string> get_op_init_and_func(
-    UnaryOpType op_type, const std::vector<float>& params, const std::string& idst) {
+std::pair<string, string> get_op_init_and_func(UnaryOpType op_type, const std::vector<float>& params, const std::string& idst) {
     return params.size() > 0 ? get_op_init_and_func_parameterized(op_type, params, idst)
                              : get_op_init_and_func_default(op_type, idst);
 }
@@ -422,4 +413,5 @@ std::map<string, string> get_block_defines(
     block_defines[fmt::format("SFPU_OP_CHAIN_{}", block_id)] = block_define;
     return block_defines;
 }
-}  // namespace ttnn::operations::unary::utils
+
+}
