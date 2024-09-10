@@ -6,7 +6,7 @@
 
 #include "dataflow_api.h"
 
-// #include "debug/dprint.h"
+//#include "debug/dprint.h"
 
 // Function to compare two bfloat16 values using integer arithmetic
 bool bfloat16_greater(uint16_t bf16_a, uint16_t bf16_b) {
@@ -74,7 +74,6 @@ void kernel_main() {
 
     const InterleavedAddrGen<dst_is_dram> s_out = {.bank_base_address = dst_addr, .page_size = out_stick_size};
 
-
     // Use cb as L1 scratch memory
     uint32_t out_addr = get_write_ptr(cb_id_intermed0);
     volatile tt_l1_ptr uint32_t* max_vals = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
@@ -86,66 +85,30 @@ void kernel_main() {
     //cb_reserve_back(cb_id_intermed0, C*H*W);
     //uint32_t indicies_addr = get_write_ptr(cb_id_intermed0);
     //volatile tt_l1_ptr uint32_t* max_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_addr);
-
-    uint32_t max_index = 0;
-    uint32_t max_val = 0;
-    uint32_t index_counter = 0;
     for(uint32_t l = 0; l < B; l ++) {
         for(uint32_t k = 0; k < C; k++) {
             for(uint32_t j = 0; j < H; j++) {
-                // load stick
-                // DPRINT << (l*C*H + k*H + j) << ENDL();
                 noc_async_read_page(l*C*H + k*H + j, s0, cb_addr);
                 noc_async_read_barrier();
+                uint32_t index_counter = 0;
+                uint32_t max_index = 0;
+                uint32_t max_val = stick[0];
                 for(uint32_t i = 0; i < W; i++) {
-                    if constexpr (all) {
-                        uint16_t val = stick[i];
-                        if(bfloat16_greater(val, max_val)) {
-                            // DPRINT << "new max " << HEX() << (val) << "\nGT old max " << (max_val) << ENDL();
-                            // DPRINT << "new idx " << DEC() << (index_counter) << "\nGT old idx " << (max_index) << ENDL();
-                            // DPRINT << DEC() << (max_index) << ENDL();
-                            max_index = index_counter;
-                            max_val = val;
-                        }
-                        // DPRINT << "[" << index_counter << "] = " << HEX() << (val) << ENDL();
-                        index_counter++;
+                    uint16_t val = stick[i];
+                    if(bfloat16_greater(val, max_val)) {
+                        max_index = index_counter;
+                        max_val = val;
                     }
-                    else {
-                    /*
-                        if(dim == 3) {
-                            if(bfloat16_greater(bfloat16_max_vals[l][k][j] < stick[i]) {
-                                bfloat16_max_vals[l][k][j] = stick[i];
-                                max_indices[l][k][j] = i;
-                            }
-                        }
-                        else if(dim == 2) {
-                            if(bfloat16_max_vals[l][k][i] < stick[i]) {
-                                bfloat16_max_vals[l][k][i] = stick[i];
-                                max_indices[l][k][i] = j;
-                            }
-                        }
-                        else if(dim == 1) {
-                            if(bfloat16_max_vals[l][j][i] < stick[i]) {
-                                bfloat16_max_vals[l][j][i] = stick[i];
-                                max_indices[l][j][i] = k;
-                            }
-                        }
-                        else if(dim == 0) {
-                            if(bfloat16_greater(stick[i], bfloat16_max_vals[k][j][i])) {
-                                bfloat16_max_vals[k][j][i] = stick[i];
-                                max_indices[k][j][i] = l;
-                            }
-                        }
-                    */
-                    }
+                    index_counter++;
+
                 }
+                max_vals[l*C*H + k*H + j] = max_index;
             }
         }
     }
-
     // TODO: Generalize write for argmax for other dims
-    max_vals[0] = max_index;
     uint64_t dst_noc_addr = get_noc_addr(0, s_out);
+
     noc_async_write(out_addr, dst_noc_addr, out_stick_size);
     noc_async_write_barrier();
 }
