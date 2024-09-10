@@ -512,7 +512,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
                 fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
                 packer_l1_acc = compute_kernel_config.packer_l1_acc;
             } else {
-                TT_FATAL("arch not supported");
+                TT_FATAL(false, "arch not supported");
             }
         },
         compute_kernel_config);

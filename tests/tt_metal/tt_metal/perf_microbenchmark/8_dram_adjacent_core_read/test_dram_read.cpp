@@ -598,7 +598,7 @@ int main(int argc, char **argv) {
             input_size = k * n * 2;
             tile_format = tt::DataFormat::Float16_b;
         } else {
-            TT_FATAL("input data format invalid");
+            TT_FATAL(false, "Input data format {} is invalid. Please change.", df);
         }
         uint32_t kt = k / 32;
         uint32_t nt = n / 32;

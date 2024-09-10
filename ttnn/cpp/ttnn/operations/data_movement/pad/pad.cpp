@@ -38,9 +38,7 @@ static ttnn::Tensor pad_impl(
         const auto input_tensor_shape = input_tensor.get_shape();
         const auto rank = input_tensor_shape.rank();
 
-        if (rank != 4) {
-            TT_FATAL("Tensor rank is not 4");
-        }
+        TT_FATAL(rank == 4, "Tensor rank is not 4");
 
         auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
         auto output_tensor = operation::run(
@@ -135,7 +133,7 @@ ttnn::Tensor ExecutePad::invoke(
             case 6: output_tensor = pad_impl<tt::tt_metal::Array6D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
             case 7: output_tensor = pad_impl<tt::tt_metal::Array7D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
             case 8: output_tensor = pad_impl<tt::tt_metal::Array8D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
-            default: TT_FATAL("Unsupported tensor rank");
+            default: TT_FATAL(false, "Unsupported tensor rank of {}. Needs to be between 1 and 8 inclusively.", original_rank);
         }
     }
     else {

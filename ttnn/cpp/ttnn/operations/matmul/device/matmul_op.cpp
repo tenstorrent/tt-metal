@@ -113,7 +113,7 @@ operation::OpPerformanceModel create_op_performance_model_for_matmul(
             } else if constexpr (std::is_same_v<T, ttnn::WormholeComputeKernelConfig>) {
                 math_fidelity = compute_kernel_config.math_fidelity;
             } else {
-                TT_FATAL("arch not supported");
+                TT_FATAL(false, "arch not supported");
             }
         },
         compute_kernel_config);

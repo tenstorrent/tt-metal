@@ -98,7 +98,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                 math_approx_mode = compute_kernel_config.math_approx_mode;
                 fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
             } else {
-                TT_FATAL("arch not supported");
+                TT_FATAL(false, "arch not supported");
             }
         },
         compute_kernel_config);

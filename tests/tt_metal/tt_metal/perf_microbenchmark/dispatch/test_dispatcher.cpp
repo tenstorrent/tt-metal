@@ -539,7 +539,7 @@ int main(int argc, char **argv) {
             log_info(LogTest, "Running packed write unicast");
             break;
         case 5:
-            TT_FATAL("Unknown test type {}", test_type_g);
+            TT_FATAL(false, "Unknown test type {}", test_type_g);
         }
 
         log_info(LogTest, "Worker grid {}", all_workers_g.str());

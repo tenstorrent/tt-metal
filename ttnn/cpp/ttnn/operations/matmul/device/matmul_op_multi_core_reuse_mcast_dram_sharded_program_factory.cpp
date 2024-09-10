@@ -376,7 +376,6 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         get_dram_reader_core_coords_wormhole_b0(device, all_worker_cores, all_worker_cores_ordered);
     } else {
         get_dram_reader_core_coords_grayskull(device, all_worker_cores, all_worker_cores_ordered);
-        // TT_FATAL("not implemeted except for wormhole_b0 yet!");
     }
 
     // dram banks
@@ -1198,7 +1197,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
                 fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
                 packer_l1_acc = compute_kernel_config.packer_l1_acc;
             } else {
-                TT_FATAL("arch not supported");
+                TT_FATAL(false, "arch not supported");
             }
         },
         compute_kernel_config);

@@ -83,7 +83,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = in0_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
         } else {
-            TT_FATAL("arch not supported");
+            TT_FATAL(false, "arch not supported");
         }
 
     }, compute_kernel_config);
@@ -481,7 +481,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
             if (fp32_dest_acc_en)
                 TT_FATAL(subblock_wt <= 4, "in fp32 mode, subblock width must be smaller/equal than 4");
         } else {
-            TT_FATAL("arch not supported");
+            TT_FATAL(false, "arch not supported");
         }
 
     }, compute_kernel_config);

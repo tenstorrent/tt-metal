@@ -95,7 +95,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype()) == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
         } else {
-            TT_FATAL("arch not supported");
+            TT_FATAL(false, "arch not supported");
         }
 
     }, compute_kernel_config);
@@ -451,7 +451,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = in_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
         } else {
-            TT_FATAL("arch not supported");
+            TT_FATAL(false, "arch not supported");
         }
 
     }, compute_kernel_config);

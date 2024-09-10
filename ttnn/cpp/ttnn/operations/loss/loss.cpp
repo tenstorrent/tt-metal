@@ -38,7 +38,7 @@ Tensor loss_function(
             fused_ops.push_back(UnaryWithParam{UnaryOpType::SQUARE});
             break;
         default:
-            TT_FATAL("unsupported loss function");
+            TT_FATAL(false, "unsupported loss function {}. Please change.", loss_kind);
     }
     Tensor result = ttnn::subtract(queue_id, ref, prediction, std::nullopt, memory_config, optional_output_tensor, fused_ops);
 
@@ -49,7 +49,7 @@ Tensor loss_function(
             return ttnn::mean(result, std::nullopt, true, memory_config.value_or(ref.memory_config()));
         case LossReductionMode::NONE:
         default:
-            TT_FATAL("unsupported loss reduce function");
+            TT_FATAL(false, "unsupported loss reduce function {}. Please change.", reduce_mode);
             break;
     }
     return result;

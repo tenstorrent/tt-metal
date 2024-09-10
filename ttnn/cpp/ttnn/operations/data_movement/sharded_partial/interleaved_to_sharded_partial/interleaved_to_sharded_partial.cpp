@@ -50,7 +50,7 @@ ttnn::Tensor InterleavedToShardedPartialOperation::invoke(
                 }
                 grid_set = tt::tt_metal::num_cores_to_corerange_set(num_cores, grid_size, row_wise);
             } else if constexpr (std::is_same_v<GridType, CoreRangeSet>) {
-                TT_FATAL("Unsupported type for grid.");
+                TT_FATAL(false, "Unsupported type for grid. CoreRangeSet not supported. Switch to a different type.");
             }
         },
         grid);
