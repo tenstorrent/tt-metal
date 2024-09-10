@@ -15,66 +15,7 @@ import ttnn
 from ttnn.operations.conv2d import determine_parallel_config, create_sharded_memory_config_from_parallel_config
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "act_shape",  ## NCHW
-    (
-        (  ## resnet shapes
-            [1, 64, 112, 112],
-            [4, 64, 112, 112],
-            [8, 64, 112, 112],
-            [16, 64, 112, 112],
-            # [20, 64, 112, 112],   ## oom
-            ## hpr shapes
-            [8, 32, 132, 20],
-            [16, 32, 132, 20],
-            [32, 32, 132, 20],
-            [64, 32, 132, 20],
-            [128, 32, 132, 20],
-            # [256, 32, 132, 20],   ## oom
-            [8, 32, 264, 40],
-            [16, 32, 264, 40],
-            [32, 32, 264, 40],
-            # [64, 32, 264, 40],    ## oom
-            # [128, 32, 264, 40],   ## oom
-            # [256, 32, 264, 40],   ## oom
-            [4, 16, 1056, 160],
-            # [8, 16, 1056, 160],     ## oom
-            # [16, 16, 1056, 160],    ## oom
-            # [32, 16, 1056, 160],    ## oom
-            # [64, 16, 1056, 160],    ## oom
-            # [128, 16, 1056, 160],   ## oom
-            # [256, 16, 1056, 160],   ## oom
-            [8, 16, 528, 80],
-            [16, 16, 528, 80],
-            # [32, 16, 528, 80],  ## oom
-            # [64, 16, 528, 80],  ## oom
-            # [128, 16, 528, 80], ## oom
-            # [256, 16, 528, 80], ## oom
-        )
-    ),
-)
-@pytest.mark.parametrize(
-    "kernel_size",
-    (
-        (2, 2),
-        (3, 3),
-    ),
-)
-@pytest.mark.parametrize(
-    "padding",
-    (
-        (0, 0),
-        (1, 1),
-    ),
-)
-@pytest.mark.parametrize(
-    "stride",
-    ((2, 2),),
-)
-@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-def test_run_max_pool(
+def run_max_pool(
     act_shape,
     kernel_size,
     padding,
@@ -208,6 +149,117 @@ def test_run_max_pool(
     assert isclose
     if dtype == ttnn.bfloat16:
         assert isequal
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "act_shape",  ## NCHW
+    (
+        (  ## resnet shapes
+            [1, 64, 112, 112],
+            [4, 64, 112, 112],
+            [8, 64, 112, 112],
+            [16, 64, 112, 112],
+            # [20, 64, 112, 112],   ## oom
+            ## hpr shapes
+            [8, 32, 132, 20],
+            [16, 32, 132, 20],
+            [32, 32, 132, 20],
+            [64, 32, 132, 20],
+            [128, 32, 132, 20],
+            # [256, 32, 132, 20],   ## oom
+            [8, 32, 264, 40],
+            [16, 32, 264, 40],
+            [32, 32, 264, 40],
+            # [64, 32, 264, 40],    ## oom
+            # [128, 32, 264, 40],   ## oom
+            # [256, 32, 264, 40],   ## oom
+            [4, 16, 1056, 160],
+            # [8, 16, 1056, 160],     ## oom
+            # [16, 16, 1056, 160],    ## oom
+            # [32, 16, 1056, 160],    ## oom
+            # [64, 16, 1056, 160],    ## oom
+            # [128, 16, 1056, 160],   ## oom
+            # [256, 16, 1056, 160],   ## oom
+            [8, 16, 528, 80],
+            [16, 16, 528, 80],
+            # [32, 16, 528, 80],  ## oom
+            # [64, 16, 528, 80],  ## oom
+            # [128, 16, 528, 80], ## oom
+            # [256, 16, 528, 80], ## oom
+        )
+    ),
+)
+@pytest.mark.parametrize(
+    "kernel_size",
+    (
+        (2, 2),
+        (3, 3),
+    ),
+)
+@pytest.mark.parametrize(
+    "padding",
+    (
+        (0, 0),
+        (1, 1),
+    ),
+)
+@pytest.mark.parametrize(
+    "stride",
+    ((2, 2),),
+)
+@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_run_max_pool(
+    act_shape,
+    kernel_size,
+    padding,
+    stride,
+    dilation,
+    device,
+    dtype,
+):
+    run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "act_shape",  ## NCHW
+    (([1, 512, 10, 10],)),  ## yolov4 shapes
+)
+@pytest.mark.parametrize(
+    "kernel_size",
+    (
+        (5, 5),
+        (9, 9),
+        (13, 13),
+        # (3, 3),
+    ),
+)
+@pytest.mark.parametrize(
+    "padding",
+    (
+        (2, 2),
+        (4, 4),
+        (6, 6),
+    ),
+)
+@pytest.mark.parametrize(
+    "stride",
+    ((1, 1),),
+)
+@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_run_max_pool_yolov4(
+    act_shape,
+    kernel_size,
+    padding,
+    stride,
+    dilation,
+    device,
+    dtype,
+):
+    run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype)
 
 
 @pytest.mark.skip("See GH issue #12285")

@@ -635,7 +635,6 @@ class TtLlamaAttention_galaxy:
             query_layer,
             key_layer,
             value_layer,
-            attn_masks,
             is_causal=True,
             scale=self.scale,
         )
