@@ -2,13 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
+from loguru import logger
 
 import ttnn
-import pytest
-
 from models.utility_functions import comp_allclose_and_pcc
-from loguru import logger
 
 
 def get_tt_dtype(torch_dtype):
@@ -21,6 +20,10 @@ def get_tt_dtype(torch_dtype):
     return None
 
 
+def create_tt_tensor(tensor: torch.Tensor, dtype, device):
+    return ttnn.from_torch(tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+
 @pytest.mark.parametrize(
     "start_end_step",
     (
@@ -31,24 +34,22 @@ def get_tt_dtype(torch_dtype):
     ),
 )
 def test_arange_row_major_simple(start_end_step, device):
+    # Prepare and compute by torch
     start, end, step = start_end_step
-
+    any_cpu = torch.ones((1024))
+    any = create_tt_tensor(any_cpu, ttnn.bfloat16, device)
+    untilize_out = True
     tt_cpu = torch.arange(start=start, end=end, step=step).to(torch.bfloat16)
 
-    any_cpu = torch.ones((1024))
-    any = ttnn.Tensor(any_cpu, ttnn.bfloat16).to(device)
-
-    untilize_out = True
-    tt_npu = ttnn.experimental.operations.primary.moreh_arange(start, end, step, any, None, untilize_out)
-
+    # Compute by ttnn
+    tt_npu = ttnn.operations.moreh.arange(start, end, step, any, untilize_out=untilize_out)
     tt_dev = tt_npu.cpu().to_torch()
 
+    # Compare
     assert tt_dev.shape == tt_cpu.shape
-
     rtol = atol = 0.1
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
     logger.info(out)
-
     assert passing
 
 
@@ -63,30 +64,29 @@ def test_arange_row_major_simple(start_end_step, device):
         False,
     ),
 )
-def test_arange_row_major_optioanl_output(start_end_step, optional_output, device):
+def test_arange_row_major_optional_output(start_end_step, optional_output, device):
+    # Prepare and compute by torch
     start, end, step = start_end_step
-
-    tt_cpu = torch.arange(start=start, end=end, step=step).to(torch.bfloat16)
-
     any_cpu = torch.ones((1024))
     any = ttnn.Tensor(any_cpu, ttnn.bfloat16).to(device)
-
     untilize_out = True
+    tt_cpu = torch.arange(start=start, end=end, step=step).to(torch.bfloat16)
+
+    # Compute by ttnn
     if optional_output:
         output_cpu = torch.empty_like(tt_cpu)
-        output = ttnn.Tensor(output_cpu, ttnn.bfloat16).to(device)
-        tt_npu = ttnn.experimental.operations.primary.moreh_arange(start, end, step, any, output, untilize_out)
+        output = ttnn.from_torch(output_cpu, dtype=ttnn.bfloat16, device=device)
+        tt_npu = ttnn.operations.moreh.arange(start, end, step, any, output_tensor=output, untilize_out=untilize_out)
     else:
-        tt_npu = ttnn.experimental.operations.primary.moreh_arange(start, end, step, any, None, untilize_out)
+        tt_npu = ttnn.operations.moreh.arange(start, end, step, any, untilize_out=untilize_out)
 
     tt_dev = tt_npu.cpu().to_torch()
 
+    # Compare
     assert tt_dev.shape == tt_cpu.shape
-
     rtol = atol = 0.1
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
     logger.info(out)
-
     assert passing
 
 
@@ -104,26 +104,23 @@ def test_arange_row_major_optioanl_output(start_end_step, optional_output, devic
     ids=["bfloat16", "int32", "float32"],
 )
 def test_arange_row_major_dtype(start_end_step, output_dtype, device):
+    # Prepare and compute by torch
     start, end, step = start_end_step
-
     tt_dtype = get_tt_dtype(output_dtype)
-
     tt_cpu = torch.arange(start=start, end=end, step=step).to(output_dtype)
-
     any_cpu = torch.ones((1024))
-    any = ttnn.Tensor(any_cpu, tt_dtype).to(device)
-
+    any = create_tt_tensor(any_cpu, tt_dtype, device)
     untilize_out = True
-    tt_npu = ttnn.experimental.operations.primary.moreh_arange(start, end, step, any, None, untilize_out, tt_dtype)
 
+    # Compute by ttnn
+    tt_npu = ttnn.operations.moreh.arange(start, end, step, any, untilize_out=untilize_out, output_dtype=tt_dtype)
     tt_dev = tt_npu.cpu().to_torch()
 
+    # Compare
     assert tt_dev.shape == tt_cpu.shape
-
     rtol = atol = 0.1
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
     logger.info(out)
-
     assert passing
 
 
@@ -137,18 +134,19 @@ def test_arange_row_major_dtype(start_end_step, output_dtype, device):
     ),
 )
 def test_arange_tilized_simple(start_end_step, device):
+    # Prepare and compute by torch
     start, end, step = start_end_step
-
     tt_cpu = torch.arange(start=start, end=end, step=step).to(torch.bfloat16)
-
     any_cpu = torch.ones((1024))
-    any = ttnn.Tensor(any_cpu).to(device)
-    tt_npu = ttnn.experimental.operations.primary.moreh_arange(start, end, step, any)
+    any = create_tt_tensor(any_cpu, ttnn.bfloat16, device)
 
+    # Compute by ttnn
+    tt_npu = ttnn.operations.moreh.arange(start, end, step, any)
     L = tt_cpu.shape[0]
-
     tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile((1, L)).to_torch().reshape((L)).to(torch.bfloat16)
 
+    # Compare
+    assert tt_dev.shape == tt_cpu.shape
     rtol = atol = 0.1
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
     logger.info(out)
@@ -166,38 +164,36 @@ def test_arange_tilized_simple(start_end_step, device):
         False,
     ),
 )
-def test_arange_tilized_major_optioanl_output(start_end_step, optional_output, device):
+def test_arange_tilized_major_optional_output(start_end_step, optional_output, device):
+    # Prepare and compute by torch
     start, end, step = start_end_step
-
     tt_cpu = torch.arange(start=start, end=end, step=step).to(torch.bfloat16)
-
     L = tt_cpu.shape[0]
-
     any_cpu = torch.ones((1024))
-    any = ttnn.Tensor(any_cpu, ttnn.bfloat16).to(device)
-
+    any = create_tt_tensor(any_cpu, ttnn.bfloat16, device)
     untilize_out = False
+
+    # Compute by ttnn
     if optional_output:
         output_cpu = torch.empty_like(tt_cpu)
         output = (
-            ttnn.Tensor(output_cpu, ttnn.bfloat16)
+            ttnn.from_torch(output_cpu, ttnn.bfloat16)
             .reshape([1, L])
             .pad_to_tile(float("nan"))
             .to(ttnn.TILE_LAYOUT)
             .to(device)
         )
-        tt_npu = ttnn.experimental.operations.primary.moreh_arange(start, end, step, any, output, untilize_out)
+        tt_npu = ttnn.operations.moreh.arange(start, end, step, any, output_tensor=output, untilize_out=untilize_out)
     else:
-        tt_npu = ttnn.experimental.operations.primary.moreh_arange(start, end, step, any, None, untilize_out)
-
+        tt_npu = ttnn.operations.moreh.arange(start, end, step, any, untilize_out=untilize_out)
     tt_dev = tt_npu.cpu().to_torch()
-
     tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile((1, L)).to_torch().reshape((L)).to(torch.bfloat16)
 
+    # Compare
+    assert tt_dev.shape == tt_cpu.shape
     rtol = atol = 0.1
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
     logger.info(out)
-
     assert passing
 
 
@@ -215,26 +211,23 @@ def test_arange_tilized_major_optioanl_output(start_end_step, optional_output, d
     ids=["bfloat16", "int32", "float32"],
 )
 def test_arange_tilized_dtype(start_end_step, output_dtype, device):
+    # Prepare and compute by torch
     start, end, step = start_end_step
-
     tt_dtype = get_tt_dtype(output_dtype)
-
     tt_cpu = torch.arange(start=start, end=end, step=step).to(output_dtype)
-
     any_cpu = torch.ones((1024))
     any = ttnn.Tensor(any_cpu, tt_dtype).to(device)
-
     untilize_out = False
-    tt_npu = ttnn.experimental.operations.primary.moreh_arange(start, end, step, any, None, untilize_out, tt_dtype)
 
+    # Compute by ttnn
+    tt_npu = ttnn.operations.moreh.arange(start, end, step, any, untilize_out=untilize_out, output_dtype=tt_dtype)
     tt_dev = tt_npu.cpu().to_torch()
-
     L = tt_cpu.shape[0]
-
     tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile((1, L)).to_torch().reshape((L)).to(output_dtype)
 
+    # Compare
+    assert tt_dev.shape == tt_cpu.shape
     rtol = atol = 0.1
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
     logger.info(out)
-
     assert passing
