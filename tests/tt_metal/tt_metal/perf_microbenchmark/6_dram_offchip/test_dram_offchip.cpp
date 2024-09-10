@@ -17,7 +17,7 @@
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include "tt_metal/tt_metal/perf_microbenchmark/common/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 using namespace tt;
 using std::chrono::duration_cast;

@@ -17,7 +17,7 @@
 #include "third_party/umd/device/tt_xy_pair.h"
 #include "third_party/magic_enum/magic_enum.hpp"
 
-#include "tt_metal/programming_examples/matmul_common/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 using std::pair;
 using CoreCoord = tt_xy_pair;

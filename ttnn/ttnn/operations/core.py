@@ -36,20 +36,31 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
     elif isinstance(slices, slice):
         slices = (slices,)
     elif isinstance(slices, type(...)):
-        raise RuntimeError("Ellipsis is not supported!")
+        return ttnn.clone(input_tensor)
 
     normalized_slices = []
+
+    ellipsis_found = False
     for s in slices:
         if isinstance(s, int):
             normalized_slices.append(slice(None, s, None))
         elif isinstance(s, slice):
             normalized_slices.append(s)
+        elif s is Ellipsis:
+            if ellipsis_found:
+                raise ValueError("Only one ellipsis ('...') is allowed in a slice.")
+            ellipsis_found = True
+            # Fill in the remaining dimensions with slice(None) based on how many slices are missing
+            num_missing_slices = input_rank - len(slices) + 1
+            normalized_slices.extend([slice(None)] * num_missing_slices)
         else:
-            raise RuntimeError("Invalid slice type!")
-    slices = tuple(normalized_slices)
+            raise TypeError(f"Invalid slice object: {s}")
 
-    while len(slices) != input_rank:
-        slices = slices + (slice(None, None, None),)
+    # If fewer slices than the rank, pad with slice(None)
+    while len(normalized_slices) < input_rank:
+        normalized_slices.append(slice(None))
+
+    slices = tuple(normalized_slices)
 
     if isinstance(slices, tuple):
         if len(slices) > input_rank:
@@ -65,13 +76,14 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
             (_slice.stop if _slice.stop is not None else input_tensor.shape[index])
             for index, _slice in enumerate(slices)
         ]
+        slice_step = [_slice.step if _slice.step is not None else 1 for _slice in slices]
 
         padded_slice_end = list(slice_end)
         if input_layout == ttnn.TILE_LAYOUT:
             padded_slice_end[-1] = int(math.ceil((slice_end[-1]) / ttnn.TILE_SIZE)) * ttnn.TILE_SIZE
             padded_slice_end[-2] = int(math.ceil((slice_end[-2]) / ttnn.TILE_SIZE)) * ttnn.TILE_SIZE
 
-        if list(padded_slice_end) == list(input_tensor.shape.with_tile_padding()):
+        if list(padded_slice_end) == list(input_tensor.shape.with_tile_padding()) and (slice_step is None):
             output = input_tensor
         else:
             padded_slice_end_minus_1 = [x - 1 for x in padded_slice_end]
@@ -79,13 +91,17 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
                 raise RuntimeError("ttnn.Tensor.__getitem__: cannot return a scalar!")
 
             if ttnn.is_tensor_storage_on_device(input_tensor):
-                output = ttnn.slice(input_tensor, slice_start, padded_slice_end_minus_1)
+                output = ttnn.slice(input_tensor, slice_start, padded_slice_end_minus_1, slice_step)
             else:
+                if any([x != 1 for x in slice_step]):
+                    raise NotImplementedError("ttnn.Tensor.__getitem__: step is not supported for host tensor!")
                 input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
                 output = input_tensor.unpad(slice_start, padded_slice_end_minus_1)
                 output = ttnn.to_layout(output, input_layout)
 
-        output_shape = [end - start for (start, end) in zip(slice_start, slice_end)][-input_rank:]
+        output_shape = [len(range(start, end, step)) for (start, end, step) in zip(slice_start, slice_end, slice_step)][
+            -input_rank:
+        ]
         padded_output_shape = list(output.shape.with_tile_padding())[-input_rank:]
         return ttnn.reshape(output, shape=ttnn.Shape(output_shape, padded_output_shape))
 

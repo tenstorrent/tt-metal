@@ -39,7 +39,7 @@ const Shape infer_dims_for_reshape_RM(int N, int C, int H, int W, uint32_t old_v
 
 template <typename T>
 static std::size_t compute_volume(const T& shape) {
-    auto volume = 1;
+    size_t volume = 1;
     for (auto index = 0; index < shape.size(); index++) {
         volume *= shape[index];
     }
@@ -75,7 +75,7 @@ static int compute_flat_indices(const vector<int>& indices, const vector<std::ui
 
 template <typename T>
 static std::size_t compute_buffer_size(const T& shape, DataType data_type) {
-    const auto volume = compute_volume(shape);
+    const size_t volume = compute_volume(shape);
     if (data_type == DataType::BFLOAT8_B) {
         TT_ASSERT(volume % constants::TILE_HW == 0);
         const auto bfloat8_b_volume = volume / constants::TILE_HW * constants::BFLOAT8_B_TILE_HW;

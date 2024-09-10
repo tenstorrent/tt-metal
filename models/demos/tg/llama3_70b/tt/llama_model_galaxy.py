@@ -191,7 +191,7 @@ class TtLlamaModel_galaxy:
             cache_file_name=self.cache_path / norm_sharded_cache_str,
         )
 
-    def prepare_inputs(self, inp_ids, start_pos, valid_seq_len=None):
+    def prepare_inputs(self, inp_ids, start_pos, valid_seq_len=None, attn_mask=None):
         assert inp_ids.dim() == 2
         batch, seq_len = inp_ids.shape
 
@@ -269,7 +269,7 @@ class TtLlamaModel_galaxy:
                 cos_gathered,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name(f"cos_gathered_prefill_galaxy_{start_pos}"),
+                # cache_file_name=cache_name(f"cos_gathered_prefill_galaxy_{start_pos}"),
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
@@ -278,26 +278,28 @@ class TtLlamaModel_galaxy:
                 sin_gathered,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name(f"sin_gathered_prefill_galaxy_{start_pos}"),
+                # cache_file_name=cache_name(f"sin_gathered_prefill_galaxy_{start_pos}"),
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             )
 
             rot_mats = [cos_gathereds, sin_gathereds]
-
-            attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
-            attn_mask = torch.triu(attn_mask, diagonal=1)
-            attn_mask = attn_mask.expand(1, batch, -1, -1)
-            attn_masks = ttnn.as_tensor(
-                attn_mask,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name(f"attn_mask_prefill_{seq_len}"),
-                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                device=self.mesh_device,
-            )
+            if not attn_mask:
+                attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
+                attn_mask = torch.triu(attn_mask, diagonal=1)
+                attn_mask = attn_mask.expand(1, batch, -1, -1)
+                attn_masks = ttnn.as_tensor(
+                    attn_mask,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    # cache_file_name=cache_name(f"attn_mask_prefill_{seq_len}"),
+                    mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    device=self.mesh_device,
+                )
+            else:
+                attn_masks = attn_mask
 
         return (
             xs,
@@ -404,7 +406,6 @@ class TtLlamaModel_galaxy:
     ) -> ttnn.Tensor:
         ### Run all layers
         for id, layer in enumerate(self.layers):
-            logger.info(f"Start layer: {id}")
             xs = layer(xs, rot_mats, start_pos, attn_masks, user_id)
 
         norm_out = self.tt_distributed_rmsnorm(

@@ -220,6 +220,21 @@ struct ExecuteBackwardRemainder {
 
 };
 
+struct ExecuteBackwardFmod {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float scalar,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+};
+
 
 }  // operations::binary
 
@@ -259,5 +274,9 @@ constexpr auto div_bw = ttnn::register_operation<"ttnn::div_bw", operations::bin
 constexpr auto remainder_bw = ttnn::register_operation<
     "ttnn::remainder_bw",
     operations::binary_backward::ExecuteBackwardRemainder>();
+
+constexpr auto fmod_bw = ttnn::register_operation<
+    "ttnn::fmod_bw",
+    operations::binary_backward::ExecuteBackwardFmod>();
 
 }  // namespace ttnn

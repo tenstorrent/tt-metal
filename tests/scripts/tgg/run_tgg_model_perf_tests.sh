@@ -8,6 +8,10 @@ run_tgg_llm_tests() {
 }
 
 run_tgg_cnn_tests() {
+
+  echo "LOG_METAL: Running run_tgg_resnet50_tests"
+  env pytest -n auto models/demos/tgg/resnet50/tests/test_perf_e2e_resnet50.py -m "model_perf_tgg" --timeout=900 ; fail+=$?
+
   # Merge all the generated reports
   env python models/perf/merge_perf_results.py
 }
@@ -27,7 +31,7 @@ main() {
     esac
     shift
   done
-    
+
   if [[ -z "$TT_METAL_HOME" ]]; then
     echo "Must provide TT_METAL_HOME in environment" 1>&2
     exit 1

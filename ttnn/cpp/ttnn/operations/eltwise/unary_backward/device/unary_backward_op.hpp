@@ -46,7 +46,6 @@ enum class UnaryBackwardOpType {
     TAN_BW,
     SIGMOID_BW,
     RSQRT_BW,
-    NEG_BW,
     RELU_BW,
     LOGIT_BW,
     HARDSHRINK_BW,
@@ -79,7 +78,6 @@ enum class UnaryBackwardOpType {
     LOGITEPS_BW,
     LOG2_BW,
     SIGN_BW,
-    FMOD_BW,
     DIV_NO_NAN_BW,
     EXP2_BW,
     EXPM1_BW,
@@ -107,7 +105,6 @@ std::vector<Tensor> _i0_bw( const Tensor& grad, const Tensor& input, const std::
 std::vector<Tensor> _tan_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _sigmoid_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _rsqrt_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _neg_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _reciprocal_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _ceil_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _softsign_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
@@ -140,7 +137,6 @@ std::vector<Tensor> _rpow_bw( const Tensor& grad, const Tensor& input, float exp
 std::vector<Tensor> _div_no_nan_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _polygamma_bw( const Tensor& grad, const Tensor& input, int n, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _lt_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _fmod_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _sub_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _gt_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config);
 
@@ -265,13 +261,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::RSQRT_BW> {
     static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
         return _rsqrt_bw(grad, input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::NEG_BW> {
-    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-        return _neg_bw(grad, input, output_mem_config);
     }
 };
 
@@ -552,13 +541,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::LOGITEPS_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float eps, const std::optional<MemoryConfig>& output_mem_config ) {
         return _logiteps_bw(grad, input, eps, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::FMOD_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _fmod_bw(grad, input, scalar, output_mem_config);
     }
 };
 
