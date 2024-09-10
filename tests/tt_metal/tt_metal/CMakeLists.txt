@@ -31,6 +31,7 @@ set (TT_METAL_TESTS_SRCS
     test_core_range_set.cpp
     test_compile_sets_kernel_binaries.cpp
     test_compile_program.cpp
+    test_create_kernel_with_kernel_path_env_var.cpp
     test_clean_init.cpp
 )
 
