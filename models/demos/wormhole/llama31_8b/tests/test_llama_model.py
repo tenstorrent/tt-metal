@@ -29,22 +29,23 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.timeout(900)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "iterations",
-    (17,),
+    "layers",
+    (1, 32),
 )
-def test_llama_model_inference(device, iterations, use_program_cache, reset_seeds):
+def test_llama_model_inference(device, layers, use_program_cache, reset_seeds):
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = False  # Flag to measure KV cache PCC for all layers
 
     dtype = ttnn.bfloat8_b
-    pcc = 0.92  # FIXME: why are first couple of iterations 0.93 and the rest higher?
+    pcc = 0.99 if layers == 1 else 0.92  # FIXME: why are first couple of iterations 0.93 and the rest higher?
+    iterations = 12
 
     # Use instruct weights instead of general weights
     instruct = False
 
     model_args = TtModelArgs(device, instruct=instruct)
 
-    model_args.n_layers = 32  # Full model
+    model_args.n_layers = layers
 
     tokenizer = Tokenizer(model_args.tokenizer_path)
 

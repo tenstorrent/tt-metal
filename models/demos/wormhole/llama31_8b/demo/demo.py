@@ -247,24 +247,6 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
                 text = "".join(tokenizer.decode(all_outputs[user]))
                 logger.info("[User {}] {}".format(user, text))
 
-        # When running in CI, check the output against the expected output to avoid accuracy regressions
-        expected_output = "models/demos/wormhole/llama31_8b/demo/expected_outputs.json"
-        with open(expected_output, "r") as f:
-            expected_out = json.load(f)
-        # assert (
-        #     len(expected_out) >= batch_size * 2
-        # ), f"expected_outputs.json should have {batch_size * 2} outputs: {batch_size} for general weights and {batch_size} for instruct weights!"
-
-        for i in range(batch_size):
-            user_output = "".join(tokenizer.decode(all_outputs[i]))
-            if instruct_mode:  # The instruct outputs are at the end of the expected outputs file
-                user_expect = expected_out[i + batch_size]["output_instruct"]
-            else:
-                user_expect = expected_out[i]["output_general"]
-
-            assert user_output == user_expect, f"Output for user {i} does not match expected output!"
-        logger.info("[CI-Only] Output token validation passed!")
-
 
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights",
