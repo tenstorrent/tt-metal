@@ -30,17 +30,19 @@ This describes how elements within a tensor are mapped to pages, with each page 
 
 
 ### 3.1 Row-Major layout
-Each row of a 2D tensor corresponds to a single page in our buffer (with a minor exception for sharded tensors, which will be explained later). For example, with a 64x64 tensor, each row is associated with a separate page, resulting in a total of 64 pages in the buffer.
+Each row of a 2D tensor corresponds to a single page in our buffer (with a minor exception for sharded tensors, which will be explained later). For example, with a 64x64 tensor, each row is associated with a separate page, resulting in a total of 64 pages in the buffer. This is illustrated in *Figure 1*.
 
 <img src="images/row_major_pages.svg" style="width:500px;"/>
 
+*Figure 1: Row major representation of a 64x64 Tensor.*
 
 
 
 ### 3.2 Tiled layout
-In a tiled tensor, pages are represented as 2D tiles, with the default tile size being 32x32, rather than being confined to a single row. For example, with a 64x64 tensor, this results in 4 tiles, each of size 32x32.
+In a tiled tensor, pages are represented as 2D tiles, with the default tile size being 32x32, rather than being confined to a single row. For example, with a 64x64 tensor, this results in 4 tiles, each of size 32x32. This is illustrated in *Figure 2*.
 <img src="images/tiled_pages.svg" style="width:500px;"/>
 
+*Figure 2: Tiled representation of a 64x64 Tensor. The tile shape is 32x32*
 
 
 #### 3.2.1 Tile Shapes
@@ -60,9 +62,11 @@ An individual tensor is represented across several pages, with the distribution 
 
 In an interleaved tensor layout, pages are allocated in a round-robin fashion across multiple banks. Allocation of a new tensor always begins with the first bank, which can lead to some fragmentation between tensors.
 
-For example, consider a tensor requiring four pages (P0 to P3) across three banks (0 to 2). The first four pages are allocated to banks 0 through 2, and the fourth page wraps around and is allocated to bank 0. The next tensor will also start allocation at bank 0.
+For example in *Figure 3*, consider a tensor requiring four pages (P0 to P3) across three banks (0 through 2). The first three pages are allocated to banks 0 through 2, and the fourth page wraps around and is allocated to bank 0. The next tensor will also start allocation at bank 0. 
+
 <img src="images/interleaved_2.svg" style="width:500px;"/>
 
+*Figure 3: Interleaved tensor partitioned over several banks*
 
 #### 4.1.1 User Interface
 
@@ -85,9 +89,11 @@ Unlike interleaved tensors, where pages are distributed across all available L1 
 
 This can be illustrated with an example. Consider a tensor with 16 pages, denoted P0 to P15. The left side of the figure shows how the tiled tensor appears in host memory. When the tensor is sharded, each shard is written into the L1 memory of a core.
 
-In the example, Core (0,0) holds pages 0, 1, 4, and 5, while Core (0,1) holds pages 2, 3, 7, and 8. This distribution is defined by a shard specification that includes the shard shape (in this case, 2x2 pages) and the core grid where the shards are placed (a 2x2 core grid).
+In the example illustrated in *Figure 4*, Core (0,0) holds pages 0, 1, 4, and 5, while Core (0,1) holds pages 2, 3, 7, and 8. This distribution is defined by a shard specification that includes the shard shape (in this case, 2x2 pages) and the core grid where the shards are placed (a 2x2 core grid).
 
 <img src="images/sharded_page_mapping_2.svg" style="width:1000px;"/>
+
+*Figure 4: Mapping of a sharded tensor onto a core-grid.*
 
 
 The main purpose of sharding is to keep data local. While an interleaved L1 tensor can also be distributed across banks in multiple cores, sharding offers a more explicit mapping of pages. This allows us to ensure that each core works on a specific portion of memory that is kept local within its respective L1 memory.
