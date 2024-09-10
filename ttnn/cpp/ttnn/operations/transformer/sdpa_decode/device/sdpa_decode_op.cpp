@@ -41,34 +41,67 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
         TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
     }
 
-    // Assert we are in decode mode if not causal
-    // Q: [1, B, NH, D]
-    // K: [1, B, S, D]
-    // V: [1, B, S, D]
+    if (this->paged_attention) {
+        // Paged attention verification
+        TT_FATAL(optional_input_tensors.at(0).has_value(), "Must have cur_pos tensor for paged attention");
+        TT_FATAL(optional_input_tensors.at(1).has_value(), "Must have page_table tensor for paged attention");
 
-    // Batch must match
-    const auto B = q_shape[1];
-    TT_FATAL(k_shape[1] == B);
-    TT_FATAL(v_shape[1] == B);
-    // TT_FATAL(Q_memcfg.shard_spec.value().grid.num_cores() == B, "Q must be height sharded by batch ");
+        const auto& cur_pos_tensor = optional_input_tensors.at(0).value();
+        const auto& page_table_tensor = optional_input_tensors.at(1).value();
 
-    // NKV must be 1 if we are running in this decode mode
-    TT_FATAL(q_shape[0] == 1);
-    TT_FATAL(k_shape[0] == 1);
-    TT_FATAL(v_shape[0] == 1);
+        TT_FATAL(cur_pos_tensor.get_dtype() == DataType::INT32);
+        TT_FATAL(cur_pos_tensor.get_layout() == Layout::ROW_MAJOR);
 
-    // Check sequence lengths
-    TT_FATAL(k_shape[-2] == v_shape[-2]);
+        TT_FATAL(page_table_tensor.get_dtype() == DataType::INT32);
+        TT_FATAL(page_table_tensor.get_layout() == Layout::ROW_MAJOR);
 
-    // Check hidden size
-    const auto D = q_shape[-1];
-    TT_FATAL(k_shape[-1] == D);
-    TT_FATAL(v_shape[-1] == D);
+        const auto cur_pos_shape = cur_pos_tensor.get_legacy_shape();
+        const auto page_table_shape = page_table_tensor.get_legacy_shape();
 
-    // Check valid seqlen
-    for (int i = 0; i < this->cur_pos.size(); i++) {
-        TT_FATAL(this->cur_pos[i] < k_shape[-2], "cur_pos must be <= K sequence dim");
+        const auto B = q_shape[1];
+        TT_FATAL(cur_pos_shape[0] == B, "cur_pos must have batch size equal to Q");
+        TT_FATAL(page_table_shape[0] == B, "page_table must have hidden size equal to Q");
+
+        const auto max_num_blocks_per_seq = page_table_shape[1];
+        TT_FATAL(B * max_num_blocks_per_seq == k_shape[0], "Paged K cache must have dim0= B * max_num_blocks_per_seq");
+        TT_FATAL(B * max_num_blocks_per_seq == v_shape[0], "Paged V cache must have dim0= B * max_num_blocks_per_seq");
+
+        TT_FATAL(k_shape[1] == 1 && v_shape[1] == 1, "Paged attention only supports 1 head");
+        TT_FATAL(k_shape[2] == v_shape[2], "K and V must have same block size");
+        TT_FATAL(k_shape[3] == v_shape[3] && k_shape[3] == q_shape[3], "Q, K, V must have same hidden size");
+    } else {
+        // Unpaged attention verification
+        TT_FATAL(not optional_input_tensors.at(1).has_value(), "Must not have page_table tensor for unpaged attention");
+        // Assert we are in decode mode if not causal
+        // Q: [1, B, NH, D]
+        // K: [1, B, S, D]
+        // V: [1, B, S, D]
+
+        // Batch must match
+        const auto B = q_shape[1];
+        TT_FATAL(k_shape[1] == B);
+        TT_FATAL(v_shape[1] == B);
+        // TT_FATAL(Q_memcfg.shard_spec.value().grid.num_cores() == B, "Q must be height sharded by batch ");
+
+        // NKV must be 1 if we are running in this decode mode
+        TT_FATAL(q_shape[0] == 1);
+        TT_FATAL(k_shape[0] == 1);
+        TT_FATAL(v_shape[0] == 1);
+
+        // Check sequence lengths
+        TT_FATAL(k_shape[-2] == v_shape[-2]);
+
+        // Check hidden size
+        const auto D = q_shape[-1];
+        TT_FATAL(k_shape[-1] == D);
+        TT_FATAL(v_shape[-1] == D);
+
+        // Check valid seqlen
+        for (int i = 0; i < this->cur_pos.size(); i++) {
+            TT_FATAL(this->cur_pos[i] < k_shape[-2], "cur_pos must be <= K sequence dim");
+        }
     }
+
 
     // Check compute kernel config
     std::visit(
@@ -101,6 +134,7 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
     auto& input_tensor_v = input_tensors.at(2);
 
     auto& cur_pos_tensor = optional_input_tensors.at(0);
+    auto& page_table_tensor = optional_input_tensors.at(1);
 
     auto& output_tensor = output_tensors.at(0);
 
@@ -118,6 +152,7 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
         input_tensor_k,
         input_tensor_v,
         cur_pos_tensor,
+        page_table_tensor,
         output_tensor,
         this->cur_pos,
         scale,
@@ -133,6 +168,7 @@ operation::Hash ScaledDotProductAttentionDecode::compute_program_hash(const std:
         this->program_config,
         this->compute_kernel_config,
         this->k_chunk_size,
+        this->paged_attention,
         input_tensors,
         optional_input_tensors);
 }
