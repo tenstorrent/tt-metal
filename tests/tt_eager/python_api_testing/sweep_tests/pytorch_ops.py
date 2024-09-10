@@ -2523,3 +2523,14 @@ def relu6_bw(x, y, *args, **kwargs):
     pyt_y.backward(gradient=grad_data)
 
     return in_data.grad
+
+
+def prod_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.prod(in_data, dim=0, keepdim=True)
+    pyt_y.backward(gradient=grad_data)
+    return in_data.grad
