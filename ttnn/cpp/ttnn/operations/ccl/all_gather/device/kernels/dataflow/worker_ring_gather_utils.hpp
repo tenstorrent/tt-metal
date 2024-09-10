@@ -450,7 +450,10 @@ FORCE_INLINE void read_wrapped_chunk_from_output_tensor(
     ASSERT(last_page_of_worker == false);
     cb_reserve_back(cb_id, num_pages);
     uint32_t local_l1_read_addr = get_write_ptr(cb_id);
-    for (uint32_t i = 0; i < num_pages; ++i) {
+
+    int32_t contig_pages = 1;
+    for (uint32_t i = 0; i < num_pages; i+= contig_pages) {
+        contig_pages = 1;
 #ifdef ROW_MAJOR_LAYOUT
   #ifdef INTERLEAVED_MEM_LAYOUT
         uint64_t src_noc_addr = get_noc_addr(curr_page_idx, s);
@@ -465,9 +468,18 @@ FORCE_INLINE void read_wrapped_chunk_from_output_tensor(
         // common with `write_chunk_v2`
     #elif defined SHARDED_MEM_LAYOUT
         // TODO: Make d.get_noc_addr work on host + device
-        auto const&[noc_yx, page_offset] = s.get_page_location(curr_page_idx);
+        auto const&[noc_yx, page_offset, contig_pages_] = s.get_page_location_with_contiguous_pages_in_row_in_bank(curr_page_idx);
+        /*
+         * num_pages - i: check if we are outside the number of pages remaining
+         * contig_pages_: check if we are outside the max number of contig pages we can read in a row in a bank
+         * contig_edge_of_tensor_slice: check if we are outside the edge of the tensor slice (in which case, we wrap around if aren't at the end)
+         */
+        uint32_t flattened_offset_worker_slice = offset_worker_slice.x + (offset_worker_slice.y * tensor_slice_shape.x);
+        uint32_t contig_edge_of_tensor_slice = tensor_slice_shape.x - ((flattened_offset_worker_slice + offset_into_worker_slice) % tensor_slice_shape.x);
+
+        contig_pages = std::min<int32_t>(num_pages - i, std::min<int32_t>(contig_pages_, contig_edge_of_tensor_slice));
         uint64_t src_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, s.bank_base_address + (page_offset * s.page_size) + 0);
-        noc_async_read(src_noc_addr, local_l1_read_addr, page_size);
+        noc_async_read(src_noc_addr, local_l1_read_addr, page_size * contig_pages);
     #endif
 
         // Update the curr_page_idx based on how the worker chunks + tensor slice is laid out in global tensor
@@ -478,11 +490,12 @@ FORCE_INLINE void read_wrapped_chunk_from_output_tensor(
             worker_slice_shape,
             tensor_slice_shape,
             tensor_shape,
-            last_page_of_worker
+            last_page_of_worker,
+            contig_pages
         );
 
 #endif
-        local_l1_read_addr += page_size;
+        local_l1_read_addr += page_size * contig_pages;
     }
     noc_async_read_barrier();
     cb_push_back(cb_id, num_pages);
@@ -506,7 +519,10 @@ FORCE_INLINE void write_wrapped_chunk(
 
     cb_wait_front(cb_id, num_pages);
     uint32_t l1_read_addr = get_read_ptr(cb_id);
-    for (uint32_t i = 0; i < num_pages; ++i) {
+
+    int32_t contig_pages = 1;
+    for (uint32_t i = 0; i < num_pages; i+= contig_pages) {
+        contig_pages = 1;
 #ifdef ROW_MAJOR_LAYOUT
     #ifdef INTERLEAVED_MEM_LAYOUT
         uint64_t dst_noc_addr = get_noc_addr(curr_page_idx, d);
@@ -522,9 +538,16 @@ FORCE_INLINE void write_wrapped_chunk(
         // Common with `read_chunk_from_output_tensor_v2`
     #elif defined SHARDED_MEM_LAYOUT
         // TODO: Make d.get_noc_addr work on host + device
-        auto const&[noc_yx, page_offset] = d.get_page_location(curr_page_idx);
+        auto const&[noc_yx, page_offset, contig_pages_] = d.get_page_location_with_contiguous_pages_in_row_in_bank(curr_page_idx);
+        /*
+         * Shared with `read_wrapped_chunk_from_output_tensor`
+         */
+        uint32_t flattened_offset_worker_slice = offset_worker_slice.x + (offset_worker_slice.y * tensor_slice_shape.x);
+        uint32_t contig_edge_of_tensor_slice = tensor_slice_shape.x - ((flattened_offset_worker_slice + offset_into_worker_slice) % tensor_slice_shape.x);
+
+        contig_pages = std::min<int32_t>(num_pages - i, std::min<int32_t>(contig_pages_, contig_edge_of_tensor_slice));
         uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, d.bank_base_address + (page_offset * d.page_size) + 0);
-        noc_async_write(l1_read_addr, dst_noc_addr, page_size);
+        noc_async_write(l1_read_addr, dst_noc_addr, page_size * contig_pages);
     #endif
 
         // Update the curr_page_idx based on how the worker chunks + tensor slice is laid out in global tensor
@@ -535,10 +558,11 @@ FORCE_INLINE void write_wrapped_chunk(
             worker_slice_shape,
             tensor_slice_shape,
             tensor_shape,
-            last_page_of_worker
+            last_page_of_worker,
+            contig_pages
         );
 #endif
-        l1_read_addr += page_size;
+        l1_read_addr += page_size * contig_pages;
     }
     noc_async_write_barrier();
     cb_pop_front(cb_id, num_pages);

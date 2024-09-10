@@ -127,13 +127,19 @@ inline void advance_worker_global_page_interleaved (
 
     coord_t const &tensor_shape, // full tensor shape
 
-    bool &last_page_of_worker
+    bool &last_page_of_worker,
+    const uint32_t stride=1
   ) {
 
-    offset_into_worker_slice++;
+    uint32_t prev_offset_into_worker_slice = offset_into_worker_slice;
+    offset_into_worker_slice += stride;
 
     uint32_t flattened_offset_worker_slice = offset_worker_slice.x + (offset_worker_slice.y * tensor_slice_shape.x);
-    bool wrap_around = (flattened_offset_worker_slice + offset_into_worker_slice) % tensor_slice_shape.x == 0;
+
+    // Calculate the number of wrap arounds (cast to uint32_t to **round down**)
+    uint32_t prev_num_wrap_around = (flattened_offset_worker_slice + prev_offset_into_worker_slice) / tensor_slice_shape.x;
+    uint32_t curr_num_wrap_around = (flattened_offset_worker_slice + offset_into_worker_slice) / tensor_slice_shape.x;
+    uint32_t num_wrap_around = curr_num_wrap_around - prev_num_wrap_around;
 
     bool end_of_worker_slice_row = offset_into_worker_slice == worker_slice_shape.x * worker_slice_shape.y;
     if (end_of_worker_slice_row) {
@@ -141,10 +147,10 @@ inline void advance_worker_global_page_interleaved (
         last_page_of_worker = true;
     } else {
         // Check for wrap around
-        if (wrap_around) { // wrap around wrt to global tensor
-            curr_page_idx += tensor_shape.x - tensor_slice_shape.x + 1;
+        if (num_wrap_around > 0) { // wrap around wrt to global tensor
+            curr_page_idx += num_wrap_around * (tensor_shape.x - tensor_slice_shape.x) + stride;
         } else {
-            curr_page_idx++;
+            curr_page_idx += stride;
         }
     }
 
