@@ -27,6 +27,7 @@ struct PagedUpdateCacheDeviceOperation {
     const uint32_t batch_offset;
     const PagedUpdateCacheOpType op_type;
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
+    const bool share_cache;
 
     PagedUpdateCacheOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
@@ -44,10 +45,10 @@ struct PagedUpdateCacheDeviceOperation {
     ) const;
 
     static constexpr auto attribute_names =
-        std::forward_as_tuple("batch_idx", "update_idxs", "batch_offset", "op_type", "compute_kernel_config");
+        std::forward_as_tuple("batch_idx", "update_idxs", "batch_offset", "op_type", "compute_kernel_config", "share_cache");
 
     const auto attribute_values() const {
-        return std::forward_as_tuple(batch_idx, update_idxs, batch_offset, op_type, compute_kernel_config);
+        return std::forward_as_tuple(batch_idx, update_idxs, batch_offset, op_type, compute_kernel_config, share_cache);
     }
 
     const operation::Hash compute_program_hash(
