@@ -273,6 +273,36 @@ def cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype, 
     ttnn.deallocate(attention_input)
 
 
+def cache_attention_share_cache(device, state_dict, model_args, rot_emb_matrix_list, dtype, iterations):
+    attention_input = ttnn.from_torch(
+        torch.randn(1, 1, 32, 4096),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    tt_model = TtLlamaAttention(
+        [device],
+        state_dict,
+        weight_cache_path=model_args.weight_cache_path(dtype),
+        layer_num=0,
+        dtype=dtype,
+        configuration=model_args,
+        rot_mat=None,
+        start_pos=0,
+    )
+    for pos in iterations:
+        tt_out = tt_model(
+            [attention_input], list(range(pos, pos + model_args.max_batch_size)), rot_mats=rot_emb_matrix_list
+        )
+
+    ttnn.deallocate(tt_model.wqkv_list[0])
+    ttnn.deallocate(tt_model.wo_list[0])
+    ttnn.deallocate(tt_model.layer_past_list[0][0])
+    ttnn.deallocate(tt_model.layer_past_list[0][1])
+    ttnn.deallocate(attention_input)
+
+
 def gather_cos_sin(position_ids, cos, sin):
     position_id_expanded = position_ids.unsqueeze(1).expand(-1, cos.shape[-1])
     cos = cos.gather(0, position_id_expanded)

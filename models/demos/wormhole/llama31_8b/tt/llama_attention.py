@@ -351,11 +351,7 @@ class TtLlamaAttention(nn.Module):
         """
         x: (seq_len, 1, batch, hidden_dim)
         start_pos: the length of the KV cache. Same as current token's index.
-        attn_mask: (seq_len, n_heads, batch, cache_len + seqlen
         """
-        self.start_pos += 1
-        padded_layer_past_len = min(nearest_32(self.start_pos), self.sliding_window)
-        layer_slice = min((self.start_pos), self.sliding_window)
 
         dense_outputs = []
         for i in range(self.num_devices):
@@ -438,31 +434,29 @@ class TtLlamaAttention(nn.Module):
             values = layer_past[1]
             cur_pos_for_attn = None
 
-            # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
-            # v_heads [seqlen, n_kv_heads, bsz, head_dim]
-            # keys, [max_batch_size, n_kv_heads // self.num_devices, sliding_window, head_dim]
-            if self.share_cache:
-                # simulate share cache with multi cache
-                assert len(current_pos) == self.max_batch_size
-                # assume current_pos is contiguous as we bring batch into sequence length and take the first current_pos
-                seq_len = self.max_batch_size
-                k_heads = ttnn.typecast(k_heads, dtype=ttnn.bfloat16)
-                v_heads = ttnn.typecast(v_heads, dtype=ttnn.bfloat16)
-                for b in range(seq_len):
-                    k_heads_i = k_heads[:, b : b + 1]
-                    v_heads_i = v_heads[:, b : b + 1]
-                    k_heads_i = ttnn.permute(k_heads_i, [0, 2, 1, 3])[:, : self.n_local_kv_heads]
-                    v_heads_i = ttnn.permute(v_heads_i, [0, 2, 1, 3])[:, : self.n_local_kv_heads]
-                    ttnn.kv_cache.update_cache_for_token_(keys, k_heads_i, current_pos[b])
-                    ttnn.kv_cache.update_cache_for_token_(values, v_heads_i, current_pos[b])
-                cur_pos_for_attn = [current_pos[j] for j in range(self.max_batch_size) for _ in range(self.n_kv_heads)]
-            else:
-                if isinstance(current_pos, list):
-                    current_pos = current_pos[0]
-                ttnn.kv_cache.update_cache_for_token_(keys, k_heads, current_pos)
-                ttnn.kv_cache.update_cache_for_token_(values, v_heads, current_pos)
-                cur_pos_for_attn = [current_pos for _ in range(self.max_batch_size * self.n_kv_heads)]
-            self.layer_past_list[i] = [keys, values]
+            # k_heads, [seqlen, bsz, n_kv_heads, head_dim]
+            # v_heads [seqlen, bsz, n_kv_heads, head_dim]
+            k_heads = ttnn.reshape(
+                k_heads,
+                ttnn.Shape(
+                    (1, self.max_batch_size, self.n_local_kv_heads, self.head_dim),
+                    (1, self.max_batch_size, 32, self.head_dim),
+                ),
+            )
+            v_heads = ttnn.reshape(
+                v_heads,
+                ttnn.Shape(
+                    (1, self.max_batch_size, self.n_local_kv_heads, self.head_dim),
+                    (1, self.max_batch_size, 32, self.head_dim),
+                ),
+            )
+            k_heads = ttnn.to_memory_config(k_heads, memory_config=self.model_config["KV_HSHARDED_MEMCFG"])
+            v_heads = ttnn.to_memory_config(v_heads, memory_config=self.model_config["KV_HSHARDED_MEMCFG"])
+
+            keys = ttnn.experimental.paged_update_cache(keys, k_heads, update_idxs=current_pos, share_cache=True)
+            values = ttnn.experimental.paged_update_cache(values, v_heads, update_idxs=current_pos, share_cache=True)
+
+            cur_pos_for_attn = [current_pos[j] for j in range(self.max_batch_size) for _ in range(self.n_kv_heads)]
 
             ttnn.deallocate(k_heads)
             ttnn.deallocate(v_heads)

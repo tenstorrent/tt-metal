@@ -357,6 +357,14 @@ class TtModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
 
+            self.model_config["KV_HSHARDED_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, 128),
+                core_grid=core_grid_by_batch,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
             self.model_config["XQKV_WSHARDED_MM_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 6),
                 in0_block_w=4,
