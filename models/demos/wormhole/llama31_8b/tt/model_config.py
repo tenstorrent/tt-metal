@@ -6,6 +6,7 @@ import os
 import ttnn
 from pathlib import Path
 from models.utility_functions import is_wormhole_b0
+from conftest import is_ci_env
 from loguru import logger
 import tarfile
 import urllib.request
@@ -94,6 +95,9 @@ class TtModelArgs:
 
         self.instruct = instruct
 
+        # CI does not set DI_DT_WORKAROUND but we want to apply it there too for now
+        self.di_dt_workaround = os.getenv("DI_DT_WORKAROUND") == "1" or is_ci_env()
+
         DRAM_MEMCFG = ttnn.DRAM_MEMORY_CONFIG
         L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
         self.model_config = {}
@@ -105,25 +109,8 @@ class TtModelArgs:
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
 
         if device is not None:  # Avoid issue with test_llama_torch.py not having a device
-            # grid_size = device.compute_with_storage_grid_size()
-            # for i in range(grid_size.y, 0, -1):
-            #     # Force the number of rows in the grid to be a factor of max_batch_size for a valid sharding
-            #     if self.max_batch_size % i == 0:
-            #         grid_size_y = i
-            #         break
-            # assert (
-            #     self.max_batch_size % grid_size_y == 0
-            # ), f"Number of rows in the grid should be a factor of max_batch_size ({self.max_batch_size})"
-            # self.max_grid_size = ttnn.CoreGrid(y=grid_size_y, x=grid_size.x)  # (y,x)
             grid = device.compute_with_storage_grid_size()
             self.max_grid_size = ttnn.CoreGrid(x=grid.x, y=grid.y)
-
-            # # Add sharded memory config for MLP FF1/FF3
-            # mlp_shard_config = ttnn.create_sharded_memory_config(
-            #     [self.max_batch_size, self.hidden_dim], self.max_grid_size, ttnn.ShardStrategy.WIDTH
-            # )
-            # self.model_config["FF1_OUTPUT_MEMCFG"] = mlp_shard_config
-            # self.model_config["FF3_OUTPUT_MEMCFG"] = mlp_shard_config
 
             # Compute kernel shared by attention and MLP. FP32 acc is needed for accuracy
             self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -211,7 +198,7 @@ class TtModelArgs:
                 fused_activation=None,
                 fuse_batch=False,
             )
-            if os.getenv("DI_DT_WORKAROUND") == "1":
+            if self.di_dt_workaround:
                 self.model_config[
                     "PREFILL_MLP_W2_PRG_CONFIG_128"
                 ] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -268,7 +255,7 @@ class TtModelArgs:
                 fuse_batch=seq_len <= 2048,
             )
 
-            if os.getenv("DI_DT_WORKAROUND") == "1":
+            if self.di_dt_workaround:
                 self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=(7, 8),
                     in0_block_w=1,
