@@ -77,8 +77,6 @@ struct MatmulFusedOpSignaler {
     bool initialized_all_gather = false;
     bool initialized_fused_op = false;
 
-    MatmulFusedOpSignaler() {}
-
     void init_all_gather(
         uint32_t num_transfers,
         uint32_t ring_size,
