@@ -23,6 +23,7 @@ void ScaledDotProductAttention::validate(
 
     const auto& mask_option = optional_input_tensors.at(0);
     if (mask_option.has_value()){
+        TT_FATAL(!this->is_causal, "Causal SDPA does not take mask as input");
         auto mask = optional_input_tensors.at(0).value();
         TT_FATAL(mask.storage_type() == StorageType::DEVICE, "When mask is provided to SDPA, the tensor must be on device");
         TT_FATAL(input_tensors.at(0).device() == mask.device(), "When mask is provided to SDPA, it must be on the same device as the input tensors");
@@ -61,13 +62,6 @@ void ScaledDotProductAttention::validate(
 
         // Check qkv heads
         TT_FATAL(q_shape[-3] >= k_shape[-3], "Q heads must be >= K heads. Got Q: {}, K: {}", q_shape[-3], k_shape[-3]);
-
-        if (mask_option.has_value()){
-            const auto mask_shape = mask_option.value().get_legacy_shape();
-            TT_FATAL(q_shape[-4] == mask_shape[-4], "Batch dim must match between Q and mask. Got Q: {}, mask: {}", q_shape[-4], mask_shape[-4]);
-            TT_FATAL(q_shape[-2] == mask_shape[-2] && q_shape[-2] == mask_shape[-1], "Q, mask sequence dim must match. Got Q: {}, mask: {}", q_shape[-2], mask_shape[-2]);
-            TT_FATAL(mask_shape[-3] == 1, "Mask heads dim must be 1. Got mask: {}", mask_shape[-3]);
-        }
 
         TT_FATAL(this->output_mem_config.buffer_type == tt::tt_metal::BufferType::DRAM, "Output must be in DRAM");
 
