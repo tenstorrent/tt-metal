@@ -90,7 +90,7 @@ def test_reproduce_lm_head_nd_32(
         mcast_in0=True,
     )
 
-    wh_compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+    wh_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
@@ -152,7 +152,7 @@ def test_reproduce_lm_head_nd_32(
                     )
             else:
                 logger.info("Start single device sync:")
-            ttl.device.Synchronize(all_devices[device_idx])
+            ttnn.device.synchronize_device(all_devices[device_idx])
             if num_devices != 1:
                 if num_devices == 2:
                     logger.info(f"End sync device id: {device_idx}")

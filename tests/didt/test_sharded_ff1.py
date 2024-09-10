@@ -125,7 +125,7 @@ def test_reproduce_matmul_2d_hang(
         fused_activation=[ttnn.UnaryOpType.GELU, True],
     )
 
-    compute_config = ttl.tensor.WormholeComputeKernelConfig(
+    compute_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttl.tensor.MathFidelity.HiFi2,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
@@ -139,9 +139,7 @@ def test_reproduce_matmul_2d_hang(
         for device_idx in range(num_devices):
             # First, convert input to sharded config
             for act in range(num_activation_tensors):
-                a_sharded = ttnn.experimental.tensor.interleaved_to_sharded(
-                    a_t[act][device_idx], sharded_mem_config=in0_block_sharded_mem_config
-                )
+                a_sharded = ttnn.interleaved_to_sharded(a_t[act][device_idx], in0_block_sharded_mem_config)
                 output = ttnn.matmul(
                     a_sharded,
                     b_t[device_idx],
@@ -159,8 +157,8 @@ def test_reproduce_matmul_2d_hang(
     out = [None] * num_devices
 
     for device_idx in range(num_devices):
-        sharded_activations_per_device[device_idx] = ttl.tensor.interleaved_to_sharded(
-            a_t[current_act_tensor][device_idx], sharded_mem_config=in0_block_sharded_mem_config
+        sharded_activations_per_device[device_idx] = ttnn.interleaved_to_sharded(
+            a_t[current_act_tensor][device_idx], in0_block_sharded_mem_config
         )
 
     logger.info("Starting iterations")
@@ -190,7 +188,7 @@ def test_reproduce_matmul_2d_hang(
                     )
             else:
                 logger.info("Start single device sync:")
-            ttl.device.Synchronize(all_devices[device_idx])
+            ttnn.device.synchronize_device(all_devices[device_idx])
             if num_devices != 1:
                 if num_devices == 2:
                     logger.info(f"End sync device id: {device_idx}")
@@ -219,8 +217,8 @@ def test_reproduce_matmul_2d_hang(
             logger.info("Switching activation tensor for new determinism iterations")
             for device_idx in range(num_devices):
                 sharded_activations_per_device[device_idx].deallocate(True)
-                sharded_activations_per_device[device_idx] = ttl.tensor.interleaved_to_sharded(
-                    a_t[current_act_tensor][device_idx], sharded_mem_config=in0_block_sharded_mem_config
+                sharded_activations_per_device[device_idx] = ttnn.interleaved_to_sharded(
+                    a_t[current_act_tensor][device_idx], in0_block_sharded_mem_config
                 )
 
         for device_idx in range(num_devices):
