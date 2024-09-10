@@ -14,7 +14,7 @@ from models.demos.wormhole.llama31_8b.tt.llama_common import (
     prepare_inputs_ttnn,
     sample,
     get_single_rot_mat,
-    cache_attention_share_cache,
+    cache_attention,
     encode_prompt_llama_instruct,
     HostEmbedding,
 )
@@ -23,8 +23,6 @@ from models.demos.wormhole.llama31_8b.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 
 from models.experimental.speculative_decode.draft_models import NGramModel, load_data
-from rich.table import Table
-from rich.live import Live
 
 
 # load from json, return as a list
@@ -107,16 +105,6 @@ def get_rotary_mat_for_speculation(model_args, speculation_length, start_pos=0):
     return current_rot_mat, rot_matrix_torch
 
 
-def generate_prints(text, tok_per_s) -> Table:
-    table = Table(show_header=True, header_style="bold magenta")
-    table.add_column("Generated Tokens", style="dim", width=120)
-    table.add_column("Tokens/s", justify="right")
-
-    table.add_row(text, f"{tok_per_s:.2f}")
-
-    return table
-
-
 def run_llama_demo(user_input, batch_size, device, instruct_mode, GENERATION_LENGTH=10, SPECULATION_LENGTH=3):
     # This module requires the env paths above for CI runs
     from models.demos.wormhole.llama31_8b.tt.model_config import TtModelArgs
@@ -166,8 +154,8 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, GENERATION_LEN
     current_rot_mat = ttnn.from_torch(
         current_rot_mat_torch, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
     )
-    logger.info("Caching attention ops...")
-    cache_attention_share_cache(device, state_dict, model_args, current_rot_mat, dtype, [0, 200, 400])
+    # logger.info("Caching attention ops...")
+    # cache_attention(device, state_dict, model_args, current_rot_mat, dtype, max_generated_tokens)
 
     # if instruct_mode:
     #     tokenizer._model.pad_id = tokenizer._model.eos_id
@@ -200,127 +188,151 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, GENERATION_LEN
     num_correct_speculations = [0 for _ in range(SPECULATION_LENGTH)]
 
     # Keep track of generated outputs to print out every iteration
-    all_outputs = []
-    user_done = False  # Keeps track when a user reaches EoD token
-    text = ""
-
-    # compile run
-    dummy_input = torch.zeros(1, 1, 32, model_args.dim)
-    dummy_input = ttnn.from_torch(dummy_input, device=tt_model.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_out = tt_model(dummy_input, list(range(0, SPECULATION_LENGTH + 1)), rot_mat=current_rot_mat)
-
-    breakpoint()
+    all_outputs = [[] for _ in range(batch_size)]
+    user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
     iteration = 0
-    total_start_time = time()
-    with Live(generate_prints("", 0), refresh_per_second=4) as live:
-        # Keep running inference as long as there is a user in the batch still decoding or max tokens per user are decoded
-        while users_decoding:
-            iteration_time_start = time()
-            curr_pos = generation_start_pos + iteration
+    # Keep running inference as long as there is a user in the batch still decoding or max tokens per user are decoded
+    while users_decoding:
+        iteration_time_start = time()
+        curr_pos = generation_start_pos + iteration
 
-            # Get the speculated tokens from draft model
-            speculated_tokens = draft_model(all_outputs, generation_length=SPECULATION_LENGTH, sampling=False)
+        logger.info(f"----------------Iteration {iteration}-----------------")
 
-            # Construct model decode input based on speculated tokens
-            assert embed_on_device == False, "speculative_decode does not support embedding on device"
-            tt_decode_speculated_input = embd(torch.tensor(speculated_tokens)).view(SPECULATION_LENGTH, 1, -1)
-            tt_decode_input = torch.cat((tt_decode_input, tt_decode_speculated_input), dim=0)
+        # Get the speculated tokens from draft model
+        speculated_tokens = draft_model(all_outputs[0], generation_length=SPECULATION_LENGTH, sampling=False)
+        logger.info(f"Next Input + Speculated tokens: {all_outputs[0][-1:] + speculated_tokens}")
+        logger.info(
+            f"Next Input + Speculated tokens decoded: {tokenizer.decode(all_outputs[0][-1:] + speculated_tokens)}"
+        )
 
-            # Prepare inputs for decode mode (rotary embeddings, attention mask, padding)
-            # TODO Move the attn mask to device
-            decode_input, current_pos = prepare_inputs_ttnn(
-                tt_decode_input,
-                curr_pos,
-                model_args.dim,
-                model_args.sliding_window,
-                tt_model.device,
+        # Construct model decode input based on speculated tokens
+        assert embed_on_device == False, "speculative_decode does not support embedding on device"
+        tt_decode_speculated_input = embd(torch.tensor(speculated_tokens)).view(SPECULATION_LENGTH, 1, -1)
+        tt_decode_input = torch.cat((tt_decode_input, tt_decode_speculated_input), dim=0)
+
+        # Prepare inputs for decode mode (rotary embeddings, attention mask, padding)
+        # TODO Move the attn mask to device
+        decode_input, current_pos = prepare_inputs_ttnn(
+            tt_decode_input,
+            curr_pos,
+            model_args.dim,
+            model_args.sliding_window,
+            tt_model.device,
+        )
+        current_pos = list(range(current_pos, current_pos + SPECULATION_LENGTH + 1))
+
+        # Run ttnn llama model
+        tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
+        tt_output_torch = (
+            ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[: model_args.max_batch_size, :, :]
+        )  # [batch, seq, hidden_dim]
+        # Update rotation matrix for next iteration
+        current_rot_mat_torch = torch.matmul(rot_matrix_torch, current_rot_mat_torch)
+        current_rot_mat.deallocate()
+        current_rot_mat = ttnn.from_torch(
+            current_rot_mat_torch, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
+        # If temperature is 0, does greedy decoding (top-1)
+        tt_out_tok = sample(tt_output_torch, temperature=0, top_p=0.8)
+
+        # TODO argmax on device
+        # tt_out = ttnn.to_layout(tt_out, ttnn.ROW_MAJOR_LAYOUT)
+        # tt_out = ttnn.permute(tt_out, (2, 1, 0, 3))
+        # tt_out = ttnn.reshape(tt_out, (tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]))  # Squeeze(1)
+        # tt_out_argmax = ttnn.argmax(tt_out, dim=-1)
+        # Typecast from bf16 to uint32 for embedding
+        # tt_out_tok = ttnn.clone(tt_out_argmax, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.uint32)
+        # tt_out_tok = ttnn.experimental.tensor.typecast(tt_out_tok, dtype=ttnn.uint32)
+
+        if iteration < input_mask.shape[1]:  # If prefill
+            # If token is pad token, start generating new token, otherwise, push the next prompt token to the model
+            tt_out_tok = torch.where(
+                input_mask[:, iteration], pt_encoded_input[:, iteration], tt_out_tok[:, 0]
+            ).unsqueeze(1)
+        else:
+            # Do speculation if not prefilling
+            tt_out_tok_to_list = tt_out_tok.squeeze().tolist()
+            logger.info(f"Prediction based on input + speculated tokens: {tt_out_tok_to_list}")
+            logger.info(
+                f"Prediction based on input + speculated tokens decoded: {tokenizer.decode(tt_out_tok_to_list)}"
             )
-            current_pos = list(range(current_pos, current_pos + SPECULATION_LENGTH + 1))
-
-            # Run ttnn llama model
-            tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
-            tt_output_torch = (
-                ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[: model_args.max_batch_size, :, :]
-            )  # [batch, seq, hidden_dim]
-
-            # Update rotation matrix for next iteration
-            current_rot_mat_torch = torch.matmul(rot_matrix_torch, current_rot_mat_torch)
-            current_rot_mat.deallocate()
-            current_rot_mat = ttnn.from_torch(
-                current_rot_mat_torch, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            )
-            # If temperature is 0, does greedy decoding (top-1)
-            tt_out_tok = sample(tt_output_torch, temperature=0, top_p=0.8)
 
             tok_index = 0
-            if iteration < input_mask.shape[1]:  # If prefill
-                # If token is pad token, start generating new token, otherwise, push the next prompt token to the model
-                tt_out_tok = torch.where(
-                    input_mask[:, iteration], pt_encoded_input[:, iteration], tt_out_tok[:, 0]
-                ).unsqueeze(1)
+            while tok_index < len(speculated_tokens) and int(tt_out_tok[tok_index]) == speculated_tokens[tok_index]:
+                num_correct_speculations[tok_index] += 1
+                logger.info(f"Correct {tok_index+1} th speculation hit!")
+                logger.info(
+                    f"Taken as input sequence: {tokenizer.decode(all_outputs[0][-4+tok_index:] + speculated_tokens[:1+tok_index])}"
+                )
+                logger.info(
+                    f"Output sequence: {tokenizer.decode(all_outputs[0][-3+tok_index:] + tt_out_tok_to_list[:2+tok_index])}"
+                )
+                tok_index += 1
 
-                # Save output token to print out later
-                user_tok = tt_out_tok[0].tolist()  # take the first, none speculated token
-                if user_tok[0] != 28803 and user_done == False:  # Stop saving the ouput after hitting the EOS token
-                    all_outputs.append(user_tok[0])
-
+        # Save output token to print out later
+        for user in range(batch_size):
+            user_tok = tt_out_tok[user].tolist()
+            if user_tok[0] != 28803 and user_done[user] == False:  # Stop saving the ouput after hitting the EOS token
+                all_outputs[user].append(user_tok[0])
             else:
-                while tok_index < len(speculated_tokens) and int(tt_out_tok[tok_index]) == speculated_tokens[tok_index]:
-                    num_correct_speculations[tok_index] += 1
-                    tok_index += 1
-
-                # Save output token to print out later
-                user_tok = tt_out_tok.squeeze().tolist()
+                user_done[user] = True
                 if (
-                    all([user_tok[idx] != 28803 for idx in range(tok_index + 1)]) and user_done == False
-                ):  # Stop saving the ouput after hitting the EOS token
-                    all_outputs.extend(user_tok[: tok_index + 1])  # TODO: highlight speculated tokens
+                    iteration < input_mask.shape[1]
+                ):  # Still in prefill, so ignore EOS token and save the generated token
+                    # all_outputs[user].append(user_tok[0])
+                    pass
                 else:
-                    user_done = True
-                    users_decoding = False
+                    logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
+                    if all(user_done):
+                        users_decoding = False
 
-            # take the next input as the last corrected speculated token
-            tt_out_tok = tt_out_tok[tok_index : tok_index + 1]
+        tt_out_tok = tt_out_tok[:1]
 
-            if embed_on_device:
-                tt_out_tok = ttnn.from_torch(tt_out_tok, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-                tt_decode_input = tt_embd(tt_out_tok)
-            else:
-                tt_decode_input = embd(tt_out_tok)
+        if embed_on_device:
+            tt_out_tok = ttnn.from_torch(tt_out_tok, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            tt_decode_input = tt_embd(tt_out_tok)
+        else:
+            tt_decode_input = embd(tt_out_tok)
 
-            num_generated_tokens = tok_index + 1
+        # Print out generated outputs for each user at the end of every iteration
+        iteration_time = time() - iteration_time_start
+        tokens_per_second_per_user = 1 / iteration_time
 
-            # Print out generated outputs for each user at the end of every iteration
-            iteration_time = time() - iteration_time_start
-            tokens_per_second_per_user = num_generated_tokens / iteration_time
-            new_tokens = all_outputs[-num_generated_tokens:]
-            decoded_tokens_non_spec = tokenizer.decode(new_tokens[: len(new_tokens) - tok_index])
-            if tok_index > 0:
-                # highlight the speculated tokens
-                decoded_tokens_spec = tokenizer.decode(new_tokens[-tok_index:])
-                decoded_tokens = decoded_tokens_non_spec + "[green]" + decoded_tokens_spec + "[/green]"
-            else:
-                decoded_tokens = decoded_tokens_non_spec
-            text = text + "".join(decoded_tokens)
-            live.update(generate_prints(text, tokens_per_second_per_user))
+        if len(user_input) == 1:
+            logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
+        else:
+            for user in range(batch_size):
+                text = "".join(tokenizer.decode(all_outputs[user]))
+                if len(text) > 100:
+                    text = "..." + text[-97:]
+                text = text.replace("\n", " ")
+                logger.info("[User {}] {}".format(user, text))
 
-            iteration += num_generated_tokens
+        # Always print perf at every iteration
+        logger.info(
+            f"Iteration {iteration}: {1000*iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
+        )
 
-            # Upper limit of generated tokens for each user (to avoid infinite generation in case eos is not seen)
-            if iteration >= max_generated_tokens:
-                users_decoding = False
+        iteration += 1
 
-    total_time = time() - total_start_time
-    logger.info(f"Total time taken: {total_time:.2f} seconds")
-    logger.info(f"Average tokens per second: {iteration / total_time:.2f}")
+        # Upper limit of generated tokens for each user (to avoid infinite generation in case eos is not seen)
+        if iteration >= max_generated_tokens:
+            users_decoding = False
+
+        # Save generated output to file
+        with open("generated_output.txt", "w") as f:
+            for user in range(batch_size):
+                text = "".join(tokenizer.decode(all_outputs[user]))
+                f.write(f"[User {user}] {text}\n")
+
     logger.info(f"Number of correct speculations: {num_correct_speculations}")
 
 
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights, generation_length, speculation_length",
     [
-        ("models/experimental/speculative_decode/input_data_questions.json", True, 600, 3),
+        ("models/experimental/speculative_decode/input_data_questions.json", True, 500, 3),
     ],
     ids=["llama3.1_8b"],
 )
