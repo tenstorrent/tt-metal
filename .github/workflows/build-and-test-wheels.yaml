@@ -1,0 +1,23 @@
+name: "[post-commit] Python wheels build and test"
+
+on:
+  workflow_dispatch:
+    inputs:
+      from-precompiled:
+        description: "Use precompiled assets for wheel build"
+        default: True
+        type: boolean
+  schedule:
+    - cron: "0 0 * * *"
+
+jobs:
+  build-artifact:
+    if: ${{ inputs.from-precompiled }}
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+  build-and-test-wheels:
+    needs: build-artifact
+    if: ${{ always() }}
+    uses: ./.github/workflows/_build-and-test-wheels-impl.yaml
+    with:
+      from-precompiled: ${{ github.event_name == 'workflow_dispatch' && inputs.from-precompiled }}

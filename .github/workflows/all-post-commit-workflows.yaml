@@ -19,7 +19,9 @@ jobs:
     secrets: inherit
   build-wheels:
     needs: build-artifact
-    uses: ./.github/workflows/eager-package-main.yaml
+    uses: ./.github/workflows/_build-and-test-wheels-impl.yaml
+    with:
+      from-precompiled: true
     secrets: inherit
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml

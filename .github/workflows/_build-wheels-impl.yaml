@@ -1,4 +1,4 @@
-name: "[internal] Python wheel build and test impl"
+name: "[internal] Python wheels build impl"
 
 on:
   workflow_call:
