@@ -405,7 +405,6 @@ class TtLlamaAttention_optimized:
             query_layer,
             key_layer,
             value_layer,
-            attn_masks,
             is_causal=True,
             scale=self.scale,
             program_config=self.model_config["SDPA_PROGCFG"],
