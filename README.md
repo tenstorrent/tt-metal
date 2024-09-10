@@ -35,7 +35,9 @@
 | [Mixtral7Bx8 (tensor parallel)](./models/demos/t3000/mixtral8x7b)    | 32    | [LoudBox](https://tenstorrent.com/hardware/tt-loudbox) | 0.19       | 15.7  | 33           | [v0.51.0-rc33](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc33) |
 | [Falcon7B (data parallel)](./models/demos/tg/falcon7b)               |1024   | [Galaxy](https://tenstorrent.com/hardware/galaxy)      | 0.30       | 4.0   | 26           | [v0.51.0-rc30](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc30) |
 
-> **Note:** The reported LLM performance is for an input sequence length (number of rows filled in the KV cache) of 128 for all models except Mamba (which can accept any sequence length).
+> **Notes:**
+> - The reported LLM performance is for an input sequence length (number of rows filled in the KV cache) of 128 for all models except Mamba (which can accept any sequence length).
+> - The t/s/u reported is the throughput of the first token generated after prefill, i.e. 1 / inter token latency.
 
 ## CNNs
 | Model                                                                       | Batch | Hardware                                                | fps     | Target fps | Release     |
