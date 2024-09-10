@@ -20,3 +20,4 @@ cargo
 ninja-build
 libxml2-dev
 libxslt-dev
+graphviz
