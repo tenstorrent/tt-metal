@@ -531,6 +531,7 @@ set(TTNN_SUBLIBRARIES
     ttnn/operations/eltwise/ternary_backward
     ttnn/operations/eltwise/binary_backward
     ttnn/operations/pool/upsample
+    ttnn/operations/moreh
 )
 
 
@@ -592,7 +593,7 @@ set(TTNN_PRECOMPILED_HEADERS
 if(WITH_PYTHON_BINDINGS)
     # TODO: should be using pybind11_add_module, but right now it introduces many build problems
     # pybinds will always be built as a shared library
-    list(APPEND TTNN_FINAL_SRC
+    list(APPEND TTNN_BASE_SRCS
         ${PROJECT_SOURCE_DIR}/ttnn/cpp/pybind11/__init__.cpp
         ${PYBIND_SRC}
         ${TT_LIB_SRCS}) # TT_LIB_SRCS from tt_eager/tt_lib/CMakeLists.txt for python bindigns
@@ -611,15 +612,20 @@ set(ALL_TTNN_SUBLIBRARIES)
 
 function(add_ttnn_sublibrary SUBLIBRARY_NAME)
     message("Adding sublibrary with ${SUBLIBRARY_NAME} ")
-    add_library(${SUBLIBRARY_NAME} OBJECT ${ARGN})
-    target_include_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
-    target_link_libraries(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_LIBRARIES})
+    add_library(${SUBLIBRARY_NAME} SHARED ${ARGN})
+    target_include_directories(${SUBLIBRARY_NAME} PRIVATE ${TTNN_PUBLIC_INCLUDE_DIRS})
+    target_link_libraries(${SUBLIBRARY_NAME} PRIVATE ${TTNN_PUBLIC_LINK_LIBRARIES})
     target_link_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
     target_precompile_headers(${SUBLIBRARY_NAME} PRIVATE ${TTNN_PRECOMPILED_HEADERS})
-    target_compile_options(${SUBLIBRARY_NAME} PUBLIC -MP -Wno-int-to-pointer-cast -fno-var-tracking)
+    target_compile_options(${SUBLIBRARY_NAME} PRIVATE -MP -Wno-int-to-pointer-cast -fno-var-tracking)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        target_compile_definitions(${SUBLIBRARY_NAME} PUBLIC DISABLE_NAMESPACE_STATIC_ASSERT)
+        target_compile_definitions(${SUBLIBRARY_NAME} PRIVATE DISABLE_NAMESPACE_STATIC_ASSERT)
     endif()
+    install(TARGETS ${SUBLIBRARY_NAME}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    COMPONENT tt_build_artifacts
+    )
 endfunction()
 
 message("TTNN_PUBLIC_INCLUDE_DIRS: ${TTNN_PUBLIC_INCLUDE_DIRS}")
@@ -637,9 +643,8 @@ endforeach(SUBLIBRARY_PATH ${TTNN_SUBLIBRARIES})
 
 add_ttnn_sublibrary(ttnn_tensor ${TENSOR_SRCS})
 add_ttnn_sublibrary(tt_dnn ${TT_DNN_SRCS})
-message("TTNN_SRC: ${TT_DNN_SRCS}")
 
-add_library(ttnn STATIC ${TTNN_BASE_SRCS} ${QUEUE_SRCS})
+add_library(ttnn SHARED ${TTNN_BASE_SRCS} ${QUEUE_SRCS})
 target_compile_options(ttnn PUBLIC -MP -Wno-int-to-pointer-cast -fno-var-tracking)
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
