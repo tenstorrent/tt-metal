@@ -56,12 +56,17 @@ Take Wormhole as an example, in0 is width sharded to the top rows on the grid, a
 After computation on the output shard is done, the output shards are sent back to the top rows, as our current sharding strategy assumes the tensor shards to be allocated contiguously. 
 
 <!-- ![image5](images/image5.png){width=10 height=10} -->
-<img src="images/image5.png" style="width:1000px;"/>
+<img src="images/image5.png" style="width:800px;"/>
 
 The table below shows the achieved bandwidth for DRAM u-benchmark and matmul in different models for Wormhole, and also compares the bandwidth for DRAM operating as 12GBps and 14GBps. The u-benchmark shows it can reach over 92% of bandwidth utilization. The matmul test shows it can reach from 82% to 90% of bandwidth utilization.
 
-<!-- ![image6](images/image6.png){width=10 height=10} -->
-<img src="images/image6.png" style="width:800px;"/>
+
+| Test                 | DRAM BW (GB/s) @12GBps | DRAM BW (GB/s) @14GBps |
+|----------------------|------------------------|------------------------|
+| DRAM u-benchmark      | 267                    | 310                    |
+| Llama3-70 decode      | 239-260                | 247-294                |
+| Mixtral8x7b decode    | 243-261                | 267-300                |
+
 
 ## Future Work 
 Since we have 12 banks on Wormhole cards, it's usually hard to divide in1 tensor evenly by 12, as our current software stack assumes the tile size to be 32x32, so when sharding the in1 tensor to 12 banks, the last bank could have uneven sharding width and cause the computation for different workers to be unbalanced. To solve this problem or at least mitigate it, we can use smaller tile sizes such as 32x16 or 32x8 so that there is less padding, and computation will be more balanced.
