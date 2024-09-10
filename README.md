@@ -23,17 +23,21 @@
 ## LLMs
 | Model                                                                | Batch | Hardware                                               | ttft (s)   | t/s/u | Target t/s/u | Release                                                                   |
 |----------------------------------------------------------------------|-------|--------------------------------------------------------|------------|-------|--------------|---------------------------------------------------------------------------|
-| [Falcon7B-decode](./models/demos/ttnn_falcon7b)                      | 32    | [e150](https://tenstorrent.com/hardware/grayskull)     |            | 135   | 140          |                                                                           |
+| [Falcon7B-decode](./models/demos/ttnn_falcon7b)                      | 32    | [e150](https://tenstorrent.com/hardware/grayskull)     |            | 4.2   | 4.4          |                                                                           |
 | [Falcon7B](./models/demos/wormhole/falcon7b)                         | 32    | [n150](https://tenstorrent.com/hardware/wormhole)      | 0.08       | 16.7  | 26           | [v0.51.0-rc24](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc24) |
 | [Mistral-7B](./models/demos/wormhole/mistral7b)                      | 32    | [n150](https://tenstorrent.com/hardware/wormhole)      |            | 9.9   | 25           | [v0.51.0-rc28](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc28) |
 | [Mamba-2.8B](./models/demos/wormhole/mamba)                          | 32    | [n150](https://tenstorrent.com/hardware/wormhole)      | 0.04       | 12.3  | 41           | [v0.51.0-rc26](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc26) |
-| [LLaMA-3.1-8B](./models/demos/wormhole/llama31_8b)                   | 32    | [n150](https://tenstorrent.com/hardware/wormhole)      |            | 8.3   | 23           | [v0.51.0-rc28](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc28) |
-| [Falcon7B (data parallel)](./models/demos/t3000/falcon7b)            | 32    | [LoudBox](https://tenstorrent.com/hardware/tt-loudbox) | 0.11       | 13.4  | 26           | [v0.51.0-rc36](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc36) |
+| [LLaMA-3.1-8B](./models/demos/wormhole/llama31_8b)                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)      |            | 8.3   | 23           | [v0.51.0-rc28](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc28) |
+| [Falcon7B (data parallel)](./models/demos/t3000/falcon7b)            | 256   | [LoudBox](https://tenstorrent.com/hardware/tt-loudbox) | 0.11       | 13.4  | 26           | [v0.51.0-rc36](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc36) |
 | [LLaMA-2-70B - (tensor parallel)](./models/demos/t3000/llama2_70b)   | 32    | [LoudBox](https://tenstorrent.com/hardware/tt-loudbox) |            | 10.4  | 20           | [v0.51.0-rc36](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc36) |
 | [LLaMA-3.1-70B (tensor parallel)](./models/demos/t3000/llama3_70b)   | 32    | [LoudBox](https://tenstorrent.com/hardware/tt-loudbox) |            | 10.4  | 20           | [v0.51.0-rc36](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc36) |
 | [Falcon40B (tensor parallel)](./models/demos/t3000/falcon40b)        | 32    | [LoudBox](https://tenstorrent.com/hardware/tt-loudbox) |            | 5.3   | 36           | [v0.51.0-rc35](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc35) |
 | [Mixtral7Bx8 (tensor parallel)](./models/demos/t3000/mixtral8x7b)    | 32    | [LoudBox](https://tenstorrent.com/hardware/tt-loudbox) | 0.19       | 15.7  | 33           | [v0.51.0-rc33](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc33) |
 | [Falcon7B (data parallel)](./models/demos/tg/falcon7b)               |1024   | [Galaxy](https://tenstorrent.com/hardware/galaxy)      | 0.30       | 4.0   | 26           | [v0.51.0-rc30](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc30) |
+
+> **Notes:**
+> - The reported LLM performance is for an input sequence length (number of rows filled in the KV cache) of 128 for all models except Mamba (which can accept any sequence length).
+> - The t/s/u reported is the throughput of the first token generated after prefill, i.e. 1 / inter token latency.
 
 ## CNNs
 | Model                                                                       | Batch | Hardware                                                | fps     | Target fps | Release     |
