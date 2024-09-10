@@ -520,7 +520,7 @@ Tensor create_device_tensor(
         auto page_shape = tensor_impl::get_sharded_page_shape(layout, data_type, shard_spec.shape);
         std::array<uint32_t, 2> tensor2d_size = {other_dims / page_shape[0], width / page_shape[1]};
         ShardSpecBuffer shard_spec_buffer(shard_spec, page_shape, tensor2d_size);
-        uint32_t packed_size_in_bytes =
+        size_t packed_size_in_bytes =
             tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
         auto device_buffer = tensor_impl::allocate_buffer_on_device(
             packed_size_in_bytes, device, shape, data_type, layout, memory_config, shard_spec_buffer);
@@ -530,7 +530,7 @@ Tensor create_device_tensor(
         GraphTracker::instance().track_function_end(output);
         return output;
     } else {
-        uint32_t packed_size_in_bytes =
+        size_t packed_size_in_bytes =
             tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
         auto device_buffer = tensor_impl::allocate_buffer_on_device(
             packed_size_in_bytes, device, shape, data_type, layout, memory_config);

@@ -496,7 +496,7 @@ void Program::validate_circular_buffer_region(const Device *device) const {
     // Only compute with storage cores can have CBs and all compute with storage cores will have the same bank offset
     const std::vector<uint32_t> &bank_ids =
         device->bank_ids_from_logical_core(BufferType::L1, *device->compute_cores_.begin());
-    std::optional<uint64_t> lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids[0]);
+    std::optional<DeviceAddr> lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids[0]);
     uint32_t max_l1_size = device->l1_size_per_core();
 
     for (const CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
