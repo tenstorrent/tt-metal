@@ -45,7 +45,6 @@ void kernel_main() {
     constexpr uint32_t cb_q_in = tt::CB::c_in0;
     constexpr uint32_t cb_k_in = tt::CB::c_in1;
     constexpr uint32_t cb_v_in = tt::CB::c_in2;
-    constexpr uint32_t cb_mask_in = tt::CB::c_in3;
 
 
     constexpr uint32_t onetile = 1;
@@ -55,8 +54,6 @@ void kernel_main() {
     constexpr DataFormat k_data_format = get_dataformat(cb_k_in);
     constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_in);
     constexpr DataFormat v_data_format = get_dataformat(cb_v_in);
-    constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
-    constexpr DataFormat mask_data_format = get_dataformat(cb_mask_in);
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
 
@@ -78,12 +75,6 @@ void kernel_main() {
         .bank_base_address = v_addr,
         .page_size = v_tile_bytes,
         .data_format = v_data_format
-    };
-
-    const InterleavedAddrGenFast<is_dram> mask_reader = {
-        .bank_base_address = mask_addr,
-        .page_size = mask_tile_bytes,
-        .data_format = mask_data_format
     };
 
     uint32_t q_tile_id = 0;
@@ -163,39 +154,6 @@ void kernel_main() {
                     }
                     noc_async_read_barrier();
                     cb_push_back(cb_k_in, k_chunk_tiles);
-
-
-                    // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
-                    // Q-range = [q_low, q_high)
-                    // K-range = [k_low, k_high)
-                    // does_overlap = not (q_low >= k_high or k_low >= q_high)
-                    // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional check
-                    // Read mask chunk
-                    if (!(q_low_idx >= k_high_idx)) {
-                        cb_reserve_back(cb_mask_in, mask_chunk_tiles);
-                        uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
-                        barrier_count = 0;
-                        mask_tile_id = mask_batch_offset + q_chunk * Sq_chunk_t * St /*row_offset*/ + k_chunk * Sk_chunk_t /*col_offset*/;
-                        for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
-                            for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
-                                noc_async_read_tile(mask_tile_id, mask_reader, mask_write_ptr);
-                                mask_tile_id += 1;
-                                mask_write_ptr += mask_tile_bytes;
-
-                                if (++barrier_count == barrier_threshold) {
-                                    noc_async_read_barrier();
-                                    barrier_count = 0;
-                                }
-                            }
-                            // Strid along columns to get to next row
-                            mask_tile_id -= Sk_chunk_t;
-                            mask_tile_id += St;
-                        }
-                        noc_async_read_barrier();
-                        cb_push_back(cb_mask_in, mask_chunk_tiles);
-                    }
-
-
 
                     v_tile_id = v_batch_offset + k_chunk * Sk_chunk_t * DHt;
                     // Read V chunk

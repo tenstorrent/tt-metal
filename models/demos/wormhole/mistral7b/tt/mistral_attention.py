@@ -608,7 +608,6 @@ class TtMistralAttention(nn.Module):
             q_heads_84SD,
             k_heads_K1SD,
             v_heads_V1SD,
-            attn_masks,
             is_causal=True,
             scale=self.scale,
             program_config=self.model_config["SDPA_PROGCFG"](seq_len),

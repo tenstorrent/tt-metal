@@ -107,7 +107,6 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     auto k_buffer = input_tensor_k.buffer();
     auto v_buffer = input_tensor_v.buffer();
     auto mask_buffer = attn_mask.has_value() ? attn_mask.value().buffer() : nullptr;
-    TT_FATAL(mask_buffer != nullptr);
 
     auto out0_buffer = output_tensor.buffer();
 
@@ -351,7 +350,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     uint32_t q_tile_size = tt::tt_metal::detail::TileSize(q_df);
     uint32_t k_tile_size = tt::tt_metal::detail::TileSize(k_df);
     uint32_t v_tile_size = tt::tt_metal::detail::TileSize(v_df);
-    uint32_t mask_tile_size = attn_mask.has_value() ? tt::tt_metal::detail::TileSize(mask_df) : 0;
+    uint32_t mask_tile_size = tt::tt_metal::detail::TileSize(mask_df);
     uint32_t out_tile_size = tt::tt_metal::detail::TileSize(out_df);
     uint32_t scalar_tile_size = tt::tt_metal::detail::TileSize(scalar_df);
     uint32_t im_tile_size = tt::tt_metal::detail::TileSize(im_df);
@@ -448,7 +447,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     uint32_t q_addr = q_buffer->address();
     uint32_t k_addr = k_buffer->address();
     uint32_t v_addr = v_buffer->address();
-    uint32_t mask_addr = mask_buffer->address();
+    uint32_t mask_addr = attn_mask.has_value() ? mask_buffer->address() : 0;
     uint32_t out_addr = out0_buffer->address();
 
     // Set reader rt args
@@ -542,13 +541,12 @@ operation::ProgramWithCallbacks sdpa_multi_core(
             auto v_buffer = input_tensors.at(2).buffer();
             auto mask_buffer =
                 optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer() : nullptr;
-            TT_FATAL(mask_buffer != nullptr);
 
             auto out0_buffer = output_tensors.at(0).buffer();
             uint32_t q_addr = q_buffer->address();
             uint32_t k_addr = k_buffer->address();
             uint32_t v_addr = v_buffer->address();
-            uint32_t mask_addr = mask_buffer->address();
+            uint32_t mask_addr = mask_buffer != nullptr ? mask_buffer->address() : 0;
             uint32_t out_addr = out0_buffer->address();
 
             auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);

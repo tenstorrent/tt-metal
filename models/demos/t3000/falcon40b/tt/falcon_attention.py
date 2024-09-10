@@ -352,7 +352,6 @@ class TtFalconAttention:
             query_layer,
             key_layer,
             value_layer,
-            attention_mask,
             is_causal=True,
             scale=self.scalar,
             program_config=self.model_config["SDPA_PROGCFG"],

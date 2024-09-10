@@ -368,7 +368,6 @@ class TtMixtralAttention(LightweightModule):
             q_heads_14SD,
             k_heads_11SD,
             v_heads_11SD,
-            attn_masks,
             is_causal=True,
             scale=self.scale,
             program_config=self.model_config["SDPA_PROGCFG"](seq_len),
