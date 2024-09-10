@@ -24,9 +24,11 @@ from models.demos.t3000.llama2_70b.demo.demo import main, construct_arg
     (
         (True, "models/demos/t3000/llama2_70b/demo/data/multi_prompt_chat.json"),
         (False, "models/demos/t3000/llama2_70b/demo/data/multi_prompt.json"),
+        (False, "models/demos/t3000/llama2_70b/demo/data/a_tale_of_two_cities.txt"),
     ),
-    ids=("chat_completion", "text_completion"),
+    ids=("chat_completion", "text_completion", "tale_two_cities"),
 )
+@pytest.mark.parametrize("trace_mode", (True, False), ids=("trace_mode_on", "trace_mode_off"))
 @pytest.mark.parametrize("decode_only", (True, False), ids=("decode_only", "prefill_decode"))
 @pytest.mark.parametrize("num_layers", (1, 2, 10, 80), ids=("1L", "2L", "10L", "80L"))
 @pytest.mark.parametrize(
@@ -48,24 +50,23 @@ from models.demos.t3000.llama2_70b.demo.demo import main, construct_arg
 @pytest.mark.parametrize(
     "max_output_tokens, output_at_end, top_p, top_k, temperature",
     (
+        (119 * 1024, True, 1, 1, 1.0),
         (128, True, 1, 1, 1.0),
         (128, True, 0.9, 10, 1.0),
     ),
-    ids=("greedy", "sampling"),
+    ids=("128k_greedy", "greedy", "sampling"),
 )
 @pytest.mark.parametrize(
     "ground_truth",
-    ("models/demos/t3000/llama2_70b/demo/data/llama3_ground_truth.json", None),
+    ("models/demos/t3000/llama2_70b/demo/data/llama2_ground_truth.json", None),
     ids=("check_enabled", "check_disabled"),
 )
 @pytest.mark.parametrize(
     "max_batch_size, max_context_len",
-    (
-        (32, 2048),
-        (16, 8192),
-    ),
-    ids=("short_context", "long_context"),
+    ((32, 2048), (16, 8192), (1, 128 * 1024)),
+    ids=("short_context", "long_context", "128k_context"),
 )
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 14227456}], indirect=True)
 def test_LlamaModel_demo(
     # model args
     implementation,
@@ -83,6 +84,7 @@ def test_LlamaModel_demo(
     t3k_mesh_device,
     n_devices,
     decode_only,
+    trace_mode,
     llama_version,
     ground_truth,
     max_batch_size,
@@ -121,6 +123,7 @@ def test_LlamaModel_demo(
         n_devices=n_devices,
         cache_path=cache_path,
         decode_only=decode_only,
+        trace_mode=trace_mode,
         llama_version=llama_version,
         ground_truth=ground_truth,
     )
