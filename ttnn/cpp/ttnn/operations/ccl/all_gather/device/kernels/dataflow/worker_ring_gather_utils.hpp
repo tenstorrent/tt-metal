@@ -472,7 +472,7 @@ FORCE_INLINE void read_wrapped_chunk_from_output_tensor(
         /*
          * num_pages - i: check if we are outside the number of pages remaining
          * contig_pages_: check if we are outside the max number of contig pages we can read in a row in a bank
-         * contig_edge_of_tensor_slice: check if we are outside the edge of the tensor slice (in which case, we wrap around if aren't at the end)
+         * contig_edge_of_tensor_slice: check if we are outside the edge of the tensor slice (in which case, we wrap around if we aren't at the end)
          */
         uint32_t flattened_offset_worker_slice = offset_worker_slice.x + (offset_worker_slice.y * tensor_slice_shape.x);
         uint32_t contig_edge_of_tensor_slice = tensor_slice_shape.x - ((flattened_offset_worker_slice + offset_into_worker_slice) % tensor_slice_shape.x);
@@ -490,8 +490,8 @@ FORCE_INLINE void read_wrapped_chunk_from_output_tensor(
             worker_slice_shape,
             tensor_slice_shape,
             tensor_shape,
-            last_page_of_worker,
-            contig_pages
+            contig_pages,
+            last_page_of_worker
         );
 
 #endif
@@ -558,8 +558,8 @@ FORCE_INLINE void write_wrapped_chunk(
             worker_slice_shape,
             tensor_slice_shape,
             tensor_shape,
-            last_page_of_worker,
-            contig_pages
+            contig_pages,
+            last_page_of_worker
         );
 #endif
         l1_read_addr += page_size * contig_pages;

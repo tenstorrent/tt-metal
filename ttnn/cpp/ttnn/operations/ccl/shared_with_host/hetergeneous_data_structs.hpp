@@ -127,8 +127,8 @@ inline void advance_worker_global_page_interleaved (
 
     coord_t const &tensor_shape, // full tensor shape
 
-    bool &last_page_of_worker,
-    const uint32_t stride=1
+    const uint32_t stride,
+    bool &last_page_of_worker
   ) {
 
     uint32_t prev_offset_into_worker_slice = offset_into_worker_slice;
