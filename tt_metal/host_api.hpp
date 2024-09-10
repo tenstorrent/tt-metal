@@ -114,12 +114,12 @@ Program CreateProgram();
  *
  * Return value: Kernel ID (uintptr_t)
  *
- * | Argument     | Description                                                                                                                          | Type                                                     | Valid Range | Required |
- * |--------------|--------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|-------------|----------|
- * | program      | The program to which this kernel will be added to                                                                                    | Program &                                                |             | Yes      |
- * | file_name    | Path to kernel src. Assumed to be absolute/relative to CWD, but will fall back to relative path from TT_METAL_HOME.                  | const std::string &                                      |             | Yes      |
- * | core_spec    | Either a single logical core, a range of logical cores or a set of logical core ranges that indicate which cores kernel is placed on | const std::variant<CoreCoord, CoreRange, CoreRangeSet> & |             | Yes      |
- * | config       | Config for data movement or compute kernel                                                                                           | const std::variant<DataMovementConfig,ComputeConfig,EthernetConfig> &   |             | No       |
+ * | Argument     | Description                                                                                                                                 | Type                                                     | Valid Range | Required |
+ * |--------------|---------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|-------------|----------|
+ * | program      | The program to which this kernel will be added to                                                                                           | Program &                                                |             | Yes      |
+ * | file_name    | Path to kernel src. Assumed to be absolute/relative to CWD, but will fall back to relative path from TT_METAL_HOME/TT_METAL_KERNEL_PATH.    | const std::string &                                      |             | Yes      |
+ * | core_spec    | Either a single logical core, a range of logical cores or a set of logical core ranges that indicate which cores kernel is placed on        | const std::variant<CoreCoord, CoreRange, CoreRangeSet> & |             | Yes      |
+ * | config       | Config for data movement or compute kernel                                                                                                  | const std::variant<DataMovementConfig,ComputeConfig,EthernetConfig> &   |             | No       |
  */
 KernelHandle CreateKernel(
     Program &program,
