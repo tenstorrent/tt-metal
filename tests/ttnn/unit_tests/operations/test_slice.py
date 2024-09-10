@@ -380,3 +380,29 @@ def test_slice_ellipses(device):
     ttnn_output = ttnn_input[...]
     ttnn_output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_output, ttnn_output, 0.99)
+
+
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("dim", [0, 1, 2, 3])
+@pytest.mark.parametrize("ends", [-2, -4, -6, -32])
+def test_slice_negative_ends(layout, dim, ends, device):
+    torch_input = torch.randn(32, 32, 32, 32)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
+
+    if dim == 3:
+        if layout == ttnn.ROW_MAJOR_LAYOUT:
+            pytest.skip("Page size will become 0 and we don't handle transforming pages to second last dimension")
+        torch_output = torch_input[:, :, :, 0:ends]
+        ttnn_output = ttnn_input[:, :, :, 0:ends]
+    elif dim == 2:
+        torch_output = torch_input[:, :, 0:ends, :]
+        ttnn_output = ttnn_input[:, :, 0:ends, :]
+    elif dim == 1:
+        torch_output = torch_input[:, 0:ends, :, :]
+        ttnn_output = ttnn_input[:, 0:ends, :, :]
+    elif dim == 0:
+        torch_output = torch_input[0:ends, :, :, :]
+        ttnn_output = ttnn_input[0:ends, :, :, :]
+
+    ttnn_output = ttnn.to_torch(ttnn_output)
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
