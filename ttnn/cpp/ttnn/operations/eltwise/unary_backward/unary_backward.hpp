@@ -13,6 +13,15 @@ namespace ttnn {
 
 namespace operations::unary_backward {
 
+struct ExecuteUnaryBackwardNeg {
+    static std::vector<std::optional<Tensor>> invoke(
+        uint8_t queue_id,
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt);
+};
+
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardTwoFloat {
     static std::vector<Tensor> invoke(
@@ -351,8 +360,7 @@ constexpr auto rsqrt_bw = ttnn::register_operation<
 
 constexpr auto neg_bw = ttnn::register_operation<
     "ttnn::neg_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::NEG_BW>>();
+    operations::unary_backward::ExecuteUnaryBackwardNeg>();
 
 constexpr auto ceil_bw = ttnn::register_operation<
     "ttnn::ceil_bw",
