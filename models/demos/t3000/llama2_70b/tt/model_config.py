@@ -334,15 +334,19 @@ def get_model_config(
             block_w=num_tiles_per_core_w,
             inplace=True,
         )
+
+        cores_y = 4 if seq_len == 128 else 8
+        max_mm_seq_tiles = min(seq_len, model_config["MAX_MM_SEQ_LEN"]) // 32
         model_config["LM_HEAD_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 4),
-            in0_block_w=8,  # how much inner dim you take each time
+            compute_with_storage_grid_size=(8, cores_y),
+            in0_block_w=1,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
             out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-            per_core_M=seq_tiles // 4,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_M=max_mm_seq_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
             per_core_N=16,  # N / TILE_WIDTH / Grid_Size
             transpose_mcast=False,
             fused_activation=None,
+            fuse_batch=False,
         )
 
         cores_y = 4 if seq_len == 128 else 8

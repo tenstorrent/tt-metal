@@ -111,13 +111,6 @@ def main(args):
             paged_attention_config=paged_attention_config,
         )
 
-        if data_args.output_at_end:
-            with open(
-                f"models/demos/t3000/llama2_70b/demo/data/{model_args.llama_version}_demo_user_output.json", "w"
-            ) as f:  # Open a file for writing
-                output_json = json.dumps(all_text, indent=4)
-                f.write(output_json)
-
 
 def build_generator(model_args, tt_args, paged_attention_config=None):
     generator = Llama.build(
@@ -160,25 +153,7 @@ def load_prompts_file(model_args, data_args, tokenizer):
         tokenized = [tokenizer.encode(x, bos=True, eos=False) for x in prompts]
 
     logger.info(f"Loaded {len(tokenized)} prompts from {data_args.prompts_file}")
-    # if len(tokenized) > model_args.max_batch_size:
-    #     logger.info(
-    #         f"Warning: prompts file contains {len(tokenized)} prompts, but max batch size is {model_args.max_batch_size}. Only first {model_args.max_batch_size} are decoded."
-    #     )
-    #     tokenized = tokenized[: model_args.max_batch_size]
-    #     prompts = prompts[: model_args.max_batch_size]
-
     return tokenized, prompts
-
-
-def initialize_inputs(tokenizer, prompt_tokens, bsz, total_len):
-    # pad the model to maximum length
-    pad_id = tokenizer.pad_id
-    tokens = torch.full((bsz, total_len), pad_id, dtype=torch.long, device="cpu")
-    for k, t in enumerate(prompt_tokens):
-        tokens[k, : len(t)] = torch.tensor(t, dtype=torch.long, device="cpu").clone().detach()
-    eos_reached = torch.tensor([False] * bsz, device="cpu")
-    input_text_mask = tokens != pad_id  # use prefill token if that token is not masked
-    return tokens, input_text_mask, eos_reached
 
 
 def initialize_prefill_input(tokenizer, prompt_tokens):
@@ -195,17 +170,6 @@ def initialize_decode_input(token_inputs, batch_token_indices):
     tokens = torch.tensor(token_inputs, dtype=torch.long, device="cpu").unsqueeze(1)
     indices = torch.tensor(batch_token_indices, dtype=torch.long, device="cpu")
     return tokens, indices
-
-
-def prepare_next_input(tokenizer, tokens, input_text_mask, finished_mask, prompt_lens, cur_pos, next_token):
-    # only replace token if prompt has already been generated
-    next_token = torch.where(input_text_mask[:, cur_pos], tokens[:, cur_pos], next_token)
-    tokens[:, cur_pos] = next_token
-
-    eos_reached = (~input_text_mask[:, cur_pos]) & (next_token == tokenizer.eos_id)
-    prev_pos = cur_pos
-
-    return tokens, eos_reached, prev_pos
 
 
 def is_batch_full(batch_valid):
@@ -236,28 +200,8 @@ def run_decode(
 
     # decode arguments
     bsz = model_args.max_batch_size
-    output_tokens = data_args.max_output_tokens
 
     sampling_func = get_sampling_func(data_args.top_k, data_args.top_p, data_args.temperature)
-
-    # prompt_lens = [len(t) for t in prompt_tokens]
-    # min_prompt_len = min(prompt_lens) if not tt_args.decode_only else 1
-    # max_prompt_len = max(prompt_lens)
-    # assert max_prompt_len <= model_args.max_kv_context_len
-    # total_len = min(model_args.max_kv_context_len, max_prompt_len + output_tokens)
-    # assert total_len <= model_args.max_kv_context_len
-    # if total_len != max_prompt_len + output_tokens:
-    #     logger.warning(
-    #         f"Requested more output tokens than allowed by model. Truncating to {total_len - max_prompt_len} output tokens."
-    #     )
-
-    # # prepare inputs
-    # tokens, input_text_mask, finished_mask = initialize_inputs(tokenizer, prompt_tokens, bsz, total_len)
-    # prev_pos = 0
-
-    # some profiling and logging
-    latencies = []
-    full_logits = []
 
     # intialize continuous batching data structures
     prompts_q = Queue()
@@ -265,7 +209,16 @@ def run_decode(
     for user_id, (p, t) in enumerate(zip(prompts, prompt_tokens)):
         prompts_q.put((user_id, p, t))
 
-    # TODO: When I merge paged_update_cache, use -1. Until then, use 0
+    """
+    Datastructures for continuous batching
+    Each datastructure is a list of size max_batch_size. The contents of each list are:
+        batch_token_indices: token index
+        batch_valid: slot is occupied/valid
+        batch_token_inputs: token input (always a single token)
+        batch_prompt_text: prompt text
+        batch_token_outputs: token outputs (grows as the user generates more tokens)
+        batch_user_ids: global user id
+    """
     batch_token_indices = [0 for _ in range(model_args.max_batch_size)]
     batch_valid = [False for _ in range(model_args.max_batch_size)]
     batch_token_inputs = [0 for _ in range(model_args.max_batch_size)]
@@ -273,11 +226,16 @@ def run_decode(
     batch_token_outputs = [None for _ in range(model_args.max_batch_size)]
     batch_user_ids = [None for _ in range(model_args.max_batch_size)]
 
-    # breakpoint()
     MAX_GEN_LENGTH = 180
 
-    # set up paged attention
-    # first pass: create a static page table for all users
+    """
+    Paged Attention
+
+    In this demo, we demonstrate continuous batching with paged KV cache.
+    The page table is static because this code does not implement a page allocator
+    or scheduler. Instead, we create a paged KV cache of full size and assign
+    pages to users randomly.
+    """
     permutation = torch.randperm(paged_attention_config.max_num_blocks)
     reverse_permutation = torch.argsort(permutation)
     static_page_table = reverse_permutation.reshape(bsz, paged_attention_config.max_num_blocks // bsz)
@@ -293,6 +251,11 @@ def run_decode(
         logger.info(f"Current batch valid: {batch_valid}")
         logger.info(f"Current batch token indices: {batch_token_indices}")
         if not is_batch_full(batch_valid) and not prompts_q.empty():
+            """
+            Prefill Step:
+                If the batch is not full and the prompts queue is not empty,
+                we will prefill one user and insert it into the batch.
+            """
             # Find first invalid slot
             user_id, prompt_text, prompt_tokens = prompts_q.get()
             batch_idx = batch_valid.index(False)
@@ -301,7 +264,6 @@ def run_decode(
             prompt_tokens, prompt_len = initialize_prefill_input(tokenizer, prompt_tokens)
 
             logits = model.prefill_forward_single_user(prompt_tokens, 0, batch_idx, page_table=page_table_tt)
-            # breakpoint() # are we getting the right shape back? are we indexing the right index?
             next_logits = logits[:, prompt_len - 1, :]  # 1, seq_len, vocab -> 1, vocab
             next_token = sampling_func(next_logits).item()  # shape = (1,)
 
@@ -314,12 +276,14 @@ def run_decode(
             batch_user_ids[batch_idx] = user_id
 
         elif not is_batch_empty(batch_valid):
+            """
+            Decode Step:
+                If the batch is not empty, we have users in the decode batch
+                to process. Do one decode iteration and then update datastructures.
+            """
             # Decode iteration
             tokens_tensor, indices_tensor = initialize_decode_input(batch_token_inputs, batch_token_indices)
-            # What is the shape of tokens_tensor???
-            # breakpoint()
             logger.info(f"Decoding batch with indices {batch_token_indices}")
-            # TODO: call model.decode? Is it switching model_configs correctly?
             logits = model.decode_forward(tokens_tensor, indices_tensor, page_table=page_table_tt)
             next_logits = logits[:, -1, :]  # batch, vocab of last token
             next_token = sampling_func(next_logits)
@@ -332,6 +296,7 @@ def run_decode(
                     batch_token_indices[i] += 1
 
                     if batch_token_indices[i] > MAX_GEN_LENGTH:
+                        # In this demo, stop decoding only if the user has hit the maximum generation length
                         user_id = batch_user_ids[i]
                         logger.info(
                             f"User {user_id} in batch slot {i} has reached max gen length. Removing from batch."
@@ -351,59 +316,12 @@ def run_decode(
             logger.info("All users have finished. Exiting.")
             break
 
+    # Log all outputs
     output_q.sort(key=lambda x: x[0])
     for out in output_q:
         user_id, prompt_text, user_text = out
         logger.info(f"User {user_id} prompt: {prompt_text}")
         logger.info(f"User {user_id} output: {user_text}")
-
-
-def latency_printout(latencies, model_args, generated_len):
-    latencies = [
-        latency for token_pos, latency in enumerate(latencies) if token_pos % 32 != 0
-    ]  # We recompute program_cache for multiples of 32
-    overall_time = sum(latencies)
-    overall_tokens = model_args.max_batch_size * len(latencies)
-    warmup_batch = 2
-    # Skip initial warmup batch
-    if len(latencies) > warmup_batch:
-        overall_time -= sum(latencies[:warmup_batch])
-        overall_tokens -= warmup_batch * model_args.max_batch_size
-        latencies = latencies[warmup_batch:]
-
-    mean_latency = sum(latencies) / len(latencies) if len(latencies) > 0 else 0
-
-    tokens_per_second = 1 / mean_latency if mean_latency != 0 else 0
-    overall_tokens_per_second = overall_tokens / overall_time if overall_time != 0 else 0
-    tokens_per_second_per_user = (
-        overall_tokens_per_second / model_args.max_batch_size if model_args.max_batch_size != 0 else 0
-    )
-    throughput = 1000 * overall_time / overall_tokens if overall_tokens != 0 else 0
-
-    logger.info(f"Overall throughput: {throughput:.1f} ms @ {overall_tokens_per_second:.1f} tokens/s")
-    logger.info(f"Tokens per second per user: {tokens_per_second_per_user:.1f} tokens/s/u")
-    logger.info(f"User latency: {1000 * mean_latency:.1f} ms @ {tokens_per_second:.1f} tokens/s")
-
-
-def get_all_text(tokenizer, tokens, prompt_tokens, max_gen_len):
-    out_tokens = []
-    for i, toks in enumerate(tokens.tolist()):
-        try:
-            # cut to max gen len
-            start = 0
-            toks = toks[start : len(prompt_tokens[i]) + max_gen_len]
-        except IndexError:
-            logger.info(f"Index out of range for sequence {i}, returning entire sequence.")
-            pass
-
-        # cut to eos tok if any
-        if tokenizer.eos_id in toks:
-            eos_idx = toks.index(tokenizer.eos_id)
-            toks = toks[:eos_idx]
-        out_tokens.append(toks)
-
-    all_text = [tokenizer.decode(toks) for toks in out_tokens]
-    return all_text
 
 
 def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=False):

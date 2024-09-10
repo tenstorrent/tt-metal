@@ -160,7 +160,7 @@ class TtLlamaModelForGeneration:
         return logits
 
     def prefill_forward_single_user(
-        self, tokens: torch.Tensor, start_pos: int, user_id: int, unpadded_seq_len=None, page_table=None
+        self, tokens: torch.Tensor, start_pos: int, user_id: int, last_token_idx=None, page_table=None
     ):
         batch, seq_len = tokens.shape
         assert batch == 1
@@ -179,7 +179,7 @@ class TtLlamaModelForGeneration:
             start_pos,
             attn_mask,
             user_id=user_id,
-            unpadded_seq_len=unpadded_seq_len,
+            last_token_idx=last_token_idx,
             page_table=page_table,
         )
 
@@ -200,6 +200,7 @@ class TtLlamaModelForGeneration:
         self._update_model_config("prefill", batch, prefill_seq_len)
 
         batch, seq_len = tokens.shape
+        last_token_idx = seq_len - 1
         output_logits = torch.zeros(batch, seq_len, self.params.vocab_size)
         # pad tokens to 128 or 2048
         prefill_ids = torch.cat([tokens, torch.zeros(batch, prefill_seq_len - seq_len).long()], dim=-1)
@@ -208,12 +209,12 @@ class TtLlamaModelForGeneration:
             logger.info(f"Filling kv cache for user {user_id + 1}")
 
             logits = self.prefill_forward_single_user(
-                prefill_ids[user_id : user_id + 1], start_pos, user_id, unpadded_seq_len=seq_len
+                prefill_ids[user_id : user_id + 1], start_pos, user_id, last_token_idx=last_token_idx
             )
 
             # output_logits[user_id] = logits[:, :seq_len, :]
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
-            output_logits[user_id] = logits[:, seq_len % 32 : seq_len % 32 + 1, :]
+            output_logits[user_id] = logits[:, last_token_idx % 32 : last_token_idx % 32 + 1, :]
 
         logger.info(f"Finished prefill for all users up to {seq_len} tokens, Starting decode...")
 

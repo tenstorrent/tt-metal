@@ -289,12 +289,12 @@ class TtLlamaModel_optimized:
         attn_masks: List[ttnn.Tensor],
         user_id: int = 0,
         cache_idxs=None,
-        unpadded_seq_len=None,
+        last_token_idx=None,
         page_table=None,
     ) -> ttnn.Tensor:
         if self.model_config["LLM_MODE"] == "prefill":
             return self.prefill_forward(
-                xs, rot_mats, start_pos, attn_masks, user_id, unpadded_seq_len=unpadded_seq_len, page_table=page_table
+                xs, rot_mats, start_pos, attn_masks, user_id, last_token_idx=last_token_idx, page_table=page_table
             )
         elif self.model_config["LLM_MODE"] == "decode":
             return self.decode_forward(xs, rot_mats, start_pos, attn_masks, cache_idxs, page_table=page_table)
@@ -384,7 +384,7 @@ class TtLlamaModel_optimized:
         start_pos: int,
         attn_masks: List[ttnn.Tensor],
         user_id: int = 0,
-        unpadded_seq_len=None,
+        last_token_idx=None,
         page_table=None,
     ) -> ttnn.Tensor:
         ### Run all layers
@@ -409,9 +409,8 @@ class TtLlamaModel_optimized:
 
         _, _, seq_len, dmodel = norm_out_replicated.shape
 
-        if unpadded_seq_len:
-            last_token_tile = unpadded_seq_len // 32  # Todo: minus 1 for index rather than seqlen?
-            # Slice out the last max_mm_seq_len. This will have to change so that we slice the row of tiles which contains the true last token index
+        if last_token_idx:
+            last_token_tile = last_token_idx // 32
             norm_out_replicated = ttnn.slice(
                 norm_out_replicated,
                 (0, 0, last_token_tile * 32, 0),
@@ -433,7 +432,7 @@ class TtLlamaModel_optimized:
         )
         norm_out_replicated.deallocate(True)
 
-        if not unpadded_seq_len:
+        if not last_token_idx:
             lm_head_out = ttnn.reshape(lm_head_out, (1, 1, seq_len, -1))
 
         return lm_head_out
