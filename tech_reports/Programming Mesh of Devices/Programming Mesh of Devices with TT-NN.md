@@ -19,9 +19,15 @@ Author: Joseph Chu
   - [4.2 Single Device to Multiple Device Execution](#42-single-device-to-multiple-device-execution)
     - [4.2.1 Single Device Execution](#421-single-device-execution)
     - [4.2.2 Mesh Device Execution](#422-mesh-device-execution)
-- [5. Programming Mesh of Devices Using Data Parallel](#5-programming-mesh-of-devices-using-data-parallel)
-  - [5.1 Data Parallel Programming Example](#51-data-parallel-programming-example)
-
+- [5. MeshDevice and Collective Communication Library (CCL)](#5-meshdevice-and-collective-communication-library-ccl)
+  - [5.1 CCL Operations](#51-ccl-operations)
+  - [5.2 All-Gather](#52-all-gather)
+    - [5.2.1 Programming Example: All-Gather (Ring)](#521-programming-example-all-gather-ring)
+    - [5.2.2 Programming Example: All-Gather (Line)](#522-programming-example-all-gather-line)
+- [6. Programming Mesh of Devices Using Data Parallel](#6-programming-mesh-of-devices-using-data-parallel)
+  - [6.1 Data Parallel Programming Example](#61-data-parallel-programming-example)
+- [7. Programming Mesh of Devices Using Tensor Parallel](#7-programming-mesh-of-devices-using-tensor-parallel)
+  - [7.1 Tensor Parallel Programming Example](#71-tensor-parallel-programming-example)
 
 ## 1. Overview
 
@@ -95,7 +101,7 @@ ttnn.visualize_mesh_device(mesh_device)
 
 ##
 
-## 3\. Distributing Tensor to MeshDevice
+## 3. Distributing Tensor to MeshDevice
 
 ### 3.1 Distribution Strategies
 
@@ -111,7 +117,7 @@ There are two main types of distribution strategies:
 
 ### 3.2 Programming Example: Sharding
 
-Let’s see how to split our data across two devices:
+Let's see how to split our data across two devices:
 
 ```py
 import ttnn
@@ -132,7 +138,7 @@ mesh_tensor: ttnn.Tensor = ttnn.from_torch(
 )
 ```
 
-Let’s inspect our ttnn.Tensor object. At this point, the data still resides in host-memory.
+Let's inspect our ttnn.Tensor object. At this point, the data still resides in host-memory.
 
 ```py
 > mesh_tensor
@@ -149,7 +155,7 @@ ttnn.Tensor([[[[ 2.00000,  2.00000,  ...,  2.00000,  2.00000],
 
 ```
 
-Let’s now transfer to device:
+Let's now transfer to device:
 
 ```py
 > mesh_tensor = ttnn.to_device(mesh_tensor, device_mesh)
@@ -189,7 +195,7 @@ ttnn.visualize_mesh_device(mesh_device, tensor=mesh_tensor)
 └──────────────────────────────┴──────────────────────────────┘
 ```
 
-## 4\. Single-Program Multiple Device
+## 4. Single-Program Multiple Device
 
 ### 4.1 Execution Model
 
@@ -199,7 +205,7 @@ TT-NN uses a Single-Program Multiple-Device (SPMD) technique to parallelize comp
 
 #### 4.2.1 Single Device Execution
 
-Let’s run a simple gelu operation on a single-device:
+Let's run a simple gelu operation on a single-device:
 
 ```py
 # Open a single device
@@ -248,7 +254,7 @@ output_tensor = ttnn.gelu(ttnn_tensor)
 *Figure 4: Parallel execution of gelu operation on 4 devices*
 
 
-## 5\. MeshDevice and Collective Communication Library (CCL)
+## 5. MeshDevice and Collective Communication Library (CCL)
 
 The Collective Communication Library (CCL) provides a set of operations for efficient device-to-device communication in a MeshDevice. See the [CCL Developer Guide](../CCL/CclDeveloperGuide.md) for more comprehensive coverage. These operations are used as building blocks for implementing tensor-parallel and other distributed computing strategies.
 
@@ -330,7 +336,7 @@ output_tensor = ttnn.line_all_gather(mesh_tensor, dim=3, cluster_axis=0, mesh_de
 ```
 
 
-## 5\. Programming Mesh of Devices Using Data Parallel
+## 6. Programming Mesh of Devices Using Data Parallel
 
 This tutorial demonstrates how to convert a model running on a single-device to multiple devices using data-parallel strategy. Using data parallel can be a good strategy to scale to multiple devices when your model fits on a single-device.
 
@@ -343,9 +349,9 @@ Effectively, each device contains a replica of the model and is responsible for 
 
 ###
 
-### 5.1 Data Parallel Programming Example:
+### 6.1 Data Parallel Programming Example:
 
-Let's start by creating a simple MLP model in TT-NN on a single-device and scale to multiple devices by using data-parallel. We’ll use pretrained weights and compare against torch for validation:
+Let's start by creating a simple MLP model in TT-NN on a single-device and scale to multiple devices by using data-parallel. We'll use pretrained weights and compare against torch for validation:
 
 1. **Create a TT-NN Falcon-7B MLP Module implementation**
 
@@ -452,7 +458,7 @@ with ttnn.distribute(ttnn.ConcatMeshToTensor(mesh_device, dim=0)):
 ```
 
 
-## 6\. Programming Mesh of Devices Using Tensor Parallel
+## 7. Programming Mesh of Devices Using Tensor Parallel
 
 When your model is too large to fit on a single device, tensor parallelism provides a solution by sharding the model parameters across the distributed SRAM/DRAM of multiple devices. Each device then performs computations on its portion of the data, with communication between devices occurring as needed to aggregate results via CCL primitives.
 
@@ -463,7 +469,7 @@ Key benefits of tensor parallelism include:
 
 ###
 
-### 6.1 Tensor Parallel Programming Example:
+### 7.1 Tensor Parallel Programming Example:
 
 Let's re-use the same example as the data-parallel example above, but this time we'll run it with tensor-parallel. In this example, we'll implement a simple tensor-parallel where we shard all model parameters on the width dimension.
 
