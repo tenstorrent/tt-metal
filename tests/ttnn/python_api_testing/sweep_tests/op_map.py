@@ -1070,4 +1070,8 @@ op_map = {
         "tt_op": ttnn_ops.complex_is_real,
         "pytorch_op": pytorch_ops.complex_is_real,
     },
+    "logiteps-bw": {
+        "tt_op": ttnn_ops.logiteps_bw,
+        "pytorch_op": pytorch_ops.logiteps_bw,
+    },
 }
