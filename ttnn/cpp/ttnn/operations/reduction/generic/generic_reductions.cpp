@@ -102,8 +102,10 @@ static Tensor reduce_impl(
                 padded_output_shape.push_back(axis >= rank - 2 ? ttnn::TILE_SIZE : 1);
             }
         } else {
+            // Get the shape for the output tensor
             output_shape.push_back(input_shape[axis]);
-            padded_output_shape.push_back(input_shape[axis]);
+            // Get the padded shape for the output tensor
+            padded_output_shape.push_back(input_shape.value[axis]);
         }
     }
 
