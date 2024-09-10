@@ -82,17 +82,20 @@ void kernel_main() {
     uint32_t cb_addr = get_write_ptr(cb_id_in0);
     volatile tt_l1_ptr uint16_t* stick = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_addr);
 
-    //cb_reserve_back(cb_id_intermed0, C*H*W);
-    //uint32_t indicies_addr = get_write_ptr(cb_id_intermed0);
-    //volatile tt_l1_ptr uint32_t* max_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_addr);
+    uint32_t max_index = 0;
+    uint32_t max_val = 0;
+    uint32_t index_counter = 0;
+
     for(uint32_t l = 0; l < B; l ++) {
         for(uint32_t k = 0; k < C; k++) {
             for(uint32_t j = 0; j < H; j++) {
                 noc_async_read_page(l*C*H + k*H + j, s0, cb_addr);
                 noc_async_read_barrier();
-                uint32_t index_counter = 0;
-                uint32_t max_index = 0;
-                uint32_t max_val = stick[0];
+                if (dim == 3) {
+                    index_counter = 0;
+                    max_index = 0;
+                    max_val = stick[0];
+                }
                 for(uint32_t i = 0; i < W; i++) {
                     uint16_t val = stick[i];
                     if(bfloat16_greater(val, max_val)) {
@@ -102,11 +105,16 @@ void kernel_main() {
                     index_counter++;
 
                 }
-                max_vals[l*C*H + k*H + j] = max_index;
+                if (dim == 3) {
+                    max_vals[l*C*H + k*H + j] = max_index;
+                }
             }
         }
     }
     // TODO: Generalize write for argmax for other dims
+    if  constexpr (all) {
+        max_vals[0] = max_index;
+    }
     uint64_t dst_noc_addr = get_noc_addr(0, s_out);
 
     noc_async_write(out_addr, dst_noc_addr, out_stick_size);

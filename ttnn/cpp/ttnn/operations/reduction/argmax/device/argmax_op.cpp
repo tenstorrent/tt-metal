@@ -48,8 +48,14 @@ void ArgMax::validate_with_output_tensors(
 
 std::vector<tt::tt_metal::Shape> ArgMax::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     auto input_shape = input_tensors[0].get_legacy_shape();
-    tt::tt_metal::Shape output_shape({input_shape[0], input_shape[1], 1, input_shape[2]});
-    return {output_shape};
+    if (this->dim.has_value()) {
+        tt::tt_metal::Shape output_shape({input_shape[0], input_shape[1], 1, input_shape[2]});
+        return {output_shape};
+    }
+    else {
+        tt::tt_metal::Shape output_shape({1, 1, 1, 1});
+        return {output_shape};
+    }
 }
 
 std::vector<Tensor> ArgMax::create_output_tensors(
@@ -67,7 +73,11 @@ operation::ProgramWithCallbacks ArgMax::create_program(
     const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto &input_tensor = input_tensors.at(0);
     const auto &output_tensor = output_tensors.at(0);
-
+    if (this->dim.has_value()) {
+        const uint32_t input_rank = input_tensor.get_legacy_shape().rank();
+        const uint32_t normalized_dim = dim.value() < 0 ? dim.value() + input_rank : dim.value();
+        return detail::argmax_single_core(input_tensor, output_tensor, normalized_dim);
+    }
     return detail::argmax_single_core(input_tensor, output_tensor, this->dim);
 }
 
