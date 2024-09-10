@@ -1,20 +1,35 @@
-# Tensor Layouts
+# Tensor and Memory Layouts
 
-## Introduction
+# Table of Contents
+
+1. [Introduction](#1-introduction)
+2. [Tensor Attributes](#2-tensor-attributes)
+3. [Tensor Layout](#3-tensor-layout)
+   - [3.1 Row-Major layout](#31-row-major-layout)
+   - [3.2 Tiled layout](#32-tiled-layout)
+     - [3.2.1 Tile Shapes](#321-tile-shapes)
+4. [Memory Layout](#4-memory-layout)
+   - [4.1 Interleaved](#41-interleaved)
+     - [4.1.1 User Interface](#411-user-interface)
+   - [4.2 Sharding](#42-sharding)
+     - [4.2.1 User Interface](#421-user-interface)
+     - [4.2.2 Other Sharding Parameters and Notes](#422-other-sharding-parameters-and-notes)
+
+## 1. Introduction
 Tensors are stored in a 2D memory space known as a `buffer`. An N-dimensional tensor is represented as a 2D memory object by combining the outer dimensions into a single dimension while keeping the inner dimension as the second dimension. For example, a tensor with dimensions `[1x4x6x8]` will be represented in memory as a `[24x8]` tensor, where 1x4x6 is squeezed into 24. At the most granular level, a block of memory representing a portion of the tensor is referred to as a page.
 
 
-## Tensor Attributes
+## 2. Tensor Attributes
 For on-device tensors, several attributes describe their characteristics:
 - **Tensor Layout**: This indicates how elements within a tensor are mapped to pages in the buffer. The two options are `Row-Major` and `Tiled`.
 - **Memory Layout**: This describes how pages are distributed in the device's memory. The two options are `Interleaved` and `Sharded`.
 - **Storage**: This refers to the type of memory used to store the tensor on the device. The two options are `L1` and `DRAM`.
 
-## Tensor Layout
+## 3. Tensor Layout
 This describes how elements within a tensor are mapped to pages, with each page representing the granularity of the tensor in memory. Pages are stored consecutively within a `buffer`.
 
 
-### Row-Major layout
+### 3.1 Row-Major layout
 Each row of a 2D tensor corresponds to a single page in our buffer (with a minor exception for sharded tensors, which will be explained later). For example, with a 64x64 tensor, each row is associated with a separate page, resulting in a total of 64 pages in the buffer.
 
 <img src="images/row_major_pages.svg" style="width:500px;"/>
@@ -22,17 +37,17 @@ Each row of a 2D tensor corresponds to a single page in our buffer (with a minor
 
 
 
-### Tiled layout
+### 3.2 Tiled layout
 In a tiled tensor, pages are represented as 2D tiles, with the default tile size being 32x32, rather than being confined to a single row. For example, with a 64x64 tensor, this results in 4 tiles, each of size 32x32.
 <img src="images/tiled_pages.svg" style="width:500px;"/>
 
 
 
-#### Tile Shapes
+#### 3.2.1 Tile Shapes
 The hardware architecture supports tile shapes of `32x32` , `16x32` , `4x32`, `2x32`, `1x32`. **However currently TT-Metallium only supports `32x32`, and other tile shapes will be supported in Q4'2024**
 
 
-## Memory Layout
+## 4. Memory Layout
 This describes how the pages of a tensor are distributed across the memory of a device. Device memory is physically partitioned into units called banks. For example, Grayskull chips have 8 DRAM banks, while Wormhole chips have 12 DRAM banks.
 
 Each core also has L1 memory, which is divided into banks. Most worker cores have a single bank, whereas some storage cores have 2 banks.
@@ -40,7 +55,7 @@ Each core also has L1 memory, which is divided into banks. Most worker cores hav
 There are two storage mechanisms that describe how a tensor is mapped to its respective banks: `Interleaved` and `Sharding`.
 
 
-### Interleaved
+### 4.1 Interleaved
 An individual tensor is represented across several pages, with the distribution of these pages depending on the tensor's memory layout. The image below illustrates storage across multiple memory banks.
 
 In an interleaved tensor layout, pages are allocated in a round-robin fashion across multiple banks. Allocation of a new tensor always begins with the first bank, which can lead to some fragmentation between tensors.
@@ -49,7 +64,7 @@ For example, consider a tensor requiring four pages (P0 to P3) across three bank
 <img src="images/interleaved_2.svg" style="width:500px;"/>
 
 
-#### User Interface
+#### 4.1.1 User Interface
 
 The Interleaved tensor is the simplest to create and is simply using `ttnn.DRAM_MEMORY_CONFIG` or `ttnn.L1_MEMORY_CONFIG` as the memory config parameter when creating a tensor.
 
@@ -61,7 +76,7 @@ a = ttnn.to_device(a, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 ```
 
 
-### Sharding
+### 4.2 Sharding
 
 A sharded tensor physically distributes the tensor across the L1 memories of multiple cores in a core grid according to a user-specified distribution, known as a shard specification. The tensor is divided into partitions called shards, with each shard placed in the L1 memory of a specific core.
 
@@ -77,6 +92,9 @@ In the example, Core (0,0) holds pages 0, 1, 4, and 5, while Core (0,1) holds pa
 
 The main purpose of sharding is to keep data local. While an interleaved L1 tensor can also be distributed across banks in multiple cores, sharding offers a more explicit mapping of pages. This allows us to ensure that each core works on a specific portion of memory that is kept local within its respective L1 memory.
 
+#### 4.2.1 User Interface
+The sharded tensor requires more detailed memory config with the shard shape, core grid, shard strategy.
+
 The following is example code to specify the above example:
 ```
 torch_a = torch.randn((64, 64), dtype=torch.bfloat16)
@@ -87,7 +105,7 @@ sharded_memory_config = ttnn.create_sharded_memory_config(
 a = ttnn.to_device(a, device, memory_config=sharded_memory_config)
 ```
 
-#### Other Sharding Parameters and Notes
+#### 4.2.2 Other Sharding Parameters And Notes
 Other sharding parameters include:
 
 - **Sharding Strategy**: Describes how the tensor is split when distributed across the core grid. The available methods are:
