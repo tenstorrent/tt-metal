@@ -102,7 +102,7 @@ FORCE_INLINE volatile uint32_t *get_cq_completion_write_ptr() {
 
 FORCE_INLINE
 void completion_queue_reserve_back(uint32_t num_pages) {
-    DEBUG_STATUS("QRBW");
+    WAYPOINT("QRBW");
     // Transfer pages are aligned
     uint32_t data_size_16B = num_pages * completion_queue_page_size_16B;
     uint32_t completion_rd_ptr_and_toggle;
@@ -124,7 +124,7 @@ void completion_queue_reserve_back(uint32_t num_pages) {
                 : (completion_queue_size_16B - (cq_write_interface.completion_fifo_wr_ptr - completion_rd_ptr));
     } while (data_size_16B > available_space);
 
-    DEBUG_STATUS("QRBD");
+    WAYPOINT("QRBD");
 }
 
 // This fn expects NOC coords to be preprogrammed
@@ -740,7 +740,7 @@ static uint32_t process_debug_cmd(uint32_t cmd_ptr) {
         checksum += *data++;
     }
     if (checksum != cmd->debug.checksum) {
-        DEBUG_STATUS("!CHK");
+        WAYPOINT("!CHK");
         ASSERT(0);
     }
 #endif
@@ -763,7 +763,7 @@ static void process_wait() {
         noc_async_write_barrier();
     }
 
-    DEBUG_STATUS("PWW");
+    WAYPOINT("PWW");
     volatile tt_l1_ptr uint32_t *sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(addr);
     uint32_t heartbeat = 0;
     if (wait) {
@@ -773,7 +773,7 @@ static void process_wait() {
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
         } while (!wrap_ge(*sem_addr, count));
     }
-    DEBUG_STATUS("PWD");
+    WAYPOINT("PWD");
 
     if (clear_count) {
         uint32_t neg_sem_val = -(*sem_addr);
@@ -803,10 +803,10 @@ re_run_command:
 
     switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR:
-            DEBUG_STATUS("DWB");
+            WAYPOINT("DWB");
             DPRINT << "cmd_write\n";
             process_write(block_noc_writes_to_clear, block_next_start_addr);
-            DEBUG_STATUS("DWD");
+            WAYPOINT("DWD");
             break;
 
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H:
@@ -921,7 +921,7 @@ re_run_command:
             DPRINT << HEX() << *((uint32_t *)cmd_ptr + 1) << ENDL();
             DPRINT << HEX() << *((uint32_t *)cmd_ptr + 2) << ENDL();
             DPRINT << HEX() << *((uint32_t *)cmd_ptr + 3) << ENDL();
-            DEBUG_STATUS("!CMD");
+            WAYPOINT("!CMD");
             ASSERT(0);
     }
 
@@ -966,7 +966,7 @@ static inline bool process_cmd_h(uint32_t &cmd_ptr, uint32_t& block_noc_writes_t
             DPRINT << HEX() << *((uint32_t *)cmd_ptr + 1) << ENDL();
             DPRINT << HEX() << *((uint32_t *)cmd_ptr + 2) << ENDL();
             DPRINT << HEX() << *((uint32_t *)cmd_ptr + 3) << ENDL();
-            DEBUG_STATUS("!CMD");
+            WAYPOINT("!CMD");
             ASSERT(0);
     }
 

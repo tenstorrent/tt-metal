@@ -1,10 +1,34 @@
 # Advanced Performance Optimizations for Models
 
-1. [Metal Trace](#metal-trace)
-2. [Multiple Command Queues](#multiple-command-queues)
-3. [Putting Trace and Multiple Command Queues Together](#putting-trace-and-multiple-command-queues-together)
+## Contents
 
-## Metal Trace
+1. [Metal Trace](#1-metal-trace)
+
+    1.1 [Overview](#11-overview)
+
+    1.2 [APIs](#12-apis)
+
+    1.3 [Programming Examples](#13-programming-examples)
+
+2. [Multiple Command Queues](#2-multiple-command-queues)
+
+    2.1 [Overview](#21-overview)
+
+    2.2 [APIs](#22-apis)
+
+    2.3 [Programming Examples](#23-programming-examples)
+
+3. [Putting Trace and Multiple Command Queues Together](#3-putting-trace-and-multiple-command-queues-together)
+
+    3.1 [Overview](#31-overview)
+
+    3.2 [APIs](#32-apis)
+
+    3.3 [Programming Examples](#33-programming-examples)
+
+## 1. Metal Trace
+
+### 1.1 Overview
 
 Metal Trace is a performance optimization feature that aims to remove the host overhead of constructing and dispatching operations for models, and will show benefits when the host time to execute/dispatch a model exceeds the device time needed to run the operations.
 
@@ -18,6 +42,7 @@ With trace, we can eliminate a large portion of these gaps. In the figure below 
 <!-- ![image2](images/image2.png){width=15 height=15} -->
 <img src="images/image2.png" style="width:1000px;"/>
 
+### 1.2 APIs
 In order to use trace, we need to use the following trace apis:
 
 * `trace_region_size`
@@ -47,6 +72,8 @@ In addition, since trace requires the addresses of the used tensors to be the sa
 * `ttnn.copy_host_to_device_tensor(host_tensor, device_tensor, cq_id=0)`
 
   This will copy data from the input host tensor to the allocated on device tensor
+
+### 1.3 Programming Examples
 
 Normally for performance we try to allocate tensors in L1, but many models are not able to fit in L1 if we keep the input tensor in L1 memory. The easiest way to work around this is that we can allocate our input in DRAM so that we can keep the tensor persistent in memory, then run an operation to move it to L1. For performance, we’d expect to allocate the input as DRAM sharded and move it to L1 sharded using the reshard operation. A more complex technique that allows us to still run with our input in L1 is to allow the input tensor to be deallocated, and then reallocating and ensuring it is allocated at the same address at the end of the trace. Both techniques will be demonstrated below.
 
@@ -111,7 +138,9 @@ host_output_tensor = output_tensor.cpu(blocking=False)
 
 ```
 
-## Multiple Command Queues
+## 2. Multiple Command Queues
+
+### 2.1 Overview
 
 Metal supports multiple command queues for fast dispatch, up to two queues. These command queues are independent of each other and allow for us to dispatch commands on a device in parallel. Both command queues support any dispatch command, so we use either for I/O data transfers or launching programs on either command queue. As these queues are independent of each other, to coordinate and guarantee command order such as having one queue be used to write the input and the other queue be used to run operations on that input, we need to use events to synchronize between the queues. A common setup for multiple command queues is to have one only responsible for writing inputs, while the other command queue is used for dispatching programs and reading back the output, which is what will be described in this document. This is useful where we are device bound and our input tensor takes a long time to write, and allows us to overlap dispatching of the next input tensor with the execution of the previous model run. Other setups are also possible, such as having one command queue for both writes and reads, while the other is used for only dispatching programs, or potentially having both command queues running different programs concurrently.
 
@@ -122,6 +151,8 @@ The figure below shows an example of where we can see the benefits of using an i
 Using a second command queue only for writes enables us to eliminate the gap between model executions, and allows the host to go ahead of the device and enqueue commands for subsequent models runs before we have finished executing our current run.
 <!-- ![image4](images/image4.png){width=15 height=15} -->
 <img src="images/image4.png" style="width:1000px;"/>
+
+### 2.2 APIs
 
 In order to use multiple command queues, we need to be familiar with the following apis:
 
@@ -148,6 +179,8 @@ In addition, for our example of using one command queue only for writing inputs,
 * `ttnn.copy_host_to_device_tensor(host_tensor, device_tensor, cq_id=0)`
 
   This will copy data from the input host tensor to the allocated on device tensor
+
+### 2.3 Programming Examples
 
 Normally for performance we try to allocate tensors in L1, but many models are not able to fit in L1 if we keep the input tensor in L1 memory. To work around this, we can allocate our input in DRAM so that we can keep the tensor persistent in memory, then run an operation to move it to L1. For performance, we’d expect to allocate the input as DRAM sharded and move it to L1 sharded using the reshard operation.
 
@@ -189,7 +222,9 @@ for iter in range(0, 2):
 
 ```
 
-## Putting Trace and Multiple Command Queues Together
+## 3. Putting Trace and Multiple Command Queues Together
+
+### 3.1 Overview
 
 This section assumes that you are familiar with the contents and apis described in [Metal Trace](#metal-trace) and [Multiple Command Queues](#multiple-command-queues).
 
@@ -201,6 +236,15 @@ When combining these two optimizations, there are a few things we need to be awa
 
 * Trace cannot capture events, so we do not capture the events or the consumer ops of the input tensor since we need to enqueue event commands right after
 * Because the input to trace is from the output of an operation, and we want the output to be in L1 we need to be ensure and assert that the location this output gets written to is a constant address when executing the trace
+
+### 3.2 APIs
+
+Refer to [1.2 Metal Trace APIs](#12-apis) and [2.2 Multiple Command Queues APIs](#22-apis) for the required APIs.
+
+### 3.3 Programming Examples
+
+The following example shows using 2 cqs with trace, where we use CQ 1 only for writing inputs, and CQ 0 for running programs/reading outputs.
+We use a persistent DRAM tensor to write our input, and we make the input to our trace as an L1 tensor which is the output of the first op.
 
 ```py
 # This example uses 1 CQ for only writing inputs (CQ 1), and one CQ for executing programs/reading back the output (CQ 0)
