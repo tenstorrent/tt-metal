@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <memory>
 #include <optional>
+
 #include "impl/buffers/buffer_constants.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -46,17 +47,16 @@ class EltwiseOpConstraintsBuilder : public OpConstraintsBuilder
         virtual bool is_valid_op_constraint(const OpConstraint& constraint) const override;
 };
 
-class ElementWiseMultiCoreConstraintsBuilder : public EltwiseOpConstraintsBuilder
-{
-public:
+class ElementWiseMultiCoreConstraintsBuilder : public EltwiseOpConstraintsBuilder {
+   public:
     // ElementWiseMultiCoreConstraintsBuilder() = default;
-    ElementWiseMultiCoreConstraintsBuilder(const ttnn::Shape& _shape_a,
-                                           const tt::tt_metal::MemoryConfig& _memory_config_a,
-                                           const ttnn::Shape& _shape_b,
-                                           const tt::tt_metal::MemoryConfig& _memory_config_b,
-                                           const tt::tt_metal::MemoryConfig& _memory_config_o)
-    : EltwiseOpConstraintsBuilder(_shape_a, _memory_config_a, _shape_b, _memory_config_b, _memory_config_o)
-    {
+    ElementWiseMultiCoreConstraintsBuilder(
+        const ttnn::Shape& _shape_a,
+        const tt::tt_metal::MemoryConfig& _memory_config_a,
+        const ttnn::Shape& _shape_b,
+        const tt::tt_metal::MemoryConfig& _memory_config_b,
+        const tt::tt_metal::MemoryConfig& _memory_config_o) :
+        EltwiseOpConstraintsBuilder(_shape_a, _memory_config_a, _shape_b, _memory_config_b, _memory_config_o) {
         std::cout << "ElementWiseMultiCoreConstraintsBuilder" << std::endl;
     }
 
@@ -65,7 +65,8 @@ public:
         return "ElementWiseMultiCore";
     }
 
-    static bool check_input_parameters(const ttnn::Shape& input_shape_a,
+    static bool check_input_parameters(
+        const ttnn::Shape& input_shape_a,
         const tt::tt_metal::MemoryConfig& memory_config_a,
         const ttnn::Shape& input_shape_b,
         const tt::tt_metal::MemoryConfig& memory_config_b);
@@ -85,9 +86,7 @@ public:
         std::cout << "BroadcastWidthMultiCoreConstraintsBuilder" << std::endl;
     }
 
-    virtual std::string get_op_name() const override {
-        return "BroadcastWidthMultiCoreConstraintsBuilder";
-    }
+    virtual std::string get_op_name() const override { return "BroadcastWidthMultiCoreConstraintsBuilder"; }
 
     static bool check_input_parameters(const ttnn::Shape& input_shape_a,
                                        const tt::tt_metal::MemoryConfig& memory_config_a,
@@ -95,11 +94,11 @@ public:
                                        const tt::tt_metal::MemoryConfig& memory_config_b);
 };
 
-class EltwiseOpConstraintsFactory
-{
-    public:
+class EltwiseOpConstraintsFactory {
+   public:
     EltwiseOpConstraintsFactory() = delete;
-    static std::unique_ptr<EltwiseOpConstraintsBuilder> Make(const ttnn::Shape& input_shape_a,
+    static std::unique_ptr<EltwiseOpConstraintsBuilder> Make(
+        const ttnn::Shape& input_shape_a,
         const tt::tt_metal::MemoryConfig& memory_config_a,
         const ttnn::Shape& input_shape_b,
         const tt::tt_metal::MemoryConfig& memory_config_b,
