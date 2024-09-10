@@ -14,7 +14,7 @@ runs:
       id: venv
       with:
         python-version: ${{ inputs.python-version }}
-        venv-dir: ${{ github.workspace }}/python_env
+        venv-dir: ${{ github.workspace }}/python_env_numpy124
         cache-dependency-path: |
           tt_metal/python_env/requirements-dev.txt
           docs/requirements-docs.txt
