@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_bmm_backward.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
-#include "tt_metal/host_api.hpp"
+#include "ttnn/operations/moreh/moreh_matmul/device/moreh_matmul_device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_bmm_backward {
 std::vector<std::optional<Tensor>> MorehBmm::invoke(
@@ -26,11 +25,11 @@ std::vector<std::optional<Tensor>> MorehBmm::invoke(
     std::cout << "came here 2\n";
 
     if (input_requires_grad) {
-        TT_ASSERT(input_grad.has_value());
+        TT_FATAL(input_grad.has_value());
         std::cout << "came here 3\n";
         const auto& input_grad_tensor = input_grad.value();
         std::cout << "came here 4\n";
-        outputs[0] = tt::operations::primary::moreh_matmul(
+        outputs[0] = ttnn::prim::moreh_matmul(
             output_grad,
             mat2,
             false,
@@ -43,9 +42,9 @@ std::vector<std::optional<Tensor>> MorehBmm::invoke(
     }
 
     if (mat2_requires_grad) {
-        TT_ASSERT(mat2_grad.has_value());
+        TT_FATAL(mat2_grad.has_value());
         const auto& mat2_grad_tensor = mat2_grad.value();
-        outputs[1] = tt::operations::primary::moreh_matmul(
+        outputs[1] = ttnn::prim::moreh_matmul(
             input,
             output_grad,
             true,
