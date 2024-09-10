@@ -18,7 +18,8 @@ constexpr uint32_t NUM_WR_CMD_BUFS = 4;
 constexpr uint32_t DEFAULT_MAX_NOC_SEND_WORDS = (NUM_WR_CMD_BUFS-1)*(NOC_MAX_BURST_WORDS*NOC_WORD_BYTES)/PACKET_WORD_SIZE_BYTES;
 constexpr uint32_t DEFAULT_MAX_ETH_SEND_WORDS = 2*1024;
 
-constexpr uint32_t NUM_PTR_REGS_PER_QUEUE = 3;
+constexpr uint32_t NUM_PTR_REGS_PER_INPUT_QUEUE = 1;
+constexpr uint32_t NUM_PTR_REGS_PER_OUTPUT_QUEUE = 2;
 
 
 inline uint64_t get_timestamp() {
@@ -39,6 +40,13 @@ void zero_l1_buf(tt_l1_ptr uint32_t* buf, uint32_t size_bytes) {
 
 static FORCE_INLINE
 void write_test_results(tt_l1_ptr uint32_t* const buf, uint32_t i, uint32_t val) {
+    if (buf != nullptr) {
+        buf[i] = val;
+    }
+}
+
+static FORCE_INLINE
+void write_kernel_status(tt_l1_ptr uint32_t* const buf, uint32_t i, uint32_t val) {
     if (buf != nullptr) {
         buf[i] = val;
     }
@@ -69,9 +77,6 @@ class packet_queue_state_t {
     volatile uint32_t* local_wptr_update;
     volatile uint32_t* local_rptr_sent_update;
     volatile uint32_t* local_rptr_cleared_update;
-    volatile uint32_t* local_wptr_reset;
-    volatile uint32_t* local_rptr_sent_reset;
-    volatile uint32_t* local_rptr_cleared_reset;
 
     uint32_t remote_ready_status_addr;
     volatile uint32_t* local_ready_status_ptr;
@@ -79,8 +84,13 @@ class packet_queue_state_t {
     uint32_t remote_wptr_update_addr;
     uint32_t remote_rptr_sent_update_addr;
     uint32_t remote_rptr_cleared_update_addr;
+    uint32_t local_wptr;
+    uint32_t local_rptr_sent;
+    uint32_t local_rptr_cleared;
 
 protected:
+    volatile uint32_t* local_rptr_sent_reset;
+    volatile uint32_t* local_rptr_cleared_reset;
 
     bool cb_mode;
     uint32_t cb_mode_page_size_words;
@@ -104,6 +114,7 @@ public:
     void init(uint8_t queue_id,
               uint32_t queue_start_addr_words,
               uint32_t queue_size_words,
+              bool queue_is_input,
               uint8_t remote_x,
               uint8_t remote_y,
               uint8_t remote_queue_id,
@@ -116,6 +127,7 @@ public:
         this->queue_id = queue_id;
         this->queue_start_addr_words = queue_start_addr_words;
         this->queue_size_words = queue_size_words;
+        this->queue_is_input = queue_is_input;
         this->remote_x = remote_x;
         this->remote_y = remote_y;
         this->remote_queue_id = remote_queue_id;
@@ -136,36 +148,44 @@ public:
         // For source/destination ready synchronization signals, we use misc. registers in
         // streams that behave like scratch registers and are reset to 0.
 
-        this->local_wptr_val = reinterpret_cast<volatile uint32_t*>(
-            STREAM_REG_ADDR(NUM_PTR_REGS_PER_QUEUE*queue_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
-        this->local_rptr_sent_val = reinterpret_cast<volatile uint32_t*>(
-            STREAM_REG_ADDR(NUM_PTR_REGS_PER_QUEUE*queue_id+1, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
-        this->local_rptr_cleared_val = reinterpret_cast<volatile uint32_t*>(
-            STREAM_REG_ADDR(NUM_PTR_REGS_PER_QUEUE*queue_id+2, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
+        this->local_rptr_sent = 0;
+        this->local_rptr_cleared = 0;
+        this->local_wptr = 0;
+        if (queue_is_input) {
+            this->local_wptr_val = reinterpret_cast<volatile uint32_t*>(
+                STREAM_REG_ADDR(NUM_PTR_REGS_PER_INPUT_QUEUE*queue_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
+            this->local_rptr_sent_val = &this->local_rptr_sent;
+            this->local_rptr_cleared_val = &this->local_rptr_cleared;
 
-        this->local_wptr_update = reinterpret_cast<volatile uint32_t*>(
-            STREAM_REG_ADDR(NUM_PTR_REGS_PER_QUEUE*queue_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
-        this->local_rptr_sent_update = reinterpret_cast<volatile uint32_t*>(
-            STREAM_REG_ADDR(NUM_PTR_REGS_PER_QUEUE*queue_id+1, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
-        this->local_rptr_cleared_update = reinterpret_cast<volatile uint32_t*>(
-            STREAM_REG_ADDR(NUM_PTR_REGS_PER_QUEUE*queue_id+2, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+            this->local_wptr_update = reinterpret_cast<volatile uint32_t*>(
+                STREAM_REG_ADDR(NUM_PTR_REGS_PER_INPUT_QUEUE*queue_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+        } else {
+            this->local_wptr_val = &this->local_wptr;
+            this->local_rptr_sent_val = reinterpret_cast<volatile uint32_t*>(
+                STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*queue_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
+            this->local_rptr_cleared_val = reinterpret_cast<volatile uint32_t*>(
+                STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*queue_id+1, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
 
-        // Setting STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX resets the credit register
-        this->local_wptr_reset = reinterpret_cast<volatile uint32_t*>(
-            STREAM_REG_ADDR(NUM_PTR_REGS_PER_QUEUE*queue_id, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
-        this->local_rptr_sent_reset = reinterpret_cast<volatile uint32_t*>(
-            STREAM_REG_ADDR(NUM_PTR_REGS_PER_QUEUE*queue_id+1, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
-        this->local_rptr_cleared_reset = reinterpret_cast<volatile uint32_t*>(
-            STREAM_REG_ADDR(NUM_PTR_REGS_PER_QUEUE*queue_id+2, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
+            this->local_rptr_sent_update = reinterpret_cast<volatile uint32_t*>(
+                STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*queue_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+            this->local_rptr_cleared_update = reinterpret_cast<volatile uint32_t*>(
+                STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*queue_id+1, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+
+            // Setting STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX resets the credit register
+            this->local_rptr_sent_reset = reinterpret_cast<volatile uint32_t*>(
+                STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*queue_id, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
+            this->local_rptr_cleared_reset = reinterpret_cast<volatile uint32_t*>(
+                STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*queue_id+1, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
+        }
 
         this->remote_wptr_update_addr =
-            STREAM_REG_ADDR(NUM_PTR_REGS_PER_QUEUE*remote_queue_id,
+            STREAM_REG_ADDR(NUM_PTR_REGS_PER_INPUT_QUEUE*remote_queue_id,
                             STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
         this->remote_rptr_sent_update_addr =
-            STREAM_REG_ADDR(NUM_PTR_REGS_PER_QUEUE*remote_queue_id+1,
+            STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*remote_queue_id,
                             STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
         this->remote_rptr_cleared_update_addr =
-            STREAM_REG_ADDR(NUM_PTR_REGS_PER_QUEUE*remote_queue_id+2,
+            STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*remote_queue_id+1,
                             STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
 
         this->remote_ready_status_addr = STREAM_REG_ADDR(remote_queue_id, STREAM_REMOTE_SRC_REG_INDEX);
@@ -181,12 +201,12 @@ public:
         return *this->local_wptr_val;
     }
 
-    inline void reset_queue_local_wptr() {
-        *this->local_wptr_reset = 0;
-    }
-
     inline void advance_queue_local_wptr(uint32_t num_words) {
-        *this->local_wptr_update = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
+        if (this->queue_is_input) {
+            *this->local_wptr_update = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
+        } else {
+            this->local_wptr += num_words;
+        }
     }
 
     inline uint32_t get_queue_local_rptr_sent() const {
@@ -197,24 +217,21 @@ public:
         return *this->local_rptr_cleared_val;
     }
 
-    inline void reset_queue_local_rptr_sent()  {
-        *this->local_rptr_sent_reset = 0;
-    }
-
-    inline void reset_queue_local_rptr_cleared()  {
-        *this->local_rptr_cleared_reset = 0;
-    }
-
     inline void advance_queue_local_rptr_sent(uint32_t num_words)  {
+        if (this->queue_is_input) {
+            this->local_rptr_sent += num_words;
+        } else {
         *this->local_rptr_sent_update = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
+        }
     }
 
     inline void advance_queue_local_rptr_cleared(uint32_t num_words)  {
-        *this->local_rptr_cleared_update = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
-    }
 
-    inline uint32_t get_queue_data_num_words_available_to_send() const {
-        return (this->get_queue_local_wptr() - this->get_queue_local_rptr_sent()) & this->queue_size_mask;
+        if (this->queue_is_input) {
+            this->local_rptr_cleared += num_words;
+        } else {
+        *this->local_rptr_cleared_update = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
+        }
     }
 
     inline uint32_t get_queue_data_num_words_occupied() const {
@@ -432,10 +449,10 @@ protected:
     uint16_t curr_packet_src;
     uint16_t curr_packet_dest;
     uint32_t curr_packet_size_words;
-    uint32_t end_of_cmd;
     uint32_t curr_packet_words_sent;
     uint32_t curr_packet_tag;
     uint16_t curr_packet_flags;
+    uint16_t end_of_cmd;
 
     uint32_t packetizer_page_words_cleared;
 
@@ -470,6 +487,13 @@ protected:
        }
     }
 
+    inline void reset_queue_local_wptr() {
+        // Setting STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX resets the credit register
+        volatile uint32_t* local_wptr_reset = reinterpret_cast<volatile uint32_t*>(
+                STREAM_REG_ADDR(NUM_PTR_REGS_PER_INPUT_QUEUE*queue_id, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
+        *local_wptr_reset = 0;
+    }
+
 public:
 
     void init(uint8_t queue_id,
@@ -486,7 +510,7 @@ public:
               uint16_t packetizer_input_src = 0,
               uint16_t packetizer_input_dest = 0) {
 
-        packet_queue_state_t::init(queue_id, queue_start_addr_words, queue_size_words,
+        packet_queue_state_t::init(queue_id, queue_start_addr_words, queue_size_words, true,
                                    remote_x, remote_y, remote_queue_id, remote_update_network_type,
                                    packetizer_input, packetizer_input_sem_id,
                                    packetizer_input_remote_sem_id,
@@ -508,18 +532,20 @@ public:
         this->ptr_offset_mask = queue_size_words - 1;
         this->queue_size_mask = (queue_size_words << 1) - 1;
         this->curr_packet_valid = false;
-        this->reset_queue_local_rptr_sent();
-        this->reset_queue_local_rptr_cleared();
         this->reset_queue_local_wptr();
         this->reset_ready_flag();
     }
 
-    inline uint32_t get_end_of_cmd() const {
+    inline uint16_t get_end_of_cmd() const {
         return this->end_of_cmd;
     }
 
     inline bool is_packetizer_input() const {
         return this->cb_mode;
+    }
+
+    inline uint32_t get_queue_data_num_words_available_to_send() const {
+        return (this->get_queue_local_wptr() - this->get_queue_local_rptr_sent()) & this->queue_size_mask;
     }
 
     inline bool get_curr_packet_valid() {
@@ -753,6 +779,14 @@ protected:
 
     } input_queue_status;
 
+    inline void reset_queue_local_rptr_sent()  {
+        *this->local_rptr_sent_reset = 0;
+    }
+
+    inline void reset_queue_local_rptr_cleared()  {
+        *this->local_rptr_cleared_reset = 0;
+    }
+
 public:
 
     void init(uint8_t queue_id,
@@ -770,7 +804,7 @@ public:
               uint8_t unpacketizer_output_remote_sem_id = 0,
               bool unpacketizer_output_remove_header = false) {
 
-        packet_queue_state_t::init(queue_id, queue_start_addr_words, queue_size_words,
+        packet_queue_state_t::init(queue_id, queue_start_addr_words, queue_size_words, false,
                                    remote_x, remote_y, remote_queue_id, remote_update_network_type,
                                    unpacketizer_output, unpacketizer_output_sem_id,
                                    unpacketizer_output_remote_sem_id,
@@ -785,7 +819,6 @@ public:
         this->input_queue_status.init(input_queue_array, num_input_queues);
         this->reset_queue_local_rptr_sent();
         this->reset_queue_local_rptr_cleared();
-        this->reset_queue_local_wptr();
         this->reset_ready_flag();
     }
 
@@ -892,7 +925,7 @@ public:
         return num_words_to_forward;
     }
 
-    inline uint32_t forward_data_from_input(uint32_t input_queue_index, bool& full_packet_sent, uint32_t end_of_cmd) {
+    inline uint32_t forward_data_from_input(uint32_t input_queue_index, bool& full_packet_sent, uint16_t end_of_cmd) {
 
         packet_input_queue_state_t* input_queue_ptr = &(this->input_queue_status.input_queue_array[input_queue_index]);
         uint32_t num_words_to_forward = this->get_num_words_to_send(input_queue_index);
@@ -961,8 +994,8 @@ bool wait_all_src_dest_ready(packet_input_queue_state_t* input_queue_array, uint
                              uint32_t timeout_cycles = 0) {
 
     bool all_src_dest_ready = false;
-    bool src_ready[MAX_SWITCH_FAN_IN] = {false};
-    bool dest_ready[MAX_SWITCH_FAN_OUT] = {false};
+    bool src_ready[num_input_queues] = {false};
+    bool dest_ready[num_output_queues] = {false};
 
     uint32_t iters = 0;
 
