@@ -120,12 +120,12 @@ static std::vector<std::vector<uint32_t>> compute_worker_sender_num_transfers(
                             break;
 
                         default:
-                            TT_FATAL(false, "Unsupported bidirectional mode {}. Please change.", all_gather_config.get_bidirectional_mode());
+                            TT_THROW("Unsupported bidirectional mode {}. Please change.", all_gather_config.get_bidirectional_mode());
                     };
                     break;
 
                 default:
-                    TT_FATAL(false, "Unsupported topology {}. Please change.", topology);
+                    TT_THROW("Unsupported topology {}. Please change.", topology);
             };
         }
     }
@@ -158,12 +158,12 @@ static std::vector<std::vector<uint32_t>> compute_worker_receiver_num_transfers(
                             break;
 
                         default:
-                            TT_FATAL(false, "Unsupported bidirectional mode {}. Please change.", all_gather_config.get_bidirectional_mode());
+                            TT_THROW("Unsupported bidirectional mode {}. Please change.", all_gather_config.get_bidirectional_mode());
                     };
                     break;
 
                 default:
-                    TT_FATAL(false, "Unsupported topology {}. Please change.", topology);
+                    TT_THROW("Unsupported topology {}. Please change.", topology);
             };
         }
     }
@@ -183,7 +183,8 @@ static bool shard_grid_is_transposed(Tensor const& t) {
     TT_FATAL(
         t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
         t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-        t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED
+        t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        "Unsupported memory layout {}.", t.memory_config().memory_layout
     );
     bool shard_grid_transposed =
         ((t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&

@@ -133,7 +133,7 @@ ttnn::Tensor ExecutePad::invoke(
             case 6: output_tensor = pad_impl<tt::tt_metal::Array6D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
             case 7: output_tensor = pad_impl<tt::tt_metal::Array7D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
             case 8: output_tensor = pad_impl<tt::tt_metal::Array8D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
-            default: TT_FATAL(false, "Unsupported tensor rank of {}. Needs to be between 1 and 8 inclusively.", original_rank);
+            default: TT_THROW("Unsupported tensor rank of {}. Needs to be between 1 and 8 inclusively.", original_rank);
         }
     }
     else {

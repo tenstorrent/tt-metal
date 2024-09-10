@@ -38,7 +38,7 @@ void AllGatherMatmul::validate(const std::vector<Tensor> &input_tensors, const s
     std::visit([&] (const auto& config) {
         using ProgramConfigType = std::decay_t<decltype(config)>;
         if (not (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig> || std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>)) {
-            TT_FATAL(false, "Unsupported MatmulProgramConfig type for AllGatherMatmul. Needs to be 1D or 2D Multicast.");
+            TT_THROW("Unsupported MatmulProgramConfig type for AllGatherMatmul. Needs to be 1D or 2D Multicast.");
         }
     }, this->matmul_struct.program_config.value());
 

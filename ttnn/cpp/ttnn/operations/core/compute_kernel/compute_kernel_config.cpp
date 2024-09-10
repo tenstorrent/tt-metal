@@ -38,7 +38,7 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
                         .fp32_dest_acc_en = fp32_dest_acc_en,
                         .packer_l1_acc = packer_l1_acc};
                 } else {
-                    TT_FATAL(false, "arch not supported");
+                    TT_THROW("arch not supported");
                 }
             },
             compute_kernel_config);
@@ -99,7 +99,7 @@ std::tuple<MathFidelity, bool, bool, bool> get_compute_kernel_config_args(
                 fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
                 packer_l1_acc = compute_kernel_config.packer_l1_acc;
             } else {
-                TT_FATAL(false, "arch not supported");
+                TT_THROW("arch not supported");
             }
         },
         compute_kernel_config);

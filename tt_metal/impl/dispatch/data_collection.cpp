@@ -178,7 +178,7 @@ string DispatchClassToString(enum dispatch_core_processor_classes proc_class, Co
             else
                 return "";
         default:
-            TT_FATAL(false, "Incompatible core type: {}", core_type);
+            TT_THROW("Incompatible core type: {}", core_type);
     }
     return "";
 }

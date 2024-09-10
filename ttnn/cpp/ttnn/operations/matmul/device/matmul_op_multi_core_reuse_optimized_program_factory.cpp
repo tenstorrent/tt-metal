@@ -512,14 +512,14 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
                 fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
                 packer_l1_acc = compute_kernel_config.packer_l1_acc;
             } else {
-                TT_FATAL(false, "arch not supported");
+                TT_THROW("arch not supported");
             }
         },
         compute_kernel_config);
 
     if (fp32_dest_acc_en) {
         TT_FATAL(
-            out_subblock_h * out_subblock_w <= 4 &&
+            out_subblock_h * out_subblock_w <= 4,
             "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
     }
 

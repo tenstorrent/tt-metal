@@ -423,11 +423,11 @@ void WriteToDeviceInterleavedContiguous(const Buffer &buffer, const std::vector<
         buffer.size());
 
     uint32_t page_size = buffer.page_size();
-    TT_FATAL(buffer.size() % page_size == 0);
+    TT_FATAL(buffer.size() % page_size == 0, "Buffer size {} mod page_size {} needs to be 0.", buffer.size(), page_size);
     uint32_t num_pages = buffer.size() / page_size;
 
     static constexpr uint32_t bytes_per_page_entry = sizeof(uint32_t);
-    TT_FATAL(page_size % bytes_per_page_entry == 0);
+    TT_FATAL(page_size % bytes_per_page_entry == 0, "Page size {} mod bytes per page entry needs to be 0", page_size, bytes_per_page_entry);
     uint32_t num_entries_per_page = page_size / bytes_per_page_entry;
 
     auto device = buffer.device();
@@ -446,7 +446,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer &buffer, const std::vector<
                 auto noc_coordinates = buffer.noc_coordinates(bank_index);
                 llrt::write_hex_vec_to_core(device->id(), noc_coordinates, page, absolute_address);
             } break;
-            default: TT_FATAL(false && "Unsupported buffer type to write to device!");
+            default: TT_THROW("Unsupported buffer type to write to device!");
         }
 
         bank_index = (bank_index + 1) % num_banks;
@@ -478,16 +478,16 @@ void WriteToBuffer(Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
             WriteToDevice(buffer, host_buffer);
         } break;
         case BufferType::SYSTEM_MEMORY: {
-            TT_FATAL(false && "Writing to host memory is unsupported!");
+            TT_THROW("Writing to host memory is unsupported!");
         } break;
-        default: TT_FATAL(false && "Unsupported buffer type!");
+        default: TT_THROW("Unsupported buffer type!");
     }
 }
 
 void ReadFromDeviceInterleavedContiguous(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
     host_buffer.clear();  // overwrite the data
     uint32_t page_size = buffer.page_size();
-    TT_FATAL(buffer.size() % page_size == 0);
+    TT_FATAL(buffer.size() % page_size == 0, "Buffer size {} mod page_size {} needs to be 0.", buffer.size(), page_size);
     uint32_t num_pages = buffer.size() / page_size;
 
     auto device = buffer.device();
@@ -505,7 +505,7 @@ void ReadFromDeviceInterleavedContiguous(const Buffer &buffer, std::vector<uint3
                 auto noc_coordinates = buffer.noc_coordinates(bank_index);
                 page = llrt::read_hex_vec_from_core(device->id(), noc_coordinates, absolute_address, page_size);
             } break;
-            default: TT_FATAL(false && "Unsupported buffer type to read from device!");
+            default: TT_THROW("Unsupported buffer type to read from device!");
         }
 
         // Copy page into host buffer
@@ -596,9 +596,9 @@ void ReadFromBuffer(Buffer &buffer, std::vector<uint32_t> &host_buffer, bool sha
             ReadFromDevice(buffer, host_buffer, shard_order);
         } break;
         case BufferType::SYSTEM_MEMORY: {
-            TT_FATAL(false && "Reading from host memory is unsupported!");
+            TT_THROW("Reading from host memory is unsupported!");
         } break;
-        default: TT_FATAL(false && "Unsupported buffer type!");
+        default: TT_THROW("Unsupported buffer type!");
     }
 }
 

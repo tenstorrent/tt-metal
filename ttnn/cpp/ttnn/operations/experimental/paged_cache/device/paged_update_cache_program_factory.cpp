@@ -26,7 +26,7 @@ bool enable_fp32_dest(const tt_metal::Device * device, const ttnn::DeviceCompute
             TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
             fp32_dest_acc_en = input_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
         } else {
-            TT_FATAL(false, "arch not supported");
+            TT_THROW("arch not supported");
         }
 
     }, compute_kernel_config);
@@ -67,7 +67,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
         index_stick_size = update_idxs_tensor.value().buffer()->aligned_page_size();
 
         log2_page_size = std::log2(index_stick_size);
-        TT_FATAL(1 << log2_page_size == index_stick_size);
+        TT_FATAL(1 << log2_page_size == index_stick_size, "Error");
     }
 
     // Pagetable-specific parameters
@@ -89,7 +89,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
         max_blocks_per_seq = page_table_tensor.get_legacy_shape()[1];
         page_table_stick_size = page_table_tensor.get_legacy_shape()[-1] * page_table_tensor.element_size();
         log2_page_table_stick_size = std::log2(page_table_stick_size);
-        TT_FATAL(1 << log2_page_table_stick_size == page_table_stick_size);
+        TT_FATAL(1 << log2_page_table_stick_size == page_table_stick_size, "Error");
 
         page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.get_dtype());
 

@@ -36,7 +36,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
             TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
             fp32_dest_acc_en = input_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
         } else {
-            TT_FATAL(false, "arch not supported");
+            TT_THROW("arch not supported");
         }
 
     }, compute_kernel_config);

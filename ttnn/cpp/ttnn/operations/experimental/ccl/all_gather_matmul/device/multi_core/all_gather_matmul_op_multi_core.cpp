@@ -285,12 +285,12 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
             );
             matmul_override_runtime_arguments_callback = matmul_program_with_callbacks->override_runtime_arguments_callback;
         } else {
-            TT_FATAL(false, "Unsupported MatmulProgramConfig type. Needs to be 1D or 2D Multicast.");
+            TT_THROW("Unsupported MatmulProgramConfig type. Needs to be 1D or 2D Multicast.");
         }
     }, program_config);
 
     if (!matmul_program_with_callbacks.has_value()) {
-        TT_FATAL(false, "Matmul program with callbacks not created");
+        TT_THROW("Matmul program with callbacks not created");
     }
 
 

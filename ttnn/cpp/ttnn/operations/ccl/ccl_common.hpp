@@ -266,7 +266,7 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
     }
 
     void create_worker_slice_shape_for_row_major_layout(tt_xy_pair const& tensor_slice_shape, uint32_t num_workers) {
-        TT_FATAL(false, "Row major interleaved not supported by Reduce Scatter");
+        TT_THROW("Row major interleaved not supported by Reduce Scatter");
     }
 
     // Static methods

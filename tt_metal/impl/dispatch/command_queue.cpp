@@ -466,7 +466,11 @@ void generate_runtime_args_cmds(
         max_runtime_args_len, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, no_stride);
     uint32_t offset_idx = 0;
     if (no_stride) {
-        TT_FATAL(max_packed_cmds >= num_packed_cmds_in_seq);
+        TT_FATAL(
+            max_packed_cmds >= num_packed_cmds_in_seq,
+            "num_packed_cmds_in_seq {} cannot exceed max_packed_cmds {}",
+            num_packed_cmds_in_seq,
+            max_packed_cmds);
     }
     while (num_packed_cmds_in_seq != 0) {
         // Generate the device command
