@@ -60,6 +60,10 @@ sfpi_inline void calculate_log_body(const uint log_base_scale_factor) {
         result = -std::numeric_limits<float>::infinity();
     }
     v_endif;
+    v_if (dst_reg[0] < 0.0F) {
+        result = std::numeric_limits<float>::quiet_NaN();
+    }
+    v_endif;
 
     dst_reg[0] = result;
 }
