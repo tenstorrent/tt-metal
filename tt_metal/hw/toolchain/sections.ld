@@ -73,7 +73,7 @@ SECTIONS
   PROVIDE (etext = .);
   __fw_export_end_text = DEFINED(__fw_export_end_text) ? __fw_export_end_text : .;
 
-  PROVIDE(__global_pointer$ = ORIGIN(REGION_DATA) + 0x7fc);
+  PROVIDE(__global_pointer$ = ORIGIN(REGION_DATA) + 0x7f0);
   .ldm_data __ldm_start :
   {
     /* ldm is copied in 4 byte chunks */
