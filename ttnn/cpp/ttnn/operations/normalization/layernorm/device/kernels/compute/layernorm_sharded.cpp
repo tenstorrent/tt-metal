@@ -13,7 +13,6 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "debug/dprint.h"
 
 // SPLIT REDUCE across Cores
 namespace NAMESPACE {
@@ -38,11 +37,6 @@ void MAIN {
     const uint32_t num_tiles_per_allgather_worker           = is_allgather_worker ? get_arg_val<uint32_t>(1) : 0;
     const bool use_two_stage_reduce                         = is_allgather_worker ? get_arg_val<uint32_t>(2) == 1 : false;
     const bool is_second_stage_reader                       = is_allgather_worker ? get_arg_val<uint32_t>(3) == 1 : false;
-
-    // DPRINT << "is_all_gather_worker: " << get_compile_time_arg_val(8) << ENDL();
-    // DPRINT << "num_tiles_per_allgather_worker: " << num_tiles_per_allgather_worker << ENDL();
-    // DPRINT << "use_two_stage_reduce: " << get_arg_val<uint32_t>(2) << ENDL();
-    // DPRINT << "is_second_stage_reader: " << get_arg_val<uint32_t>(3) << ENDL();
 
     uint32_t num_blocks_reduce;
     if (is_second_stage_reader) {
@@ -222,7 +216,7 @@ void MAIN {
     unpack_reconfig_data_format_srca(cb_in, cb_xmm);
     #endif
     cb_wait_front(cb_xmm, num_tiles_per_block);
-    #endif // not RMSNORM
+    #endif
 
     // (x - E[x])^2, cb_mm2 <-- cb_xmm
     mul_tiles_init();
