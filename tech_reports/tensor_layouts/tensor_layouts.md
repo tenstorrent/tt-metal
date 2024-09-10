@@ -72,7 +72,7 @@ This can be illustrated with an example. Consider a tensor with 16 pages, denote
 
 In the example, Core (0,0) holds pages 0, 1, 4, and 5, while Core (0,1) holds pages 2, 3, 7, and 8. This distribution is defined by a shard specification that includes the shard shape (in this case, 2x2 pages) and the core grid where the shards are placed (a 2x2 core grid).
 
-<img src="images/sharded_page_mapping.svg" style="width:1000px;"/>
+<img src="images/sharded_page_mapping_2.svg" style="width:1000px;"/>
 
 
 The main purpose of sharding is to keep data local. While an interleaved L1 tensor can also be distributed across banks in multiple cores, sharding offers a more explicit mapping of pages. This allows us to ensure that each core works on a specific portion of memory that is kept local within its respective L1 memory.
