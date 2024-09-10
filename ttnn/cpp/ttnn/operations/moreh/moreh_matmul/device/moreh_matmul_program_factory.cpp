@@ -40,7 +40,7 @@ std::vector<int64_t> find_reduce_dim(
     // batch dims
     for (int i = 0; i < rank - 2; ++i) {
         int idx = rank - 1 - i;
-        TT_ASSERT(idx >= 0);
+        TT_ASSERT(idx >= 0, "idx < 0");
         if (a_dim[idx] != b_dim[idx]) {
             dims.push_back(i);
             log_debug(tt::LogOp, "find_reduce_dim :{} push {} dim", __LINE__, i);
