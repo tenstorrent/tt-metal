@@ -76,15 +76,16 @@ def get_version(metal_build_config):
     }
 
 
-def get_is_from_precompiled():
+def get_from_precompiled_dir():
     """Additional option if the precompiled C++ libs are already in-place."""
-    return os.environ.get("TT_FROM_PRECOMPILED") == "True"
+    precompiled_dir = os.environ.get("TT_FROM_PRECOMPILED_DIR", None)
+    return Path(precompiled_dir) if precompiled_dir else None
 
 
 @dataclass(frozen=True)
 class MetalliumBuildConfig:
     arch_name = get_arch_name()
-    is_from_precompiled=get_is_from_precompiled()
+    from_precompiled_dir = get_from_precompiled_dir()
 
 
 metal_build_config = MetalliumBuildConfig()
@@ -112,10 +113,20 @@ class CMakeBuild(build_ext):
             return
 
         build_env = CMakeBuild.get_build_env()
-        source_dir = CMakeBuild.get_working_dir()
+        source_dir = (
+            metal_build_config.from_precompiled_dir
+            if metal_build_config.from_precompiled_dir
+            else CMakeBuild.get_working_dir()
+        )
+        assert source_dir.is_dir(), f"Source dir {source_dir} seems to not exist"
         build_dir = source_dir / "build"
 
-        if not metal_build_config.is_from_precompiled:
+        if metal_build_config.from_precompiled_dir:
+            assert (build_dir / "lib").exists() and (
+                source_dir / "runtime"
+            ).exists(), "The precompiled option is selected via `TT_FROM_PRECOMPILED` \
+            env var. Please place files into `build/lib` and `runtime` folders."
+        else:
             # We indirectly set a wheel build for our CMake build by using BUILD_SHARED_LIBS. This does two things:
             # - Set the right rpath ($ORIGIN) for our Python bindings so it can find the extra libraries it needs at runtime
             # - Bundles (most) of our libraries into a static library to deal with a potential singleton bug error with tt_cluster (to fix)
@@ -128,11 +139,6 @@ class CMakeBuild(build_ext):
             subprocess.check_call(
                 ["cmake", "--build", ".", "--target", "install", *build_args], cwd=build_dir, env=build_env
             )
-        else:
-            assert ((build_dir / "lib").exists() and
-                    (source_dir / "runtime").exists()), \
-                "The precompiled option is selected via `TT_FROM_PRECOMPILED` \
-            env var. Please place files into `build/lib` and `runtime` folders."
 
         # Some verbose sanity logging to see what files exist in the outputs
         subprocess.check_call(["ls", "-hal"], cwd=source_dir, env=build_env)
@@ -140,13 +146,14 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["ls", "-hal", "runtime"], cwd=source_dir, env=build_env)
 
         # Copy needed C++ shared libraries and runtime assets into wheel (sfpi, FW etc)
-        tt_build_dir = self.build_lib + "/ttnn/build"
-        os.makedirs(tt_build_dir, exist_ok=True)
-        self.copy_tree(source_dir / "build/lib", tt_build_dir + "/lib")
+        dest_ttnn_build_dir = self.build_lib + "/ttnn/build"
+        os.makedirs(dest_ttnn_build_dir, exist_ok=True)
+        self.copy_tree(source_dir / "build/lib", dest_ttnn_build_dir + "/lib")
         self.copy_tree(source_dir / "runtime", self.build_lib + "/runtime")
 
         # Encode ARCH_NAME into package for later use so user doesn't have to provide
         arch_name_file = self.build_lib + "/ttnn/.ARCH_NAME"
+        # should probably change to Python calls to write to a file descriptor instead of calling Linux tools
         subprocess.check_call(f"echo {metal_build_config.arch_name} > {arch_name_file}", shell=True)
 
         # Move built final built _ttnn SO into appropriate location in ttnn Python tree in wheel
@@ -162,13 +169,12 @@ class CMakeBuild(build_ext):
         if not os.path.exists(dir_path):
             os.makedirs(dir_path)
 
-        src = os.path.join(tt_build_dir, build_constants_lookup[ext].so_src_location)
+        src = os.path.join(dest_ttnn_build_dir, build_constants_lookup[ext].so_src_location)
         self.copy_file(src, full_lib_path)
         os.remove(src)
 
     def is_editable_install_(self):
         return self.inplace
-
 
 
 # Include tt_metal_C for kernels and src/ and tools
