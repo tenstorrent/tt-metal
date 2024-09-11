@@ -161,6 +161,29 @@ void py_bind_conv2d(py::module& module) {
         py::arg("in_channels"),
         py::arg("out_channels"));
 
+    module.def(
+        "convert_conv_weight_tensor_to_tiled_layout",
+        &ttnn::operations::conv::conv2d::convert_conv_weight_tensor_to_tiled_layout,
+        py::arg("conv_weight_tensor").noconvert(),
+        py::arg("in1_block_h"),
+        py::arg("in1_block_w"),
+        py::arg("output_dtype").noconvert() = std::nullopt);
+
+    module.def(
+        "convert_conv_weight_tensor_to_special_padding_tiled_layout",
+        &ttnn::operations::conv::conv2d::convert_conv_weight_tensor_to_special_padding_tiled_layout,
+        py::arg("conv_weight_tensor").noconvert(),
+        py::arg("in1_block_h"),
+        py::arg("in1_block_w"),
+        py::arg("output_dtype").noconvert() = std::nullopt);
+
+    module.def(
+        "convert_conv_weight_tensor_to_grouped_layout",
+        &ttnn::operations::conv::conv2d::convert_conv_weight_tensor_to_grouped_layout,
+        py::arg("conv_weight_tensor").noconvert(),
+        py::arg("num_groups"),
+        py::arg("output_dtype").noconvert() = std::nullopt);
+
     auto py_conv_config = py::class_<Conv2dConfig>(module, "Conv2dConfig");
     py_conv_config.def(
             py::init<MathFidelity, DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, uint32_t, bool, bool, TensorMemoryLayout, std::optional<CoreRangeSet>, bool, Layout, bool, bool, bool>(),

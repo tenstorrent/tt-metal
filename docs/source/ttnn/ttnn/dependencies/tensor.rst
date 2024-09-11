@@ -18,7 +18,7 @@ TT Tensor library provides support for different memory layouts of data stored w
 ROW_MAJOR layout will store values in memory row by row, starting from last dimension of tensor.
 For a tensor of shape ``[W, Z, Y, X]`` to be stored in ROW_MAJOR order on TT Accelerator device, ``X`` must be divisible by 2.
 A tensor in ROW_MAJOR order with ``X`` not divisible by 2 can exist on host machine, but can't be sent TT Accelerator device.
-So you can't provide a TT Accelerator device to TT Tensor construct for this type of tensor nor can you use ``tt_lib.tensor.Tensor.to()``
+So you can't provide a TT Accelerator device to TT Tensor construct for this type of tensor nor can you use ``ttnn.Tensor.to()``
 to send this type of tensor to TT Accelerator device.
 
 TILE layout will store values in memory tile by tile, starting from the last two dimensions of the tensor.
@@ -73,13 +73,13 @@ And the vector itself is stored in the shared pointer. That is done so that if t
 Tensor API
 ==========
 
-.. autoclass:: tt_lib.tensor.Tensor
+.. autoclass:: ttnn.Tensor
     :members: to, buffer, storage_type, device, get_layout, get_dtype, get_legacy_shape, pad, unpad, pad_to_tile, unpad_from_tile
     :special-members: __init__
 
 MemoryConfig
 ============
-.. autoclass:: tt_lib.tensor.MemoryConfig
+.. autoclass:: ttnn.MemoryConfig
     :special-members: __init__
 
 Examples of converting between PyTorch Tensor and TT Tensor
@@ -96,7 +96,7 @@ The created tensor will be in ROW_MAJOR layout and stored on TT accelerator devi
 .. code-block:: python
 
     py_tensor = torch.randn((1, 1, 32, 32))
-    tt_tensor = tt_lib.tensor.Tensor(py_tensor, tt_lib.tensor.DataType.BFLOAT16).to(tt_device)
+    tt_tensor = ttnn.Tensor(py_tensor, ttnn.bfloat16).to(tt_device)
 
 Converting a TT Tensor to a PyTorch Tensor
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -28,7 +28,6 @@ from tt_lib.utils import (
     divup,
 )
 
-import ttnn._ttnn.deprecated as ttl
 import ttnn
 import torch
 import math

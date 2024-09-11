@@ -5,7 +5,6 @@
 import torch
 import pytest
 from loguru import logger
-from ttnn import experimental as ttl
 import ttnn
 from ttnn import ShardTensorToMesh
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
@@ -55,7 +54,7 @@ def run_all_gather_matmul_on_t3000_impl(
     input_tensors = torch.chunk(input_tensor, num_devices, dim)
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttl.tensor.Tensor(t, ag_input_dtype).to(layout).to(devices[i], mem_config_input))
+        tt_input_tensors.append(ttnn.Tensor(t, ag_input_dtype).to(layout).to(devices[i], mem_config_input))
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
 
     ##### Create the weight matrix for the matmul #####
@@ -100,7 +99,7 @@ def run_all_gather_matmul_on_t3000_impl(
         raise ValueError(f"Unsupported matmul_config: {matmul_config}")
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.HiFi2,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=True,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
@@ -124,7 +123,7 @@ def run_all_gather_matmul_on_t3000_impl(
         # )
 
         # Test ttnn all_gather_matmul
-        tt_all_gather_out_tensor, tt_matmul_output, tt_datacopy_out_tensor = ttl.all_gather_matmul(
+        tt_all_gather_out_tensor, tt_matmul_output, tt_datacopy_out_tensor = ttnn.experimental.all_gather_matmul(
             input_tensor_mesh,
             weight_tt,
             dim,
@@ -145,8 +144,8 @@ def run_all_gather_matmul_on_t3000_impl(
     ##### Compare the outputs #####
     print("Checking outputs for All Gather Matmul (All Gather)")
     for i, t in enumerate(ttnn.get_device_tensors(tt_all_gather_out_tensor)):
-        tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-        if ag_input_dtype == ttl.tensor.DataType.BFLOAT16:
+        tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+        if ag_input_dtype == ttnn.bfloat16:
             eq, output = comp_equal(tt_output_tensor, input_tensor)
         else:
             eq, output = comp_pcc(tt_output_tensor, input_tensor)
@@ -157,8 +156,8 @@ def run_all_gather_matmul_on_t3000_impl(
 
     # print("Checking outputs for All Gather Matmul (Datacopy)")
     # for i, t in enumerate(ttnn.get_device_tensors(tt_datacopy_out_tensor)):
-    #     tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    #     if ag_input_dtype == ttl.tensor.DataType.BFLOAT16:
+    #     tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    #     if ag_input_dtype == ttnn.bfloat16:
     #         eq, output = comp_equal(tt_output_tensor, input_tensor)
     #     else:
     #         eq, output = comp_pcc(tt_output_tensor, input_tensor)
@@ -169,7 +168,7 @@ def run_all_gather_matmul_on_t3000_impl(
 
     print("Checking outputs for Matmul")
     for i, t in enumerate(ttnn.get_device_tensors(tt_matmul_output)):
-        tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
         eq, output = comp_pcc(tt_output_tensor, matmul_output[i])
         logger.info(f"Output {i}: {output}")
@@ -194,67 +193,67 @@ def run_all_gather_matmul_on_t3000_impl(
             1,
             [1, 1, 32, 16 * 32],
             3,
-            ttl.tensor.Layout.TILE,
+            ttnn.TILE_LAYOUT,
             1024,
             2,
-            ttl.tensor.DataType.BFLOAT16,
+            ttnn.bfloat16,
         ),
         (
             8,
             1,
             [1, 1, 128, 128 * 32],
             3,
-            ttl.tensor.Layout.TILE,
+            ttnn.TILE_LAYOUT,
             1024,
             16,
-            ttl.tensor.DataType.BFLOAT16,
+            ttnn.bfloat16,
         ),
         (
             8,
             1,
             [1, 1, 32, 1024 * 16],
             3,
-            ttl.tensor.Layout.TILE,
+            ttnn.TILE_LAYOUT,
             1024,
             16,  # NOTE: 64 for some reason gives lower perf
-            ttl.tensor.DataType.BFLOAT16,
+            ttnn.bfloat16,
         ),
         (
             8,
             1,
             [1, 1, 1024, 1024 * 32],
             3,
-            ttl.tensor.Layout.TILE,
+            ttnn.TILE_LAYOUT,
             1024,
             16,
-            ttl.tensor.DataType.BFLOAT16,
+            ttnn.bfloat16,
         ),
         (  # AllGather + Fused QKV Matmul llama 2k prefill
             8,
             1,
             [1, 1, 2048, 8192],
             3,
-            ttl.tensor.Layout.TILE,
+            ttnn.TILE_LAYOUT,
             1280,
             8,
-            ttl.tensor.DataType.BFLOAT16,
+            ttnn.bfloat16,
         ),
         (  # AllGather + FF1 Matmul llama 1k prefill
             8,
             1,
             [1, 1, 1024, 8192],
             3,
-            ttl.tensor.Layout.TILE,
+            ttnn.TILE_LAYOUT,
             4096,
             4,
-            ttl.tensor.DataType.BFLOAT16,
+            ttnn.bfloat16,
         ),
     ],
 )
 @pytest.mark.parametrize(
     "ag_input_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,
+        ttnn.bfloat16,
     ],
 )
 @pytest.mark.parametrize(
@@ -327,37 +326,37 @@ def test_all_gather_matmul_on_t3000_post_commit(
             1,
             [1, 1, 32, 16 * 32],
             3,
-            ttl.tensor.Layout.TILE,
+            ttnn.TILE_LAYOUT,
             1024,
             2,
-            ttl.tensor.DataType.BFLOAT16,
+            ttnn.bfloat16,
         ),
         (  # Llama decode FF1
             8,
             1,
             [1, 1, 32, 1024 * 8],
             3,
-            ttl.tensor.Layout.TILE,
+            ttnn.TILE_LAYOUT,
             4096,
             2,  # TODO: update
-            ttl.tensor.DataType.BFLOAT4_B,
+            ttnn.bfloat4_b,
         ),
         (  # Llama decode Fused QKV
             8,
             1,
             [1, 1, 32, 1024 * 8],
             3,
-            ttl.tensor.Layout.TILE,
+            ttnn.TILE_LAYOUT,
             1280,
             2,  # TODO: update
-            ttl.tensor.DataType.BFLOAT4_B,
+            ttnn.bfloat4_b,
         ),
     ],
 )
 @pytest.mark.parametrize(
     "ag_input_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,
+        ttnn.bfloat16,
     ],
 )
 @pytest.mark.parametrize(
@@ -430,7 +429,7 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
             1,
             [1, 1, 32, 1024 * 8],
             3,
-            ttl.tensor.Layout.TILE,
+            ttnn.TILE_LAYOUT,
             1024,
             8,
             ttnn.bfloat8_b,
@@ -440,7 +439,7 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
             1,
             [1, 1, 32, 1024 * 8],
             3,
-            ttl.tensor.Layout.TILE,
+            ttnn.TILE_LAYOUT,
             1024,
             32,
             ttnn.bfloat8_b,
@@ -450,7 +449,7 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
 @pytest.mark.parametrize(
     "ag_input_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,
+        ttnn.bfloat16,
     ],
 )
 @pytest.mark.parametrize(

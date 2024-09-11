@@ -5,15 +5,28 @@
 #include <chrono>
 #include <memory>
 
+
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+#include <pybind11/operators.h>
+
+#include "tensor.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/run_operation.hpp"
-#include "tt_lib_bindings_tensor.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "tt_metal/graph/graph_tracking.hpp"
 #include "ttnn/core.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "tt_metal/host_api.hpp"
 
-namespace tt::tt_metal::detail {
+namespace py = pybind11;
+
+namespace ttnn::tensor {
+
+using tt::tt_metal::CoreCoord;
+
+namespace detail {
 
 #ifdef DEBUG
 
@@ -24,7 +37,7 @@ void log_external_operation(
     const std::vector<Tensor>& input_tensors) {
     tt::log_debug(
         tt::LogOp,
-        "Launching External Operation: \"{}\"", operation.get_type_name());
+        "Launching External Operation: \"{}\" ({})", operation.get_type_name());
 
     auto attributes = operation.attributes();
     if (not attributes.empty()) {
@@ -198,7 +211,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
             }
         }
         case DataType::BFLOAT16: {
-            auto data_ptr = reinterpret_cast<bfloat16 *>(torch_data_ptr);
+            auto data_ptr = reinterpret_cast<::bfloat16 *>(torch_data_ptr);
             if (enable_borrow) {
                 auto storage = BorrowedStorage(
                     borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
@@ -408,7 +421,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
         tt_shards.push_back(detail::convert_python_tensor_to_tt_tensor(shard, data_type, false));
     }
     std::vector<OwnedBuffer> host_owned_buffers;
-    std::vector<Shape> host_owned_shapes;
+    std::vector<tt::tt_metal::Shape> host_owned_shapes;
     for (const auto &shard : tt_shards) {
         TT_ASSERT(std::holds_alternative<OwnedStorage>(shard.get_storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(shard.get_storage()),__FILE__, __LINE__));
         host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
@@ -437,13 +450,13 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                 return owned_buffer::create<float>(std::move(data));
             }
             case DataType::BFLOAT16: {
-                std::vector<bfloat16> bfloat16_data(data.size());
+                std::vector<::bfloat16> bfloat16_data(data.size());
                 std::transform(
                     std::begin(data), std::end(data),
                     std::begin(bfloat16_data),
-                    [](float value) { return bfloat16(value); }
+                    [](float value) { return ::bfloat16(value); }
                 );
-                return owned_buffer::create<bfloat16>(std::move(bfloat16_data));
+                return owned_buffer::create<::bfloat16>(std::move(bfloat16_data));
             }
             default: {
                 TT_THROW("Cannot create a host buffer!");
@@ -632,7 +645,10 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
         return std::make_tuple(operation, input_tensors);
     }
 
-    void TensorModulePyTensorTypes(py::module& m_tensor) {
+} // namespace detail
+
+    void pytensor_module_types(py::module &m_tensor) {
+        using tt::tt_metal::Shape;
         // Tensor constructors that accept device and .to(device) function use keep alive call policy to communicate that Device needs to outlive Tensor.
         // This is because when tensors on device are destroyed they need to deallocate their buffers via device.
         // keep_alive increases the ref count of the Device object being passed into the constructor and .to() function.
@@ -649,29 +665,29 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
             +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
             | shape      | Shape of TT tensor                                     | List[int[4]]              |                                    | Yes      |
             +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
-            | data_type  | Data type of numbers in TT tensor                      | tt_lib.tensor.DataType    | tt_lib.tensor.DataType.BFLOAT16    | Yes      |
+            | data_type  | Data type of numbers in TT tensor                      | ttnn.DataType             | ttnn.DataType.BFLOAT16             | Yes      |
             |            |                                                        |                           |                                    |          |
-            |            |                                                        |                           | tt_lib.tensor.DataType.FLOAT32     |          |
+            |            |                                                        |                           | ttnn.DataType.FLOAT32              |          |
             |            |                                                        |                           |                                    |          |
-            |            |                                                        |                           | tt_lib.tensor.DataType.UINT32      |          |
+            |            |                                                        |                           | ttnn.DataType.UINT32               |          |
             |            |                                                        |                           |                                    |          |
-            |            |                                                        |                           | tt_lib.tensor.DataType.BFLOAT8_B   |          |
+            |            |                                                        |                           | ttnn.DataType.BFLOAT8_B            |          |
             |            |                                                        |                           |                                    |          |
-            |            |                                                        |                           | tt_lib.tensor.DataType.BFLOAT4_B   |          |
+            |            |                                                        |                           | ttnn.DataType.BFLOAT4_B            |          |
             +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
-            | layout     | Layout of tensor data in memory                        | tt_lib.tensor.Layout      | tt_lib.tensor.Layout.ROW_MAJOR     | Yes      |
+            | layout     | Layout of tensor data in memory                        | ttnn.Layout               | ttnn.Layout.ROW_MAJOR              | Yes      |
             |            |                                                        |                           |                                    |          |
-            |            |                                                        |                           | tt_lib.tensor.Layout.TILE          |          |
+            |            |                                                        |                           | ttnn.Layout.TILE                   |          |
             +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
-            | device     | Device on which tensor will be created                 | tt_lib.device.Device      | Host or TT accelerator device      | No       |
+            | device     | Device on which tensor will be created                 | ttnn.Device               | Host or TT accelerator device      | No       |
             +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
-            | mem_config | Layout of tensor in TT Accelerator device memory banks | tt_lib.tensor.MemoryConfig|                                    | No       |
+            | mem_config | Layout of tensor in TT Accelerator device memory banks | ttnn.MemoryConfig         |                                    | No       |
             +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
 
         )doc");
     }
 
-    void TensorModulePyTensor(py::module &m_tensor) {
+    void pytensor_module(py::module &m_tensor) {
         m_tensor.def(
             "decorate_external_operation",
             [](const py::function &function, std::optional<std::string> function_name) -> py::function {
@@ -681,7 +697,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                     uint32_t device_operation_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
                     auto [operation, input_tensors] = detail::parse_external_operation(function, args, kwargs, function_name);
                     GraphTracker::instance().track_function_start(operation.get_type_name(), args, kwargs);
-                    log_external_operation(ttnn::CoreIDs::instance().get_python_operation_id(), device_operation_id, operation, input_tensors);
+                    detail::log_external_operation(ttnn::CoreIDs::instance().get_python_operation_id(), device_operation_id, operation, input_tensors);
 
                     auto output = function(*args, **kwargs);
 
@@ -705,7 +721,6 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                 | kwargs   | Packed kwargs        | dict      |             | No       |
                 +----------+----------------------+-----------+-------------+----------+
         )doc");
-
 
         auto pyTensor = static_cast<py::class_<Tensor>>(m_tensor.attr("Tensor"));
         pyTensor.def(py::init<ttnn::Tensor &>())
@@ -736,11 +751,11 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                     .. code-block:: python
 
                         py_tensor = torch.randn((1, 1, 32, 32))
-                        tt_lib.tensor.Tensor(
+                        ttnn.Tensor(
                             py_tensor.reshape(-1).tolist(),
                             py_tensor.size(),
-                            tt_lib.tensor.DataType.BFLOAT16,
-                            tt_lib.tensor.Layout.ROW_MAJOR,
+                            ttnn.DataType.BFLOAT16,
+                            ttnn.Layout.ROW_MAJOR,
                         )
                 )doc")
             .def(
@@ -779,13 +794,13 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                     .. code-block:: python
 
                         py_tensor = torch.randn((1, 1, 32, 32))
-                        tt_device = tt_lib.device.CreateDevice(0)
+                        tt_device = ttnn.CreateDevice(0)
                         // ...
-                        tt_lib.tensor.Tensor(
+                        ttnn.Tensor(
                             py_tensor.reshape(-1).tolist(),
                             py_tensor.size(),
-                            tt_lib.tensor.DataType.BFLOAT16,
-                            tt_lib.tensor.Layout.ROW_MAJOR,
+                            ttnn.DataType.BFLOAT16,
+                            ttnn.Layout.ROW_MAJOR,
                             tt_device
                         )
                 )doc")
@@ -828,14 +843,14 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                     .. code-block:: python
 
                         py_tensor = torch.randn((1, 1, 32, 32))
-                        tt_device = tt_lib.device.CreateDevice(0)
-                        mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.SINGLE_BANK)
+                        tt_device = ttnn.CreateDevice(0)
+                        mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.SINGLE_BANK)
                         // ...
-                        tt_lib.tensor.Tensor(
+                        ttnn.Tensor(
                             py_tensor.reshape(-1).tolist(),
                             py_tensor.size(),
-                            tt_lib.tensor.DataType.BFLOAT16,
-                            tt_lib.tensor.Layout.ROW_MAJOR,
+                            ttnn.DataType.BFLOAT16,
+                            ttnn.Layout.ROW_MAJOR,
                             tt_device,
                             mem_config
                         )
@@ -867,7 +882,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                     .. code-block:: python
 
                         py_tensor = torch.randn((1, 1, 32, 32))
-                        tt_lib.tensor.Tensor(py_tensor)
+                        ttnn.Tensor(py_tensor)
                 )doc")
             .def(
                 py::init<>([](const py::object &python_tensor,
@@ -906,7 +921,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                     .. code-block:: python
 
                         py_tensor = np.zeros((1, 1, 32, 32))
-                        tt_lib.tensor.Tensor(py_tensor)
+                        ttnn.Tensor(py_tensor)
                 )doc")
             .def_property_readonly("shape", [](const Tensor &self) { return self.get_shape(); })
             .def_property_readonly("dtype", [](const Tensor &self) { return self.get_dtype(); })
@@ -934,9 +949,9 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                 +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
                 | Argument  | Description                                     | Data type                  | Valid range           | Required |
                 +===========+=================================================+============================+=======================+==========+
-                | arg0      | Device to which tensor will be moved            | tt_lib.device.Device       | TT accelerator device | Yes      |
+                | arg0      | Device to which tensor will be moved            | ttnn.Device                | TT accelerator device | Yes      |
                 +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
-                | arg1      | MemoryConfig of tensor of TT accelerator device | tt_lib.tensor.MemoryConfig |                       | No       |
+                | arg1      | MemoryConfig of tensor of TT accelerator device | ttnn.MemoryConfig          |                       | No       |
                 +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
 
                 .. code-block:: python
@@ -965,9 +980,9 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                 +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
                 | Argument  | Description                                     | Data type                  | Valid range           | Required |
                 +===========+=================================================+============================+=======================+==========+
-                | arg0      | MeshDevice to which tensor will be moved        | tt_lib.device.MeshDevice   | TT accelerator device | Yes      |
+                | arg0      | MeshDevice to which tensor will be moved        | ttnn.MeshDevice            | TT accelerator device | Yes      |
                 +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
-                | arg1      | MemoryConfig of tensor of TT accelerator device | tt_lib.tensor.MemoryConfig |                       | No       |
+                | arg1      | MemoryConfig of tensor of TT accelerator device | ttnn.MemoryConfig          |                       | No       |
                 +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
 
                 .. code-block:: python
@@ -990,7 +1005,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                 +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
                 | Argument  | Description                                     | Data type                  | Valid range           | Required |
                 +===========+=================================================+============================+=======================+==========+
-                | arg0      | Core who's shard we want                        | tt_lib.tensor.CoreCoord    | TT accelerator device | Yes      |
+                | arg0      | Core who's shard we want                        | ttnn.CoreCoord             | TT accelerator device | Yes      |
                 +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
 
 
@@ -1053,15 +1068,15 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                 +-----------+-------------------------------------------------+----------------------------+--------------------------------+----------+
                 | Argument  | Description                                     | Data type                  | Valid range                    | Required |
                 +===========+=================================================+============================+================================+==========+
-                | arg0      | Target memory layout                            | tt_lib.tensor.Layout       | ROW_MAJOR, TILE                | Yes      |
+                | arg0      | Target memory layout                            | ttnn.Layout                | ROW_MAJOR, TILE                | Yes      |
                 +-----------+-------------------------------------------------+----------------------------+--------------------------------+----------+
-                | arg1      | Worker thread performing layout conversion      | tt_lib.device.Device       | Thread tied to TT accelerator  | No       |
-                |           | (optional)                                     |                             | device                         |          |
+                | arg1      | Worker thread performing layout conversion      | ttnn.Device                | Thread tied to TT accelerator  | No       |
+                |           | (optional)                                      |                            | device                         |          |
                 +-----------+-------------------------------------------------+----------------------------+--------------------------------+----------+
 
                 .. code-block:: python
 
-                    tt_tensor = tt_tensor.to(tt_lib.tensor.Layout.TILE, worker)
+                    tt_tensor = tt_tensor.to(ttnn.Layout.TILE, worker)
             )doc")
             .def(
                 "to",
@@ -1070,20 +1085,22 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                 py::arg("mesh_device") = nullptr,
                 R"doc(
                 Convert TT Tensor to provided memory layout. Available layouts conversions are:
+
                 * ROW_MAJOR to TILE
                 * TILE to ROW_MAJOR
+
                 +-----------+-------------------------------------------------+----------------------------+--------------------------------+----------+
                 | Argument  | Description                                     | Data type                  | Valid range                    | Required |
                 +===========+=================================================+============================+================================+==========+
-                | arg0      | Target memory layout                            | tt_lib.tensor.Layout       | ROW_MAJOR, TILE                | Yes      |
+                | arg0      | Target memory layout                            | ttnn.Layout                | ROW_MAJOR, TILE                | Yes      |
                 +-----------+-------------------------------------------------+----------------------------+--------------------------------+----------+
-                | arg1      | Worker thread performing layout conversion      | tt_lib.device.Device       | Thread tied to TT accelerator  | No       |
-                |           | (optional)                                     |                             | device                         |          |
+                | arg1      | Worker thread performing layout conversion      | ttnn.Device                | Thread tied to TT accelerator  | No       |
+                |           | (optional)                                      |                            | device                         |          |
                 +-----------+-------------------------------------------------+----------------------------+--------------------------------+----------+
 
                 .. code-block:: python
 
-                    tt_tensor = tt_tensor.to(tt_lib.tensor.Layout.TILE, mesh_device)
+                    tt_tensor = tt_tensor.to(ttnn.Layout.TILE, mesh_device)
             )doc")
             .def(
                 "pad",
@@ -1122,11 +1139,11 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                         4, 5, 6,
                         7, 8, 9 ]
                     )
-                    tt_tensor = ttl.tensor.Tensor(
+                    tt_tensor = ttnn.Tensor(
                         inp.tolist(),
                         input_tensor_shape,
-                        ttl.tensor.DataType.BFLOAT16,
-                        ttl.tensor.Layout.ROW_MAJOR,
+                        ttnn.DataType.BFLOAT16,
+                        ttnn.Layout.ROW_MAJOR,
                     )
                     tt_tensor_padded = tt_tensor.pad(output_tensor_shape, input_tensor_start, pad_value)
 
@@ -1196,11 +1213,11 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                         0, 7, 8, 9, 0,
                         0, 0, 0, 0, 0 ]
                     )
-                    tt_tensor = ttl.tensor.Tensor(
+                    tt_tensor = ttnn.Tensor(
                         inp.tolist(),
                         input_tensor_shape,
-                        ttl.tensor.DataType.BFLOAT16,
-                        ttl.tensor.Layout.ROW_MAJOR,
+                        ttnn.DataType.BFLOAT16,
+                        ttnn.Layout.ROW_MAJOR,
                     )
                     tt_tensor_unpadded = tt_tensor.unpad(output_tensor_start, output_tensor_end)
 
@@ -1251,11 +1268,11 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                         4, 5, 6,
                         7, 8, 9 ]
                     )
-                    tt_tensor = ttl.tensor.Tensor(
+                    tt_tensor = ttnn.Tensor(
                         inp.tolist(),
                         input_tensor_shape,
-                        ttl.tensor.DataType.BFLOAT16,
-                        ttl.tensor.Layout.ROW_MAJOR,
+                        ttnn.DataType.BFLOAT16,
+                        ttnn.Layout.ROW_MAJOR,
                     )
                     tt_tensor_padded = tt_tensor.pad_to_tile(pad_value)
 
@@ -1315,11 +1332,11 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
 
                     inp = torch.arange(start=1.0, end=10.0).reshape(1, 1, 3, 3)
                     inp = torch.nn.functional.pad(inp, [0, input_tensor_shape[3] - inp.shape[3], 0, input_tensor_shape[2] - inp.shape[2]]).reshape(-1)
-                    tt_tensor = ttl.tensor.Tensor(
+                    tt_tensor = ttnn.Tensor(
                         inp.tolist(),
                         input_tensor_shape,
-                        ttl.tensor.DataType.BFLOAT16,
-                        ttl.tensor.Layout.ROW_MAJOR,
+                        ttnn.DataType.BFLOAT16,
+                        ttnn.Layout.ROW_MAJOR,
                     )
                     tt_tensor_unpadded = tt_tensor.unpad_from_tile(output_tensor_shape)
 
@@ -1573,7 +1590,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                 )doc")
             .def(
                 "reshape",
-                [](Tensor &self, const Shape &shape) -> Tensor { return self.reshape(shape); },
+                [](Tensor &self, const tt::tt_metal::Shape &shape) -> Tensor { return self.reshape(shape); },
                 R"doc(
                     Reshapes TT tensor
 
@@ -1586,4 +1603,5 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                 [](const Tensor &self) { return self.tensor_id; },
                 [](Tensor &self, std::size_t tensor_id) { self.tensor_id = tensor_id; });
     }
-    }  // namespace tt::tt_metal::detail
+
+}  // namespace ttnn::tensor

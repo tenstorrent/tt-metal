@@ -10,7 +10,6 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from loguru import logger
-import tt_lib as ttl
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.unit_tests.operations.test_all_gather import is_unsupported_case
@@ -36,9 +35,9 @@ parameters = {
             [1, 1, 32, 16384],
         ],
         "dim": [0, 1, 3],
-        "layout": [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.TILE],
-        "input_dtype": [ttl.tensor.DataType.BFLOAT16],
-        "mem_config": [ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.DRAM)],
+        "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+        "input_dtype": [ttnn.bfloat16],
+        "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
         "enable_async": [True, False],
         "num_iters": [1],
     },
@@ -63,7 +62,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 
 
 def mesh_device_fixture():
-    import tt_lib as ttl
 
     assert ttnn.get_num_devices() >= 8, "Not T3000!"
     device_ids = [0, 4, 5, 1, 2, 6, 7, 3]
@@ -116,8 +114,8 @@ def run(
         logger.info(f"Done iteration {i}")
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-        tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-        if input_dtype == ttl.tensor.DataType.BFLOAT16:
+        tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+        if input_dtype == ttnn.bfloat16:
             eq, output = comp_equal(tt_output_tensor, input_tensor)
         else:
             eq, output = comp_pcc(tt_output_tensor, input_tensor)

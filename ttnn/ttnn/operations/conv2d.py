@@ -37,6 +37,56 @@ OptimizedConvParallelizationConfig = ttnn._ttnn.operations.conv2d.OptimizedConvP
 OptimizedConvBlockConfig = ttnn._ttnn.operations.conv2d.OptimizedConvBlockConfig
 
 
+def convert_conv_weight_tensor_to_tiled_layout(conv_weight_tensor, in1_block_h, in1_block_w, output_dtype=None):
+    """
+    Converts convolution weights to 2d matrix tiled layout on host
+    Returns a new tensor with the converted layout.
+
+    +----------+----------------------+-----------+-------------+----------+
+    | Argument | Description          | Data type | Valid range | Required |
+    +==========+======================+===========+=============+==========+
+    | a        | Input tensor         | Tensor    |             | Yes      |
+    +----------+----------------------+-----------+-------------+----------+
+    """
+    return ttnn._ttnn.operations.conv2d.convert_conv_weight_tensor_to_tiled_layout(
+        conv_weight_tensor, in1_block_h, in1_block_w, output_dtype
+    )
+
+
+def convert_conv_weight_tensor_to_special_padding_tiled_layout(
+    conv_weight_tensor, in1_block_h, in1_block_w, output_dtype=None
+):
+    """
+    Converts convolution weights to 2d matrix tiled layout on host with special block height padding
+    Returns a new tensor with the converted layout.
+
+    +----------+----------------------+-----------+-------------+----------+
+    | Argument | Description          | Data type | Valid range | Required |
+    +==========+======================+===========+=============+==========+
+    | a        | Input tensor         | Tensor    |             | Yes      |
+    +----------+----------------------+-----------+-------------+----------+
+    """
+    return ttnn._ttnn.operations.conv2d.convert_conv_weight_tensor_to_special_padding_tiled_layout(
+        conv_weight_tensor, in1_block_h, in1_block_w, output_dtype
+    )
+
+
+def convert_conv_weight_tensor_to_grouped_layout(conv_weight_tensor, num_groups, output_dtype):
+    """
+    Converts convolution weights to grouped layout with padded zeros
+    Returns a new tensor with the converted layout.
+
+    +----------+----------------------+-----------+-------------+----------+
+    | Argument | Description          | Data type | Valid range | Required |
+    +==========+======================+===========+=============+==========+
+    | a        | Input tensor         | Tensor    |             | Yes      |
+    +----------+----------------------+-----------+-------------+----------+
+    """
+    return ttnn._ttnn.operations.conv2d.convert_conv_weight_tensor_to_grouped_layout(
+        conv_weight_tensor, num_groups, output_dtype
+    )
+
+
 # internal. not user facing
 class ParallelConfig:
     def __init__(

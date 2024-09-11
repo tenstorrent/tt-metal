@@ -113,7 +113,7 @@ def run_moreh_mean_backward(input_shape_dim, device, keepdim=False, compute_kern
     tt_output_grad, tt_input_grad = get_tt_backward_tensors(torch_output_grad, torch_input.shape, device)
 
     if create_output:
-        input_grad_shape = ttnn._ttnn.deprecated.tensor.Shape(torch_input.shape)
+        input_grad_shape = ttnn._ttnn.tensor.Shape(torch_input.shape)
         tt_input_grad = ttnn.experimental.operations.primary.moreh_mean_backward(
             tt_output_grad,
             dim=dim,

@@ -9,7 +9,6 @@ from typing import Union, Tuple, Optional, Any, Callable, Dict
 from loguru import logger
 import torch
 
-import tt_lib as ttl
 
 import ttnn
 import ttnn.decorators
@@ -296,7 +295,7 @@ class TorchTensor(torch.Tensor):
         # this tells torch to treat TorchTensor just like torch.Tensor's.
         # Otherwise, torch will complain that it doesn't know how to handle it.
         types = tuple(torch.Tensor if t == TorchTensor else t for t in types)
-        func = ttl.tensor.decorate_external_operation(func, function_name=f"(torch) {func.__name__}")
+        func = ttnn._ttnn.tensor.decorate_external_operation(func, function_name=f"(torch) {func.__name__}")
         return super().__torch_function__(func, types, func_args, func_kwargs)
 
 
@@ -487,7 +486,7 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.Device = No
         raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file does not exist.")
     if not file_name.is_file():
         raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file is not a file.")
-    return ttl.tensor.load_tensor(str(file_name), device)
+    return ttnn._ttnn.tensor.load_tensor(str(file_name), device)
 
 
 @ttnn.register_python_operation(name="ttnn.dump_tensor")
@@ -495,7 +494,7 @@ def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor, distri
     if distribute is None:
         distribute = dict()
     file_name = pathlib.Path(file_name)
-    ttl.tensor.dump_tensor(str(file_name), tensor, distribute)
+    ttnn._ttnn.tensor.dump_tensor(str(file_name), tensor, distribute)
 
 
 @ttnn.register_python_operation(name="ttnn.as_tensor")
@@ -596,7 +595,7 @@ def as_tensor(
             )
             pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
             distributed_config = mesh_mapper.config() if mesh_mapper else dict()
-            ttnn.dump_tensor(cache_file_name, tensor, distributed_config)
+            ttnn._ttnn.tensor.dump_tensor(cache_file_name, tensor, distributed_config)
             return tensor
 
         if isinstance(mesh_mapper, ttnn.ReplicateTensorToMesh):
@@ -609,7 +608,7 @@ def as_tensor(
         cache_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}.bin"
 
         try:
-            tensor = ttnn.load_tensor(cache_file_name, device=device)
+            tensor = ttnn._ttnn.tensor.load_tensor(cache_file_name, device=device)
             if tuple(tensor.shape) != tuple(tensor.shape):
                 logger.warning(
                     f"Cached file {cache_file_name} has shape {tensor.shape}, expected {tensor.shape}, regenerating cache"
