@@ -290,11 +290,11 @@ def add_derived_columns(rows):
             dram_percentage = op_data['DRAM %'].raw_value
             flops_percentage = op_data['FLOPs %'].raw_value
             if dram_percentage and flops_percentage:
-                if dram_percentage >= 75 and flops_percentage >= 75:
+                if dram_percentage >= 65 and flops_percentage >= 65:
                     op_data['Bound'] = Cell("BOTH")
-                elif dram_percentage >= 75:
+                elif dram_percentage >= 65:
                     op_data['Bound'] = Cell("DRAM")
-                elif flops_percentage >= 75:
+                elif flops_percentage >= 65:
                     op_data['Bound'] = Cell("FLOP")
                 else:
                     op_data['Bound'] = Cell("SLOW")
