@@ -102,16 +102,19 @@ std::tuple<
     MorehNllLossUnreducedBackwardDeviceOperation::tensor_args_t>
 MorehNllLossUnreducedBackwardDeviceOperation::invoke(
     const Tensor& target_tensor,
-    const std::optional<const Tensor> weight_tensor,
     const Tensor& output_grad_tensor,
+    const std::optional<const Tensor> weight_tensor,
     const std::optional<const Tensor> input_grad_tensor,
-    const int32_t ignore_index,
+    const std::optional<int32_t> ignore_index,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    int32_t class_num = std::numeric_limits<uint32_t>::max();
     return {
         operation_attributes_t{
-            ignore_index, memory_config.value_or(output_grad_tensor.memory_config()), compute_kernel_config},
-        tensor_args_t{target_tensor, weight_tensor, output_grad_tensor, input_grad_tensor}};
+            ignore_index.value_or(class_num),
+            memory_config.value_or(output_grad_tensor.memory_config()),
+            compute_kernel_config},
+        tensor_args_t{target_tensor, output_grad_tensor, weight_tensor, input_grad_tensor}};
 }
 
 }  // namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward
