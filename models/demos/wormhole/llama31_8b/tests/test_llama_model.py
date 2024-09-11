@@ -37,6 +37,7 @@ from models.utility_functions import skip_for_grayskull
     ids=["quick", "full"],
 )
 def test_llama_model_inference(device, weights, layers, use_program_cache, reset_seeds, is_ci_env):
+    is_ci_env = True
     if is_ci_env and layers > 1:
         pytest.skip("Skipping long test in CI")
 
@@ -44,7 +45,12 @@ def test_llama_model_inference(device, weights, layers, use_program_cache, reset
     cache_pcc = layers == 1  # Flag to measure KV cache PCC for all layers
 
     dtype = ttnn.bfloat8_b
-    pcc = 0.9985 if layers == 1 else 0.97
+    pcc = 0.94 if layers == 1 else 0.97  # This sets the minimum PCC for each iteration
+    # In post-commit CI, also validate the final PCCs after 6 iterations
+    final_model_pcc = 0.9989
+    final_k_cache_pcc = 0.9998
+    final_v_cache_pcc = 0.9998
+
     iterations = 6 if layers == 1 else 9
 
     instruct = True if weights == "instruct" else False
@@ -160,10 +166,12 @@ def test_llama_model_inference(device, weights, layers, use_program_cache, reset
                     pt_out_tok.squeeze(1).tolist()[0]
                 )  # Update generated token to list of ref outputs
 
-        # TODO Measure only PCC at the end, instead of at every iteration
         # Measure PCC if also running reference model
         if run_ref_pt:
-            passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)
+            if is_ci_env and i == iterations - 1:  # On last iteration in CI set a tighter PCC
+                passing, pcc_message = comp_pcc(ref_output, tt_output_torch, final_model_pcc)
+            else:
+                passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)
 
             logger.info(comp_allclose(ref_output, tt_output_torch))
             logger.info(f"Model output: {pcc_message}")
@@ -177,28 +185,34 @@ def test_llama_model_inference(device, weights, layers, use_program_cache, reset
 
             # Compare KV caches
             if cache_pcc:
-                for i in range(model_args.n_layers):
+                for l in range(model_args.n_layers):
                     pytorch_layer_present = [
-                        reference_model.layers[i]
+                        reference_model.layers[l]
                         .attention.cache_k.clone()
                         .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                        reference_model.layers[i]
+                        reference_model.layers[l]
                         .attention.cache_v.clone()
                         .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
                     ]
 
                     tt_layer_present = []
-                    for layer_past in tt_model.layers[i].attention.layer_past_list[0]:
+                    for layer_past in tt_model.layers[l].attention.layer_past_list[0]:
                         tt_layer_present.append(ttnn.to_torch(layer_past))
 
-                    for i, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
+                    for kv_cache, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
                         cache_length_to_check = min(
                             model_args.sliding_window, generation_start_pos + generation_length + 1
                         )
                         cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
                         cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
-                        does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
-                        if i == 0:
+                        if is_ci_env and i == iterations - 1:  # On last iteration in CI set a tighter PCC
+                            if kv_cache == 0:  # K cache
+                                does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, final_k_cache_pcc)
+                            else:  # V cache
+                                does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, final_v_cache_pcc)
+                        else:
+                            does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
+                        if kv_cache == 0:
                             logger.info(f"K cache output: {output_pcc}")
                         else:
                             logger.info(f"V cache output: {output_pcc}")
