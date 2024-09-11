@@ -220,6 +220,37 @@ def mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
 
 
 @pytest.fixture(scope="function")
+def board_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
+    import ttnn
+
+    device_ids = ttnn.get_device_ids()
+
+    assert len(device_ids) == 8, "This fixture is only applicable for T3K systems"
+
+    try:
+        pcie_id = request.param
+    except (ValueError, AttributeError):
+        pcie_id = 0  # Default to using first board
+
+    assert pcie_id < 4, "Requested board id is out of range"
+
+    mesh_device_ids = [device_ids[pcie_id], device_ids[pcie_id + 4]]
+    mesh_shape = ttnn.MeshShape(1, 2)
+    mesh_device = ttnn.open_mesh_device(
+        mesh_shape, mesh_device_ids, dispatch_core_type=get_dispatch_core_type(), **device_params
+    )
+
+    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
+    yield mesh_device
+
+    for device in mesh_device.get_devices():
+        ttnn.DumpDeviceProfiler(device)
+
+    ttnn.close_mesh_device(mesh_device)
+    del mesh_device
+
+
+@pytest.fixture(scope="function")
 def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
     import ttnn
 
@@ -330,6 +361,8 @@ def get_devices(request):
         devices = request.getfixturevalue("t3k_mesh_device").get_devices()
     elif "pcie_mesh_device" in request.fixturenames:
         devices = request.getfixturevalue("pcie_mesh_device").get_devices()
+    elif "board_mesh_device" in request.fixturenames:
+        devices = request.getfixturevalue("board_mesh_device").get_devices()
     else:
         devices = []
     return devices
@@ -421,6 +454,12 @@ def pytest_addoption(parser):
         help="Enable process timeout",
     )
     parser.addoption(
+        "--iterations",
+        action="store",
+        default=None,
+        help="Number of iterations to run",
+    )
+    parser.addoption(
         "--determinism-check-iterations",
         action="store",
         default=None,
@@ -431,13 +470,20 @@ def pytest_addoption(parser):
 @pytest.fixture
 def determinism_check_iterations(request):
     iterations = request.config.getoption("--determinism-check-iterations")
-    # we return 1 in case the option is not passed or the passed value is not valid
     if iterations is not None:
-        try:
-            return int(iterations)
-        except ValueError:
-            return 1
-    return 1
+        # this will throw an error if bad value is passed
+        return int(iterations)
+    return -1
+
+
+@pytest.fixture
+def iterations(request):
+    iterations = request.config.getoption("--iterations")
+    if iterations is not None:
+        # this will throw an error if bad value is passed
+        return int(iterations)
+    # default is 100000
+    return 100000
 
 
 @pytest.fixture
