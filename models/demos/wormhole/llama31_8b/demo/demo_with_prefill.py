@@ -355,6 +355,9 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
             profiler.start(f"decode_and_argmax", iteration=batch_idx)
             # Run ttnn llama3.1 model
             tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
+            tt_out = ttnn.untilize(
+                tt_out, use_multicore=False
+            )  # multi-core OOMs (https://github.com/tenstorrent/tt-metal/issues/9022)
             tt_output_torch = (
                 ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[:batch_size, :, :]
             )  # [batch, seq, hidden_dim]
