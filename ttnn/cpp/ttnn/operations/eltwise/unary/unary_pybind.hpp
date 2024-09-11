@@ -1258,7 +1258,7 @@ void bind_dropout(py::module& module, const unary_operation_t& operation) {
             Example:
 
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor, seed=228, probability=0.2, scale= 1.0/(1.0 - probability))
+                >>> output = {1}(tensor, seed=42, probability=0.2, scale= 1.0/(1.0 - probability))
         )doc",
         ttnn::dropout.base_name(),
         ttnn::dropout.python_fully_qualified_name());
