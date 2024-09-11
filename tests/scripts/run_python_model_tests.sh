@@ -51,6 +51,6 @@ if [ "$ARCH_NAME" != "wormhole_b0" ]; then
     # Unet Shallow
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
 
-    # Llama 3.1 8B
-    pytest models/demos/wormhole/llama31_8b/tests/test_llama_decoder.py
+    # Llama 3.1 8B single-layer dummy weights tight PCC check
+    pytest models/demos/wormhole/llama31_8b/tests/test_llama_model.py::test_llama_model_inference[quick]
 fi

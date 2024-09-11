@@ -29,43 +29,37 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.timeout(900)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "layers",
-    (1, 32),
+    "weights, layers",
+    [
+        ("random", 1),
+        ("general", 32),
+    ],
+    ids=["quick", "full"],
 )
-def test_llama_model_inference(device, layers, use_program_cache, reset_seeds):
+def test_llama_model_inference(device, weights, layers, use_program_cache, reset_seeds):
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
-    cache_pcc = False  # Flag to measure KV cache PCC for all layers
+    cache_pcc = layers == 1  # Flag to measure KV cache PCC for all layers
 
     dtype = ttnn.bfloat8_b
-    pcc = 0.99 if layers == 1 else 0.92  # FIXME: why are first couple of iterations 0.93 and the rest higher?
-    iterations = 12
+    pcc = 0.9985 if layers == 1 else 0.92  # FIXME: why are first couple of iterations 0.93 and the rest higher?
+    iterations = 6 if layers == 1 else 17
 
-    # Use instruct weights instead of general weights
-    instruct = False
-
-    model_args = TtModelArgs(device, instruct=instruct)
-
+    instruct = True if weights == "instruct" else False
+    dummy_weights = True if weights == "random" else False
+    model_args = TtModelArgs(device, instruct=instruct, dummy_weights=dummy_weights)
     model_args.n_layers = layers
-
-    tokenizer = Tokenizer(model_args.tokenizer_path)
-
-    logger.info("Loading weights...")
-    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
-    state_dict = {
-        k: v
-        for k, v in state_dict.items()
-        if (
-            any([f"layers.{i}." in k for i in range(model_args.n_layers)])
-            or k in ["tok_embeddings.weight", "norm.weight", "output.weight"]
-        )
-    }
-    logger.info("Finished loading weights...")
+    state_dict = model_args.load_state_dict()
 
     prompts = ["This is a test"] * model_args.max_batch_size
-    if instruct:
-        encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in prompts]
+    if dummy_weights:
+        encoded_prompts = [[128000, 2028, 374, 264, 1296]]
+        assert not instruct, "Instruct prompt not implemented with dummy weights"
     else:
-        encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in prompts]
+        tokenizer = Tokenizer(model_args.tokenizer_path)
+        if instruct:
+            encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in prompts]
+        else:
+            encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in prompts]
 
     if run_ref_pt:
         reference_model = Transformer(model_args)
@@ -212,9 +206,10 @@ def test_llama_model_inference(device, layers, use_program_cache, reset_seeds):
                             logger.warning(f"V Cache Failed! PCC value is lower than {pcc}")
                             all_tests_pass = False
 
-        logger.info("[ttnn generation User 0] " + tokenizer.decode(all_outputs).replace("\n", "\\n"))
-        if run_ref_pt:
-            logger.info("[Ref generation User 0] " + tokenizer.decode(all_outputs_ref).replace("\n", "\\n"))
+        if not dummy_weights:
+            logger.info("[ttnn generation User 0] " + tokenizer.decode(all_outputs).replace("\n", "\\n"))
+            if run_ref_pt:
+                logger.info("[Ref generation User 0] " + tokenizer.decode(all_outputs_ref).replace("\n", "\\n"))
 
     if run_ref_pt:
         if all_tests_pass:
