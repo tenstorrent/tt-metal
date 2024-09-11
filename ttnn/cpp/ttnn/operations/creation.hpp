@@ -124,11 +124,9 @@ struct FullWith {
 
 struct Zeros : FullWith<0.0f> {};
 struct Ones : FullWith<1.0f> {};
-struct Empty : FullWith<0.0f> {};
 
 inline constexpr Zeros zeros{};
 inline constexpr Ones ones{};
-inline constexpr Empty empty{};
 
 template <typename T>
 inline ttnn::Tensor full_like_impl(
@@ -203,11 +201,35 @@ struct FullLikeWith {
 
 struct ZerosLike : FullLikeWith<0.0f> {};
 struct OnesLike : FullLikeWith<1.0f> {};
-struct EmptyLike : FullLikeWith<0.0f> {};
 
 inline constexpr ZerosLike zeros_like{};
 inline constexpr OnesLike ones_like{};
-inline constexpr EmptyLike empty_like{};
+
+struct Empty {
+   static ttnn::Tensor invoke(
+    const ttnn::Shape& shape,
+    const DataType& dtype,
+    const Layout& layout,
+    Device* device,
+    const MemoryConfig& memory_config) {
+        return create_device_tensor(shape, dtype, layout, device, memory_config);
+    }
+};
+
+struct EmptyLike {
+   static ttnn::Tensor invoke(
+    const ttnn::Tensor& tensor,
+    const std::optional<DataType>& dtype = std::nullopt,
+    const std::optional<Layout>& layout = std::nullopt,
+    const std::optional<std::reference_wrapper<Device>>& device_arg = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    Device* device = device_arg.has_value() ? &(device_arg.value().get()) : tensor.device();
+    Layout layout_value = layout.value_or(tensor.get_layout());
+    DataType dtype_value = dtype.value_or(tensor.get_dtype());
+    MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
+        return create_device_tensor(tensor.get_shape(), dtype_value, layout_value, device, mem_cfg);
+    }
+};
 
 struct Full {
     static ttnn::Tensor invoke(
