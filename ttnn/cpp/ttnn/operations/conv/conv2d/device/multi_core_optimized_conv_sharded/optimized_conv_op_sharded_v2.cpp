@@ -526,7 +526,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
     uint32_t pad_h = (uint32_t)sliding_window_config.pad_hw.first;
     uint32_t pad_w = (uint32_t)sliding_window_config.pad_hw.second;
-
+    uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
+    uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
+    
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] =
         optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(
@@ -730,6 +732,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         log_debug(LogOp, "weight_block_w_ntiles: {}", weight_block_w_ntiles);
         log_debug(LogOp, "out_subblock_h_ntiles_padded: {}", out_subblock_h_ntiles_padded);
         log_debug(LogOp, "out_subblock_w_ntiles: {}", out_subblock_w_ntiles);
+        log_debug(LogOp, "filter_h: {}", filter_h);
+        log_debug(LogOp, "filter_w: {}", filter_w);
+        log_debug(LogOp, "dilation_h: {}", dilation_h);
+        log_debug(LogOp, "dilation_w: {}", dilation_w);
     }
 
     // For debug
@@ -1176,6 +1182,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         (uint32_t)(src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
         (uint32_t)stride_h,
         (uint32_t)stride_w,
+        (uint32_t)dilation_h,
+        (uint32_t)dilation_w,
         (uint32_t)conv_act_size_w,
         (uint32_t)conv_output_size_w,  // conv_output_w_last_index
         (uint32_t)conv_act_c_read_bytes,
