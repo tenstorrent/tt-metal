@@ -238,7 +238,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("dropout_tile_init({}u);", (uint32_t)param0),
                 fmt::format("dropout_tile({}, {}u, {}u);", idst, uprob, Converter::to_hex(scale))
             };
-
+            //tt::log_warning(tt::LogAlways, "dropout_tile_init({}u);", (uint32_t)param0);
+            //tt::log_warning(tt::LogAlways, "dropout_tile({}, {}u, {}u);", idst, uprob, Converter::to_hex(scale));
             break;
         }
         default: TT_ASSERT(false && "unexpected parameterized type");
