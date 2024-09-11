@@ -50,7 +50,7 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
 
     ```bash
     # Run the demo using sampling decode
-    pytest --co models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-device_params0-short_context-check_disabled-sampling-tt-70b-T3000-80L-decode_only-trace_mode_on-text_completion-llama3]
+    pytest -svv models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-device_params0-short_context-check_disabled-sampling-tt-70b-T3000-80L-decode_only-trace_mode_on-text_completion-llama3]
     ```
 
 4. **Run the performance test:**
