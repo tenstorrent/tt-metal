@@ -27,6 +27,8 @@ on:
           - data_movement.concat.concat_interleaved_n_tensors
           - data_movement.concat.concat_interleaved
           - data_movement.concat.concat_sharded
+          - data_movement.slice.slice_pytorch2_rm
+          - data_movement.slice.slice_pytorch2_tiled
   schedule:
     - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 

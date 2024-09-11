@@ -2511,3 +2511,16 @@ def complex_is_real(x, *args, **kwargs):
 
 def complex_is_imag(x, *args, **kwargs):
     return torch.isreal(x)
+
+
+def logiteps_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    golden_function = ttnn.get_golden_function(ttnn.logiteps_bw)
+
+    golden_tensor = golden_function(grad_data, in_data, 0.0001)
+
+    return in_data.grad

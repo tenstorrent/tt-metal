@@ -2,6 +2,7 @@
 # precedence.
 
 .github/ @tt-rkim @ttmchiou @TT-billteng
+.github/workflows/ttnn-run-sweeps.yaml @xanderchin @jdesousa-TT @sjameelTT
 
 /infra/ @tt-rkim
 
@@ -106,6 +107,7 @@ ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt
 ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @cfjchu
 ttnn/cpp/ttnn/operations/pool/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
 ttnn/cpp/ttnn/operations/conv/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic @bbradelTT
+ttnn/cpp/ttnn/operations/sliding_window/ @mywoodstock @sankarmanoj-tt @pavlejosipovic
 ttnn/cpp/ttnn/operations/data_movement/ @tarafdarTT @sjameelTT @yan-zaretskiy
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT
 ttnn/cpp/ttnn/operations/eltwise/ @patrickroberts @yan-zaretskiy @eyonland

@@ -24,9 +24,9 @@ bool SlidingWindowConfig::has_parallel_config() const {
     * Calculate the window op output shape, excludes the channel dimension since this config is independent of the depth.
     */
 Shape SlidingWindowConfig::get_output_shape() const {
-    uint32_t output_h = (input_hw.first + 2 * pad_hw.first - dilation_hw.first * window_hw.first) / stride_hw.first + 1;
-    uint32_t output_w = (input_hw.second + 2 * pad_hw.second - dilation_hw.second * window_hw.second) / stride_hw.second + 1;
-    log_debug(tt::LogOp, "output_size: {} {} {}", batch_size, output_h, output_w);
+    uint32_t output_h = (input_hw.first + 2 * pad_hw.first - window_hw.first - (dilation_hw.first - 1) * (window_hw.first - 1 )) / stride_hw.first + 1;
+    uint32_t output_w = (input_hw.second + 2 * pad_hw.second - window_hw.second - (dilation_hw.second - 1) * (window_hw.second - 1 )) / stride_hw.second + 1;
+    log_debug(tt::LogOp, "SlidingWindowConfig::output_size: {} {} {}", batch_size, output_h, output_w);
     return Shape( std::vector<uint32_t>{batch_size, output_h, output_w, 0});
 }
 
@@ -85,11 +85,15 @@ std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(c
     uint32_t output_shard_h = config.get_output_shard_y(config.snap_to_tile);
     uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second;
     uint32_t max_index = op_trace_metadata.size();
-    uint32_t halo_with_pad_len = (config.window_hw.first - 1) * padded_input_w + config.window_hw.second - 1;
+
+    uint32_t dilated_window_h = config.window_hw.first + (config.dilation_hw.first - 1) * (config.window_hw.first - 1 );
+    uint32_t dilated_window_w = config.window_hw.second + (config.dilation_hw.second - 1) * (config.window_hw.second - 1 );
+    uint32_t halo_with_pad_len = (dilated_window_h - 1) * padded_input_w + dilated_window_w - 1;
+
     uint32_t output_index_start = 0;
     for (uint32_t core = 0; core < num_cores; ++ core) {
         uint32_t output_index_end = std::min(output_index_start + output_shard_h, max_index) - 1;
-        uint32_t input_index_start = op_trace_metadata[output_index_start];
+        uint32_t input_index_start = op_trace_metadata[std::min(output_index_start, max_index - 1)];
         uint32_t input_index_end = op_trace_metadata[output_index_end] + halo_with_pad_len;
         if (input_index_start == 0 and output_index_start != 0) {
             input_index_start = op_trace_metadata[output_index_end] + 1;

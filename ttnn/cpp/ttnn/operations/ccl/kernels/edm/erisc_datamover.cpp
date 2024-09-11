@@ -351,7 +351,7 @@ void kernel_main() {
                     while (!channel.eth_is_receiver_channel_send_done()) {
                         wait_count++;
                         if (wait_count > wait_max) {
-                            DEBUG_STATUS("STK");
+                            WAYPOINT("STK");
                             run_routing();
                             wait_count = 0;
                         }
@@ -361,5 +361,5 @@ void kernel_main() {
         }
     }
 
-    DEBUG_STATUS("DONE");
+    WAYPOINT("DONE");
 }

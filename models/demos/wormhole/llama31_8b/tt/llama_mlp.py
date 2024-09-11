@@ -73,6 +73,7 @@ class TtLlamaMLP(torch.nn.Module):
             dtype=ttnn.bfloat16,
             activation="silu" if not pc_1 else None,
             program_config=pc_1,
+            memory_config=ttnn.L1_MEMORY_CONFIG if seq_len <= 32 else ttnn.DRAM_MEMORY_CONFIG,
         )
 
         w3_out = ttnn.linear(
@@ -82,6 +83,7 @@ class TtLlamaMLP(torch.nn.Module):
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             dtype=ttnn.bfloat16,
             program_config=pc_3,
+            memory_config=ttnn.L1_MEMORY_CONFIG if seq_len <= 32 else ttnn.DRAM_MEMORY_CONFIG,
         )
 
         # x.deallocate(True)
@@ -97,6 +99,7 @@ class TtLlamaMLP(torch.nn.Module):
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
             dtype=ttnn.bfloat8_b,
             program_config=pc_2,
+            memory_config=ttnn.L1_MEMORY_CONFIG if seq_len <= 32 else ttnn.DRAM_MEMORY_CONFIG,
         )
 
         w2_in.deallocate(True)
