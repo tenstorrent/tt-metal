@@ -14,7 +14,7 @@ jobs:
       matrix:
         # Since pre-compiled builds only run on 20.04, we can only test on 20.04 for now
         # The full 22.04 flow can be tested without precompiled
-        os: ${{ ['ubuntu-20.04'] && inputs.from-precompiled || ['ubuntu-20.04', 'ubuntu-22.04'] }}
+        os: ${{ fromJson('["ubuntu-20.04"]' && inputs.from-precompiled || '["ubuntu-20.04", "ubuntu-22.04"]') }}
         arch: [grayskull, wormhole_b0]
     uses: ./.github/workflows/_build-wheels-impl.yaml
     with:
@@ -25,7 +25,7 @@ jobs:
     needs: build-wheels
     strategy:
       matrix:
-        os: ${{ fromJson('["ubuntu-20.04"]') && inputs.from-precompiled || fromJson('["ubuntu-20.04", "ubuntu-22.04"]') }}
+        os: ${{ fromJson('["ubuntu-20.04"]' && inputs.from-precompiled || '["ubuntu-20.04", "ubuntu-22.04"]') }}
         runner-hw-info: [
           {arch: grayskull},
           {arch: wormhole_b0}
