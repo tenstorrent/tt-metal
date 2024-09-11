@@ -262,7 +262,7 @@ class TtModelArgs:
 
             if self.di_dt_workaround:
                 self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(7, 8),
+                    compute_with_storage_grid_size=(8, 8),
                     in0_block_w=1,
                     per_core_M=1,
                     per_core_N=72,  # vocab size = 128k = 4008 tiles. 4008/56cores = 72
@@ -277,7 +277,7 @@ class TtModelArgs:
                     compute_with_storage_grid_size=(8, 8),
                     in0_block_w=2,
                     per_core_M=1,
-                    per_core_N=72,  # vocab size = 128k = 4008 tiles. 4008/56cores = 72
+                    per_core_N=64,  # 72,  # vocab size = 128k = 4008 tiles. 4008/56cores = 72
                     out_subblock_h=1,
                     out_subblock_w=4,
                     fuse_batch=True,

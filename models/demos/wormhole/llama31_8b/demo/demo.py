@@ -105,8 +105,11 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
 
     generation_start_pos = 0
-    max_generated_tokens = 120
+    max_generated_tokens = 5
     users_decoding = True
+    trace_id = None
+    device_tt_in = None
+    device_tt_out = None
 
     # Preprocess initial prompt inputs
     tt_decode_input, pt_encoded_input, input_mask, rot_emb_matrix_list = preprocess_inputs(
@@ -149,109 +152,151 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     all_outputs = [[] for _ in range(batch_size)]
     user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
-    iteration = 0
-    # Keep running inference as long as there is a user in the batch still decoding or max tokens per user are decoded
-    while users_decoding:
-        iteration_time_start = time()
-        curr_pos = generation_start_pos + iteration
+    from viztracer import VizTracer
 
-        if embed_on_device and iteration > 0:
-            current_pos = curr_pos
-            decode_input = tt_decode_input
-        else:
-            # Prepare inputs for decode mode
-            decode_input, current_pos = prepare_inputs_ttnn(
-                tt_decode_input,
-                curr_pos,
-                model_args.dim,
-                model_args.sliding_window,
-                tt_model.device,
-            )
+    with VizTracer() as tracer:
+        iteration = 0
+        # Keep running inference as long as there is a user in the batch still decoding or max tokens per user are decoded
+        while users_decoding:
+            iteration_time_start = time()
+            curr_pos = generation_start_pos + iteration
 
-        # Run ttnn llama model
-        tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
-        tt_out = ttnn.untilize(
-            tt_out, use_multicore=False
-        )  # multi-core OOMs (https://github.com/tenstorrent/tt-metal/issues/9022)
-        tt_output_torch = (
-            ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[: model_args.max_batch_size, :, :]
-        )  # [batch, seq, hidden_dim]
-        # Update rotation matrix for next iteration
-        current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
-        # If temperature is 0, does greedy decoding (top-1)
-        tt_out_tok = sample(tt_output_torch, temperature=0, top_p=0.8)
-
-        # TODO argmax on device
-        # tt_out = ttnn.to_layout(tt_out, ttnn.ROW_MAJOR_LAYOUT)
-        # tt_out = ttnn.permute(tt_out, (2, 1, 0, 3))
-        # tt_out = ttnn.reshape(tt_out, (tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]))  # Squeeze(1)
-        # tt_out_argmax = ttnn.argmax(tt_out, dim=-1)
-        # Typecast from bf16 to uint32 for embedding
-        # tt_out_tok = ttnn.clone(tt_out_argmax, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.uint32)
-        # tt_out_tok = ttnn.experimental.tensor.typecast(tt_out_tok, dtype=ttnn.uint32)
-
-        if iteration < input_mask.shape[1]:  # If prefill
-            # If token is pad token, start generating new token, otherwise, push the next prompt token to the model
-            tt_out_tok = torch.where(
-                input_mask[:, iteration], pt_encoded_input[:, iteration], tt_out_tok[:, 0]
-            ).unsqueeze(1)
-
-        # Save output token to print out later
-        for user in range(batch_size):
-            user_tok = tt_out_tok[user].tolist()
-            if user_tok[0] != 28803 and user_done[user] == False:  # Stop saving the ouput after hitting the EOS token
-                all_outputs[user].append(user_tok[0])
+            if embed_on_device and iteration > 0:
+                current_pos = curr_pos
             else:
-                user_done[user] = True
+                # Prepare inputs for decode mode
+                decode_input, current_pos = prepare_inputs_ttnn(
+                    tt_decode_input,
+                    curr_pos,
+                    model_args.dim,
+                    model_args.sliding_window,
+                    tt_model.device,
+                )
+
+            if trace_id is None:
+                assert embed_on_device, "Embedding on host is not implemented with trace capture"
+                # Trace on iteration 2 as we build embed cache on iteration 1
+                if iteration > 1:
+                    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+                if iteration > 0 and embed_on_device:  # host-embedded for iteration 0
+                    decode_input = tt_embd(tt_decode_input)
+                intermediate_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
+                intermediate_out = ttnn.untilize(intermediate_out, use_multicore=True)
+                # ensure persistent device in/out buffers are in DRAM
+                device_tt_out = ttnn.to_memory_config(intermediate_out, ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(intermediate_out, force=True)
+                current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
+                if iteration > 1:
+                    ttnn.end_trace_capture(device, trace_id)
+                    continue  # Capturing the trace doesn't actually execute the commands, so start trace execution from the same iteration
+                # ttnn.DumpDeviceProfiler(device)
+
+                tt_out = device_tt_out
+            else:
+                ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+                tt_out = ttnn.from_device(device_tt_out)
+
+            tt_output_torch = (
+                ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[: model_args.max_batch_size, :, :]
+            )  # [batch, seq, hidden_dim]
+            # If temperature is 0, does greedy decoding (top-1)
+            tt_out_tok = sample(tt_output_torch, temperature=0, top_p=0.8)
+
+            # # Run ttnn llama model
+            # tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
+            # tt_out = ttnn.untilize(
+            #     tt_out, use_multicore=False
+            # )  # multi-core OOMs (https://github.com/tenstorrent/tt-metal/issues/9022)
+            # tt_output_torch = (
+            #     ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[: model_args.max_batch_size, :, :]
+            # )  # [batch, seq, hidden_dim]
+            # # Update rotation matrix for next iteration
+            # current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
+            # # If temperature is 0, does greedy decoding (top-1)
+            # tt_out_tok = sample(tt_output_torch, temperature=0, top_p=0.8)
+
+            # TODO argmax on device
+            # tt_out = ttnn.to_layout(tt_out, ttnn.ROW_MAJOR_LAYOUT)
+            # tt_out = ttnn.permute(tt_out, (2, 1, 0, 3))
+            # tt_out = ttnn.reshape(tt_out, (tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]))  # Squeeze(1)
+            # tt_out_argmax = ttnn.argmax(tt_out, dim=-1)
+            # Typecast from bf16 to uint32 for embedding
+            # tt_out_tok = ttnn.clone(tt_out_argmax, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.uint32)
+            # tt_out_tok = ttnn.experimental.tensor.typecast(tt_out_tok, dtype=ttnn.uint32)
+
+            if iteration < input_mask.shape[1]:  # If prefill
+                # If token is pad token, start generating new token, otherwise, push the next prompt token to the model
+                tt_out_tok = torch.where(
+                    input_mask[:, iteration], pt_encoded_input[:, iteration], tt_out_tok[:, 0]
+                ).unsqueeze(1)
+
+            # Save output token to print out later
+            for user in range(batch_size):
+                user_tok = tt_out_tok[user].tolist()
                 if (
-                    iteration < input_mask.shape[1]
-                ):  # Still in prefill, so ignore EOS token and save the generated token
-                    # all_outputs[user].append(user_tok[0])
-                    pass
+                    user_tok[0] != 28803 and user_done[user] == False
+                ):  # Stop saving the ouput after hitting the EOS token
+                    all_outputs[user].append(user_tok[0])
                 else:
-                    logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
-                    if all(user_done):
-                        users_decoding = False
+                    user_done[user] = True
+                    if (
+                        iteration < input_mask.shape[1]
+                    ):  # Still in prefill, so ignore EOS token and save the generated token
+                        # all_outputs[user].append(user_tok[0])
+                        pass
+                    else:
+                        logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
+                        if all(user_done):
+                            users_decoding = False
 
-        if embed_on_device:
-            # Pad tt_out_tok to batch size of 32
-            padded_tt_out_tok = torch.zeros(1, 32, dtype=tt_out_tok.dtype, device=tt_out_tok.device)
-            padded_tt_out_tok[: tt_out_tok.shape[1]] = tt_out_tok
-            tt_out_tok = ttnn.from_torch(
-                padded_tt_out_tok,
-                device=device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-            tt_decode_input = tt_embd(tt_out_tok)
-        else:
-            tt_decode_input = embd(tt_out_tok)
-
-        # Print out generated outputs for each user at the end of every iteration
-        iteration_time = time() - iteration_time_start
-        tokens_per_second_per_user = 1 / iteration_time
-        if not is_ci_env:
-            if len(user_input) == 1:
-                logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
+            if embed_on_device:
+                # Pad tt_out_tok to batch size of 32
+                padded_tt_out_tok = torch.zeros(1, 32, dtype=tt_out_tok.dtype, device=tt_out_tok.device)
+                padded_tt_out_tok[: tt_out_tok.shape[1]] = tt_out_tok
+                if trace_id is None:
+                    device_tt_in = tt_out_tok = ttnn.from_torch(
+                        padded_tt_out_tok,
+                        device=device,
+                        dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                    )
+                else:
+                    tt_out_tok = ttnn.from_torch(
+                        padded_tt_out_tok,
+                        dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                    )
+                    ttnn.copy_host_to_device_tensor(tt_out_tok, device_tt_in)
+                tt_decode_input = (
+                    device_tt_in  # tt_embd(tt_out_tok) on-device embedding is performed as part of trace capture
+                )
             else:
-                for user in range(batch_size):
-                    text = "".join(tokenizer.decode(all_outputs[user]))
-                    if len(text) > 100:
-                        text = "..." + text[-97:]
-                    text = text.replace("\n", " ")
-                    logger.info("[User {}] {}".format(user, text))
+                tt_decode_input = embd(tt_out_tok)
 
-        # Always print perf at every iteration
-        logger.info(
-            f"Iteration {iteration}: {1000*iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
-        )
+            # Print out generated outputs for each user at the end of every iteration
+            iteration_time = time() - iteration_time_start
+            tokens_per_second_per_user = 1 / iteration_time
+            if not is_ci_env:
+                if len(user_input) == 1:
+                    logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
+                else:
+                    for user in range(batch_size):
+                        text = "".join(tokenizer.decode(all_outputs[user]))
+                        if len(text) > 100:
+                            text = "..." + text[-97:]
+                        text = text.replace("\n", " ")
+                        logger.info("[User {}] {}".format(user, text))
 
-        iteration += 1
+            # Always print perf at every iteration
+            logger.info(
+                f"Iteration {iteration}: {1000*iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
+            )
 
-        # Upper limit of generated tokens for each user (to avoid infinite generation in case eos is not seen)
-        if iteration >= max_generated_tokens:
-            users_decoding = False
+            iteration += 1
+
+            # Upper limit of generated tokens for each user (to avoid infinite generation in case eos is not seen)
+            if iteration >= max_generated_tokens:
+                users_decoding = False
 
     # In CI only print the final generated output to avoid spamming the logs
     if is_ci_env:
@@ -273,6 +318,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     # ids=["general_weights", "instruct_weights", "instruct_weights_prefill"],
     ids=["general_weights", "instruct_weights"],
 )
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 32 * 106496}], indirect=True)
 def test_llama_demo(device, use_program_cache, input_prompts, instruct_weights, is_ci_env):
     if is_ci_env and instruct_weights == False:
         pytest.skip("CI demo test only runs instruct weights to reduce CI pipeline load (both are supported)")
