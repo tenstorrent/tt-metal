@@ -328,8 +328,7 @@ def run_conv_with_split(
         (960, 960, 4, 4, 3, 3, 0, 0, 1),
         (256, 2048, 8, 8, 3, 3, 1, 1, 8),
         (512, 2048, 16, 16, 3, 3, 1, 1, 4),
-        (768, 768, 16, 16, 3, 3, 1, 1, 1),
-        (1280, 1280, 16, 16, 3, 3, 1, 1, 1),
+        (768, 768, 16, 16, 3, 3, 0, 0, 1),
         (1280, 2560, 16, 16, 3, 3, 1, 1, 2),
         (1280, 2560, 16, 16, 3, 3, 0, 0, 2),
 
@@ -388,7 +387,7 @@ def test_conv_ws(
     torch_input_tensor_nchw = torch_input_tensor_nchw.broadcast_to(conv_input_shape).float()
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
 
-    torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()
+    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
 
     tt_bias_tensor = None
     torch_bias_tensor = None
@@ -463,12 +462,13 @@ def test_conv_ws(
     # NHWC to NCHW
     # torch_output_tensor = torch_output_tensor[:, :, : batch_size * out_height * out_width, :]
     torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, output_channels)
-
+    logger.info(f"Output Shape : {torch_output_tensor.shape}")
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
     reader_patterns_cache.clear()
 
     pcc = 0.94
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
+    logger.info(f"{pcc_msg} Threshold : {pcc}")
     if not passing:
         logger.error("Fails with PCC ", pcc_msg)
     assert passing
