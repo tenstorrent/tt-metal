@@ -49,11 +49,12 @@ jobs:
         if: ${{ inputs.from-precompiled }}
         with:
           arch: ${{ inputs.arch }}
+      - name: Set precompiled dir for precompile builds
+        if: ${{ inputs.from-precompiled }}
+        # TT_FROM_PRECOMPILED_DIR env variable allows us to not re-run the full C++ build and instead
+        # rely on the artifact that was already compiled. We point it to where the repo is.
+        run: echo "TT_FROM_PRECOMPILED_DIR=${{ github.workspace }}" >> $GITHUB_ENV
       - name: Build Python package distribution
-        env:
-          # TT_FROM_PRECOMPILED env variable allows us to not re-run the full C++ build and instead
-          # rely on the artifact that was already compiled.
-          TT_FROM_PRECOMPILED: ${{ inputs.from-precompiled && 'True' || 'False' }}
         run: python -m build
       - name: Upload distribution as artifact
         uses: actions/upload-artifact@v4
