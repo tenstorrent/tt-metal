@@ -63,6 +63,7 @@ The table below shows the achieved bandwidth for DRAM u-benchmark and matmul in 
 
 | Test                 | DRAM BW (GB/s) @12GBps | DRAM BW (GB/s) @14GBps |
 |----------------------|------------------------|------------------------|
+| DRAM spec speed      | 288                    | 336                    |
 | DRAM u-benchmark      | 267                    | 310                    |
 | Llama3-70 decode      | 239-260                | 247-294                |
 | Mixtral8x7b decode    | 243-261                | 267-300                |
