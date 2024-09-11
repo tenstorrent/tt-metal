@@ -58,7 +58,7 @@ from models.demos.t3000.llama2_70b.demo.demo import main, construct_arg
 )
 @pytest.mark.parametrize(
     "ground_truth",
-    ("models/demos/t3000/llama2_70b/demo/data/llama2_ground_truth.json", None),
+    ("models/demos/t3000/llama2_70b/demo/data/llama3_ground_truth.json", None),
     ids=("check_enabled", "check_disabled"),
 )
 @pytest.mark.parametrize(
