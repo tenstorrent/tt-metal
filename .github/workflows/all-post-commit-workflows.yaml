@@ -17,9 +17,11 @@ jobs:
   static-checks:
     uses: ./.github/workflows/all-static-checks.yaml
     secrets: inherit
-  build-wheels:
+  build-and-test-wheels:
     needs: build-artifact
-    uses: ./.github/workflows/eager-package-main.yaml
+    uses: ./.github/workflows/_build-and-test-wheels-impl.yaml
+    with:
+      from-precompiled: true
     secrets: inherit
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
@@ -62,7 +64,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
-    needs: build-wheels
+    needs: build-and-test-wheels
     secrets: inherit
     strategy:
       fail-fast: false
@@ -78,7 +80,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # TTNN FD Unit tests
   ttnn-unit-tests:
-    needs: build-wheels
+    needs: build-and-test-wheels
     secrets: inherit
     strategy:
       fail-fast: false
@@ -94,7 +96,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # FD Model Tests
   models-unit-tests:
-    needs: build-wheels
+    needs: build-and-test-wheels
     secrets: inherit
     strategy:
       fail-fast: false

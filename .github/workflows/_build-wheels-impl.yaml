@@ -1,22 +1,22 @@
-name: "[internal] Python wheel build and test impl"
+name: "[internal] Python wheels build impl"
 
 on:
   workflow_call:
     inputs:
-      environment:
-        required: True
-        type: string
       os:
         required: True
         type: string
       arch:
         required: True
         type: string
+      from-precompiled:
+        required: True
+        default: True
+        type: boolean
 
 jobs:
-  build-eager-package:
+  build-wheel:
     runs-on: ${{ inputs.os }}
-    environment: ${{ inputs.environment }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ inputs.arch }}
@@ -51,13 +51,15 @@ jobs:
         run: |
           echo "DEVICE_CXX=g++" >> $GITHUB_ENV
       - uses: ./.github/actions/prepare-metal-run
+        if: ${{ inputs.from-precompiled }}
         with:
           arch: ${{ inputs.arch }}
       - name: Build Python package distribution
-        run: |
-          TT_FROM_PRECOMPILED=True python -m build
-        # TT_FROM_PRECOMPILED env variable allows us to not re-run `make install` and instead
-        # rely on the artifact that was already compiled.
+        env:
+          # TT_FROM_PRECOMPILED env variable allows us to not re-run the full C++ build and instead
+          # rely on the artifact that was already compiled.
+          TT_FROM_PRECOMPILED: ${{ inputs.from-precompiled && 'True' || 'False' }}
+        run: python -m build
       - name: Upload distribution as artifact
         uses: actions/upload-artifact@v4
         with:
