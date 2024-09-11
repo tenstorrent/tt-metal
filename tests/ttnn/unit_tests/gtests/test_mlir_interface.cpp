@@ -16,7 +16,6 @@
 #include "impl/program/program.hpp"
 #include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
 #include "tt_metal/common/logger.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/unary/unary_constraints.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/graph/graph_operation_queries.hpp"
 #include "ttnn/graph/graph_processor.hpp"
@@ -26,9 +25,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_constraints.hpp"
 #include "ttnn/operations/eltwise/binary/binary_l1_interface.hpp"
-#include "ttnn/operations/matmul/matmul_constraints.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
-#include "ttnn/operations/normalization/softmax/softmax_constraints.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -40,26 +37,28 @@ namespace operations {
 namespace binary {
 namespace test {
 
-struct InputShapeTestParam {
+struct OperandShapeTestParam {
     ttnn::types::Shape shape;
     tt::tt_metal::MemoryConfig memory_config;
     tt::tt_metal::DataType data_type = tt::tt_metal::DataType::BFLOAT16;
     tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE;
 };
 
-class MlirInterfaceTestFixture : public TTNNFixtureWithDevice,
-                                 public testing::WithParamInterface<std::tuple<
-                                     InputShapeTestParam,
-                                     InputShapeTestParam,
-                                     InputShapeTestParam,
-                                     tt::tt_metal::IGraphProcessor::RunMode>> {};
+class MlirInterfaceTestFixture
+    : public TTNNFixtureWithDevice,
+      public testing::WithParamInterface<
+          std::tuple<OperandShapeTestParam, OperandShapeTestParam, tt::tt_metal::IGraphProcessor::RunMode>> {};
+
+OperandShapeTestParam select_larger_input(const OperandShapeTestParam& a, const OperandShapeTestParam& b) {
+    return a.shape.volume() >= b.shape.volume() ? a : b;
+}
 
 TEST_P(MlirInterfaceTestFixture, MlirInterfaceTest) {
     auto param_combination = GetParam();
     auto input_a = std::get<0>(param_combination);
     auto input_b = std::get<1>(param_combination);
-    auto input_o = std::get<2>(param_combination);
-    auto run_mode = std::get<3>(param_combination);
+    auto output = select_larger_input(input_a, input_b);
+    auto run_mode = std::get<2>(param_combination);
 
     // pad input shapes (this isn't happening automagically)
     auto pad_shape_to_tile = [](const ttnn::Shape& shape) {
@@ -85,11 +84,11 @@ TEST_P(MlirInterfaceTestFixture, MlirInterfaceTest) {
     // Check input params against op constraints
     try {
         std::unique_ptr<EltwiseOpConstraintsBuilder> builder = EltwiseOpConstraintsFactory::Make(
-            input_a.shape, input_a.memory_config, input_b.shape, input_b.memory_config, input_o.memory_config);
+            input_a.shape, input_a.memory_config, input_b.shape, input_b.memory_config, output.memory_config);
         if (builder) {
             const auto op_constraints =
                 (*builder)
-                    .setDataTypeA(input_a.data_type)
+                    .setDataTypeA(input_b.data_type)
                     .setDataTypeB(input_b.data_type)
                     .setDataTypeO(input_a.data_type)  // assuming output data type is the same as input_a
                     .build_constraints();
@@ -128,7 +127,7 @@ TEST_P(MlirInterfaceTestFixture, MlirInterfaceTest) {
         {
             auto l1_input_a = std::make_tuple(input_a.shape, input_a.data_type, input_a.layout, input_a.memory_config);
             auto l1_input_b = std::make_tuple(input_b.shape, input_b.data_type, input_b.layout, input_b.memory_config);
-            auto l1_output = std::make_tuple(input_a.shape, input_a.data_type, input_a.layout, input_a.memory_config);
+            auto l1_output = std::make_tuple(output.shape, output.data_type, output.layout, output.memory_config);
 
             auto l1_usage = EltwiseOpL1UsageFactory::Make(l1_input_a, l1_input_b, l1_output);
 
@@ -136,8 +135,8 @@ TEST_P(MlirInterfaceTestFixture, MlirInterfaceTest) {
             auto graph_circular_buffer_allocations = graph::extract_circular_buffer_allocations_per_core(json_trace);
             EXPECT_EQ(l1_cb_usage.size(), graph_circular_buffer_allocations.size());
             for (int i = 0; i < l1_cb_usage.size(); i++) {
-                std::cout << "DBG cb[" << i << "]" << std::get<0>(l1_cb_usage[i])
-                          << std::endl;  // << " " << graph_circular_buffer_allocations[i] << std::endl;
+                std::cout << "DBG cb[" << i << "]" << std::get<0>(l1_cb_usage[i]) << std::endl
+                          << " " << graph_circular_buffer_allocations[i] << std::endl;
                 EXPECT_EQ(std::get<0>(l1_cb_usage[i]), graph_circular_buffer_allocations[i]);
             }
 
@@ -156,11 +155,34 @@ TEST_P(MlirInterfaceTestFixture, MlirInterfaceTest) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
+    MlirInterfaceTestsREPEAT_MAX_BLOCK_SCALE,  // Prefix for the instantiated test suite
+    MlirInterfaceTestFixture,                  // Test suite name
+    ::testing::Combine(
+        ::testing::Values(OperandShapeTestParam{
+            .shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 32 * 32, 32 * 32}),
+            .memory_config =
+                {.memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+                 .buffer_type = tt::tt_metal::BufferType::L1,
+                 .shard_spec =
+                     tt::tt_metal::ShardSpec{
+                         CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{3, 3}}}},
+                         {6 * 32, 32 * 32},
+                         ShardOrientation::COL_MAJOR}},
+        }),
+
+        ::testing::Values(OperandShapeTestParam{
+            .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32 * 32, 32 * 32}),
+            .memory_config = ttnn::L1_MEMORY_CONFIG,
+        }),
+
+        ::testing::Values(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH)));
+
+INSTANTIATE_TEST_SUITE_P(
     MlirInterfaceTests,        // Prefix for the instantiated test suite
     MlirInterfaceTestFixture,  // Test suite name
     ::testing::Combine(
         ::testing::Values(
-            InputShapeTestParam{
+            OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 5, 32 * 64, 32}),
                 .memory_config =
                     {.memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
@@ -171,7 +193,7 @@ INSTANTIATE_TEST_SUITE_P(
                              {160, 32},
                              ShardOrientation::COL_MAJOR}},
             },
-            InputShapeTestParam{
+            OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 5, 32, 32 * 64}),
                 .memory_config =
                     {.memory_layout = tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
@@ -179,20 +201,20 @@ INSTANTIATE_TEST_SUITE_P(
                      .shard_spec =
                          tt::tt_metal::ShardSpec{
                              CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 7}}}},
-                             {32, 160},
+                             {5 * 32, 160},
                              ShardOrientation::COL_MAJOR}},
             },
-            InputShapeTestParam{
+            OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32, 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
             },
-            InputShapeTestParam{
+            OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{4, 2, 5 * 32, 5 * 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
             }),
 
         ::testing::Values(
-            InputShapeTestParam{
+            OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 5, 32 * 64, 32}),
                 .memory_config =
                     {.memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
@@ -203,7 +225,7 @@ INSTANTIATE_TEST_SUITE_P(
                              {160, 32},
                              ShardOrientation::COL_MAJOR}},
             },
-            InputShapeTestParam{
+            OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 5, 32, 32 * 64}),
                 .memory_config =
                     {.memory_layout = tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
@@ -211,79 +233,46 @@ INSTANTIATE_TEST_SUITE_P(
                      .shard_spec =
                          tt::tt_metal::ShardSpec{
                              CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 7}}}},
-                             {32, 160},
+                             {5 * 32, 160},
                              ShardOrientation::COL_MAJOR}},
             },
-            InputShapeTestParam{
+            OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32, 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
             },
-            InputShapeTestParam{
+            OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 4, 32, 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
             },
-            InputShapeTestParam{
+            OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 32, 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
             },
-            InputShapeTestParam{
+            OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{3, 4, 32, 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
             },
-            InputShapeTestParam{
+            OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 1, 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
             },
-            InputShapeTestParam{
+            OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32, 1}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
             },
-            InputShapeTestParam{
+            OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 1, 1}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
             },
-            InputShapeTestParam{
+            OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{4, 2, 5 * 32, 5 * 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
             },
-            InputShapeTestParam{
+            OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{4, 2, 5 * 32, 1}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
             }),
-        ::testing::Values(
-            InputShapeTestParam{
-                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 5, 32 * 64, 32}),
-                .memory_config =
-                    {.memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-                     .buffer_type = tt::tt_metal::BufferType::L1,
-                     .shard_spec =
-                         tt::tt_metal::ShardSpec{
-                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 7}}}},
-                             {160, 32},
-                             ShardOrientation::COL_MAJOR}},
-            },
-            InputShapeTestParam{
-                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 5, 32, 32 * 64}),
-                .memory_config =
-                    {.memory_layout = tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
-                     .buffer_type = tt::tt_metal::BufferType::L1,
-                     .shard_spec =
-                         tt::tt_metal::ShardSpec{
-                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 7}}}},
-                             {32, 160},
-                             ShardOrientation::COL_MAJOR}},
-            },
-            InputShapeTestParam{
-                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32, 32}),
-                .memory_config = ttnn::L1_MEMORY_CONFIG,
-            },
-            InputShapeTestParam{
-                .shape = ttnn::Shape(tt::tt_metal::Array4D{4, 2, 5 * 32, 5 * 32}),
-                .memory_config = ttnn::L1_MEMORY_CONFIG,
-            }),
 
-        // ::testing::Values(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH,
-        // tt::tt_metal::IGraphProcessor::RunMode::NORMAL)
         ::testing::Values(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH)));
 
 INSTANTIATE_TEST_SUITE_P(
@@ -291,7 +280,7 @@ INSTANTIATE_TEST_SUITE_P(
     MlirInterfaceTestFixture,          // Test suite name
     ::testing::Combine(
         ::testing::Values(
-            InputShapeTestParam{
+            OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 5, 32 * 64, 32}),
                 .memory_config =
                     {.memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
@@ -302,7 +291,7 @@ INSTANTIATE_TEST_SUITE_P(
                              {160, 32},
                              ShardOrientation::COL_MAJOR}},
             },
-            InputShapeTestParam{
+            OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32 * 64, 32}),
                 .memory_config =
                     {.memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
@@ -315,7 +304,7 @@ INSTANTIATE_TEST_SUITE_P(
             }),
 
         ::testing::Values(
-            InputShapeTestParam{
+            OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 5, 32 * 64, 32}),
                 .memory_config =
                     {.memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
@@ -326,7 +315,7 @@ INSTANTIATE_TEST_SUITE_P(
                              {160, 32},
                              ShardOrientation::COL_MAJOR}},
             },
-            InputShapeTestParam{
+            OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32 * 64, 32}),
                 .memory_config =
                     {.memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
@@ -340,32 +329,6 @@ INSTANTIATE_TEST_SUITE_P(
 
             ),
 
-        ::testing::Values(
-            InputShapeTestParam{
-                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 5, 32 * 64, 32}),
-                .memory_config =
-                    {.memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-                     .buffer_type = tt::tt_metal::BufferType::L1,
-                     .shard_spec =
-                         tt::tt_metal::ShardSpec{
-                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 7}}}},
-                             {160, 32},
-                             ShardOrientation::COL_MAJOR}},
-            },
-            InputShapeTestParam{
-                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32 * 64, 32}),
-                .memory_config =
-                    {.memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-                     .buffer_type = tt::tt_metal::BufferType::L1,
-                     .shard_spec =
-                         tt::tt_metal::ShardSpec{
-                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 7}}}},
-                             {160, 32},
-                             ShardOrientation::COL_MAJOR}},
-            }),
-
-        // ::testing::Values(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH,
-        // tt::tt_metal::IGraphProcessor::RunMode::NORMAL)
         ::testing::Values(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH)));
 
 }  // namespace test
