@@ -17,7 +17,7 @@ jobs:
   static-checks:
     uses: ./.github/workflows/all-static-checks.yaml
     secrets: inherit
-  build-wheels:
+  build-and-test-wheels:
     needs: build-artifact
     uses: ./.github/workflows/_build-and-test-wheels-impl.yaml
     with:
