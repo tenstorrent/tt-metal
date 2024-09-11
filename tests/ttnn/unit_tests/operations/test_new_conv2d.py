@@ -1956,6 +1956,7 @@ def test_conv_for_segformer_512x512(
     )
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, groups, use_1d_systolic_array",
