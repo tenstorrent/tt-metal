@@ -225,7 +225,7 @@ class TestBertOpsTrace:
         )
 
     @pytest.mark.parametrize("cq_id", [0])
-    @pytest.mark.parametrize("device_params", [{"trace_region_size": 34816, "num_hw_cqs": 2}], indirect=True)
+    @pytest.mark.parametrize("device_params", [{"trace_region_size": 34816, "num_command_queues": 2}], indirect=True)
     def test_bert_linear_2cqs_initialized(
         self,
         device,

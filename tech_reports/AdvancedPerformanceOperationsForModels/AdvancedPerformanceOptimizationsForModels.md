@@ -156,7 +156,7 @@ Using a second command queue only for writes enables us to eliminate the gap bet
 
 In order to use multiple command queues, we need to be familiar with the following apis:
 
-* `num_hw_cqs`/`num_command_queues` (Currently dependent on whether we are running with single or multi device fixture)
+* `num_command_queues`
 
   This is a parameter to the device creation api, and sets how many command queues to create the device with. The default is one, and the max is two. In pytest, we can pass this using the `device_params` fixture:
 

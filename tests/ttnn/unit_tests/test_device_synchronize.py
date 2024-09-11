@@ -15,7 +15,7 @@ def is_eth_dispatch():
 
 
 @pytest.mark.skipif(is_wormhole_b0() and not is_eth_dispatch(), reason="Requires eth dispatch to run on WH")
-@pytest.mark.parametrize("device_params", [{"num_hw_cqs": 2}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"num_command_queues": 2}], indirect=True)
 def test_read_write_full_synchronize(device):
     zeros = torch.zeros([1, 1, 65536, 2048]).bfloat16()
     input = torch.randn([1, 1, 65536, 2048]).bfloat16()
@@ -48,7 +48,7 @@ def test_read_write_full_synchronize(device):
 
 
 @pytest.mark.skipif(is_wormhole_b0() and not is_eth_dispatch(), reason="Requires eth dispatch to run on WH")
-@pytest.mark.parametrize("device_params", [{"num_hw_cqs": 2}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"num_command_queues": 2}], indirect=True)
 def test_read_write_cq_synchronize(device):
     zeros = torch.zeros([1, 1, 65536, 2048]).bfloat16()
     input = torch.randn([1, 1, 65536, 2048]).bfloat16()
