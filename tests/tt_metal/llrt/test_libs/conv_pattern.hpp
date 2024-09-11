@@ -18,9 +18,9 @@ class ConvParameters {
         uint32_t PadW = 0;
         ConvParameters(uint32_t r, uint32_t s,  uint32_t u,  uint32_t v,  uint32_t padH,  uint32_t padW) :
         R(r), S(s), U(u), V(v), PadH(padH), PadW(padW) {
-            TT_FATAL(U > 0 and V > 0);
-            TT_FATAL(R > 0 and S > 0);
-            TT_FATAL(PadH >= 0 and PadW >= 0);
+            TT_FATAL(U > 0 and V > 0, "Error");
+            TT_FATAL(R > 0 and S > 0, "Error");
+            TT_FATAL(PadH >= 0 and PadW >= 0, "Error");
         }
         void print() {
             std::cout << "Printing conv params" << std::endl;
@@ -82,8 +82,8 @@ template <typename T>
 std::vector<T> untilize_act(std::vector<T> tilized_act,
                                             std::uint32_t output_rows,
                                             std::uint32_t output_cols) {
-    TT_FATAL(output_rows % TILE_HEIGHT == 0);
-    TT_FATAL(output_cols % TILE_WIDTH == 0);
+    TT_FATAL(output_rows % TILE_HEIGHT == 0, "Error");
+    TT_FATAL(output_cols % TILE_WIDTH == 0, "Error");
     uint32_t num_tiles_c = output_cols / TILE_WIDTH;
     uint32_t num_tiles_r = output_rows / TILE_HEIGHT;
     std::vector<T> untilized_act;
@@ -144,8 +144,8 @@ std::vector<std::vector<T>> untilize_weights(std::vector<T> tilized_weights,
 // transform it back to row major full tensor. (This function inverts the tilize() function)
 template <typename T>
 std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
-    TT_FATAL(rows % TILE_HEIGHT == 0);
-    TT_FATAL(cols % TILE_WIDTH == 0);
+    TT_FATAL(rows % TILE_HEIGHT == 0, "Error");
+    TT_FATAL(cols % TILE_WIDTH == 0, "Error");
     int num_tiles_r = rows / TILE_HEIGHT;
     int num_tiles_c = cols / TILE_WIDTH;
     std::vector<T> result;
@@ -169,8 +169,8 @@ std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
 
 template <typename T>
 std::vector<T> tilize_2d_matrix(std::vector<std::vector<T>> row_major_matrix) {
-    TT_FATAL(row_major_matrix.size() % TILE_HEIGHT == 0);
-    TT_FATAL(row_major_matrix.at(0).size() % TILE_WIDTH == 0);
+    TT_FATAL(row_major_matrix.size() % TILE_HEIGHT == 0, "Error");
+    TT_FATAL(row_major_matrix.at(0).size() % TILE_WIDTH == 0, "Error");
     int num_tiles_r = row_major_matrix.size() / TILE_HEIGHT;
     int num_tiles_c = row_major_matrix.at(0).size() / TILE_WIDTH;
     std::vector<T> result;
@@ -248,8 +248,8 @@ std::vector<std::vector<T>> move_weights_dram_to_l1_mm(tt::deprecated::Tensor<T>
 // is contiguous
 template <typename T>
 std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
-    TT_FATAL(rows % TILE_HEIGHT == 0);
-    TT_FATAL(cols % TILE_WIDTH == 0);
+    TT_FATAL(rows % TILE_HEIGHT == 0, "Error");
+    TT_FATAL(cols % TILE_WIDTH == 0, "Error");
     int num_tiles_r = rows / TILE_HEIGHT;
     int num_tiles_c = cols / TILE_WIDTH;
     std::vector<T> result;

@@ -28,18 +28,18 @@ void check_program_is_mapped_to_correct_cores(const tt_metal::Program &program, 
                 auto logical_core = CoreCoord{x, y};
                 for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
                     auto kernel = tt_metal::detail::GetKernel(program, kernel_id);
-                    TT_FATAL(kernel->is_on_logical_core(logical_core));
+                    TT_FATAL(kernel->is_on_logical_core(logical_core), "Error");
                     // Check that compute kernel compile time args are mapped to the correct cores
                     if (kernel->processor() == tt::RISCV::COMPUTE) {
                         auto kernel_compile_time_args = kernel->compile_time_args();
-                        TT_FATAL(kernel_compile_time_args == compute_kernel_args);
+                        TT_FATAL(kernel_compile_time_args == compute_kernel_args, "Error");
                     }
                 }
                 for (auto cb : program.circular_buffers()) {
-                    TT_FATAL(cb->is_on_logical_core(logical_core));
+                    TT_FATAL(cb->is_on_logical_core(logical_core), "Error");
                 }
                 for (auto semaphore : program.semaphores() ){
-                    TT_FATAL(semaphore.initialized_on_logical_core(logical_core));
+                    TT_FATAL(semaphore.initialized_on_logical_core(logical_core), "Error");
                 }
             }
         }
@@ -62,7 +62,7 @@ void check_semaphores_are_initialized(tt_metal::Device *device, tt_metal::Progra
                     filtered_res.push_back(res.at(i));
                 }
 
-                TT_FATAL(filtered_res == golden_sem_values);
+                TT_FATAL(filtered_res == golden_sem_values, "Error");
             }
         }
     }
@@ -196,7 +196,7 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromBuffer(dst_l1_buffer, result_vec);
         bool copied_data_correctly = src_vec == result_vec;
-        TT_FATAL(copied_data_correctly);
+        TT_FATAL(copied_data_correctly, "Error");
         pass &= copied_data_correctly;
     }
 
@@ -246,7 +246,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

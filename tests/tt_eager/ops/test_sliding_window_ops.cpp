@@ -425,6 +425,6 @@ int main() {
         }
     }
     log_info(tt::LogTest, "Tests for Sliding window metadata calcations ends");
-    TT_FATAL(tt::tt_metal::CloseDevice(device));
+    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
     return 0;
 }

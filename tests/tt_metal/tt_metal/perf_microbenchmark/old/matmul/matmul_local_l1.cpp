@@ -25,8 +25,8 @@ using namespace tt;
 // is contiguous
 template <typename T>
 std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
-    TT_FATAL(rows % 32 == 0);
-    TT_FATAL(cols % 32 == 0);
+    TT_FATAL(rows % 32 == 0, "Error");
+    TT_FATAL(cols % 32 == 0, "Error");
     int num_tiles_r = rows / 32;
     int num_tiles_c = cols / 32;
     std::vector<T> result;
@@ -52,8 +52,8 @@ std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
 // tilize() function)
 template <typename T>
 std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
-    TT_FATAL(rows % 32 == 0);
-    TT_FATAL(cols % 32 == 0);
+    TT_FATAL(rows % 32 == 0, "Error");
+    TT_FATAL(cols % 32 == 0, "Error");
     int num_tiles_r = rows / 32;
     int num_tiles_c = cols / 32;
     std::vector<T> result;
@@ -245,13 +245,13 @@ int main(int argc, char **argv) {
     if (Mt % num_cores_r != 0) {
       TT_THROW("Mt {} must be a multiple of num_cores_r {}", Mt,
                 num_cores_r);
-      TT_FATAL(false);
+      TT_FATAL(false, "Error");
     }
 
     if (Nt % num_cores_c != 0) {
       TT_THROW("Nt {} must be a multiple of num_cores_c {}", Nt,
                 num_cores_c);
-      TT_FATAL(false);
+      TT_FATAL(false, "Error");
     }
 
     tt::DataFormat data_format = tt::DataFormat::Float16_b;
@@ -285,7 +285,7 @@ int main(int argc, char **argv) {
     if (output_addr + (per_core_output_tiles * single_tile_size) >
         1024 * 1024) {
       log_error(LogTest, "inputs and output CBs don't fit in L1");
-      TT_FATAL(false);
+      TT_FATAL(false, "Error");
     }
 
     SHAPE shape = {1, 1, Mt * 32, Kt * 32};
@@ -319,7 +319,7 @@ int main(int argc, char **argv) {
             pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         pass &= tt_metal::detail::WriteToDeviceL1(
             device, core, activations_addr, activations);
-        TT_FATAL(pass);
+        TT_FATAL(pass, "Error");
 
         auto identity_tilized =
             tilize(weights_slice, Kt * 32, per_core_Nt * 32);
@@ -329,7 +329,7 @@ int main(int argc, char **argv) {
             transpose_tiles(weights, Kt, per_core_Nt, 1);
         pass &= tt_metal::detail::WriteToDeviceL1(device, core, weights_addr,
                                                   weights_tile_transposed);
-        TT_FATAL(pass);
+        TT_FATAL(pass, "Error");
       }
     }
 
@@ -456,7 +456,7 @@ int main(int argc, char **argv) {
     TT_THROW("Test Failed");
   }
 
-  TT_FATAL(pass);
+  TT_FATAL(pass, "Error");
 
   return 0;
 }

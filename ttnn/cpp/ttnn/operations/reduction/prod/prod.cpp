@@ -86,7 +86,7 @@ Tensor ProdOperation::invoke(const Tensor& input_a, bool all_dimensions, int64_t
     if (all_dimensions) {
         return prod_all(input_a, output_mem_config);
     }
-    TT_FATAL(dim >= -4 && dim <= 3 && "Dimension out of range (expected to be in range of [-4, 3]");
+    TT_FATAL(dim >= -4 && dim <= 3, "Dimension out of range (expected to be in range of [-4, 3]");
     Tensor temp = input_a;
     // Permute for dim 2,3
     if (dim == 2 || dim == -2) {

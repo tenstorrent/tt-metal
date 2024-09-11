@@ -435,7 +435,7 @@ std::vector<Tensor> _rsub_bw( const Tensor& grad, const Tensor& input, const Ten
 
 std::vector<Tensor> ExecuteBackwardBiasGelu::invoke(
     const Tensor& grad, const Tensor& input_a, const Tensor& input_b, string approximate, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_FATAL((approximate == "none" || approximate == "tanh") && "Incorrect approximation type (expected 'none', 'tanh')");
+    TT_FATAL((approximate == "none" || approximate == "tanh"), "Incorrect approximation type (expected 'none', 'tanh')");
     std::vector<Tensor> grad_tensor;
     Tensor input = ttnn::add(input_a, input_b);
     grad_tensor = ttnn::gelu_bw(grad, input, approximate = approximate, output_mem_config);
@@ -446,7 +446,7 @@ std::vector<Tensor> ExecuteBackwardBiasGelu::invoke(
 std::vector<Tensor> ExecuteBackwardBiasGelu::invoke(
     const Tensor& grad, const Tensor& input_tensor, float bias, string approximate, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    TT_FATAL((approximate == "none" || approximate == "tanh") && "Incorrect rounding mode (expected 'none' or 'tanh')");
+    TT_FATAL((approximate == "none" || approximate == "tanh"), "Incorrect rounding mode (expected 'none' or 'tanh')", "Error");
     Tensor input = ttnn::add(input_tensor, bias);
     grad_tensor = ttnn::gelu_bw(grad, input, approximate = approximate);
     return grad_tensor;
@@ -508,7 +508,7 @@ template std::vector<Tensor> _min_or_max_bw<false>(
 std::vector<Tensor> ExecuteBackwardDiv::invoke(
     const Tensor& grad, const Tensor& input, float scalar, std::string round_mode, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor") && "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
+    TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
     float inv_scalar = 1.0f / scalar;
     if (round_mode == "None") {
         Tensor t_inf = ttnn::operations::creation::full_like(input, std::numeric_limits<float>::infinity());

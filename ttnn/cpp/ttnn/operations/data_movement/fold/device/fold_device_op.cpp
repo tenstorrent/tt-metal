@@ -28,10 +28,10 @@ void validate_fold(const std::vector<Tensor> &input_tensors, bool is_sharded, ui
             "Fold: Only height-sharded input tensors are supported.");
 
         auto shard_shape = input_tensor.shard_spec().value().shape;
-        TT_FATAL(shard_shape[0] % (input_shape[2] * stride_h * stride_w) == 0);
+        TT_FATAL(shard_shape[0] % (input_shape[2] * stride_h * stride_w) == 0, "Error");
     } else {
-        TT_FATAL(input_shape[1] % stride_h == 0);
-        TT_FATAL(input_shape[2] % stride_w == 0);
+        TT_FATAL(input_shape[1] % stride_h == 0, "Error");
+        TT_FATAL(input_shape[2] % stride_w == 0, "Error");
     }
     TT_FATAL(
         (input_shape[-1] * input_tensor.element_size()) % 16 == 0,

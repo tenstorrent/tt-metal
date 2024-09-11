@@ -384,7 +384,7 @@ DebugPrintServerContext::~DebugPrintServerContext() {
     // Wait for the thread to end, with a timeout
     auto future = std::async(std::launch::async, &std::thread::join, print_server_thread_);
     if (future.wait_for(std::chrono::seconds(2)) == std::future_status::timeout) {
-        TT_FATAL(false && "Timed out waiting on debug print thread to terminate.");
+        TT_THROW("Timed out waiting on debug print thread to terminate.");
     }
     delete print_server_thread_;
     print_server_thread_ = nullptr;
@@ -884,7 +884,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     }
                 break;
                 default:
-                    TT_FATAL("Unexpected debug print type code" && false);
+                    TT_THROW("Unexpected debug print type code");
             }
 
             // TODO(AP): this is slow but leaving here for now for debugging the debug prints themselves
@@ -1048,7 +1048,7 @@ void DprintServerAwait() {
             DebugPrintServerContext::inst
         );
         if (future.wait_for(std::chrono::seconds(1)) == std::future_status::timeout) {
-            TT_FATAL(false && "Timed out waiting on debug print server to read data.");
+            TT_THROW("Timed out waiting on debug print server to read data.");
         }
     }
 }

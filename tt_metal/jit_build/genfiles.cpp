@@ -37,9 +37,7 @@ static string get_absolute_path(const string& file_path_string) {
     // If the path doesn't exist as a absolute/relative path, then it must be relative to TT_METAL_HOME.
     if (!fs::exists(file_path)) {
         file_path = fs::path(llrt::OptionsG.get_root_dir() + file_path_string);
-        if (!fs::exists(file_path)) {
-            TT_FATAL("Kernel file {} doesn't exist!", file_path_string);
-        }
+        TT_FATAL(fs::exists(file_path), "Kernel file {} doesn't exist!", file_path_string);
     }
 
     // Convert to absolute path and return

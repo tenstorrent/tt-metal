@@ -127,7 +127,7 @@ uint64_t BankManager::allocate_buffer(
     DeviceAddr address_limit = 0;
     if (!is_sharded and this->buffer_type_ == BufferType::L1) {
         address_limit = this->interleaved_address_limit_;
-        TT_FATAL(address_limit > 0);
+        TT_FATAL(address_limit > 0, "Address limit {} needs to be larger than zero.", address_limit);
     }
     TT_ASSERT(bool(this->allocator_), "Allocator not initialized!");
     auto address = this->allocator_->allocate(size_per_bank, bottom_up, address_limit);

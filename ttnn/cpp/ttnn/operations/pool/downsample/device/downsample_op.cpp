@@ -20,11 +20,13 @@ void Downsample::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to downsample need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Can only downsample tile major data");
 
-    TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
-    TT_FATAL(input_tensor_a.memory_config().is_sharded());
+    TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
+    TT_FATAL(input_tensor_a.memory_config().is_sharded(), "Error");
     TT_FATAL(
         input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-        input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
+        input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
+        "Unsupported memory layout {}.",
+        input_tensor_a.memory_config().memory_layout);
 }
 
 

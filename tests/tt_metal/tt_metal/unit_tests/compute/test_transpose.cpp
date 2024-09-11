@@ -56,7 +56,7 @@ void validate_transpose_wh(const std::vector<uint32_t> &src_vec, const std::vect
     vector<uint16_t> gold_reduced = gold_transpose_wh(src_linear, shape); // result is uint16_t untilized
 
     // Tilize from row major and convert to pairs (uint32_t)
-    TT_FATAL(shape.size() == 4);
+    TT_FATAL(shape.size() == 4, "Error");
     vector<uint32_t> shapeR{shape[0], shape[1], shape[3], shape[2]};
     auto gold_4f_u32 = u32_from_u16_vector(convert_layout<uint16_t>(gold_reduced, shapeR, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES));
 
@@ -68,7 +68,7 @@ void validate_transpose_wh(const std::vector<uint32_t> &src_vec, const std::vect
 }
 
 void run_single_core_transpose(tt_metal::Device* device, const TransposeConfig& test_config) {
-    TT_FATAL(test_config.shape.size() == 4);
+    TT_FATAL(test_config.shape.size() == 4, "Error");
 
     Program program = tt_metal::CreateProgram();
 
@@ -76,11 +76,11 @@ void run_single_core_transpose(tt_metal::Device* device, const TransposeConfig& 
 
     uint32_t W = test_config.shape[3], H = test_config.shape[2], NC = test_config.shape[1]*test_config.shape[0];
     uint32_t HW = H*W;
-    TT_FATAL(W % 32 == 0 && H % 32 == 0);
-    TT_FATAL(H > 0 && W > 0 && NC > 0);
+    TT_FATAL(W % 32 == 0 && H % 32 == 0, "Error");
+    TT_FATAL(H > 0 && W > 0 && NC > 0, "Error");
     uint32_t Wt = W/32;
     // size of DST register, with unary r/w this currently only works if the entire Wt fits into DST for reduce
-    TT_FATAL(Wt <= 16);
+    TT_FATAL(Wt <= 16, "Error");
     uint32_t Ht = H/32;
     float scaler = 1.0f/W;
     uint32_t num_tensor_tiles = NC*H*W / (32*32);

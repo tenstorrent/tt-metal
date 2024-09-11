@@ -477,7 +477,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 
     std::shared_ptr<tt_metal::Buffer> src, dst;
     if constexpr (src_is_in_l1) {
-        TT_FATAL((buffer_size % num_l1_banks) == 0);
+        TT_FATAL((buffer_size % num_l1_banks) == 0, "Error");
 
 
 
@@ -491,7 +491,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
             {src->address(), 0, 0, num_pages});
 
     } else {
-        TT_FATAL((buffer_size % num_dram_banks) == 0);
+        TT_FATAL((buffer_size % num_dram_banks) == 0, "Error");
 
 
 
@@ -545,7 +545,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 
     pass &= tt_metal::CloseDevice(device);
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return pass;
 }

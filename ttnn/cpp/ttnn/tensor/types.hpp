@@ -548,9 +548,7 @@ struct MultiDeviceStorage {
 
     inline const MemoryConfig memory_config() const {
         std::lock_guard<std::mutex> lock(buffer_mtx);
-        if (this->ordered_device_ids.empty()) {
-            TT_FATAL("no such device...");
-        }
+        TT_FATAL(!this->ordered_device_ids.empty(), "No device ids in list. Please ensure fields are initialized properly.");
         auto first_device_id = this->ordered_device_ids[0];
         if (this->buffers.at(first_device_id).get() == nullptr) {
             TT_THROW("MemoryConfig can only be obtained if the buffer is not null");

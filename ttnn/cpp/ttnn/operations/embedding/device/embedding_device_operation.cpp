@@ -22,26 +22,26 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensors.size() == 2, "Must have between 2 input tensors");
     auto &a = input_tensors.at(0);
     const auto &weights = input_tensors.at(1);
-    TT_FATAL(a.get_layout() == Layout::ROW_MAJOR);
-    TT_FATAL(weights.get_layout() == Layout::ROW_MAJOR);
+    TT_FATAL(a.get_layout() == Layout::ROW_MAJOR, "Error");
+    TT_FATAL(weights.get_layout() == Layout::ROW_MAJOR, "Error");
     TT_FATAL(a.get_dtype() == DataType::UINT32 or a.get_dtype() == DataType::BFLOAT16, "Input must be UINT32 or BFLOAT16");
-    TT_FATAL(weights.get_dtype() == DataType::BFLOAT16);
+    TT_FATAL(weights.get_dtype() == DataType::BFLOAT16, "Error");
     TT_FATAL(a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharding");
     TT_FATAL(weights.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharding");
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharding");
 
     TT_FATAL(weights.get_legacy_shape()[0] == 1 && weights.get_legacy_shape()[1] == 1, "First two dimensions for the weights must be 1");
     if (this->tilized) {
-        TT_FATAL(a.get_legacy_shape()[-1] % TILE_HEIGHT == 0);
+        TT_FATAL(a.get_legacy_shape()[-1] % TILE_HEIGHT == 0, "Error");
         TT_FATAL(weights.get_legacy_shape()[-1] % TILE_WIDTH == 0, "Number of columns in table must be factor of tile width");
     } else {
-        TT_FATAL(this->output_dtype != DataType::BFLOAT8_B);
+        TT_FATAL(this->output_dtype != DataType::BFLOAT8_B, "Error");
     }
     TT_FATAL(a.get_legacy_shape()[1] == 1 && a.get_legacy_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
     switch (this->embeddings_type) {
-        case EmbeddingsType::PADDED: TT_FATAL(this->pad_token.has_value()); break;
-        case EmbeddingsType::BINARY: TT_FATAL(weights.get_legacy_shape()[-2] == 2);
-        default: TT_FATAL(!this->pad_token.has_value());
+        case EmbeddingsType::PADDED: TT_FATAL(this->pad_token.has_value(), "Error"); break;
+        case EmbeddingsType::BINARY: TT_FATAL(weights.get_legacy_shape()[-2] == 2, "Error");
+        default: TT_FATAL(!this->pad_token.has_value(), "Error");
     }
 }
 

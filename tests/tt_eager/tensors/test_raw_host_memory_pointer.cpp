@@ -180,7 +180,7 @@ void test_raw_host_memory_pointer() {
         TT_ASSERT(element == bfloat16(10.0f));
     }
 
-    TT_FATAL(tt::tt_metal::CloseDevice(device));
+    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
 }
 
 int main() {

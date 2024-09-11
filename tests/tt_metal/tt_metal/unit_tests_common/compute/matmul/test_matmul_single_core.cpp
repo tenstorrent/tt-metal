@@ -35,9 +35,9 @@ bool matmul_single_core(CommonFixture *fixture, tt_metal::Device *device, int M,
     log_info(LogTest, "Weights block = {}x{}, #blocks = {}, #sub-blocks = {}", out_subblock_w, in0_block_w, K / in0_block_w, N / out_subblock_w);
 
     uint32_t single_tile_size = 2 * 1024;
-    TT_FATAL(M * in0_block_w * single_tile_size * 2 <= 130*1024);
-    TT_FATAL(N * in0_block_w * single_tile_size * 2 <= 130*1024);
-    TT_FATAL(M * N * single_tile_size <= 540*1024);
+    TT_FATAL(M * in0_block_w * single_tile_size * 2 <= 130*1024, "Parameter mismatch {} {} {}", M, in0_block_w, single_tile_size);
+    TT_FATAL(N * in0_block_w * single_tile_size * 2 <= 130*1024, "Parameter mismatch {} {} {}", N, in0_block_w, single_tile_size);
+    TT_FATAL(M * N * single_tile_size <= 540*1024, "Parameter mismatch {} {} {}", M, N, single_tile_size);
     uint32_t dram_buffer_size_act = single_tile_size * M * K; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     uint32_t dram_buffer_size_weights = single_tile_size * K * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     uint32_t dram_buffer_size_out = single_tile_size * M * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels

@@ -44,7 +44,7 @@ int main(int argc, char **argv) {
         CoreCoord core = {0, 0};
 
         uint32_t single_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Bfp8_b);
-        TT_FATAL(single_tile_size == (256 * 4) + (16 *4));
+        TT_FATAL(single_tile_size == (256 * 4) + (16 *4), "Error");
         uint32_t num_tiles = 2048;
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of BFP8_B
 
@@ -159,7 +159,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

@@ -22,9 +22,9 @@ using namespace constants;
 //////////////////////////////////////////////////////////////////////////////////////////
 
 Tensor perform_transpose_wh(Tensor& input_tensor) {
-    TT_FATAL(input_tensor.storage_type() == StorageType::OWNED);
+    TT_FATAL(input_tensor.storage_type() == StorageType::OWNED, "Error");
     auto ashape = input_tensor.get_legacy_shape();
-    TT_FATAL(ashape.rank() == 4);
+    TT_FATAL(ashape.rank() == 4, "Error");
     auto bshape = ashape;
     bshape[2] = ashape[3];
     bshape[3] = ashape[2];
@@ -119,7 +119,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

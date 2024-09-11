@@ -914,7 +914,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
                 cb_num_pages,
                 cb_num_pages,
                 cw_per_link_edm_builders.at(0).get_eth_buffer_size_bytes(),
-                op_config.get_page_size()));
+                op_config.get_page_size()), "Error");
         }
     }
 

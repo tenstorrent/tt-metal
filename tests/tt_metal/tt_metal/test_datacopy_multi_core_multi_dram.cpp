@@ -22,8 +22,8 @@ using namespace tt;
 // is contiguous
 template <typename T>
 std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
-    TT_FATAL(rows % 32 == 0);
-    TT_FATAL(cols % 32 == 0);
+    TT_FATAL(rows % 32 == 0, "Error");
+    TT_FATAL(cols % 32 == 0, "Error");
     int num_tiles_r = rows / 32;
     int num_tiles_c = cols / 32;
     std::vector<T> result;
@@ -95,11 +95,11 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
 
     int num_cores = num_cores_r * num_cores_c;
 
-    TT_FATAL("Error: tensor's tiles don't even distributed across cores." && tensor_num_tiles % num_cores == 0);
+    TT_FATAL("Error: tensor's tiles don't even distributed across cores." && tensor_num_tiles % num_cores == 0, "Error");
     int num_tiles_per_core = tensor_num_tiles / num_cores;
 
-    TT_FATAL("Error: block must fit to half-dst" && block_num_tiles <= 8); // half-dst in GS
-    TT_FATAL("Error: num tiles per core needs to be divisible by block size." && num_tiles_per_core % block_num_tiles == 0);
+    TT_FATAL("Error: block must fit to half-dst" && block_num_tiles <= 8, "Error"); // half-dst in GS
+    TT_FATAL("Error: num tiles per core needs to be divisible by block size." && num_tiles_per_core % block_num_tiles == 0, "Error");
     int num_blocks_per_core = num_tiles_per_core / block_num_tiles;
 
     uint32_t single_tile_size = 2 * 1024; // bfloat16
@@ -111,8 +111,8 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
     uint32_t out_CB_size = out_CB_tiles * single_tile_size;
     uint32_t out_CB_index = 16;
 
-    TT_FATAL(in0_CB_size <= 130*1024);
-    TT_FATAL(out_CB_size <= 540*1024);
+    TT_FATAL(in0_CB_size <= 130*1024, "Error");
+    TT_FATAL(out_CB_size <= 540*1024, "Error");
 
     CoreCoord start_core{0, 0};
     CoreCoord end_core{(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};
@@ -135,7 +135,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
                 .set_page_size(out_CB_index, single_tile_size);
             auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-            TT_FATAL(l1_valid_address < 1024 * 1024);
+            TT_FATAL(l1_valid_address < 1024 * 1024, "Error");
         }
     }
 
@@ -191,8 +191,8 @@ bool write_runtime_args_to_device(
 
     uint dram_channel_size = 1024 * 1024 * 1024;
 
-    TT_FATAL(src0_dram_addr + dram_buffer_size_act < dram_channel_size);
-    TT_FATAL(dst_dram_addr + dram_buffer_size_out < dram_channel_size);
+    TT_FATAL(src0_dram_addr + dram_buffer_size_act < dram_channel_size, "Error");
+    TT_FATAL(dst_dram_addr + dram_buffer_size_out < dram_channel_size, "Error");
     */
 
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
@@ -439,7 +439,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

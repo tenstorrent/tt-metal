@@ -42,8 +42,8 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(const std::vector<Tens
     const auto input_shape_a = input_tensor_a.get_legacy_shape();
     const auto input_shape_b = input_tensor_b.get_legacy_shape();
 
-    TT_FATAL(input_tensor_a.get_layout() == Layout::TILE);
-    TT_FATAL(input_tensor_b.get_layout() == Layout::TILE);
+    TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Error");
+    TT_FATAL(input_tensor_b.get_layout() == Layout::TILE, "Error");
     TT_FATAL(is_floating_point(input_tensor_a.get_dtype()), "Unsupported data format");
     if(!output_tensors.empty() && output_tensors.at(0).has_value()){
         TT_FATAL(is_floating_point(output_tensors.at(0).value().get_dtype()), "Unsupported data format");
@@ -52,8 +52,8 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(const std::vector<Tens
         TT_FATAL(out_tensor.get_legacy_shape() == output_shape_required.at(0), fmt::format("The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape()));
     }
     if (this->in_place) {
-        TT_FATAL(input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout);
-        TT_FATAL(input_tensor_a.memory_config().buffer_type == this->output_mem_config.buffer_type);
+        TT_FATAL(input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout, "Error");
+        TT_FATAL(input_tensor_a.memory_config().buffer_type == this->output_mem_config.buffer_type, "Error");
     }
     auto out_mem_config = (!output_tensors.empty() && output_tensors.at(0).has_value()) ? output_tensors.at(0).value().memory_config() : this->output_mem_config;
     if (this->dim == BcastOpDim::W){
@@ -90,10 +90,10 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(const std::vector<Tens
 
         uint32_t batch_size_b = get_batch_size(input_shape_b);
         if (batch_size_b != 1) {
-            TT_FATAL(input_shape_a.rank() == input_shape_b.rank() && "Broadcast with batch is currently only supported when input tensor ranks are the same");
+            TT_FATAL(input_shape_a.rank() == input_shape_b.rank(), "Broadcast with batch is currently only supported when input tensor ranks are the same", "Error");
             for (auto i = 0; i < input_shape_a.rank() - 2; i++) {
                 TT_FATAL(
-                        input_shape_a[i] == input_shape_b[i] &&
+                        input_shape_a[i] == input_shape_b[i],
                         "Broadcast with batch is currently only supported when bN*bC=1 or N & C match or equivalent"); // for H multi-batch weight is supported
             }
         }
@@ -101,11 +101,11 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(const std::vector<Tens
 
     // validate input dimensions
     if (this->dim == BcastOpDim::W)
-        TT_FATAL(height_a == height_b && width_b == TILE_WIDTH);
+        TT_FATAL(height_a == height_b && width_b == TILE_WIDTH, "Error");
     if (this->dim == BcastOpDim::H)
-        TT_FATAL(width_a == width_b && height_b == TILE_HEIGHT);
+        TT_FATAL(width_a == width_b && height_b == TILE_HEIGHT, "Error");
     if (this->dim == BcastOpDim::HW)
-        TT_FATAL(width_b == TILE_WIDTH && height_b == TILE_HEIGHT);
+        TT_FATAL(width_b == TILE_WIDTH && height_b == TILE_HEIGHT, "Error");
 }
 
 

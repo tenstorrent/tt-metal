@@ -128,6 +128,6 @@ int main(int argc, char** argv) {
     TT_THROW("Test Failed");
   }
 
-  TT_FATAL(pass);
+  TT_FATAL(pass, "Error");
   return 0;
 }

@@ -21,8 +21,8 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
     const auto& b = optional_input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(1);
     const auto& beta = optional_input_tensors.at(2);
-    TT_FATAL(a.get_layout() == Layout::TILE);
-    TT_FATAL(a.get_dtype() == DataType::FLOAT32 or a.get_dtype() == DataType::BFLOAT16 or a.get_dtype() == DataType::BFLOAT8_B);
+    TT_FATAL(a.get_layout() == Layout::TILE, "Error");
+    TT_FATAL(a.get_dtype() == DataType::FLOAT32 or a.get_dtype() == DataType::BFLOAT16 or a.get_dtype() == DataType::BFLOAT8_B, "Error");
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
 
@@ -37,14 +37,14 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
         if (gamma.value().get_layout() == Layout::TILE) {
             TT_FATAL(a.get_legacy_shape()[-1] == gamma.value().get_legacy_shape()[-1], fmt::format("{} != {}", a.get_legacy_shape()[-1], gamma.value().get_legacy_shape()[-1]));
             TT_FATAL(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-            TT_FATAL(a.device() == gamma.value().device());
-            TT_FATAL(gamma.value().get_legacy_shape()[-2] == TILE_HEIGHT);
+            TT_FATAL(a.device() == gamma.value().device(), "Error");
+            TT_FATAL(gamma.value().get_legacy_shape()[-2] == TILE_HEIGHT, "Error");
         } else {
-            TT_FATAL(gamma.value().get_layout() == Layout::ROW_MAJOR);
-            TT_FATAL((gamma.value().get_legacy_shape()[-1] == TILE_WIDTH && gamma.value().volume() / TILE_WIDTH == a.get_legacy_shape()[-1] / TILE_WIDTH));
+            TT_FATAL(gamma.value().get_layout() == Layout::ROW_MAJOR, "Error");
+            TT_FATAL((gamma.value().get_legacy_shape()[-1] == TILE_WIDTH && gamma.value().volume() / TILE_WIDTH == a.get_legacy_shape()[-1] / TILE_WIDTH), "Error");
             TT_FATAL(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-            TT_FATAL(a.device() == gamma.value().device());
-            TT_FATAL(gamma.value().get_dtype() == DataType::FLOAT32 or gamma.value().get_dtype() == DataType::BFLOAT16);
+            TT_FATAL(a.device() == gamma.value().device(), "Error");
+            TT_FATAL(gamma.value().get_dtype() == DataType::FLOAT32 or gamma.value().get_dtype() == DataType::BFLOAT16, "Error");
         }
         if (beta.has_value()) {
             TT_FATAL(gamma.value().get_layout() == beta.value().get_layout(), "Gamma and beta must have the same layout!");
@@ -53,22 +53,22 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
 
     if (beta.has_value()) {
         if (beta.value().get_layout() == Layout::TILE) {
-            TT_FATAL(a.get_legacy_shape()[-1] == beta.value().get_legacy_shape()[-1]);
+            TT_FATAL(a.get_legacy_shape()[-1] == beta.value().get_legacy_shape()[-1], "Error");
             TT_FATAL(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-            TT_FATAL(a.device() == beta.value().device());
-            TT_FATAL(beta.value().get_legacy_shape()[-2] == TILE_HEIGHT);
+            TT_FATAL(a.device() == beta.value().device(), "Error");
+            TT_FATAL(beta.value().get_legacy_shape()[-2] == TILE_HEIGHT, "Error");
         } else {
-            TT_FATAL(beta.value().get_layout() == Layout::ROW_MAJOR);
-            TT_FATAL((beta.value().get_legacy_shape()[-1] == TILE_WIDTH && beta.value().volume() / TILE_WIDTH == a.get_legacy_shape()[-1] / TILE_WIDTH));
+            TT_FATAL(beta.value().get_layout() == Layout::ROW_MAJOR, "Error");
+            TT_FATAL((beta.value().get_legacy_shape()[-1] == TILE_WIDTH && beta.value().volume() / TILE_WIDTH == a.get_legacy_shape()[-1] / TILE_WIDTH), "Error");
             TT_FATAL(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-            TT_FATAL(a.device() == beta.value().device());
-            TT_FATAL(beta.value().get_dtype() == DataType::FLOAT32 or beta.value().get_dtype() == DataType::BFLOAT16);
+            TT_FATAL(a.device() == beta.value().device(), "Error");
+            TT_FATAL(beta.value().get_dtype() == DataType::FLOAT32 or beta.value().get_dtype() == DataType::BFLOAT16, "Error");
         }
     }
     if (a.is_sharded()) {
         // TODO: Add support for this (should be similar to interleaved)
-        TT_FATAL(a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED);
-        TT_FATAL(this->output_mem_config.is_sharded() && this->output_mem_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED);
+        TT_FATAL(a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+        TT_FATAL(this->output_mem_config.is_sharded() && this->output_mem_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED, "Error");
     }
     std::visit(
         [&](const auto& program_config) {
@@ -77,10 +77,10 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
                 std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>
             ) {
                 if (program_config.inplace) {
-                    TT_FATAL(this->output_mem_config.is_sharded());
+                    TT_FATAL(this->output_mem_config.is_sharded(), "Error");
                 }
-                TT_FATAL(a.memory_config().buffer_type == this->output_mem_config.buffer_type);
-                TT_FATAL(a.memory_config().memory_layout == this->output_mem_config.memory_layout);
+                TT_FATAL(a.memory_config().buffer_type == this->output_mem_config.buffer_type, "Error");
+                TT_FATAL(a.memory_config().memory_layout == this->output_mem_config.memory_layout, "Error");
 
                 // tensor shape
                 const auto shape = a.get_legacy_shape();
@@ -98,14 +98,14 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
                 TT_FATAL(M % TILE_HEIGHT == 0, "M must be divisible by tile height.");
                 TT_FATAL(K % TILE_WIDTH == 0, "K must be divisible by tile width.");
                 const auto bbox = shard_spec.grid.bounding_box();
-                TT_FATAL(bbox.end_coord.x < program_config.compute_with_storage_grid_size.x && bbox.end_coord.y < program_config.compute_with_storage_grid_size.y);
+                TT_FATAL(bbox.end_coord.x < program_config.compute_with_storage_grid_size.x && bbox.end_coord.y < program_config.compute_with_storage_grid_size.y, "Error");
 
                 bool mcast_1d = M == block_h;
                 bool row_wise = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
                 if (mcast_1d) {
                     TT_FATAL(tt::div_up(Kt, shard_spec.num_cores()) == program_config.block_w, "block_w must equal to K / num_cores.");
                     TT_FATAL(Mt == program_config.block_h, "block_h must equal to M.");
-                    TT_FATAL(a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED);
+                    TT_FATAL(a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED, "Error");
                 } else {
                     if (row_wise) {
                         TT_FATAL(tt::div_up(Kt, (bbox.end_coord.x + 1)) == program_config.block_w, "block_w must equal to K / num_cores_c.");
@@ -116,11 +116,11 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
                     }
                 }
                 if (b.has_value()) {
-                    TT_FATAL(b.value().is_sharded());
-                    TT_FATAL(b.value().shard_spec() == shard_spec);
+                    TT_FATAL(b.value().is_sharded(), "Error");
+                    TT_FATAL(b.value().shard_spec() == shard_spec, "Error");
                 }
-                TT_FATAL(program_config.block_h * TILE_HEIGHT == shard_spec.shape[0]);
-                TT_FATAL(program_config.block_w * TILE_WIDTH == shard_spec.shape[1]);
+                TT_FATAL(program_config.block_h * TILE_HEIGHT == shard_spec.shape[0], "Error");
+                TT_FATAL(program_config.block_w * TILE_WIDTH == shard_spec.shape[1], "Error");
                 TT_FATAL(program_config.block_w % program_config.subblock_w == 0, "block_w must be divisible by subblock_w.");
             }
         },

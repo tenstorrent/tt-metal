@@ -24,7 +24,7 @@ void InterleavedToShardedPartialDeviceOperation::validate(const std::vector<Tens
 
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Input tensor must be Interleaved");
     if (input_tensor.get_dtype() != this->output_dtype) {
-        TT_FATAL(input_tensor.get_layout() == Layout::TILE);
+        TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
     }
     auto device_grid = input_tensor.device()->compute_with_storage_grid_size();
     TT_FATAL(this->grid_size.x <= device_grid.x && this->grid_size.y <= device_grid.y, "Grid size for sharding must be less than or equal to total grid available");

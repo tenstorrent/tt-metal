@@ -78,7 +78,7 @@ ttnn::Tensor ReshapeOperation::invoke(
         || output_shape[-1] % TILE_WIDTH != 0
         || input_tensor.get_legacy_shape()[-1] % TILE_WIDTH != 0
         || (input_tensor.volume() / input_tensor.get_legacy_shape()[-1]) % TILE_HEIGHT != 0)) {
-        TT_FATAL(input_tensor.get_dtype()==DataType::BFLOAT16);
+        TT_FATAL(input_tensor.get_dtype()==DataType::BFLOAT16, "Error");
 
         return detail::manual_insertion((tt::tt_metal::Tensor)input_tensor, output_shape, input_tensor.device(), output_mem_config);
     }

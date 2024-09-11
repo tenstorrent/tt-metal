@@ -19,17 +19,17 @@ namespace borrowed_buffer {
 template <typename T>
 void validate_datatype(const Tensor& tensor) {
     if constexpr (std::is_same_v<T, uint32_t>) {
-        TT_FATAL(tensor.get_dtype() == DataType::UINT32);
+        TT_FATAL(tensor.get_dtype() == DataType::UINT32, "Incorrect data type {}", tensor.get_dtype());
     } else if constexpr (std::is_same_v<T, int32_t>) {
-        TT_FATAL(tensor.get_dtype() == DataType::INT32);
+        TT_FATAL(tensor.get_dtype() == DataType::INT32, "Incorrect data type {}", tensor.get_dtype());
     } else if constexpr (std::is_same_v<T, float>) {
-        TT_FATAL(tensor.get_dtype() == DataType::FLOAT32);
+        TT_FATAL(tensor.get_dtype() == DataType::FLOAT32, "Incorrect data type {}", tensor.get_dtype());
     } else if constexpr (std::is_same_v<T, bfloat16>) {
-        TT_FATAL(tensor.get_dtype() == DataType::BFLOAT16);
+        TT_FATAL(tensor.get_dtype() == DataType::BFLOAT16, "Incorrect data type {}", tensor.get_dtype());
     } else if constexpr (std::is_same_v<T, uint16_t>) {
-        TT_FATAL(tensor.get_dtype() == DataType::UINT16);
+        TT_FATAL(tensor.get_dtype() == DataType::UINT16, "Incorrect data type {}", tensor.get_dtype());
     } else if constexpr (std::is_same_v<T, uint8_t>) {
-        TT_FATAL(tensor.get_dtype() == DataType::UINT8);
+        TT_FATAL(tensor.get_dtype() == DataType::UINT8, "Incorrect data type {}", tensor.get_dtype());
     } else {
         static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported DataType");
     }
@@ -95,17 +95,17 @@ void validate_datatype(const Tensor& tensor) {
     if constexpr (std::is_same_v<T, uint32_t>) {
         TT_FATAL(
             tensor.get_dtype() == DataType::UINT32 or tensor.get_dtype() == DataType::BFLOAT8_B or
-            tensor.get_dtype() == DataType::BFLOAT4_B);
+            tensor.get_dtype() == DataType::BFLOAT4_B, "Incorrect data type {}", tensor.get_dtype());
     } else if constexpr (std::is_same_v<T, int32_t>) {
-        TT_FATAL(tensor.get_dtype() == DataType::INT32);
+        TT_FATAL(tensor.get_dtype() == DataType::INT32, "Incorrect data type {}", tensor.get_dtype());
     } else if constexpr (std::is_same_v<T, float>) {
-        TT_FATAL(tensor.get_dtype() == DataType::FLOAT32);
+        TT_FATAL(tensor.get_dtype() == DataType::FLOAT32, "Incorrect data type {}", tensor.get_dtype());
     } else if constexpr (std::is_same_v<T, bfloat16>) {
-        TT_FATAL(tensor.get_dtype() == DataType::BFLOAT16);
+        TT_FATAL(tensor.get_dtype() == DataType::BFLOAT16, "Incorrect data type {}", tensor.get_dtype());
     } else if constexpr (std::is_same_v<T, uint16_t>) {
-        TT_FATAL(tensor.get_dtype() == DataType::UINT16);
+        TT_FATAL(tensor.get_dtype() == DataType::UINT16, "Incorrect data type {}", tensor.get_dtype());
     } else if constexpr (std::is_same_v<T, uint8_t>) {
-        TT_FATAL(tensor.get_dtype() == DataType::UINT8);
+        TT_FATAL(tensor.get_dtype() == DataType::UINT8, "Incorrect data type {}", tensor.get_dtype());
     } else {
         static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported DataType");
     }

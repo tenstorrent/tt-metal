@@ -27,9 +27,9 @@ void SplitFusedQKVAndSplitHeadsDeviceOperation::validate_with_output_tensors(con
         auto bbox = input_tensor.shard_spec().value().grid.bounding_box();
         TT_FATAL(
             (bbox.end_coord.x < this->compute_with_storage_grid_size.x &&
-             bbox.end_coord.y < this->compute_with_storage_grid_size.y));
-        TT_FATAL(input_tensor.shard_spec().value().grid.ranges().size() == 1);
-        TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
+             bbox.end_coord.y < this->compute_with_storage_grid_size.y), "Error");
+        TT_FATAL(input_tensor.shard_spec().value().grid.ranges().size() == 1, "Error");
+        TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Error");
     }
 
     if (!output_tensors.empty()) {

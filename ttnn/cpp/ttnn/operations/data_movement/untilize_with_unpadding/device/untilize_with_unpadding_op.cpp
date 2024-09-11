@@ -16,18 +16,18 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Can only untilize tile major data");
 
-    TT_FATAL(input_tensor_a.volume() % tt::constants::TILE_HW == 0);
+    TT_FATAL(input_tensor_a.volume() % tt::constants::TILE_HW == 0, "Error");
     for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
-        TT_FATAL(input_tensor_a.get_legacy_shape()[i] > 0);
-        TT_FATAL(this->output_tensor_end[i] < input_tensor_a.get_legacy_shape()[i]);
+        TT_FATAL(input_tensor_a.get_legacy_shape()[i] > 0, "Error");
+        TT_FATAL(this->output_tensor_end[i] < input_tensor_a.get_legacy_shape()[i], "Error");
     }
 
     TT_FATAL(((this->output_tensor_end[-1] + 1) % 2 == 0), "Can only unpad to row major tensor of even width");
 
     if (input_tensor_a.memory_config().is_sharded()) {
         if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-            TT_FATAL(input_tensor_a.shard_spec().value().grid.ranges().size() == 1);
-            TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+            TT_FATAL(input_tensor_a.shard_spec().value().grid.ranges().size() == 1, "Error");
+            TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
             TT_FATAL(
                 input_tensor_a.volume() /
                         (input_tensor_a.get_legacy_shape()[-2] * input_tensor_a.get_legacy_shape()[-1]) ==
@@ -35,24 +35,24 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
                 "Can only write unbatched output interleaved");
         } else if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
             if (output_mem_config.is_sharded()) {
-                TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+                TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
             }
             // What else?
         } else if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             auto output_shape = this->compute_output_shapes(input_tensors).at(0);
             // Minor host code changes required to remove this restriction
-            TT_FATAL(input_tensor_a.shard_spec().value().grid.ranges().size() == 1);
+            TT_FATAL(input_tensor_a.shard_spec().value().grid.ranges().size() == 1, "Error");
             for (uint32_t i = 0; i < output_shape.rank() - 2; i++) {
-                TT_FATAL(input_tensor_a.get_legacy_shape()[i] == output_shape[i]);
+                TT_FATAL(input_tensor_a.get_legacy_shape()[i] == output_shape[i], "Error");
             }
             if (output_mem_config.is_sharded()) {
-                TT_FATAL(this->output_mem_config.memory_layout == input_tensor_a.memory_config().memory_layout);
+                TT_FATAL(this->output_mem_config.memory_layout == input_tensor_a.memory_config().memory_layout, "Error");
                 TT_FATAL(
                     input_tensor_a.get_legacy_shape()[-1] == output_shape[-1] ||
                     (tt::div_up(output_shape[-1], input_tensor_a.shard_spec().value().shape[1]) ==
-                     input_tensor_a.shard_spec().value().grid.num_cores()));
+                     input_tensor_a.shard_spec().value().grid.num_cores()), "Error");
             } else {
-                TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+                TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
                 TT_FATAL(
                     input_tensor_a.volume() /
                             (input_tensor_a.get_legacy_shape()[-2] * input_tensor_a.get_legacy_shape()[-1]) ==
@@ -60,14 +60,14 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
                     "Can only write unbatched output interleaved");
                 TT_FATAL(
                     input_tensor_a.get_legacy_shape()[-1] - output_shape[-1] <
-                    input_tensor_a.shard_spec().value().shape[1]);
+                    input_tensor_a.shard_spec().value().shape[1], "Error");
             }
         } else {
             TT_FATAL(false, "Unsupported sharding scheme");
         }
     } else {
-        TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
-        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+        TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
     }
 }
 

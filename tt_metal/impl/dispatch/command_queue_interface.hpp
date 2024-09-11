@@ -414,6 +414,9 @@ class SystemMemoryManager {
             TT_FATAL(
                 dispatch_constants::get(core_type).max_prefetch_command_size() *
                     (dispatch_constants::get(core_type).prefetch_q_entries() + 2) <=
+                this->get_issue_queue_size(cq_id),
+                "Issue queue for cq_id {} has size of {} which is too small",
+                cq_id,
                 this->get_issue_queue_size(cq_id));
             this->cq_to_event.push_back(0);
             this->cq_to_last_completed_event.push_back(0);

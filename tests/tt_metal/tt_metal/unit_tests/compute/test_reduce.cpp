@@ -179,8 +179,8 @@ void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig
     uint32_t W = test_config.shape[3], H = test_config.shape[2], NC = test_config.shape[1]*test_config.shape[0];
     uint32_t HW = H*W;
     uint32_t N = test_config.shape[0]*test_config.shape[1];
-    TT_FATAL(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
-    TT_FATAL(H > 0 && W > 0 && NC > 0);
+    TT_FATAL(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0, "Error");
+    TT_FATAL(H > 0 && W > 0 && NC > 0, "Error");
     uint32_t Wt = W/TILE_WIDTH;
     uint32_t Ht = H/TILE_HEIGHT;
 
@@ -196,7 +196,7 @@ void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig
     float scaler = (test_config.do_max or test_config.reduce_dim == ReduceDim::HW) ? 1.0f : (test_config.reduce_dim == ReduceDim::H ? 1.0f/H : 1.0f/W);
     uint32_t num_tensor_tiles = NC*H*W / (TILE_WIDTH*TILE_HEIGHT);
     uint32_t divisor = test_config.reduce_dim == ReduceDim::W ? Wt : Ht;
-    TT_FATAL(num_tensor_tiles%divisor == 0);
+    TT_FATAL(num_tensor_tiles%divisor == 0, "Error");
 
     uint32_t single_tile_bytes = 2 * 1024;
     uint32_t dram_buffer_size = single_tile_bytes * num_tensor_tiles;
@@ -264,7 +264,7 @@ void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig
     {
         reduce_defines["SHORT_INIT"] = "1";
     }
-  
+
     if (test_config.math_only_reduce) {
         reduce_defines["MATH_ONLY"] = "1";
     } else {

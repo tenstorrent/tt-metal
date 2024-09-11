@@ -24,7 +24,7 @@ ttnn::Tensor ShardedToInterleavedPartialOperation::invoke(
 
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
     auto shard_spec = input_tensor.shard_spec().value();
-    TT_FATAL(input_tensor.shard_spec().has_value());
+    TT_FATAL(input_tensor.shard_spec().has_value(), "Error");
     operation::run(
             ShardedToInterleavedPartialDeviceOperation{
                 .num_slices = num_slices,

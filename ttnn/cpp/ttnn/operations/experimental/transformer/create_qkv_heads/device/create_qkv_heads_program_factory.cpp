@@ -16,7 +16,7 @@ namespace ttnn::operations::experimental::transformer {
         // groups = kv_heads usually
         // heads_per_group = [x 1 1] if qkv since q_heads >= kv_heads and k=v heads but this should be generic
         TT_FATAL(head_dim % TILE_WIDTH == 0, fmt::format("head dim {} needs to be a multiple of tile width {}", head_dim, TILE_WIDTH));
-        TT_FATAL(heads_per_group.size() == output.size() && output.size() == 3);
+        TT_FATAL(heads_per_group.size() == output.size() && output.size() == 3, "Error");
 
         const uint32_t total_heads_per_group = std::accumulate(heads_per_group.begin(), heads_per_group.end(), 0); // num q heads + 2 * num_kv_heads
         const uint32_t elements_per_group = head_dim * total_heads_per_group; // head_dim * (num q heads + 2 * num kv heads)

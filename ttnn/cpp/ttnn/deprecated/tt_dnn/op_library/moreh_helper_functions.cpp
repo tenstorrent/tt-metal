@@ -391,8 +391,8 @@ void validate_output_with_keepdim(const Tensor &input, const Tensor &output, con
         expand_to_max_dim(output_dim_wo_padding, output_shape_wo_padding);
 
         for (int i = 0; i < input_rank; ++i) {
-            TT_FATAL(input_dim[i] == output_dim[i]);
-            TT_FATAL(input_dim_wo_padding[i] == output_dim_wo_padding[i]);
+            TT_FATAL(input_dim[i] == output_dim[i], "Error");
+            TT_FATAL(input_dim_wo_padding[i] == output_dim_wo_padding[i], "Error");
         }
     } else {
         std::vector<uint32_t> expected_output_shape;
@@ -412,8 +412,8 @@ void validate_output_with_keepdim(const Tensor &input, const Tensor &output, con
         for (int i = 0; i < input_rank; ++i) {
             if (i == dim)
                 continue;
-            TT_FATAL(input_shape[i] == expected_output_shape[i]);
-            TT_FATAL(input_shape_wo_padding[i] == expected_output_shape_wo_padding[i]);
+            TT_FATAL(input_shape[i] == expected_output_shape[i], "Error");
+            TT_FATAL(input_shape_wo_padding[i] == expected_output_shape_wo_padding[i], "Error");
         }
     }
 }

@@ -131,7 +131,7 @@ Buffer::Buffer(
     bottom_up_(bottom_up),
     buffer_page_mapping_(nullptr),
     allocate_(allocate) {
-    TT_FATAL(this->device_ != nullptr and this->device_->allocator_ != nullptr);
+    TT_FATAL(this->device_ != nullptr and this->device_->allocator_ != nullptr, "Device and allocator need to not be null.");
     validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
     if (allocate) {
         this->allocate();
