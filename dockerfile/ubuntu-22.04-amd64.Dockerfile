@@ -4,11 +4,12 @@ FROM ubuntu:22.04
 ARG DEBIAN_FRONTEND=noninteractive
 ARG UBUNTU_VERSION=22.04
 ENV DOXYGEN_VERSION=1.9.6
+ENV LOGURU_LEVEL=INFO
 
 RUN apt update -y && apt install software-properties-common gpg-agent -y
 
 # add custom repo
-RUN add-apt-repository ppa:deadsnakes/ppa 
+RUN add-apt-repository ppa:deadsnakes/ppa
 
 # Install build and runtime deps
 COPY /scripts/docker/requirements-${UBUNTU_VERSION}.txt /opt/tt_metal_infra/scripts/docker/requirements.txt
