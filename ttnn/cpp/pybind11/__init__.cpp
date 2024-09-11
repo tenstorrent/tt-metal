@@ -48,7 +48,7 @@ PYBIND11_MODULE(_ttnn, module) {
     auto m_operations = module.def_submodule("operations", "ttnn Operations");
 
     // TYPES
-    ttnn::tensor::py_module_types(m_tensor);
+    ttnn::tensor::tensor_mem_config_module_types(m_tensor);
     ttnn::tensor::pytensor_module_types(m_tensor);
     ttnn::graph::py_graph_module_types(m_graph);
 
@@ -63,7 +63,7 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::reports::py_module_types(m_reports);
 
     // FUNCTIONS / OPERATIONS
-    ttnn::tensor::py_module(m_tensor);
+    ttnn::tensor::tensor_mem_config_module(m_tensor);
     ttnn::tensor::pytensor_module(m_tensor);
     ttnn::core::py_module(m_core);
     ttnn::graph::py_graph_module(m_graph);
