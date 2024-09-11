@@ -69,7 +69,7 @@ class TtLlamaModelForGeneration:
             llama_version: str = None
             ckpt_dir: str = None
             max_batch_size: int = 32
-            num_layers: int = 1
+            num_layers: int = 80
             max_kv_context_len: int = 4096
 
         @dataclass
