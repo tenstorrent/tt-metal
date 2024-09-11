@@ -317,6 +317,7 @@ def run_conv_with_split(
     assert_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("stride", [1, 2])
 @pytest.mark.parametrize(
@@ -331,7 +332,6 @@ def run_conv_with_split(
         (768, 768, 16, 16, 3, 3, 0, 0, 1),
         (1280, 2560, 16, 16, 3, 3, 1, 1, 2),
         (1280, 2560, 16, 16, 3, 3, 0, 0, 2),
-
     ),
 )
 @pytest.mark.parametrize(
@@ -363,12 +363,6 @@ def test_conv_ws(
     weights_dtype,
     activations_dtype,
 ):
-    if is_grayskull():
-        if input_channels >= 2048:
-            pytest.skip("Skipping on grayskull due to insufficient L1")
-        if input_channels >= 768 and input_height >= 10:
-            pytest.skip("Skipping on grayskull due to insufficient L1")
-
     stride_h = stride
     stride_w = stride
     batch_size = 2
