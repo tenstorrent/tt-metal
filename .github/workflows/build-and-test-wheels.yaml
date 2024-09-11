@@ -9,9 +9,6 @@ on:
         type: boolean
   schedule:
     - cron: "0 0 * * *"
-  push:
-    branches:
-      - "rkim/12273-precompiled"
 
 jobs:
   build-artifact:
