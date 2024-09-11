@@ -90,11 +90,6 @@ def run_moreh_nll_loss_unreduced_backward(shape, ignore_index, none_weight, devi
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(torch_input.grad, tt_input_grad_to_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
-    # print("Output grad: ", output_grad)
-    # print("Weight: ", torch_weight)
-    # print("CPU: ", torch_input.grad)
-    # print("NPU: ", tt_input_grad_to_cpu)
-
     logger.debug(f"Out passing (param)={passing}")
     logger.debug(f"Output pcc={out}")
 
@@ -104,10 +99,10 @@ def run_moreh_nll_loss_unreduced_backward(shape, ignore_index, none_weight, devi
 @pytest.mark.parametrize(
     "shape",
     [
-        # (32, 32),
-        # (400, 300),
-        # (20, 300, 320),
-        # (5, 2, 5, 40, 70),
+        (32, 32),
+        (400, 300),
+        (20, 300, 320),
+        (5, 2, 5, 40, 70),
     ],
 )
 @pytest.mark.parametrize("ignore_index", [1])
@@ -135,8 +130,6 @@ def test_moreh_nll_loss_unreduced_backward(
 @pytest.mark.parametrize("ignore_index", [0, None])
 def test_moreh_nll_loss_unreduced_backward_test_callback(shape, none_weight, device, ignore_index, use_program_cache):
     torch.manual_seed(0)
-
-    # ignore_index = 0
 
     for _ in range(2):
         run_moreh_nll_loss_unreduced_backward(shape, ignore_index, none_weight, device)

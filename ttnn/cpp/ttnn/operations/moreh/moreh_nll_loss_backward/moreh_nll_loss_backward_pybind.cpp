@@ -19,7 +19,7 @@ void bind_moreh_nll_loss_backward_operation(py::module &module) {
     bind_registered_operation(
         module,
         ttnn::moreh_nll_loss_backward,
-        R"doc(moreh_nll_loss_backward(target_tensor: ttnn.Tensor, weight_tensor: Optional[ttnn.Tensor], output_grad_tensor: ttnn.Tensor, input_grad_tensor: Optional[ttnn.Tensor], ignore_index: int32, memory_config: Optional[ttnn.MemoryConfig] = None, compute_kernel_config: Optional[DeviceComputeKernelConfig]) -> ttnn.Tensor
+        R"doc(moreh_nll_loss_backward(target_tensor: ttnn.Tensor, weight_tensor: Optional[ttnn.Tensor], output_grad_tensor: ttnn.Tensor, input_grad_tensor: Optional[ttnn.Tensor], ignore_index: int, memory_config: Optional[ttnn.MemoryConfig] = None, compute_kernel_config: Optional[DeviceComputeKernelConfig]) -> ttnn.Tensor
             Compute backward for nll_loss operation with reduction set to None
         )doc",
         ttnn::pybind_arguments_t{

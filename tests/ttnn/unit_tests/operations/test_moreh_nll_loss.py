@@ -96,9 +96,6 @@ def run_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weight
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(torch_input.grad, tt_input_grad_to_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
-    # logger.debug(f"CPU output: {torch_input.grad}")
-    # logger.debug(f"NPU output: {tt_input_grad_to_cpu}")
-
     logger.debug(f"Out passing (param)={passing}")
     logger.debug(f"Output pcc={out}")
 
