@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <exception>
 #include <filesystem>
 
 #include "assert.hpp"
@@ -9,144 +10,121 @@
 #include "impl/kernels/data_types.hpp"
 #include "impl/program/program.hpp"
 #include "llrt/rtoptions.hpp"
-#include "logger.hpp"
+#include "tt_cluster_descriptor_types.h"
 
 using namespace tt;
 using namespace tt::tt_metal;
+using namespace tt::llrt;
 
-void validate_env_vars_are_set() {
-    TT_FATAL(llrt::OptionsG.is_root_dir_specified(), "TT_METAL_HOME must be set for this test");
-    TT_FATAL(llrt::OptionsG.is_kernel_dir_specified(), "TT_METAL_KERNEL_PATH must be set for this test");
-}
+class CompileProgramWithKernelPathEnvVarFixture : public ::testing::Test {
+   protected:
+    void SetUp() override {
+        this->validate_preconditions();
 
-bool does_path_exist(const string &path) {
-    const std::filesystem::path &file_path(path);
-    return std::filesystem::exists(file_path);
-}
-
-bool is_path_a_directory(const string &path) {
-    TT_FATAL(does_path_exist(path));
-    const std::filesystem::path &file_path(path);
-    return std::filesystem::is_directory(file_path);
-}
-
-bool is_dir_empty(const string &path) {
-    TT_FATAL(does_path_exist(path));
-    TT_FATAL(is_path_a_directory(path));
-    const std::filesystem::path &file_path(path);
-    return std::filesystem::is_empty(file_path);
-}
-
-void validate_kernel_dir_is_valid() {
-    const string &kernel_dir = llrt::OptionsG.get_kernel_dir();
-    if (!does_path_exist(kernel_dir) || !is_path_a_directory(kernel_dir) || !is_dir_empty(kernel_dir)) {
-        TT_THROW("TT_METAL_KERNEL_PATH must be an existing, empty directory for this test");
+        const chip_id_t device_id = 0;
+        this->device_ = CreateDevice(device_id);
+        this->program_ = CreateProgram();
     }
-}
 
-void validate_preconditions() {
-    validate_env_vars_are_set();
-    validate_kernel_dir_is_valid();
-}
+    void TearDown() override { CloseDevice(this->device_); }
 
-void setup_kernel_dir(const string &orig_kernel_file, const string &new_kernel_file) {
-    const string &kernel_dir = llrt::OptionsG.get_kernel_dir();
-    const std::filesystem::path &kernel_file_path_under_kernel_dir(kernel_dir + orig_kernel_file);
-    std::filesystem::create_directories(kernel_file_path_under_kernel_dir);
+    void create_kernel(const string &kernel_file) {
+        CoreCoord core(0, 0);
+        tt_metal::CreateKernel(
+            this->program_,
+            kernel_file,
+            core,
+            tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    }
 
-    const string &metal_root = llrt::OptionsG.get_root_dir();
-    const std::filesystem::path &kernel_file_path_under_metal_root(metal_root + new_kernel_file);
-    std::filesystem::copy(kernel_file_path_under_metal_root, kernel_file_path_under_kernel_dir);
-}
+    void setup_kernel_dir(const string &orig_kernel_file, const string &new_kernel_file) {
+        const string &kernel_dir = OptionsG.get_kernel_dir();
+        const std::filesystem::path &kernel_file_path_under_kernel_dir(kernel_dir + new_kernel_file);
+        const std::filesystem::path &dirs_under_kernel_dir = kernel_file_path_under_kernel_dir.parent_path();
+        std::filesystem::create_directories(dirs_under_kernel_dir);
 
-void cleanup_kernel_dir() {
-    const string &kernel_dir = llrt::OptionsG.get_kernel_dir();
-    std::filesystem::remove_all(kernel_dir);
-}
+        const string &metal_root = OptionsG.get_root_dir();
+        const std::filesystem::path &kernel_file_path_under_metal_root(metal_root + orig_kernel_file);
+        std::filesystem::copy(kernel_file_path_under_metal_root, kernel_file_path_under_kernel_dir);
+    }
 
-void create_kernel(tt_metal::Program &program, const string &kernel_file) {
-    CoreCoord core(0, 0);
-    tt_metal::CreateKernel(
-        program,
-        kernel_file,
-        core,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default})
-}
+    void cleanup_kernel_dir() {
+        const string &kernel_dir = OptionsG.get_kernel_dir();
+        for (const std::filesystem::directory_entry &entry : std::filesystem::directory_iterator(kernel_dir)) {
+            std::filesystem::remove_all(entry);
+        }
+    }
 
-bool test_compile_program_with_kernel_under_metal_root_dir(Device *device) {
+    Device *device_;
+    Program program_;
+
+   private:
+    void validate_preconditions() {
+        this->validate_env_vars_are_set();
+        this->validate_kernel_dir_is_valid();
+    }
+
+    void validate_env_vars_are_set() {
+        if (!OptionsG.is_root_dir_specified()) {
+            GTEST_SKIP() << "Skipping test: TT_METAL_HOME must be set";
+        }
+        if (!OptionsG.is_kernel_dir_specified()) {
+            GTEST_SKIP() << "Skipping test: TT_METAL_KERNEL_PATH must be set";
+        }
+    }
+
+    void validate_kernel_dir_is_valid() {
+        const string &kernel_dir = llrt::OptionsG.get_kernel_dir();
+        if (!this->does_path_exist(kernel_dir) || !this->is_path_a_directory(kernel_dir) ||
+            !this->is_dir_empty(kernel_dir)) {
+            GTEST_SKIP() << "Skipping test: TT_METAL_KERNEL_PATH must be an existing, empty directory";
+        }
+    }
+
+    bool does_path_exist(const string &path) {
+        const std::filesystem::path &file_path(path);
+        return std::filesystem::exists(file_path);
+    }
+
+    bool is_path_a_directory(const string &path) {
+        TT_FATAL(this->does_path_exist(path));
+        const std::filesystem::path &file_path(path);
+        return std::filesystem::is_directory(file_path);
+    }
+
+    bool is_dir_empty(const string &path) {
+        TT_FATAL(this->does_path_exist(path));
+        TT_FATAL(this->is_path_a_directory(path));
+        const std::filesystem::path &file_path(path);
+        return std::filesystem::is_empty(file_path);
+    }
+};
+
+TEST_F(CompileProgramWithKernelPathEnvVarFixture, KernelUnderMetalRootDir) {
     const string &kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
-    tt_metal::Program program = CreateProgram();
-    create_kernel(program, kernel_file);
-    detail::CompileProgram(device, program);
-    return true;
+    create_kernel(kernel_file);
+    detail::CompileProgram(this->device_, this->program_);
 }
 
-bool test_compile_program_with_kernel_under_kernel_root_dir(Device *device) {
+TEST_F(CompileProgramWithKernelPathEnvVarFixture, KernelUnderKernelRootDir) {
     const string &orig_kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
     const string &new_kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/new_kernel.cpp";
-    setup_kernel_dir(orig_kernel_file, new_kernel_file);
-    tt_metal::Program program = CreateProgram();
-    create_kernel(program, new_kernel_file);
-    detail::CompileProgram(device, program);
-    cleanup_kernel_dir();
-    return true;
+    this->setup_kernel_dir(orig_kernel_file, new_kernel_file);
+    this->create_kernel(new_kernel_file);
+    detail::CompileProgram(this->device_, this->program_);
+    this->cleanup_kernel_dir();
 }
 
-bool test_compile_program_with_kernel_under_metal_root_dir_and_kernel_root_dir(Device *device) {
+TEST_F(CompileProgramWithKernelPathEnvVarFixture, KernelUnderMetalRootDirAndKernelRootDir) {
     const string &kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
-    setup_kernel_dir(kernel_file, kernel_file);
-    tt_metal::Program program = CreateProgram();
-    create_kernel(program, kernel_file);
-    detail::CompileProgram(device, program);
-    cleanup_kernel_dir();
-    return true;
+    this->setup_kernel_dir(kernel_file, kernel_file);
+    this->create_kernel(kernel_file);
+    detail::CompileProgram(this->device_, this->program_);
+    this->cleanup_kernel_dir();
 }
 
-bool test_compile_program_with_non_existent_kernel(Device *device) {
-    bool pass = false;
+TEST_F(CompileProgramWithKernelPathEnvVarFixture, NonExistentKernel) {
     const string &kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/non_existent_kernel.cpp";
-    tt_metal::Program program = CreateProgram();
-    create_kernel(program, kernel_file);
-    try {
-        detail::CompileProgram(device, program);
-    } catch (const std::exception &e) {
-        pass = true;
-    }
-    return pass;
-}
-
-int main(int argc, char **argv) {
-    validate_preconditions();
-
-    bool pass = true;
-
-    try {
-        const int device_id = 0;
-        Device *device = CreateDevice(device_id);
-
-        pass &= test_compile_program_with_kernel_under_metal_root_dir(device);
-
-        pass &= test_compile_program_with_kernel_under_kernel_root_dir(device);
-
-        pass &= test_compile_program_with_kernel_under_metal_root_dir_and_kernel_root_dir(device);
-
-        pass &= test_compile_program_with_non_existent_kernel(device);
-
-        pass &= CloseDevice(device);
-    } catch (const std::exception &e) {
-        pass = false;
-        // Capture the exception error message
-        log_error(LogTest, "{}", e.what());
-        // Capture system call errors that may have returned from driver/kernel
-        log_error(LogTest, "System error message: {}", std::strerror(errno));
-    }
-
-    if (pass) {
-        log_info(LogTest, "Test Passed");
-    } else {
-        TT_THROW("Test Failed");
-    }
-
-    TT_FATAL(pass);
-    return 0;
+    this->create_kernel(kernel_file);
+    EXPECT_THROW(detail::CompileProgram(this->device_, this->program_), std::exception);
 }
