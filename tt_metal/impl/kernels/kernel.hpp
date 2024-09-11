@@ -13,6 +13,7 @@
 #include "jit_build/build.hpp"
 #include "common/base_types.hpp"
 #include "tt_metal/impl/kernels/kernel_types.hpp"
+#include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/tt_memory.h"
 #include "runtime_args_data.hpp"
 
@@ -24,11 +25,17 @@ class Device;
 constexpr uint32_t max_runtime_args = 256;
 constexpr uint32_t idle_eth_max_runtime_args = eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_SIZE / sizeof(uint32_t);
 
-using Config = std::variant<DataMovementConfig, EthernetConfig, ComputeConfig>;
+using Config = std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>;
+
+namespace detail {
+
+HalProgrammableCoreType get_core_type(const Config &config);
+
+}  // namespace detail
 
 class Kernel : public JitBuildSettings {
    public:
-    Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &compile_args, const std::map<std::string, std::string>&defines);
+    Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &compile_args, const std::map<std::string, std::string>&defines, const bool from_persistent=false);
 
     virtual ~Kernel() {}
 
@@ -81,7 +88,7 @@ class Kernel : public JitBuildSettings {
     void set_runtime_args(const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
     void set_common_runtime_args(const std::vector<uint32_t> &runtime_args);
 
-    int get_watcher_kernel_id() { return watcher_kernel_id_; }
+    int get_watcher_kernel_id() const { return watcher_kernel_id_; }
 
     CoreType get_kernel_core_type() const;
     void set_full_name(const string& s) { kernel_full_name_ = s; }
@@ -89,7 +96,9 @@ class Kernel : public JitBuildSettings {
     void process_defines(const std::function<void (const string& define, const string &value)>) const override;
     void process_compile_time_args(const std::function<void (int i, uint32_t value)>) const override;
 
-    bool is_idle_eth();
+    bool is_idle_eth() const;
+
+    bool from_persistent() const { return from_persistent_; };
 
    protected:
     const int watcher_kernel_id_;
@@ -114,6 +123,7 @@ class Kernel : public JitBuildSettings {
     CoreCoord core_with_max_runtime_args_;              // For validation
     std::map<std::string, std::string> defines_;        // preprocessor defines. this is to be able to generate generic instances.
     std::set<CoreCoord> logical_cores_;
+    bool from_persistent_;
 
     virtual uint8_t expected_num_binaries() const = 0;
 
@@ -122,7 +132,7 @@ class Kernel : public JitBuildSettings {
 
 class DataMovementKernel : public Kernel {
    public:
-    DataMovementKernel(const std::string &kernel_path, const CoreRangeSet &cr_set, const DataMovementConfig &config) : Kernel(kernel_path, cr_set, config.compile_args, config.defines), config_(config) { this->dispatch_class_ = (config.processor == DataMovementProcessor::RISCV_0) ? DISPATCH_CLASS_TENSIX_DM0 : DISPATCH_CLASS_TENSIX_DM1; }
+    DataMovementKernel(const std::string &kernel_path, const CoreRangeSet &cr_set, const DataMovementConfig &config, const bool from_persistent = false) : Kernel(kernel_path, cr_set, config.compile_args, config.defines, from_persistent), config_(config) { this->dispatch_class_ = (config.processor == DataMovementProcessor::RISCV_0) ? DISPATCH_CLASS_TENSIX_DM0 : DISPATCH_CLASS_TENSIX_DM1; }
 
     ~DataMovementKernel() {}
 
@@ -148,8 +158,8 @@ class DataMovementKernel : public Kernel {
 
 class EthernetKernel : public Kernel {
    public:
-    EthernetKernel(const std::string &kernel_path, const CoreRangeSet &cr_set, const EthernetConfig &config) :
-        Kernel(kernel_path, cr_set, config.compile_args, config.defines), config_(config) { this->dispatch_class_ = DISPATCH_CLASS_ETH_DM0; }
+    EthernetKernel(const std::string &kernel_path, const CoreRangeSet &cr_set, const EthernetConfig &config, const bool from_persistent = false) :
+        Kernel(kernel_path, cr_set, config.compile_args, config.defines, from_persistent), config_(config) { this->dispatch_class_ = DISPATCH_CLASS_ETH_DM0; }
 
     ~EthernetKernel() {}
 
@@ -175,7 +185,7 @@ class EthernetKernel : public Kernel {
 
 class ComputeKernel : public Kernel {
    public:
-    ComputeKernel(const std::string &kernel_path, const CoreRangeSet &cr_set, const ComputeConfig &config) : Kernel(kernel_path, cr_set, config.compile_args, config.defines), config_(config) { this->dispatch_class_ = DISPATCH_CLASS_TENSIX_COMPUTE; }
+    ComputeKernel(const std::string &kernel_path, const CoreRangeSet &cr_set, const ComputeConfig &config, const bool from_persistent = false) : Kernel(kernel_path, cr_set, config.compile_args, config.defines, from_persistent), config_(config) { this->dispatch_class_ = DISPATCH_CLASS_TENSIX_COMPUTE; }
 
     ~ComputeKernel() {}
 

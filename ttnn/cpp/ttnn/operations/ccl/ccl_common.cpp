@@ -8,6 +8,7 @@
 #include <cmath>
 
 #include "ccl_host_datastructures.hpp"
+#include "ttnn/operations/ccl/ccl_fabric.hpp"
 
 namespace ttnn {
 namespace ccl {
@@ -210,7 +211,8 @@ void generate_edm_kernels_for_ring_or_linear_topology(
     std::vector<ccl::EriscDatamoverBuilder> const& clockwise_edm_builders,
     std::vector<ccl::EriscDatamoverBuilder> const& counter_clockwise_edm_builders,
     std::optional<uint32_t> receiver_device_id,
-    std::optional<uint32_t> sender_device_id) {
+    std::optional<uint32_t> sender_device_id,
+    ccl::OpBuildMode build_mode) {
     auto sender_noc = detail::GetPreferredNOCForDRAMRead(tt::Cluster::instance().arch());
     auto receiver_noc = detail::GetPreferredNOCForDRAMWrite(tt::Cluster::instance().arch());
     uint32_t sender_socket_idx = 0;
@@ -226,10 +228,11 @@ void generate_edm_kernels_for_ring_or_linear_topology(
         bool is_clockwise_direction_edm_enabled =
             !topology_config.is_linear || topology_config.ring_index != topology_config.ring_size - 1;
         if (is_clockwise_direction_edm_enabled) {
+            log_info(tt::LogOp, "Generating clockwise EDM");
             auto eth_sender_core = topology_config.eth_sender_cores.at(i);
             log_trace(tt::LogOp, "EDM CLOCKWISE KERNEL RT ARGS: ");
             auto eth_sender_kernel =
-                ccl::generate_edm_kernel(program, device, clockwise_edm_builders.at(i), eth_sender_core, sender_noc);
+                ccl::generate_edm_kernel(program, device, clockwise_edm_builders.at(i), eth_sender_core, sender_noc, build_mode);
             log_trace(
                 tt::LogOp,
                 "RingIndex: {}. Link {}. Clockwise EDM Core (x={},y={})",
@@ -241,10 +244,11 @@ void generate_edm_kernels_for_ring_or_linear_topology(
 
         bool is_counter_clockwise_direction_edm_enabled = !topology_config.is_linear || topology_config.ring_index != 0;
         if (is_counter_clockwise_direction_edm_enabled) {
+            log_info(tt::LogOp, "Generating counter clockwise EDM");
             log_trace(tt::LogOp, "EDM COUNTER CLOCKWISE KERNEL RT ARGS: ");
             auto eth_receiver_core = topology_config.eth_receiver_cores.at(i);
             auto eth_receiver_kernel = ccl::generate_edm_kernel(
-                program, device, counter_clockwise_edm_builders.at(i), eth_receiver_core, receiver_noc);
+                program, device, counter_clockwise_edm_builders.at(i), eth_receiver_core, receiver_noc, build_mode);
             log_trace(
                 tt::LogOp,
                 "RingIndex: {}. Link {}. Counter-clockwise EDM Core (x={},y={})",
@@ -262,7 +266,8 @@ KernelHandle generate_edm_kernel(
     Device const* device,
     ccl::EriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,
-    NOC noc_id) {
+    NOC noc_id,
+    ccl::OpBuildMode build_mode) {
     edm_builder.dump_to_log();
 
     std::vector<uint32_t> const& edm_clockwise_kernel_rt_args = edm_builder.emit_runtime_args();
@@ -274,16 +279,25 @@ KernelHandle generate_edm_kernel(
         log_trace(tt::LogOp, "\t{}", s);
     }
 
-    auto eth_sender_kernel =tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp",
-        eth_core,
-       tt::tt_metal::EthernetConfig{.noc = noc_id, .compile_args = eth_sender_ct_args});
+    bool attach_instead_of_create = build_mode == ccl::OpBuildMode::PERSISTENT_BUILD_NON_PERSISTENT_WORKERS;
+    log_info(tt::LogOp, attach_instead_of_create ? "Attaching to EDM kernel" : "Creating EDM kernel");
+    auto eth_sender_kernel = attach_instead_of_create
+                                 ? tt::tt_metal::AttachPersistentKernel(
+                                       program,
+                                       "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp",
+                                       eth_core,
+                                       tt::tt_metal::EthernetConfig{.noc = noc_id, .compile_args = eth_sender_ct_args},
+                                       device)
+                                 : tt::tt_metal::CreateKernel(
+                                       program,
+                                       "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp",
+                                       eth_core,
+                                       tt::tt_metal::EthernetConfig{.noc = noc_id, .compile_args = eth_sender_ct_args});
 
-   tt::tt_metal::SetRuntimeArgs(program, eth_sender_kernel, eth_core, edm_clockwise_kernel_rt_args);
+    tt::tt_metal::SetRuntimeArgs(program, eth_sender_kernel, eth_core, edm_clockwise_kernel_rt_args);
 
     std::stringstream ss;
-    ss << "EDM ARGS:\n";
+    ss << "EDM ARGS (" << (attach_instead_of_create ? "attached" : "created") << "):\n";
     for (auto const& s : edm_clockwise_kernel_rt_args) {
         ss << "\t" << s << "\n";
     }

@@ -126,6 +126,7 @@ KernelHandle Program::add_kernel(std::shared_ptr<Kernel> kernel, const HalProgra
     // Id is unique across all kernels on all core types
     KernelHandle id = this->num_kernels();
     uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
+    this->used_programmable_core_types_ |= 1 << index;
     kernels_[index].insert({id, kernel});
     kernel_groups_[index].resize(0);
     core_to_kernel_group_index_table_[index].clear();
@@ -350,6 +351,7 @@ void Program::CircularBufferAllocator::mark_address(uint64_t address, uint64_t s
 
 CBHandle Program::add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config) {
     this->invalidate_compile();
+    TT_FATAL(!this->is_persistent(), "Cannot add circular buffers to persistent program");
     std::shared_ptr<CircularBuffer> circular_buffer = std::make_shared<CircularBuffer>(core_range_set, config);
     // Globally allocated circular buffer do not invalidate allocation because their addresses are tracked by memory
     // allocator
@@ -542,6 +544,7 @@ void Program::init_semaphores(const Device &device, const CoreCoord &logical_cor
 
 void Program::add_semaphore(const CoreRangeSet &crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {
     this->invalidate_compile();
+    TT_FATAL(!this->is_persistent(), "Cannot add semaphores to persistent program");
     semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, core_type));
 }
 
@@ -664,6 +667,10 @@ void Program::populate_dispatch_data(Device *device) {
     // This is generic for workers and eth cores
     for (const auto &kernels : this->kernels_) {
         for (const auto &[kernel_id, kernel] : kernels) {
+            // Do not rewrite kernels that are persistent
+            if (kernel->from_persistent()) {
+                continue;
+            }
             std::vector<RISCV> sub_kernels;
             if (kernel->processor() == RISCV::COMPUTE) {
                 sub_kernels = {RISCV::TRISC0, RISCV::TRISC1, RISCV::TRISC2};
@@ -927,7 +934,7 @@ uint32_t& Program::get_program_config_size(uint32_t programmable_core_type_index
     return this->program_config_sizes_[programmable_core_type_index];
 }
 
-void Program::finalize() {
+void Program::finalize(Device * device) {
     // Store the number of tensix "go signals" for use by CQ
     // CQ iterates over these to update runtime addresses, needs to know when eth begins (after tensix)
     // TODO: should store all the counts
@@ -956,6 +963,10 @@ void Program::finalize() {
     this->set_launch_msg_sem_offsets();
 
     finalized_ = true;
+
+    if (this->is_persistent()) {
+        device->insert_persistent_program(*this);
+    }
 }
 
 void Program::compile(Device *device, bool fd_bootloader_mode) {
@@ -1067,6 +1078,7 @@ void Program::compile(Device *device, bool fd_bootloader_mode) {
         detail::MemoryReporter::inst().flush_program_memory_usage(*this, device);
     }
     compile_needed_[device->id()] = false;
+    finalized_ = false;
 }
 
 void Program::set_runtime_id(uint64_t id) { this->runtime_id = id; }

@@ -563,7 +563,8 @@ bool RunWriteBWTest(
         sender_device,
         local_chip_edm_builder,
         eth_sender_core,
-        NOC::NOC_0);
+        NOC::NOC_0,
+        ttnn::ccl::OpBuildMode::NON_PERSISTENT);
     set_edm_runtime_args(
         sender_program,
         local_edm_kernel,
@@ -576,7 +577,8 @@ bool RunWriteBWTest(
         receiver_device,
         remote_chip_edm_builder,
         eth_receiver_core,
-        NOC::NOC_0);
+        NOC::NOC_0,
+        ttnn::ccl::OpBuildMode::NON_PERSISTENT);
     set_edm_runtime_args(
         receiver_program,
         remote_edm_kernel,

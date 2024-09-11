@@ -10,9 +10,7 @@
 #include "pybind11/operations/copy.hpp"
 #include "pybind11/operations/core.hpp"
 #include "pybind11/operations/creation.hpp"
-#include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
-#include "ttnn/operations/ccl/line_all_gather/line_all_gather_pybind.hpp"
-#include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_pybind.hpp"
+#include "ttnn/operations/ccl/ccl_pybind.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
 #include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
@@ -70,9 +68,7 @@ void py_module(py::module& module) {
     unary_backward::py_module(m_unary_backward);
 
     auto m_ccl = module.def_submodule("ccl", "collective communication operations");
-    ccl::py_bind_all_gather(m_ccl);
-    ccl::py_bind_line_all_gather(m_ccl);
-    ccl::py_bind_reduce_scatter(m_ccl);
+    ccl::py_module(m_ccl);
 
     auto m_complex = module.def_submodule("complex", "complex tensor creation");
     complex::py_module(m_complex);

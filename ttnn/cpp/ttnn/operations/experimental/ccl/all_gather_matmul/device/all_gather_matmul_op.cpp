@@ -99,6 +99,7 @@ operation::ProgramWithCallbacks AllGatherMatmul::create_program(const std::vecto
         this->all_gather_struct.sender_device_id,
         this->all_gather_struct.topology,
         this->all_gather_core_grid_offset,
+        this->all_gather_struct.op_build_mode,
 
         /* Matmul Params */
         {}, // Bias
@@ -140,9 +141,9 @@ std::vector <ttnn::Tensor> all_gather_matmul(
                                             ttnn::Tensor(operation::get_workers_for_op_output({input_tensor, weight_tensor}))};
     std::vector<std::optional<const ttnn::Tensor>> optional_input_tensors = {std::nullopt};
 
-
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring;
     operation::launch_op(
-        [dim, all_gather_core_grid_offset, num_links, memory_config_ag, memory_config_mm, transpose_a, transpose_b, dtype, program_config, activation, compute_kernel_config, core_grid, devices](
+        [dim, all_gather_core_grid_offset, num_links, topology, memory_config_ag, memory_config_mm, transpose_a, transpose_b, dtype, program_config, activation, compute_kernel_config, core_grid, devices](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -151,7 +152,7 @@ std::vector <ttnn::Tensor> all_gather_matmul(
             const auto& weight_tensor = input_tensors[1];
 
             /* AllGather setup */
-            ttnn::AllGather all_gather_struct = ttnn::create_all_gather_struct(input_tensor, dim, num_links, memory_config_ag, devices);
+            ttnn::AllGather all_gather_struct = ttnn::create_all_gather_struct(input_tensor.memory_config(), input_tensor.device(), dim, num_links, memory_config_ag, devices, topology, ttnn::ccl::OpBuildMode::NON_PERSISTENT);
 
             // Create the all gather output tensor used as input (activation) to the matmul
             ttnn::Tensor all_gather_out_tensor = all_gather_struct.create_output_tensors({input_tensor})[0];

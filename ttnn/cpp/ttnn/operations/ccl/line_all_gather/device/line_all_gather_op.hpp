@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "common/core_coord.h"
 #include "impl/buffers/buffer.hpp"
+#include "ttnn/operations/ccl/ccl_fabric.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -38,6 +39,7 @@ struct LineAllGather {
     const std::optional<chip_id_t> sender_device_id;
     const MemoryConfig output_mem_config;
     const all_gather_op::Topology topology;
+    const ttnn::ccl::OpBuildMode op_build_mode;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -52,7 +54,8 @@ Tensor line_all_gather(
     const Tensor& input_tensor,
     const uint32_t dim,
     const uint32_t num_links = 1,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const ttnn::ccl::OpFabricMode op_fabric_mode = ttnn::ccl::OpFabricMode::TEMPORARY_EDM);
 
 Tensor line_all_gather(
     const Tensor& input_tensor,
@@ -60,7 +63,8 @@ Tensor line_all_gather(
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const uint32_t num_links = 1,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    ttnn::ccl::OpFabricMode op_fabic_mode = ttnn::ccl::OpFabricMode::TEMPORARY_EDM);
 
 } // namespace ccl
 } // namespace operations

@@ -12,6 +12,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include "eth_l1_address_map.h"
+#include "ttnn/operations/ccl/ccl_fabric.hpp"
 
 namespace ttnn {
 
@@ -71,21 +72,32 @@ std::vector<Tensor> LineAllGather::create_output_tensors(const std::vector<Tenso
 }
 
 operation::ProgramWithCallbacks LineAllGather::create_program(const std::vector<Tensor> & input_tensors, std::vector<Tensor> &output_tensors) const {
-    return all_gather_multi_core_with_workers(input_tensors[0], output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->receiver_device_id, this->sender_device_id, this->topology);
+    return all_gather_multi_core_with_workers(
+        input_tensors[0],
+        output_tensors[0],
+        all_gather_op_builder_args_t{
+            this->dim,
+            this->num_links,
+            this->ring_size,
+            this->ring_index,
+            this->receiver_device_id,
+            this->sender_device_id,
+            this->topology},
+        this->op_build_mode);
 }
 
 namespace operations {
 namespace ccl {
 
 Tensor line_all_gather(
-    const Tensor& input_tensor, const uint32_t dim, const uint32_t num_links, const std::optional<MemoryConfig>& memory_config) {
+    const Tensor& input_tensor, const uint32_t dim, const uint32_t num_links, const std::optional<MemoryConfig>& memory_config, const ttnn::ccl::OpFabricMode fabric_config) {
 
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
 
     auto devices = input_tensor.get_workers();
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
-        [dim, num_links, memory_config, devices](
+        [dim, num_links, memory_config, devices, fabric_config](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -112,10 +124,25 @@ Tensor line_all_gather(
                 }
             }
 
-            return operation::run(
-                ttnn::LineAllGather{
-                    dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config()), ttnn::all_gather_op::Topology::Linear},
-                {input_tensor});
+            if (fabric_config == ttnn::ccl::OpFabricMode::TEMPORARY_EDM) {
+                return operation::run(
+                    // ttnn::LineAllGather{
+                    ttnn::AllGather{
+                        dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config()), ttnn::all_gather_op::Topology::Linear, ttnn::ccl::OpBuildMode::NON_PERSISTENT},
+                    {input_tensor});
+            } else {
+                auto dummy_persistent_edm_kernel_tensor = operation::run(
+                    // ttnn::LineAllGather{
+                    ttnn::AllGather{
+                        dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config()), ttnn::all_gather_op::Topology::Linear, ttnn::ccl::OpBuildMode::PERSISTENT_BUILD_PERSISTENT_EDM},
+                    {input_tensor});
+                return operation::run(
+                    // ttnn::LineAllGather{
+                    ttnn::AllGather{
+                        dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config()), ttnn::all_gather_op::Topology::Linear, ttnn::ccl::OpBuildMode::PERSISTENT_BUILD_NON_PERSISTENT_WORKERS},
+                    {dummy_persistent_edm_kernel_tensor});
+
+            }
         },
         {input_tensor},
         output_tensors);
@@ -128,7 +155,8 @@ Tensor line_all_gather(
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const uint32_t num_links,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    const ttnn::ccl::OpFabricMode fabric_config) {
 
     const auto mesh_view = mesh_device.get_view();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view->num_rows() : mesh_view->num_cols();
@@ -136,7 +164,7 @@ Tensor line_all_gather(
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
 
     operation::launch_op(
-        [dim, num_links, memory_config, mesh_view, cluster_axis, num_devices](
+        [dim, num_links, memory_config, mesh_view, cluster_axis, num_devices, fabric_config](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -162,10 +190,23 @@ Tensor line_all_gather(
             auto receiver_device_id = is_last_chip_in_clockwise_direction ? std::nullopt : get_chip_id(device_index + 1);
             auto sender_device_id = is_last_chip_in_counter_clockwise_direction ? std::nullopt : get_chip_id(device_index + num_devices - 1);
 
-            return operation::run(
-                ttnn::LineAllGather{
-                    dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_device_tensor.memory_config()), ttnn::all_gather_op::Topology::Linear},
-                {input_device_tensor});
+
+            if (fabric_config == ttnn::ccl::OpFabricMode::TEMPORARY_EDM) {
+                return operation::run(
+                    ttnn::AllGather{
+                        dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_device_tensor.memory_config()), ttnn::all_gather_op::Topology::Linear, ttnn::ccl::OpBuildMode::NON_PERSISTENT},
+                    {input_device_tensor});
+            } else {
+                auto dummy_persistent_edm_kernel_tensor = operation::run(
+                    ttnn::AllGather{
+                        dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_device_tensor.memory_config()), ttnn::all_gather_op::Topology::Linear, ttnn::ccl::OpBuildMode::PERSISTENT_BUILD_PERSISTENT_EDM},
+                    {input_device_tensor});
+                return operation::run(
+                    ttnn::AllGather{
+                        dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_device_tensor.memory_config()), ttnn::all_gather_op::Topology::Linear, ttnn::ccl::OpBuildMode::PERSISTENT_BUILD_NON_PERSISTENT_WORKERS},
+                    {dummy_persistent_edm_kernel_tensor});
+
+            }
         },
         {input_tensor},
         output_tensors);

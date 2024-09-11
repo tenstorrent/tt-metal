@@ -30,130 +30,110 @@
 // ...
 // Repeat from step 2 for receiver side
 
-// Intended only for (performance) test use cases
-FORCE_INLINE void eth_setup_handshake2(std::uint32_t handshake_register_address, bool is_sender) {
-    if (is_sender) {
-        DPRINT << "eth_send_bytes\n";
-        eth_send_bytes(handshake_register_address, handshake_register_address, 16);
-        DPRINT << "eth_wait_for_receiver_done\n";
-        eth_wait_for_receiver_done();
-    } else {
-        DPRINT << "eth_wait_for_bytes\n";
-        eth_wait_for_bytes(16);
-        DPRINT << "wait eth_receiver_done\n";
-        eth_receiver_channel_done(0);
-    }
-}
-
 using ttnn::ccl::WorkerXY;
 
-template<uint8_t num_senders, uint8_t num_receivers>
-struct sender_receiver_index_t {
-    static constexpr bool ZERO_SENDERS = num_senders == 0;
-    static constexpr bool ZERO_RECEIVERS = num_receivers == 0;
-    static constexpr bool NUM_SENDERS_IS_POW_2 = !ZERO_SENDERS && (((num_senders - 1) & num_senders) == 0);
-    static constexpr bool NUM_RECEIVERS_IS_POW_2 = !ZERO_RECEIVERS && (((num_receivers - 1) & num_receivers) == 0);
-    static constexpr uint16_t SENDER_INCR_MASK = !ZERO_SENDERS ? num_senders - 1 : 0;
-    static constexpr uint16_t RECEIVER_INCR_MASK = !ZERO_RECEIVERS ? num_receivers - 1 : 0;
-    static constexpr uint16_t COMBINED_INCR_MASK = SENDER_INCR_MASK << 8 | RECEIVER_INCR_MASK;
-    static constexpr uint16_t COMBINED_INCR = (1 << 8) | 1;
-    union {
-        struct {
-            uint8_t sender;
-            uint8_t receiver;
-        };
-        uint16_t combined;
-    } index;
-    union {
-        struct {
-            uint8_t sender;
-            uint8_t receiver;
-        };
-        uint16_t combined;
-    } real_index;
-    union {
-        struct {
-            uint8_t sender;
-            uint8_t receiver;
-        };
-        uint16_t combined;
-    } start;
+// struct sender_receiver_index_t {
+//     static constexpr uint16_t COMBINED_INCR = (1 << 8) | 1;
+//     union {
+//         struct {
+//             uint8_t sender;
+//             uint8_t receiver;
+//         };
+//         uint16_t combined;
+//     } index;
+//     union {
+//         struct {
+//             uint8_t sender;
+//             uint8_t receiver;
+//         };
+//         uint16_t combined;
+//     } real_index;
+//     union {
+//         struct {
+//             uint8_t sender;
+//             uint8_t receiver;
+//         };
+//         uint16_t combined;
+//     } start;
 
-    sender_receiver_index_t(uint8_t send_start, uint8_t receive_start, uint8_t num_send, uint8_t num_receive) {
-        start.sender = send_start;
-        start.receiver = receive_start;
-        index.sender = 0;
-        index.receiver = 0;
-        real_index.sender = send_start;
-        real_index.receiver = receive_start;
-    }
+//     uint8_t num_senders;
+//     uint8_t num_receivers;
+
+//     sender_receiver_index_t(uint8_t send_start, uint8_t receive_start, uint8_t num_senders, uint8_t num_receivers) {
+//         start.sender = send_start;
+//         start.receiver = receive_start;
+//         index.sender = 0;
+//         index.receiver = 0;
+//         real_index.sender = send_start;
+//         real_index.receiver = receive_start;
+//         num_senders = num_senders;
+//         num_receivers = num_receivers;
+//     }
+
+//     FORCE_INLINE void increment() {
+//         index.sender += 1;
+//         index.receiver += 1;
+//         index.sender = index.sender >= num_senders ? 0 : index.sender;
+//         index.receiver = index.receiver >= num_receivers ? 0 : index.receiver;
+//         real_index.combined = start.combined + index.combined;
+//     }
+// };
+
+
+template <typename T>
+struct channel_counter_t {
+    channel_counter_t(T offset, T num) :
+        last_val(offset + num - 1), start_offset(offset), curr(start_offset) {
+        }
 
     FORCE_INLINE void increment() {
-        if constexpr (NUM_SENDERS_IS_POW_2 and NUM_RECEIVERS_IS_POW_2) {
-            index.combined = (index.combined + COMBINED_INCR) & COMBINED_INCR_MASK;
-            real_index.combined = start.combined + index.combined;
-        } else if constexpr (ZERO_RECEIVERS and NUM_SENDERS_IS_POW_2) {
-            index.sender = (index.sender + 1) & SENDER_INCR_MASK;
-            real_index.sender = start.sender + index.sender;
-        } else if constexpr (ZERO_SENDERS and NUM_RECEIVERS_IS_POW_2) {
-            index.receiver = (index.receiver + 1) & RECEIVER_INCR_MASK;
-            real_index.receiver = start.receiver + index.receiver;
-        } else {
-            index.combined += COMBINED_INCR;
-            index.sender = index.sender >= num_senders ? 0 : index.sender;
-            index.receiver = index.receiver >= num_receivers ? 0 : index.receiver;
-            real_index.combined = start.combined + index.combined;
-        }
+        bool last = (curr == last_val);
+        curr = last ? start_offset : curr + 1;
     }
+
+    FORCE_INLINE T get() const { return curr; }
+
+    protected:
+    T last_val;
+    T start_offset;
+    T curr;
 };
 
-
 void kernel_main() {
-    constexpr bool enable_sender_side = get_compile_time_arg_val(0) != 0;
-
-    // If true, will enable this erisc's receiver functionality
-    constexpr bool enable_receiver_side = get_compile_time_arg_val(1) != 0;
-
-    constexpr uint32_t num_senders = get_compile_time_arg_val(2);
-    constexpr uint32_t num_receivers = get_compile_time_arg_val(3);
-
     static constexpr ttnn::ccl::EriscDataMoverBufferSharingMode edm_buffer_sharing_mode =
-        static_cast<ttnn::ccl::EriscDataMoverBufferSharingMode>(get_compile_time_arg_val(4));
+        static_cast<ttnn::ccl::EriscDataMoverBufferSharingMode>(get_compile_time_arg_val(0));
 
     static constexpr ttnn::ccl::EriscDataMoverTerminationMode terminate_on_worker_signal =
-        static_cast<ttnn::ccl::EriscDataMoverTerminationMode>(get_compile_time_arg_val(5));
+        static_cast<ttnn::ccl::EriscDataMoverTerminationMode>(get_compile_time_arg_val(1));
 
-    static constexpr bool use_compile_time_designated_handshake_sender = false;//get_compile_time_arg_val(6) != 0;
-    static constexpr bool is_handshake_sender = get_compile_time_arg_val(7) != 0;
-
-    static constexpr uint32_t num_buffers_per_channel = get_compile_time_arg_val(8);
-    static constexpr uint32_t chip_id = get_compile_time_arg_val(9);
-
-    static_assert(num_buffers_per_channel > 0, "compile time argument [9]: num_buffers_per_channel must be > 0");
+    static constexpr uint32_t chip_id = get_compile_time_arg_val(2);
 
     using EDM_CONFIG_T = erisc::datamover::
-        EriscDatamoverConfig<edm_buffer_sharing_mode, terminate_on_worker_signal, num_buffers_per_channel>;
+        EriscDatamoverConfig<edm_buffer_sharing_mode, terminate_on_worker_signal>;
     using ChannelBufferT = erisc::datamover::ChannelBuffer<EDM_CONFIG_T>;
 
-    std::array<ChannelBufferT, eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS> buffer_channels;
-
-    //
-    std::array<uint32_t, eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS> printed_receiver_done;
+    std::array<ChannelBufferT, ttnn::ccl::edm::MAX_NUM_CHANNELS_ALLOWED> buffer_channels;
 
     // SENDER ARGS
     uint32_t args_offset = 0;
-    uint32_t handshake_addr = get_arg_val<uint32_t>(args_offset++);
+    const bool is_handshake_master = get_arg_val<uint32_t>(args_offset++) != 0;
+    const uint32_t handshake_addr = get_arg_val<uint32_t>(args_offset++);
 
-    bool is_done_as_rx_handshaker = is_handshake_sender;
-    if constexpr (is_handshake_sender) {
+    bool is_done_as_rx_handshaker = is_handshake_master;
+    if (is_handshake_master) {
         erisc::datamover::handshake::sender_side_start(handshake_addr);
     } else {
         erisc::datamover::handshake::receiver_side_start(handshake_addr);
     }
 
+    const uint32_t sender_num_channels = get_arg_val<uint32_t>(args_offset++);
+    const uint32_t receiver_num_channels = get_arg_val<uint32_t>(args_offset++);
+    const uint32_t num_buffers_per_channel = get_arg_val<uint32_t>(args_offset++);
+    ASSERT(ttnn::ccl::edm::MAX_NUM_CHANNELS_ALLOWED >= sender_num_channels + receiver_num_channels);
+    ASSERT(num_buffers_per_channel > 0);
+
     // Receiver args
     uint8_t const receiver_channels_start = get_arg_val<uint32_t>(args_offset++);
-    uint32_t const receiver_num_channels = num_receivers;//get_arg_val<uint32_t>(args_offset++);
     uint8_t num_receivers_with_no_work = 0;
     for (uint32_t channel = 0; channel < receiver_num_channels; channel++) {
         uint32_t const receiver_buffers_base_address = get_arg_val<uint32_t>(args_offset++);
@@ -173,6 +153,7 @@ void kernel_main() {
             worker_semaphore_address,
             receiver_num_workers,
             receiver_num_messages_to_send,
+            num_buffers_per_channel,
             (volatile tt_l1_ptr uint32_t *const)receiver_semaphores_base_address,
             (const WorkerXY *)workers_xy_list_addr,
             false);
@@ -184,16 +165,14 @@ void kernel_main() {
         }
     }
 
-    if (!is_handshake_sender) {
+    if (!is_handshake_master) {
         if (!is_done_as_rx_handshaker && erisc::datamover::handshake::receiver_side_can_finish()) {
             is_done_as_rx_handshaker = true;
             erisc::datamover::handshake::receiver_side_finish(handshake_addr);
         }
     }
 
-
     uint8_t const sender_channels_start = get_arg_val<uint32_t>(args_offset++);
-    uint32_t const sender_num_channels = num_senders;//get_arg_val<uint32_t>(args_offset++);
     uint8_t num_senders_with_no_work = 0;
     for (uint32_t channel = 0; channel < sender_num_channels; channel++) {
         uint32_t const sender_buffer_address = get_arg_val<uint32_t>(args_offset++);
@@ -215,6 +194,7 @@ void kernel_main() {
             worker_semaphore_address,
             sender_num_workers,
             sender_num_messages_to_send,
+            num_buffers_per_channel,
             (volatile tt_l1_ptr uint32_t *const)sender_semaphores_base_address,
             (const WorkerXY *)workers_xy_list_addr,
             true);
@@ -225,7 +205,7 @@ void kernel_main() {
         }
     }
 
-    if constexpr (is_handshake_sender) {
+    if (is_handshake_master) {
         erisc::datamover::handshake::sender_side_finish(handshake_addr);
     } else {
         if (!is_done_as_rx_handshaker) {
@@ -239,12 +219,13 @@ void kernel_main() {
     constexpr uint32_t SWITCH_INTERVAL = 4000000;
     uint32_t did_nothing_count = 0;
 
-    uint32_t num_senders_complete = !enable_sender_side ? sender_num_channels : num_senders_with_no_work;
-    uint32_t num_receivers_complete = !enable_receiver_side ? receiver_num_channels : num_receivers_with_no_work;
+    uint32_t num_senders_complete = num_senders_with_no_work;
+    uint32_t num_receivers_complete = num_receivers_with_no_work;
     bool senders_in_progress = num_senders_complete != sender_num_channels;
     bool receivers_in_progress = num_receivers_complete != receiver_num_channels;
 
-    auto send_recv_index = sender_receiver_index_t<num_senders,num_receivers>(sender_channels_start, receiver_channels_start, sender_num_channels, receiver_num_channels);
+    channel_counter_t sender_index = channel_counter_t<uint16_t>{sender_channels_start, static_cast<uint16_t>(sender_num_channels)};
+    channel_counter_t receiver_index = channel_counter_t<uint16_t>{receiver_channels_start, static_cast<uint16_t>(receiver_num_channels)};
 
     while (senders_in_progress || receivers_in_progress) {
         bool did_something_sender = false;
@@ -254,8 +235,8 @@ void kernel_main() {
         uint32_t num_senders_complete_old = num_senders_complete;
         //////////////////////////////////////
         // SENDER
-        if constexpr (enable_sender_side) {
-            ChannelBufferT &current_sender = buffer_channels[send_recv_index.real_index.sender];
+        if (senders_in_progress) {
+            ChannelBufferT &current_sender = buffer_channels[sender_index.get()];
             switch (current_sender.get_state()) {
                 case ChannelBufferT::STATE::SENDER_WAITING_FOR_WORKER:
                 did_something_sender =
@@ -284,10 +265,10 @@ void kernel_main() {
             };
         }
 
-        //////////////////////////////////////
-        // RECEIVER
-        if constexpr (enable_receiver_side) {
-            ChannelBufferT &current_receiver = buffer_channels[send_recv_index.real_index.receiver];
+        if (receivers_in_progress) {
+            ChannelBufferT &current_receiver = buffer_channels[receiver_index.get()];
+            //////////////////////////////////////
+            // RECEIVER
 
             switch (current_receiver.get_state()) {
                 case ChannelBufferT::STATE::RECEIVER_WAITING_FOR_ETH:
@@ -310,7 +291,9 @@ void kernel_main() {
                 break;
             };
         }
-        send_recv_index.increment();
+        sender_index.increment();
+        receiver_index.increment();
+
         //////////////////////////////////////
 
         // Enabling this block as is (with all the "did_something"s, seems to cause a loss of about
@@ -326,7 +309,7 @@ void kernel_main() {
     }
 
     {
-        for (uint32_t s = 0; s < num_senders + num_receivers; s++) {
+        for (uint32_t s = 0; s < sender_num_channels + receiver_num_channels; s++) {
             auto &channel = buffer_channels[s];
             // We need to explicitly check for channel send done because we may
             // advance sender channel state as soon as we receive an ack. Since we

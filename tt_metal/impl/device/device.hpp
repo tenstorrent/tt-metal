@@ -29,6 +29,7 @@ namespace tt_metal {
 enum class BufferType;
 class Buffer;
 class Program;
+class Kernel;
 class JitBuildEnv;
 class HWCommandQueue;
 class CommandQueue;
@@ -45,6 +46,8 @@ struct ProgramDeleter {
 class TraceDescriptor;
 
 }
+
+
 
 using on_close_device_callback = std::function<void ()>;
 
@@ -252,6 +255,28 @@ class Device {
         std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> &other_dispatch_cores);
     std::pair<int, int> build_processor_type_to_index(JitBuildProcessorType t) const;
 
+    void insert_persistent_program(const Program& program);
+
+    std::optional<uint64_t> find_persistent_program(HalProgrammableCoreType core_type, std::string hash, CoreRangeSet core_ranges) const;
+
+    void clear_persistent_programs() {
+        this->persistent_programs_.clear();
+    }
+
+    void clear_current_persistent_program() {
+        this->current_persistent_program_ = nullptr;
+    }
+
+    void set_current_persistent_program(uint64_t id) {
+        this->current_persistent_program_ = this->persistent_programs_.at(id).program;
+    }
+
+    const std::shared_ptr<Program> get_persistent_program(uint64_t id) const {
+        return this->persistent_programs_.at(id).program;
+    }
+
+    std::optional<uint64_t> get_current_persistent_program_id() const;
+
     // Puts device into reset
     bool close();
     friend bool CloseDevice(Device *device);
@@ -336,9 +361,16 @@ class Device {
     std::vector<pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const CoreRangeContainer& ranges, const CoreType core_type);
 
    private:
+    struct persistent_program_t {
+        std::shared_ptr<Program> program;
+        std::vector<CoreRangeSet> used_cores;
+        std::vector<std::unordered_map<std::string, std::shared_ptr<Kernel>>> kernels;
+    };
     void DisableAllocs();
     void EnableAllocs();
     std::unordered_map<uint32_t, std::shared_ptr<TraceBuffer>> trace_buffer_pool_;
+    std::unordered_map<uint64_t, persistent_program_t> persistent_programs_;
+    std::shared_ptr<Program> current_persistent_program_ = nullptr;
 };
 
 inline HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord phys_core) const {
