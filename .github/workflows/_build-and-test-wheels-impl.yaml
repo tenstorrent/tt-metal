@@ -25,7 +25,7 @@ jobs:
     needs: build-wheels
     strategy:
       matrix:
-        os: ${{ ['ubuntu-20.04'] && inputs.from-precompiled || ['ubuntu-20.04', 'ubuntu-22.04'] }}
+        os: ${{ fromJson('["ubuntu-20.04"]') && inputs.from-precompiled || fromJson('["ubuntu-20.04", "ubuntu-22.04"]') }}
         runner-hw-info: [
           {arch: grayskull},
           {arch: wormhole_b0}
