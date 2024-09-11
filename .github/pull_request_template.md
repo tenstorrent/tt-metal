@@ -12,4 +12,5 @@ Summarize the changes made and its impact.
 - [ ] Post commit CI passes
 - [ ] Blackhole Post commit (if applicable)
 - [ ] Model regression CI testing passes (if applicable)
+- [ ] Device performance regression CI testing passes (if applicable)
 - [ ] New/Existing tests provide coverage for changes
