@@ -113,6 +113,7 @@ class TtLlamaModel_galaxy:
         self.model_config = model_config
         for layer in self.layers:
             layer.set_model_config(model_config)
+        self.get_model_config()
 
     def get_model_config(self):
         self.LN_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(

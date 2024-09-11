@@ -253,7 +253,7 @@ def run_decode(
     for cur_pos in range(min_prompt_len, total_len):
         start = time()
         input_tokens = tokens[:, prev_pos:cur_pos]
-        logits = model.forward(input_tokens, prev_pos)
+        logits = model.forward(input_tokens, prev_pos, tokenizer)
 
         next_logits = logits[:, -1, :]  # batch, vocab of last token
         next_token = sampling_func(next_logits)
@@ -360,11 +360,11 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
     "chat, prompts_file",
     (
         (True, "models/demos/t3000/llama2_70b/demo/data/multi_prompt_chat.json"),
-        (False, "models/demos/t3000/llama2_70b/demo/data/multi_prompt.json"),
+        (False, "models/demos/t3000/llama2_70b/demo/data/replicated_prompts.json"),
     ),
     ids=("chat_completion", "text_completion"),
 )
-@pytest.mark.parametrize("decode_only", (True,), ids=("decode_only",))
+@pytest.mark.parametrize("decode_only", (True, False), ids=("decode_only", "prefill_decode"))
 @pytest.mark.parametrize("num_layers", (1, 2, 10, 80), ids=("1L", "2L", "10L", "80L"))
 @pytest.mark.parametrize(
     "implementation, skip_model_load, n_devices",

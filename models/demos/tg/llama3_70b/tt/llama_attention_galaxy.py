@@ -77,6 +77,7 @@ class TtLlamaAttention_galaxy:
 
     def set_model_config(self, model_config):
         self.model_config = model_config
+        self.get_attn_model_config()
 
     def get_slice_mat(self):
         # Create the slice weight matrices

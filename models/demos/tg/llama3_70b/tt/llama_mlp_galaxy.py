@@ -46,6 +46,7 @@ class TtLlamaMLP_galaxy:
 
     def set_model_config(self, model_config):
         self.model_config = model_config
+        self.get_mlp_model_config()
 
     def get_mlp_model_config(self):
         if self.model_config["LLM_MODE"] == "decode":
