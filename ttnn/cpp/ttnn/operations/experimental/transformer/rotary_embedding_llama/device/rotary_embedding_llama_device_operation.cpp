@@ -19,7 +19,7 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
     const auto& cos = input_tensors.at(1);
     const auto& sin = input_tensors.at(2);
     const auto& trans_mat = input_tensors.at(3);
-    TT_FATAL(input_tensors.size() == 4);
+    TT_FATAL(input_tensors.size() == 4, "Error");
     auto ref_device = input_tensor.device();
     for (const auto& input : input_tensors) {
         TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
@@ -51,8 +51,8 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
     TT_FATAL(trans_mat.get_legacy_shape()[-1] == TILE_WIDTH, "Transformation matrix must have 4rd dim equal to TILE_WIDTH");
 
 
-    TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
-    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+    TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
 
 }
 

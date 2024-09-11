@@ -55,10 +55,13 @@ operation::ProgramWithCallbacks ReduceScatter::create_program(
 }
 
 static ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_type(ttnn::operations::reduction::ReduceType reduce_op) {
+    // Leaving switch statement for future support of additional types.
     switch (reduce_op) {
-        case ttnn::operations::reduction::ReduceType::Sum: return ttnn::operations::binary::BinaryOpType::ADD;
-
-        default: TT_FATAL("Reduce scatter only support reduce_type Sum"); return ttnn::operations::binary::BinaryOpType::ADD;
+        case ttnn::operations::reduction::ReduceType::Sum:
+            return ttnn::operations::binary::BinaryOpType::ADD;
+        default:
+            TT_THROW("Reduce scatter only supports reduce_type Sum. Op type {} not supported.", reduce_op);
+            return ttnn::operations::binary::BinaryOpType::ADD;
     }
 }
 

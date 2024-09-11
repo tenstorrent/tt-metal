@@ -704,7 +704,7 @@ int TestEntrypoint(
     bool initialized = false;
     tt_xy_pair eth_sender_core;
     do {
-        TT_FATAL(eth_sender_core_iter != eth_sender_core_iter_end);
+        TT_FATAL(eth_sender_core_iter != eth_sender_core_iter_end, "Error");
         std::tie(device_id, eth_receiver_core) = device_0->get_connected_ethernet_core(*eth_sender_core_iter);
         eth_sender_core = *eth_sender_core_iter;
         eth_sender_core_iter++;

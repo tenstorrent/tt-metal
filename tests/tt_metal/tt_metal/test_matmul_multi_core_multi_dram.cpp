@@ -24,8 +24,8 @@ using namespace tt::tt_metal;
 // is contiguous
 template <typename T>
 std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
-    TT_FATAL(rows % 32 == 0);
-    TT_FATAL(cols % 32 == 0);
+    TT_FATAL(rows % 32 == 0, "Error");
+    TT_FATAL(cols % 32 == 0, "Error");
     int num_tiles_r = rows / 32;
     int num_tiles_c = cols / 32;
     std::vector<T> result;
@@ -107,9 +107,9 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
     uint32_t in1_CB_size = in1_block_tiles * 2 * single_tile_size;  // double buffer
     uint32_t out_CB_tiles = per_core_M * per_core_N;
     uint32_t out_CB_size = out_CB_tiles * single_tile_size;
-    TT_FATAL(in0_CB_size <= 130 * 1024);
-    TT_FATAL(in1_CB_size <= 130 * 1024);
-    TT_FATAL(out_CB_size <= 540 * 1024);
+    TT_FATAL(in0_CB_size <= 130 * 1024, "Error");
+    TT_FATAL(in1_CB_size <= 130 * 1024, "Error");
+    TT_FATAL(out_CB_size <= 540 * 1024, "Error");
 
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};
@@ -216,9 +216,9 @@ bool assign_runtime_args_to_program(
     uint32_t dram_buffer_size_out =
         single_tile_size * M * N;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-    TT_FATAL(in0_dram_addr + dram_buffer_size_act < 1024 * 1024 * 1024);
-    TT_FATAL(in1_dram_addr + dram_buffer_size_weights < 1024 * 1024 * 1024);
-    TT_FATAL(out_dram_addr + dram_buffer_size_out < 1024 * 1024 * 1024);
+    TT_FATAL(in0_dram_addr + dram_buffer_size_act < 1024 * 1024 * 1024, "Error");
+    TT_FATAL(in1_dram_addr + dram_buffer_size_weights < 1024 * 1024 * 1024, "Error");
+    TT_FATAL(out_dram_addr + dram_buffer_size_out < 1024 * 1024 * 1024, "Error");
 
     for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
@@ -492,7 +492,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

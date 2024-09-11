@@ -21,13 +21,13 @@ void CopyDeviceOperation::validate(const std::vector<Tensor> &input_tensors) con
         "Typecast operation is only supported on Grayskull for float/bfloat outputs");
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to copy need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to copy need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+    TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
     TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Copy does not currently support sharding");
     if (input_tensors.size() == 2) {
         const auto& dst_tensor = input_tensors[1];
-        TT_FATAL(input_tensor_a.get_legacy_shape() == dst_tensor.get_legacy_shape());
-        TT_FATAL(input_tensor_a.get_layout() == dst_tensor.get_layout());
-        TT_FATAL(input_tensor_a.memory_config().memory_layout == dst_tensor.memory_config().memory_layout);
+        TT_FATAL(input_tensor_a.get_legacy_shape() == dst_tensor.get_legacy_shape(), "Error");
+        TT_FATAL(input_tensor_a.get_layout() == dst_tensor.get_layout(), "Error");
+        TT_FATAL(input_tensor_a.memory_config().memory_layout == dst_tensor.memory_config().memory_layout, "Error");
         TT_FATAL(dst_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Copy does not currently support sharding");
     }
     if (this->output_dtype != input_tensor_a.get_dtype()) {

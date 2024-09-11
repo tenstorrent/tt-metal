@@ -356,7 +356,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
                 needs_shard_or_reshard = true;
             }
             if (conv_config.override_sharding_config) {
-                TT_FATAL(conv_config.core_grid.has_value());
+                TT_FATAL(conv_config.core_grid.has_value(), "Error");
                 if (conv_config.core_grid.value() != input_shard_grid) {
                     needs_shard_or_reshard = true;
                 }
@@ -385,7 +385,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
             block_shard_orientation);
 
         if (conv_config.override_sharding_config) {
-            TT_FATAL(conv_config.core_grid.has_value());
+            TT_FATAL(conv_config.core_grid.has_value(), "Error");
             // override parallel config
             auto shard_orientation =
                 conv_config.shard_layout==TensorMemoryLayout::BLOCK_SHARDED ? block_shard_orientation:  ShardOrientation::ROW_MAJOR;

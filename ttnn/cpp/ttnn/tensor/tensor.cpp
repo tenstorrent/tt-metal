@@ -723,9 +723,9 @@ void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id) {
                 device_tensor.storage_type() == StorageType::DEVICE or
                     device_tensor.storage_type() == StorageType::MULTI_DEVICE,
                 "write_tensor only supports host_tensor to device_tensor data transfer");
-            TT_FATAL(async_safe_tensor.get_shape() == device_tensor.get_shape());
-            TT_FATAL(async_safe_tensor.get_dtype() == device_tensor.get_dtype());
-            TT_FATAL(async_safe_tensor.get_layout() == device_tensor.get_layout());
+            TT_FATAL(async_safe_tensor.get_shape() == device_tensor.get_shape(), "Error");
+            TT_FATAL(async_safe_tensor.get_dtype() == device_tensor.get_dtype(), "Error");
+            TT_FATAL(async_safe_tensor.get_layout() == device_tensor.get_layout(), "Error");
             std::visit(
                 [worker_index, worker, cq_id, &async_safe_tensor](auto&& s) {
                     void* host_data = nullptr;
