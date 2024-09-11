@@ -53,11 +53,11 @@ std::vector<tt::tt_metal::Shape> NLPCreateHeadsDecodeDeviceOperation::compute_ou
     auto head_dim = this->head_dim;
 
     // pad up to nearest multiple of TILE_HEIGHT for num_q_heads and num_kv_heads
-    auto num_q_heads_padded = (this->num_q_heads / TILE_HEIGHT + 1) * TILE_HEIGHT;
-    auto num_kv_heads_padded = (this->num_kv_heads / TILE_HEIGHT + 1) * TILE_HEIGHT;
+    auto num_q_heads_padded = ((this->num_q_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
+    auto num_kv_heads_padded = ((this->num_kv_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
 
-    const tt::tt_metal::Shape q_output_shape = {input_shape[0], batch, num_q_heads_padded, head_dim};
-    const tt::tt_metal::Shape v_output_shape = {input_shape[0], batch, num_kv_heads_padded, head_dim};
+    const tt::tt_metal::Shape q_output_shape = tt::tt_metal::Shape({input_shape[0], batch, this->num_q_heads, head_dim}, {input_shape[0], batch, num_q_heads_padded, head_dim});
+    const tt::tt_metal::Shape v_output_shape = tt::tt_metal::Shape({input_shape[0], batch, this->num_kv_heads, head_dim}, {input_shape[0], batch, num_kv_heads_padded, head_dim});
     const tt::tt_metal::Shape k_output_shape = v_output_shape;
     return {q_output_shape, k_output_shape, v_output_shape};
 
@@ -71,8 +71,8 @@ std::vector<Tensor> NLPCreateHeadsDecodeDeviceOperation::create_output_tensors(c
     const auto& q_output_shape = output_shapes[0];
 
     auto batch = q_output_shape[1];
-    auto num_q_heads_padded = (this->num_q_heads / TILE_HEIGHT + 1) * TILE_HEIGHT;
-    auto num_kv_heads_padded = (this->num_kv_heads / TILE_HEIGHT + 1) * TILE_HEIGHT;
+    auto num_q_heads_padded = ((this->num_q_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
+    auto num_kv_heads_padded = ((this->num_q_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
     auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
     auto q_shard_grid = num_cores_to_corerange_set(batch, core_grid, true);
     ShardSpec q_shard_spec{q_shard_grid, {num_q_heads_padded, this->head_dim}};

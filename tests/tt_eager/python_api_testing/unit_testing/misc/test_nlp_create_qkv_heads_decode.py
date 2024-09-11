@@ -69,9 +69,9 @@ def run_test_create_head_max_width_shard(device, n_local_heads, n_local_kv_heads
         memory_config=HEIGHT_SHARDED_MEMCFG,
         # unpadded_batch_size=batch if batch != padded_batch else None,
     )
-    logger.info(f"q_heads_tt: {q_heads_tt.memory_config()}")
-    logger.info(f"k_heads_tt: {k_heads_tt.memory_config()}")
-    logger.info(f"v_heads_tt: {v_heads_tt.memory_config()}")
+    logger.info(f"q_heads_tt: {q_heads_tt.shape}, {q_heads_tt.memory_config()}")
+    logger.info(f"k_heads_tt: {k_heads_tt.shape}, {k_heads_tt.memory_config()}")
+    logger.info(f"v_heads_tt: {v_heads_tt.shape}, {v_heads_tt.memory_config()}")
 
     # torch operation
     q_heads_torch = proj_output[:, :, :batch, : head_dim * n_local_heads].view(seq_len, batch, n_local_heads, head_dim)
@@ -83,15 +83,15 @@ def run_test_create_head_max_width_shard(device, n_local_heads, n_local_kv_heads
     )
 
     # compare
-    q_heads_tt_cpu = tt2torch_tensor(q_heads_tt)[..., :n_local_heads, :]
+    q_heads_tt_cpu = ttnn.to_torch(q_heads_tt)
     out_pass_q, output_pcc_q = comp_pcc(q_heads_tt_cpu, q_heads_torch, pcc=0.9999)
     logger.info(f"PCC value: {output_pcc_q}")
 
-    k_heads_tt_cpu = tt2torch_tensor(k_heads_tt)[..., :n_local_kv_heads, :]
+    k_heads_tt_cpu = ttnn.to_torch(k_heads_tt)
     out_pass_k, output_pcc_k = comp_pcc(k_heads_tt_cpu, k_heads_torch, pcc=0.9999)
     logger.info(f"PCC value: {output_pcc_k}")
 
-    v_heads_tt_cpu = tt2torch_tensor(v_heads_tt)[..., :n_local_kv_heads, :]
+    v_heads_tt_cpu = ttnn.to_torch(v_heads_tt)
     out_pass_v, output_pcc_v = comp_pcc(v_heads_tt_cpu, v_heads_torch, pcc=0.9999)
     logger.info(f"PCC value: {output_pcc_v}")
 
@@ -101,7 +101,7 @@ def run_test_create_head_max_width_shard(device, n_local_heads, n_local_kv_heads
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "n_local_heads, n_local_kv_heads, head_dim, batch",
-    ((8, 1, 128, 32), (8, 4, 96, 32), (16, 2, 64, 32), (8, 1, 128, 16), (8, 1, 128, 8)),
+    ((8, 1, 128, 32), (8, 4, 96, 32), (16, 2, 64, 32), (8, 1, 128, 16), (8, 1, 128, 8), (32, 8, 128, 4)),
 )
 def test_create_head_max_width_shard(
     n_local_heads,
@@ -172,9 +172,9 @@ def run_test_create_min_width_shard(
         num_kv_heads=n_local_kv_heads,
         memory_config=HEIGHT_SHARDED_MEMCFG,
     )
-    logger.info(f"q_heads_tt: {q_heads_tt.memory_config()}")
-    logger.info(f"k_heads_tt: {k_heads_tt.memory_config()}")
-    logger.info(f"v_heads_tt: {v_heads_tt.memory_config()}")
+    logger.info(f"q_heads_tt: {q_heads_tt.shape}, {q_heads_tt.memory_config()}")
+    logger.info(f"k_heads_tt: {k_heads_tt.shape}, {k_heads_tt.memory_config()}")
+    logger.info(f"v_heads_tt: {v_heads_tt.shape}, {v_heads_tt.memory_config()}")
 
     # torch operation
     q_heads_torch = proj_output[:, :, :, : head_dim * n_local_heads].view(seq_len, batch, n_local_heads, head_dim)
@@ -186,15 +186,15 @@ def run_test_create_min_width_shard(
     )
 
     # compare
-    q_heads_tt_cpu = tt2torch_tensor(q_heads_tt)[..., :n_local_heads, :]
+    q_heads_tt_cpu = ttnn.to_torch(q_heads_tt)
     out_pass_q, output_pcc_q = comp_pcc(q_heads_tt_cpu, q_heads_torch)
     logger.info(f"PCC value: {output_pcc_q}")
 
-    k_heads_tt_cpu = tt2torch_tensor(k_heads_tt)[..., :n_local_kv_heads, :]
+    k_heads_tt_cpu = ttnn.to_torch(k_heads_tt)
     out_pass_k, output_pcc_k = comp_pcc(k_heads_tt_cpu, k_heads_torch)
     logger.info(f"PCC value: {output_pcc_k}")
 
-    v_heads_tt_cpu = tt2torch_tensor(v_heads_tt)[..., :n_local_kv_heads, :]
+    v_heads_tt_cpu = ttnn.to_torch(v_heads_tt)
     out_pass_v, output_pcc_v = comp_pcc(v_heads_tt_cpu, v_heads_torch)
     logger.info(f"PCC value: {output_pcc_v}")
 
