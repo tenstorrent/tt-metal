@@ -24,6 +24,7 @@ void bind_moreh_nll_loss_unreduced_backward_operation(py::module &module) {
         ttnn::pybind_arguments_t{
             py::arg("target_tensor"),
             py::arg("output_grad_tensor"),
+            py::kw_only(),
             py::arg("weight_tensor"),
             py::arg("input_grad_tensor"),
             py::arg("ignore_index") = std::nullopt,

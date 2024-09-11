@@ -118,9 +118,9 @@ def run_moreh_nll_loss_unreduced_backward(shape, ignore_index, none_weight, devi
     tt_input_grad = ttnn.moreh_nll_loss_unreduced_backward(
         tt_target,
         tt_output_grad,
-        tt_weight,
-        tt_input_grad,
-        ignore_index,
+        weight_tensor=tt_weight,
+        input_grad_tensor=tt_input_grad,
+        ignore_index=ignore_index,
         compute_kernel_config=compute_kernel_config,
     )
     tt_input_grad_to_cpu = to_cpu(tt_input_grad, torch_input.grad.shape)
