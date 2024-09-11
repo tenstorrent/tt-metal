@@ -22,9 +22,7 @@
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
 
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss_backward/moreh_nll_loss_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss_unreduced/moreh_nll_loss_unreduced_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss_unreduced_backward/moreh_nll_loss_unreduced_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_norm/moreh_norm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_norm_backward/moreh_norm_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sgd/moreh_sgd_op.hpp"
@@ -208,21 +206,6 @@ void py_module(py::module& m_primary) {
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a nll_loss operation. Returns an output tensor.");
 
-    // moreh_nll_loss_backward
-    m_primary.def(
-        "moreh_nll_loss_backward",
-        &moreh_nll_loss_backward,
-        py::arg("target_tensor").noconvert(),
-        py::arg("weight_tensor").noconvert() = std::nullopt,
-        py::arg("divisor_tensor").noconvert() = std::nullopt,
-        py::arg("output_grad_tensor").noconvert(),
-        py::arg("input_grad_tensor").noconvert() = std::nullopt,
-        py::arg("ignore_index").noconvert(),
-        py::arg("reduction_mean").noconvert(),
-        py::arg("input_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs a nll_loss_backward operation. Returns an input_grad tensor.");
-
     // moreh_nll_loss_unreduced
     m_primary.def(
         "moreh_nll_loss_unreduced",
@@ -235,19 +218,6 @@ void py_module(py::module& m_primary) {
         py::arg("memory_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a nll_loss_unreduced operation. Returns an output tensor.");
-
-    // moreh_nll_loss_unreduced_backward
-    m_primary.def(
-        "moreh_nll_loss_unreduced_backward",
-        &moreh_nll_loss_unreduced_backward,
-        py::arg("target_tensor").noconvert(),
-        py::arg("weight_tensor").noconvert() = std::nullopt,
-        py::arg("output_grad_tensor").noconvert(),
-        py::arg("input_grad_tensor").noconvert() = std::nullopt,
-        py::arg("ignore_index").noconvert(),
-        py::arg("memory_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs a nll_loss_unreduced_backward operation. Returns an input_grad tensor.");
 
     // moreh_norm
     m_primary.def(
