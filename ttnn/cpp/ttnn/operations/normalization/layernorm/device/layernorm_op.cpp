@@ -22,7 +22,7 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
     }
     else
     {
-        TT_FATAL(input_tensors.size() == 1 and optional_input_tensors.size() <= 3, "Must have between 1 to 4 input tensors");
+        TT_FATAL(input_tensors.size() == 1 and optional_input_tensors.size() <= 4, "Must have between 1 to 4 input tensors");
     }
     auto& a = input_tensors.at(0);
     const auto& b = optional_input_tensors.at(0);
