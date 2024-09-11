@@ -12,7 +12,7 @@ from models.utility_functions import run_for_grayskull
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",
     [
-        [20, "20-act_dtype0-weight_dtype0-math_fidelity0-device_params0", 6600],
+        [20, "20-act_dtype0-weight_dtype0-math_fidelity0-device_params0", 6810],
     ],
 )
 def test_perf_device(batch_size, test, expected_perf):
