@@ -15,7 +15,7 @@ on:
 
 jobs:
   build-artifact:
-    if: ${{ inputs.from-precompiled }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.from-precompiled }}
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
   build-and-test-wheels:
