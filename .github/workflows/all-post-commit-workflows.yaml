@@ -64,7 +64,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
-    needs: build-wheels
+    needs: build-and-test-wheels
     secrets: inherit
     strategy:
       fail-fast: false
@@ -80,7 +80,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # TTNN FD Unit tests
   ttnn-unit-tests:
-    needs: build-wheels
+    needs: build-and-test-wheels
     secrets: inherit
     strategy:
       fail-fast: false
@@ -96,7 +96,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # FD Model Tests
   models-unit-tests:
-    needs: build-wheels
+    needs: build-and-test-wheels
     secrets: inherit
     strategy:
       fail-fast: false
