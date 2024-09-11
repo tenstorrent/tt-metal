@@ -1,4 +1,4 @@
-#include "eltwise_l1_interface_common.hpp"
+#include "l1_interface_common.hpp"
 
 #include "detail/util.hpp"
 #include "impl/buffers/buffer.hpp"

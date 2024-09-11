@@ -5,7 +5,7 @@
 #include <optional>
 #include <tuple>
 
-EltwiseOpParams get_larger_eltwise_op_params_by_volume(const EltwiseOpParams& a, const EltwiseOpParams& b) {
+L1InterfaceOpParams get_larger_eltwise_op_params_by_volume(const L1InterfaceOpParams& a, const L1InterfaceOpParams& b) {
     if (std::get<ttnn::types::Shape>(a).volume() > std::get<ttnn::types::Shape>(b).volume()) {
         return a;
     } else {
@@ -14,10 +14,10 @@ EltwiseOpParams get_larger_eltwise_op_params_by_volume(const EltwiseOpParams& a,
 };
 
 std::vector<std::tuple<uint32_t, uint32_t>> get_circular_buffer_l1_allocations_per_core_eltwise_impl(
-    const EltwiseOpParams& input_a,
-    const EltwiseOpParams& input_b,
-    const EltwiseOpParams& output,
-    const std::optional<EltwiseOpParams>& repeat = std::nullopt,
+    const L1InterfaceOpParams& input_a,
+    const L1InterfaceOpParams& input_b,
+    const L1InterfaceOpParams& output,
+    const std::optional<L1InterfaceOpParams>& repeat = std::nullopt,
     const std::optional<ShardSpec>& op_shard_spec = std::nullopt) {
     std::vector<std::tuple<uint32_t, uint32_t>> sizes;
     if (repeat.has_value()) {
@@ -42,7 +42,7 @@ std::vector<std::tuple<uint32_t, uint32_t>> get_circular_buffer_l1_allocations_p
 }
 
 std::vector<std::tuple<uint32_t, uint32_t>> get_tensor_l1_allocations_per_core_eltwise_impl(
-    const EltwiseOpParams& output, const std::optional<EltwiseOpParams>& repeat = std::nullopt) {
+    const L1InterfaceOpParams& output, const std::optional<L1InterfaceOpParams>& repeat = std::nullopt) {
     std::vector<std::tuple<uint32_t, uint32_t>> sizes;
 
     if (repeat.has_value()) {
@@ -60,7 +60,7 @@ std::vector<std::tuple<uint32_t, uint32_t>> get_tensor_l1_allocations_per_core_e
 
 #include "binary_constraints.hpp"  // for EltwiseOpConstraintsDirector::GetEltwiseOpType(..)
 std::unique_ptr<EltwiseOpL1Usage> EltwiseOpL1UsageFactory::Make(
-    const EltwiseOpParams& input_a, const EltwiseOpParams& input_b, const EltwiseOpParams& output) {
+    const L1InterfaceOpParams& input_a, const L1InterfaceOpParams& input_b, const L1InterfaceOpParams& output) {
     const auto input_shape_a = std::get<ttnn::types::Shape>(input_a);
     const auto memory_config_a = std::get<tt::tt_metal::MemoryConfig>(input_a);
     const auto input_shape_b = std::get<ttnn::types::Shape>(input_b);
@@ -84,11 +84,11 @@ std::unique_ptr<EltwiseOpL1Usage> EltwiseOpL1UsageFactory::Make(
 };
 
 EltwiseOpL1Usage::EltwiseOpL1Usage(
-    const EltwiseOpParams& input_a, const EltwiseOpParams& input_b, const EltwiseOpParams& output) :
+    const L1InterfaceOpParams& input_a, const L1InterfaceOpParams& input_b, const L1InterfaceOpParams& output) :
     input_a(input_a), input_b(input_b), output(output), repeat(calculate_repeat_buffer_impl(input_a, input_b)){};
 
-std::optional<EltwiseOpParams> EltwiseOpL1Usage::calculate_repeat_buffer_impl(
-    const EltwiseOpParams& input_a, const EltwiseOpParams& input_b) {
+std::optional<L1InterfaceOpParams> EltwiseOpL1Usage::calculate_repeat_buffer_impl(
+    const L1InterfaceOpParams& input_a, const L1InterfaceOpParams& input_b) {
     const auto shape_a = std::get<ttnn::types::Shape>(input_a);
     const auto shape_b = std::get<ttnn::types::Shape>(input_b);
 
@@ -137,7 +137,7 @@ std::optional<ShardSpec> EltwiseOpL1Usage::get_op_shard_spec() const {
 }
 
 ElementWiseMultiCoreOpL1Usage::ElementWiseMultiCoreOpL1Usage(
-    const EltwiseOpParams& input_a, const EltwiseOpParams& input_b, const EltwiseOpParams& output) :
+    const L1InterfaceOpParams& input_a, const L1InterfaceOpParams& input_b, const L1InterfaceOpParams& output) :
     EltwiseOpL1Usage(input_a, input_b, output) {}
 
 std::vector<std::tuple<uint32_t, uint32_t>>
@@ -151,7 +151,7 @@ std::vector<std::tuple<uint32_t, uint32_t>> ElementWiseMultiCoreOpL1Usage::get_t
 }
 
 BroadcastWidthMultiCoreOpL1Usage::BroadcastWidthMultiCoreOpL1Usage(
-    const EltwiseOpParams& input_a, const EltwiseOpParams& input_b, const EltwiseOpParams& output) :
+    const L1InterfaceOpParams& input_a, const L1InterfaceOpParams& input_b, const L1InterfaceOpParams& output) :
     EltwiseOpL1Usage(input_a, input_b, output) {}
 
 std::vector<std::tuple<uint32_t, uint32_t>>

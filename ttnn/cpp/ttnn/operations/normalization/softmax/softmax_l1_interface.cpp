@@ -5,10 +5,10 @@
 #include <tuple>
 
 #include "detail/util.hpp"
-#include "ttnn/operations/eltwise/common/eltwise_l1_interface_common.hpp"
+#include "ttnn/operations/common/l1_interface_common.hpp"
 #include "ttnn/tensor/types.hpp"
 
-EltwiseOpParams get_softmax_output(const EltwiseOpParams& input) {
+L1InterfaceOpParams get_softmax_output(const L1InterfaceOpParams& input) {
     return std::make_tuple(
         std::get<ttnn::types::Shape>(input),
         std::get<tt::tt_metal::DataType>(input),
@@ -30,11 +30,11 @@ int find_max_divisor(uint32_t val, uint32_t start_max_div) {
     return result;
 }
 
-std::unique_ptr<SoftmaxOpL1Usage> SoftmaxOpL1UsageFactory::Make(const EltwiseOpParams& input, int dim_arg) {
+std::unique_ptr<SoftmaxOpL1Usage> SoftmaxOpL1UsageFactory::Make(const L1InterfaceOpParams& input, int dim_arg) {
     return std::make_unique<SoftmaxOpL1Usage>(input, dim_arg);
 };
 
-SoftmaxOpL1Usage::SoftmaxOpL1Usage(const EltwiseOpParams& input, int dim_arg) :
+SoftmaxOpL1Usage::SoftmaxOpL1Usage(const L1InterfaceOpParams& input, int dim_arg) :
     input(input), output(get_softmax_output(input)), dim_arg(dim_arg) {}
 
 bool SoftmaxOpL1Usage::SoftmaxOpL1Usage::should_tilize_input() const {

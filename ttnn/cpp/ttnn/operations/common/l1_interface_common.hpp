@@ -25,7 +25,7 @@ struct Shape;
 }
 }  // namespace ttnn
 
-using EltwiseOpParams =
+using L1InterfaceOpParams =
     std::tuple<ttnn::types::Shape, tt::tt_metal::DataType, tt::tt_metal::Layout, tt::tt_metal::MemoryConfig>;
 
 uint32_t calculate_circular_buffer_l1_allocation_size_per_core(
@@ -35,7 +35,8 @@ uint32_t calculate_circular_buffer_l1_allocation_size_per_core(
     const tt::tt_metal::MemoryConfig& memory_config,
     const uint32_t max_block_size);
 
-inline uint32_t calculate_circular_buffer_l1_allocation_size_per_core(EltwiseOpParams input, uint32_t max_block_size) {
+inline uint32_t calculate_circular_buffer_l1_allocation_size_per_core(
+    L1InterfaceOpParams input, uint32_t max_block_size) {
     return calculate_circular_buffer_l1_allocation_size_per_core(
         std::get<ttnn::types::Shape>(input),
         std::get<tt::tt_metal::DataType>(input),
@@ -50,7 +51,7 @@ uint32_t calculate_tensor_l1_allocation_size_per_core(
     const tt::tt_metal::Layout& layout,
     const tt::tt_metal::MemoryConfig& memory_config);
 
-inline uint32_t calculate_tensor_l1_allocation_size_per_core(EltwiseOpParams input) {
+inline uint32_t calculate_tensor_l1_allocation_size_per_core(L1InterfaceOpParams input) {
     return calculate_tensor_l1_allocation_size_per_core(
         std::get<ttnn::types::Shape>(input),
         std::get<tt::tt_metal::DataType>(input),

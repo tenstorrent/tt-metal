@@ -111,7 +111,7 @@ OperandShapeTestParam select_larger_input(const OperandShapeTestParam& a, const 
 }
 
 class SoftmaxOpInterfaceTestFixture : public TTNNFixtureWithDevice,
-                                      public testing::WithParamInterface<std::tuple<InputShapeTestParam, int>> {};
+                                      public testing::WithParamInterface<std::tuple<OperandShapeTestParam, int>> {};
 
 TEST_P(SoftmaxOpInterfaceTestFixture, MlirInterfaceTest) {
     auto param_combination = GetParam();
@@ -154,15 +154,15 @@ INSTANTIATE_TEST_SUITE_P(
     SoftmaxOpInterfaceTestFixture,  // Test suite name
     ::testing::Combine(
         ::testing::Values(
-            InputShapeTestParam{
+            OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{4, 2, 5 * 32, 7 * 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
             },
-            InputShapeTestParam{
+            OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{4, 2, 5 * 32, 7 * 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
                 .layout = ttnn::ROW_MAJOR_LAYOUT},
-            InputShapeTestParam{
+            OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 32 * 32, 32 * 32}),
                 .memory_config =
                     {.memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
@@ -231,7 +231,7 @@ INSTANTIATE_TEST_SUITE_P(
             .shape = ttnn::Shape(tt::tt_metal::Array4D{4, 2, 5 * 32, 7 * 32}),
             .memory_config = ttnn::L1_MEMORY_CONFIG,
         },
-        InputShapeTestParam{
+        OperandShapeTestParam{
             .shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 32 * 32, 32 * 32}),
             .memory_config =
                 {.memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
