@@ -37,15 +37,17 @@ from models.utility_functions import skip_for_grayskull
     ids=["quick", "full"],
 )
 def test_llama_model_inference(device, weights, layers, use_program_cache, reset_seeds, is_ci_env):
-    is_ci_env = True
     if is_ci_env and layers > 1:
         pytest.skip("Skipping long test in CI")
 
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
-    cache_pcc = layers == 1  # Flag to measure KV cache PCC for all layers
+    cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
 
     dtype = ttnn.bfloat8_b
-    pcc = 0.94 if layers == 1 else 0.97  # This sets the minimum PCC for each iteration
+
+    # This sets the minimum PCC for each iteration
+    # TODO: In the full model test, iterations 4 and 8 have lower PCCs of 0.9077 and 0.9593 respectively.
+    pcc = 0.94 if layers == 1 else 0.97
     # In post-commit CI, also validate the final PCCs after 6 iterations
     final_model_pcc = 0.9989
     final_k_cache_pcc = 0.9998
@@ -61,7 +63,7 @@ def test_llama_model_inference(device, weights, layers, use_program_cache, reset
 
     prompts = ["This is a test"] * model_args.max_batch_size
     if dummy_weights:
-        encoded_prompts = [[128000, 2028, 374, 264, 1296]]
+        encoded_prompts = [[128000, 2028, 374, 264, 1296]]  # "This is a test" encoded prompt
         assert not instruct, "Instruct prompt not implemented with dummy weights"
     else:
         tokenizer = Tokenizer(model_args.tokenizer_path)
