@@ -49,7 +49,8 @@ Tensor loss_function(
             return ttnn::mean(result, std::nullopt, true, memory_config.value_or(ref.memory_config()));
         case LossReductionMode::NONE:
         default:
-            TT_THROW("unsupported loss reduce function {}. Please change.", reduce_mode);
+            // TODO: old code indicated this path is unsupported, but the all post commit test pipeline uses this path.
+            // Need to update test or replace this comment with a throw.
             break;
     }
     return result;

@@ -423,11 +423,16 @@ void WriteToDeviceInterleavedContiguous(const Buffer &buffer, const std::vector<
         buffer.size());
 
     uint32_t page_size = buffer.page_size();
-    TT_FATAL(buffer.size() % page_size == 0, "Buffer size {} mod page_size {} needs to be 0.", buffer.size(), page_size);
+    TT_FATAL(
+        buffer.size() % page_size == 0,
+        "Invalid buffer size: {}. Buffer size must be a multiple of page size {}.",
+        buffer.size(),
+        page_size);
     uint32_t num_pages = buffer.size() / page_size;
 
     static constexpr uint32_t bytes_per_page_entry = sizeof(uint32_t);
-    TT_FATAL(page_size % bytes_per_page_entry == 0, "Page size {} mod bytes per page entry needs to be 0", page_size, bytes_per_page_entry);
+    TT_FATAL(page_size % bytes_per_page_entry == 0,
+        "Invalid page size: {}. Page size  must be a multiple of bytes per page entry {}.", page_size, bytes_per_page_entry);
     uint32_t num_entries_per_page = page_size / bytes_per_page_entry;
 
     auto device = buffer.device();
@@ -487,7 +492,11 @@ void WriteToBuffer(Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
 void ReadFromDeviceInterleavedContiguous(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
     host_buffer.clear();  // overwrite the data
     uint32_t page_size = buffer.page_size();
-    TT_FATAL(buffer.size() % page_size == 0, "Buffer size {} mod page_size {} needs to be 0.", buffer.size(), page_size);
+    TT_FATAL(
+        buffer.size() % page_size == 0,
+        "Invalid buffer size: {}. Buffer size must be a multiple of page size {}.",
+        buffer.size(),
+        page_size);
     uint32_t num_pages = buffer.size() / page_size;
 
     auto device = buffer.device();

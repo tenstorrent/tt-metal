@@ -122,8 +122,5 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    // Error out with non-zero return code if we don't detect a pass
-    TT_FATAL(pass, "Error");
-
     return 0;
 }

@@ -468,7 +468,7 @@ void generate_runtime_args_cmds(
     if (no_stride) {
         TT_FATAL(
             max_packed_cmds >= num_packed_cmds_in_seq,
-            "num_packed_cmds_in_seq {} cannot exceed max_packed_cmds {}",
+            "num_packed_cmds_in_seq {} cannot exceed max_packed_cmds {} when no_stride is true",
             num_packed_cmds_in_seq,
             max_packed_cmds);
     }
