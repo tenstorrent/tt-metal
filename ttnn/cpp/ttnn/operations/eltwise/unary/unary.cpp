@@ -4,14 +4,13 @@
 
 #include "unary.hpp"
 
-#include "common/unary_op_types.hpp"
-#include "device/unary_device_operation.hpp"
 #include "ttnn/common/constants.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
-#include "ttnn/operations/eltwise/complex/complex.hpp"
-#include "ttnn/operations/pool/downsample/device/downsample_op.hpp"
+#include "device/unary_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/operations/pool/downsample/device/downsample_op.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 
 namespace ttnn::operations::unary {
 
@@ -23,29 +22,18 @@ inline Tensor unary_impl(
     const std::vector<UnaryWithParam>& op_chain,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    DataType output_dtype = (op_chain[0].op_type == UnaryOpType::TYPECAST)
-                                ? static_cast<DataType>(op_chain[0].params[1])
-                                : input_tensor.get_dtype();
-    bool preserve_fp32_precision =
-        (op_chain[0].op_type == UnaryOpType::TYPECAST) and (input_tensor.get_dtype() == DataType::FLOAT32);
-    bool fp32_dest_acc_en = preserve_fp32_precision or output_dtype == DataType::UINT32 or
-                            output_dtype == DataType::INT32 or output_dtype == DataType::FLOAT32 or
+    DataType output_dtype = (op_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(op_chain[0].params[1]) : input_tensor.get_dtype();
+    bool preserve_fp32_precision = (op_chain[0].op_type == UnaryOpType::TYPECAST) and (input_tensor.get_dtype() == DataType::FLOAT32);
+    bool fp32_dest_acc_en = preserve_fp32_precision or
+                            output_dtype == DataType::UINT32 or
+                            output_dtype == DataType::INT32 or
+                            output_dtype == DataType::FLOAT32 or
                             input_tensor.get_dtype() == DataType::UINT32 or
                             input_tensor.get_dtype() == DataType::INT32;  // MT: Currently only uint32/int32 is moved to
                                                                           // DST directly, fp32 is converted to fp16b
 
-    auto output_memory_config = optional_output_tensor.has_value()
-                                    ? optional_output_tensor.value().memory_config()
-                                    : memory_config.value_or(input_tensor.memory_config());
-    return prim::unary(
-        queue_id,
-        input_tensor,
-        op_chain,
-        output_dtype,
-        output_memory_config,
-        fp32_dest_acc_en,
-        preserve_fp32_precision,
-        optional_output_tensor);
+    auto output_memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config.value_or(input_tensor.memory_config());
+    return prim::unary(queue_id, input_tensor, op_chain, output_dtype, output_memory_config, fp32_dest_acc_en, preserve_fp32_precision, optional_output_tensor);
 }
 
 }  // namespace detail
@@ -71,24 +59,24 @@ Tensor ExecuteUnary<unary_op_types...>::invoke(
 
 template <>
 Tensor ExecuteUnary<UnaryOpType::ABS>::invoke(
-    const ComplexTensor& input_tensor, const MemoryConfig& output_mem_config) {
-    return ttnn::hypot(input_tensor[0], input_tensor[1], output_mem_config);
+    const ComplexTensor& input_tensor,
+    const MemoryConfig& output_mem_config) {
+    return ttnn::hypot(input_tensor[0],input_tensor[1],output_mem_config);
 }
 
 template <>
 ComplexTensor ExecuteUnary<UnaryOpType::RECIP>::invoke(
-    const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-    Tensor a_plus_b = ttnn::add(input[0], input[1], std::nullopt, output_mem_config);
-    Tensor a_minus_b = ttnn::subtract(input[0], input[1], std::nullopt, output_mem_config);
-    Tensor asqr_plus_bsqr = ttnn::add(
-        ttnn::square(input[0], output_mem_config),
-        ttnn::square(input[1], output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    Tensor inv_dr = ttnn::reciprocal(asqr_plus_bsqr, output_mem_config);
-    Tensor conj_im = ttnn::multiply(ttnn::neg(input[1], output_mem_config), inv_dr, std::nullopt, output_mem_config);
-    Tensor conj_re = ttnn::multiply(input[0], inv_dr, std::nullopt, output_mem_config);
-    return ComplexTensor({conj_re, conj_im});
+    const ComplexTensor& input,
+    const MemoryConfig& output_mem_config) {
+    Tensor a_plus_b = ttnn::add(input[0],input[1],std::nullopt,output_mem_config);
+    Tensor a_minus_b = ttnn::subtract(input[0],input[1],std::nullopt,output_mem_config);
+    Tensor asqr_plus_bsqr = ttnn::add(ttnn::square(input[0],output_mem_config),ttnn::square(input[1],output_mem_config),
+                                std::nullopt,output_mem_config);
+    Tensor inv_dr = ttnn::reciprocal( asqr_plus_bsqr, output_mem_config );
+    Tensor conj_im = ttnn::multiply( ttnn::neg(input[1],output_mem_config), inv_dr, std::nullopt, output_mem_config);
+    Tensor conj_re = ttnn::multiply( input[0], inv_dr, std::nullopt, output_mem_config);
+    return ComplexTensor({ conj_re, conj_im});
+
 }
 
 template struct ExecuteUnary<UnaryOpType::ABS>;
@@ -290,6 +278,33 @@ Tensor Softplus::invoke(
         optional_output_tensor);
 }
 
+Tensor Identity::invoke(
+    uint8_t queue_id,
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::IDENTITY;
+    if (input_tensor.get_dtype() == DataType::UINT32) {
+        op_type = UnaryOpType::IDENTITY_UINT32;
+    }
+
+    return detail::unary_impl(
+        queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+}
+
+Tensor Identity::invoke(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::IDENTITY;
+    if (input_tensor.get_dtype() == DataType::UINT32) {
+        op_type = UnaryOpType::IDENTITY_UINT32;
+    }
+
+    return detail::unary_impl(
+        DefaultQueueId, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+}
+
 Tensor Dropout::invoke(
     const Tensor& input,
     const uint32_t seed,
@@ -321,32 +336,6 @@ Tensor Dropout::invoke(
         {UnaryWithParam{UnaryOpType::DROPOUT, {static_cast<float>(seed), probability, scale}}},
         memory_config,
         optional_output_tensor);
-}
-
-Tensor Identity::invoke(
-    uint8_t queue_id,
-    const Tensor& input_tensor,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    UnaryOpType op_type = UnaryOpType::IDENTITY;
-    if (input_tensor.get_dtype() == DataType::UINT32) {
-        op_type = UnaryOpType::IDENTITY_UINT32;
-    }
-
-    return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
-}
-
-Tensor Identity::invoke(
-    const Tensor& input_tensor,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    UnaryOpType op_type = UnaryOpType::IDENTITY;
-    if (input_tensor.get_dtype() == DataType::UINT32) {
-        op_type = UnaryOpType::IDENTITY_UINT32;
-    }
-
-    return detail::unary_impl(
-        DefaultQueueId, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
 template <UnaryOpType unary_op_type, typename T>
@@ -385,6 +374,7 @@ template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_AND, int32
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_OR, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_XOR, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_NOT, int32_t>;
+
 
 template <UnaryOpType unary_op_type, typename T>
 Tensor SymmetricBinop<unary_op_type, T>::invoke(
@@ -448,6 +438,7 @@ Tensor SymmetricBinop<unary_op_type, T>::invoke(
 template struct SymmetricBinop<UnaryOpType::ADD_UNARY_SFPU>;
 template struct SymmetricBinop<UnaryOpType::MUL_UNARY_SFPU>;
 
+
 template <UnaryOpType unary_op_type, UnaryOpType unary_op_rev_type>
 Tensor AsymmetricBinop<unary_op_type, unary_op_rev_type>::invoke(
     uint8_t queue_id,
@@ -509,4 +500,4 @@ Tensor AsymmetricBinop<unary_op_type, unary_op_rev_type>::invoke(
 template struct AsymmetricBinop<UnaryOpType::SUB_UNARY_SFPU, UnaryOpType::RSUB>;
 template struct AsymmetricBinop<UnaryOpType::DIV_UNARY_SFPU, UnaryOpType::RDIV>;
 
-}  // namespace ttnn::operations::unary
+}
