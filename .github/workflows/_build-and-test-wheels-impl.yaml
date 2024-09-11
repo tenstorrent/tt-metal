@@ -25,11 +25,10 @@ jobs:
       matrix:
         os: [ubuntu-20.04, ubuntu-22.04]
         runner-hw-info: [
-          {arch: grayskull, type: E150},
-          {arch: wormhole_b0, type: N150}
+          {arch: grayskull},
+          {arch: wormhole_b0}
         ]
-    runs-on: ["cloud-virtual-machine", "${{ matrix.runner-hw-info.type }}", "in-service"]
-    environment: production
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/install-metal-deps
@@ -57,7 +56,6 @@ jobs:
           {arch: wormhole_b0, type: N300}
         ]
     runs-on: ["cloud-virtual-machine", "${{ matrix.runner-hw-info.type }}", "in-service"]
-    environment: production
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
