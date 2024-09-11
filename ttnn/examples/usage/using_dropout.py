@@ -38,7 +38,22 @@ with ttnn.manage_device(device_id=0) as device:
 
     mean = np.mean(ratios)
     std = np.std(ratios)
+    print("TTNN:")
+    print("Expected probability:", prob)
+    print("Mean:", mean)
+    print("Standard Deviation:", std)
 
+    torch_ratios = []
+    dropout = torch.nn.Dropout(p=prob)
+    dropout.train()
+    for _ in range(100):
+        output = dropout(t) * (1 - prob)
+        r = get_tensor_ratio(s, t, output)
+        torch_ratios.append(r)
+
+    mean = np.mean(torch_ratios)
+    std = np.std(torch_ratios)
+    print("PYTORCH:")
     print("Expected probability:", prob)
     print("Mean:", mean)
     print("Standard Deviation:", std)
