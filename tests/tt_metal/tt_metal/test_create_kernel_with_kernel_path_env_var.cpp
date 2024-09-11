@@ -87,14 +87,14 @@ class CompileProgramWithKernelPathEnvVarFixture : public ::testing::Test {
     }
 
     bool is_path_a_directory(const string &path) {
-        TT_FATAL(this->does_path_exist(path));
+        TT_FATAL(this->does_path_exist(path), "{} does not exist", path);
         const std::filesystem::path &file_path(path);
         return std::filesystem::is_directory(file_path);
     }
 
     bool is_dir_empty(const string &path) {
-        TT_FATAL(this->does_path_exist(path));
-        TT_FATAL(this->is_path_a_directory(path));
+        TT_FATAL(this->does_path_exist(path), "{} does not exist", path);
+        TT_FATAL(this->is_path_a_directory(path), "{} is not a directory", path);
         const std::filesystem::path &file_path(path);
         return std::filesystem::is_empty(file_path);
     }
