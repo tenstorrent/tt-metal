@@ -119,8 +119,8 @@ auto map_execute_on_worker_thread_return_to_launch_op_return(const T&& value) ->
         output_tensors.reserve(size);
 
         auto dummy_tensor = Tensor();
-        for (uint32_t i = 0 ; i < size; i++) {
-            output_tensors.push_back(value.at(i).value_or(dummy_tensor));
+        for (auto& val : value) {
+            output_tensors.push_back(val.value_or(dummy_tensor));
         }
         return output_tensors;
     } else if constexpr (is_homogenous_tuple<T, Tensor>()) {
