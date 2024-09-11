@@ -36,60 +36,8 @@ class TtNeck:
             "neek.conv3",
             [1, 10, 10, 1024],
             (1, 1, 0, 0),
-            height_sharding=False,
             reshard=True,
         )
-
-        self.p1 = fallback_ops.MaxPool2d(kernel_size=5, stride=1, padding=2, dilation=1, ceil_mode=False)
-        #  ttnn.MaxPool2d(
-        #     kernel_size=(5, 5),
-        #     stride=(1, 1),
-        #     padding=(2, 2),
-        #     dilation=(1, 1),
-        #     dtype=ttnn.bfloat16,
-        #     device=self.device,
-        #     batch_size=self.batch_size,
-        #     input_height=10,
-        #     input_width=10,
-        #     reader_patterns_cache=self.max_pool_reader_patterns_cache,
-        #     deallocate_activation=True,
-        #     parallel_config_override={},
-        #     channels=512
-        # )
-
-        self.p2 = fallback_ops.MaxPool2d(kernel_size=9, stride=1, padding=4, dilation=1, ceil_mode=False)
-        #  ttnn.MaxPool2d(
-        #     kernel_size=(9, 9),
-        #     stride=(1, 1),
-        #     padding=(4, 4),
-        #     dilation=(1, 1),
-        #     dtype=ttnn.bfloat16,
-        #     device=self.device,
-        #     batch_size=self.batch_size,
-        #     input_height=10,
-        #     input_width=10,
-        #     reader_patterns_cache=self.max_pool_reader_patterns_cache,
-        #     deallocate_activation=True,
-        #     parallel_config_override={},
-        #     channels=512
-        # )
-
-        self.p3 = fallback_ops.MaxPool2d(kernel_size=13, stride=1, padding=6, dilation=1, ceil_mode=False)
-        #  ttnn.MaxPool2d(
-        #     kernel_size=(13, 13),
-        #     stride=(1, 1),
-        #     padding=(6, 6),
-        #     dilation=(1, 1),
-        #     dtype=ttnn.bfloat16,
-        #     device=self.device,
-        #     batch_size=self.batch_size,
-        #     input_height=10,
-        #     input_width=10,
-        #     reader_patterns_cache=self.max_pool_reader_patterns_cache,
-        #     deallocate_activation=True,
-        #     parallel_config_override={},
-        #     channels=512
-        # )
 
         self.conv4 = Conv(
             torch_model,
@@ -233,30 +181,51 @@ class TtNeck:
         output_tensor = self.conv3(device, output_tensor)
         output_tensor = ttnn.leaky_relu(output_tensor, slope=0.1)
 
-        output_tensor_conv3 = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
+        pool_1 = ttnn.max_pool2d(
+            input_tensor=output_tensor,
+            batch_size=1,
+            input_h=10,
+            input_w=10,
+            channels=512,
+            kernel_size=[5, 5],
+            stride=[1, 1],
+            padding=[2, 2],
+            dilation=[1, 1],
+            device=device,
+        )
+        pool_2 = ttnn.max_pool2d(
+            input_tensor=output_tensor,
+            batch_size=1,
+            input_h=10,
+            input_w=10,
+            channels=512,
+            kernel_size=[9, 9],
+            stride=[1, 1],
+            padding=[4, 4],
+            dilation=[1, 1],
+            device=device,
+        )
+        pool_3 = ttnn.max_pool2d(
+            input_tensor=output_tensor,
+            batch_size=1,
+            input_h=10,
+            input_w=10,
+            channels=512,
+            kernel_size=[13, 13],
+            stride=[1, 1],
+            padding=[6, 6],
+            dilation=[1, 1],
+            device=device,
+        )
 
-        # Once issue #7746 is resolved we will use ttnn.MaxPool instead of fallback.MaxPool
-        output_tensor_conv3 = ttnn.to_layout(output_tensor_conv3, layout=ttnn.ROW_MAJOR_LAYOUT)
-        output_tensor_conv3 = ttnn.reshape(
-            output_tensor_conv3, (1, 10, 10, 512)
-        )  # hard coded the shape as in future we will be using ttnn.MaxPool
-        output_tensor_conv3 = ttnn.permute(output_tensor_conv3, (0, 3, 1, 2))
-
-        pool_1 = self.p1(output_tensor_conv3)
-        pool_2 = self.p2(output_tensor_conv3)
-        pool_3 = self.p3(output_tensor_conv3)
-
-        pool_1 = ttnn.permute(pool_1, (0, 2, 3, 1))
-        pool_1 = ttnn.reshape(pool_1, (1, 1, pool_1.shape[1] * pool_1.shape[2], pool_1.shape[3]))
-        pool_2 = ttnn.permute(pool_2, (0, 2, 3, 1))
-        pool_2 = ttnn.reshape(pool_2, (1, 1, pool_2.shape[1] * pool_2.shape[2], pool_2.shape[3]))
-        pool_3 = ttnn.permute(pool_3, (0, 2, 3, 1))
-        pool_3 = ttnn.reshape(pool_3, (1, 1, pool_3.shape[1] * pool_3.shape[2], pool_3.shape[3]))
-        pool_1 = ttnn.to_layout(pool_1, layout=ttnn.TILE_LAYOUT)
-        pool_2 = ttnn.to_layout(pool_2, layout=ttnn.TILE_LAYOUT)
-        pool_3 = ttnn.to_layout(pool_3, layout=ttnn.TILE_LAYOUT)
-
+        pool_1 = ttnn.sharded_to_interleaved(pool_1, ttnn.L1_MEMORY_CONFIG)
+        pool_2 = ttnn.sharded_to_interleaved(pool_2, ttnn.L1_MEMORY_CONFIG)
+        pool_3 = ttnn.sharded_to_interleaved(pool_3, ttnn.L1_MEMORY_CONFIG)
+        pool_1 = ttnn.to_layout(pool_1, layout=ttnn.TILE_LAYOUT)  # This is becauase output_tensor is in TILE_LAYOUT
+        pool_2 = ttnn.to_layout(pool_2, layout=ttnn.TILE_LAYOUT)  # This is becauase output_tensor is in TILE_LAYOUT
+        pool_3 = ttnn.to_layout(pool_3, layout=ttnn.TILE_LAYOUT)  # This is becauase output_tensor is in TILE_LAYOUT
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
+
         output_tensor = ttnn.concat([pool_3, pool_2, pool_1, output_tensor], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(pool_3)
         ttnn.deallocate(pool_2)
