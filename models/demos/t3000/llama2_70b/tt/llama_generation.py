@@ -6,11 +6,17 @@ import torch
 import ttnn
 from ttnn import ConcatMeshToTensor
 
+from dataclasses import dataclass
 from loguru import logger
 
 import copy
 from models.demos.t3000.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized as TtLlamaModel
-from models.demos.t3000.llama2_70b.tt.llama_common import BASE_URL
+from models.demos.t3000.llama2_70b.tt.llama_common import (
+    BASE_URL,
+    load_llama_state_dict,
+    setup_llama_env,
+    check_mesh_device,
+)
 from models.demos.t3000.llama2_70b.tt.model_config import (
     get_model_config,
 )
@@ -53,6 +59,56 @@ class TtLlamaModelForGeneration:
         )
 
         del state_dict
+
+    @classmethod
+    def initialize_vllm_model(cls, hf_config, t3k_mesh_device):
+        # TODO: pass in model args and tt args as parameters from vllm
+        @dataclass
+        class ModelArgs:
+            llama_version: str = None
+            ckpt_dir: str = None
+            max_batch_size: int = 32
+            num_layers: int = 80
+            max_kv_context_len: int = 4096
+
+        @dataclass
+        class TTArgs:
+            mesh_device: object = None
+            cache_path: str = None
+
+        # setup configs
+        llama_version = "llama3"
+        model_config, ckpt_dir, _, cache_path = setup_llama_env(
+            llama_version=llama_version,
+        )
+        check_mesh_device(t3k_mesh_device, model_config)
+
+        # initialize arg classes
+        model_args = ModelArgs(llama_version=llama_version, ckpt_dir=ckpt_dir)
+        tt_args = TTArgs(mesh_device=t3k_mesh_device, cache_path=cache_path)
+
+        # load state dict
+        state_dict = load_llama_state_dict(model_args.ckpt_dir, n_layers=model_args.num_layers)
+
+        # TODO: delete this configuration setup once llama can directly accept hf_config
+        from models.demos.t3000.llama2_70b.reference.llama.llama.model import ModelArgs as ReferenceModelArgs
+        from pathlib import Path
+        import json
+
+        with open(Path(ckpt_dir) / "params.json", "r") as f:
+            params = json.loads(f.read())
+        configuration = ReferenceModelArgs(
+            max_seq_len=model_args.max_kv_context_len,
+            max_batch_size=model_args.max_batch_size,
+            **params,
+        )
+
+        return cls(
+            configuration=configuration,
+            state_dict=state_dict,
+            model_args=model_args,
+            tt_args=tt_args,
+        )
 
     def forward(self, tokens: torch.Tensor, start_pos: int):
         _, seq_len = tokens.shape
