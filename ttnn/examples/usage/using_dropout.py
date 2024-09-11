@@ -8,7 +8,7 @@ import torch
 import numpy as np
 
 
-def get_tensor_ratio(seed, t, out):
+def get_tensor_ratio(t, out):
     t_sum = t.sum().item()
     out_sum = out.sum().item()
     return 1.0 - out_sum / t_sum
@@ -33,7 +33,7 @@ with ttnn.manage_device(device_id=0) as device:
     for _ in range(100):
         output = ttnn.dropout(t_tt, seed=s, probability=prob, scale=1.0)
         output1 = ttnn.to_torch(output)
-        r = get_tensor_ratio(s, t, output1)
+        r = get_tensor_ratio(t, output1)
         ratios.append(r)
 
     mean = np.mean(ratios)
@@ -48,7 +48,7 @@ with ttnn.manage_device(device_id=0) as device:
     dropout.train()
     for _ in range(100):
         output = dropout(t) * (1 - prob)
-        r = get_tensor_ratio(s, t, output)
+        r = get_tensor_ratio(t, output)
         torch_ratios.append(r)
 
     mean = np.mean(torch_ratios)
