@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
@@ -46,7 +47,7 @@ def colored(text, color):
 def tflops_per_core(math_fidelity):
     """ Source: https://tenstorrent.com/assets/one-pagers/08.01.24_Wormhole.pdf """
     if math_fidelity == 'HiFi4':
-        return 74/72 
+        return 74/72
     elif math_fidelity == 'HiFi2':
         return 148/72
     elif math_fidelity == 'LoFi':
@@ -65,7 +66,7 @@ class Cell:
     def format(self):
         if self.raw_value is None or pd.isna(self.raw_value):
             return ""
-        
+
         if isinstance(self.raw_value, str) and 'Matmul' in self.raw_value:
             parts = self.raw_value.split(maxsplit=1)
             op_name = parts[0]
@@ -76,13 +77,13 @@ class Cell:
                 formatted = f"{float(self.raw_value):,.{self.decimals}f}"
             except (ValueError, TypeError):
                 formatted = str(self.raw_value)
-            
+
             if self.color:
                 formatted = colored(formatted, self.color)
-        
+
         if self.unit:
             formatted += f" {colored(self.unit, 'grey')}"
-        
+
         return formatted
 
     def __str__(self):
@@ -90,7 +91,7 @@ class Cell:
 
 def filter_by_signpost(df, signpost=None, ignore_signposts=False):
     signpost_rows = df[df['OP TYPE'] == 'signpost']
-    
+
     if ignore_signposts:
         print(colored("Ignoring all signposts. Using the entire file for analysis.", "cyan"))
         return df
@@ -156,13 +157,13 @@ def evaluate_fidelity(input_0_datatype, input_1_datatype, output_datatype, math_
 def analyze_matmul(row):
     input_0_from_dram = 'DRAM' in row['INPUT_0_MEMORY']
     input_1_from_dram = 'DRAM' in row['INPUT_1_MEMORY']
-    
+
     total_data_size_bytes = 0
     if input_0_from_dram:
         total_data_size_bytes += row['INPUT_0_W'] * row['INPUT_0_Y'] * row['INPUT_0_Z'] * row['INPUT_0_X'] * get_datatype_size(row['INPUT_0_DATATYPE'])
     if input_1_from_dram:
         total_data_size_bytes += row['INPUT_1_W'] * row['INPUT_1_Y'] * row['INPUT_1_Z'] * row['INPUT_1_X'] * get_datatype_size(row['INPUT_1_DATATYPE'])
-    
+
     # Always include output if it's written to DRAM
     if 'DRAM' in row['OUTPUT_0_MEMORY']:
         total_data_size_bytes += row['OUTPUT_0_W'] * row['OUTPUT_0_Y'] * row['OUTPUT_0_Z'] * row['OUTPUT_0_X'] * get_datatype_size(row['OUTPUT_0_DATATYPE'])
@@ -176,13 +177,13 @@ def analyze_matmul(row):
 
     M, K, N = int(row['INPUT_0_Y']), int(row['INPUT_0_X']), int(row['INPUT_1_X'])
     W, Z = int(row['INPUT_0_W']), int(row['INPUT_0_Z'])
-    
+
     flops = (M * K * N * W * Z * 2) / duration_s
 
     size = f"{M} x {K} x {N}"
     memory_info = f"({row['INPUT_0_DATATYPE']} {row['INPUT_0_MEMORY'].replace('DEV_0_', '')} @ {row['INPUT_1_DATATYPE']} {row['INPUT_1_MEMORY'].replace('DEV_0_', '')} => {row['OUTPUT_0_DATATYPE']} {row['OUTPUT_0_MEMORY'].replace('DEV_0_', '')})"
 
-    dram_percentage = (dram_speed_gb_s / 240) * 100 if dram_speed_gb_s is not None else None
+    dram_percentage = (dram_speed_gb_s / 288) * 100 if dram_speed_gb_s is not None else None
     flops_percentage = (flops / peak_flops_value) * 100
 
     # Check for DRAM-sharded program config
@@ -199,7 +200,7 @@ def analyze_op(row, prev_row):
     op_code = Cell(row['OP CODE'])
     cores = Cell(int(row['CORE COUNT']) if pd.notna(row['CORE COUNT']) else None)
     device_time = Cell(row['DEVICE FW DURATION [ns]'] / 1000 if pd.notna(row['DEVICE FW DURATION [ns]']) else None, unit='µs', decimals=0)
-    
+
     if prev_row is not None and pd.notna(prev_row['OP TO OP LATENCY [ns]']):
         dispatch_time = Cell(row['OP TO OP LATENCY [ns]'] / 1000 if pd.notna(row['OP TO OP LATENCY [ns]']) else None, unit='µs', decimals=0)
     else:
@@ -212,7 +213,7 @@ def analyze_op(row, prev_row):
         dram_percentage = Cell(dram_percentage, unit='%', decimals=1)
         flops = Cell(flops/1e12 if pd.notna(flops) else None, unit='TFLOPs', decimals=1)
         flops_percentage = Cell(flops_percentage, unit='%', decimals=1)
-        
+
         short_name = lambda n: {"BFLOAT16": "BF16", "BFLOAT8_B": "BFP8", "BFLOAT4_B": "BFP4"}.get(n, n)
         math_fidelity_cell = Cell(f"{math_fidelity} {short_name(input_0_datatype)} x {short_name(input_1_datatype)} => {short_name(output_datatype)}".strip() if math_fidelity else None)
         output_datatype_cell = Cell(output_datatype)
@@ -249,22 +250,22 @@ def analyze_op(row, prev_row):
     }
 
     input_0_memory = Cell(row['INPUT_0_MEMORY'] if pd.notna(row['INPUT_0_MEMORY']) else None)
-    
+
     # Extract program config details
     attributes = row['ATTRIBUTES'] if pd.notna(row['ATTRIBUTES']) else ""
     in0_block_w = Cell(None)
     out_subblock_h = Cell(None)
     out_subblock_w = Cell(None)
-    
+
     if 'program_config' in attributes:
         match = re.search(r'in0_block_w=(\d+)', attributes)
         if match:
             in0_block_w = Cell(int(match.group(1)))
-        
+
         match = re.search(r'out_subblock_h=(\d+)', attributes)
         if match:
             out_subblock_h = Cell(int(match.group(1)))
-        
+
         match = re.search(r'out_subblock_w=(\d+)', attributes)
         if match:
             out_subblock_w = Cell(int(match.group(1)))
@@ -366,9 +367,9 @@ def color_row(op_data, percentage, min_percentage):
             input_0_datatype = op_data['Input 0 Datatype'].raw_value
             input_1_datatype = op_data['Input 1 Datatype'].raw_value
             output_datatype = op_data['Output Datatype'].raw_value
-            
+
             fidelity_evaluation, _ = evaluate_fidelity(input_0_datatype, input_1_datatype, output_datatype, math_fidelity)
-            
+
             if fidelity_evaluation == 'sufficient':
                 op_data['Math Fidelity'].color = 'green'
             elif fidelity_evaluation == 'too_high':
@@ -423,7 +424,7 @@ def print_fallback_advice(rows, headers, col_widths):
         print("\nThese ops should be moved to run on device.\n")
 
 def print_dispatch_advice(rows, headers, col_widths):
-    high_dispatch_ops = [(idx + 1, op_data) for idx, op_data in enumerate(rows) 
+    high_dispatch_ops = [(idx + 1, op_data) for idx, op_data in enumerate(rows)
                          if op_data['Dispatch Time'].raw_value is not None and op_data['Dispatch Time'].raw_value > 6.5]
 
     if high_dispatch_ops:
@@ -438,14 +439,14 @@ def print_dispatch_advice(rows, headers, col_widths):
 
 def print_matmul_advice(rows, headers, col_widths):
     matmul_ops = [op_data for op_data in rows if "Matmul" in op_data['OP Code'].raw_value]
-    
+
     if matmul_ops:
         print("Matmul Optimization\n-------------------")
         for op_data in matmul_ops:
             print_row(op_data, col_widths, headers)
             advice = []
             color = "grey" if op_data['OP Code'].color == "grey" else "white"
-            
+
             math_fidelity = op_data['Math Fidelity'].raw_value.split()[0] if op_data['Math Fidelity'].raw_value else None
             output_datatype = op_data['Output Datatype'].raw_value
             input_0_datatype = op_data['Input 0 Datatype'].raw_value
@@ -458,7 +459,7 @@ def print_matmul_advice(rows, headers, col_widths):
                     advice.append("- Try a DRAM-sharded program config (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) to improve throughput further")
                 if fidelity_evaluation == 'too_low' and op_data['FLOPs %'].raw_value < 40:
                     advice.append(f"- {fidelity_advice}")
-            elif op_data['Bound'].raw_value == "FLOP":               
+            elif op_data['Bound'].raw_value == "FLOP":
                 if cores < 64:
                     advice.append(f"- Increase grid size (currently using {cores})")
                 if fidelity_evaluation == 'too_high':
@@ -467,7 +468,7 @@ def print_matmul_advice(rows, headers, col_widths):
                 input_0_memory = op_data['Input 0 Memory'].raw_value
                 if input_0_memory and 'L1' not in input_0_memory:
                     advice.append(f"- If possible place input 0 in L1 (currently in {input_0_memory})")
-                
+
                 inner_dim_block = op_data['Inner Dim Block Size'].raw_value
                 out_h = op_data['Output Subblock H'].raw_value
                 out_w = op_data['Output Subblock W'].raw_value
@@ -483,7 +484,7 @@ def print_matmul_advice(rows, headers, col_widths):
                     else:
                         advice.append("- No inner dim block size found")
                         all_good = False
-                    
+
                     if out_h is not None and out_w is not None:
                         out_area = out_h * out_w
                         if out_area < 2:
@@ -492,10 +493,10 @@ def print_matmul_advice(rows, headers, col_widths):
                     else:
                         advice.append("- No output subblock size found")
                         all_good = False
-                    
+
                     if all_good:
                         advice.append(f"- in0_block_w={inner_dim_block} and output subblock {out_h}x{out_w} look good 🤷")
-            
+
             if advice:
                 for item in advice:
                     print(colored(item, color))
@@ -519,7 +520,7 @@ def merge_device_rows(df):
 
     for blocks in zip(*[block_by_device[device_id] for device_id in device_ids]):
         op_name = blocks[0][0]
-        
+
         if 'AllGather' in op_name or 'ReduceScatter' in op_name:
             # For collective ops, take the row with minimum duration
             min_duration_block = min(blocks, key=lambda x: x[1]['DEVICE FW DURATION [ns]'])
@@ -534,14 +535,14 @@ def merge_device_rows(df):
 def parse_id_range(id_range_str):
     if id_range_str is None:
         return None
-    
+
     parts = id_range_str.split('-')
     if len(parts) != 2:
         raise ValueError("Invalid ID range format")
-    
+
     start = int(parts[0]) if parts[0] else None
     end = int(parts[1]) if parts[1] else None
-    
+
     return (start, end)
 
 def filter_by_id_range(rows, id_range):
@@ -556,32 +557,32 @@ def filter_by_id_range(rows, id_range):
         else:
             print(colored(f"Filtering rows with IDs from {start} to {end}", "cyan"))
             filtered_rows = [row for row in rows if start <= row['ID'].raw_value <= end]
-        
+
         # Reset the dispatch time for the first item in the filtered range
         if filtered_rows:
             filtered_rows[0]['Dispatch Time'] = Cell(None, unit='µs', decimals=0)
-        
+
         return filtered_rows
     return rows
 
 def main(csv_file, signpost, ignore_signposts, min_percentage, id_range, csv_output):
     df = pd.read_csv(csv_file)
-    
+
     # Add a column for original row numbers
     df['ORIGINAL_ROW'] = df.index + 2  # +2 to match Excel row numbers (1-based + header)
-    
+
     # Sort the DataFrame by "HOST START TS" column
     if 'HOST START TS' in df.columns:
         print(colored("Sorting CSV by 'HOST START TS' column...", "cyan"))
         df = df.sort_values(by='HOST START TS')
     else:
         print(colored("Warning: 'HOST START TS' column not found. CSV will not be sorted.", "yellow"))
-    
+
     # Check if the file contains multiple devices
     if 'DEVICE ID' in df.columns and df['DEVICE ID'].nunique() > 1:
         print(colored(f"Detected data from {df['DEVICE ID'].nunique()} devices. Merging device data...", "cyan"))
         df = merge_device_rows(df)
-    
+
     df = filter_by_signpost(df, signpost, ignore_signposts)
 
     rows = []
@@ -593,7 +594,7 @@ def main(csv_file, signpost, ignore_signposts, min_percentage, id_range, csv_out
         op_data['ID'] = Cell(row['ORIGINAL_ROW'])  # Use the original row number
         rows.append(op_data)
         prev_row = row
-        
+
         # Count device and host ops
         if "(torch)" in op_data['OP Code'].raw_value:
             host_ops += 1
@@ -612,7 +613,7 @@ def main(csv_file, signpost, ignore_signposts, min_percentage, id_range, csv_out
     rows = [color_row(op_data, op_data['Total %'].raw_value, min_percentage) for op_data in rows]
 
     visible_headers = ["ID", "Total %", "Bound", "OP Code", "Device Time", "Dispatch Time", "Cores", "DRAM", "DRAM %", "FLOPs", "FLOPs %", "Math Fidelity"]
-    
+
     if csv_output:
         all_headers = visible_headers + ["Output Datatype", "Input 0 Datatype", "Input 1 Datatype", "DRAM Sharded", "Input 0 Memory", "Inner Dim Block Size", "Output Subblock H", "Output Subblock W"]
         print(",".join(all_headers))
