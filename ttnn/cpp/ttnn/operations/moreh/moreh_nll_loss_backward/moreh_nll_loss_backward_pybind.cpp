@@ -8,6 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "moreh_nll_loss_backward.hpp"
+#include "pybind11/cast.h"
 #include "ttnn/cpp/pybind11/decorators.hpp"
 
 namespace py = pybind11;
@@ -25,9 +26,10 @@ void bind_moreh_nll_loss_backward_operation(py::module &module) {
             py::arg("target_tensor"),
             py::arg("output_grad_tensor"),
             py::arg("reduction_mean"),
-            py::arg("weight_tensor"),
-            py::arg("input_grad_tensor"),
-            py::arg("divisor_tensor"),
+            py::kw_only(),
+            py::arg("weight_tensor") = std::nullopt,
+            py::arg("input_grad_tensor") = std::nullopt,
+            py::arg("divisor_tensor") = std::nullopt,
             py::arg("ignore_index") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt});

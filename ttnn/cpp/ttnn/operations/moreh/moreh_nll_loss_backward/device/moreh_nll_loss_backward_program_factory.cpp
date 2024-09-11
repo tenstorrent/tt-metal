@@ -582,35 +582,38 @@ void MorehNllLossBackwardDeviceOperation::Factory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    // auto& program = cached_program.program;
-    // auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    // auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-    // auto& num_cores = cached_program.shared_variables.num_cores;
-    // auto& num_cores_y = cached_program.shared_variables.num_cores_y;
+    auto& program = cached_program.program;
+    auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
+    auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    auto& num_cores = cached_program.shared_variables.num_cores;
+    auto& num_cores_y = cached_program.shared_variables.num_cores_y;
 
-    // const uint32_t target_addr = tensor_args.target_tensor.buffer()->address();
-    // const uint32_t output_grad_addr = tensor_args.output_grad_tensor.buffer()->address();
-    // const uint32_t weight_addr =
-    //     tensor_args.weight_tensor.has_value() ? tensor_args.weight_tensor.value().buffer()->address() : 0;
-    // const uint32_t ignore_index = static_cast<uint32_t>(operation_attributes.ignore_index);
+    const uint32_t target_addr = tensor_args.target_tensor.buffer()->address();
+    const uint32_t output_grad_addr = tensor_args.output_grad_tensor.buffer()->address();
+    const uint32_t weight_addr =
+        tensor_args.weight_tensor.has_value() ? tensor_args.weight_tensor.value().buffer()->address() : 0;
+    const uint32_t divisor_addr =
+        tensor_args.divisor_tensor.has_value() ? tensor_args.divisor_tensor.value().buffer()->address() : 0;
+    const uint32_t ignore_index = static_cast<uint32_t>(operation_attributes.ignore_index);
 
-    // const uint32_t input_grad_addr = tensor_return_value.buffer()->address();
+    const uint32_t input_grad_addr = tensor_return_value.buffer()->address();
 
-    // for (uint32_t i = 0; i < num_cores; ++i) {
-    //     CoreCoord core = {i / num_cores_y, i % num_cores_y};
-    //     {
-    //         auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-    //         runtime_args[0] = target_addr;
-    //         runtime_args[1] = output_grad_addr;
-    //         runtime_args[2] = weight_addr;
-    //         runtime_args[3] = ignore_index;
-    //     }
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        {
+            auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+            runtime_args[0] = target_addr;
+            runtime_args[1] = output_grad_addr;
+            runtime_args[2] = weight_addr;
+            runtime_args[3] = divisor_addr;
+            runtime_args[4] = ignore_index;
+        }
 
-    //     {
-    //         auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-    //         runtime_args[0] = input_grad_addr;
-    //     }
-    // }
+        {
+            auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+            runtime_args[0] = input_grad_addr;
+        }
+    }
 }
 
 }  // namespace ttnn::operations::moreh::moreh_nll_loss_backward
