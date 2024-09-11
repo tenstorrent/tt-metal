@@ -41,8 +41,8 @@ def test_llama_model_inference(device, weights, layers, use_program_cache, reset
     cache_pcc = layers == 1  # Flag to measure KV cache PCC for all layers
 
     dtype = ttnn.bfloat8_b
-    pcc = 0.9985 if layers == 1 else 0.92  # FIXME: why are first couple of iterations 0.93 and the rest higher?
-    iterations = 6 if layers == 1 else 17
+    pcc = 0.9985 if layers == 1 else 0.97
+    iterations = 6 if layers == 1 else 9
 
     instruct = True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
