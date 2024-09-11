@@ -367,7 +367,7 @@ Tensor _swish(const Tensor& a, const std::optional<MemoryConfig>& output_mem_con
 
 Tensor _trunc(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     auto arch = input.device()->arch();
-    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
+    TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Op is not supported on Grayskull");
     Tensor floor_res = ttnn::floor(input, output_mem_config);
     Tensor trunc_res = ttnn::where(ttnn::ne(input, floor_res), ttnn::add(floor_res, 1.0f, std::nullopt, output_mem_config), floor_res);
     Tensor result = ttnn::where(ttnn::gtz(input, output_mem_config), floor_res, trunc_res);
