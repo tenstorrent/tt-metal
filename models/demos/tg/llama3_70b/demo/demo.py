@@ -7,7 +7,7 @@ import os
 import json
 import torch
 import torch.nn.functional as F
-
+import ttnn
 from time import time
 import pytest
 from loguru import logger
@@ -267,13 +267,34 @@ def run_decode(
             break
 
         # Decode the entire sequence generated so far and log it
-        for user_id in range(max(0, bsz - 3), bsz):
-            text = tokenizer.decode(tokens[user_id, : cur_pos + 1].tolist())
+        for user_id in range(max(0, bsz - 5), bsz):
+            eos_found = False
+            for eos_idx, tk in enumerate(tokens[user_id, : cur_pos + 1].tolist()):
+                if tk == tokenizer.eos_id:
+                    text = tokenizer.decode(tokens[user_id, :eos_idx].tolist())
+                    eos_found = True
+            if not eos_found:
+                text = tokenizer.decode(tokens[user_id, : cur_pos + 1].tolist())
             if data_args.print_output_as_generated:
                 logger.info(f"Loop {cur_pos} user {user_id}: {text}\n")
 
         if return_full_logits:
             full_logits.append(logits.clone().detach())
+
+        if cur_pos == min(prompt_lens):
+            key_caches = []
+            value_caches = []
+            # for i in range(len(model.tt_model.layers)):
+            #     key_cache = model.tt_model.layers[i].attention.layer_past[0]
+            #     key_cache = ttnn.to_torch(key_cache, mesh_composer=ttnn.ListMeshToTensor(tt_args.mesh_device))
+            #     key_caches.append(key_cache)
+            #     value_cache = model.tt_model.layers[i].attention.layer_past[1]
+            #     value_cache = ttnn.to_torch(value_cache, mesh_composer=ttnn.ListMeshToTensor(tt_args.mesh_device))
+            #     value_caches.append(value_cache)
+            # key_caches = torch.stack([torch.stack(key_cache, dim=0) for key_cache in key_caches])
+            # value_caches = torch.stack([torch.stack(value_cache, dim=0) for value_cache in value_caches])
+            # torch.save(torch.tensor(key_caches), "models/demos/tg/llama3_70b/data/decode_key_cache.pt")
+            # torch.save(torch.tensor(value_caches), "models/demos/tg/llama3_70b/data/decode_value_cache.pt")
 
     latency_printout(latencies, model_args, total_len - min_prompt_len)
     output = get_all_text(tokenizer, tokens, prompt_tokens, output_tokens)
@@ -360,7 +381,7 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
     "chat, prompts_file",
     (
         (True, "models/demos/t3000/llama2_70b/demo/data/multi_prompt_chat.json"),
-        (False, "models/demos/t3000/llama2_70b/demo/data/replicated_prompts.json"),
+        (False, "models/demos/t3000/llama2_70b/demo/data/multi_prompt.json"),
     ),
     ids=("chat_completion", "text_completion"),
 )

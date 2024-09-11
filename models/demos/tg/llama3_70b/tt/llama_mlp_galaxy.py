@@ -355,6 +355,7 @@ class TtLlamaMLP_galaxy:
             w3_out,
             input_tensor_a_activation=ttnn.UnaryOpType.SILU,
             dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         # hidden_states = ttnn.to_memory_config(hidden_states, self.FF2_ACT_MEMCFG)
@@ -364,7 +365,7 @@ class TtLlamaMLP_galaxy:
             self.w2,
             dtype=ttnn.bfloat16,
             program_config=self.FF2_PROGCFG,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         hidden_states = ttnn.reshape(hidden_states, (1, 1, seq_len, -1))
