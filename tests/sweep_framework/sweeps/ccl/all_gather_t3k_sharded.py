@@ -30,6 +30,9 @@ TIMEOUT = 30
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 
+TILE_HEIGHT = 32
+TILE_WIDTH = 32
+
 height_shard_shapes = []
 width_shard_shapes = []
 block_shard_shapes = []
@@ -46,25 +49,31 @@ height_shard_X = width_shard_Y
 block_shard_X = block_shard_Y
 
 
-def generate_shard_input_shapes(batch_sizes, shard_Y, shard_X):
+def generate_shard_input_shapes(batch_sizes, shard_Y, shard_X, x=1, y=1):
     input_shapes = []
-    for batch_size in batch_sizes:
-        for channels in batch_sizes:
+    for W in batch_sizes:
+        for Z in batch_sizes:
             for height in shard_Y:
                 for width in shard_X:
-                    input_shapes.append([batch_size, channels, height * batch_size * channels, width])
+                    input_shapes.append([W, Z, height * x, width * y])
     return input_shapes
 
 
-tile_width_shard_input_shapes = generate_shard_input_shapes(tile_batch_size, width_shard_Y, width_shard_X)
+tile_width_shard_input_shapes = generate_shard_input_shapes(
+    tile_batch_size, width_shard_Y, width_shard_X, x=TILE_HEIGHT, y=TILE_WIDTH
+)
 row_width_shard_input_shapes = generate_shard_input_shapes(row_batch_size, width_shard_Y, width_shard_X)
-tile_height_shard_input_shapes = generate_shard_input_shapes(tile_batch_size, height_shard_Y, height_shard_X)
+tile_height_shard_input_shapes = generate_shard_input_shapes(
+    tile_batch_size, height_shard_Y, height_shard_X, x=TILE_HEIGHT, y=TILE_WIDTH
+)
 row_height_shard_input_shapes = generate_shard_input_shapes(row_batch_size, height_shard_Y, height_shard_X)
-tile_block_shard_input_shapes = generate_shard_input_shapes(tile_batch_size, block_shard_Y, block_shard_X)
+tile_block_shard_input_shapes = generate_shard_input_shapes(
+    tile_batch_size, block_shard_Y, block_shard_X, x=TILE_HEIGHT, y=TILE_WIDTH
+)
 row_block_shard_input_shapes = generate_shard_input_shapes(row_batch_size, block_shard_Y, block_shard_X)
 
 
-for height in range(32, 128, 32):  # Increment by 32
+for height in range(32, 1024, 32):  # Increment by 32
     height_shard_shapes.append([height, 32])
 
 for width in range(32, 1024, 32):  # Increment by 32
@@ -84,14 +93,12 @@ shard_grid = [
     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
-    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(10, 7))}),
     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 4))}),
     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 4))}),
-    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7))}),
 ]
 
 parameters = {
-    "all_gather_tile_height_sharded": {
+    "all_gather_tile_height_sharded_line": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
         "input_shape": tile_height_shard_input_shapes,
@@ -104,9 +111,9 @@ parameters = {
         "tensor_mem_layout": [
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ],
-        "all_gather_operation": ["all_gather", "line_all_gather"],
+        "all_gather_operation": ["line_all_gather"],
     },
-    "all_gather_tile_width_sharded": {
+    "all_gather_tile_width_sharded_line": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
         "input_shape": tile_width_shard_input_shapes,
@@ -119,9 +126,9 @@ parameters = {
         "tensor_mem_layout": [
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ],
-        "all_gather_operation": ["all_gather", "line_all_gather"],
+        "all_gather_operation": ["line_all_gather"],
     },
-    "all_gather_tile_block_sharded": {
+    "all_gather_tile_block_sharded_line": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
         "input_shape": tile_block_shard_input_shapes,
@@ -134,9 +141,9 @@ parameters = {
         "tensor_mem_layout": [
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ],
-        "all_gather_operation": ["all_gather", "line_all_gather"],
+        "all_gather_operation": ["line_all_gather"],
     },
-    "all_gather_row_height_sharded": {
+    "all_gather_row_height_sharded_line": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
         "input_shape": row_height_shard_input_shapes,
@@ -149,9 +156,9 @@ parameters = {
         "tensor_mem_layout": [
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ],
-        "all_gather_operation": ["all_gather", "line_all_gather"],
+        "all_gather_operation": ["line_all_gather"],
     },
-    "all_gather_row_width_sharded": {
+    "all_gather_row_width_sharded_line": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
         "input_shape": row_width_shard_input_shapes,
@@ -164,9 +171,9 @@ parameters = {
         "tensor_mem_layout": [
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ],
-        "all_gather_operation": ["all_gather", "line_all_gather"],
+        "all_gather_operation": ["line_all_gather"],
     },
-    "all_gather_row_block_sharded": {
+    "all_gather_row_block_sharded_line": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
         "input_shape": row_block_shard_input_shapes,
@@ -179,36 +186,277 @@ parameters = {
         "tensor_mem_layout": [
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ],
-        "all_gather_operation": ["all_gather", "line_all_gather"],
+        "all_gather_operation": ["line_all_gather"],
     },
-    "all_gather_non_sharded": {
+    "all_gather_tile_height_sharded_ring": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
-        "input_shape": [
-            [1, 1, 32, 1024],
-            [4, 1, 32, 128],
-            [8, 1, 32, 1024],
-            [4, 1, 32, 32],
-            [1, 8, 32, 1024],
-        ],
-        "input_shard_shape": [
-            [32, 1024],
-            [32, 128],
-            [32, 32],
-        ],
-        "shard_grid": [
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
-        ],
+        "input_shape": tile_height_shard_input_shapes,
+        "input_shard_shape": height_shard_shapes,
+        "shard_grid": shard_grid,
         "dim": [0, 1, 2, 3],
-        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+        "tensor_layout": [ttnn.TILE_LAYOUT],
         "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
         "tensor_mem_layout": [
-            ttnn.TensorMemoryLayout.SINGLE_BANK,
-            ttnn.TensorMemoryLayout.INTERLEAVED,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ],
-        "all_gather_operation": ["all_gather", "line_all_gather"],
+        "all_gather_operation": ["all_gather"],
+    },
+    "all_gather_tile_width_sharded_ring": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": tile_width_shard_input_shapes,
+        "input_shard_shape": width_shard_shapes,
+        "shard_grid": shard_grid,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.TILE_LAYOUT],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ],
+        "all_gather_operation": ["all_gather"],
+    },
+    "all_gather_tile_block_sharded_ring": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": tile_block_shard_input_shapes,
+        "input_shard_shape": block_shard_shapes,
+        "shard_grid": shard_grid,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.TILE_LAYOUT],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ],
+        "all_gather_operation": ["all_gather"],
+    },
+    "all_gather_row_height_sharded_ring": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": row_height_shard_input_shapes,
+        "input_shard_shape": height_shard_shapes,
+        "shard_grid": shard_grid,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ],
+        "all_gather_operation": ["all_gather"],
+    },
+    "all_gather_row_width_sharded_ring": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": row_width_shard_input_shapes,
+        "input_shard_shape": width_shard_shapes,
+        "shard_grid": shard_grid,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ],
+        "all_gather_operation": ["all_gather"],
+    },
+    "all_gather_row_block_sharded_ring": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": row_block_shard_input_shapes,
+        "input_shard_shape": block_shard_shapes,
+        "shard_grid": shard_grid,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ],
+        "all_gather_operation": ["all_gather"],
+    },
+    "all_gather_tile_height_sharded_line": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": tile_height_shard_input_shapes,
+        "input_shard_shape": height_shard_shapes,
+        "shard_grid": shard_grid,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.TILE_LAYOUT],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ],
+        "all_gather_operation": ["line_all_gather"],
+    },
+    "all_gather_tile_width_sharded_line": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": tile_width_shard_input_shapes,
+        "input_shard_shape": width_shard_shapes,
+        "shard_grid": shard_grid,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.TILE_LAYOUT],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ],
+        "all_gather_operation": ["line_all_gather"],
+    },
+    "all_gather_tile_block_sharded_line": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": tile_block_shard_input_shapes,
+        "input_shard_shape": block_shard_shapes,
+        "shard_grid": shard_grid,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.TILE_LAYOUT],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ],
+        "all_gather_operation": ["line_all_gather"],
+    },
+    "all_gather_row_height_sharded_line": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": row_height_shard_input_shapes,
+        "input_shard_shape": height_shard_shapes,
+        "shard_grid": shard_grid,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ],
+        "all_gather_operation": ["line_all_gather"],
+    },
+    "all_gather_row_width_sharded_line": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": row_width_shard_input_shapes,
+        "input_shard_shape": width_shard_shapes,
+        "shard_grid": shard_grid,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ],
+        "all_gather_operation": ["line_all_gather"],
+    },
+    "all_gather_row_block_sharded_line": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": row_block_shard_input_shapes,
+        "input_shard_shape": block_shard_shapes,
+        "shard_grid": shard_grid,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ],
+        "all_gather_operation": ["line_all_gather"],
+    },
+    "all_gather_tile_height_sharded_ring": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": tile_height_shard_input_shapes,
+        "input_shard_shape": height_shard_shapes,
+        "shard_grid": shard_grid,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.TILE_LAYOUT],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ],
+        "all_gather_operation": ["all_gather"],
+    },
+    "all_gather_tile_width_sharded_ring": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": tile_width_shard_input_shapes,
+        "input_shard_shape": width_shard_shapes,
+        "shard_grid": shard_grid,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.TILE_LAYOUT],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ],
+        "all_gather_operation": ["all_gather"],
+    },
+    "all_gather_tile_block_sharded_ring": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": tile_block_shard_input_shapes,
+        "input_shard_shape": block_shard_shapes,
+        "shard_grid": shard_grid,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.TILE_LAYOUT],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ],
+        "all_gather_operation": ["all_gather"],
+    },
+    "all_gather_row_height_sharded_ring": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": row_height_shard_input_shapes,
+        "input_shard_shape": height_shard_shapes,
+        "shard_grid": shard_grid,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ],
+        "all_gather_operation": ["all_gather"],
+    },
+    "all_gather_row_width_sharded_ring": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": row_width_shard_input_shapes,
+        "input_shard_shape": width_shard_shapes,
+        "shard_grid": shard_grid,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ],
+        "all_gather_operation": ["all_gather"],
+    },
+    "all_gather_row_block_sharded_ring": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": row_block_shard_input_shapes,
+        "input_shard_shape": block_shard_shapes,
+        "shard_grid": shard_grid,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ],
+        "all_gather_operation": ["all_gather"],
     },
 }
 

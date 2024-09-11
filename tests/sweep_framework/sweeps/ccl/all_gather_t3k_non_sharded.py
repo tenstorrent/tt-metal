@@ -48,11 +48,11 @@ row_X = [n * 32 for n in n_pages]
 
 def generate_input_shapes(batch_sizes, Y, X):
     input_shapes = []
-    for batch_size in batch_sizes:
-        for channels in batch_sizes:
+    for W in batch_sizes:
+        for Z in batch_sizes:
             for height in Y:
                 for width in X:
-                    input_shapes.append([batch_size, channels, height, width])
+                    input_shapes.append([W, Z, height, width])
     return input_shapes
 
 
@@ -60,32 +60,212 @@ tile_input_shapes = generate_input_shapes(tile_batch_size, tile_Y, tile_X)
 row_input_shapes = generate_input_shapes(row_batch_size, row_Y, row_X)
 
 parameters = {
-    "all_gather_tile_non_sharded": {
+    "all_gather_tile_non_sharded_single_bank_ring_bf16": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
         "input_shape": tile_input_shapes,
         "dim": [0, 1, 2, 3],
         "tensor_layout": [ttnn.TILE_LAYOUT],
-        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_dtype": [ttnn.bfloat16],
         "tensor_mem_layout": [
             ttnn.TensorMemoryLayout.SINGLE_BANK,
-            ttnn.TensorMemoryLayout.INTERLEAVED,
         ],
-        "all_gather_operation": ["all_gather", "line_all_gather"],
+        "all_gather_operation": ["all_gather"],
         "num_iters": [1],
     },
-    "all_gather_row_non_sharded": {
+    "all_gather_tile_non_sharded_single_bank_ring_bf8": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": tile_input_shapes,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.TILE_LAYOUT],
+        "input_dtype": [ttnn.bfloat8_b],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.SINGLE_BANK,
+        ],
+        "all_gather_operation": ["all_gather"],
+        "num_iters": [1],
+    },
+    "all_gather_tile_non_sharded_single_bank_line_bf16": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": tile_input_shapes,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.TILE_LAYOUT],
+        "input_dtype": [ttnn.bfloat16],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.SINGLE_BANK,
+        ],
+        "all_gather_operation": ["line_all_gather"],
+        "num_iters": [1],
+    },
+    "all_gather_tile_non_sharded_single_bank_line_bf8": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": tile_input_shapes,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.TILE_LAYOUT],
+        "input_dtype": [ttnn.bfloat8_b],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.SINGLE_BANK,
+        ],
+        "all_gather_operation": ["line_all_gather"],
+        "num_iters": [1],
+    },
+    "all_gather_tile_non_sharded_interleaved_ring_bf16": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": tile_input_shapes,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.TILE_LAYOUT],
+        "input_dtype": [ttnn.bfloat16],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.INTERLEAVED,
+        ],
+        "all_gather_operation": ["all_gather"],
+        "num_iters": [1],
+    },
+    "all_gather_tile_non_sharded_interleaved_ring_bf8": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": tile_input_shapes,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.TILE_LAYOUT],
+        "input_dtype": [ttnn.bfloat8_b],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.INTERLEAVED,
+        ],
+        "all_gather_operation": ["all_gather"],
+        "num_iters": [1],
+    },
+    "all_gather_tile_non_sharded_interleaved_line_bf16": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": tile_input_shapes,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.TILE_LAYOUT],
+        "input_dtype": [ttnn.bfloat16],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.INTERLEAVED,
+        ],
+        "all_gather_operation": ["line_all_gather"],
+        "num_iters": [1],
+    },
+    "all_gather_tile_non_sharded_interleaved_line_bf8": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": tile_input_shapes,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.TILE_LAYOUT],
+        "input_dtype": [ttnn.bfloat8_b],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.INTERLEAVED,
+        ],
+        "all_gather_operation": ["line_all_gather"],
+        "num_iters": [1],
+    },
+    "all_gather_row_non_sharded_single_bank_ring_bf16": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
         "input_shape": row_input_shapes,
         "dim": [0, 1, 2, 3],
         "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_dtype": [ttnn.bfloat16],
         "tensor_mem_layout": [
             ttnn.TensorMemoryLayout.SINGLE_BANK,
+        ],
+        "all_gather_operation": ["all_gather"],
+        "num_iters": [1],
+    },
+    "all_gather_row_non_sharded_single_bank_ring_bf8": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": row_input_shapes,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat8_b],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.SINGLE_BANK,
+        ],
+        "all_gather_operation": ["all_gather"],
+        "num_iters": [1],
+    },
+    "all_gather_row_non_sharded_single_bank_line_bf16": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": row_input_shapes,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat16],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.SINGLE_BANK,
+        ],
+        "all_gather_operation": ["line_all_gather"],
+        "num_iters": [1],
+    },
+    "all_gather_row_non_sharded_single_bank_line_bf8": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": row_input_shapes,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat8_b],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.SINGLE_BANK,
+        ],
+        "all_gather_operation": ["line_all_gather"],
+        "num_iters": [1],
+    },
+    "all_gather_row_non_sharded_interleaved_ring_bf16": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": row_input_shapes,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat16],
+        "tensor_mem_layout": [
             ttnn.TensorMemoryLayout.INTERLEAVED,
         ],
-        "all_gather_operation": ["all_gather", "line_all_gather"],
+        "all_gather_operation": ["all_gather"],
+        "num_iters": [1],
+    },
+    "all_gather_row_non_sharded_interleaved_ring_bf8": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": row_input_shapes,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat8_b],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.INTERLEAVED,
+        ],
+        "all_gather_operation": ["all_gather"],
+        "num_iters": [1],
+    },
+    "all_gather_row_non_sharded_interleaved_line_bf16": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": row_input_shapes,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat16],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.INTERLEAVED,
+        ],
+        "all_gather_operation": ["line_all_gather"],
+        "num_iters": [1],
+    },
+    "all_gather_row_non_sharded_interleaved_line_bf8": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": row_input_shapes,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_dtype": [ttnn.bfloat8_b],
+        "tensor_mem_layout": [
+            ttnn.TensorMemoryLayout.INTERLEAVED,
+        ],
+        "all_gather_operation": ["line_all_gather"],
         "num_iters": [1],
     },
 }
