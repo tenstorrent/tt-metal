@@ -717,7 +717,7 @@ void bind_unary_backward_optional(
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("input_grad") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = ttnn::DefaultQueueId});
 }
 
 template <typename unary_backward_operation_t>
@@ -1022,7 +1022,7 @@ void py_module(py::module& module) {
         ttnn::lgamma_bw,
         R"doc(Performs backward operations for lgamma on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
 
-    detail::bind_unary_backward(
+    detail::bind_unary_backward_optional(
         module,
         ttnn::fill_bw,
         R"doc(Performs backward operations for fill on :attr:`input_tensor` with given :attr:`grad_tensor`.
