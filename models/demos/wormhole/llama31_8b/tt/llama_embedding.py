@@ -33,4 +33,6 @@ class TtLlamaEmbedding(torch.nn.Module):
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        return ttnn.embedding(x, self.weights)
+        x = ttnn.embedding(x, self.weights, layout=ttnn.TILE_LAYOUT)
+        x = ttnn.reshape(x, [x.shape[0], 1, x.shape[1], x.shape[2]])
+        return x
