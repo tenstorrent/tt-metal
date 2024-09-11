@@ -269,9 +269,9 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse(
     uint32_t per_core_M = 16;
     uint32_t per_core_N = 16;
 
-    TT_FATAL(Mt % per_core_M == 0);
-    TT_FATAL(Nt % per_core_N == 0);
-    TT_FATAL(Kt % in0_block_w == 0);
+    TT_FATAL(Mt % per_core_M == 0, "Error");
+    TT_FATAL(Nt % per_core_N == 0, "Error");
+    TT_FATAL(Kt % in0_block_w == 0, "Error");
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
@@ -280,7 +280,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     uint32_t num_blocks_total = (Mt / per_core_M) * (Nt / per_core_N);
-    TT_FATAL(num_blocks_total <= num_cores_x * num_cores_y);
+    TT_FATAL(num_blocks_total <= num_cores_x * num_cores_y, "Error");
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup

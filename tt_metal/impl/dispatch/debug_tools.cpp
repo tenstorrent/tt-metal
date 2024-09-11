@@ -185,7 +185,8 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd *cmd, uint32_t cmd_addr, std::ofstream 
             case CQ_DISPATCH_CMD_EXEC_BUF_END: break;
             case CQ_DISPATCH_CMD_REMOTE_WRITE: break;
             case CQ_DISPATCH_CMD_TERMINATE: break;
-            default: TT_FATAL("Unrecognized dispatch command: {}", cmd_id); break;
+            case CQ_DISPATCH_CMD_SET_WRITE_OFFSET: break;
+            default: TT_THROW("Unrecognized dispatch command: {}", cmd_id); break;
         }
     }
     return stride;
@@ -542,7 +543,7 @@ void dump_command_queue_raw_data(
         base_addr = cq_interface.offset + CQ_START;
         queue_type_name = "Issue";
     } else {
-        TT_FATAL("Unrecognized CQ type: {}", queue_type);
+        TT_THROW("Unrecognized CQ type: {}", queue_type);
     }
 
     // Read out in pages

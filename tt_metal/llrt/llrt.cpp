@@ -294,7 +294,9 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
                 run,
                 run_state,
                 RUN_MSG_DONE);
-            TT_FATAL(run_mailbox_read_val[0] == run_state || run_mailbox_read_val[0] == RUN_MSG_DONE);
+            TT_FATAL(
+                run_mailbox_read_val[0] == run_state || run_mailbox_read_val[0] == RUN_MSG_DONE,
+                "Read unexpected run_mailbox value");
         }
 
         return run == RUN_MSG_DONE;

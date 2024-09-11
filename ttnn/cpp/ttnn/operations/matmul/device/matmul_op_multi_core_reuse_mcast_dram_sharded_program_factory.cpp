@@ -376,7 +376,6 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         get_dram_reader_core_coords_wormhole_b0(device, all_worker_cores, all_worker_cores_ordered);
     } else {
         get_dram_reader_core_coords_grayskull(device, all_worker_cores, all_worker_cores_ordered);
-        // TT_FATAL("not implemeted except for wormhole_b0 yet!");
     }
 
     // dram banks
@@ -1088,8 +1087,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            TT_FATAL(input_tensors.size() + optional_input_tensors.size() == 3);
-            TT_FATAL(output_tensors.size() == 1);
+            TT_FATAL(input_tensors.size() + optional_input_tensors.size() == 3, "Error");
+            TT_FATAL(output_tensors.size() == 1, "Error");
 
             auto src_buffer_a = input_tensors.at(0).buffer();
             auto src_buffer_b = input_tensors.at(1).buffer();
@@ -1148,7 +1147,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;  // bias; doesn't matter if bias=nullptr
     if (bias.has_value()) {
         auto& c = bias.value();
-        TT_FATAL(c.storage_type() == StorageType::DEVICE);
+        TT_FATAL(c.storage_type() == StorageType::DEVICE, "Error");
         TT_FATAL(a.device() == c.device(), "Operands to matmul need to be on the same device!");
         TT_FATAL(c.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
 
@@ -1159,23 +1158,23 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
 
     tt::tt_metal::Device* device = a.device();
 
-    TT_FATAL(a.shard_spec().has_value() && output.shard_spec().has_value());
+    TT_FATAL(a.shard_spec().has_value() && output.shard_spec().has_value(), "Error");
     CoreRangeSet all_cores_storage = a.shard_spec().value().grid;
 
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     tt_metal::Buffer* in1_buffer = b.buffer();
-    TT_FATAL(in0_buffer->size() % in0_single_tile_size == 0);
-    TT_FATAL(in1_buffer->size() % in1_single_tile_size == 0);
+    TT_FATAL(in0_buffer->size() % in0_single_tile_size == 0, "Error");
+    TT_FATAL(in1_buffer->size() % in1_single_tile_size == 0, "Error");
 
     TT_FATAL(
-        ashape[-1] == bshape[-2] &&
+        ashape[-1] == bshape[-2],
         "Dimension K (A.shape[-1] and B.shape[-2]) must match for A and B in bmm_op");  // A.K == B.K
-    TT_FATAL(ashape[-2] % TILE_HEIGHT == 0);
-    TT_FATAL(ashape[-1] % TILE_WIDTH == 0);
-    TT_FATAL(bshape[-2] % TILE_HEIGHT == 0);
-    TT_FATAL(bshape[-1] % TILE_WIDTH == 0);
+    TT_FATAL(ashape[-2] % TILE_HEIGHT == 0, "Error");
+    TT_FATAL(ashape[-1] % TILE_WIDTH == 0, "Error");
+    TT_FATAL(bshape[-2] % TILE_HEIGHT == 0, "Error");
+    TT_FATAL(bshape[-1] % TILE_WIDTH == 0, "Error");
 
     MathFidelity math_fidelity;
     bool math_approx_mode;
@@ -1198,7 +1197,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
                 fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
                 packer_l1_acc = compute_kernel_config.packer_l1_acc;
             } else {
-                TT_FATAL("arch not supported");
+                TT_THROW("arch not supported");
             }
         },
         compute_kernel_config);
@@ -1213,7 +1212,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     uint32_t Kt = ashape[-1] / TILE_WIDTH;
     uint32_t Nt = bshape[-1] / TILE_WIDTH;
 
-    TT_FATAL(Kt % in0_block_w == 0);
+    TT_FATAL(Kt % in0_block_w == 0, "Error");
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup

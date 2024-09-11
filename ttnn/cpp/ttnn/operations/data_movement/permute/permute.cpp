@@ -159,14 +159,14 @@ ttnn::Tensor ExecutePermute::invoke(
     const auto input_layout = input_tensor.get_layout();
     const auto input_rank = input_tensor.get_shape().rank();
 
-    TT_FATAL(input_rank <= 4);
+    TT_FATAL(input_rank <= 4, "Error");
     TT_FATAL(
         input_rank == dims.size(),
         "The number of dimensions in the tensor input does not match the length of the desired ordering");
 
     auto adjust_order = [](const std::vector<int64_t>& dims) {
         std::vector<std::int64_t> new_order;
-        TT_FATAL(dims.size() <= 4);
+        TT_FATAL(dims.size() <= 4, "Error");
         int additional_ranks = 4 - dims.size();
         for (int i = 0; i < additional_ranks; i++) {
             new_order.push_back(i);
@@ -183,7 +183,7 @@ ttnn::Tensor ExecutePermute::invoke(
         itensor = ttnn::to_layout(itensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
     }
 
-    TT_FATAL(detail::is_on_device(itensor) and itensor.get_shape().rank() == 4);
+    TT_FATAL(detail::is_on_device(itensor) and itensor.get_shape().rank() == 4, "Error");
     auto output_tensor = detail::permute_launch(itensor, iorder, memory_config.value_or(input_tensor.memory_config()));
     output_tensor = ttnn::to_layout(output_tensor, input_layout, std::nullopt, std::nullopt, (Device*)nullptr);
 

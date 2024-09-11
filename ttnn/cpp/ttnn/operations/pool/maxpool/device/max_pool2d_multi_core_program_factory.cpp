@@ -72,7 +72,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
 
     uint32_t tile_w = tt::constants::TILE_WIDTH;
     if (input_shape[3] < tt::constants::TILE_WIDTH) {
-        TT_FATAL(input_shape[3] == 16);
+        TT_FATAL(input_shape[3] == 16, "Error");
         tile_w = tt::constants::FACE_WIDTH;
     }
     uint32_t out_w_loop_count = std::ceil((float)out_w / nblocks);
@@ -208,7 +208,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     auto cb_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
 
-    TT_FATAL(output.memory_config().is_sharded());
+    TT_FATAL(output.memory_config().is_sharded(), "Error");
 
     #if 1
     {  // debug
