@@ -37,7 +37,7 @@ void bind_all_gather(pybind11::module& module, const ccl_operation_t& operation,
             py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
             py::arg("num_workers") = std::nullopt,
-            py::arg("num_buffers_per_channel") = 2});
+            py::arg("num_buffers_per_channel") = std::nullopt});
 }
 
 }  // namespace detail
@@ -47,7 +47,7 @@ void py_bind_all_gather(pybind11::module& module) {
     detail::bind_all_gather(
         module,
         ttnn::all_gather,
-        R"doc(all_gather(input_tensor: ttnn.Tensor, dim: int, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None, num_workers: int = None, num_buffers_per_channel: int = 2) -> ttnn.Tensor
+        R"doc(all_gather(input_tensor: ttnn.Tensor, dim: int, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None, num_workers: int = None, num_buffers_per_channel: int = None) -> ttnn.Tensor
 
         Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
 
