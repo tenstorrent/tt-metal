@@ -5,14 +5,14 @@
 #pragma once
 #include <optional>
 
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/matmul/device/matmul_types.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/types.hpp"
-
-#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 namespace ttnn {
 
@@ -20,8 +20,8 @@ namespace operations {
 
 namespace matmul {
 
-using ttnn::operations::unary::UnaryWithParam;
 using tt::tt_metal::Shape;
+using ttnn::operations::unary::UnaryWithParam;
 
 /*
  * GENERAL MATMUL AND BMM
@@ -97,61 +97,6 @@ operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
     bool fuse_batch,
     bool untilize_out);
 
-// TODO: Uplift this to support fused activation and bias
-// TODO: Uplift this to support bcast batch for in1; currently, only allows B=1 for in1 iff B=1 for in0 (ie. single
-// core)
-struct MatmulMultiCoreReuseProgramConfig {
-    CoreCoord compute_with_storage_grid_size;
-    std::size_t in0_block_w;
-    std::size_t out_subblock_h;
-    std::size_t out_subblock_w;
-    std::size_t per_core_M;
-    std::size_t per_core_N;
-};
-
-struct MatmulMultiCoreReuseMultiCastProgramConfig {
-    CoreCoord compute_with_storage_grid_size;
-    std::size_t in0_block_w;
-    std::size_t out_subblock_h;
-    std::size_t out_subblock_w;
-    std::size_t per_core_M;
-    std::size_t per_core_N;
-    bool transpose_mcast;
-    std::optional<UnaryWithParam> fused_activation;
-    bool fuse_batch = true;
-};
-
-struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
-    CoreCoord compute_with_storage_grid_size;
-    std::size_t in0_block_w;
-    std::size_t out_subblock_h;
-    std::size_t out_subblock_w;
-    std::size_t per_core_M;
-    std::size_t per_core_N;
-    bool fuse_batch;
-    std::optional<UnaryWithParam> fused_activation;
-    bool mcast_in0;
-};
-
-struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
-    std::size_t in0_block_w;
-    std::size_t per_core_M;
-    std::size_t per_core_N;
-    std::optional<UnaryWithParam> fused_activation;
-};
-
-struct MatmulMultiCoreProgramConfig {};
-
-struct MatmulMultiCoreNonOptimizedReuseProgramConfig {};
-
-using MatmulProgramConfig = std::variant<
-    MatmulMultiCoreProgramConfig,
-    MatmulMultiCoreNonOptimizedReuseProgramConfig,
-    MatmulMultiCoreReuseProgramConfig,
-    MatmulMultiCoreReuseMultiCastProgramConfig,
-    MatmulMultiCoreReuseMultiCast1DProgramConfig,
-    MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>;
-
 struct Matmul {
     const std::optional<const MatmulProgramConfig> program_config = std::nullopt;
     const std::optional<bool> bcast_batch = std::nullopt;
@@ -183,13 +128,10 @@ struct Matmul {
 };
 
 Matmul create_matmul_struct(
-    const Tensor &input_tensor_a,
-    const Tensor &input_tensor_b,
-    const struct Matmul &parameters
-);
+    const Tensor &input_tensor_a, const Tensor &input_tensor_b, const struct Matmul &parameters);
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::Program &program,
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
     const std::optional<const Tensor> bias,
@@ -200,7 +142,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helpe
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler);
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helper(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::Program &program,
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
     const std::optional<const Tensor> bias,
@@ -233,6 +175,7 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
     const bool per_core_N_equals_subblock_w_constraint,
     const bool fp32_dest_acc_en);
 
-void add_stagger_defines_if_needed(const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines);
+void add_stagger_defines_if_needed(
+    const tt::ARCH arch, const int num_cores, std::map<string, string> &mm_kernel_defines);
 
 }  // namespace bmm_op_utils
