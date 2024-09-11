@@ -73,12 +73,10 @@ operation::ProgramWithCallbacks ArgMax::create_program(
     const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto &input_tensor = input_tensors.at(0);
     const auto &output_tensor = output_tensors.at(0);
-    if (this->dim.has_value()) {
-        const uint32_t input_rank = input_tensor.get_legacy_shape().rank();
-        const uint32_t normalized_dim = dim.value() < 0 ? dim.value() + input_rank : dim.value();
-        return detail::argmax_single_core(input_tensor, output_tensor, normalized_dim);
-    }
-    return detail::argmax_single_core(input_tensor, output_tensor, this->dim);
+    uint32_t normalized_dim = dim.has_value()
+    ? *dim + input_tensor.get_legacy_shape().rank() * (*dim < 0)
+    : dim;
+    return detail::argmax_single_core(input_tensor, output_tensor, normalized_dim);
 }
 
 }  // namespace ttnn::operations::reduction
