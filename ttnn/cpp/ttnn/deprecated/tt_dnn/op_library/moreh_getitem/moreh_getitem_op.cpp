@@ -26,7 +26,7 @@ void MorehGetitem::validate_with_output_tensors(
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to getitem need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to getitem need to be allocated in buffers on device!");
     auto dtype = input_tensor.get_dtype();
-    TT_FATAL(dtype == DataType::INT32 || dtype == DataType::BFLOAT16);
+    TT_FATAL(dtype == DataType::INT32 || dtype == DataType::BFLOAT16, "Error");
 
     // validate index tensors
     uint32_t index_size = input_tensors.at(1).get_legacy_shape()[-1];
@@ -34,14 +34,14 @@ void MorehGetitem::validate_with_output_tensors(
         auto& index_tensor = input_tensors.at(i);
         TT_FATAL(index_tensor.storage_type() == StorageType::DEVICE, "Operands to getitem need to be on device!");
         TT_FATAL(index_tensor.buffer() != nullptr, "Operands to getitem need to be allocated in buffers on device!");
-        TT_FATAL(index_tensor.get_dtype() == DataType::INT32);
+        TT_FATAL(index_tensor.get_dtype() == DataType::INT32, "Error");
 
         auto index_shape = index_tensor.get_legacy_shape();
         auto index_layout = index_tensor.get_layout();
         if (index_layout == Layout::ROW_MAJOR) {
-            TT_FATAL(index_shape.rank() == 1);
+            TT_FATAL(index_shape.rank() == 1, "Error");
         } else if (index_layout == Layout::TILE) {
-            TT_FATAL(index_shape.rank() == 5);
+            TT_FATAL(index_shape.rank() == 5, "Error");
         }
         TT_FATAL(
             !(input_layout == Layout::ROW_MAJOR && index_layout == Layout::TILE),
@@ -69,7 +69,7 @@ void MorehGetitem::validate_with_output_tensors(
         return;
     }
     TT_FATAL(output_tensors.size() == 1, "Must have 1 output tensor");
-    TT_FATAL(dtype == output_tensors.front().value().get_dtype());
+    TT_FATAL(dtype == output_tensors.front().value().get_dtype(), "Error");
 }
 
 std::vector<Shape> MorehGetitem::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {

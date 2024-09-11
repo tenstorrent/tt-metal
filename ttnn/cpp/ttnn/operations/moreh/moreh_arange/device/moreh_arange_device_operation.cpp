@@ -28,13 +28,13 @@ void MorehArangeOperation::validate_inputs(
     TT_FATAL(
         output_dtype == output_tensor->get_dtype(),
         "If output_tensor is provided as input, its dtype should match the output_dtype parameter.");
-    TT_FATAL(output_tensor->memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+    TT_FATAL(output_tensor->memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
 
     auto output_layout = output_tensor->get_layout();
     if (operation_attributes.untilize_out) {
-        TT_FATAL(output_layout == Layout::ROW_MAJOR);
+        TT_FATAL(output_layout == Layout::ROW_MAJOR, "Error");
     } else {
-        TT_FATAL(output_layout == Layout::TILE);
+        TT_FATAL(output_layout == Layout::TILE, "Error");
     }
 }
 

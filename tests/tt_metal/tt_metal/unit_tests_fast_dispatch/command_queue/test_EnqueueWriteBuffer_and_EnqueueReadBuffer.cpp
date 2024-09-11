@@ -81,7 +81,7 @@ class BufferStressTestConfigSharded {
 namespace local_test_functions {
 
 vector<uint32_t> generate_arange_vector(uint32_t size_bytes) {
-    TT_FATAL(size_bytes % sizeof(uint32_t) == 0);
+    TT_FATAL(size_bytes % sizeof(uint32_t) == 0, "Error");
     vector<uint32_t> src(size_bytes / sizeof(uint32_t), 0);
 
     for (uint32_t i = 0; i < src.size(); i++) {

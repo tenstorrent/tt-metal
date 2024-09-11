@@ -19,7 +19,7 @@ namespace primary {
 void MorehMean::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_FATAL((dim >= 0 && dim <= 7), "dim should be 0 - 7");
-    TT_FATAL(input_tensors.size() == 1);
+    TT_FATAL(input_tensors.size() == 1, "Error");
     TT_FATAL(this->divisor.has_value() == false, "divisor not supported yet.");
 
     const auto& input = input_tensors.at(0);
