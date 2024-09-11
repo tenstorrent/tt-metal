@@ -445,8 +445,10 @@ std::vector<Tensor> ExecuteBackwardBiasGelu::invoke(
     TT_FATAL((approximate == "none" || approximate == "tanh"), "Incorrect approximation type (expected 'none', 'tanh')");
     std::vector<Tensor> grad_tensor;
     Tensor input = ttnn::add(input_a, input_b);
-    grad_tensor = ttnn::gelu_bw(grad, input, approximate = approximate, output_mem_config);
-    grad_tensor.emplace_back(grad_tensor[0]);
+    std::vector<std::optional<Tensor>> gelu_result = ttnn::gelu_bw(grad, input, approximate, output_mem_config);
+    if (gelu_result[0].has_value()) {
+        grad_tensor.push_back(gelu_result[0].value());
+    }
     return grad_tensor;
 }
 
@@ -455,7 +457,10 @@ std::vector<Tensor> ExecuteBackwardBiasGelu::invoke(
     std::vector<Tensor> grad_tensor;
     TT_FATAL((approximate == "none" || approximate == "tanh"), "Incorrect rounding mode (expected 'none' or 'tanh')", "Error");
     Tensor input = ttnn::add(input_tensor, bias);
-    grad_tensor = ttnn::gelu_bw(grad, input, approximate = approximate);
+    std::vector<std::optional<Tensor>> gelu_result = ttnn::gelu_bw(grad, input, approximate = approximate, output_mem_config);
+    if (gelu_result[0].has_value()) {
+        grad_tensor.push_back(gelu_result[0].value());
+    }
     return grad_tensor;
 }
 

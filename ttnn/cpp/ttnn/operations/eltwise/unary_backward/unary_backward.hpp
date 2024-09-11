@@ -251,6 +251,24 @@ struct ExecuteUnaryBackwardAbs {
 };
 
 
+struct ExecuteUnaryBackwardGelu{
+    static std::vector<std::optional<ttnn::Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        string parameter_a,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<std::optional<ttnn::Tensor>> invoke(
+        uint8_t queue_id,
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        string parameter_a,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt);
+
+};
+
+
 }  // operations::unary
 
 constexpr auto threshold_bw = ttnn::register_operation<
@@ -533,8 +551,7 @@ constexpr auto rdiv_bw = ttnn::register_operation<
 
 constexpr auto gelu_bw = ttnn::register_operation<
     "ttnn::gelu_bw",
-    operations::unary_backward::ExecuteUnaryBackwardStringDefault<
-        operations::unary_backward::UnaryBackwardOpType::GELU_BW>>();
+    operations::unary_backward::ExecuteUnaryBackwardGelu>();
 
 constexpr auto repeat_bw = ttnn::register_operation<
     "ttnn::repeat_bw",
