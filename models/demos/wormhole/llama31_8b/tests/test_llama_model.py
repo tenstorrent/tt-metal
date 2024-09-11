@@ -36,7 +36,10 @@ from models.utility_functions import skip_for_grayskull
     ],
     ids=["quick", "full"],
 )
-def test_llama_model_inference(device, weights, layers, use_program_cache, reset_seeds):
+def test_llama_model_inference(device, weights, layers, use_program_cache, reset_seeds, is_ci_env):
+    if is_ci_env and layers > 1:
+        pytest.skip("Skipping long test in CI")
+
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = layers == 1  # Flag to measure KV cache PCC for all layers
 
