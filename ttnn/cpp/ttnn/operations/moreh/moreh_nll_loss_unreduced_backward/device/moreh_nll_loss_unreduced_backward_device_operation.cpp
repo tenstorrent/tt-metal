@@ -112,7 +112,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::invoke(
     return {
         operation_attributes_t{
             ignore_index.value_or(class_num),
-            memory_config.value_or(output_grad_tensor.memory_config()),
+            memory_config.value_or(target_tensor.memory_config()),
             compute_kernel_config},
         tensor_args_t{target_tensor, output_grad_tensor, weight_tensor, input_grad_tensor}};
 }

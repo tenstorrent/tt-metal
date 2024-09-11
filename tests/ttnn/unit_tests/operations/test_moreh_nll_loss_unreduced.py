@@ -44,10 +44,6 @@ def get_tt_tensors(torch_input, torch_target, torch_weight, torch_output, device
     return tt_input, tt_target, tt_weight, tt_output
 
 
-def create_tt_tensor(tensor: torch.Tensor, device, dtype=ttnn.bfloat16):
-    return ttnn.from_torch(tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-
-
 def get_tt_backward_tensors(torch_target, torch_weight, torch_output_grad, torch_input_grad, device):
     npu_index_dtype = ttnn.int32
 
