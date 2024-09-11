@@ -434,8 +434,8 @@ def print_dispatch_advice(rows, headers, col_widths):
         max_dispatch_overhead = sum(op_data['Dispatch Time'].raw_value - 6 for _, op_data in high_dispatch_ops)
         total_duration = sum(op_data['Device Time'].raw_value for op_data in rows if op_data['Device Time'].raw_value is not None)
         percentage_saved = (max_dispatch_overhead / total_duration) * 100
-        print(f"\nThese ops have >6us dispatch latency. Reducing this could save {max_dispatch_overhead:.0f} µs ({percentage_saved:.1f}% of overall time)")
-        print("Try moving runtime args in the kernels to compile-time args to reduce dispatch latency.\n")
+        print(f"\nThese ops have >6us dispatch latency. Running with tracing could save {max_dispatch_overhead:.0f} µs ({percentage_saved:.1f}% of overall time)")
+        print("Alternatively try moving runtime args in the kernels to compile-time args.\n")
 
 def print_matmul_advice(rows, headers, col_widths):
     matmul_ops = [op_data for op_data in rows if "Matmul" in op_data['OP Code'].raw_value]
