@@ -4,7 +4,14 @@ set -eo pipefail
 
 run_tgg_tests() {
   # Add tests here
-  echo "Fill me!"
+  echo "LOG_METAL: running run_tgg_frequent_tests"
+  pytest -n auto tests/ttnn/unit_tests/test_multi_device_trace_tgg.py --timeout=1500 ; fail+=$?
+  pytest -n auto models/demos/tgg/resnet50/tests/test_resnet50_performant.py --timeout=900 ; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    echo "LOG_METAL: run_tgg_frequent_tests failed"
+    exit 1
+  fi
 }
 
 main() {

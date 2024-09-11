@@ -25,7 +25,7 @@
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/creation.hpp"
-
+#include "ttnn/common/constants.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 
@@ -54,7 +54,20 @@ std::vector<ttnn::Tensor> _atan2_bw(
     return grad_tensor;
 }
 
-std::vector<std::optional<ttnn::Tensor>> _addalpha_bw(
+// to be used for all binary backward ops to create a zeros tensor when there's no preallocated output_tensor
+void preallocated_tensors_check(std::optional<Tensor>& input_grad, std::optional<Tensor>& other_grad, const Tensor& input, const Tensor& other,  const std::array<bool, 2>& required_outputs){
+
+    TT_FATAL(required_outputs[0] || required_outputs[1], "Atleast one gradient is expected to be calculated.");
+
+    if(required_outputs[0] && !input_grad.has_value()){
+        input_grad = ttnn::zeros_like(input);
+    }
+    if(required_outputs[1] && !other_grad.has_value()){
+        other_grad = ttnn::zeros_like(other);
+    }
+}
+
+std::vector<std::optional<ttnn::Tensor>> ExecuteAddalphaBW::invoke(
     uint8_t queue_id,
     const Tensor& grad,
     const Tensor& input,
@@ -64,31 +77,31 @@ std::vector<std::optional<ttnn::Tensor>> _addalpha_bw(
     const std::vector<bool>& are_required_outputs,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
-    std::vector<std::optional<Tensor>> result;
+    std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
 
-    if (are_required_outputs.at(0)) {
-        if(input_grad.has_value()){
-            ttnn::assign(queue_id, grad, input_grad.value());
-        } else {
-            input_grad = grad;
-        }
-        result.emplace_back(input_grad);
-    } else {
-        result.emplace_back(std::nullopt);
+    preallocated_tensors_check(input_grad, other_grad, input, other, {are_required_outputs[0], are_required_outputs[1]});
+
+    if (are_required_outputs[0]) {
+        ttnn::assign(queue_id, grad, input_grad.value());
+        result[0] = input_grad;
     }
-    if (are_required_outputs.at(1)) {
-        if(other_grad.has_value()){
-            ttnn::multiply(queue_id, grad, ttnn::operations::creation::full_like(grad, alpha, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config), std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, other_grad);
-        } else {
-            other_grad = ttnn::multiply(queue_id, grad, alpha, std::nullopt, output_mem_config);
-        }
-        result.emplace_back(other_grad);
-    } else {
-        result.emplace_back(std::nullopt);
+    if (are_required_outputs[1]) {
+        ttnn::multiply(queue_id, grad, alpha, std::nullopt, output_mem_config, other_grad);
+        result[1] = other_grad;
     }
+    return result;
+}
 
-    return std::move(result);
-
+std::vector<std::optional<ttnn::Tensor>> ExecuteAddalphaBW::invoke(
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& other,
+    float alpha,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+       return ExecuteAddalphaBW::invoke(ttnn::DefaultQueueId, grad, input, other, alpha, output_mem_config, are_required_outputs, input_grad, other_grad);
 }
 
 std::vector<ttnn::Tensor> _subalpha_bw(
@@ -103,18 +116,6 @@ std::vector<ttnn::Tensor> _subalpha_bw(
 std::vector<ttnn::Tensor> _sub_bw(
     const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     return _subalpha_bw(grad, input, other, 1.0, output_mem_config);
-}
-
-std::vector<std::optional<Tensor>> _add_bw(
-    uint8_t queue_id,
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    return _addalpha_bw(queue_id, grad, input, other, 1.0f, output_mem_config, are_required_outputs, input_grad, other_grad);
 }
 
 std::vector<Tensor> ExecuteBackwardAdd::invoke(
@@ -392,7 +393,7 @@ std::vector<Tensor> _concat_bw(
         input.get_legacy_shape()[2] - 1,
         input.get_legacy_shape()[3] - 1};
 
-    Tensor grad_a = ttnn::slice(0, grad, start_index, end_index, std::nullopt);
+    Tensor grad_a = ttnn::slice(0, grad, start_index, end_index, std::nullopt, std::nullopt);
     grad_tensor.emplace_back(grad_a);
 
     std::vector<uint32_t> start_index_2 = {0, 0, 0, 0};
@@ -411,7 +412,7 @@ std::vector<Tensor> _concat_bw(
         grad.get_legacy_shape()[1] - 1,
         grad.get_legacy_shape()[2] - 1,
         grad.get_legacy_shape()[3] - 1};
-    Tensor grad_b = ttnn::slice(0, grad, start_index_2, end_index_2, std::nullopt);
+    Tensor grad_b = ttnn::slice(0, grad, start_index_2, end_index_2, std::nullopt, std::nullopt);
     grad_tensor.emplace_back(grad_b);
 
     return grad_tensor;

@@ -16,7 +16,6 @@
 #include "tt_metal/common/math.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/conv/conv2d/device/optimized_conv_op.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv_op.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
@@ -149,6 +148,25 @@ std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, bool> shard_or_reshard_
     uint32_t out_channels);
 
 void validate_weight_and_bias_tensors(const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor);
+
+// Converts convolution weights to tilized 2d matrix layout.
+// Returns a new tensor with layout=Tile
+Tensor convert_conv_weight_tensor_to_tiled_layout(
+    Tensor conv_weight_tensor,
+    uint32_t in1_block_h,
+    uint32_t in1_block_w,
+    std::optional<DataType> output_dtype = std::nullopt);
+
+// Converts convolution weights to tilized 2d matrix layout with special block height padding
+// Returns a new tensor with layout=Tile
+Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
+    Tensor conv_weight_tensor,
+    uint32_t in1_block_h,
+    uint32_t in1_block_w,
+    std::optional<DataType> output_dtype = std::nullopt);
+
+// Converts convolution weights to grouped layout with padded zeros
+Tensor convert_conv_weight_tensor_to_grouped_layout(Tensor conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
 
 template <typename T>
 std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor, uint32_t input_channels_alignment, DataType weights_bias_dtype, uint32_t weight_block_h_ntiles, uint32_t weight_block_w_ntiles, const sliding_window::ParallelConfig& parallel_config, T * device, uint32_t groups, uint32_t act_block_h_ntiles, uint32_t input_width);

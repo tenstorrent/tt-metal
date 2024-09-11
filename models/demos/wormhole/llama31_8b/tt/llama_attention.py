@@ -321,7 +321,8 @@ class TtLlamaAttention(nn.Module):
             dense_out = ttnn.linear(
                 attn_output_cat,
                 wo,
-                memory_config=self.model_config["LM_HEAD_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["ATTN_OUTPUT_MEMCFG"],
+                program_config=self.model_config["ATTN_OUTPUT_PROGCFG"],
                 compute_kernel_config=self.compute_kernel_config,
                 # core_grid=self.grid_size,
             )  # seqlen, 1, batch, hidden_size
@@ -427,7 +428,6 @@ class TtLlamaAttention(nn.Module):
             q_heads_84SD,
             k_heads_K1SD,
             v_heads_V1SD,
-            attn_masks,
             is_causal=True,
             scale=self.scale,
             program_config=self.model_config["SDPA_PROGCFG"](seq_len),

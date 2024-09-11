@@ -526,7 +526,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
     uint32_t pad_h = (uint32_t)sliding_window_config.pad_hw.first;
     uint32_t pad_w = (uint32_t)sliding_window_config.pad_hw.second;
-
+    uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
+    uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
+    
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] =
         optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(
@@ -730,6 +732,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         log_debug(LogOp, "weight_block_w_ntiles: {}", weight_block_w_ntiles);
         log_debug(LogOp, "out_subblock_h_ntiles_padded: {}", out_subblock_h_ntiles_padded);
         log_debug(LogOp, "out_subblock_w_ntiles: {}", out_subblock_w_ntiles);
+        log_debug(LogOp, "filter_h: {}", filter_h);
+        log_debug(LogOp, "filter_w: {}", filter_w);
+        log_debug(LogOp, "dilation_h: {}", dilation_h);
+        log_debug(LogOp, "dilation_w: {}", dilation_w);
     }
 
     // For debug
@@ -1176,6 +1182,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         (uint32_t)(src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
         (uint32_t)stride_h,
         (uint32_t)stride_w,
+        (uint32_t)dilation_h,
+        (uint32_t)dilation_w,
         (uint32_t)conv_act_size_w,
         (uint32_t)conv_output_size_w,  // conv_output_w_last_index
         (uint32_t)conv_act_c_read_bytes,
@@ -1672,79 +1680,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             }
         };
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
-}
-
-operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(
-    const Tensor& a,
-    const Tensor& b,
-    const Shape& ashape,
-    std::optional<const Tensor> bias,
-    const std::optional<const Tensor> conv_reader_indices,
-    sliding_window::SlidingWindowConfig sliding_window_config,
-    uint32_t output_channels,
-    uint32_t groups,
-    bool untilize_out,
-    bool has_bias,
-    bool fuse_relu,
-    const OptimizedConvParallelizationConfig& parallelization_config,
-    const OptimizedConvBlockConfig& block_config,
-    uint32_t extra_padding_for_32B_alignment,
-    bool use_shallow_conv_variant,
-    bool transpose_mcast,
-    Tensor& output,
-    DeviceComputeKernelConfig compute_kernel_config,
-    bool enable_act_double_buffer,
-    bool enable_split_reader,
-    bool enable_subblock_padding) {
-    tt_metal::Program program = tt_metal::CreateProgram();
-    if(a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        return multi_core_optimized_conv_width_sharded_v2_impl(
-        program,
-        a,
-        b,
-        ashape,
-        bias,
-        conv_reader_indices,
-        sliding_window_config,
-        output_channels,
-        groups,
-        untilize_out,
-        has_bias,
-        fuse_relu,
-        parallelization_config,
-        block_config,
-        extra_padding_for_32B_alignment,
-        use_shallow_conv_variant,
-        transpose_mcast,
-        output,
-        compute_kernel_config,
-        enable_act_double_buffer,
-        enable_split_reader,
-        enable_subblock_padding);
-    }
-    return multi_core_optimized_conv_sharded_v2_impl(
-        program,
-        a,
-        b,
-        ashape,
-        bias,
-        conv_reader_indices,
-        sliding_window_config,
-        output_channels,
-        groups,
-        untilize_out,
-        has_bias,
-        fuse_relu,
-        parallelization_config,
-        block_config,
-        extra_padding_for_32B_alignment,
-        use_shallow_conv_variant,
-        transpose_mcast,
-        output,
-        compute_kernel_config,
-        enable_act_double_buffer,
-        enable_split_reader,
-        enable_subblock_padding);
 }
 
 operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(

@@ -989,14 +989,14 @@ void Matmul::validate(
     if (optional_bias.has_value()) {
         const auto& bias = optional_bias.value();
         TT_FATAL(bias.get_layout() == Layout::TILE, "Unsupported input layout");
-        const auto& bias_shape = bias.get_legacy_shape();
+        const auto& bias_shape = bias.get_shape();
         uint32_t bias_batch_size = get_batch_size(bias_shape);
         TT_FATAL(bias_batch_size == 1, "Unsupported bias shape: batch size not equal to 1.");
         TT_FATAL(
-            bias_shape[-2] == TILE_HEIGHT, "Unsupported bias shape: second last dimension not equal to tile height");
+            bias_shape.with_tile_padding()[-2] == TILE_HEIGHT, "Unsupported bias shape: second last dimension not equal to tile height");
         TT_FATAL(
-            bias_shape.without_padding()[-1] == b_shape[-1],
-            "Unsupported bias shape: last dimension not equal to second input's last dimension.");
+            bias_shape.with_tile_padding()[-1] == b_shape.with_tile_padding()[-1],
+            "Unsupported bias shape: last dimension not equal to second input's last dimension.", bias_shape.with_tile_padding()[-1], b_shape.with_tile_padding()[-1]);
     }
 
     if (this->untilize_out) {
