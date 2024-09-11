@@ -98,7 +98,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                 math_approx_mode = compute_kernel_config.math_approx_mode;
                 fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
             } else {
-                TT_FATAL("arch not supported");
+                TT_THROW("arch not supported");
             }
         },
         compute_kernel_config);
@@ -107,7 +107,6 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     auto k_buffer = input_tensor_k.buffer();
     auto v_buffer = input_tensor_v.buffer();
     auto mask_buffer = attn_mask.has_value() ? attn_mask.value().buffer() : nullptr;
-    TT_FATAL(mask_buffer != nullptr);
 
     auto out0_buffer = output_tensor.buffer();
 
@@ -117,7 +116,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores = grid_size.x * grid_size.y;
 
-    TT_FATAL(num_cores <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
+    TT_FATAL(num_cores <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y, "Error");
 
     // Parallelization scheme
     // We will choose parallelization factors for batch, num_heads, and q_seq_len in that order
@@ -125,7 +124,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     uint32_t nh_parallel_factor = std::min(num_cores / batch_parallel_factor, NQH);
     uint32_t q_parallel_factor = std::min(num_cores / (batch_parallel_factor * nh_parallel_factor), q_num_chunks);
 
-    TT_FATAL(batch_parallel_factor * nh_parallel_factor * q_parallel_factor <= num_cores);
+    TT_FATAL(batch_parallel_factor * nh_parallel_factor * q_parallel_factor <= num_cores, "Error");
 
     tt::log_debug("Parallelization scheme:");
     tt::log_debug("batch_parallel_factor: {}", batch_parallel_factor);
@@ -206,15 +205,15 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     // Find log2 of stats_granularity using std
     const uint32_t log2_stats_granularity = std::log2(stats_granularity);
     // Assert that this is a power of 2
-    TT_FATAL(stats_granularity == (1 << log2_stats_granularity));
+    TT_FATAL(stats_granularity == (1 << log2_stats_granularity), "Error");
 
     const uint32_t sub_exp_granularity = std::min(Sk_chunk_t, dst_size);
     const uint32_t log2_sub_exp_granularity = std::log2(sub_exp_granularity);
-    TT_FATAL(sub_exp_granularity == (1 << log2_sub_exp_granularity));
+    TT_FATAL(sub_exp_granularity == (1 << log2_sub_exp_granularity), "Error");
 
     const uint32_t mul_bcast_granularity = std::min(Sq_chunk_t * Sk_chunk_t, dst_size);
     const uint32_t log2_mul_bcast_granularity = std::log2(mul_bcast_granularity);
-    TT_FATAL(mul_bcast_granularity == (1 << log2_mul_bcast_granularity));
+    TT_FATAL(mul_bcast_granularity == (1 << log2_mul_bcast_granularity), "Error");
 
     const uint32_t dht_granularity = std::min(DHt, dst_size);
     const uint32_t log2_dht_granularity = std::log2(dht_granularity);
@@ -351,7 +350,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     uint32_t q_tile_size = tt::tt_metal::detail::TileSize(q_df);
     uint32_t k_tile_size = tt::tt_metal::detail::TileSize(k_df);
     uint32_t v_tile_size = tt::tt_metal::detail::TileSize(v_df);
-    uint32_t mask_tile_size = attn_mask.has_value() ? tt::tt_metal::detail::TileSize(mask_df) : 0;
+    uint32_t mask_tile_size = tt::tt_metal::detail::TileSize(mask_df);
     uint32_t out_tile_size = tt::tt_metal::detail::TileSize(out_df);
     uint32_t scalar_tile_size = tt::tt_metal::detail::TileSize(scalar_df);
     uint32_t im_tile_size = tt::tt_metal::detail::TileSize(im_df);
@@ -448,7 +447,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     uint32_t q_addr = q_buffer->address();
     uint32_t k_addr = k_buffer->address();
     uint32_t v_addr = v_buffer->address();
-    uint32_t mask_addr = mask_buffer->address();
+    uint32_t mask_addr = attn_mask.has_value() ? mask_buffer->address() : 0;
     uint32_t out_addr = out0_buffer->address();
 
     // Set reader rt args
@@ -542,13 +541,12 @@ operation::ProgramWithCallbacks sdpa_multi_core(
             auto v_buffer = input_tensors.at(2).buffer();
             auto mask_buffer =
                 optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer() : nullptr;
-            TT_FATAL(mask_buffer != nullptr);
 
             auto out0_buffer = output_tensors.at(0).buffer();
             uint32_t q_addr = q_buffer->address();
             uint32_t k_addr = k_buffer->address();
             uint32_t v_addr = v_buffer->address();
-            uint32_t mask_addr = mask_buffer->address();
+            uint32_t mask_addr = mask_buffer != nullptr ? mask_buffer->address() : 0;
             uint32_t out_addr = out0_buffer->address();
 
             auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);

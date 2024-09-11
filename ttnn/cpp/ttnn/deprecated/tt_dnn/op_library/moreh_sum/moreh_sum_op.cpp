@@ -31,7 +31,7 @@ Tensor _moreh_sum(
     uint8_t queue_id = ttnn::DefaultQueueId) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input}))};
 
-    TT_FATAL(input.storage_type() == StorageType::DEVICE || input.storage_type() == StorageType::MULTI_DEVICE);
+    TT_FATAL(input.storage_type() == StorageType::DEVICE || input.storage_type() == StorageType::MULTI_DEVICE, "Error");
     auto kernel_config_val =
         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
 

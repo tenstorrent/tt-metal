@@ -103,25 +103,80 @@ def run_inference(tt_model, tokenizer, tokens, mesh_device, configuration, total
     for cur_pos in range(start_pos + 1, total_len):
         logger.info(f"Generating token: {cur_pos}")
 
-        tt_inp_emb, prev_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tokens[:, prev_pos:cur_pos], prev_pos)
+        tt_inp_emb, prev_pos, rot_mat, attn_mask, cache_idxs = tt_model.prepare_inputs(
+            tokens[:, prev_pos:cur_pos], prev_pos
+        )
+        tt_inp_emb = ttnn.to_device(tt_inp_emb, mesh_device, memory_config=tt_model.model_config["DRAM_MEMCFG"])
+        tt_inp_emb = tt_model.tt_embd(tt_inp_emb)
+        tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, tt_model.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
 
+        rot_mat = ttnn.to_device(rot_mat, mesh_device, memory_config=tt_model.model_config["ROT_MAT_MM_IN1_MEMCFG"])
+        cache_idxs = ttnn.to_device(cache_idxs, mesh_device, memory_config=tt_model.model_config["DRAM_MEMCFG"])
+
+        logger.info("Compiling model")
+        tt_logits = tt_model(
+            tt_inp_emb,
+            rot_mat,
+            prev_pos,
+            attn_mask,
+            cache_idxs=cache_idxs,
+        )
+
+        # del tt_inp_emb
+        # del rot_mat
+        # del attn_mask
+        tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # logits = ttnn.to_torch(tt_logits, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=3))
+        tt_logits_tensors = ttnn.get_device_tensors(tt_logits)
+        logits_rm = ttnn.to_layout(tt_logits_tensors[0], ttnn.ROW_MAJOR_LAYOUT)
+        # logits_rm = ttnn.untilize(tt_logits_tensors[0], use_multicore=True)
+        logits = ttnn.to_torch(logits_rm)
+
+        # logits = logits[..., : configuration.vocab_size].float()  # [1, batch, vocab_size]
+        # del tt_logits
+
+        logger.info("Capturing trace")
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         tt_logits = tt_model(
             tt_inp_emb,
             rot_mat,
             prev_pos,
             attn_mask,
         )
+        tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_logits_tensors = ttnn.get_device_tensors(tt_logits)
+        logits_rm = ttnn.to_layout(tt_logits_tensors[0], ttnn.ROW_MAJOR_LAYOUT)
+        # logits = ttnn.to_torch(logits_rm)
+        # logits_rm = ttnn.untilize(tt_logits_tensors[0], use_multicore=True)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
 
-        del tt_inp_emb
-        del rot_mat
-        del attn_mask
-        logits = ttnn.to_torch(tt_logits, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
-        logits = logits[..., : configuration.vocab_size].float()  # [1, batch, vocab_size]
-        del tt_logits
+        logger.info("Starting Trace perf test...")
+
+        import time
+
+        num_iters = 100
+        times = []
+        for i in range(num_iters):
+            x1 = time.time()
+            ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+            # logits = ttnn.to_torch(
+            # tt_logits, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=3)
+            # )
+            logits = ttnn.to_torch(logits_rm)
+
+            x2 = time.time()
+
+            times.append(x2 - x1)
+        logger.info(
+            f"Ran Trace for {num_iters} iterations. Avg Trace execution time: {sum(times[1:]) / len(times[1:])} seconds."
+        )
+        print(times)
+        ttnn.release_trace(mesh_device, trace_id)
+        breakpoint()
 
         next_token = torch.argmax(logits, dim=-1)
         next_token = next_token.reshape(-1)
-
+        break
         tokens, eos_reached, prev_pos = prepare_next_input(tokenizer, tokens, input_text_mask, cur_pos, next_token)
 
 
@@ -254,6 +309,7 @@ def run_test_LlamaModel_end_to_end(
     ),
     ids=["gen32", "gen128", "gen2048"],
 )
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 14227456}], indirect=True)
 def test_Llama_perf_host(
     generation_length,
     expected_compile_time,

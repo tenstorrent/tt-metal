@@ -533,6 +533,13 @@ struct fmt::formatter<CoreRangeSet> {
     }
 };
 
+// Adding to tt::tt_metal namespace as we transition to moving this out of global namespace eventually.
+namespace tt::tt_metal {
+   using ::CoreCoord;
+   using ::CoreRange;
+   using ::CoreRangeSet;
+}
+
 namespace std {
 template <>
 struct hash<CoreRangeSet> {

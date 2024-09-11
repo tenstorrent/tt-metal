@@ -14,7 +14,7 @@ void Pad::validate_with_output_tensors(
     const auto& input_tensor = input_tensors.at(0);
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operand to pad needs to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
-    TT_FATAL(input_tensor.get_layout() == Layout::TILE || input_tensor.get_layout() == Layout::ROW_MAJOR);
+    TT_FATAL(input_tensor.get_layout() == Layout::TILE || input_tensor.get_layout() == Layout::ROW_MAJOR, "Error");
     if (input_tensor.get_layout() == Layout::TILE) {
         TT_FATAL(
             (this->input_tensor_start[0] == 0 && this->input_tensor_start[1] == 0 && this->input_tensor_start[2] == 0 && this->input_tensor_start[3] == 0),
@@ -36,11 +36,11 @@ void Pad::validate_with_output_tensors(
     }
 
     if (input_tensor.is_sharded()) {
-        TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
-        TT_FATAL(input_tensor.get_layout() == Layout::ROW_MAJOR);
+        TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+        TT_FATAL(input_tensor.get_layout() == Layout::ROW_MAJOR, "Error");
 
-        TT_FATAL(this->output_mem_config.is_sharded());
-        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        TT_FATAL(this->output_mem_config.is_sharded(), "Error");
+        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
     }
 }
 
@@ -83,7 +83,7 @@ operation::ProgramWithCallbacks Pad::create_program(const std::vector<Tensor>& i
         }
         return detail::pad_tile(input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
     } else {
-        TT_FATAL(false and "Unsupported layout for pad");
+        TT_FATAL(false and "Unsupported layout for pad", "Error");
         return {};
     }
 

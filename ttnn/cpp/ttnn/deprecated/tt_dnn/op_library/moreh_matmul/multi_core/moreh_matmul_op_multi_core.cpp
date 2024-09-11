@@ -345,7 +345,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
                 compute_rt_args
             );
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
-            TT_FATAL(compute_kernel_2_id.has_value());
+            TT_FATAL(compute_kernel_2_id.has_value(), "Error");
             num_output_tiles_per_core = num_output_tiles_per_core_group_2;
             std::vector<uint32_t> compute_rt_args;
             compute_rt_args.push_back(num_tiles_written);

@@ -18,15 +18,15 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Te
     TT_FATAL(q_input_tensor.buffer() != nullptr && kv_input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(q_input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 || q_input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || q_input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
     TT_FATAL(kv_input_tensor.get_dtype() == q_input_tensor.get_dtype(), "Unsupported data format");
-    TT_FATAL(q_input_tensor.get_layout() == Layout::TILE && kv_input_tensor.get_layout() == Layout::TILE);
+    TT_FATAL(q_input_tensor.get_layout() == Layout::TILE && kv_input_tensor.get_layout() == Layout::TILE, "Error");
     TT_FATAL(q_input_tensor.is_sharded() && kv_input_tensor.is_sharded(), "Operands to TM must be sharded");
 
 
     auto bbox = q_input_tensor.shard_spec().value().grid.bounding_box();
-    TT_FATAL((bbox.end_coord.x < q_input_tensor.device()->compute_with_storage_grid_size().x && bbox.end_coord.y < q_input_tensor.device()->compute_with_storage_grid_size().y));
+    TT_FATAL((bbox.end_coord.x < q_input_tensor.device()->compute_with_storage_grid_size().x && bbox.end_coord.y < q_input_tensor.device()->compute_with_storage_grid_size().y), "Error");
 
-    TT_FATAL(q_input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
-    TT_FATAL(kv_input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
+    TT_FATAL(q_input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Error");
+    TT_FATAL(kv_input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Error");
 
     ShardOrientation shard_orientation = q_input_tensor.shard_spec().value().orientation;
     bool rm = shard_orientation == ShardOrientation::ROW_MAJOR;
@@ -66,7 +66,7 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Te
     TT_FATAL(L1_SIZE >= 2 * (per_core_q_tiles + 2*per_core_k_tiles) * single_tile_size, fmt::format("Workload exceeds L1 capacity"));
 
     // TODO: Add this back when output is HEIGHT sharded only!
-    // TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+    // TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
     TT_FATAL(q_input_shape[0] == num_h_cores, fmt::format("Batch size {} must be equal to num cores {}", q_input_shape[0], num_h_cores));
 }
 

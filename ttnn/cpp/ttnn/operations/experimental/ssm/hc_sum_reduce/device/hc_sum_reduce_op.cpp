@@ -10,7 +10,7 @@ namespace ttnn::operations::experimental::ssm {
 
 void HCSumReduce::validate(const std::vector<Tensor>& input_tensors) const {
     using namespace tt::constants;
-    TT_FATAL(input_tensors.size() == 1);
+    TT_FATAL(input_tensors.size() == 1, "Error");
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL((input_tensor_a.get_layout() == Layout::TILE), "Inputs to ssm_1d_sum_reduce must be tilized");
 
