@@ -50,7 +50,7 @@ std::unordered_map<std::string, std::string> get_last_program_binary_path(const 
                 latest_hash = dir_entry.path().filename().string();
             }
         }
-        TT_FATAL(not latest_hash.empty());
+        TT_FATAL(not latest_hash.empty(), "Error");
         kernel_name_to_last_compiled_dir.insert({kernel->name(), latest_hash});
     }
     return kernel_name_to_last_compiled_dir;
@@ -371,7 +371,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
     return 0;
 
 }

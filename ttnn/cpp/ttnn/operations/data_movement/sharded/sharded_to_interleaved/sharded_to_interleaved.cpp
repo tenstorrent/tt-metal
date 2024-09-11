@@ -20,7 +20,7 @@ ttnn::Tensor ShardedToInterleavedOperation::invoke(
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
 
     auto shard_spec = input_tensor.shard_spec().value();
-    TT_FATAL(input_tensor.shard_spec().has_value());
+    TT_FATAL(input_tensor.shard_spec().has_value(), "Error");
     return operation::run(
             ShardedToInterleavedDeviceOperation{
                 .output_mem_config = memory_config,

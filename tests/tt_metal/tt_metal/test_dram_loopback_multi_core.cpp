@@ -71,7 +71,7 @@ int main(int argc, char **argv) {
         uint32_t transient_buffer_size_bytes = transient_buffer_size_tiles * single_tile_size;
         std::uint32_t stream_register_address = STREAM_REG_ADDR(0, 12);
 
-        TT_FATAL(num_output_tiles % transient_buffer_size_tiles == 0);
+        TT_FATAL(num_output_tiles % transient_buffer_size_tiles == 0, "Error");
 
         tt_metal::InterleavedBufferConfig dram_config{
                                 .device=device,
@@ -174,6 +174,6 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
     return 0;
 }

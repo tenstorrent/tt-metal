@@ -282,7 +282,7 @@ struct Tensor {
     //                                  Low Level APIs
     // ======================================================================================
     Tensor reshape(int N, int C, int H, int W) const;
-    Tensor reshape(const Shape &new_shape) const;
+    Tensor reshape(const tt::tt_metal::Shape &new_shape) const;
 
     // ======================================================================================
     //                                      Getters

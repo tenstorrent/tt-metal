@@ -90,7 +90,10 @@ void Cluster::detect_arch_and_target() {
         get_string(this->arch_));
 #endif
 
-    TT_FATAL(this->target_type_ == TargetDevice::Silicon or this->target_type_ == TargetDevice::Simulator);
+    TT_FATAL(
+        this->target_type_ == TargetDevice::Silicon or this->target_type_ == TargetDevice::Simulator,
+        "Target type={} is not supported",
+        this->target_type_);
 }
 
 std::filesystem::path get_cluster_desc_yaml() {
@@ -277,7 +280,7 @@ void Cluster::open_driver(
 
         // Adding this check is a workaround for current UMD bug that only uses this getter to populate private metadata
         // that is later expected to be populated by unrelated APIs
-        TT_FATAL(device_driver->get_target_mmio_device_ids().size() == 1);
+        TT_FATAL(device_driver->get_target_mmio_device_ids().size() == 1, "Only one target mmio device id allowed.");
     } else if (this->target_type_ == TargetDevice::Simulator) {
         device_driver = std::make_unique<tt_SimulationDevice>(sdesc_path);
     }

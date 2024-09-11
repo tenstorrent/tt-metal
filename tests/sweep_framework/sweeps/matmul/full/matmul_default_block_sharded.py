@@ -20,7 +20,7 @@ from tests.ttnn.utils_for_testing import (
 )
 from models.utility_functions import torch_random
 
-TIMEOUT = 5
+TIMEOUT = 15
 
 
 def get_block_sharded_specs(

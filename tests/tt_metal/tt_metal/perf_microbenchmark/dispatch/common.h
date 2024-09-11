@@ -813,7 +813,7 @@ inline void gen_bare_dispatcher_unicast_write_cmd(Device *device,
     cmd.write_linear.length = length;
     cmd.write_linear.num_mcast_dests = 0;
 
-    TT_FATAL((cmd.write_linear.addr & (L1_ALIGNMENT - 1)) == 0);
+    TT_FATAL((cmd.write_linear.addr & (L1_ALIGNMENT - 1)) == 0, "Error");
 
     add_bare_dispatcher_cmd(cmds, cmd);
 }
@@ -930,7 +930,7 @@ inline void gen_dispatcher_packed_write_cmd(Device *device,
     cmd.write_packed.size = size_words * sizeof(uint32_t);
 
     uint32_t sub_cmds_size = padded_size(worker_cores.size() * sizeof(CQDispatchWritePackedUnicastSubCmd), sizeof(CQDispatchCmd));
-    TT_FATAL(repeat == false || size_words * sizeof(uint32_t) + sizeof(CQDispatchCmd) + sub_cmds_size <= dispatch_buffer_page_size_g);
+    TT_FATAL(repeat == false || size_words * sizeof(uint32_t) + sizeof(CQDispatchCmd) + sub_cmds_size <= dispatch_buffer_page_size_g, "Error");
 
     add_dispatcher_packed_cmd(device, cmds, worker_cores, device_data, cmd, size_words, repeat);
 }

@@ -523,18 +523,18 @@ struct DeviceOperation final {
                 }
 
                 if constexpr (detail::implements_validate<T>()) {
-                    TT_FATAL(optional_input_tensors.empty());
+                    TT_FATAL(optional_input_tensors.empty(), "Optional input tensors not allowed");
                     operation.validate(input_tensors);
                 } else if constexpr (detail::implements_validate_with_optional_input_tensors<T>()) {
-                    TT_FATAL(not optional_input_tensors.empty());
+                    TT_FATAL(not optional_input_tensors.empty(), "Optional input tensors are expected");
                     operation.validate(input_tensors, optional_input_tensors);
                 } else if constexpr (detail::implements_validate_with_output_tensors<T>()) {
-                    TT_FATAL(optional_input_tensors.empty());
-                    // TT_FATAL(not optional_output_tensors.empty());
+                    TT_FATAL(optional_input_tensors.empty(), "Optional input tensors not allowed");
+                    // TT_FATAL(not optional_output_tensors.empty(), "Error");
                     operation.validate_with_output_tensors(input_tensors, optional_output_tensors);
                 } else if constexpr (detail::implements_validate_with_output_tensors_and_optional_input_tensors<T>()) {
-                    TT_FATAL(not optional_input_tensors.empty());
-                    TT_FATAL(not optional_output_tensors.empty());
+                    TT_FATAL(not optional_input_tensors.empty(), "Optional input tensors are expected");
+                    TT_FATAL(not optional_output_tensors.empty(), "Optional output tensors are expected");
                     operation.validate_with_output_tensors(
                         input_tensors, optional_input_tensors, optional_output_tensors);
                 } else {

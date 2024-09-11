@@ -23,8 +23,8 @@ using namespace tt;
 // is contiguous
 template <typename T>
 std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
-    TT_FATAL(rows % 32 == 0);
-    TT_FATAL(cols % 32 == 0);
+    TT_FATAL(rows % 32 == 0, "Error");
+    TT_FATAL(cols % 32 == 0, "Error");
     int num_tiles_r = rows / 32;
     int num_tiles_c = cols / 32;
     std::vector<T> result;
@@ -50,8 +50,8 @@ std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
 // transform it back to row major full tensor. (This function inverts the tilize() function)
 template <typename T>
 std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
-    TT_FATAL(rows % 32 == 0);
-    TT_FATAL(cols % 32 == 0);
+    TT_FATAL(rows % 32 == 0, "Error");
+    TT_FATAL(cols % 32 == 0, "Error");
     int num_tiles_r = rows / 32;
     int num_tiles_c = cols / 32;
     std::vector<T> result;
@@ -157,9 +157,9 @@ int main(int argc, char **argv) {
         int in0_block_w = 1;
 
         uint32_t single_tile_size = 2 * 1024;
-        TT_FATAL(M * in0_block_w * single_tile_size * 2 <= 100*1024);
-        TT_FATAL(N * in0_block_w * single_tile_size * 2 <= 100*1024);
-        TT_FATAL(M * N * single_tile_size <= 600*1024);
+        TT_FATAL(M * in0_block_w * single_tile_size * 2 <= 100*1024, "Error");
+        TT_FATAL(N * in0_block_w * single_tile_size * 2 <= 100*1024, "Error");
+        TT_FATAL(M * N * single_tile_size <= 600*1024, "Error");
         uint32_t dram_buffer_size_act = single_tile_size * M * K; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
         uint32_t dram_buffer_size_weights = single_tile_size * K * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
         uint32_t dram_buffer_size_out = single_tile_size * M * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
@@ -236,7 +236,7 @@ int main(int argc, char **argv) {
         uint32_t src0_num_reads_per_block = src0_num_tiles_per_block * num_addresses_per_tile;
         uint32_t src0_num_bytes_per_block = src0_num_tiles_per_block * single_tile_size;
         uint32_t src1_num_bytes_per_block = src1_num_tiles_per_block * single_tile_size;
-        TT_FATAL(source_addresses.size() == num_blocks * src0_num_reads_per_block);
+        TT_FATAL(source_addresses.size() == num_blocks * src0_num_reads_per_block, "Error");
 
         tt_metal::InterleavedBufferConfig l1_config{
                     .device=device,
@@ -395,7 +395,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }
