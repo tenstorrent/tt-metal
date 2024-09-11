@@ -202,6 +202,15 @@ struct ExecuteUnaryBackwardSilu {
         std::optional<Tensor> input_grad = std::nullopt);
 };
 
+struct ExecuteUnaryBackwardFill {
+    static std::vector<std::optional<Tensor>> invoke(
+        uint8_t queue_id,
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt);
+};
+
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardProdBW {
     static std::vector<Tensor> invoke(
@@ -266,8 +275,7 @@ constexpr auto lgamma_bw = ttnn::register_operation<
 
 constexpr auto fill_bw = ttnn::register_operation<
     "ttnn::fill_bw",
-    operations::unary_backward::ExecuteUnaryBackwardWoFloat<
-        operations::unary_backward::UnaryBackwardOpType::FILL_BW>>();
+    operations::unary_backward::ExecuteUnaryBackwardFill>();
 
 constexpr auto hardsigmoid_bw = ttnn::register_operation<
     "ttnn::hardsigmoid_bw",

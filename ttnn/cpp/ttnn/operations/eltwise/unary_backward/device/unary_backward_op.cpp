@@ -415,15 +415,18 @@ std::vector<Tensor> _relu_bw(const Tensor& grad, const Tensor& input, const std:
     return grad_tensor;
 }
 
-std::vector<Tensor> _fill_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
+std::vector<std::optional<Tensor>> ExecuteUnaryBackwardFill::invoke(uint8_t queue_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
+    std::vector<std::optional<Tensor>> result = {std::nullopt};
+    input_grad = input_grad.value_or(ttnn::zeros_like(input));
+
     Tensor val = grad;
     val = ttnn::sum(val);
-    Tensor result = ttnn::full_like(grad, 0.0f);
-    result = ttnn::add(result, val, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
+    Tensor result_val = ttnn::full_like(grad, 0.0f);
+    ttnn::add(queue_id, result_val, val, std::nullopt, output_mem_config, input_grad);
+
+    result[0] = input_grad;
+    return result;
 }
 
 std::vector<Tensor> _hardsigmoid_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {

@@ -25,7 +25,6 @@ from tests.ttnn.unit_tests.operations.backward.utility_funcs import (
 #   self: zeros_like(grad)
 #   value: grad.sum()
 #   result: at::fill(self_t, value_t)
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_bw_fill(input_shapes, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)
@@ -35,5 +34,32 @@ def test_bw_fill(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.fill_bw)
     golden_tensor = golden_function(grad_data, in_data)
 
+    comp_pass = compare_all_close(tt_output_tensor_on_device, golden_tensor, atol=150, rtol=1e-6)
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_bw_fill_opt_tensor(input_shapes, device):
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)
+
+    _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
+    input_grad = ttnn.to_memory_config(input_grad, ttnn.L1_MEMORY_CONFIG)
+    cq_id = 0
+    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    ttnn.fill_bw(grad_tensor, input_tensor, input_grad=input_grad, queue_id=cq_id)
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+
+    golden_function = ttnn.get_golden_function(ttnn.fill_bw)
+    golden_tensor = golden_function(grad_data, in_data)
+
+    tt_output_tensor_on_device = [input_grad]
     comp_pass = compare_all_close(tt_output_tensor_on_device, golden_tensor, atol=150, rtol=1e-6)
     assert comp_pass
