@@ -69,6 +69,25 @@ Additionally, unless otherwise stated, any specifics with respect to details suc
 
 [Lower Level Debug Guide](#lower-level-debug-guide)
 
+# CCL Software Stack Overview
+
+CCL operations are implemented on top of multiple software API layers; both single and multi-chip APIs. To ease programming burden and to reduce test and optimization surface area and improve reusability, CCL operations reuse higher level programming APIs, in particular the Erisc Data Mover (EDM). Developers are free to program at their desired level of abstraction.
+
+The current stacks look like the following:
+
+![](./images/ccl_stack_v0_1.svg)
+<p align="center"><i>CCL multichip abstraction layers</i></p>
+
+The Ethernet subsystem, including the link and phy are at the lowest level.
+
+Above thise are APIs to direct write to Ethernet command queue registers, which can be used to initiate ethernet transactions and change message modes (raw vs packet for example).
+
+The third level is the ethernet dataflow API which lets the user initiate writes over the ethernet link. These APIs are similar to the noc async APIs in that commands are issued to command buffers and dispatched at some later, unknown time.
+
+The fourth level is the Erisc datamover which encapsulates many common pieces of functionality that are required by multichip operations: startup/teardown synchronization, flow constrol, virtual channels, and multi-buffering.
+
+Finally, higher level operations are implemented.
+
 # Multichip Topologies and Connectivity {#multichip-topologies-and-connectivity}
 
 Starting with the Wormhole architecture, Tenstorrent offers multi-chip functionality where two or more Wormhole chips can be connected together. Tenstorrent’s scaleout strategy enables Wormhole and later chips to communicate directly with each other,  
@@ -97,8 +116,7 @@ Ethernet cores contains:
 Note that there are no Tensix compute units.
 
 ![img](images/wormhole_80_noc_view.png)
-
-Wormhole NoC 0 view
+<p align="center"><i>Wormhole NoC 0 view</i></p>
 
 ## Ethernet Core (ERISC)
 
@@ -158,7 +176,7 @@ Here is a sample, contrived cluster description file where two chip chips are co
 
 ![two_wh_connected_over_eth.png](images/two_wh_connected_over_eth.png)
 
-Example of two Wormholes connected over ethernet
+<p align="center"><i>Example of two Wormholes connected over ethernet</i></p>
 
 #### N300
 
@@ -169,12 +187,14 @@ To manage this limitation where the remote chip is not directly accessible by th
 In total, there are 200 Gbps of bandwidth, in each direction, between the local and remote chips. The board provides six additional ports to enable Ethernet connectivity to external boards/devices. With the reserved Dispatcher link taken into account, 100 Gbps of bandwidth is available per direction for user kernels.
 
 ![n300](images/n300.png)
+<p align="center"><i>N300 Board</i></p>
 
 #### T3000
 
 The T3000 part is a desktop form factor machine which contains a total of eight Wormhole chips in a 2x4 mesh configuration. The part is assembled from four N300 parts, implementing the mesh using the external ports; previously mentioned. In this configuration, each N300’s local chip is directly addressable by the host CPU: chips 0,1,2, and 3 are accessible directly through PCIe but the others are not.  As with the N300 part, one link from the local to the remote chip is still reserved for Dispatcher datapath’s use. Ethernet link speeds remain the same as with N300.
 
 ![t3000](images/t3000.png)
+<p align="center"><i>T3000 Boards</i></p>
 
 #### Galaxy
 
