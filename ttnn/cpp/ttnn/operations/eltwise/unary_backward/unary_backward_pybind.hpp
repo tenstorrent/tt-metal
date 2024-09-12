@@ -954,11 +954,6 @@ void py_module(py::module& module) {
         20.0,
         R"doc(Performs backward operations for softplus on :attr:`input_tensor`, :attr:`beta`, :attr:`threshold` with given :attr:`grad_tensor`.)doc");
 
-    detail::bind_unary_backward(
-        module,
-        ttnn::assign_bw,
-        R"doc(Performs backward operations for assign on :attr:`input_tensor` or attr:`input_tensor_a`, attr:`input_tensor_b`, with given :attr:`grad_tensor`.)doc");
-
     detail::bind_unary_backward_float_string_default(
         module,
         ttnn::rdiv_bw,

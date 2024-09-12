@@ -44,8 +44,9 @@ ttnn::Tensor AssignOperation::invoke(
     uint8_t queue_id,
     const Tensor& input,
     const MemoryConfig& output_mem_config,
-    std::optional<const DataType> output_dtype) {
-    return operation::run(CopyDeviceOperation{output_mem_config, output_dtype.value_or(input.get_dtype())}, {input}, {}, {}, queue_id).at(0);
+    std::optional<const DataType> output_dtype,
+    std::optional<Tensor> optional_output_tensor) {
+    return operation::run(CopyDeviceOperation{output_mem_config, output_dtype.value_or(input.get_dtype())}, {input}, {}, {optional_output_tensor}, queue_id).at(0);
 }
 
 ttnn::Tensor AssignOperation::invoke(

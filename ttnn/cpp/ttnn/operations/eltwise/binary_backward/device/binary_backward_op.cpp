@@ -375,10 +375,17 @@ std::vector<ttnn::Tensor> _eq_bw_inter(
     return output_tensors;
 }
 
-std::vector<Tensor> _assign_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
+std::vector<ttnn::Tensor> ExecuteBackwardAssign::invoke(
+    uint8_t cq_id, const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
+    grad_tensor.emplace_back(grad);
+    return grad_tensor;
+}
+
+std::vector<ttnn::Tensor> ExecuteBackwardAssign::invoke(
+    uint8_t cq_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
     return grad_tensor;
 }
