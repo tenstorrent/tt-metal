@@ -126,13 +126,10 @@ MatmulOpTypes MatmulOpConstraintsFactory::GetMatmulOpType(
     const tt::tt_metal::MemoryConfig& memory_config_b,
     const tt::tt_metal::MemoryConfig& memory_config_o,
     const ttnn::operations::matmul::MatmulProgramConfig& program_config) {
-    std::cout << "GGGG" << std::endl;
     if (input_shape_a[-1] != input_shape_b[-2]) {
-        std::cout << "LLLLL" << std::endl;
         return MatmulOpTypes::NotSupported;
     }
     if (input_shape_a.rank() != input_shape_b.rank()) {
-        std::cout << "OOOO" << std::endl;
         return MatmulOpTypes::NotSupported;
     }
     for (auto i = 0; i < input_shape_a.rank() - 2; i++) {
@@ -140,7 +137,6 @@ MatmulOpTypes MatmulOpConstraintsFactory::GetMatmulOpType(
             return MatmulOpTypes::NotSupported;
         }
     }
-    std::cout << "HHHH" << std::endl;
     std::visit(
         [&](const auto& program_config) {
             using T = std::decay_t<decltype(program_config)>;
@@ -268,9 +264,7 @@ MatmulOpTypes MatmulOpConstraintsFactory::GetMatmulOpType(
             } else if constexpr (std::is_same_v<
                                      T,
                                      ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                std::cout << "I AM HERE" << std::endl;
                 if (memory_config_a.is_sharded()) {
-                    std::cout << "SHARDED" << std::endl;
                     auto tensor_a_memory_layout = memory_config_a.memory_layout;
                     uint32_t M = Volume(input_shape_a) / input_shape_a[-1] / tt::constants::TILE_HEIGHT;
                     uint32_t K = input_shape_a[-1] / tt::constants::TILE_WIDTH;
@@ -282,7 +276,6 @@ MatmulOpTypes MatmulOpConstraintsFactory::GetMatmulOpType(
                         tensor_a_memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
                         return MatmulOpTypes::NotSupported;
                     }
-                    std::cout << "WWWWWW" << std::endl;
 
                     if (tensor_a_memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
                         if (program_config.transpose_mcast) {
@@ -304,36 +297,25 @@ MatmulOpTypes MatmulOpConstraintsFactory::GetMatmulOpType(
                         }
 
                     } else if (tensor_a_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-                        std::cout << "TTTTT" << std::endl;
                         if (program_config.transpose_mcast) {
                             return MatmulOpTypes::NotSupported;
                         }
-                        std::cout << "JJJJJ" << std::endl;
-                        std::cout << "k=" << K << std::endl;
-                        std::cout << "in0_block_w=" << program_config.in0_block_w << std::endl;
                         if (K != program_config.in0_block_w) {
                             return MatmulOpTypes::NotSupported;
                         }
-                        std::cout << "shard_shape=" << shard_shape[1] << std::endl;
                         if (program_config.in0_block_w != (shard_shape[1] / tt::constants::TILE_WIDTH)) {
                             return MatmulOpTypes::NotSupported;
                         }
-                        std::cout << "YYYY" << std::endl;
-                        std::cout << "start_coord_x=" << memory_config_a.shard_spec.value().grid.bounding_box().start_coord.x << std::endl;
-                        std::cout << "end_coord_x=" << memory_config_a.shard_spec.value().grid.bounding_box().end_coord.x << std::endl;
                         if (memory_config_a.shard_spec.value().grid.bounding_box().start_coord.x !=
                             memory_config_a.shard_spec.value().grid.bounding_box().end_coord.x) {
                             return MatmulOpTypes::NotSupported;
                         }
-                        std::cout << "IIII" << std::endl;
                     }
 
                     if (per_core_M != (shard_shape[0] / tt::constants::TILE_HEIGHT)) {
-                        std::cout << "BBBB" << std::endl;
                         return MatmulOpTypes::NotSupported;
                     }
                     if ((shard_shape[1] / tt::constants::TILE_WIDTH) % program_config.in0_block_w != 0) {
-                        std::cout << "UUUU" << std::endl;
                         return MatmulOpTypes::NotSupported;
                     }
                 }
@@ -343,7 +325,6 @@ MatmulOpTypes MatmulOpConstraintsFactory::GetMatmulOpType(
                         return MatmulOpTypes::NotSupported;
                     }
                     auto tensor_b_memory_layout = memory_config_b.memory_layout;
-                    std::cout << "AAAAA" << std::endl;
                     if (tensor_b_memory_layout != TensorMemoryLayout::WIDTH_SHARDED) {
                         return MatmulOpTypes::NotSupported;
                     }
