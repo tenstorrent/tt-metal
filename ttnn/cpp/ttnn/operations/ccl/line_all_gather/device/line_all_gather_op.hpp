@@ -55,8 +55,8 @@ Tensor line_all_gather(
     const uint32_t dim,
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<size_t> user_defined_num_workers = std::size_t(-1),
-    const std::optional<size_t> user_defined_num_buffers_per_channel = 2);
+    const std::optional<size_t> user_defined_num_workers = std::nullopt,
+    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);
 
 Tensor line_all_gather(
     const Tensor& input_tensor,
@@ -65,8 +65,8 @@ Tensor line_all_gather(
     const MeshDevice& mesh_device,
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<size_t> user_defined_num_workers = std::size_t(-1),
-    const std::optional<size_t> user_defined_num_buffers_per_channel = 2);
+    const std::optional<size_t> user_defined_num_workers = std::nullopt,
+    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);
 
 } // namespace ccl
 } // namespace operations

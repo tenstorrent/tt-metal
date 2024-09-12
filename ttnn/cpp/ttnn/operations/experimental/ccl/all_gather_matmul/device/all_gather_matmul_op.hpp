@@ -92,7 +92,7 @@ std::vector<Tensor> all_gather_matmul(
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config_ag = std::nullopt,
     const std::optional<size_t> user_defined_num_workers = std::nullopt,
-    const std::optional<size_t> user_defined_num_buffers_per_channel = 2,
+    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
     const std::optional<MemoryConfig>& memory_config_mm = std::nullopt,
     const bool transpose_a = false,
     const bool transpose_b = false,

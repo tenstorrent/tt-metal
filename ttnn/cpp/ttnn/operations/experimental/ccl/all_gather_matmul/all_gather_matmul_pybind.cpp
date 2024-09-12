@@ -58,7 +58,7 @@ void py_bind_all_gather_matmul(pybind11::module& module) {
             py::arg("num_links") = 1,
             py::arg("memory_config_ag") = std::nullopt,
             py::arg("num_workers") = std::nullopt,
-            py::arg("num_buffers_per_channel") = 2,
+            py::arg("num_buffers_per_channel") = std::nullopt,
             py::arg("memory_config_mm") = std::nullopt,
             py::arg("transpose_a") = false,
             py::arg("transpose_b") = false,

@@ -36,7 +36,7 @@ void bind_line_all_gather(pybind11::module& module, const ccl_operation_t& opera
             py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
             py::arg("num_workers") = std::nullopt,
-            py::arg("num_buffers_per_channel") = 2},
+            py::arg("num_buffers_per_channel") = std::nullopt},
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
@@ -57,7 +57,7 @@ void bind_line_all_gather(pybind11::module& module, const ccl_operation_t& opera
             py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
             py::arg("num_workers") = std::nullopt,
-            py::arg("num_buffers_per_channel") = 2});
+            py::arg("num_buffers_per_channel") = std::nullopt});
 }
 
 }  // namespace detail

@@ -17,7 +17,7 @@ struct ExecuteLineAllGather {
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<size_t> num_workers = std::nullopt,
-        const std::optional<size_t> num_buffers_per_channel = 2);
+        const std::optional<size_t> num_buffers_per_channel = std::nullopt);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
@@ -27,7 +27,7 @@ struct ExecuteLineAllGather {
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<size_t> num_workers = std::nullopt,
-        const std::optional<size_t> num_buffers_per_channel = 2);
+        const std::optional<size_t> num_buffers_per_channel = std::nullopt);
 };
 
 }  // namespace ccl
