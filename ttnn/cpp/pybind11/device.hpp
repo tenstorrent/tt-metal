@@ -12,7 +12,7 @@ namespace py = pybind11;
 
 namespace ttnn::device {
 
-    void py_device_module_types(py::module& module);
-    void py_device_module(py::module& module);
+void py_device_module_types(py::module& module);
+void py_device_module(py::module& module);
 
 } // namespace ttnn::device

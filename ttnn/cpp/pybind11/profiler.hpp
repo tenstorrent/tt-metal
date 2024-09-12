@@ -10,6 +10,6 @@ namespace py = pybind11;
 
 namespace ttnn::profiler {
 
-    void py_module(py::module& module);
+void py_module(py::module& module);
 
 } // namespace ttnn::profiler

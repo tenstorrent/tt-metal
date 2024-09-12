@@ -64,7 +64,7 @@ void implement_buffer_protocol(py::module& m_tensor, std::string_view name) {
 
 }  // namespace detail
 
-void py_module_types(py::module& m_tensor) {
+void tensor_mem_config_module_types(py::module& m_tensor) {
     export_enum<Layout>(m_tensor);
     export_enum<DataType>(m_tensor);
     export_enum<StorageType>(m_tensor);
@@ -115,7 +115,7 @@ void py_module_types(py::module& m_tensor) {
 
 }
 
-void tensor_module(py::module& m_tensor) {
+void tensor_mem_config_module(py::module& m_tensor) {
     using tt::tt_metal::Shape;
 
     auto py_core_coord = static_cast<py::class_<CoreCoord>>(m_tensor.attr("CoreCoord"));
@@ -290,9 +290,5 @@ void tensor_module(py::module& m_tensor) {
 
 }
 
-
-void py_module(py::module& module) {
-            tensor_module(module);
-        }
 
 }  // namespace ttnn::tensor
