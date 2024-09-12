@@ -6,9 +6,6 @@
 #include <tuple>
 #include <vector>
 
-#include "impl/buffers/buffer.hpp"
-#include "ttnn/tensor/types.hpp"
-
 // forward declarations
 namespace tt {
 namespace tt_metal {
