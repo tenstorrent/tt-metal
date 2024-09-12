@@ -56,9 +56,8 @@ jobs:
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ inputs.arch }}
       LOGURU_LEVEL: INFO
+      # may not need this
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on:
       - ${{ inputs.runner-label }}
@@ -66,10 +65,6 @@ jobs:
       - in-service
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-          echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
         with:
           name: eager-dist-${{ matrix.os }}-${{ inputs.arch }}
