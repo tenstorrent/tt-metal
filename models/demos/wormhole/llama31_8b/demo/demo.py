@@ -74,7 +74,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     # This module requires the env paths above for CI runs
     from models.demos.wormhole.llama31_8b.tt.model_config import TtModelArgs
 
-    embed_on_device = False
+    embed_on_device = True
     dtype = ttnn.bfloat8_b
 
     # Load model args, weights, and tokenizer
@@ -155,15 +155,18 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
         iteration_time_start = time()
         curr_pos = generation_start_pos + iteration
 
-        # Prepare inputs for decode mode (rotary embeddings, attention mask, padding)
-        # TODO Move the attn mask to device
-        decode_input, current_pos = prepare_inputs_ttnn(
-            tt_decode_input,
-            curr_pos,
-            model_args.dim,
-            model_args.sliding_window,
-            tt_model.device,
-        )
+        if embed_on_device and iteration > 0:
+            current_pos = curr_pos
+            decode_input = tt_decode_input
+        else:
+            # Prepare inputs for decode mode
+            decode_input, current_pos = prepare_inputs_ttnn(
+                tt_decode_input,
+                curr_pos,
+                model_args.dim,
+                model_args.sliding_window,
+                tt_model.device,
+            )
 
         # Run ttnn llama model
         tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
@@ -211,7 +214,16 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
                         users_decoding = False
 
         if embed_on_device:
-            tt_out_tok = ttnn.from_torch(tt_out_tok, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            # Pad tt_out_tok to batch size of 32
+            padded_tt_out_tok = torch.zeros(1, 32, dtype=tt_out_tok.dtype, device=tt_out_tok.device)
+            padded_tt_out_tok[: tt_out_tok.shape[1]] = tt_out_tok
+            tt_out_tok = ttnn.from_torch(
+                padded_tt_out_tok,
+                device=device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
             tt_decode_input = tt_embd(tt_out_tok)
         else:
             tt_decode_input = embd(tt_out_tok)

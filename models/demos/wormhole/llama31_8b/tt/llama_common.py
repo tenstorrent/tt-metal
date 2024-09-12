@@ -170,27 +170,33 @@ def prepare_inputs_ttnn(x, current_pos, hidden_size, sliding_window, device):
     start_pos: int
     """
 
-    assert len(x.shape) == 3
-    assert x.shape[2] == hidden_size
+    if len(x.shape) == 3:
+        batch = x.shape[0]
+        seq_len = x.shape[1]
+        assert x.shape[2] == hidden_size
+    elif len(x.shape) == 4:
+        seq_len = x.shape[0]
+        assert x.shape[1] == 1
+        batch = x.shape[2]
+        assert x.shape[3] == hidden_size
 
-    batch = x.shape[0]
-    seq_len = x.shape[1]
-    hidden_size = x.shape[2]
     assert seq_len == 1, "Only supporting decode mode"
 
     # Support input on device
     if torch.is_tensor(x):  # Input on host -> Use torch
         x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
-    else:  # Input on device -> Use ttnn
+        # Pad small batches to 32
+        if batch < 32:
+            zeros = torch.zeros(1, seq_len, 32, hidden_size)
+            zeros[:, :, :batch, :] = x
+            x = zeros
+    elif len(x.shape) == 3:  # Input on device -> Use ttnn
         x = ttnn.reshape(
             x, (batch, seq_len, 1, hidden_size)
         )  # [batch, seqlen, hidden_dim] -> [batch, seqlen, 1, hidden_dim]
         x = ttnn.permute(x, (1, 2, 0, 3))  # [seq_len, 1, batch, hidden_dim]
-    # Pad small batches to 32
-    if batch < 32:
-        zeros = torch.zeros(1, seq_len, 32, hidden_size)
-        zeros[:, :, :batch, :] = x
-        x = zeros
+    elif len(x.shape) == 4:
+        pass  # already in [seq_len, 1, batch, hidden_dim]
 
     current = current_pos % sliding_window
 

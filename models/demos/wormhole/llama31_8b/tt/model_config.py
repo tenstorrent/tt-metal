@@ -100,6 +100,8 @@ class TtModelArgs:
 
         # Enable workarounds by default until di/dt issues are fixed
         self.di_dt_workaround = os.getenv("DISABLE_DI_DT_WORKAROUND") != "1"
+        if not self.di_dt_workaround:
+            logger.info("Disabling di/dt workaround, re-enable if you see hangs")
 
         DRAM_MEMCFG = ttnn.DRAM_MEMORY_CONFIG
         L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
