@@ -24,6 +24,48 @@ from tests.ttnn.integration_tests.swin_s.test_ttnn_patchmerging import (
 )
 
 
+def preprocess_attn_mask(input_shape, patch_size, window_size, shift_size, device):
+    h, w = input_shape[2], input_shape[3]
+    attention_h = ((h - (patch_size[0] - 1) - 1) // patch_size[0]) + 1
+    attention_w = ((w - (patch_size[0] - 1) - 1) // patch_size[0]) + 1
+    attn_mask_tuple = ()
+    for i in range(4):
+        pad_r = (window_size[1] - attention_w % window_size[1]) % window_size[1]
+        pad_b = (window_size[0] - attention_h % window_size[0]) % window_size[0]
+        pad_H = attention_h + pad_b
+        pad_W = attention_w + pad_r
+        num_windows = (pad_H // window_size[0]) * (pad_W // window_size[1])
+
+        attn_mask = torch.zeros((pad_H, pad_W))
+        h_slices = (
+            (0, -window_size[0]),
+            (-window_size[0], -shift_size[0]),
+            (-shift_size[0], None),
+        )
+        w_slices = (
+            (0, -window_size[1]),
+            (-window_size[1], -shift_size[1]),
+            (-shift_size[1], None),
+        )
+        count = 0
+        for h in h_slices:
+            for w in w_slices:
+                attn_mask[h[0] : h[1], w[0] : w[1]] = count
+                count += 1
+        attn_mask = attn_mask.view(pad_H // window_size[0], window_size[0], pad_W // window_size[1], window_size[1])
+        attn_mask = attn_mask.permute(0, 2, 1, 3).reshape(num_windows, window_size[0] * window_size[1])
+        attn_mask = attn_mask.unsqueeze(1) - attn_mask.unsqueeze(2)
+        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
+        attn_mask = attn_mask.unsqueeze(1).unsqueeze(0)
+        attn_mask = ttnn.from_torch(attn_mask, device=device, layout=ttnn.TILE_LAYOUT)
+        attention_h = attention_h // 2
+        attention_w = attention_w // 2
+
+        attn_mask_tuple += (attn_mask,)
+
+    return attn_mask_tuple
+
+
 def create_custom_preprocessor(device):
     def custom_preprocessor(torch_model, name, ttnn_module_args):
         parameters = {}
@@ -95,6 +137,8 @@ def test_swin_s_transformer(device, reset_seeds):
         initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(device), device=device
     )
 
+    attn_mask_tuple = preprocess_attn_mask([1, 3, 512, 512], [4, 4], [7, 7], [3, 3], device)
+
     # Convert the model to TTNN
     ttnn_model = TtSwinTransformer(
         device,
@@ -104,6 +148,7 @@ def test_swin_s_transformer(device, reset_seeds):
         depths=[2, 2, 18, 2],
         num_heads=[3, 6, 12, 24],
         window_size=[7, 7],
+        attn_mask_tuple=attn_mask_tuple,
     )
 
     # Convert input tensor to TTNN format
