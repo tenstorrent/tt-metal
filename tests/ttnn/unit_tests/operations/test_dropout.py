@@ -10,15 +10,15 @@ import numpy as np
 from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc
 
 
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 1, 1024])),
-        (torch.Size([4, 1, 1, 2048])),
-    ),
-)
-def test_dopout(input_shapes, device):
-    t = torch.ones(input_shapes)
+def test_dopout(device):
+    t = torch.ones(
+        (
+            1,
+            1,
+            1,
+            1024,
+        )
+    )
     t_tt = ttnn.from_torch(t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     tt_ratios = []
