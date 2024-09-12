@@ -10,3 +10,4 @@ getitem = ttnn._ttnn.operations.moreh.moreh_getitem
 sum = ttnn._ttnn.operations.moreh.moreh_sum
 mean = ttnn._ttnn.operations.moreh.moreh_mean
 mean_backward = ttnn._ttnn.operations.moreh.moreh_mean_backward
+matmul = ttnn._ttnn.operations.moreh.moreh_matmul
