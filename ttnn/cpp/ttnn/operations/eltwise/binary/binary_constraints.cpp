@@ -5,18 +5,46 @@ std::vector<OpConstraint> EltwiseOpConstraintsBuilder::build_constraints() {
         throw std::runtime_error("Cannot build constraints, missing required parameters");
     }
 
-    // data types are required
-    static constexpr std::array<Layout, 2> tile_layouts = {Layout::ROW_MAJOR, Layout::TILE};
+    std::vector<Layout> tile_layouts_a = {Layout::ROW_MAJOR, Layout::TILE};
+    if (tile_layout_a.has_value())
+    {
+        tile_layouts_a = {tile_layout_a.value()};
+    }
+    std::vector<Layout> tile_layouts_b = {Layout::ROW_MAJOR, Layout::TILE};
+    if (tile_layout_b.has_value())
+    {
+        tile_layouts_a = {tile_layout_b.value()};
+    }
+    std::vector<Layout> tile_layouts_o = {Layout::ROW_MAJOR, Layout::TILE};
+    if (tile_layout_o.has_value())
+    {
+        tile_layouts_o = {tile_layout_b.value()};
+    }
     // Only two for now. TODO: add other storage types.
-    static constexpr std::array<StorageType, 2> storage_types = {StorageType::OWNED, StorageType::DEVICE};
+    std::vector<StorageType> storage_types_a = {StorageType::OWNED, StorageType::DEVICE};
+    if (storage_type_a.has_value())
+    {
+        storage_types_a = {storage_type_a.value()};
+    }
+    std::vector<StorageType> storage_types_b = {StorageType::OWNED, StorageType::DEVICE};
+    if (storage_type_b.has_value())
+    {
+        storage_types_b = {storage_type_b.value()};
+    }
+    std::vector<StorageType> storage_types_o = {StorageType::OWNED, StorageType::DEVICE};
+    if (storage_type_o.has_value())
+    {
+        storage_types_o = {storage_type_a.value()};
+    }
+
     std::vector<OpConstraint> constraints;
     // Currently we are only looking at softmax for one input.
-    for (const auto& tile_layout_a : tile_layouts) {
-        for (const auto& storage_type_a : storage_types) {
-            for (const auto& tile_layout_b : tile_layouts) {
-                for (const auto& storage_type_b : storage_types) {
-                    for (const auto& tile_layout_o : tile_layouts) {
-                        for (const auto& storage_type_o : storage_types) {
+    for (const auto& tile_layout_a : tile_layouts_a) {
+        for (const auto& storage_type_a : storage_types_a) {
+            for (const auto& tile_layout_b : tile_layouts_b) {
+                for (const auto& storage_type_b : storage_types_b) {
+                    for (const auto& tile_layout_o : tile_layouts_o) {
+                        for (const auto& storage_type_o : storage_types_o) {
                             const auto constraint = OpConstraint(
                                 data_type_a.value(),
                                 tile_layout_a,

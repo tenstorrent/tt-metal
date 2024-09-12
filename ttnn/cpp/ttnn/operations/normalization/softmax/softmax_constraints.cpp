@@ -7,17 +7,35 @@ std::vector<OpConstraint> SoftmaxOpConstraintsBuilder::build_constraints() {
 
     // reducing search space
     // data types are required
-    static constexpr std::array<Layout, 2> tile_layouts = {Layout::ROW_MAJOR, Layout::TILE};
+    std::vector<Layout> tile_layouts_a = {Layout::ROW_MAJOR, Layout::TILE};
+    if (tile_layout_a.has_value())
+    {
+        tile_layouts_a = {tile_layout_a.value()};
+    }
+    std::vector<Layout> tile_layouts_o = {Layout::ROW_MAJOR, Layout::TILE};
+    if (tile_layout_o.has_value())
+    {
+        tile_layouts_o = {tile_layout_b.value()};
+    }
     // Only two for now. TODO: add other storage types.
-    static constexpr std::array<StorageType, 2> storage_types = {StorageType::OWNED, StorageType::DEVICE};
+    std::vector<StorageType> storage_types_a = {StorageType::OWNED, StorageType::DEVICE};
+    if (storage_type_a.has_value())
+    {
+        storage_types_a = {storage_type_a.value()};
+    }
+    std::vector<StorageType> storage_types_o = {StorageType::OWNED, StorageType::DEVICE};
+    if (storage_type_o.has_value())
+    {
+        storage_types_o = {storage_type_a.value()};
+    }
 
     std::vector<OpConstraint> constraints;
 
     // Currently we are only looking at softmax for one input.
-    for (const auto& tile_layout_a : tile_layouts) {
-        for (const auto& storage_type_a : storage_types) {
-            for (const auto& tile_layout_o : tile_layouts) {
-                for (const auto& storage_type_o : storage_types) {
+    for (const auto& tile_layout_a : tile_layouts_a) {
+        for (const auto& storage_type_a : storage_types_a) {
+            for (const auto& tile_layout_o : tile_layouts_a) {
+                for (const auto& storage_type_o : storage_types_o) {
                     const auto constraint = OpConstraint(
                         data_type_a.value(),
                         tile_layout_a,
@@ -56,13 +74,18 @@ bool SoftmaxConstraintsBuilder::is_valid_op_constraint(const OpConstraint& const
     return true;
 }
 
+bool SoftmaxConstraintsBuilder::can_build_constraints() const
+{
+    return data_type_a.has_value() && data_type_o.has_value();
+}
+
 std::unique_ptr<SoftmaxOpConstraintsBuilder> SoftmaxOpConstraintsFactory::Make(
     const ttnn::Shape& input_shape_a,
     const tt::tt_metal::MemoryConfig& memory_config_a,
     const ttnn::Shape& input_shape_o,
     const tt::tt_metal::MemoryConfig& memory_config_o,
-    std::optional<const ttnn::Shape>& input_shape_b,
-    std::optional<const tt::tt_metal::MemoryConfig>& memory_config_b) {
+    const std::optional<const ttnn::Shape>& input_shape_b,
+    const std::optional<const tt::tt_metal::MemoryConfig>& memory_config_b) {
     auto Softmax_op_type = GetSoftmaxOpType(input_shape_a, memory_config_a, input_shape_b, memory_config_b);
     switch (Softmax_op_type) {
         case SoftmaxOpTypes::Softmax:
@@ -79,8 +102,8 @@ std::unique_ptr<SoftmaxOpConstraintsBuilder> SoftmaxOpConstraintsFactory::Make(
 SoftmaxOpTypes SoftmaxOpConstraintsFactory::GetSoftmaxOpType(
     const ttnn::Shape& input_shape_a,
     const tt::tt_metal::MemoryConfig& memory_config_a,
-    std::optional<const ttnn::Shape>& input_shape_b,
-    std::optional<const tt::tt_metal::MemoryConfig>& memory_config_b) {
+    const std::optional<const ttnn::Shape>& input_shape_b,
+    const std::optional<const tt::tt_metal::MemoryConfig>& memory_config_b) {
     if (input_shape_b.has_value() || memory_config_b.has_value()) {
         std::cout << "SoftmaxOpTypes::NotSupported" << std::endl;
         return SoftmaxOpTypes::NotSupported;
