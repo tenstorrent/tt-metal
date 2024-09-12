@@ -575,7 +575,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     if (false) {
         compute_defines["PACKER_L1_ACC"] = "1";
     }
-
+    uint32_t output_rows_h = output.shard_spec().value().shape[0];
+    uint32_t use_non_tile_height = false;
     compute_kernel_args = {
         act_block_w_ntiles,           //in0_block_w
         act_num_subblocks,            //in0_num_sublocks
@@ -601,6 +602,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         untilize_out,                 //untilize_out
 
         bias_ntiles_per_core,
+
+        output_rows_h,
+        use_non_tile_height,
 
         total_num_cores,              //in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
     };
