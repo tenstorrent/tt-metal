@@ -31,7 +31,7 @@ namespace ttnn::mlir_interface
         const std::string& data_type_o);
 
     bool does_unary_op_support_input_output_constraints(
-        const std::string op_type,
+        const std::string op_type, // only RELU supported for now
         const std::vector<uint32_t>& input_shape_a,
         const memory_config_tuple& memory_config_a,
         const std::string& data_type_a,
@@ -39,5 +39,11 @@ namespace ttnn::mlir_interface
         const memory_config_tuple& memory_config_o,
         const std::string& data_type_o);
 
-
+    bool does_softmax_op_support_input_output_constraints(
+        const std::vector<uint32_t>& input_shape_a,
+        const memory_config_tuple& memory_config_a,
+        const std::string& data_type_a,
+        const std::vector<uint32_t>& input_shape_o,
+        const memory_config_tuple& memory_config_o,
+        const std::string& data_type_o);
 }

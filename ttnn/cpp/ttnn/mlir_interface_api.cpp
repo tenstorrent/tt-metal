@@ -156,5 +156,52 @@ bool does_unary_op_support_input_output_constraints(
     return true;
 }
 
+bool does_softmax_op_support_input_output_constraints(
+    const std::vector<uint32_t>& _input_shape_a,
+    const memory_config_tuple& _memory_config_a,
+    const std::string& _data_type_a,
+    const std::vector<uint32_t>& _input_shape_o,
+    const memory_config_tuple& _memory_config_o,
+    const std::string& _data_type_o) {
+
+    auto shape_a = ttnn::vector_wrapper::to_shape(_input_shape_a);
+    auto memory_config_a = ttnn::tuple_wrapper::to_memory_config(_memory_config_a);
+    if (!memory_config_a.has_value()) {
+        return false;
+    }
+    auto data_type_a = ttnn::str_wrapper::to_data_type(_data_type_a);
+    if (!data_type_a.has_value()) {
+        return false;
+    }
+    auto shape_o = ttnn::vector_wrapper::to_shape(_input_shape_o);
+    auto memory_config_o = ttnn::tuple_wrapper::to_memory_config(_memory_config_o);
+    if (!memory_config_o.has_value()) {
+        return false;
+    }
+    auto data_type_o = ttnn::str_wrapper::to_data_type(_data_type_o);
+    if (!data_type_o.has_value()) {
+        return false;
+    }
+
+    auto builder = SoftmaxOpConstraintsFactory::Make(ttnn::Shape(shape_a), memory_config_a.value(), ttnn::Shape(shape_o), memory_config_o.value());
+    if (builder)
+    {
+        const auto op_constraints =
+            (*builder)
+                .setDataTypeA(data_type_a.value())
+                .setDataTypeO(data_type_o.value())
+                .build_constraints();
+        if (op_constraints.size() == 0)
+        {
+            return false;
+        }
+    }
+    else
+    {
+        return false;
+    }
+
+    return true;
+}
 
 } // namespace ttnn_mlir_interface
