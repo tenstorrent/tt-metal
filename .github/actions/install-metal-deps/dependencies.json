@@ -4,15 +4,13 @@
     "build-essential=12.8ubuntu1.1",
     "python3.8-venv",
     "libhwloc-dev",
-    "graphviz",
-    "patchelf"
+    "graphviz"
   ],
   "ubuntu-22.04": [
     "software-properties-common",
     "build-essential",
     "python3.10-venv",
     "libhwloc-dev",
-    "graphviz",
-    "patchelf"
+    "graphviz"
   ]
 }

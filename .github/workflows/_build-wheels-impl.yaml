@@ -18,9 +18,7 @@ jobs:
   build-wheel:
     runs-on: ${{ inputs.os }}
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ inputs.arch }}
-      TT_METAL_CREATE_STATIC_LIB: 1
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
         with:
@@ -43,9 +41,6 @@ jobs:
         run: |
           pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
           pip install -r tt_metal/python_env/requirements-dev.txt
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Use g++ as umd compiler for ubuntu 22.04
         if: ${{ inputs.os == 'ubuntu-22.04' }}
         run: |
@@ -54,11 +49,12 @@ jobs:
         if: ${{ inputs.from-precompiled }}
         with:
           arch: ${{ inputs.arch }}
+      - name: Set precompiled dir for precompile builds
+        if: ${{ inputs.from-precompiled }}
+        # TT_FROM_PRECOMPILED_DIR env variable allows us to not re-run the full C++ build and instead
+        # rely on the artifact that was already compiled. We point it to where the repo is.
+        run: echo "TT_FROM_PRECOMPILED_DIR=${{ github.workspace }}" >> $GITHUB_ENV
       - name: Build Python package distribution
-        env:
-          # TT_FROM_PRECOMPILED env variable allows us to not re-run the full C++ build and instead
-          # rely on the artifact that was already compiled.
-          TT_FROM_PRECOMPILED: ${{ inputs.from-precompiled && 'True' || 'False' }}
         run: python -m build
       - name: Upload distribution as artifact
         uses: actions/upload-artifact@v4

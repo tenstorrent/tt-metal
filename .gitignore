@@ -117,8 +117,12 @@ ttnn/tutorials/DiT/
 
 compile_commands.json
 
-# rpath_check
-ttnn/ttnn/.rpath_checked*
+# files to ensure that we can use the wheel with runtime artifacts
+ttnn/build
+ttnn/ttnn/build
+ttnn/runtime
+ttnn/ttnn/runtime
+.ttnn_runtime_artifacts/
 
 # exclude packages brough in from CPM
 .cpmcache

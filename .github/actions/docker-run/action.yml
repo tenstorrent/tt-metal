@@ -60,7 +60,6 @@ runs:
           ${{ inputs.docker_opts }}
           -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
           -e PYTHONPATH=/usr/app
-          -e ARCH_NAME=${{ inputs.docker_image_arch }}
           ${{ inputs.device }}
         run: |
           cp -r /github_workspace/* /usr/app/

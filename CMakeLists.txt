@@ -86,11 +86,7 @@ if(ENABLE_BUILD_TIME_TRACE)
 endif()
 
 # Default to building everything as a shared lib
-if($ENV{TT_METAL_CREATE_STATIC_LIB})
-    option(BUILD_SHARED_LIBS "Create shared library" OFF)
-else()
-    option(BUILD_SHARED_LIBS "Create shared library" ON)
-endif()
+option(BUILD_SHARED_LIBS "Create shared libraries" ON)
 message(STATUS "Build shared libs: ${BUILD_SHARED_LIBS}")
 
 option(ENABLE_ASAN "Enable build with AddressSanitizer" OFF)
