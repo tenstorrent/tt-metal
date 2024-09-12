@@ -1248,7 +1248,7 @@ void bind_dropout(py::module& module, const unary_operation_t& operation) {
                 * :attr:`input_tensor`
 
             Keyword Args:
-                * :attr:`seed` (float): seed used for RNG
+                * :attr:`seed` (uint32_t): seed used for RNG
                 * :attr:`probability` (float): Dropout probability. In average total_elems * probability elements will be zero out.
                 * :attr:`scale` (float): Scales output tensor. In general scale == 1.0/(1.0-probability)
                 * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
