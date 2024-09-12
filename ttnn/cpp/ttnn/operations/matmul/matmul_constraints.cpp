@@ -6,34 +6,28 @@ std::vector<OpConstraint> MatmulOpConstraintsBuilder::build_constraints() {
     }
 
     std::vector<Layout> tile_layouts_a = {Layout::ROW_MAJOR, Layout::TILE};
-    if (tile_layout_a.has_value())
-    {
+    if (tile_layout_a.has_value()) {
         tile_layouts_a = {tile_layout_a.value()};
     }
     std::vector<Layout> tile_layouts_b = {Layout::ROW_MAJOR, Layout::TILE};
-    if (tile_layout_b.has_value())
-    {
+    if (tile_layout_b.has_value()) {
         tile_layouts_a = {tile_layout_b.value()};
     }
     std::vector<Layout> tile_layouts_o = {Layout::ROW_MAJOR, Layout::TILE};
-    if (tile_layout_o.has_value())
-    {
+    if (tile_layout_o.has_value()) {
         tile_layouts_o = {tile_layout_b.value()};
     }
     // Only two for now. TODO: add other storage types.
     std::vector<StorageType> storage_types_a = {StorageType::OWNED, StorageType::DEVICE};
-    if (storage_type_a.has_value())
-    {
+    if (storage_type_a.has_value()) {
         storage_types_a = {storage_type_a.value()};
     }
     std::vector<StorageType> storage_types_b = {StorageType::OWNED, StorageType::DEVICE};
-    if (storage_type_b.has_value())
-    {
+    if (storage_type_b.has_value()) {
         storage_types_b = {storage_type_b.value()};
     }
     std::vector<StorageType> storage_types_o = {StorageType::OWNED, StorageType::DEVICE};
-    if (storage_type_o.has_value())
-    {
+    if (storage_type_o.has_value()) {
         storage_types_o = {storage_type_a.value()};
     }
 
@@ -93,9 +87,9 @@ std::unique_ptr<MatmulOpConstraintsBuilder> MatmulOpConstraintsFactory::Make(
     tt::tt_metal::MemoryConfig& memory_config_b,
     tt::tt_metal::MemoryConfig& memory_config_o,
     const ttnn::operations::matmul::MatmulProgramConfig& program_config) {
-    auto Matmul_op_type = GetMatmulOpType(
+    auto matmul_op_type = GetMatmulOpType(
         input_shape_a, memory_config_a, input_shape_b, memory_config_b, memory_config_o, program_config);
-    switch (Matmul_op_type) {
+    switch (matmul_op_type) {
         case MatmulOpTypes::MatmulMultiCoreReuseMultiCast:
             return std::make_unique<MatmulMultiCoreReuseMultiCastConstraintsBuilder>(
                 input_shape_a, memory_config_a, input_shape_b, memory_config_b, memory_config_o);
@@ -137,6 +131,7 @@ MatmulOpTypes MatmulOpConstraintsFactory::GetMatmulOpType(
             return MatmulOpTypes::NotSupported;
         }
     }
+    MatmulOpTypes matmul_op_type = MatmulOpTypes::NotSupported;
     std::visit(
         [&](const auto& program_config) {
             using T = std::decay_t<decltype(program_config)>;
@@ -144,14 +139,14 @@ MatmulOpTypes MatmulOpConstraintsFactory::GetMatmulOpType(
                 if (program_config.mcast_in0) {
                     if (memory_config_a.is_sharded()) {
                         if (!program_config.fuse_batch) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                         if (memory_config_a.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                         if (memory_config_o.is_sharded()) {
                             if (memory_config_a.memory_layout != memory_config_o.memory_layout) {
-                                return MatmulOpTypes::NotSupported;
+                                return;
                             }
                         }
                         uint32_t M = (program_config.fuse_batch ? Volume(input_shape_a) / input_shape_a[-1]
@@ -162,21 +157,21 @@ MatmulOpTypes MatmulOpConstraintsFactory::GetMatmulOpType(
                         auto shard_shape = memory_config_a.shard_spec.value().shape;
 
                         if (M != per_core_M) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                         if (per_core_M != (shard_shape[0] / tt::constants::TILE_HEIGHT)) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                         if (K % program_config.in0_block_w != 0) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                         if ((shard_shape[1] / tt::constants::TILE_WIDTH) % program_config.in0_block_w != 0) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                     }
                     if (memory_config_o.is_sharded()) {
                         if (memory_config_o.memory_layout != TensorMemoryLayout::WIDTH_SHARDED) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                         uint32_t M = (program_config.fuse_batch ? Volume(input_shape_a) / input_shape_a[-1]
                                                                 : input_shape_a[-2]) /
@@ -187,28 +182,28 @@ MatmulOpTypes MatmulOpConstraintsFactory::GetMatmulOpType(
 
                         // No padding
                         if (M != per_core_M) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
 
                         if (program_config.out_subblock_w != per_core_N && program_config.out_subblock_h != 1) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                     }
                 } else {
                     if (memory_config_a.is_sharded()) {
                         if (!program_config.fuse_batch) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                         if (memory_config_a.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                         if (memory_config_o.is_sharded()) {
                             if (memory_config_a.memory_layout != memory_config_o.memory_layout) {
-                                return MatmulOpTypes::NotSupported;
+                                return;
                             }
                         }
                         if (memory_config_a.shard_spec.value().orientation == ShardOrientation::ROW_MAJOR) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                         uint32_t M = (program_config.fuse_batch ? Volume(input_shape_a) / input_shape_a[-1]
                                                                 : input_shape_a[-2]) /
@@ -218,21 +213,21 @@ MatmulOpTypes MatmulOpConstraintsFactory::GetMatmulOpType(
                         auto shard_shape = memory_config_a.shard_spec.value().shape;
 
                         if (tt::div_up(M, per_core_M) != memory_config_a.shard_spec.value().grid.num_cores()) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                         if (per_core_M != (shard_shape[0] / tt::constants::TILE_HEIGHT)) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                         if (K % program_config.in0_block_w != 0) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                         if (K != (shard_shape[1] / tt::constants::TILE_WIDTH)) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                     }
                     if (memory_config_o.is_sharded()) {
                         if (memory_config_o.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                         uint32_t M = (program_config.fuse_batch ? Volume(input_shape_a) / input_shape_a[-1]
                                                                 : input_shape_a[-2]) /
@@ -242,25 +237,27 @@ MatmulOpTypes MatmulOpConstraintsFactory::GetMatmulOpType(
                         uint32_t per_core_N = program_config.per_core_N;
 
                         if (N != per_core_N) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                         if (program_config.out_subblock_w != per_core_N && program_config.out_subblock_h != 1) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                     }
                 }
                 if (memory_config_b.memory_layout != TensorMemoryLayout::INTERLEAVED) {
-                    return MatmulOpTypes::NotSupported;
+                    return;
                 }
                 if ((input_shape_a[-1] / tt::constants::TILE_WIDTH) % program_config.in0_block_w != 0) {
-                    return MatmulOpTypes::NotSupported;
+                    return;
                 }
                 if (program_config.per_core_M % program_config.out_subblock_h != 0) {
-                    return MatmulOpTypes::NotSupported;
+                    return;
                 }
                 if (program_config.per_core_N % program_config.out_subblock_w != 0) {
-                    return MatmulOpTypes::NotSupported;
+                    return;
                 }
+                matmul_op_type = MatmulOpTypes::MatmulMultiCoreReuseMultiCast1D;
+                return;
             } else if constexpr (std::is_same_v<
                                      T,
                                      ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
@@ -274,75 +271,74 @@ MatmulOpTypes MatmulOpConstraintsFactory::GetMatmulOpType(
 
                     if (tensor_a_memory_layout != TensorMemoryLayout::BLOCK_SHARDED &&
                         tensor_a_memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-                        return MatmulOpTypes::NotSupported;
+                        return;
                     }
 
                     if (tensor_a_memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
                         if (program_config.transpose_mcast) {
                             if (memory_config_a.shard_spec.value().orientation != ShardOrientation::COL_MAJOR) {
-                                return MatmulOpTypes::NotSupported;
+                                return;
                             }
                         } else {
                             if (memory_config_a.shard_spec.value().orientation != ShardOrientation::ROW_MAJOR) {
-                                return MatmulOpTypes::NotSupported;
+                                return;
                             }
                         }
                         if (memory_config_o.is_sharded()) {
                             if (memory_config_a.buffer_type != memory_config_o.buffer_type) {
-                                return MatmulOpTypes::NotSupported;
+                                return;
                             }
                             if (memory_config_a.memory_layout != memory_config_o.memory_layout) {
-                                return MatmulOpTypes::NotSupported;
+                                return;
                             }
                         }
 
                     } else if (tensor_a_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                         if (program_config.transpose_mcast) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                         if (K != program_config.in0_block_w) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                         if (program_config.in0_block_w != (shard_shape[1] / tt::constants::TILE_WIDTH)) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                         if (memory_config_a.shard_spec.value().grid.bounding_box().start_coord.x !=
                             memory_config_a.shard_spec.value().grid.bounding_box().end_coord.x) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                     }
-
                     if (per_core_M != (shard_shape[0] / tt::constants::TILE_HEIGHT)) {
-                        return MatmulOpTypes::NotSupported;
+                        return;
                     }
                     if ((shard_shape[1] / tt::constants::TILE_WIDTH) % program_config.in0_block_w != 0) {
-                        return MatmulOpTypes::NotSupported;
+                        return;
                     }
                 }
 
                 if (memory_config_b.is_sharded()) {
                     if (program_config.transpose_mcast) {
-                        return MatmulOpTypes::NotSupported;
+                        return;
                     }
                     auto tensor_b_memory_layout = memory_config_b.memory_layout;
                     if (tensor_b_memory_layout != TensorMemoryLayout::WIDTH_SHARDED) {
-                        return MatmulOpTypes::NotSupported;
+                        return;
                     }
                     if (memory_config_b.buffer_type != tt::tt_metal::BufferType::DRAM) {
                         if (program_config.per_core_N !=
                             (memory_config_b.shard_spec.value().shape[1] / tt::constants::TILE_WIDTH)) {
-                            return MatmulOpTypes::NotSupported;
+                            return;
                         }
                     }
                     if (memory_config_b.shard_spec.value().grid.bounding_box().start_coord.x !=
                         memory_config_b.shard_spec.value().grid.bounding_box().end_coord.x) {
-                        return MatmulOpTypes::NotSupported;
+                        return;
                     }
                 }
 
                 if (memory_config_o.is_sharded()) {
                     if (memory_config_o.memory_layout != TensorMemoryLayout::BLOCK_SHARDED) {
-                        return MatmulOpTypes::NotSupported;
+                        return;
                     }
                     uint32_t M = Volume(input_shape_a) / input_shape_a[-1] / tt::constants::TILE_HEIGHT;
                     uint32_t N = input_shape_b[-1] / tt::constants::TILE_WIDTH;
@@ -350,24 +346,25 @@ MatmulOpTypes MatmulOpConstraintsFactory::GetMatmulOpType(
                     uint32_t per_core_N = program_config.per_core_N;
 
                     if (program_config.out_subblock_w != per_core_N && program_config.out_subblock_h != 1) {
-                        return MatmulOpTypes::NotSupported;
+                        return;
                     }
                 }
                 if ((input_shape_a[-1] / tt::constants::TILE_WIDTH) % program_config.in0_block_w != 0) {
-                    return MatmulOpTypes::NotSupported;
+                    return;
                 }
                 if (program_config.per_core_M % program_config.out_subblock_h != 0) {
-                    return MatmulOpTypes::NotSupported;
+                    return;
                 }
                 if (program_config.per_core_N % program_config.out_subblock_w != 0) {
-                    return MatmulOpTypes::NotSupported;
+                    return;
                 }
+                matmul_op_type = MatmulOpTypes::MatmulMultiCoreReuseMultiCast;
+                return;
             } else {
                 std::cout << "Currently not supported" << std::endl;
-                return MatmulOpTypes::NotSupported;
+                return;
             }
-            return MatmulOpTypes::NotSupported;
         },
         program_config);
-    return MatmulOpTypes::NotSupported;
+    return matmul_op_type;
 }
