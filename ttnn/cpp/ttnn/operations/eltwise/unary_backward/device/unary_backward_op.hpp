@@ -80,7 +80,6 @@ enum class UnaryBackwardOpType {
     ERF_BW,
     DEG2RAD_BW,
     POLYGAMMA_BW,
-    GELU_BW,
     REPEAT_BW,
     PROD_BW,
 };
@@ -159,8 +158,6 @@ std::vector<Tensor> _logiteps_bw( const Tensor& grad, const Tensor& input, float
 std::vector<Tensor> _clamp_bw( const Tensor& grad, const Tensor& input, std::optional<float> min = std::nullopt, std::optional<float> max = std::nullopt, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 std::vector<Tensor> _rdiv_bw( const Tensor& grad, const Tensor& input, float scalar, string round_mode = "None", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-
-std::vector<Tensor> _gelu_bw( const Tensor& grad, const Tensor& input, string approximate = "none", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 std::vector<Tensor> _repeat_bw(const Tensor& grad, const Tensor& input, const tt::tt_metal::Shape& shape, const std::optional<MemoryConfig>& output_mem_config);
 
@@ -616,13 +613,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::RDIV_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, string round_mode, const std::optional<MemoryConfig>& output_mem_config ) {
         return _rdiv_bw(grad, input, scalar, round_mode, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::GELU_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, string approximate, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _gelu_bw(grad, input, approximate, output_mem_config);
     }
 };
 
