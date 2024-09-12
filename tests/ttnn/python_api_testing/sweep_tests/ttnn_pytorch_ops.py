@@ -246,3 +246,27 @@ def concat_bw(x, y, z, dim, *args, **kwargs):
     torch_output_tensor = golden_function(x, y, z, dim=dim)
 
     return torch_output_tensor
+
+
+def conv2d(x, y, bias, params_tensor, *args, **kwargs):
+    # HACK: pass stride, padding and groups as shape of last tensor
+    params = params_tensor.shape
+    [stride_h, stride_w, pad_h, pad_w, groups] = [params[0], params[1], params[2], params[3], params[4]]
+
+    # If last dimension is zero then skip bias
+    if bias.shape[3] == 0:
+        torch_bias = None
+    else:
+        torch_bias = bias.reshape(-1)
+
+    torch_output_tensor = torch.nn.functional.conv2d(
+        x,
+        y,
+        bias=torch_bias,
+        stride=(stride_h, stride_w),
+        padding=(pad_h, pad_w),
+        dilation=(1, 1),
+        groups=groups,
+    )
+    # print(torch_output_tensor)
+    return torch_output_tensor
