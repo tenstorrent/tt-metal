@@ -224,12 +224,6 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSqrt::invoke(uint8_t queu
     return grad_tensor;
 }
 
-std::vector<Tensor> _assign_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    grad_tensor.emplace_back(grad);
-    return grad_tensor;
-}
-
 std::vector<Tensor> _multigammaln_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor digamma_result = ttnn::multiply(grad, ttnn::digamma(input, output_mem_config), std::nullopt, output_mem_config);
@@ -1323,9 +1317,18 @@ std::vector<Tensor> _deg2rad_bw(const Tensor& grad, const Tensor& input, const s
 }
 
 
-std::vector<Tensor> _gelu_bw(
-    const Tensor& grad, const Tensor& input, string approximate, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
+std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardGelu::invoke(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const Tensor& input,
+    string approximate,
+    const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> input_grad) {
+    std::vector<std::optional<Tensor>> result;
+    if(!input_grad.has_value()){
+        input_grad = ttnn::zeros_like(grad);
+    }
+
     auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
     TT_FATAL((approximate == "none" || approximate == "tanh"), "Incorrect approximate mode (expected 'None', 'tanh')");
 
@@ -1354,19 +1357,27 @@ std::vector<Tensor> _gelu_bw(
                 std::nullopt,
                 output_memory_config);
 
-        Tensor grad_a = ttnn::multiply(grad, (ttnn::add(left_derivative, right_derivative)), std::nullopt, output_memory_config);
-        grad_tensor.emplace_back(grad_a);
+        ttnn::multiply(queue_id, grad, (ttnn::add(left_derivative, right_derivative)), std::nullopt, output_memory_config, input_grad);
+        result.push_back(input_grad);
     } else {
         float kAlpha = M_SQRT1_2;
         float kBeta = M_2_SQRTPI * M_SQRT1_2 * 0.5;
         Tensor cdf =
             ttnn::multiply((ttnn::add(ttnn::erf(ttnn::multiply(input, kAlpha, std::nullopt, output_memory_config)), 1, std::nullopt, output_memory_config)), 0.5);
         Tensor pdf = ttnn::multiply(ttnn::exp(ttnn::multiply(ttnn::multiply(input, input), -0.5), false, output_memory_config), kBeta, std::nullopt, output_memory_config);
-        Tensor grad_a = ttnn::multiply(grad, (ttnn::add(cdf, ttnn::multiply(input, pdf))));
-        grad_tensor.emplace_back(grad_a);
+        ttnn::multiply(queue_id, grad, ttnn::add(cdf, ttnn::multiply(input, pdf)), std::nullopt, output_memory_config, input_grad);
+        result.push_back(input_grad);
     }
 
-    return grad_tensor;
+    return result;
+}
+
+std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardGelu::invoke(
+    const Tensor& grad,
+    const Tensor& input,
+    string approximate,
+    const std::optional<MemoryConfig>& output_mem_config) {
+        return ExecuteUnaryBackwardGelu::invoke(DefaultQueueId, grad, input, approximate, output_mem_config);
 }
 
 std::vector<Tensor> _repeat_bw(

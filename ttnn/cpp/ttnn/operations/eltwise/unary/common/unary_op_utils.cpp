@@ -382,7 +382,7 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::SQUARE);
     else if (name == "softplus")
         return UnaryWithParam(UnaryOpType::SOFTPLUS);
-    TT_THROW("Unknown unary op: " + name);
+    TT_THROW("Unknown unary op: {}", name);
 }
 
 std::map<string, string> get_defines(

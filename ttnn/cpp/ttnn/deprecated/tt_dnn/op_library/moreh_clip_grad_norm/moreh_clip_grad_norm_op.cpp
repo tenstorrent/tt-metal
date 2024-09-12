@@ -210,11 +210,10 @@ Tensor moreh_clip_grad_norm_impl(
             tensor_impl::cast_vec<float>(owned_buffer::get_as<bfloat16>(total_norm.cpu())).at(0);
         TT_ASSERT(
             std::isfinite(fp32_total_norm),
-            fmt::format(
                 "The total norm of order {} for gradients from `parameters` is non-finite, so it cannot be "
                 "clipped. To disable this error and scale the gradients by the non-finite norm anyway, set "
                 "`error_if_nonfinite=False`",
-                norm_type));
+                norm_type);
     }
 
     // max_norm / (total_norm + 1e-6)

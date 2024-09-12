@@ -129,8 +129,11 @@ void DevicePool::initialize(
      // Never skip for TG Cluster
     bool skip = not tt::Cluster::instance().is_galaxy_cluster();
     for (const auto& device_id : device_ids) {
-        TT_FATAL(device_id < tt::Cluster::instance().number_of_devices(),
-        fmt::format("Device index {} out of range. There are {} devices available.", device_id, tt::Cluster::instance().number_of_devices()));
+        TT_FATAL(
+            device_id < tt::Cluster::instance().number_of_devices(),
+            "Device index {} out of range. There are {} devices available.",
+            device_id,
+            tt::Cluster::instance().number_of_devices());
         const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         skip &= (device_id == mmio_device_id);
     }
@@ -172,8 +175,11 @@ void DevicePool::initialize_device(Device* dev) const {
 }
 
 void DevicePool::activate_device(chip_id_t id) {
-    TT_FATAL(id < tt::Cluster::instance().number_of_devices(),
-        fmt::format("Device index {} out of range. There are {} devices available.", id, tt::Cluster::instance().number_of_devices()));
+    TT_FATAL(
+        id < tt::Cluster::instance().number_of_devices(),
+        "Device index {} out of range. There are {} devices available.",
+        id,
+        tt::Cluster::instance().number_of_devices());
     const std::lock_guard<std::mutex> lock(this->lock);
     if (this->devices.size() < id + 1) {
         this->devices.resize(id + 1);

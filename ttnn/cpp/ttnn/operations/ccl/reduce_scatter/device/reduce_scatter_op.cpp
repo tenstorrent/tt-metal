@@ -17,10 +17,10 @@ void ReduceScatter::validate(const std::vector<Tensor>& input_tensors) const {
     for (auto const& t : input_tensors) {
         TT_FATAL(
             t.get_legacy_shape()[this->scatter_dim] / this->ring_size > 0,
-            "Reduce scatter input tensor shape on dim {} must be divisible by ring size");
+            "Reduce scatter input tensor shape on dim {} must be divisible by ring size", this->scatter_dim);
         TT_FATAL(
             t.get_legacy_shape()[this->scatter_dim] % this->ring_size == 0,
-            "Reduce scatter input tensor shape on dim {} must be divisible by ring size");
+            "Reduce scatter input tensor shape on dim {} must be divisible by ring size", this->scatter_dim);
     }
 }
 

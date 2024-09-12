@@ -151,7 +151,7 @@ void assert_kernel_binary_path_exists(const Program &program, int build_key, con
         auto kernel = detail::GetKernel(program, kernel_id);
         auto hash = kernel_name_to_hash.at(kernel->name());
         auto kernel_binary_path = jit_build_get_kernel_compile_outpath(build_key) + kernel->name() + "/" + hash;
-        TT_FATAL(std::filesystem::exists(kernel_binary_path), "Expected " + kernel_binary_path + " folder to exist!");
+        TT_FATAL(std::filesystem::exists(kernel_binary_path), "Expected {} folder to exist!", kernel_binary_path);
     }
 }
 
@@ -160,14 +160,14 @@ void assert_program_cache_hit_status(const Program &program, bool hit_expected, 
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         auto kernel = detail::GetKernel(program, kernel_id);
         auto hit_status = kernel_name_to_cache_hit_status.at(kernel->name());
-        TT_FATAL(hit_status == hit_expected, "Did not get expected cache status " + std::to_string(hit_expected) + " for kernel " + kernel->name());
+        TT_FATAL(hit_status == hit_expected, "Did not get expected cache status {} for kernel {}", hit_expected, kernel->name());
     }
 }
 
 void assert_kernel_hash_matches(const std::unordered_map<std::string, std::string> &golden_kernel_name_to_hash, const KernelCacheStatus &kernel_cache_status) {
     for (const auto &[kernel_name, hash] : kernel_cache_status.kernel_name_to_hash_str) {
         auto expected_hash = golden_kernel_name_to_hash.at(kernel_name);
-        TT_FATAL(hash == expected_hash, "Expected hash for " + kernel_name + " " + expected_hash + " but got " + hash);
+        TT_FATAL(hash == expected_hash, "Expected hash for {} {} but got {}", kernel_name, expected_hash, hash);
     }
 }
 
@@ -231,9 +231,9 @@ void assert_hash_comparison_for_kernel_type(
         auto curr_hash = curr_kernel_name_to_hash.at(kernel->name());
         bool same_hash_expected = type_to_same_hash_expected.at(kernel->processor());
         if (same_hash_expected) {
-            TT_FATAL(prev_hash == curr_hash, "Expected same hashes for " + kernel->name());
+            TT_FATAL(prev_hash == curr_hash, "Expected same hashes for {}", kernel->name());
         } else {
-            TT_FATAL(prev_hash != curr_hash, "Expected different hashes for " + kernel->name());
+            TT_FATAL(prev_hash != curr_hash, "Expected different hashes for {}", kernel->name());
         }
     }
 }
@@ -244,7 +244,7 @@ void assert_cache_hit_status_for_kernel_type(const Program &program, const std::
         auto kernel = detail::GetKernel(program, kernel_id);
         bool hit_expected = type_to_cache_hit_status.at(kernel->processor());
         auto hit_status = kernel_name_to_cache_hit_status.at(kernel->name());
-        TT_FATAL(hit_status == hit_expected, "Did not get expected cache status " + std::to_string(hit_expected) + " for kernel " + kernel->name());
+        TT_FATAL(hit_status == hit_expected, "Did not get expected cache status {} for kernel {}", hit_expected, kernel->name());
     }
 }
 

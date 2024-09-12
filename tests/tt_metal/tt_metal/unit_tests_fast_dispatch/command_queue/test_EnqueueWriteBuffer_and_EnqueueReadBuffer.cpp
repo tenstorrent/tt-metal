@@ -710,7 +710,7 @@ TEST_F(CommandQueueSingleCardFixture, ShardedBufferL1ReadWrites) {
                             config.num_iterations = num_iterations;
                             config.mem_config = shard_strategy;
                             config.page_shape = page_shape;
-                            tt::log_info(tt::LogTest, fmt::format("Device: {} cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: {}, num_iterations: {}", device->id(), cores[0],cores[1], num_pages[0],num_pages[1], page_shape[0],page_shape[1], magic_enum::enum_name(shard_strategy).data(), num_iterations).c_str());
+                            tt::log_info(tt::LogTest, "Device: {} cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: {}, num_iterations: {}", device->id(), cores[0],cores[1], num_pages[0],num_pages[1], page_shape[0],page_shape[1], magic_enum::enum_name(shard_strategy).data(), num_iterations);
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                                 device, device->command_queue(), config, BufferType::L1, false);
                         }
@@ -758,7 +758,6 @@ TEST_F(CommandQueueSingleCardFixture, ShardedBufferDRAMReadWrites) {
                             config.page_shape = page_shape;
                             tt::log_info(
                                 tt::LogTest,
-                                fmt::format(
                                     "Device: {} cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: "
                                     "{}, num_iterations: {}",
                                     device->id(),
@@ -769,8 +768,7 @@ TEST_F(CommandQueueSingleCardFixture, ShardedBufferDRAMReadWrites) {
                                     page_shape[0],
                                     page_shape[1],
                                     magic_enum::enum_name(shard_strategy).data(),
-                                    num_iterations)
-                                    .c_str());
+                                    num_iterations);
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                                 device, device->command_queue(), config, BufferType::DRAM, false);
                         }
@@ -812,7 +810,7 @@ TEST_F(CommandQueueSingleCardFixture, ShardedBufferLargeL1ReadWrites) {
                             config.num_iterations = num_iterations;
                             config.mem_config = shard_strategy;
                             config.page_shape = page_shape;
-                            tt::log_info(tt::LogTest, fmt::format("Device: {} cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: {}, num_iterations: {}", device->id(), cores[0],cores[1], num_pages[0],num_pages[1], page_shape[0],page_shape[1], magic_enum::enum_name(shard_strategy).data(), num_iterations).c_str());
+                            tt::log_info(tt::LogTest, "Device: {} cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: {}, num_iterations: {}", device->id(), cores[0],cores[1], num_pages[0],num_pages[1], page_shape[0],page_shape[1], magic_enum::enum_name(shard_strategy).data(), num_iterations);
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                                 device, device->command_queue(), config, BufferType::L1, true);
                         }
@@ -856,7 +854,6 @@ TEST_F(CommandQueueSingleCardFixture, ShardedBufferLargeDRAMReadWrites) {
                             config.page_shape = page_shape;
                             tt::log_info(
                                 tt::LogTest,
-                                fmt::format(
                                     "Device: {} cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: "
                                     "{}, num_iterations: {}",
                                     device->id(),
@@ -867,8 +864,7 @@ TEST_F(CommandQueueSingleCardFixture, ShardedBufferLargeDRAMReadWrites) {
                                     page_shape[0],
                                     page_shape[1],
                                     magic_enum::enum_name(shard_strategy).data(),
-                                    num_iterations)
-                                    .c_str());
+                                    num_iterations);
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                                 device, device->command_queue(), config, BufferType::DRAM, true);
                         }

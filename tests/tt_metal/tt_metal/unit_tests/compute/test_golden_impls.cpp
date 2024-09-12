@@ -49,7 +49,7 @@ std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t> &src_ve
                     // Left face row copy
                     for (int k = 0; k < num_c_dim; k++) {
                         int idx = physical_start_for_tile_row + i * num_c_dim + k + j * tile_size;
-                        TT_FATAL(ind.find(idx) == ind.end(), t);
+                        TT_FATAL(ind.find(idx) == ind.end(), "{}", t);
                         ind.insert(idx);
                         dst_vec.push_back(src_vec.at(idx));
                     }
@@ -58,7 +58,7 @@ std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t> &src_ve
                         // Right face row copy
                         for (int k = 0; k < num_c_dim; k++) {
                             int idx = physical_start_for_tile_row + i * num_c_dim + k + face_size + j * tile_size;
-                            TT_FATAL(ind.find(idx) == ind.end(), t);
+                            TT_FATAL(ind.find(idx) == ind.end(), "{}", t);
                             ind.insert(idx);
                             dst_vec.push_back(src_vec.at(idx));
                         }
