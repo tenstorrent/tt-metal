@@ -137,7 +137,7 @@ std::vector<uint16_t> gold_transpose_wh(const std::vector<uint16_t> &src_vec, co
 // input shape.x is assumed to have the full number of elements in bfloat16
 // src_vec is expected to be untilized
 // result is also untilized
-std::vector<uint16_t> gold_reduce_h(const std::vector<uint16_t> &src_vec, const std::vector<uint32_t> &shape, float scaler, bool red_max, bool zeropad) {
+std::vector<uint16_t> gold_reduce_h(const std::vector<uint16_t> &src_vec, const std::vector<uint32_t> &shape, float scaler, uint8_t red_type, bool zeropad) {
     vector<uint32_t> shape_dst{shape[0], shape[1], 1, shape[3]};
     TT_FATAL(shape[2] > 0, "Error");
     if (zeropad)
@@ -150,13 +150,17 @@ std::vector<uint16_t> gold_reduce_h(const std::vector<uint16_t> &src_vec, const 
     for (int n = 0; n < shape[0]; n++)
     for (int c = 0; c < shape[1]; c++)
     for (int w = 0; w < shape[3]; w++) {
-        float sum = red_max ? -std::numeric_limits<float>::max() : 0.0f;
+        // red_type : {SUM, AVG, MAX}; i.e. {0, 1, 2};
+        float sum = (red_type == 2) ? -std::numeric_limits<float>::max() : 0.0f;
         for (int h = 0; h < shape[2]; h++) {
             auto offs = addr.offs(n, c, h, w);
-            if (red_max)
+            if (red_type == 2)
                 sum = fmaxf(bfloat16(src_vec[offs]).to_float(), sum);
             else
                 sum += bfloat16(src_vec[offs]).to_float();
+        }
+        if (red_type == 1) {
+            sum /= shape[2];
         }
         auto dest_offs = addr_dst.offs(n, c, 0, w);
         reduced[dest_offs] = bfloat16(sum*scaler).to_uint16();
@@ -165,7 +169,7 @@ std::vector<uint16_t> gold_reduce_h(const std::vector<uint16_t> &src_vec, const 
     return reduced;
 };
 
-std::vector<uint16_t> gold_reduce_w(const vector<uint16_t> &src_vec, const std::vector<uint32_t> &shape, float scaler, bool red_max, bool zeropad) {
+std::vector<uint16_t> gold_reduce_w(const vector<uint16_t> &src_vec, const std::vector<uint32_t> &shape, float scaler, uint8_t red_type, bool zeropad) {
     vector<uint32_t> shape_dst{shape[0], shape[1], shape[2], 1};
     if (zeropad)
         shape_dst[3] = 32;
@@ -177,22 +181,25 @@ std::vector<uint16_t> gold_reduce_w(const vector<uint16_t> &src_vec, const std::
     for (int n = 0; n < shape[0]; n++)
     for (int c = 0; c < shape[1]; c++)
     for (int h = 0; h < shape[2]; h++) {
-        float sum = red_max ? -std::numeric_limits<float>::max() : 0.0f;
+        // red_type : {SUM, AVG, MAX}; i.e. {0, 1, 2};
+        float sum = (red_type == 2) ? -std::numeric_limits<float>::max() : 0.0f;
         for (int w = 0; w < shape[3]; w++) {
             auto offs = addr.offs(n, c, h, w);
-            if (red_max)
+            if (red_type == 2)
                 sum = fmaxf(bfloat16(src_vec[offs]).to_float(), sum);
             else
                 sum += bfloat16(src_vec[offs]).to_float();
         }
+        if (red_type == 1) {
+            sum /= shape[3];
+        }
         auto dest_offs = addr_dst.offs(n, c, h, 0);
         reduced[dest_offs] = bfloat16(sum*scaler).to_uint16();
     }
-
     return reduced;
 }
 
-std::vector<uint16_t> gold_reduce_hw(const std::vector<uint16_t> &src_vec, const std::vector<uint32_t> &shape, float scaler, bool red_max, bool zeropad) {
+std::vector<uint16_t> gold_reduce_hw(const std::vector<uint16_t> &src_vec, const std::vector<uint32_t> &shape, float scaler, uint8_t red_type, bool zeropad) {
     vector<uint32_t> shape_dst{shape[0], shape[1], 1, 1};
     if (zeropad) {
         shape_dst[2] = 32;
@@ -205,17 +212,20 @@ std::vector<uint16_t> gold_reduce_hw(const std::vector<uint16_t> &src_vec, const
     std::fill(reduced.begin(), reduced.end(), 0);
     for (int n = 0; n < shape[0]; n++)
     for (int c = 0; c < shape[1]; c++) {
-        float sum = red_max ? -std::numeric_limits<float>::max() : 0.0f;
+        // red_type : {SUM, AVG, MAX}; i.e. {0, 1, 2};
+        float sum = (red_type == 2) ? -std::numeric_limits<float>::max() : 0.0f;
         for (int h = 0; h < shape[2]; h++) {
-        for (int w = 0; w < shape[3]; w++) {
-            auto offs = addr.offs(n, c, h, w);
-            if (red_max)
-                sum = fmaxf(bfloat16(src_vec[offs]).to_float(), sum);
-            else {
-                sum += bfloat16(src_vec[offs]).to_float();
-                //sum = bfloat16(sum).to_float();
+            for (int w = 0; w < shape[3]; w++) {
+                auto offs = addr.offs(n, c, h, w);
+                if (red_type == 2)
+                    sum = fmaxf(bfloat16(src_vec[offs]).to_float(), sum);
+                else
+                    sum += bfloat16(src_vec[offs]).to_float();
             }
-        }}
+        }
+        if (red_type == 1) {
+            sum /= (shape[2] * shape[3]);
+        }
         auto dest_offs = addr_dst.offs(n, c, 0, 0);
         reduced[dest_offs] = bfloat16(sum*scaler).to_uint16();
     }
