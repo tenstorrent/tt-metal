@@ -30,6 +30,7 @@ class TtSwinTransformer:
         num_classes=1000,
         block=None,
         norm_layer=None,
+        attn_mask_tuple=None,
     ):
         self.patch_size = patch_size
         self.num_classes = num_classes
@@ -60,6 +61,7 @@ class TtSwinTransformer:
                         window_size=window_size,
                         shift_size=[0 if i_layer % 2 == 0 else w // 2 for w in window_size],
                         mlp_ratio=mlp_ratio,
+                        attn_mask=attn_mask_tuple[index],
                     )
                 )
             self.layers.append(stage)

@@ -27,6 +27,7 @@ class TtShiftedWindowAttention(nn.Module):
         num_heads,
         qkv_bias: bool = True,
         proj_bias: bool = True,
+        attn_mask=None,
     ):
         super().__init__()
         if len(window_size) != 2 or len(shift_size) != 2:
@@ -37,6 +38,7 @@ class TtShiftedWindowAttention(nn.Module):
         self.window_size = window_size
         self.shift_size = shift_size
         self.num_heads = num_heads
+        self.attn_mask = attn_mask
 
     def forward(self, x):
         relative_position_bias = self.parameters[
@@ -117,49 +119,10 @@ class TtShiftedWindowAttention(nn.Module):
         attn = ttnn.add(attn, relative_position_bias)
 
         if sum(self.shift_size) > 0:  # some torch ops have been used should check this function
-            # generate attention mask
-            attn_mask = ttnn.zeros((pad_H, pad_W), dtype=ttnn.bfloat16)
-            h_slices = (
-                (0, -self.window_size[0]),
-                (-self.window_size[0], -self.shift_size[0]),
-                (-self.shift_size[0], None),
-            )
-            w_slices = (
-                (0, -self.window_size[1]),
-                (-self.window_size[1], -self.shift_size[1]),
-                (-self.shift_size[1], None),
-            )
-
-            # Torch is used since ttnn doesn't support assignment operator
-            attn_mask = tt_to_torch_tensor(attn_mask)
-            count = 0
-            for h in h_slices:
-                for w in w_slices:
-                    attn_mask[h[0] : h[1], w[0] : w[1]] = count
-                    count += 1
-            attn_mask = torch_to_tt_tensor_rm(attn_mask, device=self.device, put_on_device=False)
-
-            attn_mask = ttnn.from_device(attn_mask)
-            attn_mask = ttnn.reshape(
-                attn_mask,
-                (pad_H // self.window_size[0], self.window_size[0], pad_W // self.window_size[1], self.window_size[1]),
-            )
-
-            # Torch is used since valid_buffer issue is faced should check it,
-            attn_mask = tt_to_torch_tensor(attn_mask)
-            attn_mask = torch.permute(attn_mask, (0, 2, 1, 3))
-            attn_mask = torch.reshape(attn_mask, (num_windows, self.window_size[0] * self.window_size[1]))
-
-            # attn_mask = ttnn.to_torch(attn_mask)
-            attn_mask = attn_mask.unsqueeze(1) - attn_mask.unsqueeze(2)
-            attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
-
+            attn = attn + self.attn_mask
+            # attn = ttnn.from_torch(attn, dtype=ttnn.bfloat16)
             attn = ttnn.from_device(attn)
             attn = ttnn.to_layout(attn, layout=ttnn.ROW_MAJOR_LAYOUT)
-            attn = ttnn.reshape(attn, (x.shape[0] // num_windows, num_windows, self.num_heads, x.shape[1], x.shape[1]))
-            attn = ttnn.to_torch(attn)
-            attn = attn + attn_mask.unsqueeze(1).unsqueeze(0)
-            attn = ttnn.from_torch(attn, dtype=ttnn.bfloat16)
             attn = ttnn.reshape(attn, (-1, self.num_heads, x.shape[1], x.shape[1]))
             attn = ttnn.to_layout(attn, layout=ttnn.TILE_LAYOUT)
             attn = ttnn.to_device(attn, device=self.device)

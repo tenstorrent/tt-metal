@@ -19,6 +19,7 @@ class TtSwinTransformerBlock(nn.Module):
         window_size,
         shift_size,
         mlp_ratio=4.0,
+        attn_mask=None,
     ):
         super().__init__()
         self.device = device
@@ -30,6 +31,7 @@ class TtSwinTransformerBlock(nn.Module):
             window_size,
             shift_size,
             num_heads,
+            attn_mask=attn_mask,
         )
 
         self.mlp = TtMLP(
