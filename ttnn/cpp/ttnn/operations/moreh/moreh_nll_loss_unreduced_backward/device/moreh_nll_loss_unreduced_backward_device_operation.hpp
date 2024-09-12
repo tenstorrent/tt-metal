@@ -18,7 +18,7 @@ namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward {
 struct MorehNllLossUnreducedBackwardDeviceOperation {
     // Define the operation attributes. This is it to store all variables needed by operations that aren't tensors
     struct operation_attributes_t {
-        const int32_t ignore_index;
+        const uint32_t ignore_index = std::numeric_limits<uint32_t>::max();
         const MemoryConfig memory_config;
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config;
     };
@@ -35,7 +35,7 @@ struct MorehNllLossUnreducedBackwardDeviceOperation {
 
     // Define the return types for the shape(s) of the operation
     // Can be a single ttnn::Shape, std::optional<ttnn::Shape>, std::vector<ttnn::Shape>, std::tuple<ttnn::Shape> etc.
-    using shape_return_value_t = std::vector<ttnn::Shape>;
+    using shape_return_value_t = ttnn::Shape;
 
     // Define the return types for the tensor(s) of the operation
     // Can be a single Tensor, std::optional<Tensor, ...>, std::vector<Tensor>, std::tuple<Tensor, ...> etc.
@@ -89,7 +89,7 @@ struct MorehNllLossUnreducedBackwardDeviceOperation {
         const Tensor& output_grad_tensor,
         const std::optional<const Tensor> weight_tensor,
         const std::optional<const Tensor> input_grad_tensor,
-        const std::optional<int32_t> ignore_index,
+        const int32_t ignore_index,
         const std::optional<ttnn::MemoryConfig>& memory_config,
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 };

@@ -19,7 +19,7 @@ struct MorehNllLossBackwardDeviceOperation {
     // Define the operation attributes. This is it to store all variables needed by operations that aren't tensors
     struct operation_attributes_t {
         const bool reduction_mean;
-        const int32_t ignore_index;
+        const uint32_t ignore_index = std::numeric_limits<uint32_t>::max();
         const MemoryConfig memory_config;
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config;
     };
@@ -93,7 +93,7 @@ struct MorehNllLossBackwardDeviceOperation {
         const std::optional<const Tensor> weight_tensor,
         const std::optional<const Tensor> input_grad_tensor,
         const std::optional<const Tensor> divisor_tensor,
-        const std::optional<int32_t> ignore_index,
+        const int32_t ignore_index,
         const std::optional<ttnn::MemoryConfig>& memory_config,
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 };

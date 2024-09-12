@@ -63,10 +63,7 @@ def run_moreh_nll_loss_unreduced_backward(shape, ignore_index, none_weight, devi
     if none_weight:
         torch_weight = None
 
-    if ignore_index == None:
-        nll_loss = torch.nn.NLLLoss(weight=torch_weight, reduction="none")
-    else:
-        nll_loss = torch.nn.NLLLoss(weight=torch_weight, ignore_index=ignore_index, reduction="none")
+    nll_loss = torch.nn.NLLLoss(weight=torch_weight, ignore_index=ignore_index, reduction="none")
     torch_loss = nll_loss(torch_input, torch_target)
 
     output_grad = torch.randn_like(torch_loss)
@@ -127,7 +124,7 @@ def test_moreh_nll_loss_unreduced_backward(
     ],
 )
 @pytest.mark.parametrize("none_weight", [True, False])
-@pytest.mark.parametrize("ignore_index", [0, None])
+@pytest.mark.parametrize("ignore_index", [0, -100])
 def test_moreh_nll_loss_unreduced_backward_test_callback(shape, none_weight, device, ignore_index, use_program_cache):
     torch.manual_seed(0)
 

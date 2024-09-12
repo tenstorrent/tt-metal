@@ -78,7 +78,7 @@ MorehNllLossBackwardDeviceOperation::shape_return_value_t MorehNllLossBackwardDe
     // To calculate the output shape, we need the channel_size. However, the required tensors, target and output_grad,
     // do not contain the channel_size information.
     TT_FATAL(false, "moreh_nll_loss_backward not support create output tensors.");
-    return {tensor_args.target_tensor.get_shape()};
+    return tensor_args.target_tensor.get_shape();
 }
 
 MorehNllLossBackwardDeviceOperation::tensor_return_value_t MorehNllLossBackwardDeviceOperation::create_output_tensors(
@@ -104,14 +104,13 @@ MorehNllLossBackwardDeviceOperation::invoke(
     const std::optional<const Tensor> weight_tensor,
     const std::optional<const Tensor> input_grad_tensor,
     const std::optional<const Tensor> divisor_tensor,
-    const std::optional<int32_t> ignore_index,
+    const int32_t ignore_index,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    int32_t class_num = std::numeric_limits<uint32_t>::max();
     return {
         operation_attributes_t{
             reduction_mean,
-            ignore_index.value_or(class_num),
+            ignore_index < 0 ? std::numeric_limits<uint32_t>::max() : ignore_index,
             memory_config.value_or(target_tensor.memory_config()),
             compute_kernel_config},
         tensor_args_t{target_tensor, output_grad_tensor, weight_tensor, divisor_tensor, input_grad_tensor}};

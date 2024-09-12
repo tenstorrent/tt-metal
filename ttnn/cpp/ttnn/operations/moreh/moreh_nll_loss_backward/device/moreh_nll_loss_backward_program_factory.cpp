@@ -19,7 +19,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     const Tensor& output_grad,
     const Tensor& input_grad,
     const bool reduction_mean,
-    const int32_t ignore_index,
+    const uint32_t ignore_index,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     // split work
 
@@ -151,7 +151,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
             output_grad_addr,
             weight_addr,
             divisor_addr,
-            static_cast<uint32_t>(ignore_index),
+            ignore_index,
             units_per_core,
             tile_offset,
             channel_size,
@@ -193,7 +193,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     const Tensor& output_grad,
     const Tensor& input_grad,
     const bool reduction_mean,
-    const int32_t ignore_index,
+    const uint32_t ignore_index,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     // split work
 
@@ -329,7 +329,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
             output_grad_addr,
             weight_addr,
             divisor_addr,
-            static_cast<uint32_t>(ignore_index),
+            ignore_index,
             units_per_core,
             tile_offset,
             channel_size,
@@ -372,7 +372,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     const Tensor& output_grad,
     const Tensor& input_grad,
     const bool reduction_mean,
-    const int32_t ignore_index,
+    const uint32_t ignore_index,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     // split work
     auto input_grad_shape = input_grad.get_legacy_shape();
@@ -505,7 +505,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
             output_grad_addr,
             weight_addr,
             divisor_addr,
-            static_cast<uint32_t>(ignore_index),
+            ignore_index,
             units_per_core,
             tile_offset,
             channel_size,
@@ -554,7 +554,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t MorehNllLossBackw
     const std::optional<const Tensor> divisor = tensor_args.divisor_tensor;
 
     const bool reduction_mean = operation_attributes.reduction_mean;
-    const int32_t ignore_index = operation_attributes.ignore_index;
+    const uint32_t ignore_index = operation_attributes.ignore_index;
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = operation_attributes.compute_kernel_config;
 
     const Tensor& input_grad = tensor_return_value;
@@ -594,7 +594,7 @@ void MorehNllLossBackwardDeviceOperation::Factory::override_runtime_arguments(
         tensor_args.weight_tensor.has_value() ? tensor_args.weight_tensor.value().buffer()->address() : 0;
     const uint32_t divisor_addr =
         tensor_args.divisor_tensor.has_value() ? tensor_args.divisor_tensor.value().buffer()->address() : 0;
-    const uint32_t ignore_index = static_cast<uint32_t>(operation_attributes.ignore_index);
+    const uint32_t ignore_index = operation_attributes.ignore_index;
 
     const uint32_t input_grad_addr = tensor_return_value.buffer()->address();
 

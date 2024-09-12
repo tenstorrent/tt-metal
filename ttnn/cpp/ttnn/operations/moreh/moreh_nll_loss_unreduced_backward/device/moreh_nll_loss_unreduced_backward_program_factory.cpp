@@ -17,7 +17,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     const std::optional<const Tensor> weight,
     const Tensor& output_grad,
     const Tensor& input_grad,
-    const int32_t ignore_index,
+    const uint32_t ignore_index,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     // split work
 
@@ -116,7 +116,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
             target_addr,
             output_grad_addr,
             weight_addr,
-            static_cast<uint32_t>(ignore_index),
+            ignore_index,
             units_per_core,
             tile_offset,
             Nt,
@@ -145,7 +145,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     const std::optional<const Tensor> weight,
     const Tensor& output_grad,
     const Tensor& input_grad,
-    const int32_t ignore_index,
+    const uint32_t ignore_index,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     // split work
 
@@ -246,7 +246,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
             target_addr,
             output_grad_addr,
             weight_addr,
-            static_cast<uint32_t>(ignore_index),
+            ignore_index,
             units_per_core,
             tile_offset,
             channel_size,
@@ -275,7 +275,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     const std::optional<const Tensor> weight,
     const Tensor& output_grad,
     const Tensor& input_grad,
-    const int32_t ignore_index,
+    const uint32_t ignore_index,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     // split work
     auto input_grad_shape = input_grad.get_legacy_shape();
@@ -375,7 +375,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
             target_addr,
             output_grad_addr,
             weight_addr,
-            static_cast<uint32_t>(ignore_index),
+            ignore_index,
             units_per_core,
             tile_offset,
             num_inner_tile,
@@ -411,7 +411,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::create(
     const std::optional<const Tensor> weight = tensor_args.weight_tensor;
     const Tensor& output_grad = tensor_args.output_grad_tensor;
 
-    const int32_t ignore_index = operation_attributes.ignore_index;
+    const uint32_t ignore_index = operation_attributes.ignore_index;
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = operation_attributes.compute_kernel_config;
 
     const Tensor& input_grad = tensor_return_value;
@@ -449,7 +449,7 @@ void MorehNllLossUnreducedBackwardDeviceOperation::Factory::override_runtime_arg
     const uint32_t output_grad_addr = tensor_args.output_grad_tensor.buffer()->address();
     const uint32_t weight_addr =
         tensor_args.weight_tensor.has_value() ? tensor_args.weight_tensor.value().buffer()->address() : 0;
-    const uint32_t ignore_index = static_cast<uint32_t>(operation_attributes.ignore_index);
+    const uint32_t ignore_index = operation_attributes.ignore_index;
 
     const uint32_t input_grad_addr = tensor_return_value.buffer()->address();
 

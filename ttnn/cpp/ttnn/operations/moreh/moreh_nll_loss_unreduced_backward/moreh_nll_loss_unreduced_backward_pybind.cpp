@@ -27,7 +27,7 @@ void bind_moreh_nll_loss_unreduced_backward_operation(py::module &module) {
             py::kw_only(),
             py::arg("weight_tensor") = std::nullopt,
             py::arg("input_grad_tensor") = std::nullopt,
-            py::arg("ignore_index") = std::nullopt,
+            py::arg("ignore_index") = -100,
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt});
 }

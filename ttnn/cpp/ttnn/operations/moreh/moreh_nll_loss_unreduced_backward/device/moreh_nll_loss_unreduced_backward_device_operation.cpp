@@ -80,7 +80,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::compute_output_shapes(
     // To calculate the output shape, we need the channel_size. However, the required tensors, target and output_grad,
     // do not contain the channel_size information.
     TT_FATAL(false, "moreh_nll_loss_unreduced_backward not support create output tensors.");
-    return {tensor_args.target_tensor.get_shape()};
+    return tensor_args.target_tensor.get_shape();
 }
 
 MorehNllLossUnreducedBackwardDeviceOperation::tensor_return_value_t
@@ -94,7 +94,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::create_output_tensors(
     auto dtype = tensor_args.target_tensor.get_dtype();
     Layout layout{Layout::TILE};
     auto device = tensor_args.target_tensor.device();
-    return create_device_tensor(output_shapes.at(1), dtype, layout, device, operation_attributes.memory_config);
+    return create_device_tensor(output_shapes, dtype, layout, device, operation_attributes.memory_config);
 }
 
 std::tuple<
@@ -105,13 +105,12 @@ MorehNllLossUnreducedBackwardDeviceOperation::invoke(
     const Tensor& output_grad_tensor,
     const std::optional<const Tensor> weight_tensor,
     const std::optional<const Tensor> input_grad_tensor,
-    const std::optional<int32_t> ignore_index,
+    const int32_t ignore_index,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    int32_t class_num = std::numeric_limits<uint32_t>::max();
     return {
         operation_attributes_t{
-            ignore_index.value_or(class_num),
+            ignore_index < 0 ? std::numeric_limits<uint32_t>::max() : ignore_index,
             memory_config.value_or(target_tensor.memory_config()),
             compute_kernel_config},
         tensor_args_t{target_tensor, output_grad_tensor, weight_tensor, input_grad_tensor}};
