@@ -70,7 +70,7 @@ jobs:
           run_args: |
             WHEEL_FILENAME=$(ls -1 *.whl)
             pip3 install --user $WHEEL_FILENAME
-            source tests/scripts/run_python_model_tests.sh && run_python_model_tests_{{ inputs.arch }}
+            source tests/scripts/run_python_model_tests.sh && run_python_model_tests_${{ inputs.arch }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
