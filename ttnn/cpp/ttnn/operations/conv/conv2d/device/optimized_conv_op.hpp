@@ -25,6 +25,8 @@ struct OptimizedConvParallelizationConfig {
     uint32_t num_cores_c = 1;
     uint32_t per_core_out_matrix_height_ntiles = 1;
     uint32_t per_core_out_matrix_width_ntiles = 1;
+    uint32_t per_core_out_matrix_height = -1;
+    uint32_t per_core_out_matrix_width = -1;
     // std::size_t in0_block_w;
     // std::size_t out_subblock_h;
     // std::size_t out_subblock_w;
@@ -57,7 +59,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const T
     Tensor& output,
     bool enable_act_double_buffer,
     bool enable_split_reader,
-    bool enable_subblock_padding);
+    bool enable_subblock_padding,
+    bool use_non_tile_height);
 
 // new micro op
 struct OptimizedConvNew {
@@ -76,6 +79,7 @@ struct OptimizedConvNew {
     bool enable_act_double_buffer;
     bool enable_split_reader;
     bool enable_subblock_padding;
+    bool use_non_tile_height;
     OptimizedConvNew(const sliding_window::SlidingWindowConfig& sliding_window_config,
         uint32_t output_channels, uint32_t groups,
         bool untile_out,
@@ -85,7 +89,7 @@ struct OptimizedConvNew {
         MemoryConfig out_mem_config,
         DataType dtype,
         std::array<std::uint32_t, 4> input_tensor_shape, bool use_shallow_conv_variant,
-        const DeviceComputeKernelConfig compute_kernel_config, bool enable_act_double_buffer, bool enable_split_reader, bool enable_subblock_padding) :
+        const DeviceComputeKernelConfig compute_kernel_config, bool enable_act_double_buffer, bool enable_split_reader, bool enable_subblock_padding, bool use_non_tile_height) :
             output_channels(output_channels),
             groups(groups),
             sliding_window_config(sliding_window_config),
@@ -101,7 +105,8 @@ struct OptimizedConvNew {
             compute_kernel_config(compute_kernel_config),
             enable_act_double_buffer(enable_act_double_buffer),
             enable_split_reader(enable_split_reader),
-            enable_subblock_padding(enable_subblock_padding) {}
+            enable_subblock_padding(enable_subblock_padding),
+            use_non_tile_height(use_non_tile_height) {}
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
@@ -158,7 +163,8 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool enable_act_double_buffer = false,
     bool enable_split_reader = false,
-    bool enable_subblock_padding = false
+    bool enable_subblock_padding = false,
+    bool use_non_tile_height = false
 );
 
 }  // namespace conv2d
