@@ -1,5 +1,5 @@
 #!/bin/bash
-# set -eo pipefail
+set -eo pipefail
 
 run_t3000_ttmetal_tests() {
   # Record the start time

@@ -1,4 +1,4 @@
-#/bin/bash
+#!/bin/bash
 
 run_tg_llama3_70b_tests() {
   # Record the start time

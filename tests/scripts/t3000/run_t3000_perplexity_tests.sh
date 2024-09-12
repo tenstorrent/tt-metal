@@ -1,5 +1,4 @@
-
-#/bin/bash
+#!/bin/bash
 
 run_t3000_perplexity_tests() {
   # Record the start time

@@ -1,6 +1,5 @@
-
-#/bin/bash
-# set -eo pipefail
+#!/bin/bash
+set -eo pipefail
 
 run_t3000_falcon40b_tests() {
   # Record the start time

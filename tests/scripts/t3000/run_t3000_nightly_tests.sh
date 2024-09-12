@@ -1,4 +1,4 @@
-#/bin/bash
+#!/bin/bash
 
 run_t3000_ccl_tests() {
   # Record the start time

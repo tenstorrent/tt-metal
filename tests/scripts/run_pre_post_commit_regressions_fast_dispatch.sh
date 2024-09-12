@@ -1,4 +1,4 @@
-#/bin/bash
+#!/bin/bash
 
 set -eo pipefail
 
@@ -23,4 +23,3 @@ export PYTHONPATH=$TT_METAL_HOME
 ./tests/scripts/run_python_api_unit_tests.sh
 
 ./tests/scripts/run_cpp_unit_tests.sh
-
