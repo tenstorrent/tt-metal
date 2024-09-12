@@ -25,6 +25,9 @@ run_common_func_tests() {
   # Distilbert
   pytest --disable-warnings models/demos/distilbert/demo/demo.py --timeout 600; fail+=$?
 
+  # ConvNet Mnist
+  pytest --disable-warnings models/demos/convnet_mnist/demo/demo.py --timeout 600; fail+=$?
+
   return $fail
 }
 
