@@ -45,6 +45,8 @@ class UnaryOpConstraintsBuilder : public OpConstraintsBuilder {
    public:
     virtual ~UnaryOpConstraintsBuilder() = default;
 
+    virtual bool can_build_constraints() const override;
+
     std::vector<OpConstraint> build_constraints() override;
 };
 
@@ -91,9 +93,7 @@ class UnaryOpConstraintsFactory {
         const ttnn::Shape& input_shape_a,
         const tt::tt_metal::MemoryConfig& memory_config_a,
         const ttnn::Shape& input_shape_o,
-        const tt::tt_metal::MemoryConfig& memory_config_o,
-        std::optional<const ttnn::Shape>& input_shape_b,
-        std::optional<const tt::tt_metal::MemoryConfig>& memory_config_b);
+        const tt::tt_metal::MemoryConfig& memory_config_o);
 
     static bool is_supported_arch(tt::ARCH arch, UnaryOpType op_type);
 

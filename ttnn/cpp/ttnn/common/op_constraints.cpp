@@ -1,4 +1,5 @@
 #include "ttnn/common/op_constraints.hpp"
+#include <optional>
 
 #include "ttnn/cpp/ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/cpp/ttnn/tensor/tensor_utils.hpp"
