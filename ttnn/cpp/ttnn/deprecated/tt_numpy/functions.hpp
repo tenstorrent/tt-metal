@@ -205,7 +205,7 @@ static Tensor zeros_like(
     std::optional<DataType> data_type = std::nullopt,
     std::optional<Layout> layout = std::nullopt,
     std::optional<MemoryConfig> output_mem_config = std::nullopt) {
-    return full_like(input_tensor, 0.0f, data_type, layout, output_mem_config);
+    return zeros_like_impl(ttnn::DefaultQueueId, input_tensor, data_type, layout, output_mem_config, std::nullopt);
 }
 
 static Tensor ones_like(

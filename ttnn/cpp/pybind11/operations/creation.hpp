@@ -149,6 +149,36 @@ void bind_full_like_operation(py::module& module, const creation_operation_t& op
 }
 
 template <typename creation_operation_t>
+void bind_zeros_like_operation(py::module& module, const creation_operation_t& operation) {
+    auto doc = fmt::format(
+        R"doc({0}(tensor: ttnn.Tensor, dtype: Optional[ttnn.DataType] = None, layout: Optional[ttnn.Layout] = None, device: Optional[ttnn.Device] = None, memory_config: Optional[ttnn.MemoryConfig] = None)doc",
+        operation.base_name());
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const creation_operation_t& self,
+               const ttnn::Tensor& tensor,
+               const std::optional<DataType>& dtype,
+               const std::optional<Layout>& layout,
+               const std::optional<std::reference_wrapper<Device>>& device,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<ttnn::Tensor> &optional_output_tensor,
+               uint8_t queue_id) -> ttnn::Tensor {
+                return self(queue_id, tensor, dtype, layout, device, memory_config, optional_output_tensor);
+            },
+            py::arg("tensor"),
+            py::arg("dtype") = std::nullopt,
+            py::arg("layout") = std::nullopt,
+            py::arg("device") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("optional_tensor") = std::nullopt,
+            py::arg("queue_id") = ttnn::DefaultQueueId});
+}
+
+template <typename creation_operation_t>
 void bind_full_like_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation) {
     auto doc = fmt::format(
         R"doc({0}(tensor: ttnn.Tensor, dtype: Optional[ttnn.DataType] = None, layout: Optional[ttnn.Layout] = None, device: Optional[ttnn.Device] = None, memory_config: Optional[ttnn.MemoryConfig] = None)doc",
@@ -210,7 +240,7 @@ void py_module(py::module& module) {
     detail::bind_full_operation_with_hard_coded_value(module, ttnn::empty);
 
     detail::bind_full_like_operation(module, ttnn::full_like);
-    detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::zeros_like);
+    detail::bind_zeros_like_operation(module, ttnn::zeros_like);
     detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::ones_like);
     detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::empty_like);
 
