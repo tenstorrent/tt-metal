@@ -36,10 +36,7 @@ from models.utility_functions import skip_for_grayskull
     ],
     ids=["quick", "full"],
 )
-def test_llama_model_inference(device, weights, layers, use_program_cache, reset_seeds, is_ci_env):
-    if is_ci_env and layers > 1:
-        pytest.skip("Skipping long test in CI")
-
+def test_llama_model_inference(device, weights, layers, use_program_cache, reset_seeds):
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
 
@@ -170,7 +167,7 @@ def test_llama_model_inference(device, weights, layers, use_program_cache, reset
 
         # Measure PCC if also running reference model
         if run_ref_pt:
-            if is_ci_env and i == iterations - 1:  # On last iteration in CI set a tighter PCC
+            if layers == 1 and i == iterations - 1:  # On last iteration in the quick test, set a tighter PCC
                 passing, pcc_message = comp_pcc(ref_output, tt_output_torch, final_model_pcc)
             else:
                 passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)
@@ -207,7 +204,9 @@ def test_llama_model_inference(device, weights, layers, use_program_cache, reset
                         )
                         cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
                         cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
-                        if is_ci_env and i == iterations - 1:  # On last iteration in CI set a tighter PCC
+                        if (
+                            layers == 1 and i == iterations - 1
+                        ):  # On last iteration in the quick test, set a tighter PCC
                             if kv_cache == 0:  # K cache
                                 does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, final_k_cache_pcc)
                             else:  # V cache
