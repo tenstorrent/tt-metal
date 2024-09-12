@@ -137,13 +137,18 @@ Every Wormhole Ethernet core is uniform in performance, all capable of sending a
 
 Minimum Packet Size: 16 B  
 Maximum Packet Size: 1500 B  
-Packet Header Size + CRC: 22 + 1 B = 33B
+Packet Overheads: 50+B
+- 14B Raw Packet header
+- 16 Byte Packet header
+- 16B MAC header
+- some bytes for FEC header
+- 4B CRC
 
-The numbers above lead to a workload bandwidth utilization curve which is shown below. For any reasonably sized payload (as small as a single bfp4 tile) leads to minimal overheads of less than 5%. Payloads larger than 1KB are in the roughly 3% to 1.5% packet header overhead range. 
+The numbers above lead to a workload bandwidth utilization curve which is shown below. For any reasonably sized payload (as small as a single bfp4 tile) leads to minimal overheads. For small packets, ~91% utilization is possible and for typical packets - tiles of bfp8, fp16 - there are overheads of  less than 5% . Payloads larger than 1KB are in the roughly 6% to 3% packet header + CRC overhead range. 
 
 Note: The payload sent can be larger than the maximum packet size. The Ethernet subsystem will break the larger payload into smaller packets.  
 
-![](images/workload_theoretical_peak_util.png) 
+![](images/workload_theoretical_peak_util.svg) 
 
 In aggregate, when all 16 Ethernet links are active, a single Wormhole chip provides 1600Gbps of ethernet bandwidth in each direction, for a total of 3200 Gbps (400 GB/s) bi-directional bandwidth. 
 
