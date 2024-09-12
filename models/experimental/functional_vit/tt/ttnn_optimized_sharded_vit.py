@@ -13,97 +13,108 @@ import ttnn
 
 from ttnn.dot_access import DotAccessDict
 
+core_grid = ttnn.CoreGrid(y=8, x=12)
+
 
 def update_model_config(config, batch_size):
     core_grid = ttnn.CoreGrid(y=8, x=12)
+    seqL_t = int(224 / 32)  # 7
+    dim_t = int(768 / 32)  # 24
+    dim_t__x = int(dim_t / core_grid.x)  # 2
+    head_num = 12
+    head_seqL_t = int(head_num * seqL_t / core_grid.x)  # 7
+    head_size_t__x = int(dim_t / head_num)  # 2
+    class__x = int(1152 / 32 / core_grid.x)  # 3
+
+    print(seqL_t, dim_t__x, head_seqL_t, head_size_t__x, class__x)
 
     # sharding configs
     program_configs = {
         "query_key_value_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=2,
+            in0_block_w=dim_t__x,  # 2,
             out_subblock_h=1,
-            out_subblock_w=6,
-            per_core_M=7,
-            per_core_N=6,
+            out_subblock_w=int(3 * dim_t__x),  # 6,
+            per_core_M=seqL_t,  # 7,
+            per_core_N=int(3 * dim_t__x),  # 6,
             transpose_mcast=False,
             fused_activation=None,
         ),
         "query_by_key_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=2,
+            in0_block_w=dim_t__x,  # 2,
             out_subblock_h=1,
-            out_subblock_w=7,
-            per_core_M=7,
-            per_core_N=7,
+            out_subblock_w=seqL_t,  # 7,
+            per_core_M=seqL_t,  # 7,
+            per_core_N=head_seqL_t,  # 7,
         ),
         "attention_probabilities_by_value_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=7,
+            in0_block_w=seqL_t,  # 7,
             out_subblock_h=1,
-            out_subblock_w=2,
-            per_core_M=7,
-            per_core_N=2,
+            out_subblock_w=head_size_t__x,  # 2,
+            per_core_M=seqL_t,  # 7,
+            per_core_N=head_size_t__x,  # 2,
         ),
         "self_output_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=2,
-            out_subblock_h=7,
-            out_subblock_w=2,
-            per_core_M=7,
-            per_core_N=2,
+            in0_block_w=dim_t__x,  # 2,
+            out_subblock_h=seqL_t,  # 7,
+            out_subblock_w=dim_t__x,  # 2,
+            per_core_M=seqL_t,  # 7,
+            per_core_N=dim_t__x,  # 2,
             transpose_mcast=False,
             fused_activation=None,
         ),
         "ff1_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=2,
+            in0_block_w=dim_t__x,  # 2,
             out_subblock_h=1,
-            out_subblock_w=4,
-            per_core_M=7,
-            per_core_N=8,
+            out_subblock_w=int(4 * dim_t__x / 2),  # 4,
+            per_core_M=seqL_t,  # 7,
+            per_core_N=int(4 * dim_t__x),  # 8,
             transpose_mcast=False,
             fused_activation=(ttnn.UnaryOpType.GELU, True),
         ),
         "ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=8,
-            out_subblock_h=7,
-            out_subblock_w=2,
-            per_core_M=7,
-            per_core_N=2,
+            in0_block_w=int(4 * dim_t__x),  # 8,
+            out_subblock_h=seqL_t,  # 7,
+            out_subblock_w=dim_t__x,  # 2,
+            per_core_M=seqL_t,  # 7,
+            per_core_N=dim_t__x,  # 2,
             transpose_mcast=False,
             fused_activation=None,
         ),
         "classifer_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=2,
+            in0_block_w=dim_t__x,  # 2,
             out_subblock_h=1,
-            out_subblock_w=3,
-            per_core_M=7,
-            per_core_N=3,
+            out_subblock_w=class__x,  # 3,
+            per_core_M=seqL_t,  # 7,
+            per_core_N=class__x,  # 3,
             transpose_mcast=False,
             fused_activation=(ttnn.UnaryOpType.GELU, True),
         ),
         "layernorm_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            subblock_w=2,
-            block_h=7,
-            block_w=2,
+            subblock_w=dim_t__x,  # 2,
+            block_h=seqL_t,  # 7,
+            block_w=dim_t__x,  # 2,
             inplace=False,
         ),
         "layernorm_after_output_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            subblock_w=2,
-            block_h=7,
-            block_w=2,
+            subblock_w=dim_t__x,  # 2,
+            block_h=seqL_t,  # 7,
+            block_w=dim_t__x,  # 2,
             inplace=False,
         ),
         "softmax_program_config": ttnn.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            subblock_w=7,
-            block_h=7,
-            block_w=7,
+            subblock_w=head_seqL_t,  # 7,
+            block_h=seqL_t,  # 7,
+            block_w=head_seqL_t,  # 7,
         ),
     }
 
