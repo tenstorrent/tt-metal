@@ -532,30 +532,30 @@ all_binary_ops = [
         "name": "ttnn.bcast_mul_hw",
         "shape_func": bcast_hw_shape_func,
     },
-    {
-        "op": ttnn.add,
-        "name": "ttnn.complex_add",
-        "is_complex": [True, True],
-        "need_out_mem_cfg": True,
-    },
-    {
-        "op": ttnn.sub,
-        "name": "ttnn.complex_sub",
-        "is_complex": [True, True],
-        "need_out_mem_cfg": True,
-    },
-    {
-        "op": ttnn.multiply,
-        "name": "ttnn.complex_mul",
-        "is_complex": [True, True],
-        "need_out_mem_cfg": True,
-    },
-    {
-        "op": ttnn.divide,
-        "name": "ttnn.complex_div",
-        "is_complex": [True, True],
-        "need_out_mem_cfg": True,
-    },
+    # {
+    #     "op": ttnn.add,
+    #     "name": "ttnn.complex_add",
+    #     "is_complex": [True, True],
+    #     "need_out_mem_cfg": True,
+    # },
+    # {
+    #     "op": ttnn.sub,
+    #     "name": "ttnn.complex_sub",
+    #     "is_complex": [True, True],
+    #     "need_out_mem_cfg": True,
+    # },
+    # {
+    #     "op": ttnn.multiply,
+    #     "name": "ttnn.complex_mul",
+    #     "is_complex": [True, True],
+    #     "need_out_mem_cfg": True,
+    # },
+    # {
+    #     "op": ttnn.divide,
+    #     "name": "ttnn.complex_div",
+    #     "is_complex": [True, True],
+    #     "need_out_mem_cfg": True,
+    # },
     {
         "op": concat_0,
         "name": "ttnn.concat_dim_0",
@@ -1188,7 +1188,7 @@ def ttnn_slice(x):
 
 
 def typecast(x):
-    ttnn.typecast(x, tt_lib.tensor.DataType.BFLOAT8_B)
+    ttnn.typecast(x, ttnn.bfloat8_b)
 
 
 def arange(x):
