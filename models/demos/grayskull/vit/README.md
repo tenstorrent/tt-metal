@@ -22,7 +22,7 @@ To run the demo for question answering using the Bloom model, follow these instr
 -  For the inference overall rutime (end-2-end), use the following command to run the demo:
 
   ```sh
-  pytest --disable-warnings  models/demos/grayskull/vit/demo/demo_vit_ttnn_inference_throughput.py
+  pytest --disable-warnings  models/demos/grayskull/vit/demo/demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
   ```
 
 -  For running the inference device OPs analysis, use the following command to run the demo:

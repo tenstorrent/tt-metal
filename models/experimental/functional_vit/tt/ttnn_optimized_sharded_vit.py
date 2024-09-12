@@ -17,37 +17,8 @@ from ttnn.dot_access import DotAccessDict
 def update_model_config(config, batch_size):
     core_grid = ttnn.CoreGrid(y=8, x=12)
 
+    # sharding configs
     program_configs = {
-        "fold_output_program_config": ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(
-                ttnn.CoreRangeSet(
-                    {
-                        ttnn.CoreRange(
-                            ttnn.CoreCoord(0, 0),
-                            ttnn.CoreCoord(12, 7),
-                        ),
-                    }
-                ),
-                [
-                    224,
-                    192,
-                ],
-                ttnn.ShardOrientation.ROW_MAJOR,
-                False,
-            ),
-        ),
-        "embedding_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=3,
-            out_subblock_h=1,
-            out_subblock_w=6,
-            per_core_M=7,
-            per_core_N=6,
-            transpose_mcast=False,
-            fused_activation=None,
-        ),
         "query_key_value_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             in0_block_w=2,
@@ -119,9 +90,6 @@ def update_model_config(config, batch_size):
             subblock_w=2,
             block_h=7,
             block_w=2,
-            # math_fidelity=ttnn.MathFidelity.HiFi4,
-            # im_data_format=ttnn.bfloat16,
-            # out_data_format=ttnn.bfloat8_b,
             inplace=False,
         ),
         "layernorm_after_output_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -129,9 +97,6 @@ def update_model_config(config, batch_size):
             subblock_w=2,
             block_h=7,
             block_w=2,
-            # math_fidelity=ttnn.MathFidelity.HiFi4,
-            # im_data_format=ttnn.bfloat16,
-            # out_data_format=ttnn.bfloat8_b,
             inplace=False,
         ),
         "softmax_program_config": ttnn.SoftmaxShardedMultiCoreProgramConfig(
@@ -139,8 +104,6 @@ def update_model_config(config, batch_size):
             subblock_w=7,
             block_h=7,
             block_w=7,
-            # math_fidelity=ttnn.MathFidelity.HiFi4,
-            # im_data_format=ttnn.bfloat16,
         ),
     }
 
@@ -162,38 +125,9 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
 
     folded_pixel_values = ttnn.fold(pixel_values, stride_h, stride_w)  # 1568, 1024
     ttnn.deallocate(pixel_values)
-    folded_pixel_values = ttnn.to_memory_config(
-        folded_pixel_values, memory_config=ttnn.L1_MEMORY_CONFIG
-    )  # Convert back to interleaved or otherwise to_layout will fail
+    folded_pixel_values = ttnn.to_memory_config(folded_pixel_values, memory_config=ttnn.L1_MEMORY_CONFIG)
+    # Convert back to interleaved or otherwise to_layout will fail
     folded_pixel_values = ttnn.to_layout(folded_pixel_values, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-
-    #### Exp 1 of resharding after Fold and before Matmul
-    # pixel_values = ttnn.pad(pixel_values, ((0, 0), (0, 0), (0, 224), (0, 128)), 0)
-    # output_sharded_memory_config_args = dict(core_grid=ttnn.CoreGrid(y=8, x=12), strategy=ttnn.ShardStrategy.BLOCK)
-    # input_shape = [fold_h_padded, fold_w_padded]
-    # output_shard_memory_config = ttnn.create_sharded_memory_config(input_shape, **output_sharded_memory_config_args)
-    # resharded_pixel_values = ttnn.to_memory_config(pixel_values, output_shard_memory_config)
-
-    #### Exp 2 of resharding after Fold and before Matmul
-    # pixel_values = ttnn.pad(pixel_values, ((0, 0), (0, 0), (0, 224), (0, 128)), 0)
-    # post_fold_config = ttnn.MemoryConfig(
-    #     ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-    #     ttnn.BufferType.L1,
-    #     ttnn.ShardSpec(
-    #         ttnn.CoreRangeSet(
-    #             {ttnn.CoreRange(
-    #                     ttnn.CoreCoord(0, 0),
-    #                     ttnn.CoreCoord(11, 7),
-    #             ),},
-    #         ),
-    #         [224,192],
-    #         ttnn.ShardOrientation.ROW_MAJOR,
-    #         False,
-    #     ),
-    # )
-    # resharded_pixel_values = ttnn.reshard(pixel_values, post_fold_config)
-
-    # return resharded_pixel_values
 
     if unittest_check:
         parameters = parameters.vit.embeddings.patch_embeddings
@@ -205,9 +139,7 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
         core_grid=ttnn.CoreGrid(y=8, x=12),
-        # program_config=config.program_configs["embedding_matmul_program_config"],
     )
-    # ttnn.deallocate(pixel_values)
 
     patch_embedding_output = ttnn.to_layout(patch_embedding_output, layout=ttnn.ROW_MAJOR_LAYOUT)
     patch_embedding_output = ttnn.reshape(patch_embedding_output, (batch_size, patch_count_all, patch_size_sq_trpl))
@@ -233,8 +165,6 @@ def vit_embeddings(
     embedding_output = ttnn.add(
         embedding_output, position_embeddings, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
     )
-    # Needed to improve PCC in an older commit
-    # embedding_output = ttnn.pad(embedding_output, ((0, 0), (0, 27), (0, 0)), 0)
 
     return embedding_output
 
