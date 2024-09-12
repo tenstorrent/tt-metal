@@ -25,6 +25,7 @@ jobs:
     with:
       arch: '["blackhole"]'
   build-wheels:
+    needs: build-artifact
     uses: ./.github/workflows/_build-wheels-impl.yaml
     with:
       os: "ubuntu-20.04"
