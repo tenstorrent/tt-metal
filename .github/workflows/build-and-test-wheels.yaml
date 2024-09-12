@@ -17,7 +17,7 @@ jobs:
     secrets: inherit
   build-wheels:
     needs: build-artifact
-    needs: ${{ always() }}
+    if: ${{ always() }}
     strategy:
       matrix:
         # Since pre-compiled builds only run on 20.04, we can only test on 20.04 for now
