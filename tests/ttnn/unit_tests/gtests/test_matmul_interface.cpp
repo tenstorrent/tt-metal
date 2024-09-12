@@ -49,11 +49,11 @@ struct InputShapeTestParam {
 };
 
 class MatmulInterfaceTestFixture : public TTNNFixtureWithDevice,
-                                 public testing::WithParamInterface<std::tuple<
-                                     InputShapeTestParam,
-                                     InputShapeTestParam,
-                                     InputShapeTestParam,
-                                     tt::tt_metal::IGraphProcessor::RunMode>> {};
+                                   public testing::WithParamInterface<std::tuple<
+                                       InputShapeTestParam,
+                                       InputShapeTestParam,
+                                       InputShapeTestParam,
+                                       tt::tt_metal::IGraphProcessor::RunMode>> {};
 
 TEST_P(MatmulInterfaceTestFixture, MatmulInterfaceTest) {
     auto param_combination = GetParam();
@@ -82,21 +82,26 @@ TEST_P(MatmulInterfaceTestFixture, MatmulInterfaceTest) {
     input_a.shape = pad_shape_to_tile(input_a.shape);
     input_b.shape = pad_shape_to_tile(input_b.shape);
     ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig matmul_program_config =
-    ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
+        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
             .compute_with_storage_grid_size = CoreCoord(8, 8),
             .in0_block_w = 1,
             .out_subblock_h = 1,
-            .out_subblock_w = 4,
-            .per_core_M = 8,
-            .per_core_N = 16,
-            .transpose_mcast=false,
-            .fused_activation=std::nullopt};
+            .out_subblock_w = 1,
+            .per_core_M = 5,
+            .per_core_N = 5,
+            .transpose_mcast = false,
+            .fused_activation = std::nullopt};
     std::cout << "OP = " << input_a.shape << " + " << input_b.shape << std::endl;
 
     // Check input params against op constraints
     try {
         std::unique_ptr<MatmulOpConstraintsBuilder> builder = MatmulOpConstraintsFactory::Make(
-            input_a.shape, input_a.memory_config, input_b.shape, input_b.memory_config, input_o.memory_config, matmul_program_config);
+            input_a.shape,
+            input_a.memory_config,
+            input_b.shape,
+            input_b.memory_config,
+            input_o.memory_config,
+            matmul_program_config);
         if (builder) {
             const auto op_constraints =
                 (*builder)
@@ -137,7 +142,6 @@ TEST_P(MatmulInterfaceTestFixture, MatmulInterfaceTest) {
                 matmul_program_config);
             return output_tensor;
         };
-
     }
 }
 
@@ -147,7 +151,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Combine(
         ::testing::Values(
             InputShapeTestParam{
-                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32 * 64, 32}),
+                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32 * 32, 32}),
                 .memory_config =
                     {.memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
                      .buffer_type = tt::tt_metal::BufferType::L1,
@@ -158,7 +162,7 @@ INSTANTIATE_TEST_SUITE_P(
                              ShardOrientation::COL_MAJOR}},
             },
             InputShapeTestParam{
-                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32, 32 * 64}),
+                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32, 32 * 32}),
                 .memory_config =
                     {.memory_layout = tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
                      .buffer_type = tt::tt_metal::BufferType::L1,
@@ -171,24 +175,24 @@ INSTANTIATE_TEST_SUITE_P(
 
         ::testing::Values(
             InputShapeTestParam{
-                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32 * 64, 32}),
+                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32 * 32, 32}),
                 .memory_config =
                     {.memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
                      .buffer_type = tt::tt_metal::BufferType::L1,
                      .shard_spec =
                          tt::tt_metal::ShardSpec{
-                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 7}}}},
+                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{0, 7}}}},
                              {160, 32},
                              ShardOrientation::COL_MAJOR}},
             },
             InputShapeTestParam{
-                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32, 32 * 64}),
+                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32, 32 * 32}),
                 .memory_config =
                     {.memory_layout = tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
                      .buffer_type = tt::tt_metal::BufferType::L1,
                      .shard_spec =
                          tt::tt_metal::ShardSpec{
-                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 7}}}},
+                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{0, 7}}}},
                              {32, 160},
                              ShardOrientation::COL_MAJOR}},
             }),
@@ -196,7 +200,7 @@ INSTANTIATE_TEST_SUITE_P(
             InputShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32, 32}),
                 .memory_config =
-                    {.memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+                    {.memory_layout = tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
                      .buffer_type = tt::tt_metal::BufferType::L1,
                      .shard_spec =
                          tt::tt_metal::ShardSpec{
@@ -205,9 +209,9 @@ INSTANTIATE_TEST_SUITE_P(
                              ShardOrientation::COL_MAJOR}},
             },
             InputShapeTestParam{
-                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32 * 64, 32 * 64}),
+                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32 * 32, 32 * 32}),
                 .memory_config =
-                    {.memory_layout = tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
+                    {.memory_layout = tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
                      .buffer_type = tt::tt_metal::BufferType::L1,
                      .shard_spec =
                          tt::tt_metal::ShardSpec{
