@@ -5,7 +5,10 @@
 #include <optional>
 #include <tuple>
 
-L1InterfaceOpParams get_larger_eltwise_op_params_by_volume(const L1InterfaceOpParams& a, const L1InterfaceOpParams& b) {
+#include "ttnn/operations/common/l1_interface_common.hpp"
+
+L1InterfaceOperandParams get_larger_eltwise_op_params_by_volume(
+    const L1InterfaceOperandParams& a, const L1InterfaceOperandParams& b) {
     if (std::get<ttnn::types::Shape>(a).volume() > std::get<ttnn::types::Shape>(b).volume()) {
         return a;
     } else {
@@ -14,10 +17,10 @@ L1InterfaceOpParams get_larger_eltwise_op_params_by_volume(const L1InterfaceOpPa
 };
 
 std::vector<std::tuple<uint32_t, uint32_t>> get_circular_buffer_l1_allocations_per_core_eltwise_impl(
-    const L1InterfaceOpParams& input_a,
-    const L1InterfaceOpParams& input_b,
-    const L1InterfaceOpParams& output,
-    const std::optional<L1InterfaceOpParams>& repeat = std::nullopt,
+    const L1InterfaceOperandParams& input_a,
+    const L1InterfaceOperandParams& input_b,
+    const L1InterfaceOperandParams& output,
+    const std::optional<L1InterfaceOperandParams>& repeat = std::nullopt,
     const std::optional<ShardSpec>& op_shard_spec = std::nullopt) {
     std::vector<std::tuple<uint32_t, uint32_t>> sizes;
     if (repeat.has_value()) {
@@ -28,21 +31,23 @@ std::vector<std::tuple<uint32_t, uint32_t>> get_circular_buffer_l1_allocations_p
 
     const uint32_t max_block_size = calculate_max_block_size(op_shard_spec);
 
+    const auto get_operand_cb_size = [max_block_size](const L1InterfaceOperandParams& operand) {
+        return is_sharded(operand) ? c_cb_shares_space_with_sharded_operand
+                                   : calculate_circular_buffer_l1_allocation_size_per_core(operand, max_block_size);
+    };
+
     sizes.emplace_back(std::make_tuple(
-        calculate_circular_buffer_l1_allocation_size_per_core(input_a, max_block_size),
-        get_num_of_cores(std::get<tt::tt_metal::MemoryConfig>(input_a).shard_spec)));
+        get_operand_cb_size(input_a), get_num_of_cores(std::get<tt::tt_metal::MemoryConfig>(input_a).shard_spec)));
     sizes.emplace_back(std::make_tuple(
-        calculate_circular_buffer_l1_allocation_size_per_core(input_b, max_block_size),
-        get_num_of_cores(std::get<tt::tt_metal::MemoryConfig>(input_b).shard_spec)));
+        get_operand_cb_size(input_b), get_num_of_cores(std::get<tt::tt_metal::MemoryConfig>(input_b).shard_spec)));
     sizes.emplace_back(std::make_tuple(
-        calculate_circular_buffer_l1_allocation_size_per_core(output, max_block_size),
-        get_num_of_cores(std::get<tt::tt_metal::MemoryConfig>(output).shard_spec)));
+        get_operand_cb_size(output), get_num_of_cores(std::get<tt::tt_metal::MemoryConfig>(output).shard_spec)));
 
     return sizes;
 }
 
 std::vector<std::tuple<uint32_t, uint32_t>> get_tensor_l1_allocations_per_core_eltwise_impl(
-    const L1InterfaceOpParams& output, const std::optional<L1InterfaceOpParams>& repeat = std::nullopt) {
+    const L1InterfaceOperandParams& output, const std::optional<L1InterfaceOperandParams>& repeat = std::nullopt) {
     std::vector<std::tuple<uint32_t, uint32_t>> sizes;
 
     if (repeat.has_value()) {
@@ -60,7 +65,9 @@ std::vector<std::tuple<uint32_t, uint32_t>> get_tensor_l1_allocations_per_core_e
 
 #include "binary_constraints.hpp"  // for EltwiseOpConstraintsDirector::GetEltwiseOpType(..)
 std::unique_ptr<EltwiseOpL1Usage> EltwiseOpL1UsageFactory::Make(
-    const L1InterfaceOpParams& input_a, const L1InterfaceOpParams& input_b, const L1InterfaceOpParams& output) {
+    const L1InterfaceOperandParams& input_a,
+    const L1InterfaceOperandParams& input_b,
+    const L1InterfaceOperandParams& output) {
     const auto input_shape_a = std::get<ttnn::types::Shape>(input_a);
     const auto memory_config_a = std::get<tt::tt_metal::MemoryConfig>(input_a);
     const auto input_shape_b = std::get<ttnn::types::Shape>(input_b);
@@ -84,11 +91,13 @@ std::unique_ptr<EltwiseOpL1Usage> EltwiseOpL1UsageFactory::Make(
 };
 
 EltwiseOpL1Usage::EltwiseOpL1Usage(
-    const L1InterfaceOpParams& input_a, const L1InterfaceOpParams& input_b, const L1InterfaceOpParams& output) :
+    const L1InterfaceOperandParams& input_a,
+    const L1InterfaceOperandParams& input_b,
+    const L1InterfaceOperandParams& output) :
     input_a(input_a), input_b(input_b), output(output), repeat(calculate_repeat_buffer_impl(input_a, input_b)){};
 
-std::optional<L1InterfaceOpParams> EltwiseOpL1Usage::calculate_repeat_buffer_impl(
-    const L1InterfaceOpParams& input_a, const L1InterfaceOpParams& input_b) {
+std::optional<L1InterfaceOperandParams> EltwiseOpL1Usage::calculate_repeat_buffer_impl(
+    const L1InterfaceOperandParams& input_a, const L1InterfaceOperandParams& input_b) {
     const auto shape_a = std::get<ttnn::types::Shape>(input_a);
     const auto shape_b = std::get<ttnn::types::Shape>(input_b);
 
@@ -137,7 +146,9 @@ std::optional<ShardSpec> EltwiseOpL1Usage::get_op_shard_spec() const {
 }
 
 ElementWiseMultiCoreOpL1Usage::ElementWiseMultiCoreOpL1Usage(
-    const L1InterfaceOpParams& input_a, const L1InterfaceOpParams& input_b, const L1InterfaceOpParams& output) :
+    const L1InterfaceOperandParams& input_a,
+    const L1InterfaceOperandParams& input_b,
+    const L1InterfaceOperandParams& output) :
     EltwiseOpL1Usage(input_a, input_b, output) {}
 
 std::vector<std::tuple<uint32_t, uint32_t>>
@@ -151,7 +162,9 @@ std::vector<std::tuple<uint32_t, uint32_t>> ElementWiseMultiCoreOpL1Usage::get_t
 }
 
 BroadcastWidthMultiCoreOpL1Usage::BroadcastWidthMultiCoreOpL1Usage(
-    const L1InterfaceOpParams& input_a, const L1InterfaceOpParams& input_b, const L1InterfaceOpParams& output) :
+    const L1InterfaceOperandParams& input_a,
+    const L1InterfaceOperandParams& input_b,
+    const L1InterfaceOperandParams& output) :
     EltwiseOpL1Usage(input_a, input_b, output) {}
 
 std::vector<std::tuple<uint32_t, uint32_t>>

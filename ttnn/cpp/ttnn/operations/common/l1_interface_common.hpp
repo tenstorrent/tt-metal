@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <tuple>
 #include <vector>
@@ -22,7 +23,9 @@ struct Shape;
 }
 }  // namespace ttnn
 
-using L1InterfaceOpParams =
+constexpr static uint32_t c_cb_shares_space_with_sharded_operand = std::numeric_limits<uint32_t>::max();
+
+using L1InterfaceOperandParams =
     std::tuple<ttnn::types::Shape, tt::tt_metal::DataType, tt::tt_metal::Layout, tt::tt_metal::MemoryConfig>;
 
 uint32_t calculate_circular_buffer_l1_allocation_size_per_core(
@@ -33,12 +36,12 @@ uint32_t calculate_circular_buffer_l1_allocation_size_per_core(
     const uint32_t max_block_size);
 
 inline uint32_t calculate_circular_buffer_l1_allocation_size_per_core(
-    L1InterfaceOpParams input, uint32_t max_block_size) {
+    L1InterfaceOperandParams operand, uint32_t max_block_size) {
     return calculate_circular_buffer_l1_allocation_size_per_core(
-        std::get<ttnn::types::Shape>(input),
-        std::get<tt::tt_metal::DataType>(input),
-        std::get<tt::tt_metal::Layout>(input),
-        std::get<tt::tt_metal::MemoryConfig>(input),
+        std::get<ttnn::types::Shape>(operand),
+        std::get<tt::tt_metal::DataType>(operand),
+        std::get<tt::tt_metal::Layout>(operand),
+        std::get<tt::tt_metal::MemoryConfig>(operand),
         max_block_size);
 }
 
@@ -48,12 +51,12 @@ uint32_t calculate_tensor_l1_allocation_size_per_core(
     const tt::tt_metal::Layout& layout,
     const tt::tt_metal::MemoryConfig& memory_config);
 
-inline uint32_t calculate_tensor_l1_allocation_size_per_core(L1InterfaceOpParams input) {
+inline uint32_t calculate_tensor_l1_allocation_size_per_core(const L1InterfaceOperandParams& operand) {
     return calculate_tensor_l1_allocation_size_per_core(
-        std::get<ttnn::types::Shape>(input),
-        std::get<tt::tt_metal::DataType>(input),
-        std::get<tt::tt_metal::Layout>(input),
-        std::get<tt::tt_metal::MemoryConfig>(input));
+        std::get<ttnn::types::Shape>(operand),
+        std::get<tt::tt_metal::DataType>(operand),
+        std::get<tt::tt_metal::Layout>(operand),
+        std::get<tt::tt_metal::MemoryConfig>(operand));
 }
 
 uint32_t get_num_of_cores(const std::optional<tt::tt_metal::ShardSpec>& shard_spec = std::nullopt);
@@ -63,3 +66,7 @@ uint32_t get_num_pages(const tt::tt_metal::ShardSpec& shard_spec);
 uint32_t calculate_repeat_circular_buffer_size(tt::tt_metal::DataType data_type);
 
 uint32_t calculate_max_block_size(const std::optional<tt::tt_metal::ShardSpec>& shard_spec);
+
+bool is_sharded(const L1InterfaceOperandParams& operand);
+
+uint32_t get_tile_size(const L1InterfaceOperandParams& operand);

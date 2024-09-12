@@ -2,6 +2,7 @@
 set(TTNN_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_add.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_graph_add.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_mlir_interface.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_binary_interface.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_softmax_interface.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_unary_interface.cpp
