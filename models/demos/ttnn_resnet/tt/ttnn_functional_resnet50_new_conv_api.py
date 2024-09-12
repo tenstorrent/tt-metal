@@ -628,7 +628,7 @@ class resnet50:
 
         conv_dummy_tensor = torch.rand((self.fold_output_shape), dtype=torch.bfloat16)
         conv_dummy_tensor = ttnn.from_torch(conv_dummy_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-        _, self.override_fold_mem_config, _ = ttnn.get_conv_padded_input_shape_and_mem_config(
+        _, self.override_fold_mem_config, _, _ = ttnn.get_conv_padded_input_shape_and_mem_config(
             device=device,
             input_tensor=conv_dummy_tensor,
             conv_config=self.conv1_config,
