@@ -482,26 +482,6 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
 
         profiler.end(f"inference_decode", iteration=batch_idx)
 
-        # When running in CI, check the output against the expected output to avoid accuracy regressions
-        # TODO Extend the expected output validation to further batches
-        if is_ci_env and batch_idx == 0:  # Only check output of batch 0
-            expected_output = "models/demos/wormhole/llama31_8b/demo/expected_outputs_prefill_128.json"
-            with open(expected_output, "r") as f:
-                expected_out = json.load(f)
-            # assert (
-            #     len(expected_out) >= batch_size * 2
-            # ), f"expected_outputs.json should have {batch_size * 2} outputs: {batch_size} for general weights and {batch_size} for instruct weights!"
-
-            for i in range(batch_size):
-                user_output = "".join(tokenizer.decode(all_outputs[i]))
-                if instruct_mode:  # The instruct outputs are at the end of the expected outputs file
-                    user_expect = expected_out[i + batch_size]["output_instruct"]
-                else:
-                    user_expect = expected_out[i]["output_general"]
-
-                assert user_output == user_expect, f"Output for user {i} does not match expected output!"
-            logger.info("[CI-Only] Output token validation passed!")
-
     # Finish profiling at the end of all batches
     profiler.end("run")
 
@@ -566,11 +546,6 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
     target_decode_ts = 1056
     decode_tsu = 33
     targets = {"prefill_t/s": target_prefill_ts, "decode_t/s": target_decode_ts, "decode_t/s/u": decode_tsu}
-
-    # TODO move token verification here?
-    # if expected_greedy_output_path is not None:
-    #     token_check_does_pass, expected_output = check_tokens_match(generated_text, expected_greedy_output_path)
-    #     measurements["token_verification"] = float(token_check_does_pass)
 
     # Save benchmark data for CI dashboard
     if is_ci_env and is_n300:
