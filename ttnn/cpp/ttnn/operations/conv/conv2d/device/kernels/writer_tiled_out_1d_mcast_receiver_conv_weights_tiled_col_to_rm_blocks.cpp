@@ -4,8 +4,17 @@
 
 #include "dataflow_api.h"
 
-// #include "debug/dprint.h"
-
+#include "debug/dprint.h"
+inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
+    for (uint32_t page = 0; page < npages; ++ page) {
+        DPRINT << start + page << ": ";
+        for (uint32_t j = 0; j < pagelen; ++ j, ++ ptr) {
+            DPRINT << BF16(*ptr) << " ";
+        }
+        DPRINT << ENDL();
+    }
+}
 
 void kernel_main() {
     // This writer is for output tensor in tile format
@@ -43,6 +52,7 @@ void kernel_main() {
     constexpr uint32_t out_width_num_tiles = get_compile_time_arg_val(28);
 
     constexpr uint32_t out_addr = get_compile_time_arg_val(29);
+    constexpr uint32_t output_rows_h          = get_compile_time_arg_val(32);
 
     constexpr uint32_t total_weight_num_tiles = weight_block_height_num_outer * num_blocks_weight_h * weight_block_num_tiles;
 
@@ -212,6 +222,13 @@ void kernel_main() {
     } // out_num_blocks_w
 
     #ifdef SHARDED_OUT
-    cb_wait_front(cb_id_out0, out_subblock_tile_count * out_num_subblocks_h * out_num_subblocks_w * out_num_blocks_w * out_num_blocks_h);
+        #ifndef USE_MAX_CORES
+        //DPRINT << out_subblock_tile_count * out_num_subblocks_h * out_num_subblocks_w * out_num_blocks_w * out_num_blocks_h << ENDL();
+        //DPRINT << "SHARDED_OUT_NOT_SUPPORTED" << ENDL();
+        //print_pages( get_read_ptr(cb_id_out0), 64, 64, 0);
+        cb_wait_front(cb_id_out0, out_subblock_tile_count * out_num_subblocks_h * out_num_subblocks_w * out_num_blocks_w * out_num_blocks_h);
+        #else
+        cb_wait_front(cb_id_out0, output_rows_h);
+        #endif
     #endif
 }

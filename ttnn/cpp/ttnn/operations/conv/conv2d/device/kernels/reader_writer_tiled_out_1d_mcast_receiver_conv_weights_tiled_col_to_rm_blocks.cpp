@@ -45,14 +45,14 @@ void kernel_main() {
     constexpr uint32_t out_addr = get_compile_time_arg_val(29);
 
     // MCAST args
-    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(32);
-    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(33);
-    constexpr uint32_t conv_act_size_c_bytes = get_compile_time_arg_val(34);
-    constexpr uint32_t coalesced_read_bytes = get_compile_time_arg_val(35);
-    constexpr uint32_t window_outer_offset = get_compile_time_arg_val(36);
-    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(37);
-    constexpr uint32_t act_block_h_datums_first_reader = get_compile_time_arg_val(38);
-    constexpr uint32_t act_block_h_datums_last_block = get_compile_time_arg_val(39);
+    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(33);
+    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(34);
+    constexpr uint32_t conv_act_size_c_bytes = get_compile_time_arg_val(35);
+    constexpr uint32_t coalesced_read_bytes = get_compile_time_arg_val(36);
+    constexpr uint32_t window_outer_offset = get_compile_time_arg_val(37);
+    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(38);
+    constexpr uint32_t act_block_h_datums_first_reader = get_compile_time_arg_val(39);
+    constexpr uint32_t act_block_h_datums_last_block = get_compile_time_arg_val(40);
 
     constexpr uint32_t act_block_h_datums_read_last_block =
         act_block_h_datums_last_block > act_block_h_datums
