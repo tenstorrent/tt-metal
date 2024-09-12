@@ -575,7 +575,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     if (packer_l1_acc) {
         compute_defines["PACKER_L1_ACC"] = "1";
     }
-
+    uint32_t num_output_tiles = per_core_out_matrix_height_ntiles*per_core_out_matrix_width_ntiles;
+    uint32_t use_non_tile_height = false;
     compute_kernel_args = {
         act_block_w_ntiles,           //in0_block_w
         act_num_subblocks,            //in0_num_sublocks
@@ -601,6 +602,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         untilize_out,                 //untilize_out
 
         bias_ntiles_per_core,
+
+        num_output_tiles,
+        use_non_tile_height,
 
         total_num_cores,              //in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
     };
@@ -676,7 +680,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
     uint32_t out_tile_size = tt_metal::detail::TileSize(out_df);
     uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_df);
-    uint32_t num_output_tiles = per_core_out_matrix_height_ntiles*per_core_out_matrix_width_ntiles;
 
 
         // Share buffer if same data format
