@@ -63,7 +63,7 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
                     input_tensor_a.shard_spec().value().shape[1], "Error");
             }
         } else {
-            TT_FATAL(false, "Unsupported sharding scheme");
+            TT_THROW("Unsupported sharding scheme");
         }
     } else {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");

@@ -7,6 +7,8 @@
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/common/core_coord.h"
 
+#include "third_party/magic_enum/magic_enum.hpp"
+
 using namespace tt;
 
 namespace {
@@ -178,7 +180,7 @@ string DispatchClassToString(enum dispatch_core_processor_classes proc_class, Co
             else
                 return "";
         default:
-            TT_THROW("Incompatible core type: {}", core_type);
+            TT_THROW("Incompatible core type: {}", magic_enum::enum_name(core_type));
     }
     return "";
 }

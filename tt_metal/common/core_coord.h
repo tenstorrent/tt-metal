@@ -255,9 +255,10 @@ class CoreRangeSet {
                 auto no_overlap = first_core_left_of_second or first_core_right_of_second or first_core_above_second or
                                   first_core_below_second;
                 if (not no_overlap) {
-                    TT_THROW(("Cannot create CoreRangeSet with specified core ranges because core ranges " +
-                              first_core_range.str() + " and " + second_core_range.str() + " overlap!")
-                                 .c_str());
+                    TT_THROW(
+                        "Cannot create CoreRangeSet with specified core ranges because core ranges {} and {} overlap!",
+                        first_core_range.str(),
+                        second_core_range.str());
                 }
             }
         }

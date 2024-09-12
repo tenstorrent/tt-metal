@@ -6,6 +6,8 @@ import math
 import ttnn
 import torch
 
+from typing import List
+
 from ttnn.operations.conv2d import determine_parallel_config, create_sharded_memory_config_from_parallel_config
 
 from models.utility_functions import nearest_32
@@ -23,6 +25,7 @@ def determine_num_cores_for_upsample(nhw: int, width: int, max_cores=64) -> int:
     return cores
 
 
+# TODO: Make this valid over any num_cores
 def get_core_grid_from_num_cores(num_cores: int):
     if num_cores == 44:
         return ttnn.CoreRangeSet(
@@ -42,38 +45,37 @@ def get_core_grid_from_num_cores(num_cores: int):
     raise RuntimeError(f"Could not get core grid given num_cores={num_cores}")
 
 
-def unet_concat(ttnn_tensors, dim=-1):
-    assert len(ttnn_tensors) > 0
+def unet_concat(inputs: List, dim=-1):
+    assert len(inputs) > 0
     assert dim < 0
-    ttlib_tensors = ttnn_tensors
-    all_sharded = all(t.is_sharded() for t in ttlib_tensors)
+    all_sharded = all(tensor.is_sharded() for tensor in inputs)
     if all_sharded:
-        max_idx, output_mem_config = max(
-            ((i, t.memory_config()) for i, t in enumerate(ttlib_tensors)), key=lambda m: m[1].shard_spec.num_cores()
+        max_idx, memory_config = max(
+            ((i, t.memory_config()) for i, t in enumerate(inputs)), key=lambda m: m[1].shard_spec.num_cores()
         )
-        for i in range(0, len(ttlib_tensors)):
+        for i in range(0, len(inputs)):
             if i == max_idx:
                 continue
-            t = ttlib_tensors[i]
+            t = inputs[i]
             t_mem_config = t.memory_config()
             t_shard_shape = t_mem_config.shard_spec.shape
-            output_shard_shape = output_mem_config.shard_spec.shape
+            output_shard_shape = memory_config.shard_spec.shape
             output_shard_shape[dim] += t_shard_shape[dim]
-            output_mem_config.shard_spec.shape = output_shard_shape
+            memory_config.shard_spec.shape = output_shard_shape
 
             reshard_shape = output_shard_shape
             reshard_shape[dim] = t_shard_shape[dim]
             if reshard_shape != t_shard_shape:
                 t_mem_config.shard_spec.shape = reshard_shape
-                t_mem_config.shard_spec.grid = output_mem_config.shard_spec.grid
-                t_mem_config.shard_spec.orientation = output_mem_config.shard_spec.orientation
-                ttlib_tensors[i] = ttnn.reshard(t, t_mem_config)
+                t_mem_config.shard_spec.grid = memory_config.shard_spec.grid
+                t_mem_config.shard_spec.orientation = memory_config.shard_spec.orientation
+                inputs[i] = ttnn.reshard(t, t_mem_config)
     else:
-        output_mem_config = ttnn.DRAM_MEMORY_CONFIG
-        for i in range(0, len(ttlib_tensors)):
-            if ttlib_tensors[i].is_sharded():
-                ttlib_tensors[i] = ttnn.to_memory_config(ttlib_tensors[i], output_mem_config)
-    return ttnn.concat(ttlib_tensors, dim=dim, memory_config=output_mem_config)
+        memory_config = ttnn.DRAM_MEMORY_CONFIG
+        for i in range(0, len(inputs)):
+            if inputs[i].is_sharded():
+                inputs[i] = ttnn.to_memory_config(inputs[i], memory_config)
+    return ttnn.concat(inputs, dim=dim, memory_config=memory_config)
 
 
 class UNetPointwiseConv2D:
@@ -106,7 +108,14 @@ class UNetPointwiseConv2D:
 
     def __call__(self, x):
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        x = ttnn.linear(x, self.weight, bias=self.bias, dtype=self.activation_dtype)
+        x = ttnn.linear(
+            x,
+            self.weight,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            bias=self.bias,
+            dtype=self.activation_dtype,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+        )
         return x
 
 
@@ -150,8 +159,10 @@ class UNetConv2D:
             deallocate_activation=self.deallocate_activation,
             fp32_dest_acc_enabled=True,
             packer_l1_accum_enabled=False,
-            enable_act_double_buffer=False,
-            enable_split_reader=False,
+            enable_act_double_buffer=(
+                conv.use_activation_double_buffer if "use_activation_double_buffer" in conv else False
+            ),
+            enable_split_reader=conv.use_split_reader if "use_split_reader" in conv else False,
             enable_subblock_padding=False,
             activation=activation,
             output_layout=ttnn.TILE_LAYOUT,
@@ -226,8 +237,20 @@ class UNetDownblock:
         should_reshard=False,
         mesh_mapper=None,
     ):
-        self.conv1 = UNetConv2D(conv1, bn=bn1, device=device, cache=conv_cache, mesh_mapper=mesh_mapper)
-        self.conv2 = UNetConv2D(conv2, bn=bn2, device=device, cache=conv_cache, mesh_mapper=mesh_mapper)
+        self.conv1 = UNetConv2D(
+            conv1,
+            bn=bn1,
+            device=device,
+            cache=conv_cache,
+            mesh_mapper=mesh_mapper,
+        )
+        self.conv2 = UNetConv2D(
+            conv2,
+            bn=bn2,
+            device=device,
+            cache=conv_cache,
+            mesh_mapper=mesh_mapper,
+        )
         self.pool1 = UNetMaxPool2D(pool, conv2.out_channels, device=device)
 
         self.should_reshard = should_reshard
@@ -447,7 +470,7 @@ class UNet:
             parameters.b6_3,
             device,
             conv_cache=self.conv_cache,
-            should_reshard=True,
+            should_reshard=False,
             mesh_mapper=mesh_mapper,
         )
         self.upblock3 = UNetUpblock(
@@ -471,7 +494,7 @@ class UNet:
             parameters.b8_3,
             device,
             conv_cache=self.conv_cache,
-            should_reshard=True,
+            should_reshard=False,
             mesh_mapper=mesh_mapper,
         )
 
@@ -483,15 +506,16 @@ class UNet:
 
     def bottleneck(self, x):
         if x.is_sharded():
-            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-        x = ttnn.interleaved_to_sharded(
-            x,
-            self.bnc_sharded_memory_config,
-        )
+            x = ttnn.reshard(x, self.bnc_sharded_memory_config)
+        else:
+            x = ttnn.interleaved_to_sharded(
+                x,
+                self.bnc_sharded_memory_config,
+            )
         x = self.bnc(x)
         return self.bnc2(x)
 
-    def __call__(self, x, original_shape, perf_mode=False):
+    def __call__(self, x):
         assert len(x.shape) == 4, f"Expected UNet input tensors to be rank 4 (was {len(x.shape)})"
 
         x = x.to(self.device, ttnn.L1_MEMORY_CONFIG)

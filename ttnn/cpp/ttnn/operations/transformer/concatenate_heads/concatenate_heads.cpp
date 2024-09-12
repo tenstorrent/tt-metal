@@ -18,16 +18,14 @@ struct ConcatenateHeads : public ttnn::operations::experimental::transformer::NL
 
         TT_FATAL(
             head_size % ttnn::types::TILE_SIZE == 0,
-            fmt::format(
                 "Head size must be a multiple of {} but was found to be {}. Update the matmul that uses the output of this "
                 "operation to include padding in the weights.",
                 ttnn::types::TILE_SIZE,
-                head_size));
+                head_size);
 
         TT_FATAL(
             padded_head_size - head_size == 0,
-            fmt::format("Head size ({}) cannot have tile padding. Ensure that the head size is not padded.", head_size));
-
+            "Head size ({}) cannot have tile padding. Ensure that the head size is not padded.", head_size);
 
         NLPConcatHeadsDeviceOperation::validate(input_tensors);
     }

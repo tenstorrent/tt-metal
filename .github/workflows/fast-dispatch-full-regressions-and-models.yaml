@@ -73,14 +73,14 @@ jobs:
               arch: wormhole_b0,
               runs-on: ["cloud-virtual-machine", "N300", "in-service"],
               cmd: tests/scripts/single_card/nightly/run_wh_b0_only.sh,
-              timeout: 80
+              timeout: 100
             },
             {
               name: "N150 WH-only models",
               arch: wormhole_b0,
               runs-on: ["cloud-virtual-machine", "N150", "in-service"],
               cmd: tests/scripts/single_card/nightly/run_wh_b0_only.sh,
-              timeout: 80
+              timeout: 100
             },
             {
               name: "API tests GS",

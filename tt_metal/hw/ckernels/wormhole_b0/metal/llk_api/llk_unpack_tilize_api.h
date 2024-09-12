@@ -139,7 +139,7 @@ inline void llk_unpack_tilizeA_B_hw_configure_disaggregated(const std::uint32_t 
     llk_unpack_tilizeA_B_hw_configure<is_fp32_dest_acc_en, stoch_rnd_mode>(&unpack_tilizeA_B_params, within_face_16x16_transpose);
 }
 
-template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false>
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B_mop_config(const bool narrow_tile = false, const std::uint32_t num_faces = 4) {
     static constexpr uint unpack_srca = TT_OP_UNPACR(SrcA, (zero_srcA ? 0b010001 : 0b1), 0, 0, 0, 1, (zero_srcA ? 0 : 1), p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, (zero_srcA ? 0b010001 : (reload_srcB ? 0b0 : 0b1)), 0, 0, 0, 1, (zero_srcA ? 0 : 1), p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Skip face ptr inc if same face is reloaded into srcB
@@ -154,6 +154,8 @@ inline void llk_unpack_tilizeA_B_mop_config(const bool narrow_tile = false, cons
     ckernel_template tmp(outerloop, innerloop, unpack_srca, ((zero_srcA && num_faces==2) ? unpack_srcb_2_face : unpack_srcb));
     if constexpr (neginf_srcA) {
         tmp.set_start_op(unpack_neginf_srca);
+    } else if constexpr (zero_srcA_reduce) {
+        tmp.set_start_op(unpack_zero_srca);
     } else if constexpr (zero_srcA) {
         if (num_faces < 4) {
             tmp.set_start_op(unpack_zero_srca);
@@ -163,7 +165,7 @@ inline void llk_unpack_tilizeA_B_mop_config(const bool narrow_tile = false, cons
     tmp.program(instrn_buffer);
 }
 
-template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false>
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t ct_dim, const std::uint32_t num_faces = 4, const std::uint32_t unpA_face_r_dim = FACE_R_DIM, const std::uint32_t unpB_face_r_dim = FACE_R_DIM) {
 
     const std::uint32_t operand_id = get_operand_id(operandA); // Use operandA to get operand_id tile dims must be the same for both operands
@@ -190,7 +192,7 @@ inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::u
     TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG2_Out_data_format_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0); // Load unpack config[0]
     TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16); //GPR preloaded with  16 | (16 << 16)
 
-    llk_unpack_tilizeA_B_mop_config<neginf_srcA,reload_srcB,zero_srcA>(narrow_tile, num_faces);
+    llk_unpack_tilizeA_B_mop_config<neginf_srcA,reload_srcB,zero_srcA,zero_srcA_reduce>(narrow_tile, num_faces);
 }
 
 template <bool zero_srcA = false>

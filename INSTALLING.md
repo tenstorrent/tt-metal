@@ -30,7 +30,7 @@ Note the current compatability matrix:
 
 ```sh
 sudo apt update
-sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv libhwloc-dev graphviz patchelf cmake=3.16.3-1ubuntu1.20.04.1 ninja-build
+sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv libhwloc-dev graphviz cmake=3.16.3-1ubuntu1.20.04.1 ninja-build
 
 wget https://apt.llvm.org/llvm.sh
 chmod u+x llvm.sh
@@ -116,11 +116,17 @@ export PYTHONPATH=$(pwd)
 source python_env/bin/activate
 ```
 
+where `ARCH_NAME` is one of `grayskull`, `wormhole_b0`, or `blackhole`,
+depending on your Tenstorrent card type.
+
 > [!NOTE]
 >
 > Note about Python environments: You do not have to use `create_venv.sh`. If you
 > are less familiar with Python and its various environment tools, just use
-> `create_venv.sh` as shown above and the pre-built environment.
+> `create_venv.sh` as shown above and the pre-built environment. If you choose
+> to install in your custom environment, please note that you may run into
+> compatibility issues between dependencies. It is up to the user to ensure
+> that all the packages in their environment are compatible with each other.
 >
 > If you do choose to manage your own environment, please note that you must
 > use Pip 20.1.1 or lower to install this project. This is the highest version
