@@ -19,7 +19,6 @@ enum class UnaryBackwardOpType {
     SOFTPLUS_BW,
     DIV_BW,
     RDIV_BW,
-    ASSIGN_BW,
     MULTIGAMMALN_BW,
     ADD_BW,
     EQ_BW,
@@ -133,7 +132,6 @@ std::vector<Tensor> _lt_bw( const Tensor& grad, const Tensor& input, float other
 std::vector<Tensor> _sub_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _gt_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config);
 
-std::vector<Tensor> _assign_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _multigammaln_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _lgamma_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _hardsigmoid_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
@@ -527,13 +525,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::GT_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config ) {
         return _gt_bw(grad, input, other, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::ASSIGN_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _assign_bw(grad, input, output_mem_config);
     }
 };
 

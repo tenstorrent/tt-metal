@@ -71,7 +71,7 @@ def test_perf_trace(
 
 @run_for_grayskull()
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_hw_cqs": 2}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
     ((20, 0.0100, 19),),
@@ -99,7 +99,7 @@ def test_perf_2cqs(
 @run_for_grayskull()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768, "trace_region_size": 1332224, "num_hw_cqs": 2}], indirect=True
+    "device_params", [{"l1_small_size": 32768, "trace_region_size": 1332224, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
