@@ -19,6 +19,7 @@ on:
       - "(T3K) T3000 model perf tests"
       - "(Single-card) Model perf tests"
       - "(Single-card) Device perf tests"
+      - "Nightly fast dispatch tests"
     types:
       - completed
 
