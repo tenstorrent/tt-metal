@@ -125,7 +125,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
     # This module requires the env paths above for CI runs
     from models.demos.wormhole.llama31_8b.tt.model_config import TtModelArgs
 
-    embed_on_device = False
+    embed_on_device = True
     dtype = ttnn.bfloat8_b
 
     # We disregard any warmup iteration for profiling, in favour of just measuring compile time on the first iteration
@@ -341,15 +341,18 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
             curr_pos = generation_start_pos + iteration
 
             # Prepare inputs for decode mode (rotary embeddings, attention mask, padding)
-            # TODO Move the attn mask to device
             profiler.start(f"prepare_input_decode", iteration=batch_idx)
-            decode_input, current_pos = prepare_inputs_ttnn(
-                pt_encoded_input,
-                curr_pos,
-                model_args.dim,
-                model_args.sliding_window,
-                tt_model.device,
-            )
+            if embed_on_device and iteration > 0:
+                current_pos = curr_pos
+                decode_input = pt_encoded_input
+            else:
+                decode_input, current_pos = prepare_inputs_ttnn(
+                    pt_encoded_input,
+                    curr_pos,
+                    model_args.dim,
+                    model_args.sliding_window,
+                    tt_model.device,
+                )
             profiler.end(f"prepare_input_decode", iteration=batch_idx)
 
             profiler.start(f"decode_and_argmax", iteration=batch_idx)
@@ -404,7 +407,16 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
 
             profiler.start(f"decode_embedding", iteration=batch_idx)
             if embed_on_device:
-                tt_out_tok = ttnn.from_torch(tt_out_tok, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+                # Pad tt_out_tok to batch size of 32
+                padded_tt_out_tok = torch.zeros(1, 32, dtype=tt_out_tok.dtype, device=tt_out_tok.device)
+                padded_tt_out_tok[: tt_out_tok.shape[1]] = tt_out_tok
+                tt_out_tok = ttnn.from_torch(
+                    padded_tt_out_tok,
+                    device=device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
                 pt_encoded_input = tt_embd(tt_out_tok)
             else:
                 pt_encoded_input = embd(tt_out_tok)
