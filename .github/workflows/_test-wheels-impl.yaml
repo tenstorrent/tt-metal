@@ -47,7 +47,6 @@ jobs:
           cd tests/end_to_end_tests
           pytest -c conftest.py . -m eager_host_side
   test-wheels-silicon:
-    needs: build-wheels
     strategy:
       matrix:
         # We only have this for non-Docker silicon runners right now
