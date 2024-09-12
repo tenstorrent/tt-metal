@@ -73,7 +73,7 @@ void nt_memcpy_128b(uint8_t *__restrict dst, const uint8_t *__restrict src, size
     }
 
     if (num_lines > 0)
-        _mm_sfence();
+        tt_driver_atomics::sfence();
 }
 
 template <bool stream_load, bool aligned_load>
@@ -105,7 +105,7 @@ void nt_memcpy_256b(uint8_t *__restrict dst, const uint8_t *__restrict src, size
     }
 
     if (num_lines > 0)
-        _mm_sfence();
+        tt_driver_atomics::sfence();
 }
 
 int main(int argc, char **argv) {
