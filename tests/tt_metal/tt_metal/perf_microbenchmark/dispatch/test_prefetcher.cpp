@@ -200,7 +200,7 @@ void dirty_host_completion_buffer(uint32_t *host_hugepage_completion_buffer) {
     for (int i = 0; i < DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE / sizeof(uint32_t); i++) {
         host_hugepage_completion_buffer[i] = host_data_dirty_pattern;
     }
-    _mm_sfence();
+    tt_driver_atomics::sfence();
 }
 
 uint32_t round_cmd_size_up(uint32_t size) {
@@ -1344,7 +1344,7 @@ void nt_memcpy(uint8_t *__restrict dst, const uint8_t * __restrict src, size_t n
     }
 
     if (num_lines > 0)
-        _mm_sfence();
+        tt_driver_atomics::sfence();
 }
 
 void write_prefetcher_cmd(Device *device,
