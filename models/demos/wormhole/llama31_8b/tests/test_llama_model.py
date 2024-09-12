@@ -29,42 +29,45 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.timeout(900)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "iterations",
-    (17,),
+    "weights, layers",
+    [
+        ("random", 1),
+        ("general", 32),
+    ],
+    ids=["quick", "full"],
 )
-def test_llama_model_inference(device, iterations, use_program_cache, reset_seeds):
+def test_llama_model_inference(device, weights, layers, use_program_cache, reset_seeds):
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
-    cache_pcc = False  # Flag to measure KV cache PCC for all layers
+    cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
 
     dtype = ttnn.bfloat8_b
-    pcc = 0.92  # FIXME: why are first couple of iterations 0.93 and the rest higher?
 
-    # Use instruct weights instead of general weights
-    instruct = False
+    # This sets the minimum PCC for each iteration
+    # TODO: In the full model test, iterations 4 and 8 have lower PCCs of 0.9077 and 0.9593 respectively.
+    pcc = 0.94 if layers == 1 else 0.97
+    # In post-commit CI, also validate the final PCCs after 6 iterations
+    final_model_pcc = 0.9989
+    final_k_cache_pcc = 0.9998
+    final_v_cache_pcc = 0.9998
 
-    model_args = TtModelArgs(device, instruct=instruct)
+    iterations = 6 if layers == 1 else 9
 
-    model_args.n_layers = 32  # Full model
-
-    tokenizer = Tokenizer(model_args.tokenizer_path)
-
-    logger.info("Loading weights...")
-    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
-    state_dict = {
-        k: v
-        for k, v in state_dict.items()
-        if (
-            any([f"layers.{i}." in k for i in range(model_args.n_layers)])
-            or k in ["tok_embeddings.weight", "norm.weight", "output.weight"]
-        )
-    }
-    logger.info("Finished loading weights...")
+    instruct = True if weights == "instruct" else False
+    dummy_weights = True if weights == "random" else False
+    model_args = TtModelArgs(device, instruct=instruct, dummy_weights=dummy_weights)
+    model_args.n_layers = layers
+    state_dict = model_args.load_state_dict()
 
     prompts = ["This is a test"] * model_args.max_batch_size
-    if instruct:
-        encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in prompts]
+    if dummy_weights:
+        encoded_prompts = [[128000, 2028, 374, 264, 1296]]  # "This is a test" encoded prompt
+        assert not instruct, "Instruct prompt not implemented with dummy weights"
     else:
-        encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in prompts]
+        tokenizer = Tokenizer(model_args.tokenizer_path)
+        if instruct:
+            encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in prompts]
+        else:
+            encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in prompts]
 
     if run_ref_pt:
         reference_model = Transformer(model_args)
@@ -162,10 +165,12 @@ def test_llama_model_inference(device, iterations, use_program_cache, reset_seed
                     pt_out_tok.squeeze(1).tolist()[0]
                 )  # Update generated token to list of ref outputs
 
-        # TODO Measure only PCC at the end, instead of at every iteration
         # Measure PCC if also running reference model
         if run_ref_pt:
-            passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)
+            if layers == 1 and i == iterations - 1:  # On last iteration in the quick test, set a tighter PCC
+                passing, pcc_message = comp_pcc(ref_output, tt_output_torch, final_model_pcc)
+            else:
+                passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)
 
             logger.info(comp_allclose(ref_output, tt_output_torch))
             logger.info(f"Model output: {pcc_message}")
@@ -179,28 +184,36 @@ def test_llama_model_inference(device, iterations, use_program_cache, reset_seed
 
             # Compare KV caches
             if cache_pcc:
-                for i in range(model_args.n_layers):
+                for l in range(model_args.n_layers):
                     pytorch_layer_present = [
-                        reference_model.layers[i]
+                        reference_model.layers[l]
                         .attention.cache_k.clone()
                         .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                        reference_model.layers[i]
+                        reference_model.layers[l]
                         .attention.cache_v.clone()
                         .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
                     ]
 
                     tt_layer_present = []
-                    for layer_past in tt_model.layers[i].attention.layer_past_list[0]:
+                    for layer_past in tt_model.layers[l].attention.layer_past_list[0]:
                         tt_layer_present.append(ttnn.to_torch(layer_past))
 
-                    for i, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
+                    for kv_cache, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
                         cache_length_to_check = min(
                             model_args.sliding_window, generation_start_pos + generation_length + 1
                         )
                         cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
                         cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
-                        does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
-                        if i == 0:
+                        if (
+                            layers == 1 and i == iterations - 1
+                        ):  # On last iteration in the quick test, set a tighter PCC
+                            if kv_cache == 0:  # K cache
+                                does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, final_k_cache_pcc)
+                            else:  # V cache
+                                does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, final_v_cache_pcc)
+                        else:
+                            does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
+                        if kv_cache == 0:
                             logger.info(f"K cache output: {output_pcc}")
                         else:
                             logger.info(f"V cache output: {output_pcc}")
@@ -211,9 +224,10 @@ def test_llama_model_inference(device, iterations, use_program_cache, reset_seed
                             logger.warning(f"V Cache Failed! PCC value is lower than {pcc}")
                             all_tests_pass = False
 
-        logger.info("[ttnn generation User 0] " + tokenizer.decode(all_outputs).replace("\n", "\\n"))
-        if run_ref_pt:
-            logger.info("[Ref generation User 0] " + tokenizer.decode(all_outputs_ref).replace("\n", "\\n"))
+        if not dummy_weights:
+            logger.info("[ttnn generation User 0] " + tokenizer.decode(all_outputs).replace("\n", "\\n"))
+            if run_ref_pt:
+                logger.info("[Ref generation User 0] " + tokenizer.decode(all_outputs_ref).replace("\n", "\\n"))
 
     if run_ref_pt:
         if all_tests_pass:

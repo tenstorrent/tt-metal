@@ -26,7 +26,12 @@ class TtLlamaMLP(torch.nn.Module):
 
         base_name = f"layers.{layer_num}.feed_forward"
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{base_name}.{name}.weight"], -2, -1)
-        cache_name = lambda name: weight_cache_path / (base_name + f".{name}")
+
+        if args.dummy_weights:
+            cache_name = lambda _: None
+        else:
+            cache_name = lambda name: weight_cache_path / (base_name + f".{name}")
+
         as_tensor = lambda name, type: ttnn.as_tensor(
             torch_weight(name),
             dtype=type,

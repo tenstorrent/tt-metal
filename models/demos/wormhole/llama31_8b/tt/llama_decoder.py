@@ -58,7 +58,7 @@ class TtTransformerBlock(torch.nn.Module):
             dim=args.dim,
             state_dict=state_dict,
             layer_num=layer_num,
-            weight_cache_path=weight_cache_path,
+            weight_cache_path=None if args.dummy_weights else weight_cache_path,
             weight_dtype=dtype,
             weight_key="attention_norm",
         )
@@ -67,7 +67,7 @@ class TtTransformerBlock(torch.nn.Module):
             dim=args.dim,
             state_dict=state_dict,
             layer_num=layer_num,
-            weight_cache_path=weight_cache_path,
+            weight_cache_path=None if args.dummy_weights else weight_cache_path,
             weight_dtype=dtype,
             weight_key="ffn_norm",
         )
