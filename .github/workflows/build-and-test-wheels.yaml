@@ -16,6 +16,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
   build-wheels:
+    needs: build-artifact
+    needs: ${{ always() }}
     strategy:
       matrix:
         # Since pre-compiled builds only run on 20.04, we can only test on 20.04 for now
