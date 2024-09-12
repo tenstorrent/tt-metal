@@ -159,6 +159,11 @@ void run_single_core_cumsum(tt_metal::Device* device, const CumsumConfig& test_c
 }
 
 TEST_F(DeviceFixture, ComputeCumsum) {
+    auto arch = this->arch_;
+    if (arch == tt::ARCH::GRAYSKULL) {
+        GTEST_SKIP(); // Not implemented for GRAYSKULL
+    }
+
     for (int i = 1; i <= 3; i++) {
         for (int j = 1; j <= 3; j++) {
             for (int k = 1; k <= 3; k++) {
