@@ -76,27 +76,32 @@ struct ExecuteBackwardMul  {
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
 
-    static std::vector<std::optional<ttnn::Tensor>> invoke(
-        const Tensor &grad_tensor_arg,
-        const Tensor &input_tensor_arg,
-        float scalar,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
-
     static std::vector<std::optional<Tensor>> invoke(
         uint8_t queue_id,
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         const Tensor &other_tensor_arg,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt,
         const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt,
         std::optional<Tensor> other_grad = std::nullopt);
+
+    static std::vector<std::optional<ttnn::Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float scalar,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt);
 
     static std::vector<std::optional<Tensor>> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         const Tensor &other_tensor_arg,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+        const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt,
+        std::optional<Tensor> other_grad = std::nullopt);
+
 
     static std::vector<ComplexTensor> invoke(
         const ComplexTensor &grad_tensor_arg,
@@ -243,8 +248,8 @@ struct ExecuteAddalphaBW {
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
         float parameter,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt,
         const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> input_a_grad = std::nullopt,
         std::optional<Tensor> input_b_grad = std::nullopt);
 
@@ -253,8 +258,8 @@ struct ExecuteAddalphaBW {
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
         float parameter,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt,
         const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> input_a_grad = std::nullopt,
         std::optional<Tensor> input_b_grad = std::nullopt);
 };
