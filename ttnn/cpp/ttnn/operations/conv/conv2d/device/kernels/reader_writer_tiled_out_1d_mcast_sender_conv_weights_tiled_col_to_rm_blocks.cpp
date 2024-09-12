@@ -262,8 +262,12 @@ void kernel_main() {
                         // num_dests must not include source, since we are NOT really doing a local copy!
                         noc_async_write_multicast(weights_start_address, weights_multicast_data_addr, weights_block_size_bytes, weights_mcast_num_cores, false, false);
 
-                        // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
+                        // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc even though cmd bufs are different
                         // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
+#ifdef ARCH_BLACKHOLE
+                        // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and may not be sent in order they are issued
+                        noc_async_writes_flushed();
+#endif
 
                         // We should also multicast the flag to destinations
                         // num_dests must not include source, since we are NOT really doing a local copy!
@@ -348,8 +352,12 @@ void kernel_main() {
                 // num_dests must not include source, since we are NOT really doing a local copy!
                 noc_async_write_multicast(bias_start_address, bias_multicast_data_addr, bias_block_size_bytes, weights_mcast_num_cores, false, false);
 
-                // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
+                // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc even though cmd bufs are different
                 // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
+#ifdef ARCH_BLACKHOLE
+                // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and may not be sent in order they are issued
+                noc_async_writes_flushed();
+#endif
 
                 // We should also multicast the flag to destinations
                 // num_dests must not include source, since we are NOT really doing a local copy!
