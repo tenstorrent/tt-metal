@@ -1,4 +1,4 @@
-name: "[internal] Python wheels build and test impl"
+name: "[internal] Python wheels test impl"
 
 on:
   workflow_call:
@@ -8,21 +8,20 @@ on:
         default: True
         type: boolean
 
+# Since pre-compiled assets are only built on ubuntu-20.04, we force tests
+# to only be run on ubuntu-20.04.
+#
+# Otherwise, we run across 20.04 and 22.04 as we should have assets for both
+# from previous wheel builds if from-precompiled is false.
+#
+# I chose the more heavy-handed approach because:
+# - This should all go away soon once we have more OSes + more Docker up and
+# running so we can matrix properly across more stuff
+# - though provides less flexibility to caller workflows, we want to be pretty
+# strict with the matrix + doesn't change often
+
 jobs:
-  build-wheels:
-    strategy:
-      matrix:
-        # Since pre-compiled builds only run on 20.04, we can only test on 20.04 for now
-        # The full 22.04 flow can be tested without precompiled
-        os: ${{ fromJson(inputs.from-precompiled && '["ubuntu-20.04"]' || '["ubuntu-20.04", "ubuntu-22.04"]') }}
-        arch: [grayskull, wormhole_b0]
-    uses: ./.github/workflows/_build-wheels-impl.yaml
-    with:
-      os: ${{ matrix.os }}
-      arch: ${{ matrix.arch }}
-      from-precompiled: ${{ inputs.from-precompiled }}
   test-wheels-host:
-    needs: build-wheels
     strategy:
       matrix:
         os: ${{ fromJson(inputs.from-precompiled && '["ubuntu-20.04"]' || '["ubuntu-20.04", "ubuntu-22.04"]') }}
@@ -48,9 +47,9 @@ jobs:
           cd tests/end_to_end_tests
           pytest -c conftest.py . -m eager_host_side
   test-wheels-silicon:
-    needs: build-wheels
     strategy:
       matrix:
+        # We only have this for non-Docker silicon runners right now
         os: [ubuntu-20.04]
         runner-hw-info: [
           {arch: grayskull, type: E150},

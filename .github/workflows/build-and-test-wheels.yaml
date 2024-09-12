@@ -15,9 +15,23 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.from-precompiled }}
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
-  build-and-test-wheels:
+  build-wheels:
     needs: build-artifact
     if: ${{ always() }}
-    uses: ./.github/workflows/_build-and-test-wheels-impl.yaml
+    strategy:
+      matrix:
+        # Since pre-compiled builds only run on 20.04, we can only test on 20.04 for now
+        # The full 22.04 flow can be tested without precompiled
+        os: ${{ fromJson((github.event_name == 'schedule' || inputs.from-precompiled) && '["ubuntu-20.04"]' || '["ubuntu-20.04", "ubuntu-22.04"]') }}
+        arch: [grayskull, wormhole_b0]
+    uses: ./.github/workflows/_build-wheels-impl.yaml
+    with:
+      os: ${{ matrix.os }}
+      arch: ${{ matrix.arch }}
+      from-precompiled: ${{ inputs.from-precompiled }}
+  test-wheels:
+    needs: build-wheels
+    if: ${{ always() }}
+    uses: ./.github/workflows/_test-wheels-impl.yaml
     with:
       from-precompiled: ${{ github.event_name == 'workflow_dispatch' && inputs.from-precompiled }}
