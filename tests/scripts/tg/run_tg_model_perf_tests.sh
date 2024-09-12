@@ -1,4 +1,4 @@
-#/bin/bash
+#!/bin/bash
 
 run_tg_llm_tests() {
   # Merge all the generated reports
