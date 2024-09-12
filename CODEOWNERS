@@ -99,7 +99,7 @@ ttnn/cpp/ttnn/tensor/ @patrickroberts @yan-zaretskiy @eyonland @cfjchu @ayerofie
 ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/ccl/ @SeanNijjar
 ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/program_cache.*pp @eyonland @cfjchu @xanderchin
 ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
-ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @TT-BrianLiu @tt-aho @mywoodstock @eyonland @ayerofieiev-tt @razorback3 @dongjin-na
+ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @TT-BrianLiu @mywoodstock @eyonland @ayerofieiev-tt @razorback3 @dongjin-na
 ttnn/cpp/ttnn/deprecated/tt_lib/csrc/tt_lib_bindings_tensor_pytensor.cpp @eyonland @cfjchu @xanderchin
 ttnn/cpp/ttnn/deprecated/tt_lib/fallback_ops @tt-aho
 
