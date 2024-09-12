@@ -113,10 +113,10 @@ operation::ProgramWithCallbacks moreh_groupnorm_impl(
          num_rows_per_core_group_1,
          num_rows_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_rows);
 
-    log_debug(LogTest, fmt::format("num_cores_to_be_used: {}", num_cores_to_be_used).c_str());
-    log_debug(LogTest, fmt::format("num_rows_per_core_group_1: {}", num_rows_per_core_group_1).c_str());
-    log_debug(LogTest, fmt::format("num_rows_per_core_group_2: {}", num_rows_per_core_group_2).c_str());
-    log_debug(LogTest, fmt::format("block_size: {}", block_size).c_str());
+    log_debug(LogTest, "num_cores_to_be_used: {}", num_cores_to_be_used);
+    log_debug(LogTest, "num_rows_per_core_group_1: {}", num_rows_per_core_group_1);
+    log_debug(LogTest, "num_rows_per_core_group_2: {}", num_rows_per_core_group_2);
+    log_debug(LogTest, "block_size: {}", block_size);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup

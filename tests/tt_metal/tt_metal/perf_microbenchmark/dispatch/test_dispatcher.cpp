@@ -539,7 +539,7 @@ int main(int argc, char **argv) {
             log_info(LogTest, "Running packed write unicast");
             break;
         case 5:
-            log_info(LogTest, "Running alternate packed write unicast");
+            log_info(LogTest, "Running packed write large unicast");
             break;
         }
 

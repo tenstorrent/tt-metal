@@ -120,7 +120,9 @@ uint64_t BankManager::allocate_buffer(
         is_sharded = true;
         TT_FATAL(
             num_shards.value() <= num_compute_banks,
-            fmt::format("Expected number of shards {} to be less than or equal to total number of L1 banks {} in compute cores", num_shards.value(), num_compute_banks));
+            "Expected number of shards {} to be less than or equal to total number of L1 banks {} in compute cores",
+            num_shards.value(),
+            num_compute_banks);
         num_banks = num_shards.value();
     }
     DeviceAddr size_per_bank = tt::tt_metal::detail::SizeBytesPerBank(size, page_size, num_banks, this->alignment_bytes_);

@@ -150,7 +150,7 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
             log_debug(LogOp, "Act CB: {}, npages: {}, pagesize: {}", act_cb, num_cb0_tiles, act_tile_size);
         }
     } else {
-        TT_FATAL(false, "Input must be sharded!");
+        TT_THROW("Input must be sharded!");
     }
 
     CircularBufferConfig cb_weight_config =
@@ -291,7 +291,7 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
                                                     .set_page_size(act_cb, act_tile_size);
         auto cb_act = tt_metal::CreateCircularBuffer(program, core, cb_act_config);
     } else {
-        TT_FATAL(false, "Input must be sharded!");
+        TT_THROW("Input must be sharded!");
     }
 
     CircularBufferConfig cb_weight_config =
@@ -1164,7 +1164,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
                 .set_page_size(cb_for_l1_array, 32 * 2);
         auto cb_for_l1_array_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_l1_array_config);
     } else {
-        TT_FATAL(false, "Sharded input not supported for this conv yet!");
+        TT_THROW("Sharded input not supported for this conv yet!");
     }
 
     if (read_window_in_inner_loop) {
@@ -1546,7 +1546,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
                         writer_rt_args.push_back(bottom_right_core_physical.y);       // weights_mcast_dest_noc_end_y
                     } else {
                         // TODO: ...
-                        TT_FATAL(false, "TODO: Writer on NOC 1 not supported yet!");
+                        TT_THROW("TODO: Writer on NOC 1 not supported yet!");
                         // writer_rt_args.push_back(bottom_right_core_physical.x); // weights_mcast_dest_noc_start_x
                         // writer_rt_args.push_back(right_core_physical.y); // weights_mcast_dest_noc_start_y
                         // writer_rt_args.push_back(top_left_core_plus_one_physical.x); // weights_mcast_dest_noc_end_x

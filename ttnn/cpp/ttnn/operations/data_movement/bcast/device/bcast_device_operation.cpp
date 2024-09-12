@@ -49,7 +49,7 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(const std::vector<Tens
         TT_FATAL(is_floating_point(output_tensors.at(0).value().get_dtype()), "Unsupported data format");
         const std::vector<tt::tt_metal::Shape> output_shape_required = this->compute_output_shapes(input_tensors);
         const auto& out_tensor = output_tensors.at(0).value();
-        TT_FATAL(out_tensor.get_legacy_shape() == output_shape_required.at(0), fmt::format("The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape()));
+        TT_FATAL(out_tensor.get_legacy_shape() == output_shape_required.at(0), "The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape());
     }
     if (this->in_place) {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout, "Error");

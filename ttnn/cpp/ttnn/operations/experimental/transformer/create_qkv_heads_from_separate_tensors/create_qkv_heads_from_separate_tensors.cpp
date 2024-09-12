@@ -21,7 +21,7 @@ namespace ttnn:: operations::experimental::transformer {
         std::optional<std::array<Tensor, 3>> optional_output_tensors) {
 
         const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_q_heads);
-        TT_FATAL(input_tensor_q.get_legacy_shape()[3] % num_q_heads == 0, fmt::format("Flattened Q hidden dimension {} must be a multiple of Q heads {}", input_tensor_q.get_legacy_shape()[3], num_q_heads));
+        TT_FATAL(input_tensor_q.get_legacy_shape()[3] % num_q_heads == 0, "Flattened Q hidden dimension {} must be a multiple of Q heads {}", input_tensor_q.get_legacy_shape()[3], num_q_heads);
         const uint32_t head_dim = input_tensor_q.get_legacy_shape()[3] / (num_q_heads);
         auto optional_outputs = std::vector<std::optional<Tensor>>{};
         if (optional_output_tensors.has_value()) {
