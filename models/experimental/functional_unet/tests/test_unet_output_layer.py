@@ -27,11 +27,12 @@ def test_unet_output_layer(batch, groups, device, reset_seeds):
     torch_input, ttnn_input = create_unet_input_tensors(device, batch, groups, pad_input=False, input_channels=16)
     torch_output = model.output_layer(torch_input)
 
-    ttnn_input = ttnn.to_device(ttnn_input, device)
+    ttnn_input = ttnn.to_device(ttnn_input, device=device)
+    ttnn_input = ttnn.to_layout(ttnn_input, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
     ttnn_output = ttnn_model.output_layer(ttnn_input)
 
     B, C, H, W = torch_output.shape
     ttnn_output = ttnn.to_torch(ttnn_output)
     assert list(ttnn_output.shape) == [1, 1, B * H * W, C], "Expected output layer to be [1, 1, BHW, C]"
     ttnn_output = ttnn_output.reshape(B, H, W, C).permute(0, 3, 1, 2)
-    assert_with_pcc(torch_output, ttnn_output, 0.99)
+    assert_with_pcc(torch_output, ttnn_output, 0.99995)

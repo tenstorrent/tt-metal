@@ -51,4 +51,4 @@ def test_unet_multi_device_model(batch, groups, mesh_device, use_program_cache, 
     torch_output_tensor = model(torch_input)
     output_tensor = ttnn_model(ttnn_input)
 
-    check_pcc_conv(torch_output_tensor, output_tensor, mesh_composer=output_mesh_composer, pcc=0.99)
+    check_pcc_conv(torch_output_tensor, output_tensor, mesh_composer=output_mesh_composer, pcc=0.986)

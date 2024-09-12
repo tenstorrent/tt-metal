@@ -41,8 +41,9 @@ def test_unet_bottleneck(batch, groups, device, reset_seeds):
 
 @pytest.mark.parametrize("batch", [2])
 @pytest.mark.parametrize("groups", [1])
+@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_unet_bottleneck_multi_device(batch, groups, mesh_device, reset_seeds):
+def test_unet_bottleneck_multi_device(batch, groups, mesh_device, reset_seeds, enable_async_mode):
     if not is_n300_with_eth_dispatch_cores(mesh_device):
         pytest.skip("Test is only valid for N300")
 
