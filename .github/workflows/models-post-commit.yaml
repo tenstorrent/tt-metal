@@ -44,7 +44,7 @@ jobs:
       matrix:
         os: ["ubuntu-20.04"]
         test-group: [
-          {name: model, cmd: ./tests/scripts/run_python_model_tests.sh},
+          {name: model},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     env:
@@ -70,7 +70,7 @@ jobs:
           run_args: |
             WHEEL_FILENAME=$(ls -1 *.whl)
             pip3 install --user $WHEEL_FILENAME
-            ${{ matrix.test-group.cmd }}
+            source tests/scripts/run_python_model_tests.sh && run_python_model_tests_{{ inputs.arch }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
