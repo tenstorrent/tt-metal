@@ -115,6 +115,34 @@ TEST_P(MatmulInterfaceTestFixture, MatmulInterfaceTest) {
                 std::cout << "op_constraints is empty" << std::endl;
                 GTEST_SKIP();
             }
+            // Run the test
+            {
+                for (const auto& op_constraint : op_constraints) {
+                    auto input_tensor_a = ttnn::zeros(
+                        input_a.shape, input_a.data_type, input_a.layout, this->getDevice(), input_a.memory_config);
+                    auto input_tensor_b = ttnn::zeros(
+                        input_b.shape, input_b.data_type, input_b.layout, this->getDevice(), input_b.memory_config);
+
+                    auto call = [&] {
+                        auto input_tensor_a = ttnn::zeros(
+                            input_a.shape, input_a.data_type, input_a.layout, this->getDevice(), input_a.memory_config);
+                        auto input_tensor_b = ttnn::zeros(
+                            input_b.shape, input_b.data_type, input_b.layout, this->getDevice(), input_b.memory_config);
+                        const auto output_tensor = ttnn::matmul(
+                            input_tensor_a,
+                            input_tensor_b,
+                            false /* transpose_a */,
+                            false /* transpose_b */,
+                            std::nullopt /* memory_config */,
+                            std::nullopt /* dtype */,
+                            matmul_program_config);
+                        return output_tensor;
+                    };
+
+                    auto json_trace = graph::query_trace(call);
+                    tt::log_info("Trace: {}", json_trace.dump(4));
+                }
+            }
         } else {
             std::cout << "builder is nullptr" << std::endl;
             GTEST_SKIP();
@@ -122,26 +150,6 @@ TEST_P(MatmulInterfaceTestFixture, MatmulInterfaceTest) {
     } catch (const std::exception& e) {
         std::cout << e.what() << std::endl;
         GTEST_FAIL();
-    }
-
-    // Run the test
-    {
-        auto input_tensor_a =
-            ttnn::zeros(input_a.shape, input_a.data_type, input_a.layout, this->getDevice(), input_a.memory_config);
-        auto input_tensor_b =
-            ttnn::zeros(input_b.shape, input_b.data_type, input_b.layout, this->getDevice(), input_b.memory_config);
-
-        auto call = [&] {
-            const auto output_tensor = ttnn::matmul(
-                input_tensor_a,
-                input_tensor_b,
-                false /* transpose_a */,
-                false /* transpose_b */,
-                std::nullopt /* memory_config */,
-                std::nullopt /* dtype */,
-                matmul_program_config);
-            return output_tensor;
-        };
     }
 }
 
@@ -181,7 +189,7 @@ INSTANTIATE_TEST_SUITE_P(
                      .buffer_type = tt::tt_metal::BufferType::L1,
                      .shard_spec =
                          tt::tt_metal::ShardSpec{
-                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{0, 7}}}},
+                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 0}}}},
                              {160, 32},
                              ShardOrientation::COL_MAJOR}},
             },
@@ -192,7 +200,7 @@ INSTANTIATE_TEST_SUITE_P(
                      .buffer_type = tt::tt_metal::BufferType::L1,
                      .shard_spec =
                          tt::tt_metal::ShardSpec{
-                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{0, 7}}}},
+                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 0}}}},
                              {32, 160},
                              ShardOrientation::COL_MAJOR}},
             }),

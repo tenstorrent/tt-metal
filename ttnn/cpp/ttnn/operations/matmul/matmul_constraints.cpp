@@ -330,8 +330,8 @@ MatmulOpTypes MatmulOpConstraintsFactory::GetMatmulOpType(
                             return;
                         }
                     }
-                    if (memory_config_b.shard_spec.value().grid.bounding_box().start_coord.x !=
-                        memory_config_b.shard_spec.value().grid.bounding_box().end_coord.x) {
+                    if (memory_config_b.shard_spec.value().grid.bounding_box().start_coord.y !=
+                        memory_config_b.shard_spec.value().grid.bounding_box().end_coord.y) {
                         return;
                     }
                 }
