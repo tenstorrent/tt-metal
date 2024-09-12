@@ -119,3 +119,24 @@ TEST(MLIR_INTERFACE_API, softmax_op)
   EXPECT_TRUE(ttnn::mlir_interface::does_softmax_op_support_input_output_constraints(shape, dram_interleaved_memory_config, data_type, shape, l1_interleaved_memory_config, data_type));
   EXPECT_TRUE(ttnn::mlir_interface::does_softmax_op_support_input_output_constraints(shape, l1_interleaved_memory_config, data_type, shape, dram_interleaved_memory_config, data_type));
 }
+
+TEST(MLIR_INTERFACE_API, matmul_multicast)
+{
+  // [n x k], [k x m] -> [n x m]
+  // size_t n = 2 * 64 * 32, k = 64 * 32, m = 5 * 64 * 32;
+  // std::vector<uint32_t> shape_a = ttnn::Shape(tt::tt_metal::Array4D{1, 1, n, k});
+  // std::vector<uint32_t> shape_b = ttnn::Shape(tt::tt_metal::Array4D{1, 1, k, m});
+  // std::vector<uint32_t> shape_o = ttnn::Shape(tt::tt_metal::Array4D{1, 1, n, m});
+
+  // ttnn::mlir_interface::memory_config_tuple l1_interleaved_memory_config = {"INTERLEAVED", "L1", std::nullopt};
+
+  // ttnn::mlir_interface::matmul_multicore_reuse_config_tuple matmul_config = {{8,8}, 1, 1, 4, 8, 16, false, false}
+
+  // ttnn::mlir_interface::does_matmul_multicore_reuse_multicast_support_input_output_constraints()
+}
+
+TEST(MLIR_INTERFACE_API, matmul_multicast_1d)
+{
+  // ttnn::mlir_interface::does_matmul_multicore_reuse_multicast_1d_op_support_input_output_constraints()
+
+}

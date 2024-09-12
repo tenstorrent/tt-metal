@@ -38,6 +38,12 @@ namespace ttnn::operations::unary {
     enum class UnaryOpType;     // unary_op_types.hpp
 }
 
+namespace ttnn::operations::matmul {
+    struct MatmulMultiCoreReuseProgramConfig;
+    struct MatmulMultiCoreReuseMultiCastProgramConfig;
+    struct MatmulMultiCoreReuseMultiCast1DProgramConfig;
+}
+
 namespace ttnn::str_wrapper
 {
     std::optional<tt::tt_metal::StorageType> to_storage_type(const std::string& storage_type_str);
@@ -53,6 +59,9 @@ namespace ttnn::tuple_wrapper
 {
     std::optional<tt::tt_metal::ShardSpec> to_shard_spec(const mlir_interface::shard_spec_tuple& shard_spec_tuple);
     std::optional<tt::tt_metal::MemoryConfig> to_memory_config(const mlir_interface::memory_config_tuple& memory_config_tuple);
+    std::optional<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig> to_program_config(const mlir_interface::matmul_multicore_reuse_config_tuple& program_config_tuple);
+    std::optional<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> to_multicast_program_config(const mlir_interface::matmul_multicore_reuse_config_tuple &program_config_tuple, bool transpose_mcast, bool fuse_batch);
+    std::optional<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig> to_multicast_1d_program_config(const mlir_interface::matmul_multicore_reuse_config_tuple &program_config_tuple, bool fuse_batch, bool mcast_in0);
 } // namespace ttnn::tuple_wrapper
 
 namespace ttnn::vector_wrapper

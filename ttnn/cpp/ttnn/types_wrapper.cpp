@@ -10,6 +10,7 @@
 #include "tt_metal/impl/buffers/buffer_constants.hpp" // TensorMemoryLayout, ShardOrientation
 #include "tt_metal/impl/buffers/buffer.hpp" // BufferType, ShardSpec
 #include "common/core_coord.h" // CoreRangeSet
+#include "ttnn/operations/matmul/device/matmul_types.hpp" // MatmulMultiCoreReuseProgramConfig et al.
 
 namespace ttnn::str_wrapper
 {
@@ -285,6 +286,106 @@ namespace ttnn::tuple_wrapper {
             std::get<0>(memory_config_tuple),
             std::get<1>(memory_config_tuple),
             std::get<std::optional<mlir_interface::shard_spec_tuple>>(memory_config_tuple));
+    }
+
+    // MatmulMultiCoreReuseProgramConfig wrapper
+    std::optional<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig> to_program_config(
+        const std::array<uint32_t, 2>& compute_with_storage_grid_size,
+        const size_t in0_block_w,
+        const size_t out_subblock_h,
+        const size_t out_subblock_w,
+        const size_t per_core_M,
+        const size_t per_core_N) {
+            return std::make_optional(ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig{
+                CoreCoord{compute_with_storage_grid_size[0], compute_with_storage_grid_size[1]},
+                in0_block_w,
+                out_subblock_h,
+                out_subblock_w,
+                per_core_M,
+                per_core_N
+            });
+    }
+
+    std::optional<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig> to_program_config(const mlir_interface::matmul_multicore_reuse_config_tuple& program_config_tuple) {
+        return to_program_config(
+            std::get<0>(program_config_tuple),
+            std::get<1>(program_config_tuple),
+            std::get<2>(program_config_tuple),
+            std::get<3>(program_config_tuple),
+            std::get<4>(program_config_tuple),
+            std::get<5>(program_config_tuple));
+    }
+
+    // MatmulMultiCoreReuseMultiCastProgramConfig wrapper
+    std::optional<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> to_multicast_program_config(
+        const std::array<uint32_t, 2>& compute_with_storage_grid_size,
+        const size_t in0_block_w,
+        const size_t out_subblock_h,
+        const size_t out_subblock_w,
+        const size_t per_core_M,
+        const size_t per_core_N,
+        const bool transpose_mcast,
+        const bool fuse_batch) {
+
+        return std::make_optional(ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
+            CoreCoord{compute_with_storage_grid_size[0], compute_with_storage_grid_size[1]},
+            in0_block_w,
+            out_subblock_h,
+            out_subblock_w,
+            per_core_M,
+            per_core_N,
+            transpose_mcast,
+            std::nullopt,   //  fused_activation
+            fuse_batch
+        });
+    }
+
+    std::optional<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> to_multicast_program_config(const mlir_interface::matmul_multicore_reuse_config_tuple &program_config_tuple, bool transpose_mcast, bool fuse_batch)
+    {
+        return to_multicast_program_config(
+            std::get<0>(program_config_tuple),
+            std::get<1>(program_config_tuple),
+            std::get<2>(program_config_tuple),
+            std::get<3>(program_config_tuple),
+            std::get<4>(program_config_tuple),
+            std::get<5>(program_config_tuple),
+            transpose_mcast,
+            fuse_batch);
+    }
+
+    // MatmulMultiCoreReuseMultiCast1DProgramConfig wrapper
+    std::optional<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig> to_multicast_1d_program_config(
+        const std::array<uint32_t, 2>& compute_with_storage_grid_size,
+        const size_t in0_block_w,
+        const size_t out_subblock_h,
+        const size_t out_subblock_w,
+        const size_t per_core_M,
+        const size_t per_core_N,
+        const bool fuse_batch,
+        const bool mcast_in0) {
+            return std::make_optional(ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig{
+                CoreCoord{compute_with_storage_grid_size[0], compute_with_storage_grid_size[1]},
+                in0_block_w,
+                out_subblock_h,
+                out_subblock_w,
+                per_core_M,
+                per_core_N,
+                fuse_batch,
+                std::nullopt,   //  fused_activation
+                mcast_in0
+            });
+        }
+    std::optional<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig> to_multicast_1d_program_config(const mlir_interface::matmul_multicore_reuse_config_tuple &program_config_tuple, bool fuse_batch, bool mcast_in0)
+    {
+        return to_multicast_1d_program_config(
+            std::get<0>(program_config_tuple),
+            std::get<1>(program_config_tuple),
+            std::get<2>(program_config_tuple),
+            std::get<3>(program_config_tuple),
+            std::get<4>(program_config_tuple),
+            std::get<5>(program_config_tuple),
+            fuse_batch,
+            mcast_in0);
     }
 
 } // namespace ttnn::tuple_wrapper
