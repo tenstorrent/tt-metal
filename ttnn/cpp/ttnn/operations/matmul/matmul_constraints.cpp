@@ -5,20 +5,47 @@ std::vector<OpConstraint> MatmulOpConstraintsBuilder::build_constraints() {
         throw std::runtime_error("Cannot build constraints, missing required parameters");
     }
 
-    // reducing search space
-    // data types are required
-    static constexpr std::array<Layout, 2> tile_layouts = {Layout::ROW_MAJOR, Layout::TILE};
-    static constexpr std::array<StorageType, 2> storage_types = {StorageType::OWNED, StorageType::DEVICE};
+    std::vector<Layout> tile_layouts_a = {Layout::ROW_MAJOR, Layout::TILE};
+    if (tile_layout_a.has_value())
+    {
+        tile_layouts_a = {tile_layout_a.value()};
+    }
+    std::vector<Layout> tile_layouts_b = {Layout::ROW_MAJOR, Layout::TILE};
+    if (tile_layout_b.has_value())
+    {
+        tile_layouts_a = {tile_layout_b.value()};
+    }
+    std::vector<Layout> tile_layouts_o = {Layout::ROW_MAJOR, Layout::TILE};
+    if (tile_layout_o.has_value())
+    {
+        tile_layouts_o = {tile_layout_b.value()};
+    }
+    // Only two for now. TODO: add other storage types.
+    std::vector<StorageType> storage_types_a = {StorageType::OWNED, StorageType::DEVICE};
+    if (storage_type_a.has_value())
+    {
+        storage_types_a = {storage_type_a.value()};
+    }
+    std::vector<StorageType> storage_types_b = {StorageType::OWNED, StorageType::DEVICE};
+    if (storage_type_b.has_value())
+    {
+        storage_types_b = {storage_type_b.value()};
+    }
+    std::vector<StorageType> storage_types_o = {StorageType::OWNED, StorageType::DEVICE};
+    if (storage_type_o.has_value())
+    {
+        storage_types_o = {storage_type_a.value()};
+    }
 
     std::vector<OpConstraint> constraints;
 
     // Currently we are only looking at softmax for one input.
-    for (const auto& tile_layout_a : tile_layouts) {
-        for (const auto& storage_type_a : storage_types) {
-            for (const auto& tile_layout_b : tile_layouts) {
-                for (const auto& storage_type_b : storage_types) {
-                    for (const auto& tile_layout_o : tile_layouts) {
-                        for (const auto& storage_type_o : storage_types) {
+    for (const auto& tile_layout_a : tile_layouts_a) {
+        for (const auto& storage_type_a : storage_types_a) {
+            for (const auto& tile_layout_b : tile_layouts_b) {
+                for (const auto& storage_type_b : storage_types_b) {
+                    for (const auto& tile_layout_o : tile_layouts_o) {
+                        for (const auto& storage_type_o : storage_types_o) {
                             const auto constraint = OpConstraint(
                                 data_type_a.value(),
                                 tile_layout_a,
@@ -99,10 +126,13 @@ MatmulOpTypes MatmulOpConstraintsFactory::GetMatmulOpType(
     const tt::tt_metal::MemoryConfig& memory_config_b,
     const tt::tt_metal::MemoryConfig& memory_config_o,
     const ttnn::operations::matmul::MatmulProgramConfig& program_config) {
+    std::cout << "GGGG" << std::endl;
     if (input_shape_a[-1] != input_shape_b[-2]) {
+        std::cout << "LLLLL" << std::endl;
         return MatmulOpTypes::NotSupported;
     }
     if (input_shape_a.rank() != input_shape_b.rank()) {
+        std::cout << "OOOO" << std::endl;
         return MatmulOpTypes::NotSupported;
     }
     for (auto i = 0; i < input_shape_a.rank() - 2; i++) {
@@ -110,6 +140,7 @@ MatmulOpTypes MatmulOpConstraintsFactory::GetMatmulOpType(
             return MatmulOpTypes::NotSupported;
         }
     }
+    std::cout << "HHHH" << std::endl;
     std::visit(
         [&](const auto& program_config) {
             using T = std::decay_t<decltype(program_config)>;
@@ -237,7 +268,9 @@ MatmulOpTypes MatmulOpConstraintsFactory::GetMatmulOpType(
             } else if constexpr (std::is_same_v<
                                      T,
                                      ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
+                std::cout << "I AM HERE" << std::endl;
                 if (memory_config_a.is_sharded()) {
+                    std::cout << "SHARDED" << std::endl;
                     auto tensor_a_memory_layout = memory_config_a.memory_layout;
                     uint32_t M = Volume(input_shape_a) / input_shape_a[-1] / tt::constants::TILE_HEIGHT;
                     uint32_t K = input_shape_a[-1] / tt::constants::TILE_WIDTH;
@@ -246,9 +279,10 @@ MatmulOpTypes MatmulOpConstraintsFactory::GetMatmulOpType(
                     auto shard_shape = memory_config_a.shard_spec.value().shape;
 
                     if (tensor_a_memory_layout != TensorMemoryLayout::BLOCK_SHARDED &&
-                        tensor_a_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+                        tensor_a_memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
                         return MatmulOpTypes::NotSupported;
                     }
+                    std::cout << "WWWWWW" << std::endl;
 
                     if (tensor_a_memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
                         if (program_config.transpose_mcast) {
@@ -270,25 +304,36 @@ MatmulOpTypes MatmulOpConstraintsFactory::GetMatmulOpType(
                         }
 
                     } else if (tensor_a_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+                        std::cout << "TTTTT" << std::endl;
                         if (program_config.transpose_mcast) {
                             return MatmulOpTypes::NotSupported;
                         }
+                        std::cout << "JJJJJ" << std::endl;
+                        std::cout << "k=" << K << std::endl;
+                        std::cout << "in0_block_w=" << program_config.in0_block_w << std::endl;
                         if (K != program_config.in0_block_w) {
                             return MatmulOpTypes::NotSupported;
                         }
+                        std::cout << "shard_shape=" << shard_shape[1] << std::endl;
                         if (program_config.in0_block_w != (shard_shape[1] / tt::constants::TILE_WIDTH)) {
                             return MatmulOpTypes::NotSupported;
                         }
+                        std::cout << "YYYY" << std::endl;
+                        std::cout << "start_coord_x=" << memory_config_a.shard_spec.value().grid.bounding_box().start_coord.x << std::endl;
+                        std::cout << "end_coord_x=" << memory_config_a.shard_spec.value().grid.bounding_box().end_coord.x << std::endl;
                         if (memory_config_a.shard_spec.value().grid.bounding_box().start_coord.x !=
                             memory_config_a.shard_spec.value().grid.bounding_box().end_coord.x) {
                             return MatmulOpTypes::NotSupported;
                         }
+                        std::cout << "IIII" << std::endl;
                     }
 
                     if (per_core_M != (shard_shape[0] / tt::constants::TILE_HEIGHT)) {
+                        std::cout << "BBBB" << std::endl;
                         return MatmulOpTypes::NotSupported;
                     }
                     if ((shard_shape[1] / tt::constants::TILE_WIDTH) % program_config.in0_block_w != 0) {
+                        std::cout << "UUUU" << std::endl;
                         return MatmulOpTypes::NotSupported;
                     }
                 }
@@ -298,6 +343,7 @@ MatmulOpTypes MatmulOpConstraintsFactory::GetMatmulOpType(
                         return MatmulOpTypes::NotSupported;
                     }
                     auto tensor_b_memory_layout = memory_config_b.memory_layout;
+                    std::cout << "AAAAA" << std::endl;
                     if (tensor_b_memory_layout != TensorMemoryLayout::WIDTH_SHARDED) {
                         return MatmulOpTypes::NotSupported;
                     }

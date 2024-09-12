@@ -1,4 +1,5 @@
 #include "ttnn/common/op_constraints.hpp"
+#include <optional>
 
 #include "ttnn/cpp/ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/cpp/ttnn/tensor/tensor_utils.hpp"
@@ -67,6 +68,7 @@ bool OpConstraintsBuilder::is_tensor_valid(
             return false;
         }
     } else if (memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        std::cout << "BLOCK" << std::endl;
         const auto& shard_spec = memory_config.shard_spec.value();
         const auto& shard_shape = shard_spec.shape;
         if (shard_spec.grid.ranges().size() != 1) {
@@ -93,6 +95,7 @@ bool OpConstraintsBuilder::is_tensor_valid(
             }
         }
     } else {
+        std::cout << "else" << std::endl;
         return false;
     }
     if (layout == Layout::TILE) {

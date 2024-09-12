@@ -25,12 +25,6 @@ class SoftmaxOpConstraintsBuilder : public OpConstraintsBuilder {
     const ttnn::Shape shape_o;
     const tt::tt_metal::MemoryConfig memory_config_o;
 
-    std::optional<tt::tt_metal::DataType> data_type_a;  // required
-    std::optional<tt::tt_metal::Layout> tile_layout_a;
-
-    std::optional<tt::tt_metal::DataType> data_type_o;  // required
-    std::optional<tt::tt_metal::Layout> tile_layout_o;
-
     SoftmaxOpConstraintsBuilder(
         const ttnn::Shape& _shape_a,
         const tt::tt_metal::MemoryConfig& _memory_config_a,
@@ -59,6 +53,8 @@ class SoftmaxConstraintsBuilder : public SoftmaxOpConstraintsBuilder {
 
     virtual std::string get_op_name() const override { return "Softmax"; }
 
+    virtual bool can_build_constraints() const override;
+
    protected:
     virtual bool is_valid_op_constraint(const OpConstraint& constraint) const override;
 };
@@ -70,12 +66,12 @@ class SoftmaxOpConstraintsFactory {
         const tt::tt_metal::MemoryConfig& memory_config_a,
         const ttnn::Shape& input_shape_o,
         const tt::tt_metal::MemoryConfig& memory_config_o,
-        std::optional<const ttnn::Shape>& input_shape_b,
-        std::optional<const tt::tt_metal::MemoryConfig>& memory_config_b);
+        const std::optional<const ttnn::Shape>& input_shape_b = std::nullopt,
+        const std::optional<const tt::tt_metal::MemoryConfig>& memory_config_b = std::nullopt);
 
     static SoftmaxOpTypes GetSoftmaxOpType(
         const ttnn::Shape& input_shape_a,
         const tt::tt_metal::MemoryConfig& memory_config_a,
-        std::optional<const ttnn::Shape>& input_shape_b,
-        std::optional<const tt::tt_metal::MemoryConfig>& memory_config_b);
+        const std::optional<const ttnn::Shape>& input_shape_b = std::nullopt,
+        const std::optional<const tt::tt_metal::MemoryConfig>& memory_config_b = std::nullopt);
 };

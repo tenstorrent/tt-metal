@@ -57,7 +57,7 @@ class OpConstraint {
 };
 
 class OpConstraintsBuilder {
-   protected:
+   public:
     std::optional<tt::tt_metal::DataType> data_type_a;  // required
     std::optional<tt::tt_metal::Layout> tile_layout_a;
     std::optional<tt::tt_metal::StorageType> storage_type_a;
