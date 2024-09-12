@@ -24,6 +24,12 @@ jobs:
     secrets: inherit
     with:
       arch: '["blackhole"]'
+  build-wheels:
+    uses: ./.github/workflows/_build-wheels-impl.yaml
+    with:
+      os: "ubuntu-20.04"
+      arch: "blackhole"
+      from-precompiled: true
 #   build-artifact-profiler:
 #     uses: ./.github/workflows/build-artifact.yaml
 #     with:
@@ -43,13 +49,13 @@ jobs:
       arch: blackhole
       runner-label: BH
       timeout: 30
-  # fd-unit-tests:
-  #   needs: build-artifact
-  #   uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
-  #   secrets: inherit
-  #   with:
-  #     arch: blackhole
-  #     runner-label: BH
+  fd-unit-tests:
+    needs: build-wheels
+    uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
+    secrets: inherit
+    with:
+      arch: blackhole
+      runner-label: BH
   # FD C++ Unit Tests
   cpp-unit-tests:
     needs: build-artifact
