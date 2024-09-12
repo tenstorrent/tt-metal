@@ -21,28 +21,37 @@ enum TensorLayout {
 };
 
 template <class T, template <typename...> typename BufferType>
-std::vector<T> convert_to_tile_layout(const BufferType<T>& data) {
+std::vector<T> convert_to_tile_layout(
+    const BufferType<T>& data,
+    const std::optional<std::vector<uint32_t>>& tile_shape = std::nullopt,
+    const std::optional<const std::vector<uint32_t>>& face_shape = std::nullopt) {
     ZoneScoped;
     std::vector<T> result;
-    TT_ASSERT(data.size() / (32 * 32) > 0);
-    TT_ASSERT(data.size() % (32 * 32) == 0);
-    int num_tiles = data.size() / (32 * 32);
+    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : 32;
+    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : 32;
+    auto face_H = face_shape.has_value() ? face_shape.value()[0] : 16;
+    auto face_W = face_shape.has_value() ? face_shape.value()[1] : 16;
+    auto tile_HW = tile_H * tile_W;
+    auto face_HW = face_H * face_W;
+    TT_ASSERT(data.size() / tile_HW > 0);
+    TT_ASSERT(data.size() % tile_HW == 0);
+    int num_tiles = data.size() / tile_HW;
     for(int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         std::vector<T> top_left;
         std::vector<T> top_right;
         std::vector<T> bottom_left;
         std::vector<T> bottom_right;
 
-        int index = tile_idx * (32 * 32);
-        for(int row = 0; row < 32; row++) {
-            for(int col = 0; col < 32; col++) {
-                if(row < 16 and col < 16) {
+        int index = tile_idx * tile_HW;
+        for(int row = 0; row < tile_H; row++) {
+            for(int col = 0; col < tile_W; col++) {
+                if(row < face_H and col < face_W) {
                     top_left.push_back(data[index]);
-                } else if(row < 16 and col >= 16) {
+                } else if(row < face_H and col >= face_W) {
                     top_right.push_back(data[index]);
-                } else if(row >= 16 and col < 16) {
+                } else if(row >= face_H and col < face_W) {
                     bottom_left.push_back(data[index]);
-                } else if(row >= 16 and col >= 16) {
+                } else if(row >= face_H and col >= face_W) {
                     bottom_right.push_back(data[index]);
                 } else {
                     TT_ASSERT(false);
@@ -50,10 +59,10 @@ std::vector<T> convert_to_tile_layout(const BufferType<T>& data) {
                 index++;
             }
         }
-        TT_ASSERT(top_left.size() == 16 * 16);
-        TT_ASSERT(top_right.size() == 16 * 16);
-        TT_ASSERT(bottom_left.size() == 16 * 16);
-        TT_ASSERT(bottom_right.size() == 16 * 16);
+        TT_ASSERT(top_left.size() == face_HW);
+        TT_ASSERT((top_right.size() == 0) or (top_right.size() == face_HW));
+        TT_ASSERT((bottom_left.size() == 0) or (bottom_left.size() == face_HW));
+        TT_ASSERT((bottom_right.size() == 0) or (bottom_right.size() == face_HW));
 
         result.insert(result.end(), top_left.begin(), top_left.end());
         result.insert(result.end(), top_right.begin(), top_right.end());
@@ -65,20 +74,31 @@ std::vector<T> convert_to_tile_layout(const BufferType<T>& data) {
 }
 
 template <class T, template <typename...> typename BufferTyp>
-std::vector<T> convert_to_flat_layout(const BufferTyp<T>& data) {
+std::vector<T> convert_to_flat_layout(
+    const BufferTyp<T>& data,
+    const std::optional<std::vector<uint32_t>>& tile_shape = std::nullopt,
+    const std::optional<const std::vector<uint32_t>>& face_shape = std::nullopt) {
     ZoneScoped;
     std::vector<T> result;
-    TT_ASSERT(data.size() / (32 * 32) > 0);
-    TT_ASSERT(data.size() % (32 * 32) == 0);
-    int num_tiles = data.size() / (32 * 32);
+    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : 32;
+    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : 32;
+    auto face_H = face_shape.has_value() ? face_shape.value()[0] : 16;
+    auto face_W = face_shape.has_value() ? face_shape.value()[1] : 16;
+    auto tile_HW = tile_H * tile_W;
+    auto face_HW = face_H * face_W;
+    auto num_faces_row = tile_W / face_W;
+    auto num_faces_col = tile_H / face_H;
+    TT_ASSERT(data.size() / tile_HW > 0);
+    TT_ASSERT(data.size() % tile_HW == 0);
+    int num_tiles = data.size() / tile_HW;
     for(int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
-        int tile_start = tile_idx * (32 * 32);
-        for(int face_y = 0; face_y < 2; face_y++) {
-            for(int row = 0; row < 16; row++) {
-                int start = tile_start + face_y * (16 * 32) + row * 16;
-                for(int face_x = 0; face_x < 2; face_x++) {
-                    int offset = face_x * (16 * 16);
-                    for(int col = offset; col < offset + 16; col++) {
+        int tile_start = tile_idx * tile_HW;
+        for(int face_y = 0; face_y < num_faces_col; face_y++) {
+            for(int row = 0; row < face_H; row++) {
+                int start = tile_start + face_y * (face_H * tile_W) + row * face_W;
+                for(int face_x = 0; face_x < num_faces_row; face_x++) {
+                    int offset = face_x * face_HW;
+                    for(int col = offset; col < offset + face_W; col++) {
                         result.push_back(data[start + col]);
                     }
                 }
@@ -91,9 +111,12 @@ std::vector<T> convert_to_flat_layout(const BufferTyp<T>& data) {
 
 // Converts a 32-swizzled tilized row-major tensor to a linear 32-zero-padded row-major tensor
 template <typename T, template <typename...> typename BufferType>
-inline std::vector<T> untilize_nchw(const BufferType<T>& in, const std::vector<std::uint32_t>& shape) {
+inline std::vector<T> untilize_nchw(const BufferType<T>& in, const std::vector<std::uint32_t>& shape, const std::optional<std::vector<uint32_t>>& tile_shape = std::nullopt) {
     ZoneScoped;
-    TT_ASSERT(shape[shape.size() - 2] % 32 == 0 && shape[shape.size() - 1] % 32 == 0);
+    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : 32;
+    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : 32;
+
+    TT_ASSERT(shape[shape.size() - 2] % tile_H == 0 && shape[shape.size() - 1] % tile_W == 0);
 
     std::vector<T> result;
     // Untilize into row major
@@ -105,10 +128,10 @@ inline std::vector<T> untilize_nchw(const BufferType<T>& in, const std::vector<s
     result.resize(batch_size * H * W);
     uint32_t linear = 0;
     for (auto batch_index = 0; batch_index < batch_size; batch_index++) {
-        for (int hs32 = 0; hs32 < H; hs32 += 32) {        // iterate over h with stride 32
-            for (int ws32 = 0; ws32 < W; ws32 += 32) {    // iterate over w with stride 32
-                for (int h32 = 0; h32 < 32; h32++) {      // hs32 + h32 = h
-                    for (int w32 = 0; w32 < 32; w32++) {  // ws32 + w32 = w
+        for (int hs32 = 0; hs32 < H; hs32 += tile_H) {        // iterate over h with stride 32
+            for (int ws32 = 0; ws32 < W; ws32 += tile_W) {    // iterate over w with stride 32
+                for (int h32 = 0; h32 < tile_H; h32++) {      // hs32 + h32 = h
+                    for (int w32 = 0; w32 < tile_W; w32++) {  // ws32 + w32 = w
                         T val = in[linear];
                         auto w = w32 + ws32;
                         auto h = h32 + hs32;
@@ -128,9 +151,11 @@ inline std::uint32_t round_up_to_mul16(std::uint32_t val) { return ((val & 15) =
 
 inline std::uint32_t round_up_to_mul32(std::uint32_t val) { return ((val & 31) == 0) ? val : (val | 31)+1; }
 
+inline std::uint32_t round_up_to_tile(int val, int tile_val) { return (val + tile_val - 1) & ~(tile_val - 1); }
+
 // Converts a linear non-zero-padded row-major tensor to zero-padded-32 32-swizzled tilized row-major tensor
 template <typename T, template <typename...> typename BufferType>
-inline std::vector<T> tilize_nchw(const BufferType<T>& in_rowmajor, const std::vector<std::uint32_t>& shape) {
+inline std::vector<T> tilize_nchw(const BufferType<T>& in_rowmajor, const std::vector<std::uint32_t>& shape, const std::optional<std::vector<uint32_t>>& tile_shape = std::nullopt) {
     ZoneScoped;
     int H = shape[shape.size() - 2], W = shape[shape.size() - 1];
     auto batch_size = 1;
@@ -138,17 +163,19 @@ inline std::vector<T> tilize_nchw(const BufferType<T>& in_rowmajor, const std::v
         batch_size *= shape[i];
     }
     int input_volume = batch_size * H * W;
-    int OH = round_up_to_mul32(H);
-    int OW = round_up_to_mul32(W);
+    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : 32;
+    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : 32;
+    int OH = round_up_to_tile(H, tile_H);
+    int OW = round_up_to_tile(W, tile_W);
     std::vector<T> tilized_result;
     tilized_result.resize(batch_size * OH * OW);
     std::fill(tilized_result.begin(), tilized_result.end(), 0);
     int out_index = 0;
     for (auto batch_index = 0; batch_index < batch_size; batch_index++) {
-        for (int hs32 = 0; hs32 < H; hs32 += 32) {
-            for (int ws32 = 0; ws32 < W; ws32 += 32) {
-                for (int h32 = 0; h32 < 32; h32++) {
-                    for (int w32 = 0; w32 < 32; w32++) {
+        for (int hs32 = 0; hs32 < H; hs32 += tile_H) {
+            for (int ws32 = 0; ws32 < W; ws32 += tile_W) {
+                for (int h32 = 0; h32 < tile_H; h32++) {
+                    for (int w32 = 0; w32 < tile_W; w32++) {
                         auto w = w32 + ws32;
                         auto h = h32 + hs32;
                         auto in_offs = w + h * W + batch_index * H * W;
@@ -189,32 +216,37 @@ struct TensAddr {
 
 template <typename T, template <typename...> typename BufferType>
 inline std::vector<T> convert_layout(
-    const BufferType<T>& inp, const std::vector<uint32_t>& shape, TensorLayout inL, TensorLayout outL) {
+    const BufferType<T>& inp,
+    const std::vector<uint32_t>& shape,
+    TensorLayout inL,
+    TensorLayout outL,
+    const std::optional<std::vector<uint32_t>>& tile_shape = std::nullopt,
+    const std::optional<const std::vector<uint32_t>>& face_shape = std::nullopt) {
     ZoneScoped;
     switch (inL) {
         case TILED32_SWIZZLED:
             if (outL == TILED32_4FACES) {
-                return convert_to_tile_layout<T>(inp);
+                return convert_to_tile_layout<T>(inp, tile_shape, face_shape);
             } else if (outL == LIN_ROW_MAJOR) {
-                return untilize_nchw<T>(inp, shape);
+                return untilize_nchw<T>(inp, shape, tile_shape);
             } else
                 TT_ASSERT(false && "Unsupported conversion.");
         break;
         case LIN_ROW_MAJOR:
             if (outL == TILED32_SWIZZLED) {
-                return tilize_nchw<T>(inp, shape);
+                return tilize_nchw<T>(inp, shape, tile_shape);
             } else if (outL == TILED32_4FACES) {
-                auto swiz32 = convert_layout<T>(inp, shape, inL, TILED32_SWIZZLED);
-                return convert_layout<T>(swiz32, shape, TILED32_SWIZZLED, outL);
+                auto swiz32 = convert_layout<T>(inp, shape, inL, TILED32_SWIZZLED, tile_shape, face_shape);
+                return convert_layout<T>(swiz32, shape, TILED32_SWIZZLED, outL, tile_shape, face_shape);
             } else
                 TT_ASSERT(false && "Unsupported conversion.");
         break;
         case TILED32_4FACES:
             if (outL == TILED32_SWIZZLED) {
-                return convert_to_flat_layout<T>(inp);
+                return convert_to_flat_layout<T>(inp, tile_shape, face_shape);
             } else if (outL == LIN_ROW_MAJOR) {
-                auto swiz32 = convert_layout<T>(inp, shape, inL, TILED32_SWIZZLED);
-                return untilize_nchw<T>(swiz32, shape);
+                auto swiz32 = convert_layout<T>(inp, shape, inL, TILED32_SWIZZLED, tile_shape, face_shape);
+                return untilize_nchw<T>(swiz32, shape, tile_shape);
             } else {
                 TT_ASSERT(false && "Unsupported conversion");
             }

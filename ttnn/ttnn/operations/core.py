@@ -172,6 +172,7 @@ def from_torch(
     tensor: "torch.Tensor",
     dtype: Optional[ttnn.DataType] = None,
     *,
+    tile: Optional[ttnn.Tile] = None,
     layout: Optional[ttnn.Layout] = ttnn.ROW_MAJOR_LAYOUT,
     device: Optional[ttnn.Device] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
@@ -217,7 +218,10 @@ def from_torch(
         shards = mesh_mapper.map(tensor)
         tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config())
     else:
-        tensor = ttnn.Tensor(tensor, dtype)
+        if tile is not None:
+            tensor = ttnn.Tensor(tensor, dtype, tile)
+        else:
+            tensor = ttnn.Tensor(tensor, dtype)
 
     if layout is not None:
         tensor = ttnn.to_layout(tensor, layout, device=device)

@@ -12,6 +12,28 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_wormhole_b0
 
 
+@pytest.mark.parametrize("n", [2])
+@pytest.mark.parametrize("c", [5])
+@pytest.mark.parametrize("h", [512])
+@pytest.mark.parametrize("w", [512])
+def test_rm_to_tile(device, n, c, h, w):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+
+    sharded_memory_config = ttnn.create_sharded_memory_config(
+        (n, c, h, w),
+        core_grid=ttnn.CoreGrid(y=8, x=8),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, tile=(16, 32), layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_memory_config
+    )
+    output_tensor = ttnn.to_torch(input_tensor)
+    assert_with_pcc(torch_input_tensor, output_tensor, 1)
+
+
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [3])
 @pytest.mark.parametrize("h", [230])
