@@ -53,7 +53,7 @@ void MorehGetItemOperation::validate_inputs(
     for (auto dim : operation_attributes.index_dims) {
         TT_FATAL(
             dim_start + i == dim,
-            fmt::format("The value of index_dims={} must be consecutive integers.", operation_attributes.index_dims));
+            "The value of index_dims={} must be consecutive integers.", operation_attributes.index_dims);
         i++;
     }
     if (!output_tensor.has_value()) {

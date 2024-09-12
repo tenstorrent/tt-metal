@@ -34,7 +34,7 @@ void CopyDeviceOperation::validate_with_output_tensors(const std::vector<Tensor>
     if(!output_tensors.empty() && output_tensors.at(0).has_value()){
         const auto output_shape_required = this->compute_output_shapes(input_tensors);
         const auto& out_tensor = output_tensors.at(0).value();
-        TT_FATAL(out_tensor.get_legacy_shape() == output_shape_required.at(0), fmt::format("The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape()));
+        TT_FATAL(out_tensor.get_legacy_shape() == output_shape_required.at(0), "The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape());
         output_dtype = out_tensor.get_dtype();
     }
     if (output_dtype != input_tensor_a.get_dtype()) {
