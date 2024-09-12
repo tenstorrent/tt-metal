@@ -26,7 +26,12 @@ class TtLlamaMLP(torch.nn.Module):
 
         base_name = f"layers.{layer_num}.feed_forward"
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{base_name}.{name}.weight"], -2, -1)
-        cache_name = lambda name: weight_cache_path / (base_name + f".{name}")
+
+        if args.dummy_weights:
+            cache_name = lambda _: None
+        else:
+            cache_name = lambda name: weight_cache_path / (base_name + f".{name}")
+
         as_tensor = lambda name, type: ttnn.as_tensor(
             torch_weight(name),
             dtype=type,
@@ -68,6 +73,7 @@ class TtLlamaMLP(torch.nn.Module):
             dtype=ttnn.bfloat16,
             activation="silu" if not pc_1 else None,
             program_config=pc_1,
+            memory_config=ttnn.L1_MEMORY_CONFIG if seq_len <= 32 else ttnn.DRAM_MEMORY_CONFIG,
         )
 
         w3_out = ttnn.linear(
@@ -77,6 +83,7 @@ class TtLlamaMLP(torch.nn.Module):
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             dtype=ttnn.bfloat16,
             program_config=pc_3,
+            memory_config=ttnn.L1_MEMORY_CONFIG if seq_len <= 32 else ttnn.DRAM_MEMORY_CONFIG,
         )
 
         # x.deallocate(True)
@@ -92,6 +99,7 @@ class TtLlamaMLP(torch.nn.Module):
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
             dtype=ttnn.bfloat8_b,
             program_config=pc_2,
+            memory_config=ttnn.L1_MEMORY_CONFIG if seq_len <= 32 else ttnn.DRAM_MEMORY_CONFIG,
         )
 
         w2_in.deallocate(True)

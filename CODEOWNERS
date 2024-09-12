@@ -2,6 +2,7 @@
 # precedence.
 
 .github/ @tt-rkim @ttmchiou @TT-billteng
+.github/workflows/ttnn-run-sweeps.yaml @xanderchin @jdesousa-TT @sjameelTT
 
 /infra/ @tt-rkim
 
@@ -91,14 +92,14 @@ tests/scripts/run_performance.sh @tt-rkim
 
 # TTNN
 ttnn/ @eyonland @patrickroberts @yan-zaretskiy @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dmakoviichuk-tt
+ttnn/ttnn/library_tweaks.py @ayerofieiev-tt @dmakoviichuk-tt @tt-rkim
 ttnn/**/kernels/ # Removes the owners above from owning kernels unless specified afterwards
-ttnn/setup.py @ayerofieiev-tt @dmakoviichuk-tt @tt-rkim
 ttnn/**/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @yan-zaretskiy
 ttnn/cpp/ttnn/tensor/ @patrickroberts @yan-zaretskiy @eyonland @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
 ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/ccl/ @SeanNijjar
 ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/program_cache.*pp @eyonland @cfjchu @xanderchin
 ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
-ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @TT-BrianLiu @tt-aho @mywoodstock @eyonland @ayerofieiev-tt @razorback3 @dongjin-na
+ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @TT-BrianLiu @mywoodstock @eyonland @ayerofieiev-tt @razorback3 @dongjin-na
 ttnn/cpp/ttnn/deprecated/tt_lib/csrc/tt_lib_bindings_tensor_pytensor.cpp @eyonland @cfjchu @xanderchin
 ttnn/cpp/ttnn/deprecated/tt_lib/fallback_ops @tt-aho
 
@@ -106,6 +107,7 @@ ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt
 ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @cfjchu
 ttnn/cpp/ttnn/operations/pool/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
 ttnn/cpp/ttnn/operations/conv/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic @bbradelTT
+ttnn/cpp/ttnn/operations/sliding_window/ @mywoodstock @sankarmanoj-tt @pavlejosipovic
 ttnn/cpp/ttnn/operations/data_movement/ @tarafdarTT @sjameelTT @yan-zaretskiy
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT
 ttnn/cpp/ttnn/operations/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
@@ -115,6 +117,7 @@ ttnn/cpp/ttnn/operations/embedding/ @tarafdarTT @tt-aho @TT-BrianLiu
 ttnn/cpp/ttnn/operations/embedding_backward/ @TT-BrianLiu @yan-zaretskiy
 tests/ttnn/ @eyonland @patrickroberts @yan-zaretskiy @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dmakoviichuk-tt @razorback3 @dongjin-na
 tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
+
 # models
 /models/ @tt-rkim @uaydonat
 /models/*/**

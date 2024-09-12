@@ -52,7 +52,7 @@ def test_run_resnet50_trace_inference(
 
 
 @run_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_hw_cqs": 2}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
     ((20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
@@ -65,7 +65,7 @@ def test_run_resnet50_2cqs_inference(
 
 @run_for_grayskull()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768, "trace_region_size": 1332224, "num_hw_cqs": 2}], indirect=True
+    "device_params", [{"l1_small_size": 32768, "trace_region_size": 1332224, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",

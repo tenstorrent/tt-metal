@@ -11,9 +11,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random, is_wormhole_b0
 
 
-@pytest.mark.parametrize("batch_size", [1, 16])
-@pytest.mark.parametrize("h", [32, 64])
-@pytest.mark.parametrize("w", [32, 64])
+@pytest.mark.parametrize("batch_size", [1, 16, 1, 16])
+@pytest.mark.parametrize("h", [32, 64, 41, 37])
+@pytest.mark.parametrize("w", [32, 64, 31, 63])
 @pytest.mark.parametrize("dim", [-1, -2])
 def test_min(device, batch_size, h, w, dim):
     if is_wormhole_b0() and dim == -2:
@@ -33,9 +33,9 @@ def test_min(device, batch_size, h, w, dim):
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.parametrize("batch_size", [1, 16])
-@pytest.mark.parametrize("h", [32, 64])
-@pytest.mark.parametrize("w", [32, 64])
+@pytest.mark.parametrize("batch_size", [1, 16, 1, 16])
+@pytest.mark.parametrize("h", [32, 64, 41, 37])
+@pytest.mark.parametrize("w", [32, 64, 31, 63])
 def test_min_global(device, batch_size, h, w):
     if is_wormhole_b0():
         pytest.skip("Issue #6991: PCC mismatch")

@@ -7,14 +7,11 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_adam/moreh_adam_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_adamw/moreh_adamw_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_arange/moreh_arange_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_bmm/moreh_bmm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_bmm_backward/moreh_bmm_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_cumsum/moreh_cumsum_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_getitem/moreh_getitem_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm/moreh_groupnorm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm_backward/moreh_groupnorm_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
@@ -44,7 +41,7 @@ namespace operations {
 namespace primary {
 
 void py_module_types(py::module& m_primary) {
-        py::enum_<MorehSoftmaxOpParallelizationStrategy>(m_primary, "MorehSoftmaxOpParallelizationStrategy")
+    py::enum_<MorehSoftmaxOpParallelizationStrategy>(m_primary, "MorehSoftmaxOpParallelizationStrategy")
         .value("NONE", MorehSoftmaxOpParallelizationStrategy::NONE)
         .value("SMALL_W", MorehSoftmaxOpParallelizationStrategy::SMALL_W)
         .value("SMALL_H", MorehSoftmaxOpParallelizationStrategy::SMALL_H)
@@ -62,33 +59,6 @@ void py_module_types(py::module& m_primary) {
 }
 
 void py_module(py::module& m_primary) {
-
-    // moreh_adam
-    m_primary.def(
-        "moreh_adam",
-        &moreh_adam,
-        py::arg("param_in").noconvert(),
-        py::arg("grad").noconvert(),
-        py::arg("exp_avg_in").noconvert(),
-        py::arg("exp_avg_sq_in").noconvert(),
-        py::arg("lr").noconvert(),
-        py::arg("beta1").noconvert(),
-        py::arg("beta2").noconvert(),
-        py::arg("eps").noconvert(),
-        py::arg("weight_decay").noconvert(),
-        py::arg("step").noconvert(),
-        py::arg("amsgrad").noconvert(),
-        py::arg("max_exp_avg_sq_in").noconvert() = std::nullopt,
-        py::arg("param_out").noconvert() = std::nullopt,
-        py::arg("exp_avg_out").noconvert() = std::nullopt,
-        py::arg("exp_avg_sq_out").noconvert() = std::nullopt,
-        py::arg("max_exp_avg_sq_out").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-        "Performs a moreh_adam operation.
-        )doc");
-
     // moreh_adamw
     m_primary.def(
         "moreh_adamw",
@@ -452,19 +422,6 @@ void py_module(py::module& m_primary) {
         "Performs cumsum backward operation. Returns an input_grad tensor.");
 
     m_primary.def(
-        "moreh_arange",
-        &moreh_arange,
-        py::arg("start"),
-        py::arg("end"),
-        py::arg("step"),
-        py::arg("any").noconvert(),
-        py::arg("output_tensor").noconvert() = std::nullopt,
-        py::arg("untilize_out").noconvert() = false,
-        py::arg("output_dtype").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        "Performs an arange operation. Returns an output tensor.");
-
-    m_primary.def(
         "moreh_sgd",
         &moreh_sgd,
         py::arg("param_in").noconvert(),
@@ -552,15 +509,6 @@ void py_module(py::module& m_primary) {
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs mean backward operation. Returns an input_grad tensor.");
 
-    m_primary.def(
-        "moreh_getitem",
-        &moreh_getitem,
-        py::arg("input_tensor").noconvert(),
-        py::arg("index_tensors").noconvert(),
-        py::arg("index_dims").noconvert(),
-        py::arg("output_tensor").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        "Performs a getitem operation. Returns an output tensor.");
 }
 
 }  // namespace

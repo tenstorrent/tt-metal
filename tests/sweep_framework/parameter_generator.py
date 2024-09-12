@@ -87,7 +87,7 @@ def export_suite_vectors(module_name, suite_name, vectors):
         vector = dict()
         for elem in vectors[i].keys():
             vector[elem] = serialize(vectors[i][elem], warnings)
-        input_hash = hashlib.sha224(str(vectors[i]).encode("utf-8")).hexdigest()
+        input_hash = hashlib.sha224(str(vector).encode("utf-8")).hexdigest()
         new_vector_hashes.add(input_hash)
         vector["timestamp"] = current_time
         vector["input_hash"] = input_hash
@@ -96,7 +96,7 @@ def export_suite_vectors(module_name, suite_name, vectors):
 
     if old_vector_hashes == new_vector_hashes:
         print(
-            f"SWEEPS: Vectors generated for module {module_name}, suite {suite_name} already exist with tag {SWEEPS_TAG}, and have not changed. Skipping..."
+            f"SWEEPS: Vectors generated for module {module_name}, suite {suite_name} already exist with tag {SWEEPS_TAG}, and have not changed. ({len(old_vector_hashes)} existing tests). Skipping..."
         )
         return
     else:
@@ -133,7 +133,7 @@ def clean_module(module_name):
 
     update_script = {"source": f"ctx._source.status = '{str(VectorStatus.ARCHIVED)}'", "lang": "painless"}
     client.update_by_query(
-        index=vector_index, query={"match_all": {"tag.keyword": SWEEPS_TAG}}, script=update_script, refresh=True
+        index=vector_index, query={"match": {"tag.keyword": SWEEPS_TAG}}, script=update_script, refresh=True
     )
     print(
         f"SWEEPS: Marked all vectors with tag {SWEEPS_TAG} in index {vector_index} as archived. Proceeding with generation..."

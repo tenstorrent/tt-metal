@@ -194,7 +194,7 @@ int main(int argc, char **argv) {
                 (demux_queue_size_bytes >> 4), // 9: remote_tx_queue_size_words
                 (uint32_t)demux_phys_core.x, // 10: remote_tx_x
                 (uint32_t)demux_phys_core.y, // 11: remote_tx_y
-                num_dest_endpoints, // 12: remote_tx_queue_id
+                0, // 12: remote_tx_queue_id
                 (uint32_t)DispatchRemoteNetworkType::NOC0, // 13: tx_network_type
                 test_results_addr, // 14: test_results_addr
                 test_results_size, // 15: test_results_size
@@ -228,7 +228,7 @@ int main(int argc, char **argv) {
                     (rx_queue_size_bytes >> 4), // 4: queue_size_words
                     (uint32_t)demux_phys_core.x, // 5: remote_tx_x
                     (uint32_t)demux_phys_core.y, // 6: remote_tx_y
-                    i, // 7: remote_tx_queue_id
+                    i + 1, // 7: remote_tx_queue_id. +1 since demux input is qid 0. qid 1 - 4 are demux outputs
                     (uint32_t)DispatchRemoteNetworkType::NOC0, // 8: rx_rptr_update_network_type
                     test_results_addr, // 9: test_results_addr
                     test_results_size, // 10: test_results_size

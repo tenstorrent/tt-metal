@@ -163,12 +163,13 @@ Coordinate MeshDeviceView::find_device(chip_id_t device_id) const {
     if (it != device_coordinates_.end()) {
         return it->second;
     }
-    TT_FATAL(false, fmt::format("Device not found in mesh: {}", device_id));
+    TT_THROW("Device not found in mesh: {}", device_id);
 }
 
 chip_id_t MeshDeviceView::find_device_id(const Coordinate& coord) const {
-    TT_FATAL(coord.row >= 0 and coord.row < num_rows() and coord.col >= 0 and coord.col < num_cols(),
-        fmt::format("Invalid coordinate: "));
+    TT_FATAL(
+        coord.row >= 0 and coord.row < num_rows() and coord.col >= 0 and coord.col < num_cols(),
+        "Invalid coordinate: ({}, {})", coord.row, coord.col);
     return this->devices_.at(coord.row * num_cols() + coord.col)->id();
 }
 

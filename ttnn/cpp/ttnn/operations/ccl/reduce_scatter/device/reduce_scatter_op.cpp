@@ -17,10 +17,10 @@ void ReduceScatter::validate(const std::vector<Tensor>& input_tensors) const {
     for (auto const& t : input_tensors) {
         TT_FATAL(
             t.get_legacy_shape()[this->scatter_dim] / this->ring_size > 0,
-            "Reduce scatter input tensor shape on dim {} must be divisible by ring size");
+            "Reduce scatter input tensor shape on dim {} must be divisible by ring size", this->scatter_dim);
         TT_FATAL(
             t.get_legacy_shape()[this->scatter_dim] % this->ring_size == 0,
-            "Reduce scatter input tensor shape on dim {} must be divisible by ring size");
+            "Reduce scatter input tensor shape on dim {} must be divisible by ring size", this->scatter_dim);
     }
 }
 
@@ -55,10 +55,13 @@ operation::ProgramWithCallbacks ReduceScatter::create_program(
 }
 
 static ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_type(ttnn::operations::reduction::ReduceType reduce_op) {
+    // Leaving switch statement for future support of additional types.
     switch (reduce_op) {
-        case ttnn::operations::reduction::ReduceType::Sum: return ttnn::operations::binary::BinaryOpType::ADD;
-
-        default: TT_FATAL("Reduce scatter only support reduce_type Sum"); return ttnn::operations::binary::BinaryOpType::ADD;
+        case ttnn::operations::reduction::ReduceType::Sum:
+            return ttnn::operations::binary::BinaryOpType::ADD;
+        default:
+            TT_THROW("Reduce scatter only supports reduce_type Sum. Op type {} not supported.", reduce_op);
+            return ttnn::operations::binary::BinaryOpType::ADD;
     }
 }
 

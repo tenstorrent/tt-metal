@@ -50,7 +50,7 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
 
     ```bash
     # Run the demo using sampling decode
-    pytest -svv models/demos/t3000/llama2_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-short_context-check_disabled-sampling-tt-70b-T3000-80L-decode_only-text_completion-llama2]
+    pytest -svv models/demos/t3000/llama2_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-device_params0-short_context-check_disabled-sampling-tt-70b-T3000-80L-decode_only-trace_mode_on-text_completion-llama2]
     ```
 
 4. **Run the performance test:**
@@ -58,7 +58,7 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
     The above demo does not achieve peak performance because we log outputs to the screen. The following perf test will print an accurate end-to-end throughput number.
     For best performance numbers, we recommend building `tt-metal` with `CONFIG=Release` env var, and ensuring the host's CPU frequency governors are set to `performance`.
     ```bash
-    pytest -svv models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_perf_host[wormhole_b0-True-gen128-llama2]
+    pytest -svv models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_perf_host[wormhole_b0-True-device_params0-gen128-llama2]
     ```
 
 ## Details
@@ -77,6 +77,7 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
     - `implementation: [tt-70b-T3000]`: Run the 70B model on the Tenstorrent backend
     - `num_layers: [1L, 2L, 10L, 80L]`: Select 80L to run the full model
     - `decode_only: [decode_only, prefill_decode]`: Use `decode_only`. Alternately, choose `prefill_decode` to enable prefill-decode mode
+    - `trace_mode: [trace_mode_on, trace_mode_off]`: Use `trace_mode_on`. Alternately, choose `trace_mode_off` to disable trace mode
     - `chat: [text_completion, chat_completion]`: Run in text_completion mode for the pretrained model or chat_completion for the finetuned model
     - `llama_version: [llama2]`: Select the Llama2 model
 

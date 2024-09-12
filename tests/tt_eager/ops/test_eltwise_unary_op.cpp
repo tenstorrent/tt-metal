@@ -121,9 +121,9 @@ void test_operation_infrastructure() {
         false};
     ttnn::operations::unary::tensor_args_t tensor_args {input_tensor};
     auto program_hash = ttnn::operations::unary::UnaryDeviceOperation::compute_program_hash(op_args, tensor_args);
-    TT_FATAL(program_hash == 3018574135764717736ULL, fmt::format("Actual value is {}", program_hash));
+    TT_FATAL(program_hash == 3018574135764717736ULL, "Actual value is {}", program_hash);
 
-    TT_FATAL(tt::tt_metal::CloseDevice(device));
+    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
 }
 
 void test_shape_padding() {
@@ -149,10 +149,10 @@ void test_shape_padding() {
     output_tensor = output_tensor.cpu();
 
     auto output_shape = output_tensor.get_legacy_shape();
-    TT_FATAL(output_shape == tt::tt_metal::Shape(padded_input_shape));
-    TT_FATAL(output_shape.without_padding() == tt::tt_metal::Shape(input_shape));
+    TT_FATAL(output_shape == tt::tt_metal::Shape(padded_input_shape), "Error");
+    TT_FATAL(output_shape.without_padding() == tt::tt_metal::Shape(input_shape), "Error");
 
-    TT_FATAL(tt::tt_metal::CloseDevice(device));
+    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
 }
 
 namespace tt {
@@ -180,47 +180,47 @@ void test_numerically() {
     auto shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
     {
         auto allclose = run_test<UnaryOpType::SQRT>(device, shape, 0.0f, 1.0f, 1e-1f, 1e-5f);
-        TT_FATAL(allclose);
+        TT_FATAL(allclose, "Error");
     }
     {
         auto allclose = run_test<UnaryOpType::EXP>(device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
-        TT_FATAL(allclose);
+        TT_FATAL(allclose, "Error");
     }
     {
         auto allclose = run_test<UnaryOpType::EXP>(device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
-        TT_FATAL(allclose);
+        TT_FATAL(allclose, "Error");
     }
     {
         auto allclose = run_test<UnaryOpType::RECIP>(device, shape, 1.0f, 10.0f, 1e-1f, 1e-5f);
-        TT_FATAL(allclose);
+        TT_FATAL(allclose, "Error");
     }
     {
         auto allclose = run_test<UnaryOpType::GELU>(device, shape, 1.0f, 10.0f, 1e-1f, 1e-3f);
-        TT_FATAL(allclose);
+        TT_FATAL(allclose, "Error");
     }
     {
         auto allclose = run_test<UnaryOpType::GELU>(device, shape, 1.0f, 10.0f, 1e-1f, 1e-3f);
-        TT_FATAL(allclose);
+        TT_FATAL(allclose, "Error");
     }
 
     {
         auto allclose = run_test<UnaryOpType::RELU>(device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
-        TT_FATAL(allclose);
+        TT_FATAL(allclose, "Error");
     }
     {
         auto allclose = run_test<UnaryOpType::SIGMOID>(device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
-        TT_FATAL(allclose);
+        TT_FATAL(allclose, "Error");
     }
     {
         auto allclose = run_test<UnaryOpType::LOG>(device, shape, 0.0f, 1.0f, 1e-1f, 1e-2f);
-        TT_FATAL(allclose);
+        TT_FATAL(allclose, "Error");
     }
     {
         auto allclose = run_test<UnaryOpType::TANH>(device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
-        TT_FATAL(allclose);
+        TT_FATAL(allclose, "Error");
     }
 
-    TT_FATAL(tt::tt_metal::CloseDevice(device));
+    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
 }
 
 void test_program_cache() {
@@ -276,8 +276,8 @@ void test_program_cache() {
     TT_FATAL(device->num_program_cache_entries() == 4, "There are {} entries", device->num_program_cache_entries());
 
     device->disable_and_clear_program_cache();
-    TT_FATAL(device->num_program_cache_entries() == 0);
-    TT_FATAL(tt::tt_metal::CloseDevice(device));
+    TT_FATAL(device->num_program_cache_entries() == 0, "Error");
+    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
 }
 
 int main(int argc, char** argv) {

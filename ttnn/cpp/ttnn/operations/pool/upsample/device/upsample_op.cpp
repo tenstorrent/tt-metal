@@ -20,7 +20,7 @@ void UpSample::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to copy need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to copy need to be allocated in buffers on device!");
-    // TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+    // TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
     TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Input tensor layout should be ROW_MAJOR");
     TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Input tensor data type should be BFLOAT16");
     if (input_tensor_a.memory_config().is_sharded()) {
@@ -79,10 +79,10 @@ std::vector<Tensor> UpSample::create_output_tensors(const std::vector<Tensor> &i
                 log_debug(LogOp, "output_shard_shape: {}", output_shard_shape);
                 return {create_device_tensor(output_shape, input.get_dtype(), input.get_layout(), input.device(), mem_config)};
             } else {
-                TT_FATAL(false, "input memory config is not HEIGHT or BLOCK sharded");
+                TT_THROW("input memory config is not HEIGHT or BLOCK sharded");
             }
         } else {
-            TT_FATAL(false, "Output memory config is sharded but input memory config is not sharded");
+            TT_THROW("Output memory config is sharded but input memory config is not sharded");
         }
     } else {
         return operation::generic_create_output_tensors(*this, inputs, input.get_dtype(), input.get_layout(), output_mem_config_);

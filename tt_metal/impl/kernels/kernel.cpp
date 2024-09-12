@@ -5,6 +5,7 @@
 #include "tt_metal/impl/kernels/kernel.hpp"
 
 #include <fmt/core.h>
+#include <fmt/ranges.h>
 
 #include <set>
 
@@ -135,8 +136,10 @@ std::vector<ll_api::memory> const &Kernel::binaries(uint32_t build_key) const {
     if (this->binaries_.find(build_key) != this->binaries_.end() and
         this->binaries_.at(build_key).size() != expected_num_binaries) {
         TT_THROW(
-            "Expected " + std::to_string(expected_num_binaries) + " binaries but have " +
-            std::to_string(this->binaries_.at(build_key).size()) + " for kernel " + this->name());
+            "Expected {} binaries but have {} for kernel {}",
+            expected_num_binaries,
+            this->binaries_.at(build_key).size(),
+            this->name());
     }
     return this->binaries_.at(build_key);
 }
@@ -205,8 +208,7 @@ void Kernel::validate_runtime_args_size(
 
     if (total_rt_args > max_rt_args) {
         log_warning(tt::LogMetal, "Too many runtime args, unique: {} common: {} on {}", num_unique_rt_args, num_common_rt_args, this->processor());
-        TT_THROW(std::to_string(total_rt_args) + " unique+common runtime args targeting kernel " +  this->name() + " on " + logical_core.str() +
-            " are too large. Max allowable is " + std::to_string(max_runtime_args));
+        TT_THROW("{} unique+common runtime args targeting kernel {} on {} are too large. Max allowable is {}", total_rt_args, this->name(), logical_core.str(), max_runtime_args);
     }
 }
 
@@ -398,7 +400,7 @@ RISCV ComputeKernel::processor() const { return RISCV::COMPUTE; }
 bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core) const {
     bool pass = true;
     if (not is_on_logical_core(logical_core)) {
-        TT_THROW("Cannot configure kernel because it is not on core " + logical_core.str());
+        TT_THROW("Cannot configure kernel because it is not on core {}", logical_core.str());
     }
     auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
@@ -432,7 +434,7 @@ bool EthernetKernel::configure(Device *device, const CoreCoord &logical_core) co
 bool ComputeKernel::configure(Device *device, const CoreCoord &logical_core) const {
     bool pass = true;
     if (not is_on_logical_core(logical_core)) {
-        TT_THROW("Cannot configure kernel because it is not on core " + logical_core.str());
+        TT_THROW("Cannot configure kernel because it is not on core {}", logical_core.str());
     }
     auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);

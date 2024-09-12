@@ -36,8 +36,10 @@ def get_model_config(
     assert seq_len in (1, 128, 256, 2048, 4096, 8192, 32 * 1024, 128 * 1024)
 
     # Supported values, TODO update for larger TT chips
-    if max_context_len > 4096:
+    if max_context_len == 8192:
         assert max_batch_size == 16
+    elif max_context_len == 128 * 1024:
+        assert max_batch_size == 1
     else:
         assert max_batch_size == 32
     assert batch <= max_batch_size
@@ -173,7 +175,10 @@ def get_model_config(
     if llm_mode == "decode":
         model_config["PADDED_BATCH_SIZE"] = 32
         shard_height = model_config["PADDED_BATCH_SIZE"]
-        if batch == 16:
+        if batch == 1:
+            batch_grid_size = [1, 1]
+            batch_core_range = shard_spec_1_cores_grid
+        elif batch == 16:
             batch_grid_size = [8, 2]
             batch_core_range = shard_spec_16_cores_grid
         elif batch == 32:
@@ -329,15 +334,19 @@ def get_model_config(
             block_w=num_tiles_per_core_w,
             inplace=True,
         )
+
+        cores_y = 4 if seq_len == 128 else 8
+        max_mm_seq_tiles = min(seq_len, model_config["MAX_MM_SEQ_LEN"]) // 32
         model_config["LM_HEAD_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 4),
-            in0_block_w=8,  # how much inner dim you take each time
+            compute_with_storage_grid_size=(8, cores_y),
+            in0_block_w=1,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
             out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-            per_core_M=seq_tiles // 4,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_M=max_mm_seq_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
             per_core_N=16,  # N / TILE_WIDTH / Grid_Size
             transpose_mcast=False,
             fused_activation=None,
+            fuse_batch=False,
         )
 
         cores_y = 4 if seq_len == 128 else 8
@@ -552,17 +561,6 @@ def get_model_config(
     # Llama MLP config
     # Padded MLP 32K config:
     if llm_mode == "decode":
-        model_config["PADDED_FF1_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 4),
-            in0_block_w=8,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
-            out_subblock_h=1,  # Must be divisible by per_core_M
-            out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-            per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
-            per_core_N=4,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 4096 for num_device=8
-            fuse_batch=True,
-            fused_activation=ttnn.UnaryOpType.SILU,
-            mcast_in0=True,
-        )
         model_config["PADDED_FF3_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=8,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
@@ -570,9 +568,9 @@ def get_model_config(
             fused_activation=None,
         )
         model_config["PADDED_FF2_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=32,  # K = 32768 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+            in0_block_w=4,  # K = 32768 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             per_core_M=1,
-            per_core_N=1,
+            per_core_N=8,
             fused_activation=None,
         )
     else:
@@ -611,7 +609,7 @@ def get_model_config(
             out_subblock_h=1,  # Must be divisible by per_core_M
             out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
             per_core_M=max_mm_seq_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-            per_core_N=4,  # N / TILE_WIDTH / Grid_Size
+            per_core_N=32,  # N / TILE_WIDTH / Grid_Size
             transpose_mcast=False,
             fused_activation=None,
             fuse_batch=False,

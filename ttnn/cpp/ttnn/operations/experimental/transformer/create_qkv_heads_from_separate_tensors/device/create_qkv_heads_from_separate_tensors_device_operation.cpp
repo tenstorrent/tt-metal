@@ -18,36 +18,36 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Te
     TT_FATAL(q_input_tensor.buffer() != nullptr && kv_input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(q_input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 || q_input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || q_input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
     TT_FATAL(kv_input_tensor.get_dtype() == q_input_tensor.get_dtype(), "Unsupported data format");
-    TT_FATAL(q_input_tensor.get_layout() == Layout::TILE && kv_input_tensor.get_layout() == Layout::TILE);
+    TT_FATAL(q_input_tensor.get_layout() == Layout::TILE && kv_input_tensor.get_layout() == Layout::TILE, "Error");
     TT_FATAL(q_input_tensor.is_sharded() && kv_input_tensor.is_sharded(), "Operands to TM must be sharded");
 
 
     auto bbox = q_input_tensor.shard_spec().value().grid.bounding_box();
-    TT_FATAL((bbox.end_coord.x < q_input_tensor.device()->compute_with_storage_grid_size().x && bbox.end_coord.y < q_input_tensor.device()->compute_with_storage_grid_size().y));
+    TT_FATAL((bbox.end_coord.x < q_input_tensor.device()->compute_with_storage_grid_size().x && bbox.end_coord.y < q_input_tensor.device()->compute_with_storage_grid_size().y), "Error");
 
-    TT_FATAL(q_input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
-    TT_FATAL(kv_input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
+    TT_FATAL(q_input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Error");
+    TT_FATAL(kv_input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Error");
 
     ShardOrientation shard_orientation = q_input_tensor.shard_spec().value().orientation;
     bool rm = shard_orientation == ShardOrientation::ROW_MAJOR;
     uint32_t num_h_cores = rm ? bbox.end_coord.y + 1 : bbox.end_coord.x + 1;
     uint32_t num_w_cores = rm ? bbox.end_coord.x + 1 : bbox.end_coord.y + 1;
 
-    TT_FATAL(this->num_q_heads % num_w_cores == 0, fmt::format("Number of q heads {} must fit evenly into cores {}", this->num_q_heads, num_w_cores));
-    TT_FATAL(this->num_kv_heads % num_w_cores == 0, fmt::format("Number of kv heads {} must fit evenly into cores {}", this->num_kv_heads, num_w_cores));
+    TT_FATAL(this->num_q_heads % num_w_cores == 0, "Number of q heads {} must fit evenly into cores {}", this->num_q_heads, num_w_cores);
+    TT_FATAL(this->num_kv_heads % num_w_cores == 0, "Number of kv heads {} must fit evenly into cores {}", this->num_kv_heads, num_w_cores);
 
     const auto q_input_shape = q_input_tensor.get_legacy_shape();
     const auto kv_input_shape = kv_input_tensor.get_legacy_shape();
     TT_FATAL(q_input_shape[1] == 1 && kv_input_shape[1] == 1, "Unsupported input shape");
-    TT_FATAL(q_input_shape[0] == kv_input_shape[0], fmt::format("Q {} and KV {} batch size must match", q_input_shape[0], kv_input_shape[0]));
+    TT_FATAL(q_input_shape[0] == kv_input_shape[0], "Q {} and KV {} batch size must match", q_input_shape[0], kv_input_shape[0]);
 
-    TT_FATAL(q_input_shape[3] % (num_w_cores * TILE_WIDTH) == 0, fmt::format("Flattened hidden dimension {} must be a multiple of width cores {} * tile width {} to ensure that each core gets an even amount of tiles", q_input_shape[3], num_w_cores, TILE_WIDTH));
-    TT_FATAL(q_input_shape[0]*q_input_shape[2] % (num_h_cores * TILE_HEIGHT) == 0, fmt::format("Batch {} * Seq Len {} must be a multiple of height cores {} * tile height {} to ensure that each core gets an even amount of tiles", q_input_shape[0], q_input_shape[2], num_h_cores, TILE_HEIGHT));
+    TT_FATAL(q_input_shape[3] % (num_w_cores * TILE_WIDTH) == 0, "Flattened hidden dimension {} must be a multiple of width cores {} * tile width {} to ensure that each core gets an even amount of tiles", q_input_shape[3], num_w_cores, TILE_WIDTH);
+    TT_FATAL(q_input_shape[0]*q_input_shape[2] % (num_h_cores * TILE_HEIGHT) == 0, "Batch {} * Seq Len {} must be a multiple of height cores {} * tile height {} to ensure that each core gets an even amount of tiles", q_input_shape[0], q_input_shape[2], num_h_cores, TILE_HEIGHT);
 
-    TT_FATAL(kv_input_shape[3] % (num_w_cores * TILE_WIDTH) == 0, fmt::format("Flattened hidden dimension {} must be a multiple of width cores {} * tile width {} to ensure that each core gets an even amount of tiles", kv_input_shape[3], num_w_cores, TILE_WIDTH));
-    TT_FATAL(kv_input_shape[0]*kv_input_shape[2] % (num_h_cores * TILE_HEIGHT) == 0, fmt::format("Batch {} * Seq Len {} must be a multiple of height cores {} * tile height {} to ensure that each core gets an even amount of tiles", kv_input_shape[0], kv_input_shape[2], num_h_cores, TILE_HEIGHT));
+    TT_FATAL(kv_input_shape[3] % (num_w_cores * TILE_WIDTH) == 0, "Flattened hidden dimension {} must be a multiple of width cores {} * tile width {} to ensure that each core gets an even amount of tiles", kv_input_shape[3], num_w_cores, TILE_WIDTH);
+    TT_FATAL(kv_input_shape[0]*kv_input_shape[2] % (num_h_cores * TILE_HEIGHT) == 0, "Batch {} * Seq Len {} must be a multiple of height cores {} * tile height {} to ensure that each core gets an even amount of tiles", kv_input_shape[0], kv_input_shape[2], num_h_cores, TILE_HEIGHT);
 
-    TT_FATAL((q_input_shape[3]/(this->num_q_heads)) == (kv_input_shape[3]/(2 * this->num_kv_heads)), fmt::format("Head dims must be equal in size! Q {} num_heads {} KV {} num_heads {}", q_input_shape[3], num_q_heads, kv_input_shape[3], num_kv_heads));
+    TT_FATAL((q_input_shape[3]/(this->num_q_heads)) == (kv_input_shape[3]/(2 * this->num_kv_heads)), "Head dims must be equal in size! Q {} num_heads {} KV {} num_heads {}", q_input_shape[3], num_q_heads, kv_input_shape[3], num_kv_heads);
 
     uint32_t q_shard_wt = (q_input_shape[3]) / (num_w_cores * TILE_WIDTH); // number of tiles in width dimension  - multiple tiles per head, multiple heads per group, multiple tensors in group, multiple groups per cores
     uint32_t q_shard_ht = ((q_input_shape[0] * q_input_shape[2]) / (num_w_cores * TILE_HEIGHT));
@@ -63,11 +63,11 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Te
     uint32_t per_core_k_tiles = k_shard_ht * k_shard_wt;
 
     const uint32_t single_tile_size = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(q_input_tensor.get_dtype()));
-    TT_FATAL(L1_SIZE >= 2 * (per_core_q_tiles + 2*per_core_k_tiles) * single_tile_size, fmt::format("Workload exceeds L1 capacity"));
+    TT_FATAL(L1_SIZE >= 2 * (per_core_q_tiles + 2*per_core_k_tiles) * single_tile_size, "Workload exceeds L1 capacity");
 
     // TODO: Add this back when output is HEIGHT sharded only!
-    // TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
-    TT_FATAL(q_input_shape[0] == num_h_cores, fmt::format("Batch size {} must be equal to num cores {}", q_input_shape[0], num_h_cores));
+    // TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+    TT_FATAL(q_input_shape[0] == num_h_cores, "Batch size {} must be equal to num cores {}", q_input_shape[0], num_h_cores);
 }
 
 std::vector<tt::tt_metal::Shape> CreateQKVHeadsSeparateTensorsDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {

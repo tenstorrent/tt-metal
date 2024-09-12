@@ -48,14 +48,14 @@ pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape
 }
 
 pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(const Shape& conv_activation_shape, ttnn::operations::sliding_window::SlidingWindowConfig sliding_window_config, uint32_t act_block_h_ntiles, uint32_t padding_for_32B_alignment) {
+
     uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;  // filter_h
     uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
-    uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw.first;
-    uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
-    uint32_t pad_h = (uint32_t)sliding_window_config.pad_hw.first;
-    uint32_t pad_w = (uint32_t)sliding_window_config.pad_hw.second;
-    auto [conv_output_h, conv_output_w] = compute_opt_conv_output_face_shape(conv_activation_shape[1], conv_activation_shape[2], filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, padding_for_32B_alignment);
-    uint32_t batch_size = conv_activation_shape[0];
+    auto output_shape = sliding_window_config.get_output_shape();
+    uint32_t batch_size = output_shape[0];
+    uint32_t conv_output_h = output_shape[1];
+    uint32_t conv_output_w = output_shape[2];
+
     // pad height
     uint32_t num_rows = (uint32_t) batch_size * conv_output_h * conv_output_w;
     uint32_t act_block_h_datums = act_block_h_ntiles * TILE_HEIGHT;
@@ -122,17 +122,17 @@ void OptimizedConvNew::validate(const std::vector<Tensor>& input_tensors, const 
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     // TODO: ...
-    TT_FATAL(!input_tensor_b.memory_config().is_sharded());
+    TT_FATAL(!input_tensor_b.memory_config().is_sharded(), "Error");
     if (this->untilize_out) {
-        TT_FATAL((this->dtype == DataType::BFLOAT16) || (this->dtype == DataType::FLOAT32));
+        TT_FATAL((this->dtype == DataType::BFLOAT16) || (this->dtype == DataType::FLOAT32), "Error");
     }
     if (this->memory_config.is_sharded()) {
         uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntiles;
         auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(input_tensor_a.get_legacy_shape(), sliding_window_config, out_block_h_ntiles, extra_padding_for_32B_alignment);
         uint32_t out_width_ntiles = this->compute_output_shapes(input_tensors).at(0)[-1] / TILE_WIDTH;
         if(this->memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-            TT_FATAL(this->parallelization_config.per_core_out_matrix_width_ntiles == out_width_ntiles);
-            TT_FATAL(this->block_config.out_subblock_w_ntiles == out_width_ntiles || this->block_config.out_subblock_h_ntiles == 1);
+            TT_FATAL(this->parallelization_config.per_core_out_matrix_width_ntiles == out_width_ntiles, "Error");
+            TT_FATAL(this->block_config.out_subblock_w_ntiles == out_width_ntiles || this->block_config.out_subblock_h_ntiles == 1, "Error");
         } else if (this->memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
             // For block sharded, out_width per core is shard width, and this is split along row
             // TODO: We should clean this up and relax constraints on out_subblock h and w
@@ -141,7 +141,7 @@ void OptimizedConvNew::validate(const std::vector<Tensor>& input_tensors, const 
             } else {
                 out_width_ntiles /= this->parallelization_config.grid_size.x;
             }
-            TT_FATAL(this->block_config.out_subblock_w_ntiles == out_width_ntiles || this->block_config.out_subblock_h_ntiles == 1);
+            TT_FATAL(this->block_config.out_subblock_w_ntiles == out_width_ntiles || this->block_config.out_subblock_h_ntiles == 1, "Error");
         }
     }
 }
@@ -218,7 +218,7 @@ std::vector<Tensor> OptimizedConvNew::create_output_tensors(const std::vector<Te
             mem_config.shard_spec = shard_spec;
             return {create_device_tensor(output_shape, this->dtype, output_layout, input_tensor.device(), mem_config)};
         } else {
-            TT_FATAL(false, "Unsupported shard scheme");
+            TT_THROW("Unsupported shard scheme");
         }
 
     }

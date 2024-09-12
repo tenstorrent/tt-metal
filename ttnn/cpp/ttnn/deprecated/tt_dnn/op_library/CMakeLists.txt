@@ -3,11 +3,8 @@
 set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/sharding_utilities.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_helper_functions.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_adam/moreh_adam.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_adam/moreh_adam_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_adamw/moreh_adamw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_adamw/moreh_adamw_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_arange/moreh_arange_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_clip_grad_norm/moreh_clip_grad_norm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/moreh_clip_grad_norm_step1.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_clip_grad_norm/moreh_clip_grad_norm_step2/moreh_clip_grad_norm_step2.cpp
@@ -80,9 +77,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_cumsum/moreh_cumsum_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sgd/moreh_sgd_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sgd/moreh_sgd.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_getitem/moreh_getitem_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_getitem/moreh_getitem_rm/moreh_getitem_rm.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_getitem/moreh_getitem_tilized/moreh_getitem_tilized.cpp
 
     CACHE INTERNAL "tt_dnn sources to reuse in ttnn build"
 )

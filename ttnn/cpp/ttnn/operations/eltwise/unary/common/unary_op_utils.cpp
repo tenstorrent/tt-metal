@@ -78,7 +78,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     UnaryOpType op_type, const std::vector<float>& params, const std::string& idst) {
     std::pair<std::string, std::string> op_init_and_name;
-    TT_FATAL(is_parametrized_type(op_type) && "operator should support at least one parameter");
+    TT_FATAL(is_parametrized_type(op_type) && "operator should support at least one parameter", "Error");
     float param0 = params[0];
     switch (op_type) {
         case UnaryOpType::RELU_MAX:
@@ -382,7 +382,7 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::SQUARE);
     else if (name == "softplus")
         return UnaryWithParam(UnaryOpType::SOFTPLUS);
-    TT_THROW("Unknown unary op: " + name);
+    TT_THROW("Unknown unary op: {}", name);
 }
 
 std::map<string, string> get_defines(

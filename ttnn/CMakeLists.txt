@@ -332,6 +332,22 @@ set(ALL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/sharded/reshard/reshard_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/sharded/reshard/device/reshard_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/sharded/reshard/device/reshard_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_pybind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_arange/moreh_arange.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_arange/moreh_arange_pybind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_arange/device/moreh_arange_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_arange/device/moreh_arange_device_operation.cpp
+
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_adam/moreh_adam.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_adam/moreh_adam_pybind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_adam/device/moreh_adam_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_adam/device/moreh_adam_device_operation.cpp
+
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_getitem/moreh_getitem.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_getitem/moreh_getitem_pybind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_rm_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_device_operation.cpp
 )
 
 # Split src and python bindings
@@ -342,6 +358,8 @@ set(PYBIND_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/events.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/profiler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/pytensor.cpp
 )
 
 foreach(FILE ${ALL_TTNN_SRCS})
@@ -418,6 +436,12 @@ target_link_libraries(ttnn PUBLIC ${TTNN_PUBLIC_LINK_LIBRARIES})
 target_link_directories(ttnn PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
 target_precompile_headers(ttnn PRIVATE ${TTNN_PRECOMPILED_HEADERS})
 
+# We move the library binaries to a different path rather than PROJECT_BINARY_DIR
+# in the Python wheel
+set(TTNN_INSTALL_RPATH
+    "${PROJECT_BINARY_DIR}/lib"
+    "$ORIGIN/build/lib"
+)
 
 # Make sure library built is _ttnn.so and that it can find all it's linked libraries
 # ttnn breaks if -fvisibility=hidden, so CXX_VISIBILITY_PRESET set to default
@@ -426,7 +450,7 @@ set_target_properties(ttnn PROPERTIES
     PREFIX ""
     SUFFIX ".so"
     BUILD_RPATH "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
-    INSTALL_RPATH "${PROJECT_BINARY_DIR}/lib"
+    INSTALL_RPATH "${TTNN_INSTALL_RPATH}"
     CXX_VISIBILITY_PRESET "default"
     ADDITIONAL_CLEAN_FILES "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_ttnn.so;${PROJECT_SOURCE_DIR}/ttnn/ttnn.egg-info"
 )
