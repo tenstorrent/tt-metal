@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <tuple>
 #include <variant>
@@ -15,6 +16,7 @@
 #include "impl/event/event.hpp"
 #include "impl/program/program.hpp"
 #include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
+#include "third_party/json/json.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/graph/graph_operation_queries.hpp"
@@ -25,8 +27,10 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_constraints.hpp"
 #include "ttnn/operations/eltwise/binary/binary_l1_interface.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary/unary_l1_interface.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/normalization/softmax/softmax_l1_interface.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
@@ -44,39 +48,211 @@ struct OperandShapeTestParam {
     tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE;
 };
 
-class MlirInterfaceTestFixture
+ttnn::Shape pad_shape_to_tile(const ttnn::Shape& shape) {
+    std::vector<uint32_t> shape_og;
+    std::vector<uint32_t> shape_padded;
+
+    auto rank = shape.rank();
+    for (auto i = 0; i < rank; i++) {
+        shape_og.push_back(shape[i]);
+
+        if (i >= rank - 2) {
+            shape_padded.push_back((shape[i] + 31) / 32 * 32);
+        } else {
+            shape_padded.push_back(shape[i]);
+        }
+    }
+    return ttnn::Shape(shape_og, shape_padded);
+}
+
+void compare_l1_circular_buffer_allocations(
+    const std::vector<std::tuple<uint32_t, uint32_t>>& usage_estimator_result, const nlohmann::json& json_trace) {
+    auto graph_circular_buffer_allocations = graph::extract_circular_buffer_allocations_per_core(json_trace);
+    EXPECT_EQ(usage_estimator_result.size(), graph_circular_buffer_allocations.size());
+
+    for (const auto& [size, cores] : usage_estimator_result) {
+        std::cout << size << " ";
+    }
+    std::cout << std::endl;
+    for (int size : graph_circular_buffer_allocations) {
+        std::cout << size << " ";
+    }
+    std::cout << std::endl;
+
+    for (int i = 0; i < graph_circular_buffer_allocations.size(); i++) {
+        std::cout << "DBG cb[" << i << "]" << std::get<0>(usage_estimator_result[i]) << std::endl
+                  << " " << graph_circular_buffer_allocations[i] << std::endl;
+        EXPECT_EQ(std::get<0>(usage_estimator_result[i]), graph_circular_buffer_allocations[i]);
+    }
+}
+
+void compare_l1_tensor_allocations(
+    const std::vector<std::tuple<uint32_t, uint32_t>>& usage_estimator_result, const nlohmann::json& json_trace) {
+    auto graph_l1_buffer_allocations = graph::extract_l1_buffer_allocations(json_trace);  // total
+    EXPECT_EQ(usage_estimator_result.size(), graph_l1_buffer_allocations.size());
+    for (int i = 0; i < graph_l1_buffer_allocations.size(); i++) {
+        std::cout << "DBG l1[" << i << "]" << std::get<0>(usage_estimator_result[i])
+                  << std::endl;  // << " " << graph_l1_buffer_allocations[i] << std::endl;
+        EXPECT_EQ(
+            std::get<0>(usage_estimator_result[i]) * std::get<1>(usage_estimator_result[i]),
+            graph_l1_buffer_allocations[i]);
+    }
+}
+
+class EltwiseUnaryOpInterfaceTestFixture : public TTNNFixtureWithDevice,
+                                           public testing::WithParamInterface<OperandShapeTestParam> {};
+
+class EltwiseBinaryOpInterfaceTestFixture
     : public TTNNFixtureWithDevice,
-      public testing::WithParamInterface<
-          std::tuple<OperandShapeTestParam, OperandShapeTestParam, tt::tt_metal::IGraphProcessor::RunMode>> {};
+      public testing::WithParamInterface<std::tuple<OperandShapeTestParam, OperandShapeTestParam>> {};
 
 OperandShapeTestParam select_larger_input(const OperandShapeTestParam& a, const OperandShapeTestParam& b) {
     return a.shape.volume() >= b.shape.volume() ? a : b;
 }
 
-TEST_P(MlirInterfaceTestFixture, MlirInterfaceTest) {
+class SoftmaxOpInterfaceTestFixture : public TTNNFixtureWithDevice,
+                                      public testing::WithParamInterface<std::tuple<OperandShapeTestParam, int>> {};
+
+TEST_P(SoftmaxOpInterfaceTestFixture, MlirInterfaceTest) {
+    auto param_combination = GetParam();
+    auto input = std::get<0>(param_combination);
+    auto dim_arg = std::get<1>(param_combination);
+
+    // pad input shapes (this isn't happening automagically)
+    input.shape = pad_shape_to_tile(input.shape);
+    std::cout << "OP = softmax(" << input.shape << ", dim=" << dim_arg << ")" << std::endl;
+
+    // TODO: Test constraints
+
+    // Run the test
+    {
+        auto input_tensor =
+            ttnn::zeros(input.shape, input.data_type, input.layout, this->getDevice(), input.memory_config);
+
+        auto call = [&] {
+            const auto output_tensor = ttnn::softmax(input_tensor, dim_arg);
+            return output_tensor;
+        };
+
+        // // get graph trace for ground truth
+        auto json_trace = graph::query_trace(call);
+        tt::log_info("Trace: {}", json_trace.dump(4));
+
+        // L1 interface calls and checks against graph trace
+        {
+            auto l1_input = std::make_tuple(input.shape, input.data_type, input.layout, input.memory_config);
+            auto l1_usage = SoftmaxOpL1UsageFactory::Make(l1_input, dim_arg);
+
+            compare_l1_circular_buffer_allocations(l1_usage->get_circular_buffer_l1_allocations_per_core(), json_trace);
+            compare_l1_tensor_allocations(l1_usage->get_tensor_l1_allocations_per_core(), json_trace);
+        }
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MlirInterfaceTests,             // Prefix for the instantiated test suite
+    SoftmaxOpInterfaceTestFixture,  // Test suite name
+    ::testing::Combine(
+        ::testing::Values(
+            OperandShapeTestParam{
+                .shape = ttnn::Shape(tt::tt_metal::Array4D{4, 2, 5 * 32, 7 * 32}),
+                .memory_config = ttnn::L1_MEMORY_CONFIG,
+            },
+            OperandShapeTestParam{
+                .shape = ttnn::Shape(tt::tt_metal::Array4D{4, 2, 5 * 32, 7 * 32}),
+                .memory_config = ttnn::L1_MEMORY_CONFIG,
+                .layout = ttnn::ROW_MAJOR_LAYOUT},
+            OperandShapeTestParam{
+                .shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 32 * 32, 32 * 32}),
+                .memory_config =
+                    {.memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+                     .buffer_type = tt::tt_metal::BufferType::L1,
+                     .shard_spec =
+                         tt::tt_metal::ShardSpec{
+                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{3, 3}}}},
+                             {6 * 32, 32 * 32},
+                             ShardOrientation::COL_MAJOR}},
+            }),
+
+        ::testing::Values(-1))
+
+);
+
+TEST_P(EltwiseUnaryOpInterfaceTestFixture, MlirInterfaceTest) {
+    auto input = GetParam();
+
+    // pad input shapes (this isn't happening automagically)
+    input.shape = pad_shape_to_tile(input.shape);
+    std::cout << "OP = relu(" << input.shape << ")" << std::endl;
+
+    // TODO: Test constraints
+
+    // Run the test
+    {
+        auto input_tensor =
+            ttnn::zeros(input.shape, input.data_type, input.layout, this->getDevice(), input.memory_config);
+
+        auto call = [&] {
+            const auto output_tensor = ttnn::relu(input_tensor);
+            return output_tensor;
+        };
+
+        // // get graph trace for ground truth
+        auto json_trace = graph::query_trace(call);
+        tt::log_info("Trace: {}", json_trace.dump(4));
+
+        // L1 interface calls and checks against graph trace
+        {
+            auto l1_input = std::make_tuple(input.shape, input.data_type, input.layout, input.memory_config);
+            auto l1_usage = UnaryOpL1UsageFactory::Make(l1_input);
+
+            compare_l1_circular_buffer_allocations(l1_usage->get_circular_buffer_l1_allocations_per_core(), json_trace);
+            compare_l1_tensor_allocations(l1_usage->get_tensor_l1_allocations_per_core(), json_trace);
+        }
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MlirInterfaceTests,                  // Prefix for the instantiated test suite
+    EltwiseUnaryOpInterfaceTestFixture,  // Test suite name
+    ::testing::Values(
+        OperandShapeTestParam{
+            .shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 32 * 32, 32 * 32}),
+            .memory_config =
+                {.memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+                 .buffer_type = tt::tt_metal::BufferType::L1,
+                 .shard_spec =
+                     tt::tt_metal::ShardSpec{
+                         CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{3, 3}}}},
+                         {6 * 32, 32 * 32},
+                         ShardOrientation::COL_MAJOR}},
+        },
+        OperandShapeTestParam{
+            .shape = ttnn::Shape(tt::tt_metal::Array4D{4, 2, 5 * 32, 7 * 32}),
+            .memory_config = ttnn::L1_MEMORY_CONFIG,
+        },
+        OperandShapeTestParam{
+            .shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 32 * 32, 32 * 32}),
+            .memory_config =
+                {.memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+                 .buffer_type = tt::tt_metal::BufferType::L1,
+                 .shard_spec =
+                     tt::tt_metal::ShardSpec{
+                         CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{3, 3}}}},
+                         {6 * 32, 32 * 32},
+                         ShardOrientation::COL_MAJOR}},
+            .layout = tt::tt_metal::Layout::ROW_MAJOR,
+        })
+
+);
+
+TEST_P(EltwiseBinaryOpInterfaceTestFixture, MlirInterfaceTest) {
     auto param_combination = GetParam();
     auto input_a = std::get<0>(param_combination);
     auto input_b = std::get<1>(param_combination);
     auto output = select_larger_input(input_a, input_b);
-    auto run_mode = std::get<2>(param_combination);
 
     // pad input shapes (this isn't happening automagically)
-    auto pad_shape_to_tile = [](const ttnn::Shape& shape) {
-        std::vector<uint32_t> shape_og;
-        std::vector<uint32_t> shape_padded;
-
-        auto rank = shape.rank();
-        for (auto i = 0; i < rank; i++) {
-            shape_og.push_back(shape[i]);
-
-            if (i >= rank - 2) {
-                shape_padded.push_back((shape[i] + 31) / 32 * 32);
-            } else {
-                shape_padded.push_back(shape[i]);
-            }
-        }
-        return ttnn::Shape(shape_og, shape_padded);
-    };
     input_a.shape = pad_shape_to_tile(input_a.shape);
     input_b.shape = pad_shape_to_tile(input_b.shape);
     std::cout << "OP = " << input_a.shape << " + " << input_b.shape << std::endl;
@@ -131,32 +307,15 @@ TEST_P(MlirInterfaceTestFixture, MlirInterfaceTest) {
 
             auto l1_usage = EltwiseOpL1UsageFactory::Make(l1_input_a, l1_input_b, l1_output);
 
-            auto l1_cb_usage = l1_usage->get_circular_buffer_l1_allocations_per_core();
-            auto graph_circular_buffer_allocations = graph::extract_circular_buffer_allocations_per_core(json_trace);
-            EXPECT_EQ(l1_cb_usage.size(), graph_circular_buffer_allocations.size());
-            for (int i = 0; i < l1_cb_usage.size(); i++) {
-                std::cout << "DBG cb[" << i << "]" << std::get<0>(l1_cb_usage[i]) << std::endl
-                          << " " << graph_circular_buffer_allocations[i] << std::endl;
-                EXPECT_EQ(std::get<0>(l1_cb_usage[i]), graph_circular_buffer_allocations[i]);
-            }
-
-            auto l1_tensor_usage =
-                l1_usage->get_tensor_l1_allocations_per_core();  // what about output tensor allocation?
-            auto graph_l1_buffer_allocations = graph::extract_l1_buffer_allocations(json_trace);  // total
-            EXPECT_EQ(l1_tensor_usage.size(), graph_l1_buffer_allocations.size());
-            for (int i = 0; i < l1_tensor_usage.size(); i++) {
-                std::cout << "DBG l1[" << i << "]" << std::get<0>(l1_tensor_usage[i])
-                          << std::endl;  // << " " << graph_l1_buffer_allocations[i] << std::endl;
-                EXPECT_EQ(
-                    std::get<0>(l1_tensor_usage[i]) * std::get<1>(l1_tensor_usage[i]), graph_l1_buffer_allocations[i]);
-            }
+            compare_l1_circular_buffer_allocations(l1_usage->get_circular_buffer_l1_allocations_per_core(), json_trace);
+            compare_l1_tensor_allocations(l1_usage->get_tensor_l1_allocations_per_core(), json_trace);
         }
     }
 }
 
 INSTANTIATE_TEST_SUITE_P(
     MlirInterfaceTestsREPEAT_MAX_BLOCK_SCALE,  // Prefix for the instantiated test suite
-    MlirInterfaceTestFixture,                  // Test suite name
+    EltwiseBinaryOpInterfaceTestFixture,       // Test suite name
     ::testing::Combine(
         ::testing::Values(OperandShapeTestParam{
             .shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 32 * 32, 32 * 32}),
@@ -173,13 +332,13 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::Values(OperandShapeTestParam{
             .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32 * 32, 32 * 32}),
             .memory_config = ttnn::L1_MEMORY_CONFIG,
-        }),
+        }))
 
-        ::testing::Values(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH)));
+);
 
 INSTANTIATE_TEST_SUITE_P(
-    MlirInterfaceTests,        // Prefix for the instantiated test suite
-    MlirInterfaceTestFixture,  // Test suite name
+    MlirInterfaceTests,                   // Prefix for the instantiated test suite
+    EltwiseBinaryOpInterfaceTestFixture,  // Test suite name
     ::testing::Combine(
         ::testing::Values(
             OperandShapeTestParam{
@@ -271,13 +430,13 @@ INSTANTIATE_TEST_SUITE_P(
             OperandShapeTestParam{
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{4, 2, 5 * 32, 1}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
-            }),
+            }))
 
-        ::testing::Values(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH)));
+);
 
 INSTANTIATE_TEST_SUITE_P(
-    MlirInterfaceTestsHEIGHT_SHARDED,  // Prefix for the instantiated test suite
-    MlirInterfaceTestFixture,          // Test suite name
+    MlirInterfaceTestsHEIGHT_SHARDED,     // Prefix for the instantiated test suite
+    EltwiseBinaryOpInterfaceTestFixture,  // Test suite name
     ::testing::Combine(
         ::testing::Values(
             OperandShapeTestParam{
@@ -327,9 +486,9 @@ INSTANTIATE_TEST_SUITE_P(
                              ShardOrientation::COL_MAJOR}},
             }
 
-            ),
+            ))
 
-        ::testing::Values(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH)));
+);
 
 }  // namespace test
 }  // namespace binary
