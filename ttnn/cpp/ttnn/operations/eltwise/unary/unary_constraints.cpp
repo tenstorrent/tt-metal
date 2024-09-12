@@ -42,24 +42,20 @@ std::vector<OpConstraint> UnaryOpConstraintsBuilder::build_constraints() {
     // reducing search space
     // data types are required
     std::vector<Layout> tile_layouts_a = {Layout::ROW_MAJOR, Layout::TILE};
-    if (tile_layout_a.has_value())
-    {
+    if (tile_layout_a.has_value()) {
         tile_layouts_a = {tile_layout_a.value()};
     }
     std::vector<Layout> tile_layouts_o = {Layout::ROW_MAJOR, Layout::TILE};
-    if (tile_layout_o.has_value())
-    {
+    if (tile_layout_o.has_value()) {
         tile_layouts_o = {tile_layout_b.value()};
     }
     // Only two for now. TODO: add other storage types.
     std::vector<StorageType> storage_types_a = {StorageType::OWNED, StorageType::DEVICE};
-    if (storage_type_a.has_value())
-    {
+    if (storage_type_a.has_value()) {
         storage_types_a = {storage_type_a.value()};
     }
     std::vector<StorageType> storage_types_o = {StorageType::OWNED, StorageType::DEVICE};
-    if (storage_type_o.has_value())
-    {
+    if (storage_type_o.has_value()) {
         storage_types_o = {storage_type_a.value()};
     }
 
@@ -90,8 +86,7 @@ std::vector<OpConstraint> UnaryOpConstraintsBuilder::build_constraints() {
     return std::move(constraints);
 }
 
-bool UnaryOpConstraintsBuilder::can_build_constraints() const
-{
+bool UnaryOpConstraintsBuilder::can_build_constraints() const {
     return data_type_a.has_value() && data_type_o.has_value();
 }
 
@@ -105,6 +100,11 @@ bool UnaryOpConstraintsBuilder::is_valid_op_constraint(const OpConstraint& const
     }
     if (!is_supported_dtype(data_type_a, data_type_o, op_type)) {
         return false;
+    }
+    if (!memory_config_a.is_sharded()) {
+        if (c_tile_layout_a != Layout::TILE) {
+            return false;
+        }
     }
     if (storage_type_a != StorageType::DEVICE) {
         return false;
@@ -167,10 +167,8 @@ UnaryOpTypes UnaryOpConstraintsFactory::GetUnaryOpType(
     const ttnn::Shape& input_shape_a,
     const tt::tt_metal::MemoryConfig& memory_config_a,
     const tt::tt_metal::MemoryConfig& memory_config_o) {
-
     // We currently do not support anything except relu op
-    if (_op_type != ttnn::operations::unary::UnaryOpType::RELU)
-    {
+    if (_op_type != ttnn::operations::unary::UnaryOpType::RELU) {
         return UnaryOpTypes::NotSupported;
     }
     if (!is_supported_arch(arch, _op_type)) {

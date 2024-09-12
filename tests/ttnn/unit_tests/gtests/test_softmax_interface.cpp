@@ -44,7 +44,6 @@ struct InputShapeTestParam {
     ttnn::types::Shape shape;
     tt::tt_metal::MemoryConfig memory_config;
     tt::tt_metal::DataType data_type = tt::tt_metal::DataType::BFLOAT16;
-    tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE;
 };
 
 class SoftmaxInterfaceTestFixture
@@ -94,6 +93,24 @@ TEST_P(SoftmaxInterfaceTestFixture, SoftmaxInterfaceTest) {
                 std::cout << "op_constraints is empty" << std::endl;
                 GTEST_SKIP();
             }
+            // Run the test
+            {
+                for (const auto& op_constraint : op_constraints) {
+                    auto call = [&] {
+                        auto input_tensor_a = ttnn::zeros(
+                            input_a.shape,
+                            op_constraint.getDataTypeA(),
+                            op_constraint.getTileLayoutA(),
+                            this->getDevice(),
+                            input_a.memory_config);
+                        const auto output_tensor = ttnn::softmax(input_tensor_a, -1);
+                        return output_tensor;
+                    };
+
+                    auto json_trace = graph::query_trace(call);
+                    tt::log_info("Trace: {}", json_trace.dump(4));
+                }
+            }
         } else {
             std::cout << "builder is nullptr" << std::endl;
             GTEST_SKIP();
@@ -101,17 +118,6 @@ TEST_P(SoftmaxInterfaceTestFixture, SoftmaxInterfaceTest) {
     } catch (const std::exception& e) {
         std::cout << e.what() << std::endl;
         GTEST_FAIL();
-    }
-
-    // Run the test
-    {
-        auto input_tensor_a =
-            ttnn::zeros(input_a.shape, input_a.data_type, input_a.layout, this->getDevice(), input_a.memory_config);
-
-        auto call = [&] {
-            const auto output_tensor = ttnn::softmax(input_tensor_a, 0);
-            return output_tensor;
-        };
     }
 }
 
