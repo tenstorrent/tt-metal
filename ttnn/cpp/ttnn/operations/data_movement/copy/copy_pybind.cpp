@@ -140,13 +140,15 @@ void py_bind_assign(py::module& module) {
                 const ttnn::Tensor& input,
                 const ttnn::MemoryConfig memory_config,
                 const std::optional<const ttnn::DataType> dtype,
+                std::optional<ttnn::Tensor> &optional_output_tensor,
                 uint8_t queue_id) {
-                    return self(queue_id, input, memory_config, dtype);
+                    return self(queue_id, input, memory_config, dtype, optional_output_tensor);
                 },
                 py::arg("input_tensor").noconvert(),
                 py::kw_only(),
                 py::arg("memory_config"),
                 py::arg("dtype") = std::nullopt,
+                py::arg("output_tensor") = std::nullopt,
                 py::arg("queue_id") = 0},
         ttnn::pybind_overload_t{
             [] (const decltype(ttnn::assign)& self,

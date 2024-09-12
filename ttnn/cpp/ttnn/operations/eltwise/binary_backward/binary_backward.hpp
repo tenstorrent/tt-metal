@@ -91,6 +91,23 @@ struct ExecuteBackwardMul  {
         const MemoryConfig &memory_config);
 };
 
+struct ExecuteBackwardAssign  {
+
+    static std::vector<ttnn::Tensor> invoke(
+        uint8_t queue_id,
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<ttnn::Tensor> invoke(
+        uint8_t queue_id,
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const Tensor &other_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+};
+
 struct ExecuteBackwardBiasGelu {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
@@ -247,6 +264,8 @@ constexpr auto subalpha_bw = ttnn::register_operation<"ttnn::subalpha_bw", opera
 constexpr auto concat_bw = ttnn::register_operation<"ttnn::concat_bw", operations::binary_backward::ExecuteBinaryBackwardIntDefault<operations::binary_backward::BinaryBackwardOpType::CONCAT_BW>>();
 
 constexpr auto mul_bw = ttnn::register_operation<"ttnn::mul_bw", operations::binary_backward::ExecuteBackwardMul>();
+
+constexpr auto assign_bw = ttnn::register_operation<"ttnn::assign_bw", operations::binary_backward::ExecuteBackwardAssign>();
 
 constexpr auto bias_gelu_bw = ttnn::register_operation<
     "ttnn::bias_gelu_bw",

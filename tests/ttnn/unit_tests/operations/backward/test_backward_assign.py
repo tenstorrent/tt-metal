@@ -29,7 +29,6 @@ def test_bw_unary_assign(input_shapes, device):
     assert status
 
 
-@pytest.mark.skip(reason="this test is failing because ttnn.assign_bw doesn't have a corresponding API call")
 @pytest.mark.parametrize(
     "input_shapes",
     (
