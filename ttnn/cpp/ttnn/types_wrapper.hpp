@@ -34,6 +34,10 @@ namespace ttnn {
     }
 } // namespace ttnn
 
+namespace ttnn::operations::unary {
+    enum class UnaryOpType;     // unary_op_types.hpp
+}
+
 namespace ttnn::str_wrapper
 {
     std::optional<tt::tt_metal::StorageType> to_storage_type(const std::string& storage_type_str);
@@ -42,6 +46,7 @@ namespace ttnn::str_wrapper
     std::optional<tt::tt_metal::DataType> to_data_type(const std::string& data_type_str);
     std::optional<tt::tt_metal::BufferType> to_buffer_type(const std::string& buffer_type_str);
     std::optional<tt::tt_metal::ShardOrientation> to_shard_orientation(const std::string& shard_str);
+    std::optional<ttnn::operations::unary::UnaryOpType> to_unary_op_type(const std::string& unary_op_type_str);
 } // namespace ttnn::str_wrapper
 
 namespace ttnn::tuple_wrapper

@@ -21,12 +21,23 @@ namespace ttnn::mlir_interface
     using memory_config_tuple = std::tuple<std::string, std::string, std::optional<shard_spec_tuple>>;
 
     bool does_binary_op_support_input_output_constraints(
-        const std::vector<uint32_t>& _shape_a,
-        const memory_config_tuple& _memory_config_a,
-        const std::string& _data_type_a,
-        const std::vector<uint32_t>& _shape_b,
-        const memory_config_tuple& _memory_config_b,
-        const std::string& _data_type_b,
-        const memory_config_tuple& _memory_config_o,
-        const std::string& _data_type_o);
+        const std::vector<uint32_t>& shape_a,
+        const memory_config_tuple& memory_config_a,
+        const std::string& data_type_a,
+        const std::vector<uint32_t>& shape_b,
+        const memory_config_tuple& memory_config_b,
+        const std::string& data_type_b,
+        const memory_config_tuple& memory_config_o,
+        const std::string& data_type_o);
+
+    bool does_unary_op_support_input_output_constraints(
+        const std::string op_type,
+        const std::vector<uint32_t>& input_shape_a,
+        const memory_config_tuple& memory_config_a,
+        const std::string& data_type_a,
+        const std::vector<uint32_t>& input_shape_o,
+        const memory_config_tuple& memory_config_o,
+        const std::string& data_type_o);
+
+
 }

@@ -5,6 +5,7 @@
 #include "types_wrapper.hpp"
 #include <optional>
 
+#include "operations/eltwise/unary/common/unary_op_types.hpp"
 #include "tensor/types.hpp" // DataType, Layout, StorageType, MemoryConfig
 #include "tt_metal/impl/buffers/buffer_constants.hpp" // TensorMemoryLayout, ShardOrientation
 #include "tt_metal/impl/buffers/buffer.hpp" // BufferType, ShardSpec
@@ -69,6 +70,86 @@ std::optional<tt::tt_metal::ShardOrientation> to_shard_orientation(const std::st
 {
     if (shard_str == "ROW_MAJOR") return tt::tt_metal::ShardOrientation::ROW_MAJOR;
     if (shard_str == "COL_MAJOR") return tt::tt_metal::ShardOrientation::COL_MAJOR;
+    return std::nullopt;
+}
+
+std::optional<ttnn::operations::unary::UnaryOpType> to_unary_op_type(const std::string& unary_op_type_str)
+{
+    if (unary_op_type_str == "EXP") return ttnn::operations::unary::UnaryOpType::EXP;
+    if (unary_op_type_str == "RECIP") return ttnn::operations::unary::UnaryOpType::RECIP;
+
+
+    if (unary_op_type_str == "GELU") return ttnn::operations::unary::UnaryOpType::GELU;
+    if (unary_op_type_str == "RELU") return ttnn::operations::unary::UnaryOpType::RELU;
+    if (unary_op_type_str == "SQRT") return ttnn::operations::unary::UnaryOpType::SQRT;
+    if (unary_op_type_str == "SIGMOID") return ttnn::operations::unary::UnaryOpType::SIGMOID;
+    if (unary_op_type_str == "LOG") return ttnn::operations::unary::UnaryOpType::LOG;
+    if (unary_op_type_str == "TANH") return ttnn::operations::unary::UnaryOpType::TANH;
+    if (unary_op_type_str == "LOG2") return ttnn::operations::unary::UnaryOpType::LOG2;
+    if (unary_op_type_str == "LOG10") return ttnn::operations::unary::UnaryOpType::LOG10;
+    if (unary_op_type_str == "SIN") return ttnn::operations::unary::UnaryOpType::SIN;
+    if (unary_op_type_str == "COS") return ttnn::operations::unary::UnaryOpType::COS;
+    if (unary_op_type_str == "ABS") return ttnn::operations::unary::UnaryOpType::ABS;
+    if (unary_op_type_str == "SIGN") return ttnn::operations::unary::UnaryOpType::SIGN;
+    if (unary_op_type_str == "SQUARE") return ttnn::operations::unary::UnaryOpType::SQUARE;
+    if (unary_op_type_str == "EQZ") return ttnn::operations::unary::UnaryOpType::EQZ;
+    if (unary_op_type_str == "NEZ") return ttnn::operations::unary::UnaryOpType::NEZ;
+    if (unary_op_type_str == "GTZ") return ttnn::operations::unary::UnaryOpType::GTZ;
+    if (unary_op_type_str == "LTZ") return ttnn::operations::unary::UnaryOpType::LTZ;
+    if (unary_op_type_str == "GEZ") return ttnn::operations::unary::UnaryOpType::GEZ;
+    if (unary_op_type_str == "LEZ") return ttnn::operations::unary::UnaryOpType::LEZ;
+    if (unary_op_type_str == "RELU_MAX") return ttnn::operations::unary::UnaryOpType::RELU_MAX;
+    if (unary_op_type_str == "RELU_MIN") return ttnn::operations::unary::UnaryOpType::RELU_MIN;
+    if (unary_op_type_str == "POWER") return ttnn::operations::unary::UnaryOpType::POWER;
+    if (unary_op_type_str == "LEAKY_RELU") return ttnn::operations::unary::UnaryOpType::LEAKY_RELU;
+    if (unary_op_type_str == "ELU") return ttnn::operations::unary::UnaryOpType::ELU;
+    if (unary_op_type_str == "EXP2") return ttnn::operations::unary::UnaryOpType::EXP2;
+    if (unary_op_type_str == "HEAVISIDE") return ttnn::operations::unary::UnaryOpType::HEAVISIDE;
+    if (unary_op_type_str == "EXPM1") return ttnn::operations::unary::UnaryOpType::EXPM1;
+    if (unary_op_type_str == "SIGNBIT") return ttnn::operations::unary::UnaryOpType::SIGNBIT;
+    if (unary_op_type_str == "ASIN") return ttnn::operations::unary::UnaryOpType::ASIN;
+    if (unary_op_type_str == "ACOS") return ttnn::operations::unary::UnaryOpType::ACOS;
+    if (unary_op_type_str == "RSQRT") return ttnn::operations::unary::UnaryOpType::RSQRT;
+    if (unary_op_type_str == "RELU6") return ttnn::operations::unary::UnaryOpType::RELU6;
+    if (unary_op_type_str == "ATAN") return ttnn::operations::unary::UnaryOpType::ATAN;
+    if (unary_op_type_str == "ERF") return ttnn::operations::unary::UnaryOpType::ERF;
+    if (unary_op_type_str == "ERFC") return ttnn::operations::unary::UnaryOpType::ERFC;
+    if (unary_op_type_str == "ISINF") return ttnn::operations::unary::UnaryOpType::ISINF;
+    if (unary_op_type_str == "ISPOSINF") return ttnn::operations::unary::UnaryOpType::ISPOSINF;
+    if (unary_op_type_str == "ISNEGINF") return ttnn::operations::unary::UnaryOpType::ISNEGINF;
+    if (unary_op_type_str == "ISNAN") return ttnn::operations::unary::UnaryOpType::ISNAN;
+    if (unary_op_type_str == "LOGICAL_NOT_UNARY") return ttnn::operations::unary::UnaryOpType::LOGICAL_NOT_UNARY;
+    if (unary_op_type_str == "ISFINITE") return ttnn::operations::unary::UnaryOpType::ISFINITE;
+    if (unary_op_type_str == "ERFINV") return ttnn::operations::unary::UnaryOpType::ERFINV;
+    if (unary_op_type_str == "I0") return ttnn::operations::unary::UnaryOpType::I0;
+    if (unary_op_type_str == "TAN") return ttnn::operations::unary::UnaryOpType::TAN;
+    if (unary_op_type_str == "RSUB") return ttnn::operations::unary::UnaryOpType::RSUB;
+    if (unary_op_type_str == "RDIV") return ttnn::operations::unary::UnaryOpType::RDIV;
+    if (unary_op_type_str == "SILU") return ttnn::operations::unary::UnaryOpType::SILU;
+    if (unary_op_type_str == "SOFTPLUS") return ttnn::operations::unary::UnaryOpType::SOFTPLUS;
+    if (unary_op_type_str == "IDENTITY") return ttnn::operations::unary::UnaryOpType::IDENTITY;
+    if (unary_op_type_str == "NEG") return ttnn::operations::unary::UnaryOpType::NEG;
+    if (unary_op_type_str == "ADD_UNARY_SFPU") return ttnn::operations::unary::UnaryOpType::ADD_UNARY_SFPU;
+    if (unary_op_type_str == "SUB_UNARY_SFPU") return ttnn::operations::unary::UnaryOpType::SUB_UNARY_SFPU;
+    if (unary_op_type_str == "MUL_UNARY_SFPU") return ttnn::operations::unary::UnaryOpType::MUL_UNARY_SFPU;
+    if (unary_op_type_str == "DIV_UNARY_SFPU") return ttnn::operations::unary::UnaryOpType::DIV_UNARY_SFPU;
+    if (unary_op_type_str == "IDENTITY_UINT32") return ttnn::operations::unary::UnaryOpType::IDENTITY_UINT32;
+    if (unary_op_type_str == "UNARY_NE") return ttnn::operations::unary::UnaryOpType::UNARY_NE;
+    if (unary_op_type_str == "UNARY_GT") return ttnn::operations::unary::UnaryOpType::UNARY_GT;
+    if (unary_op_type_str == "UNARY_LT") return ttnn::operations::unary::UnaryOpType::UNARY_LT;
+    if (unary_op_type_str == "TILED_PROD") return ttnn::operations::unary::UnaryOpType::TILED_PROD;
+    if (unary_op_type_str == "TYPECAST") return ttnn::operations::unary::UnaryOpType::TYPECAST;
+    if (unary_op_type_str == "BITWISE_XOR") return ttnn::operations::unary::UnaryOpType::BITWISE_XOR;
+    if (unary_op_type_str == "BITWISE_NOT") return ttnn::operations::unary::UnaryOpType::BITWISE_NOT;
+    if (unary_op_type_str == "BITWISE_AND") return ttnn::operations::unary::UnaryOpType::BITWISE_AND;
+    if (unary_op_type_str == "BITWISE_OR") return ttnn::operations::unary::UnaryOpType::BITWISE_OR;
+    if (unary_op_type_str == "RIGHT_SHIFT") return ttnn::operations::unary::UnaryOpType::RIGHT_SHIFT;
+    if (unary_op_type_str == "FLOOR") return ttnn::operations::unary::UnaryOpType::FLOOR;
+    if (unary_op_type_str == "CEIL") return ttnn::operations::unary::UnaryOpType::CEIL;
+    if (unary_op_type_str == "LEFT_SHIFT") return ttnn::operations::unary::UnaryOpType::LEFT_SHIFT;
+    if (unary_op_type_str == "REMAINDER") return ttnn::operations::unary::UnaryOpType::REMAINDER;
+    if (unary_op_type_str == "FMOD") return ttnn::operations::unary::UnaryOpType::FMOD;
+
     return std::nullopt;
 }
 

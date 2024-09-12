@@ -75,3 +75,25 @@ TEST(MLIR_INTERFACE_API, binary_op_block_sharded)
 
   EXPECT_TRUE(ttnn::mlir_interface::does_binary_op_support_input_output_constraints(shape, memory_config, data_type, shape, memory_config, data_type, memory_config, data_type));
 }
+
+TEST(MLIR_INTERFACE_API, unary_op)
+{
+  std::vector<uint32_t> shape = {1, 1, 32, 32 * 5 * 64};
+  ttnn::mlir_interface::memory_config_tuple l1_interleaved_memory_config = {"INTERLEAVED", "L1", std::nullopt};
+  ttnn::mlir_interface::shard_spec_tuple shard_spec = {{{0, 0, 8, 8}}, {32, 32 * 5}, "COL_MAJOR", false};
+  ttnn::mlir_interface::memory_config_tuple l1_sharded_memory_config = {"WIDTH_SHARDED", "L1", shard_spec};
+  ttnn::mlir_interface::memory_config_tuple dram_interleaved_memory_config = {"INTERLEAVED", "DRAM", std::nullopt};
+  std::string data_type = "BFLOAT16";
+
+  EXPECT_TRUE(ttnn::mlir_interface::does_unary_op_support_input_output_constraints("RELU", shape, l1_interleaved_memory_config, data_type, shape, l1_interleaved_memory_config, data_type));
+  EXPECT_FALSE(ttnn::mlir_interface::does_unary_op_support_input_output_constraints("RELU", shape, l1_interleaved_memory_config, data_type, shape, l1_sharded_memory_config, data_type));
+  EXPECT_FALSE(ttnn::mlir_interface::does_unary_op_support_input_output_constraints("RELU", shape, l1_sharded_memory_config, data_type, shape, l1_interleaved_memory_config, data_type));
+  EXPECT_TRUE(ttnn::mlir_interface::does_unary_op_support_input_output_constraints("RELU", shape, l1_sharded_memory_config, data_type, shape, l1_sharded_memory_config, data_type));
+
+  EXPECT_TRUE(ttnn::mlir_interface::does_unary_op_support_input_output_constraints("RELU", shape, dram_interleaved_memory_config, data_type, shape, dram_interleaved_memory_config, data_type));
+  EXPECT_FALSE(ttnn::mlir_interface::does_unary_op_support_input_output_constraints("RELU", shape, l1_sharded_memory_config, data_type, shape, dram_interleaved_memory_config, data_type));
+  EXPECT_FALSE(ttnn::mlir_interface::does_unary_op_support_input_output_constraints("RELU", shape, dram_interleaved_memory_config, data_type, shape, l1_sharded_memory_config, data_type));
+
+  EXPECT_TRUE(ttnn::mlir_interface::does_unary_op_support_input_output_constraints("RELU", shape, dram_interleaved_memory_config, data_type, shape, l1_interleaved_memory_config, data_type));
+  EXPECT_TRUE(ttnn::mlir_interface::does_unary_op_support_input_output_constraints("RELU", shape, l1_interleaved_memory_config, data_type, shape, dram_interleaved_memory_config, data_type));
+}
