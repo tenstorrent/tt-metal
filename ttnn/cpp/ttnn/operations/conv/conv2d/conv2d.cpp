@@ -229,7 +229,7 @@ OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_o
     TT_ASSERT(conv_output_mem_config.shard_spec.has_value());
     const auto& shard_spec = conv_output_mem_config.shard_spec.value();
     const auto& shard_shape = shard_spec.shape;
-    // TT_ASSERT(shard_shape[0] % 32 == 0);
+    TT_ASSERT(conv_output_mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED || shard_shape[0] % 32 == 0);
     TT_ASSERT(shard_shape[1] % 32 == 0);
     return {
         .grid_size = shard_spec.grid.bounding_box().grid_size(),
