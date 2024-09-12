@@ -28,7 +28,7 @@ jobs:
       arch: ${{ matrix.arch }}
       from-precompiled: ${{ inputs.from-precompiled }}
   test-wheels:
-    needs: build-artifact
+    needs: build-wheels
     if: ${{ always() }}
     uses: ./.github/workflows/_test-wheels-impl.yaml
     with:
