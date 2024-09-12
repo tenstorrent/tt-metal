@@ -79,10 +79,10 @@ std::vector<Tensor> UpSample::create_output_tensors(const std::vector<Tensor> &i
                 log_debug(LogOp, "output_shard_shape: {}", output_shard_shape);
                 return {create_device_tensor(output_shape, input.get_dtype(), input.get_layout(), input.device(), mem_config)};
             } else {
-                TT_FATAL(false, "input memory config is not HEIGHT or BLOCK sharded");
+                TT_THROW("input memory config is not HEIGHT or BLOCK sharded");
             }
         } else {
-            TT_FATAL(false, "Output memory config is sharded but input memory config is not sharded");
+            TT_THROW("Output memory config is sharded but input memory config is not sharded");
         }
     } else {
         return operation::generic_create_output_tensors(*this, inputs, input.get_dtype(), input.get_layout(), output_mem_config_);

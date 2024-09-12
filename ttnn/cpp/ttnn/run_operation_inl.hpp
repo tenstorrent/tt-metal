@@ -61,7 +61,7 @@ auto& get_workers(auto& output_tensors) {
             return output_tensor->workers;
         }
     }
-    TT_FATAL(false, "Workers not found in output tensors.");
+    TT_THROW("Workers not found in output tensors.");
 }
 
 

@@ -142,7 +142,7 @@ int main(int argc, char **argv) {
 
     // Skip teardown by throwing.
     if (skip_teardown) {
-        TT_FATAL(false, "Skip teardown by throwing");
+        TT_THROW("Skip teardown by throwing");
     } else {
         for (auto device : devices) {
             pass &= CloseDevice(device);

@@ -2871,9 +2871,7 @@ void FinishImpl(CommandQueue& cq) { cq.hw_command_queue().finish(); }
 
 void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
     detail::DispatchStateCheck(true);
-    TT_FATAL(
-        cq.device()->get_trace(trace_id) != nullptr,
-        "Trace instance " + std::to_string(trace_id) + " must exist on device");
+    TT_FATAL(cq.device()->get_trace(trace_id) != nullptr, "Trace instance {} must exist on device", trace_id);
     cq.run_command(
         CommandInterface{.type = EnqueueCommandType::ENQUEUE_TRACE, .blocking = blocking, .trace_id = trace_id});
 }

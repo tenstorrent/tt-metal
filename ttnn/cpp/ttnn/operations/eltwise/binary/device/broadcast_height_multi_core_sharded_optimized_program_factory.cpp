@@ -106,7 +106,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
             bN,
             TILE_HEIGHT);
     } else {
-        TT_FATAL(false, "Unsupported memory layout");
+        TT_THROW("Unsupported memory layout");
     }
 
     TT_ASSERT(
@@ -284,7 +284,7 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreShardedOptimized::override_
             Wt = shard_spec.shape[1] / TILE_WIDTH;
             Ht = shard_spec.shape[0] / TILE_HEIGHT;
         } else{
-            TT_FATAL(false, "Unsupported memory layout");
+            TT_THROW("Unsupported memory layout");
         }
         uint32_t ncores_y = ncores / ncores_x;
         uint32_t Ht_per_b1 = 0; // Ht per batch

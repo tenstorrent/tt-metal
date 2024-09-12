@@ -14,7 +14,7 @@ inline std::string get_env_arch_name() {
     if (const char* arch_name_ptr = std::getenv(ARCH_NAME_ENV_VAR.data())) {
         arch_name = arch_name_ptr;
     } else {
-        TT_THROW("Env var " + std::string(ARCH_NAME_ENV_VAR) + " is not set.");
+        TT_THROW("Env var {} is not set.", ARCH_NAME_ENV_VAR);
     }
     return arch_name;
 }

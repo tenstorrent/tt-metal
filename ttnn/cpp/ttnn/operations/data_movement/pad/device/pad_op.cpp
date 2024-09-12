@@ -83,7 +83,7 @@ operation::ProgramWithCallbacks Pad::create_program(const std::vector<Tensor>& i
         }
         return detail::pad_tile(input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
     } else {
-        TT_FATAL(false and "Unsupported layout for pad", "Error");
+        TT_THROW("Unsupported layout for pad");
         return {};
     }
 

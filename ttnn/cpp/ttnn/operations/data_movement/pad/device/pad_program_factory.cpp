@@ -612,7 +612,7 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, CoreRangeSet, CoreRangeSet, uint
                 // ncores_h = (uint32_t) ceil((float) nbatch / nbatch_per_core_h);
                 // ntiles_per_core_h = nbatch_per_core_h * ntiles_h;
             } else {
-                TT_ASSERT("Something went terribly wrong in splitting acrtoss cores");
+                TT_THROW("Something went terribly wrong in splitting acrtoss cores");
             }
             break;
     }

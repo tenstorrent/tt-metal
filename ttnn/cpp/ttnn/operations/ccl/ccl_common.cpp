@@ -378,7 +378,7 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::RingReduceScatterBaseTensor
     uint32_t slice_size_in_bytes = std::numeric_limits<uint32_t>::max();
     if (row_major) {
         if (slice_dim_is_width) {
-            TT_FATAL(false, "Reduce scatter row-major interleaved does not yet support a width dim");
+            TT_THROW("Reduce scatter row-major interleaved does not yet support a width dim");
             this->output_addr_offset = input_page_size;
         } else {
             this->output_page_offset = num_rows;

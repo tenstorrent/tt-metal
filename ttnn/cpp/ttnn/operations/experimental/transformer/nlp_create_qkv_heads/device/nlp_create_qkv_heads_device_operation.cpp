@@ -15,13 +15,13 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(const operati
     const auto input_shape = input_tensor.get_legacy_shape();
 
     // NOTE: Checks for head_dim and shape[3] is done in nlp_create_qkv_heads because it's needed to infer head_dim
-    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, fmt::format("Operands to TM need to be on device! {}", input_tensor.storage_type()));
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device! {}", input_tensor.storage_type());
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
     TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
 
-    TT_FATAL(input_shape[2] % TILE_HEIGHT == 0, fmt::format("Unsupported input height {} is not tile aligned", input_shape[2]));
-    TT_FATAL(input_shape[1] == 1, fmt::format("Unsupported input sequence length {} is not equal to 1", input_shape[1]));
+    TT_FATAL(input_shape[2] % TILE_HEIGHT == 0, "Unsupported input height {} is not tile aligned", input_shape[2]);
+    TT_FATAL(input_shape[1] == 1, "Unsupported input sequence length {} is not equal to 1", input_shape[1]);
     if (input_tensor.is_sharded()) {
         TT_FATAL(input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_legacy_shape()[-1], "Error");
         TT_FATAL(operation_attributes.output_mem_config.is_sharded() && operation_attributes.output_mem_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED, "Error");
@@ -57,7 +57,7 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(const operati
         TT_FATAL(input_tensor_kv.get_layout() == Layout::TILE, "Error");
 
         TT_FATAL(input_shape_kv[0] == input_shape[0], "KV tensor batch dim must be same as Q tensor batch!");
-        TT_FATAL(input_shape_kv[1] == 1, fmt::format("Unsupported input shape {} is not equal to 1", input_shape_kv[1]));
+        TT_FATAL(input_shape_kv[1] == 1, "Unsupported input shape {} is not equal to 1", input_shape_kv[1]);
         TT_FATAL(input_shape_kv[2] == input_shape[2], "KV tensor seq_len dim must be same as Q tensor seq_len!");
         if (input_tensor_kv.is_sharded()) {
             TT_FATAL(input_tensor.is_sharded(), "Error");

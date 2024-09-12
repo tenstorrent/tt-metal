@@ -238,18 +238,13 @@ tt::stl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
     auto program_factory = select_program_factory(attributes, tensor_args);
     TT_ASSERT(
         std::holds_alternative<DeviceStorage>(input_tensor_a.get_storage()),
-        fmt::format(
-            "Unexpected type {} in {}:{} ",
-            tt::stl::get_active_type_name_in_variant(input_tensor_a.get_storage()),
-            __FILE__,
-            __LINE__));
+        "Unexpected type {}",
+        tt::stl::get_active_type_name_in_variant(input_tensor_a.get_storage()));
     TT_ASSERT(
         std::holds_alternative<DeviceStorage>(input_tensor_b.get_storage()),
-        fmt::format(
-            "Unexpected type {} in {}:{} ",
-            tt::stl::get_active_type_name_in_variant(input_tensor_b.get_storage()),
-            __FILE__,
-            __LINE__));
+        "Unexpected type {}",
+        tt::stl::get_active_type_name_in_variant(input_tensor_b.get_storage()));
+
     operation::Hash hash = operation::hash_operation<BinaryDeviceOperation>(
         attributes,
         program_factory.index(),

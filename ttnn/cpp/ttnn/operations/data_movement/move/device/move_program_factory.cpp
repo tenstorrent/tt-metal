@@ -129,7 +129,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
             num_pages_per_core = num_pages_per_core_group_2;
         } else {
-            TT_FATAL(false, "Core not in specified core ranges");
+            TT_THROW("Core not in specified core ranges");
         }
 
         bool is_controller = (i == 0);

@@ -33,8 +33,8 @@ void ArgMax::validate_with_output_tensors(
     if (this->dim.has_value()) {
         const uint32_t input_rank = input_tensor_a.get_legacy_shape().rank();
         const uint32_t normalized_dim = dim.value() < 0 ? dim.value() + input_rank : dim.value();
-        TT_FATAL(normalized_dim >= 0, fmt::format("Invalid dim for argmax: {}!", dim.value()));
-        TT_FATAL(normalized_dim < input_rank, fmt::format("Invalid dim for argmax: {}!", dim.value()));
+        TT_FATAL(normalized_dim >= 0, "Invalid dim for argmax: {}!", dim.value());
+        TT_FATAL(normalized_dim < input_rank, "Invalid dim for argmax: {}!", dim.value());
 
         // TODO: Add support for normalized_dim = 0, 1, 2
         TT_FATAL(normalized_dim == (input_rank - 1), "Only argmax on last dim is supported!");

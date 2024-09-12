@@ -40,7 +40,7 @@ Tensor BcastOperation::invoke(
                         input_tensor_b.get_legacy_shape()[-1] == 1 ||
                         input_tensor_b.get_legacy_shape()[-1] == TILE_WIDTH, "Error");
                 } else {
-                    TT_FATAL(false, "Unsupported layout");
+                    TT_THROW("Unsupported layout");
                 }
             } else if (bcast_dim == BcastOpDim::H) {
                 TT_FATAL(input_tensor_a.get_legacy_shape()[-1] == input_tensor_b.get_legacy_shape()[-1], "Error");
@@ -51,7 +51,7 @@ Tensor BcastOperation::invoke(
                         input_tensor_b.get_legacy_shape()[-2] == 1 ||
                         input_tensor_b.get_legacy_shape()[-2] == TILE_HEIGHT, "Error");
                 } else {
-                    TT_FATAL(false, "Unsupported layout");
+                    TT_THROW("Unsupported layout");
                 }
             } else if (bcast_dim == BcastOpDim::HW) {
                 if (input_tensor_b.get_layout() == Layout::TILE) {

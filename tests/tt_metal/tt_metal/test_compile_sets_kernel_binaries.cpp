@@ -212,8 +212,7 @@ int main(int argc, char **argv) {
                             ll_api::memory trisc_binary = llrt::get_risc_binary(trisc_hex_path);
                             TT_FATAL(
                                 trisc_binary == compute_binaries.at(mask).at(trisc_id),
-                                "Expected saved TRISC binary for " + trisc_id_str +
-                                    " to be the same as binary in persistent cache");
+                                "Expected saved TRISC binary for {} to be the same as binary in persistent cache", trisc_id_str);
                         }
                     }
                 });

@@ -439,7 +439,7 @@ int main (int argc, char** argv) {
                 return std::vector<Device*>{all_devices[0], all_devices[4], all_devices[5], all_devices[1], all_devices[2], all_devices[3], all_devices[0], all_devices[1], all_devices[2], all_devices[6], all_devices[7], all_devices[3]};
 
             default:
-                TT_ASSERT("Unsupported hop_count");
+                TT_THROW("Unsupported hop_count");
                 return std::vector<Device*>{};
         };
     };

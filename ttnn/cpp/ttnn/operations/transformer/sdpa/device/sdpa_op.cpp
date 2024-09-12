@@ -130,7 +130,7 @@ void ScaledDotProductAttention::validate(
         }
     } else {
         if (!this->is_causal) {
-            TT_FATAL(false, "Non-causal SDPA must use multi-core program config");
+            TT_THROW("Non-causal SDPA must use multi-core program config");
         }
     }
 }

@@ -384,7 +384,7 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
         LogRunningKernels(core, launch_msg);
         // Save the error string for checking later in unit tests.
         set_watcher_exception_message(fmt::format("{}: {}", core_str, error_msg));
-        TT_THROW(error_reason);
+        TT_THROW("{}", error_reason);
     }
 }
 
@@ -418,6 +418,7 @@ void WatcherDeviceReader::DumpAssertStatus(CoreDescriptor &core, const string &c
                 assert_status->which != DEBUG_SANITIZE_NOC_SENTINEL_OK_8) {
                 TT_THROW(
                     "Watcher unexpected assert state on core {}, reported OK but got risc {}, line {}.",
+                    core.coord.str(),
                     assert_status->which,
                     assert_status->line_num);
             }
@@ -447,7 +448,7 @@ void WatcherDeviceReader::DumpPauseStatus(CoreDescriptor &core, const string &co
             LogRunningKernels(core, &mbox_data->launch);
             // Save the error string for checking later in unit tests.
             set_watcher_exception_message(fmt::format("{}: {}", core_str, error_reason));
-            TT_THROW(error_reason);
+            TT_THROW("{}", error_reason);
         }
     }
 }

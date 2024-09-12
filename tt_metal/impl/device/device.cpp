@@ -2346,7 +2346,7 @@ pair<int, int> Device::build_processor_type_to_index(JitBuildProcessorType t) co
     case JitBuildProcessorType::DATA_MOVEMENT: return pair<int, int>(0, DataMovementBuildCount);
     case JitBuildProcessorType::COMPUTE: return pair<int, int>(DataMovementBuildCount, ComputeBuildCount);
     case JitBuildProcessorType::ETHERNET: return pair<int, int>(DataMovementBuildCount + ComputeBuildCount, EthernetBuildCount);
-    default: TT_ASSERT("Bad processor type: {}", static_cast<std::underlying_type<JitBuildProcessorType>::type>(t));
+    default: TT_THROW("Bad processor type: {}", static_cast<std::underlying_type<JitBuildProcessorType>::type>(t));
     }
 
     // shh the warnings
@@ -2431,7 +2431,7 @@ void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
 
 void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
     TT_FATAL(this->hw_command_queues_[cq_id]->tid == tid, "CQ {} is not being used for tracing tid {}", (uint32_t)cq_id, tid);
-    TT_FATAL(this->trace_buffer_pool_.count(tid) > 0, "Trace instance " + std::to_string(tid) + " must exist on device");
+    TT_FATAL(this->trace_buffer_pool_.count(tid) > 0, "Trace instance {} must exist on device", tid);
     this->hw_command_queues_[cq_id]->record_end();
     auto &trace_data = this->trace_buffer_pool_[tid]->desc->data;
     trace_data = std::move(this->sysmem_manager().get_bypass_data());
@@ -2447,7 +2447,7 @@ void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
 
 void Device::replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) {
     constexpr bool check = false;
-    TT_FATAL(this->trace_buffer_pool_.count(tid) > 0, "Trace instance " + std::to_string(tid) + " must exist on device");
+    TT_FATAL(this->trace_buffer_pool_.count(tid) > 0, "Trace instance {}  must exist on device" , tid);
     if constexpr (check) {
         Trace::validate_instance(*this->trace_buffer_pool_[tid]);
     }

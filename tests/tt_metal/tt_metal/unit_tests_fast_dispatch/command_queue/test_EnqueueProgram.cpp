@@ -1382,7 +1382,7 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
                 SetRuntimeArgs(program, dummy_trisc_kernel, cr_set, trisc_unique_rtargs);
                 SetCommonRuntimeArgs(program, dummy_trisc_kernel, trisc_common_rtargs);
             } else {
-                TT_ASSERT("Invalid");
+                TT_THROW("Invalid");
             }
         }
 

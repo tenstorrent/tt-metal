@@ -287,7 +287,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t num_blocks_act_w = act_matrix_width_ntiles / act_block_w_ntiles;
     uint32_t num_blocks_weight_w = weight_matrix_width_ntiles / weight_block_w_ntiles;
 
-    TT_FATAL(num_blocks_act_w%total_num_cores==0,num_blocks_act_w,total_num_cores);
+    TT_FATAL(num_blocks_act_w%total_num_cores==0, "{} {}", num_blocks_act_w, total_num_cores);
     uint32_t per_core_num_blocks_act_w = num_blocks_act_w/total_num_cores;
 
 

@@ -51,7 +51,7 @@ std::vector<Tensor> HaloDeviceOperation::create_output_tensors(const std::vector
     DataType output_dtype = input_tensor.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.get_dtype();
     auto output_shape = this->compute_output_shapes(input_tensors).at(0);
 
-    TT_FATAL(input_tensor.memory_config().memory_layout == output_memory_config_.memory_layout, input_tensor.memory_config(), output_memory_config_);
+    TT_FATAL(input_tensor.memory_config().memory_layout == output_memory_config_.memory_layout, "{} {}", input_tensor.memory_config(), output_memory_config_);
 
     if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         auto input_core_range = *(input_tensor.memory_config().shard_spec->grid.ranges().begin());

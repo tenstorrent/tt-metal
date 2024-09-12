@@ -35,9 +35,7 @@ void log_external_operation(
     std::size_t device_operation_id,
     const operation::ExternalOperation& operation,
     const std::vector<Tensor>& input_tensors) {
-    tt::log_debug(
-        tt::LogOp,
-        "Launching External Operation: \"{}\" ({})", operation.get_type_name());
+    tt::log_debug(tt::LogOp, "Launching External Operation: \"{}\"", operation.get_type_name());
 
     auto attributes = operation.attributes();
     if (not attributes.empty()) {
@@ -111,7 +109,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
     }  else if (torch_dtype.equal(torch.attr("uint8"))) {
         data_type = DataType::UINT8;
     } else {
-        TT_THROW(fmt::format("Unsupported DataType: {}", py::repr(torch_dtype)));
+        TT_THROW("Unsupported DataType: {}", std::string(py::repr(torch_dtype)));
     }
 
     switch (data_type) {
@@ -149,7 +147,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
             break;
         }
         default: {
-            TT_THROW(fmt::format("Unsupported DataType: {}", data_type));
+            TT_THROW("Unsupported DataType: {}", data_type);
             break;
         }
     }
@@ -239,7 +237,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
             return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR);
         }
         default: {
-            TT_THROW(fmt::format("Unsupported DataType: {}", data_type));
+            TT_THROW("Unsupported DataType: {}", data_type);
             break;
         }
     }
@@ -278,7 +276,7 @@ Tensor convert_numpy_tensor_to_tt_tensor(
     } else if (np_dtype.equal(np.attr("ubyte"))) {
         data_type = DataType::UINT8;
     } else {
-        TT_THROW(fmt::format("Unsupported DataType: {}", py::repr(np_dtype)));
+        TT_THROW("Unsupported DataType: {}", std::string(py::repr(np_dtype)));
     }
 
     switch (data_type) {
@@ -318,7 +316,7 @@ Tensor convert_numpy_tensor_to_tt_tensor(
         }
         */
         default: {
-            TT_THROW(fmt::format("Unsupported DataType: {}", data_type));
+            TT_THROW("Unsupported DataType: {}", data_type);
             break;
         }
     }
@@ -388,7 +386,7 @@ Tensor convert_numpy_tensor_to_tt_tensor(
             return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR);
         }
         default: {
-            TT_THROW(fmt::format("Unsupported DataType: {}", data_type));
+            TT_THROW("Unsupported DataType: {}", data_type);
             break;
         }
     }
@@ -423,7 +421,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
     std::vector<OwnedBuffer> host_owned_buffers;
     std::vector<tt::tt_metal::Shape> host_owned_shapes;
     for (const auto &shard : tt_shards) {
-        TT_ASSERT(std::holds_alternative<OwnedStorage>(shard.get_storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(shard.get_storage()),__FILE__, __LINE__));
+        TT_ASSERT(std::holds_alternative<OwnedStorage>(shard.get_storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(shard.get_storage()));
         host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
         host_owned_shapes.push_back(shard.get_legacy_shape());
     }
@@ -493,14 +491,14 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
 
         auto tt_dtype = tt_tensor.get_dtype();
         if (tt_dtype == DataType::BFLOAT8_B) {
-            TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(buffer),__FILE__, __LINE__));
+            TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(buffer));
             auto uint32_data = std::get<owned_buffer::Buffer<std::uint32_t>>(std::get<OwnedBuffer>(buffer)).get();
             auto float_unpacked_data = unpack_bfp8_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
             buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
             tt_dtype = DataType::FLOAT32;
         }
         if (tt_dtype == DataType::BFLOAT4_B) {
-            TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(buffer),__FILE__, __LINE__));
+            TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(buffer));
             auto uint32_data = std::get<owned_buffer::Buffer<std::uint32_t>>(std::get<OwnedBuffer>(buffer)).get();
             auto float_unpacked_data = unpack_bfp4_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
             buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
@@ -558,7 +556,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
 
         auto tt_dtype = tt_tensor.get_dtype();
         if (tt_dtype == DataType::BFLOAT8_B) {
-            TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(buffer),__FILE__, __LINE__));
+            TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(buffer));
             auto uint32_data = std::get<owned_buffer::Buffer<std::uint32_t>>(std::get<OwnedBuffer>(buffer)).get();
             auto float_unpacked_data =
                 unpack_bfp8_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
@@ -566,7 +564,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
             tt_dtype = DataType::FLOAT32;
         }
         if (tt_dtype == DataType::BFLOAT4_B) {
-            TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(buffer),__FILE__, __LINE__));
+            TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(buffer));
             auto uint32_data = std::get<owned_buffer::Buffer<std::uint32_t>>(std::get<OwnedBuffer>(buffer)).get();
             auto float_unpacked_data =
                 unpack_bfp4_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);

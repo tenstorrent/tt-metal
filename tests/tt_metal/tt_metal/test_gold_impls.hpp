@@ -97,7 +97,7 @@ inline std::vector<uint16_t> gold_bcast_op(
             case BcastDim::W:  b_index = h + c*H + n*C*H; break; // bcast tensor is nch
             case BcastDim::HW: b_index = c + n*C; break; // bcast tensor is nc
             default:
-            TT_FATAL(false && "Unexpected broadcast mode in gold_bcast_op", "Error");
+            TT_THROW("Unexpected broadcast mode in gold_bcast_op");
         }
         float bval = bfloat16(bcast_vals[b_index]).to_float();
         float result1 = 0.0f;
@@ -106,7 +106,7 @@ inline std::vector<uint16_t> gold_bcast_op(
             case BcastOp::SUB: result1 = bfloat16(src_vec[offs]).to_float() - bval; break;
             case BcastOp::MUL: result1 = bfloat16(src_vec[offs]).to_float() * bval; break;
             default:
-                TT_FATAL(false && "Unexpected bcast_op", "Error");
+                TT_THROW("Unexpected bcast_op");
         }
         result[offs] = bfloat16(result1).to_uint16();
     }

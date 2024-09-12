@@ -198,8 +198,8 @@ const operation::Hash GroupAttnMatmulDeviceOperation::compute_program_hash(const
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
 
-    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor_a.storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensor_a.storage()),__FILE__, __LINE__));
-    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor_b.storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensor_b.storage()),__FILE__, __LINE__));
+    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor_a.storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(input_tensor_a.storage()));
+    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor_b.storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(input_tensor_b.storage()));
 
     return operation::hash_operation<GroupAttnMatmulDeviceOperation>(
         this->transpose_hw,

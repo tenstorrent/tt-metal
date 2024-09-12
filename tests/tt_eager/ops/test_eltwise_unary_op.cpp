@@ -121,7 +121,7 @@ void test_operation_infrastructure() {
         false};
     ttnn::operations::unary::tensor_args_t tensor_args {input_tensor};
     auto program_hash = ttnn::operations::unary::UnaryDeviceOperation::compute_program_hash(op_args, tensor_args);
-    TT_FATAL(program_hash == 3018574135764717736ULL, fmt::format("Actual value is {}", program_hash));
+    TT_FATAL(program_hash == 3018574135764717736ULL, "Actual value is {}", program_hash);
 
     TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
 }

@@ -315,7 +315,7 @@ const DataFormat get_single_pack_src_format(
             TT_THROW("No valid conversion from fp32 dest to output format = {}", output_format);
         }
     } else if (int_fpu_en) {
-        TT_FATAL(false, "Integer math is not supported");
+        TT_THROW("Integer math is not supported");
         // TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Integer math is not supported for arch grayskull");
         // If output is integer, then pack_src_format is integer as conversion in packer is not supported
         // If output if float, then pack_src_format is Float32 as sfpu outut if Float32

@@ -10,6 +10,8 @@
 #include <functional>
 #include <string>
 #include <vector>
+
+#include "fmt/base.h"
 #include "tt_metal/third_party/umd/device/tt_arch_types.h"
 
 namespace tt {
@@ -48,9 +50,9 @@ enum class DataFormat : uint8_t {
  */
 inline bool is_integer_format(DataFormat format) {
     return (
-        (format == DataFormat::UInt32) || (format == DataFormat::Int8) ||
-        (format == DataFormat::UInt16) || (format == DataFormat::UInt8) || (format == DataFormat::Int32) ||
-        (format == DataFormat::RawUInt32) || (format == DataFormat::RawUInt16) || (format == DataFormat::RawUInt8));
+        (format == DataFormat::UInt32) || (format == DataFormat::Int8) || (format == DataFormat::UInt16) ||
+        (format == DataFormat::UInt8) || (format == DataFormat::Int32) || (format == DataFormat::RawUInt32) ||
+        (format == DataFormat::RawUInt16) || (format == DataFormat::RawUInt8));
 }
 
 inline std::ostream& operator<<(std::ostream& os, const DataFormat& format) {
@@ -81,7 +83,7 @@ inline std::ostream& operator<<(std::ostream& os, const DataFormat& format) {
 }
 
 // Size of datum in bytes
-inline constexpr static uint32_t datum_size(const DataFormat &format) {
+inline constexpr static uint32_t datum_size(const DataFormat& format) {
     switch (format) {
         case DataFormat::Bfp2:
         case DataFormat::Bfp2_b:
@@ -108,14 +110,14 @@ inline constexpr static uint32_t datum_size(const DataFormat &format) {
 }
 
 // Size of tile in bytes
-inline constexpr static uint32_t tile_size(const DataFormat &format) {
+inline constexpr static uint32_t tile_size(const DataFormat& format) {
     switch (format) {
         case DataFormat::Bfp2:
         case DataFormat::Bfp2_b: return (64 * 4) + (16 * 4);
         case DataFormat::Bfp4:
         case DataFormat::Bfp4_b: return (128 * 4) + (16 * 4);
         case DataFormat::Bfp8:
-        case DataFormat::Bfp8_b: return (256 * 4) + (16 *4);
+        case DataFormat::Bfp8_b: return (256 * 4) + (16 * 4);
         case DataFormat::Float16:
         case DataFormat::Float16_b: return (1024 * 2);
         case DataFormat::Float32: return (1024 * 4);
@@ -136,7 +138,7 @@ inline constexpr static uint32_t tile_size(const DataFormat &format) {
 
 std::string get_string(ARCH arch);
 std::string get_string_lowercase(ARCH arch);
-ARCH get_arch_from_string(const std::string &arch_str);
+ARCH get_arch_from_string(const std::string& arch_str);
 
 enum RISCV : uint8_t {
     BRISC = 0,
@@ -145,7 +147,7 @@ enum RISCV : uint8_t {
     TRISC1 = 3,
     TRISC2 = 4,
     ERISC = 5,
-    COMPUTE = 6,     // Encompasses TRISC0, TRISC1, and TRISC2
+    COMPUTE = 6,  // Encompasses TRISC0, TRISC1, and TRISC2
     MAX = 7,
 };
 
@@ -168,4 +170,9 @@ inline std::ostream& operator<<(std::ostream& os, const RISCV& riscv) {
 template <>
 struct std::hash<tt::DataFormat> {
     std::size_t operator()(tt::DataFormat const& obj) const noexcept { return static_cast<std::size_t>(obj); }
+};
+
+template <>
+struct fmt::formatter<tt::DataFormat> : formatter<string_view> {
+    auto format(tt::DataFormat df, format_context& ctx) const -> format_context::iterator;
 };

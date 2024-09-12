@@ -60,6 +60,7 @@ std::vector<Tensor> UntilizeWithHaloV2::create_output_tensors(
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout == out_mem_config_.memory_layout,
+        "{} {}",
         input_tensor.memory_config(),
         out_mem_config_);
     if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {

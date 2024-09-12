@@ -36,7 +36,7 @@ void ReshapeDeviceOperation::validate(const std::vector<Tensor> &input_tensors) 
         uint32_t num_old_sticks = input_tensor_a.get_legacy_shape()[0] * input_tensor_a.get_legacy_shape()[1] * input_tensor_a.get_legacy_shape()[2];
         uint32_t num_new_sticks = output_shape[0] * output_shape[1] * output_shape[2];
     } else {
-        TT_FATAL(false, "Unsupported layout for reshape");
+        TT_THROW("Unsupported layout for reshape");
     }
 }
 

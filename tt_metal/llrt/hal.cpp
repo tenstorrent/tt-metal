@@ -35,7 +35,7 @@ void Hal::initialize(tt::ARCH arch) {
             break;
 
         default:
-            TT_ASSERT("Unsupported arch for HAL");
+            TT_THROW("Unsupported arch for HAL");
         }
 
         this->initialized_ = true;

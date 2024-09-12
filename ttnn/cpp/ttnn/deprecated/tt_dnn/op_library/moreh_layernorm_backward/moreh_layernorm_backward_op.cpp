@@ -18,12 +18,12 @@ namespace primary {
 
 namespace {
 inline void check_tensor(const Tensor& tensor, const std::string& op_name) {
-    TT_ASSERT(tensor.get_layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
-    TT_ASSERT(tensor.get_dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
+    TT_ASSERT(tensor.get_layout() == Layout::TILE, "{} only supports tiled layout.", op_name);
+    TT_ASSERT(tensor.get_dtype() == DataType::BFLOAT16, "{} only supports bfloat16.", op_name);
     TT_ASSERT(
-        tensor.storage_type() == StorageType::DEVICE, fmt::format("Operands to {} need to be on device!", op_name));
+        tensor.storage_type() == StorageType::DEVICE, "Operands to {} need to be on device!", op_name);
     TT_ASSERT(
-        tensor.buffer() != nullptr, fmt::format("Operands to {} need to be allocated in buffers on device!", op_name));
+        tensor.buffer() != nullptr, "Operands to {} need to be allocated in buffers on device!", op_name);
 }
 }  // namespace
 
@@ -77,7 +77,7 @@ std::vector<Tensor> MorehLayerNormBackwardInputGrad::create_output_tensors(
         log_debug(LogOp, "{}:{} use output tensor", __func__, __LINE__);
         return {output_tensors.at(0).value()};
     }
-    TT_FATAL(false, "Create output tensor is not supported yet. fix this after the # 9552 issue is addressed.");
+    TT_THROW("Create output tensor is not supported yet. fix this after the # 9552 issue is addressed.");
     return {};
 }
 
@@ -133,7 +133,7 @@ void MorehLayerNormBackwardGammaBetaGrad::validate_with_output_tensors(
 
 std::vector<Shape> MorehLayerNormBackwardGammaBetaGrad::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
-    TT_FATAL(false, "The compute_output_shapes function in MorehLayerNormBackwardGammaBetaGrad is not implemented.");
+    TT_THROW("The compute_output_shapes function in MorehLayerNormBackwardGammaBetaGrad is not implemented.");
     return {};
 }
 
@@ -144,7 +144,7 @@ std::vector<Tensor> MorehLayerNormBackwardGammaBetaGrad::create_output_tensors(
         return {output_tensors.at(0).value(), output_tensors.at(1).value()};
     }
 
-    TT_FATAL(false, "Create output tensor is not supported yet. Fix this after the #9552 issue is addressed.");
+    TT_THROW("Create output tensor is not supported yet. Fix this after the #9552 issue is addressed.");
     return {};
 }
 

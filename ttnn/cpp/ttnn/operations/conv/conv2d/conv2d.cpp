@@ -108,7 +108,7 @@ ParallelConfig determine_parallel_config(
             return 1u;
         }
 
-        TT_FATAL("Conv2d supports Height, Block or Width Sharded Layouts but got ",shard_layout);
+        TT_THROW("Conv2d supports Height, Block or Width Sharded Layouts but got {}",shard_layout);
         return 0u;
     };
 
@@ -138,7 +138,7 @@ ParallelConfig determine_parallel_config(
             return grid;
 
         } else {
-           TT_FATAL("Conv2d supports Height, Block or Width Sharded Layouts but got ",shard_layout);
+           TT_THROW("Conv2d supports Height, Block or Width Sharded Layouts but got {}", shard_layout);
             return CoreRangeSet({});
         }
     };
@@ -217,7 +217,7 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
         nhw_padded = round_up(nhw_shape, num_cores_nhw * tile_size);
     }
     uint32_t nhw_shard = nhw_padded / num_cores_nhw;
-    TT_ASSERT(channels % num_cores_channels == 0, channels, num_cores_channels);
+    TT_ASSERT(channels % num_cores_channels == 0, "Channels: {}, num core channels: {}", channels, num_cores_channels);
     uint32_t channel_shard = channels / num_cores_channels;
     auto shard_spec = ShardSpec{parallel_config.grid, {nhw_shard, channel_shard}, shard_orientation};
     return MemoryConfig{shard_scheme, BufferType::L1, shard_spec};

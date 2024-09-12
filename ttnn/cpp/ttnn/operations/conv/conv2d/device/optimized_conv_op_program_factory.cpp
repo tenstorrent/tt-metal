@@ -218,7 +218,7 @@ std::vector<Tensor> OptimizedConvNew::create_output_tensors(const std::vector<Te
             mem_config.shard_spec = shard_spec;
             return {create_device_tensor(output_shape, this->dtype, output_layout, input_tensor.device(), mem_config)};
         } else {
-            TT_FATAL(false, "Unsupported shard scheme");
+            TT_THROW("Unsupported shard scheme");
         }
 
     }

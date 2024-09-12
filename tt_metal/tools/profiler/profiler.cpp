@@ -135,20 +135,20 @@ void DeviceProfiler::readRiscProfilerResults(
                             }
 
                             TT_ASSERT (riscNumRead == riscNum,
-                                    fmt::format("Unexpected risc id, expected {}, read {}. In core {},{} at run {}",
+                                    "Unexpected risc id, expected {}, read {}. In core {},{} at run {}",
                                         riscNum,
                                         riscNumRead,
                                         worker_core.x,
                                         worker_core.y,
-                                        runCounterRead)
+                                        runCounterRead
                                     );
                             TT_ASSERT (coreFlatIDRead == coreFlatID,
-                                    fmt::format("Unexpected core id, expected {}, read {}. In core {},{} at run {}",
+                                    "Unexpected core id, expected {}, read {}. In core {},{} at run {}",
                                         coreFlatID,
                                         coreFlatIDRead,
                                         worker_core.x,
                                         worker_core.y,
-                                        runCounterRead));
+                                        runCounterRead);
 
                             dumpResultToFile(
                                     runCounterRead,

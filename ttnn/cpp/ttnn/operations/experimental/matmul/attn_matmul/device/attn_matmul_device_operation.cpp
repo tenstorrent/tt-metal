@@ -114,8 +114,9 @@ operation::ProgramWithCallbacks AttnMatmulDeviceOperation::create_program(
 }
 
 const operation::Hash AttnMatmulDeviceOperation::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
-    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensors.at(0).storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensors.at(0).get_storage()),__FILE__, __LINE__));
-    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensors.at(1).storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensors.at(1).get_storage()),__FILE__, __LINE__));
+    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensors.at(0).storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(input_tensors.at(0).get_storage()));
+    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensors.at(1).storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(input_tensors.at(1).get_storage()));
+
     return operation::hash_operation<AttnMatmulDeviceOperation>(
         this->transpose_hw,
         this->output_mem_config,

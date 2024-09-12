@@ -1,5 +1,5 @@
 # Guidelines for Writing Effective Error Messages ✍️
-Clear and informative error messages are crucial for debugging and maintenance. A well-crafted error message can save hours of troubleshooting and make our codebase more user-friendly, especially for those less familiar with the system. 
+Clear and informative error messages are crucial for debugging and maintenance. A well-crafted error message can save hours of troubleshooting and make our codebase more user-friendly, especially for those less familiar with the system.
 
 A well-written error message provides the following information to the user:
 * What happened and why?
@@ -17,7 +17,7 @@ TT_FATAL(input_shape.rank() == 3, "Invalid input tensor dimensions.");
 ```
 Write:
 ```cpp
-TT_FATAL(input_shape.rank() == 3, fmt::format("Invalid input tensor: expected 3 dimensions, but found {}.", input_shape.rank()));
+TT_FATAL(input_shape.rank() == 3, "Invalid input tensor: expected 3 dimensions, but found {}.", input_shape.rank());
 ```
 ### 2. Explain the Issue
 Provide a brief explanation of why the error occurred or why the condition is important. This helps users understand the context of the error.
@@ -53,15 +53,15 @@ TT_FATAL(head_size % TILE_WIDTH != 0, "Head size is invalid.");
 ```
 Write:
 ```cpp
-TT_FATAL(head_size % TILE_WIDTH != 0, fmt::format("Invalid head size: {}. The head size must be a multiple of tile width ({}). Please adjust the dimensions accordingly.", head_size, TILE_WIDTH));
+TT_FATAL(head_size % TILE_WIDTH != 0, "Invalid head size: {}. The head size must be a multiple of tile width ({}). Please adjust the dimensions accordingly.", head_size, TILE_WIDTH);
 ```
 
 ## Good Example
 This message clearly states the problem, includes the actual value of head_size, and offers guidance on how to fix it.
 ```cpp
 TT_FATAL(head_size % TILE_WIDTH == 0,
-         fmt::format("Invalid head size: {}. The head size must be a multiple of the tile width ({}). Please adjust the dimensions accordingly.", 
-                     head_size, TILE_WIDTH));
+         "Invalid head size: {}. The head size must be a multiple of the tile width ({}). Please adjust the dimensions accordingly.",
+         head_size, TILE_WIDTH);
 ```
 
 ## Style recommendations

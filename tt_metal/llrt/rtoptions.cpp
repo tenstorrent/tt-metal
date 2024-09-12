@@ -117,7 +117,7 @@ RunTimeOptions::RunTimeOptions() {
 
 const std::string &RunTimeOptions::get_root_dir() {
     if (root_dir == "") {
-        TT_THROW("Env var " + std::string("TT_METAL_HOME") + " is not set.");
+        TT_THROW("Env var TT_METAL_HOME is not set.");
     }
 
     return root_dir;

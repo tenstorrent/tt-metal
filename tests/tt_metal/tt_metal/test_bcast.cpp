@@ -40,7 +40,7 @@ const char* get_reader_name(bool multibank, BcastDim::Enum bcast_dim) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bcast_hw_8bank.cpp" :
             "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp";
     }
-    TT_FATAL(false && "Unexpected bcast_dim!", "Error");
+    TT_THROW("Unexpected bcast_dim!");
     return "";
 }
 
@@ -49,7 +49,7 @@ const char* get_compute_name(BcastDim::Enum bcast_dim) {
         case BcastDim::H:  return "tests/tt_metal/tt_metal/test_kernels/compute/bcast_h.cpp";
         case BcastDim::W:  return "tests/tt_metal/tt_metal/test_kernels/compute/bcast_w.cpp";
         case BcastDim::HW: return "tests/tt_metal/tt_metal/test_kernels/compute/bcast_hw.cpp";
-        default:           TT_FATAL(false && "Unexpected bcast_dim!", "Error");
+        default:           TT_THROW("Unexpected bcast_dim!");
     }
     return "";
 }

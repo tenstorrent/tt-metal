@@ -317,7 +317,7 @@ inline std::string op_meta_data_serialized_json(
     auto j = get_base_json<true>(opID, op, input_tensors);
     j["op_type"] = magic_enum::enum_name(OpType::python_fallback);
     std::string ser = j.dump(4);
-    return fmt::format("`TT_DNN_FALL_BACK_OP:{} ->\n{}`", j["op_code"], ser);
+    return fmt::format("`TT_DNN_FALL_BACK_OP:{} ->\n{}`", j["op_code"].dump(), ser);
 }
 
 template <typename device_operation_t>
@@ -356,7 +356,7 @@ inline std::string op_meta_data_serialized_json(
         j["performance_model"]["input_bws"] = perfModel.get_input_bws();
         j["performance_model"]["output_bws"] = perfModel.get_output_bws();
 
-        std::string short_str = fmt::format("`TT_DNN_DEVICE_OP: {}, {}, {}, ", j["op_code"], program_hash, device_id);
+        std::string short_str = fmt::format("`TT_DNN_DEVICE_OP: {}, {}, {}, ", j["op_code"].dump(), program_hash, device_id);
         if (cached_ops.find(device_id) == cached_ops.end()) {
             cached_ops.emplace(
                 device_id, (std::unordered_map<tt::tt_metal::operation::Hash, std::string>){{program_hash, short_str}});
