@@ -61,10 +61,10 @@ def test_llama_mlp_inference(device, seq_len, use_program_cache, reset_seeds):
     )
 
     logger.info("Compilation pass for Llama_MLP")
-    tt_output = tt_model(tt_input)
+    tt_output = tt_model(tt_input, mode="decode")
 
     logger.info("Performance pass for Llama_MLP")
-    tt_output = tt_model(tt_input)
+    tt_output = tt_model(tt_input, mode="decode")
     tt_output_torch = ttnn.to_torch(tt_output)
 
     pcc_required = 0.99
