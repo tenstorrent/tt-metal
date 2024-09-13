@@ -32,7 +32,7 @@
 | [LLaMA-2-70B - (tensor parallel)](./models/demos/t3000/llama2_70b)   | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) |            | 10.4  | 20           | [v0.52.0-rc14](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc14) |
 | [LLaMA-3.1-70B (tensor parallel)](./models/demos/t3000/llama3_70b)   | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) |            | 10.4  | 20           | [v0.52.0-rc14](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc14) |
 | [Falcon40B (tensor parallel)](./models/demos/t3000/falcon40b)        | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) |            | 5.3   | 36           | [v0.52.0-rc12](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc12) |
-| [Mixtral7Bx8 (tensor parallel)](./models/demos/t3000/mixtral8x7b)    | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 0.19       | 15.7  | 33           | [v0.51.0-rc33](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc33) |
+| [Mixtral7Bx8 (tensor parallel)](./models/demos/t3000/mixtral8x7b)    | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 0.19       | 13.6  | 33           | [v0.51.0-rc33](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc33) |
 | [Falcon7B (data parallel)](./models/demos/tg/falcon7b)               |1024   | [Galaxy](https://tenstorrent.com/hardware/galaxy)      | 0.27       | 4.1   | 26           | [v0.52.0-rc14](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc14) |
 
 > **Notes:**
