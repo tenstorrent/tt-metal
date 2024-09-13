@@ -126,14 +126,12 @@ class EltwiseBinaryOpInterfaceTestFixture
 class SoftmaxOpInterfaceTestFixture : public TTNNFixtureWithDevice,
                                       public testing::WithParamInterface<std::tuple<OperandShapeTestParam, int>> {};
 
-class MatmulMultiCoreReuseMultiCastOpInterfaceTestFixture
+class MatmulOpInterfaceTestFixture
     : public TTNNFixtureWithDevice,
-      public testing::WithParamInterface<std::tuple<
-          OperandShapeTestParam,
-          OperandShapeTestParam,
-          ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>> {};
+      public testing::WithParamInterface<
+          std::tuple<OperandShapeTestParam, OperandShapeTestParam, ttnn::operations::matmul::MatmulProgramConfig>> {};
 
-TEST_P(MatmulMultiCoreReuseMultiCastOpInterfaceTestFixture, MlirInterfaceTest) {
+TEST_P(MatmulOpInterfaceTestFixture, MlirInterfaceTest) {
     auto param_combination = GetParam();
     auto input_a = std::get<0>(param_combination);
     auto input_b = std::get<1>(param_combination);
@@ -194,8 +192,86 @@ TEST_P(MatmulMultiCoreReuseMultiCastOpInterfaceTestFixture, MlirInterfaceTest) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    MlirInterfaceTests,                                   // Prefix for the instantiated test suite
-    MatmulMultiCoreReuseMultiCastOpInterfaceTestFixture,  // Test suite name
+    MlirInterfaceTests_REUSE_MCAST_1D_IN0,  // Prefix for the instantiated test suite
+    MatmulOpInterfaceTestFixture,           // Test suite name
+    ::testing::Combine(
+        ::testing::Values(
+            OperandShapeTestParam{
+                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 64, 2048}),
+                .memory_config = ttnn::L1_MEMORY_CONFIG,
+            },
+            OperandShapeTestParam{
+                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 64, 2048}),
+                .memory_config =
+                    {.memory_layout = tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
+                     .buffer_type = tt::tt_metal::BufferType::L1,
+                     .shard_spec =
+                         tt::tt_metal::ShardSpec{
+                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 3}}}},
+                             {64, 64},
+                             ShardOrientation::ROW_MAJOR}},
+            }),
+
+        ::testing::Values(OperandShapeTestParam{
+            .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 2048, 1024}),
+            .memory_config = ttnn::L1_MEMORY_CONFIG,
+        }),
+
+        ::testing::Values(ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig{
+            .compute_with_storage_grid_size = CoreCoord(8, 4),
+            .in0_block_w = 2,
+            .out_subblock_h = 1,
+            .out_subblock_w = 1,
+            .per_core_M = 2,
+            .per_core_N = 1,
+            .fuse_batch = true,
+            .fused_activation = std::nullopt,
+            .mcast_in0 = true}))
+
+);
+
+INSTANTIATE_TEST_SUITE_P(
+    MlirInterfaceTests_REUSE_MCAST_1D_IN1,  // Prefix for the instantiated test suite
+    MatmulOpInterfaceTestFixture,           // Test suite name
+    ::testing::Combine(
+        ::testing::Values(
+            OperandShapeTestParam{
+                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 4096, 64}),
+                .memory_config = ttnn::DRAM_MEMORY_CONFIG,
+            },
+            OperandShapeTestParam{
+                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 4096, 64}),
+                .memory_config =
+                    {.memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+                     .buffer_type = tt::tt_metal::BufferType::L1,
+                     .shard_spec =
+                         tt::tt_metal::ShardSpec{
+                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 3}}}},
+                             {128, 64},
+                             ShardOrientation::ROW_MAJOR}},
+            }),
+
+        ::testing::Values(OperandShapeTestParam{
+            .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 64, 256}),
+            .memory_config = ttnn::DRAM_MEMORY_CONFIG,
+        }),
+
+        ::testing::Values(ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig{
+            .compute_with_storage_grid_size = CoreCoord(8, 4),
+            .in0_block_w = 2,
+            .out_subblock_h = 1,
+            .out_subblock_w = 1,
+            .per_core_M = 4,
+            .per_core_N = 8,
+            .fuse_batch = true,
+            .fused_activation = std::nullopt,
+            .mcast_in0 = false}))
+
+);
+
+INSTANTIATE_TEST_SUITE_P(
+    MlirInterfaceTests_REUSE_MCAST_2D,  // Prefix for the instantiated test suite
+    MatmulOpInterfaceTestFixture,       // Test suite name
     ::testing::Combine(
         ::testing::Values(OperandShapeTestParam{
             .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 4 * 32, 8 * 32}),
@@ -220,8 +296,8 @@ INSTANTIATE_TEST_SUITE_P(
 );
 
 INSTANTIATE_TEST_SUITE_P(
-    MlirInterfaceTestsBATCHED,                            // Prefix for the instantiated test suite
-    MatmulMultiCoreReuseMultiCastOpInterfaceTestFixture,  // Test suite name
+    MlirInterfaceTests_REUSE_MCAST_2D_BATCHED,  // Prefix for the instantiated test suite
+    MatmulOpInterfaceTestFixture,               // Test suite name
     ::testing::Combine(
         ::testing::Values(OperandShapeTestParam{
             .shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 4 * 32, 8 * 32}),
@@ -246,8 +322,8 @@ INSTANTIATE_TEST_SUITE_P(
 );
 
 INSTANTIATE_TEST_SUITE_P(
-    MlirInterfaceTestsBLOCK_SHARDED,                      // Prefix for the instantiated test suite
-    MatmulMultiCoreReuseMultiCastOpInterfaceTestFixture,  // Test suite name
+    MlirInterfaceTests_REUSE_MCAST_2D_BLOCK_SHARDED,  // Prefix for the instantiated test suite
+    MatmulOpInterfaceTestFixture,                     // Test suite name
     ::testing::Combine(
         ::testing::Values(OperandShapeTestParam{
             .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 1600, 256}),
