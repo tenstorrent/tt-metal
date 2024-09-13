@@ -41,16 +41,6 @@ void kernel_main() {
     tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_y)));
 
 
-    MatmulOpReceiver fused_op_receiver;
-    if constexpr (fuse_op) {
-        fused_op_receiver = MatmulOpReceiver(
-            true, /* wait_for_op_signal */
-            rt_args_idx,
-            num_blocks,
-            in0_block_w /* tiles_per_block (in the same dimension as tensor slice) */
-        );
-    }
-
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in2 = 2;  // Sharded cb
 
@@ -122,6 +112,16 @@ void kernel_main() {
         noc_shard_read_start_addr = get_noc_addr(get_read_ptr(cb_id_in2));
     } else {
         local_read_addr = get_read_ptr(cb_id_in2);
+    }
+
+    MatmulOpReceiver fused_op_receiver;
+    if constexpr (fuse_op) {
+        fused_op_receiver = MatmulOpReceiver(
+            sender_id < num_remote_senders, /* wait_for_op_signal */
+            rt_args_idx,
+            num_blocks,
+            in0_block_w /* tiles_per_block (in the same dimension as tensor slice) */
+        );
     }
 
     for (uint32_t b = 0; b < batch; ++b) {

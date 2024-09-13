@@ -368,7 +368,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
 
     if (fuse_op) {
         // Create semaphores
-        fused_op_signaler->init_fused_op(program, device, in0_mcast_cores_with_work_and_in_receiver_grid);
+        fused_op_signaler->init_fused_op(program, device, in0_mcast_sender_cores,
+            in0_is_sharded ? ttnn::experimental::ccl::FusedOpSignalerMode::SINGLE : ttnn::experimental::ccl::FusedOpSignalerMode::MULTI);
     }
 
     auto mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id = tt_metal::CreateKernel(
@@ -639,10 +640,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
             mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
 
+            if (fuse_op) {
+                fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
+            }
+
             if (i < num_cores_with_work) {
-                if (fuse_op) {
-                    fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
-                }
 
                 tt_metal::SetRuntimeArgs(
                     program,

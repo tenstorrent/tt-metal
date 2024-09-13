@@ -166,6 +166,11 @@ void kernel_main() {
             pop_filler_pages_from_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
         }
 
+        // Synchronize if all gather fusion is enabled
+        if constexpr(fuse_op) {
+            op_signaler.synchronize_workers_and_signal_op(input_ring_idx);
+        }
+
         if (is_clockwise_direction) {
             if (input_ring_idx == 0) {
                 input_ring_idx = ring_size - 1;
@@ -203,11 +208,6 @@ void kernel_main() {
                 }
             }
 
-        }
-
-        // Synchronize if all gather fusion is enabled
-        if constexpr(fuse_op) {
-            op_signaler.synchronize_workers_and_signal_op();
         }
 
         output_page_idx = output_base_page_idx;

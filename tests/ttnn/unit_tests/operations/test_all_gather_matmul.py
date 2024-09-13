@@ -6,10 +6,14 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
-from ttnn import ShardTensorToMesh
+from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0
 from tests.ttnn.unit_tests.operations.test_all_gather import is_unsupported_case
+
+
+USE_NON_FUSED = False
+USE_DATACOPY = False
 
 
 def run_all_gather_matmul_on_t3000_impl(
@@ -31,6 +35,7 @@ def run_all_gather_matmul_on_t3000_impl(
     mem_config_mm,
     mem_config_weights=None,
     num_iters=1,
+    enable_trace=False,
 ):
     # Set the default config
     if mem_config_weights is None:
@@ -77,7 +82,9 @@ def run_all_gather_matmul_on_t3000_impl(
             out_subblock_h=1,  # Must be divisible by per_core_M
             out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
             per_core_M=max(1, ag_output_shape[2] // 32 // core_grid[1]),  # M / TILE_HEIGHT / Grid_Size
-            per_core_N=max(1, matmul_output_dim // 32 // core_grid[0]),  # N / TILE_WIDTH / Grid_Size
+            per_core_N=1
+            if mem_config_input.is_sharded()
+            else max(1, matmul_output_dim // 32 // core_grid[0]),  # N / TILE_WIDTH / Grid_Size
             mcast_in0=True,
             fused_activation=None,  # ttnn.UnaryOpType.SILU,
             fuse_batch=True,
@@ -106,40 +113,67 @@ def run_all_gather_matmul_on_t3000_impl(
     )
 
     ##### Perform the torch ops #####
-    matmul_output = torch.chunk(torch.matmul(input_tensor, weights_tensor), num_devices, dim)
+    matmul_output = torch.matmul(input_tensor, weights_tensor)
 
     ##### Perform the TT ops #####
-    for i in range(num_iters):
-        # # all_gather
-        # tt_all_gather_out_tensor = ttnn.all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config_ag)
+    def run_op():
+        if USE_NON_FUSED:
+            # all_gather
+            tt_all_gather_out_tensor = ttnn.all_gather(
+                input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config_ag
+            )
 
-        # # matmul
-        # tt_matmul_output = ttnn.matmul(
-        #     tt_all_gather_out_tensor,
-        #     weight_tt,
-        #     memory_config=mem_config_mm,
-        #     program_config=program_config,
-        #     compute_kernel_config=compute_kernel_config,
-        # )
+            # matmul
+            tt_matmul_out_tensor = ttnn.matmul(
+                tt_all_gather_out_tensor,
+                weight_tt,
+                memory_config=mem_config_mm,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+            )
+            return tt_all_gather_out_tensor, tt_matmul_out_tensor, None
+        else:
+            return ttnn.experimental.all_gather_matmul(
+                input_tensor_mesh,
+                weight_tt,
+                dim,
+                (0, 4),
+                num_links=num_links,
+                memory_config_ag=mem_config_ag,
+                memory_config_mm=mem_config_mm,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+            )
 
-        # Test ttnn all_gather_matmul
-        tt_all_gather_out_tensor, tt_matmul_output, tt_datacopy_out_tensor = ttnn.experimental.all_gather_matmul(
-            input_tensor_mesh,
-            weight_tt,
-            dim,
-            (0, 4),
-            num_links=num_links,
-            memory_config_ag=mem_config_ag,
-            memory_config_mm=mem_config_mm,
-            program_config=program_config,
-            compute_kernel_config=compute_kernel_config,
-        )
+    if enable_trace:
+        # Compile the op
+        tt_all_gather_out_tensor, tt_matmul_out_tensor, tt_datacopy_out_tensor = run_op()
+        logger.info(f"Done compiling Op")
 
-        logger.info(f"Done iteration {i}")
+        # Capture the trace
+        trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
+        for i in range(num_iters):
+            tt_all_gather_out_tensor, tt_matmul_out_tensor, tt_datacopy_out_tensor = run_op()
+        ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
+
+        logger.info(f"Done capturing trace")
+
+        # Execute trace
+        ttnn.execute_trace(t3k_mesh_device, trace_id, cq_id=0, blocking=False)
+        logger.info(f"Done executing trace")
 
         # Synchronize the devices
         for d in devices:
             ttnn.synchronize_device(d)
+    else:
+        for i in range(num_iters):
+            tt_all_gather_out_tensor, tt_matmul_out_tensor, tt_datacopy_out_tensor = run_op()
+
+            # Synchronize the devices
+            for d in devices:
+                ttnn.synchronize_device(d)
+
+            logger.info(f"Done iteration {i}")
 
     ##### Compare the outputs #####
     print("Checking outputs for All Gather Matmul (All Gather)")
@@ -154,30 +188,28 @@ def run_all_gather_matmul_on_t3000_impl(
             logger.error(f"output mismatch for tensor {i}")
         assert eq, f"{i} FAILED: {output}"
 
-    # print("Checking outputs for All Gather Matmul (Datacopy)")
-    # for i, t in enumerate(ttnn.get_device_tensors(tt_datacopy_out_tensor)):
-    #     tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
-    #     if ag_input_dtype == ttnn.bfloat16:
-    #         eq, output = comp_equal(tt_output_tensor, input_tensor)
-    #     else:
-    #         eq, output = comp_pcc(tt_output_tensor, input_tensor)
-    #     logger.info(f"Output {i}: {output}")
-    #     if not eq:
-    #         logger.error(f"output mismatch for tensor {i}")
-    #     assert eq, f"{i} FAILED: {output}"
+    if USE_DATACOPY:
+        print("Checking outputs for All Gather Matmul (Datacopy)")
+        for i, t in enumerate(ttnn.get_device_tensors(tt_datacopy_out_tensor)):
+            tt_output_tensor = t.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
+            if ag_input_dtype == ttnn.experimental.tensor.DataType.BFLOAT16:
+                eq, output = comp_equal(tt_output_tensor, input_tensor)
+            else:
+                eq, output = comp_pcc(tt_output_tensor, input_tensor)
+            logger.info(f"Output {i}: {output}")
+            if not eq:
+                logger.error(f"output mismatch for tensor {i}")
+            assert eq, f"{i} FAILED: {output}"
 
-    print("Checking outputs for Matmul")
-    for i, t in enumerate(ttnn.get_device_tensors(tt_matmul_output)):
-        tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    print("Checking outputs for All Gather Matmul (Matmul)")
+    tt_mm_out = ttnn.from_device(tt_matmul_out_tensor)
+    tt_mm_out = ttnn.to_torch(tt_mm_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
 
-        eq, output = comp_pcc(tt_output_tensor, matmul_output[i])
-        logger.info(f"Output {i}: {output}")
-        if not eq:
-            logger.error(f"output mismatch for tensor {i}")
-        assert eq, f"{i} FAILED: {output}"
+    eq, output = comp_pcc(tt_mm_out, matmul_output)
+    logger.info(f"Output: {output}")
+    assert eq
 
 
-# @skip_for_wormhole_b0()  # Used to disable test
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "matmul_config",
@@ -270,7 +302,7 @@ def run_all_gather_matmul_on_t3000_impl(
     "enable_async",
     [
         True,
-        # False,
+        False,
     ],
 )
 def test_all_gather_matmul_on_t3000_post_commit(
@@ -310,7 +342,6 @@ def test_all_gather_matmul_on_t3000_post_commit(
     )
 
 
-# @skip_for_wormhole_b0() # Used to disable test
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "matmul_config",
@@ -413,7 +444,6 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
     )
 
 
-# @skip_for_wormhole_b0() # Used to disable test
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "matmul_config",
@@ -500,6 +530,7 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         )
     ],
+    ids=("llama_selfout",),
 )
 @pytest.mark.parametrize(
     "enable_async",
@@ -508,6 +539,9 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
         False,
     ],
 )
+@pytest.mark.parametrize(
+    "device_params", [{"trace_region_size": 90112}], indirect=True
+)  # TODO: Update once trace fails
 def test_all_gather_matmul_1d_llama_selfout_on_t3000_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -544,4 +578,5 @@ def test_all_gather_matmul_1d_llama_selfout_on_t3000_post_commit(
         mem_config_ag,
         mem_config_mm,
         mem_config_weights,
+        enable_trace=True,
     )
