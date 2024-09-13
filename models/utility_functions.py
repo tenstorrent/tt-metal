@@ -299,10 +299,10 @@ def unpad_from_zero(x, desired_shape):
         x = x.unpad(
             (0, 0, 0, 0),
             (
-                desired_shape[0] - 1,
-                desired_shape[1] - 1,
-                desired_shape[2] - 1,
-                desired_shape[3] - 1,
+                desired_shape[0],
+                desired_shape[1],
+                desired_shape[2],
+                desired_shape[3],
             ),
         )
 
