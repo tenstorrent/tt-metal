@@ -372,7 +372,6 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(const std::
             // this core has no output
             continue;
         }
-        // TT_ASSERT(output_shard_start < op_trace_metadata.size());
         TT_ASSERT(input_shard_start == op_trace_metadata[output_shard_start]);
         std::vector<uint16_t> local_top_left_indices;
         for(size_t i = output_shard_start; i < output_shard_end + 1; i++) {
@@ -383,7 +382,7 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(const std::
     if (pad_tile) {
         // Pad indices to tile-multiple
         for(size_t i = 0; i < sharded_input_top_left_indices.size(); i++) {
-            uint32_t extend_with_zeroes = sharded_input_top_left_indices[i].size() % 32;
+            uint32_t extend_with_zeroes = (32 - sharded_input_top_left_indices[i].size() % 32) % 32;
             if (extend_with_zeroes > 0) {
                 std::vector<uint16_t> extend_v(extend_with_zeroes, 0);
                 sharded_input_top_left_indices[i].insert(sharded_input_top_left_indices[i].end(), extend_v.begin(), extend_v.end());
