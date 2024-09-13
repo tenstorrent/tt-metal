@@ -15,6 +15,7 @@
 namespace ttnn::str_wrapper
 {
 
+// no MLIR equivalent for storage type
 std::optional<tt::tt_metal::StorageType> to_storage_type(const std::string& storage_type_str)
 {
     if (storage_type_str == "OWNED") return tt::tt_metal::StorageType::OWNED;
@@ -27,48 +28,74 @@ std::optional<tt::tt_metal::StorageType> to_storage_type(const std::string& stor
 
 std::optional<tt::tt_metal::Layout> to_layout(const std::string& layout_str)
 {
-    if (layout_str == "ROW_MAJOR") return tt::tt_metal::Layout::ROW_MAJOR;
-    if (layout_str == "TILE") return tt::tt_metal::Layout::TILE;
-    if (layout_str == "INVALID") return tt::tt_metal::Layout::INVALID;
+    // Replicating MLIR defined strings
+    // def TT_OperandConstraintScalar : I32BitEnumAttrCaseBit<"Scalar", 3, "scalar">;
+    // def TT_OperandConstraintTile : I32BitEnumAttrCaseBit<"Tile", 4, "tile">;
+    if (layout_str == "scalar") return tt::tt_metal::Layout::ROW_MAJOR;
+    if (layout_str == "tile") return tt::tt_metal::Layout::TILE;
     return std::nullopt;
 }
 
 std::optional<tt::tt_metal::TensorMemoryLayout> to_tensor_memory_layout(const std::string& tensor_memory_layout_str)
 {
-    if (tensor_memory_layout_str == "INTERLEAVED") return tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
-    if (tensor_memory_layout_str == "SINGLE_BANK") return tt::tt_metal::TensorMemoryLayout::SINGLE_BANK;
-    if (tensor_memory_layout_str == "HEIGHT_SHARDED") return tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED;
-    if (tensor_memory_layout_str == "WIDTH_SHARDED") return tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED;
-    if (tensor_memory_layout_str == "BLOCK_SHARDED") return tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED;
+    // Replicating MLIR defined strings
+    // def TT_OperandConstraintInterleaved : I32BitEnumAttrCaseBit<"Interleaved", 6, "interleaved">;
+    // def TT_OperandConstraintSingleBank : I32BitEnumAttrCaseBit<"SingleBank", 7, "single_bank">;
+    // def TT_OperandConstraintHeightSharded : I32BitEnumAttrCaseBit<"HeightSharded", 8, "height_sharded">;
+    // def TT_OperandConstraintWidthSharded : I32BitEnumAttrCaseBit<"WidthSharded", 9, "width_sharded">;
+    // def TT_OperandConstraintBlockSharded : I32BitEnumAttrCaseBit<"BlockSharded", 10, "block_sharded">;
+    if (tensor_memory_layout_str == "interleaved") return tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
+    if (tensor_memory_layout_str == "single_bank") return tt::tt_metal::TensorMemoryLayout::SINGLE_BANK;
+    if (tensor_memory_layout_str == "height_sharded") return tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED;
+    if (tensor_memory_layout_str == "width_sharded") return tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED;
+    if (tensor_memory_layout_str == "block_sharded") return tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED;
     return std::nullopt;
 }
 
 std::optional<tt::tt_metal::DataType> to_data_type(const std::string& data_type_str)
 {
-    if (data_type_str == "BFLOAT16") return tt::tt_metal::DataType::BFLOAT16;
-    if (data_type_str == "FLOAT32") return tt::tt_metal::DataType::FLOAT32;
-    if (data_type_str == "UINT32") return tt::tt_metal::DataType::UINT32;
-    if (data_type_str == "BFLOAT8_B") return tt::tt_metal::DataType::BFLOAT8_B;
-    if (data_type_str == "BFLOAT4_B") return tt::tt_metal::DataType::BFLOAT4_B;
-    if (data_type_str == "UINT8") return tt::tt_metal::DataType::UINT8;
-    if (data_type_str == "UINT16") return tt::tt_metal::DataType::UINT16;
-    if (data_type_str == "INT32") return tt::tt_metal::DataType::INT32;
-    if (data_type_str == "INVALID") return tt::tt_metal::DataType::INVALID;
+    // Replicate MLIR defined strings
+    // def TT_Float32 : I32EnumAttrCase<"Float32", 0, "f32">;
+    // def TT_Float16 : I32EnumAttrCase<"Float16", 1, "f16">;
+    // def TT_BFloat16 : I32EnumAttrCase<"BFloat16", 2, "bf16">;
+    // def TT_BFP_Float8 : I32EnumAttrCase<"BFP_Float8", 3, "bfp_f8">;
+    // def TT_BFP_BFloat8 : I32EnumAttrCase<"BFP_BFloat8", 4, "bfp_bf8">;
+    // def TT_BFP_Float4 : I32EnumAttrCase<"BFP_Float4", 5, "bfp_f4">;
+    // def TT_BFP_BFloat4 : I32EnumAttrCase<"BFP_BFloat4", 6, "bfp_bf4">;
+    // def TT_BFP_Float2 : I32EnumAttrCase<"BFP_Float2", 7, "bfp_f2">;
+    // def TT_BFP_BFloat2 : I32EnumAttrCase<"BFP_BFloat2", 8, "bfp_bf2">;
+    // def TT_UInt32 : I32EnumAttrCase<"UInt32", 9, "u32">;
+    // def TT_UInt16 : I32EnumAttrCase<"UInt16", 10, "u16">;
+    // def TT_UInt8 : I32EnumAttrCase<"UInt8", 11, "u8">;
+
+    if (data_type_str == "f32") return tt::tt_metal::DataType::FLOAT32;
+    if (data_type_str == "bf16") return tt::tt_metal::DataType::BFLOAT16;
+    if (data_type_str == "bfp_bf8") return tt::tt_metal::DataType::BFLOAT8_B;
+    if (data_type_str == "bfp_bf4") return tt::tt_metal::DataType::BFLOAT4_B;
+    if (data_type_str == "u32") return tt::tt_metal::DataType::UINT32;
+    if (data_type_str == "u16") return tt::tt_metal::DataType::UINT16;
+    if (data_type_str == "u8") return tt::tt_metal::DataType::UINT8;
+    // if (data_type_str == "INT32") return tt::tt_metal::DataType::INT32;
     return std::nullopt;
 }
 
 std::optional<tt::tt_metal::BufferType> to_buffer_type(const std::string& buffer_type_str)
 {
-    if (buffer_type_str == "DRAM") return tt::tt_metal::BufferType::DRAM;
-    if (buffer_type_str == "L1") return tt::tt_metal::BufferType::L1;
-    if (buffer_type_str == "SYSTEM_MEMORY") return tt::tt_metal::BufferType::SYSTEM_MEMORY;
-    if (buffer_type_str == "L1_SMALL") return tt::tt_metal::BufferType::L1_SMALL;
-    if (buffer_type_str == "TRACE") return tt::tt_metal::BufferType::TRACE;
+    // Replicate MLIR defined strings
+    // def TT_OperandConstraintSystem : I32BitEnumAttrCaseBit<"System", 0, "system">;
+    // def TT_OperandConstraintDRAM : I32BitEnumAttrCaseBit<"DRAM", 1, "dram">;
+    // def TT_OperandConstraintL1 : I32BitEnumAttrCaseBit<"L1", 2, "l1">;
+    if (buffer_type_str == "dram") return tt::tt_metal::BufferType::DRAM;
+    if (buffer_type_str == "l1") return tt::tt_metal::BufferType::L1;
+    if (buffer_type_str == "system") return tt::tt_metal::BufferType::SYSTEM_MEMORY;
+    // if (buffer_type_str == "L1_SMALL") return tt::tt_metal::BufferType::L1_SMALL;
+    // if (buffer_type_str == "TRACE") return tt::tt_metal::BufferType::TRACE;
     return std::nullopt;
 }
 
 std::optional<tt::tt_metal::ShardOrientation> to_shard_orientation(const std::string& shard_str)
 {
+    // no MLIR equivalent yet
     if (shard_str == "ROW_MAJOR") return tt::tt_metal::ShardOrientation::ROW_MAJOR;
     if (shard_str == "COL_MAJOR") return tt::tt_metal::ShardOrientation::COL_MAJOR;
     return std::nullopt;

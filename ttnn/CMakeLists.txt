@@ -456,7 +456,26 @@ set(MLIR_INTERFACE_LIB ttnn_mlir_interface)
 set(MLIR_INTERFACE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/mlir_interface_api.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/types_wrapper.cpp
+
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/common/op_constraints.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/binary/binary_constraints.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/unary/unary_constraints.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/matmul/matmul_constraints.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/softmax/softmax_constraints.cpp
+
+    # ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/types.cpp                     # Shape
+    # ${CMAKE_CURRENT_SOURCE_DIR}/../tt_metal/impl/buffers/buffer.cpp         # Buffer
+    # ${CMAKE_CURRENT_SOURCE_DIR}/../tt_metal/tt_metal.cpp                   # tt::tt_metal::detail::AllocateBuffer
+    # ${CMAKE_CURRENT_SOURCE_DIR}/../tt_metal/impl/allocator/allocator.cpp   # tt::tt_metal::Device::logical_core_from_bank_id
+    # ${CMAKE_CURRENT_SOURCE_DIR}/../tt_metal/impl/device/device.cpp              # tt::tt_metal::Device::dram_channel_from_bank_id
+    # ${CMAKE_CURRENT_SOURCE_DIR}/../tt_metal/llrt/tt_cluster.cpp      # tt::Cluster::instance()
+    # ${CMAKE_CURRENT_SOURCE_DIR}/../tt_metal/llrt/llrt.cpp               # tt::llrt::write_hex_vec_to_core
+    # ${CMAKE_CURRENT_SOURCE_DIR}/../tt_metal/impl/device/device_pool.cpp # tt::DevicePool::_ins
+    # ${CMAKE_CURRENT_SOURCE_DIR}/../tt_metal/impl/program/program.cpp # tt::tt_metal::Program::compile
+    # this list is too long, linking ttnn.so for now
 )
+
+# message(STATUS "CMAKE_CXX_COMPILER_ID = ${CMAKE_CXX_COMPILER_ID}")
 
 add_library(${MLIR_INTERFACE_LIB} STATIC ${MLIR_INTERFACE_SOURCES})
 
@@ -469,6 +488,12 @@ set(MLIR_INTERFACE_PUBLIC_HEADER
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/mlir_interface_api.hpp
 )
 
+# if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+#     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++")
+#     target_link_libraries(${MLIR_INTERFACE_LIB} PUBLIC c++abi)
+# endif()
+
+
 # target_include_directories(${MLIR_INTERFACE_LIB} PRIVATE
 #     ${PROJECT_SOURCE_DIR}/
 #     ${PROJECT_SOURCE_DIR}/ttnn/cpp/
@@ -479,10 +504,10 @@ set(MLIR_INTERFACE_PUBLIC_HEADER
 
 # link everything (temporary to get going)
 
-target_include_directories(${MLIR_INTERFACE_LIB} PRIVATE ${TTNN_PUBLIC_INCLUDE_DIRS})
-target_link_libraries(${MLIR_INTERFACE_LIB} PRIVATE ${TTNN_PUBLIC_LINK_LIBRARIES})
-target_link_directories(${MLIR_INTERFACE_LIB} PRIVATE ${TTNN_PUBLIC_LINK_DIRS})
-# target_precompile_headers(${MLIR_INTERFACE_LIB} PRIVATE ${TTNN_PRECOMPILED_HEADERS})
+target_include_directories(${MLIR_INTERFACE_LIB} PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
+target_link_libraries(${MLIR_INTERFACE_LIB} PUBLIC ${TTNN_PUBLIC_LINK_LIBRARIES})
+target_link_directories(${MLIR_INTERFACE_LIB} PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
+target_precompile_headers(${MLIR_INTERFACE_LIB} PRIVATE ${TTNN_PRECOMPILED_HEADERS})
 
 
 set_target_properties(${MLIR_INTERFACE_LIB} PROPERTIES
