@@ -303,6 +303,12 @@ class TtLlamaAttention(nn.Module):
             ttnn.deallocate(k_heads)
             ttnn.deallocate(v_heads)
 
+            q_heads_shape = q_heads.shape
+            q_heads = ttnn.reshape(
+                q_heads,
+                ttnn.Shape((q_heads_shape[0], q_heads_shape[1], self.max_batch_size, q_heads_shape[3]), q_heads_shape),
+            )
+
             attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode_gqa(
                 q_heads,
                 keys,
@@ -366,7 +372,7 @@ class TtLlamaAttention(nn.Module):
             xqkv_fused = ttnn.linear(
                 x,
                 wqkv,
-                memory_config=self.model_config["XQKV_MM_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["XQKV_WSHARDED_MM_OUTPUT_MEMCFG"],
                 compute_kernel_config=self.compute_kernel_config,
                 dtype=ttnn.bfloat16,
                 core_grid=self.grid_size,
@@ -378,8 +384,6 @@ class TtLlamaAttention(nn.Module):
             )
 
             # ttnn.deallocate(x)
-            # hack to work around nlp create head decode not taking 32x128 shard
-            xqkv_fused = ttnn.to_memory_config(xqkv_fused, self.model_config["XQKV_WSHARDED_1CORE_MM_OUTPUT_MEMCFG"])
             ###
             # Reshape and rotary embeddings
             ###
@@ -400,27 +404,20 @@ class TtLlamaAttention(nn.Module):
             rotary_mat = rot_mat
 
             # work around for different cur pos
-            # bug in nlp create head decode where the output n head is 64 instead of 32
-            q_heads_pre_rot = ttnn.to_memory_config(q_heads_pre_rot, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            q_heads_pre_rot = q_heads_pre_rot[:, :, : self.n_local_heads, :]
-            k_heads_pre_rot = ttnn.to_memory_config(k_heads_pre_rot, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            v_heads = ttnn.to_memory_config(v_heads, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             q_heads = ttnn.linear(
                 q_heads_pre_rot,
                 rotary_mat,
-                # program_config=self.q_heads_program_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config,
-                # program_config=self.model_config["ROT_MAT_MM_PROGCFG"],
+                program_config=self.model_config["ROT_MAT_BMM_PROGCFG"],
                 dtype=ttnn.bfloat16,
             )
             k_heads = ttnn.linear(
                 k_heads_pre_rot,
                 rotary_mat,
-                # program_config=self.k_heads_program_config,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=k_heads_pre_rot.memory_config(),
                 compute_kernel_config=self.compute_kernel_config,
-                # program_config=self.model_config["ROT_MAT_MM_PROGCFG"],
+                program_config=self.model_config["ROT_MAT_BMM_PROGCFG"],
                 dtype=ttnn.bfloat16,
             )
 
@@ -436,31 +433,15 @@ class TtLlamaAttention(nn.Module):
 
             # k_heads, [seqlen, bsz, n_kv_heads, head_dim]
             # v_heads [seqlen, bsz, n_kv_heads, head_dim]
-            k_heads = ttnn.reshape(
-                k_heads,
-                ttnn.Shape(
-                    (1, self.max_batch_size, self.n_local_kv_heads, self.head_dim),
-                    (1, self.max_batch_size, 32, self.head_dim),
-                ),
-            )
-            v_heads = ttnn.reshape(
-                v_heads,
-                ttnn.Shape(
-                    (1, self.max_batch_size, self.n_local_kv_heads, self.head_dim),
-                    (1, self.max_batch_size, 32, self.head_dim),
-                ),
-            )
-            k_heads = ttnn.to_memory_config(k_heads, memory_config=self.model_config["KV_HSHARDED_MEMCFG"])
-            v_heads = ttnn.to_memory_config(v_heads, memory_config=self.model_config["KV_HSHARDED_MEMCFG"])
-
             keys = ttnn.experimental.paged_update_cache(keys, k_heads, update_idxs=current_pos, share_cache=True)
             values = ttnn.experimental.paged_update_cache(values, v_heads, update_idxs=current_pos, share_cache=True)
-
-            cur_pos_for_attn = [current_pos[j] for j in range(self.max_batch_size) for _ in range(self.n_kv_heads)]
-
             ttnn.deallocate(k_heads)
             ttnn.deallocate(v_heads)
 
+            ###
+            # Flash Decode
+            ###
+            cur_pos_for_attn = [current_pos[j] for j in range(self.max_batch_size) for _ in range(self.n_kv_heads)]
             attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode_gqa(
                 q_heads,
                 keys,

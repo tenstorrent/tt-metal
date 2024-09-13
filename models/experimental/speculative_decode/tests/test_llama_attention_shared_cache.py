@@ -34,6 +34,13 @@ def get_rotary_mat_for_speculation(model_args, speculation_length, start_pos=0):
     return current_rot_mat, rot_matrix_torch
 
 
+def fa_rand(*shape):
+    normal_1 = torch.randn(shape)
+    normal_2 = torch.randn(shape) * 10
+    bernoulli = torch.bernoulli(torch.full(shape, 0.001))
+    return normal_1 + normal_2 * bernoulli
+
+
 @skip_for_grayskull("Requires wormhole_b0 to run")
 def test_llama_attention_inference(device, use_program_cache, reset_seeds, debug=True):
     dtype = ttnn.bfloat8_b
@@ -63,7 +70,11 @@ def test_llama_attention_inference(device, use_program_cache, reset_seeds, debug
         start_pos=0,
     )
     current_rot_mat = ttnn.from_torch(
-        current_rot_mat_torch, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        current_rot_mat_torch,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=model_args.model_config["ROT_MAT_MEMCONFIG"],
     )
 
     tt_model = TtLlamaAttention(
@@ -80,7 +91,7 @@ def test_llama_attention_inference(device, use_program_cache, reset_seeds, debug
     cos, sin = precompute_freqs(model_args.head_dim, model_args.max_seq_len * 2)
     freqs_cis = torch.complex(cos, sin)
     for i in range(generation_length):
-        pt_attention_input = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1
+        pt_attention_input = fa_rand(batch, seq_len, model_args.dim)
 
         tt_attention_input = pt_attention_input.clone()
         current_pos = generation_start_pos + i
@@ -137,7 +148,11 @@ def test_llama_attention_inference(device, use_program_cache, reset_seeds, debug
         current_rot_mat_torch = torch.matmul(rot_matrix_torch, current_rot_mat_torch)
         current_rot_mat.deallocate()
         current_rot_mat = ttnn.from_torch(
-            current_rot_mat_torch, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            current_rot_mat_torch,
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=model_args.model_config["ROT_MAT_MEMCONFIG"],
         )
 
         if True:  # FIXME: Issue #10648
@@ -179,8 +194,8 @@ def test_llama_attention_inference(device, use_program_cache, reset_seeds, debug
                         passing, pcc_message = comp_pcc(batch_cache_pt, batch_cache_tt, pcc)
                         logger.info(f"Batch (seqlen) {batch_idx}: {pcc_message}")
 
-    # if all_tests_pass:
-    #     logger.info("Llama Attention output Passed!")
-    # else:
-    #     logger.warning("Llama Attention output Failed!")
-    #     assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
+    if all_tests_pass:
+        logger.info("Llama Attention output Passed!")
+    else:
+        logger.warning("Llama Attention output Failed!")
+        assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"

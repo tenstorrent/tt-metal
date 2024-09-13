@@ -186,7 +186,11 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, GENERATION_LEN
         start_pos=0,
     )
     current_rot_mat = ttnn.from_torch(
-        current_rot_mat_torch, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        current_rot_mat_torch,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=model_args.model_config["ROT_MAT_MEMCONFIG"],
     )
     logger.info("Caching attention ops...")
     cache_attention_share_cache(device, state_dict, model_args, current_rot_mat, dtype, [0, 200, 400])
@@ -276,7 +280,11 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, GENERATION_LEN
             current_rot_mat_torch = torch.matmul(rot_matrix_torch, current_rot_mat_torch)
             current_rot_mat.deallocate()
             current_rot_mat = ttnn.from_torch(
-                current_rot_mat_torch, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+                current_rot_mat_torch,
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=model_args.model_config["ROT_MAT_MEMCONFIG"],
             )
             # If temperature is 0, does greedy decoding (top-1)
             tt_out_tok = sample(tt_output_torch, temperature=0, top_p=0.8)

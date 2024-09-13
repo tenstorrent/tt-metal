@@ -319,19 +319,28 @@ class TtModelArgs:
             )
             # Useful core grid based on batch size
             if self.max_batch_size == 32:
-                core_grid_by_batch = ttnn.CoreGrid(y=4, x=8)
+                grid_by_batch = (8, 4)
             elif self.max_batch_size == 16:
-                core_grid_by_batch = ttnn.CoreGrid(y=2, x=8)
+                grid_by_batch = (8, 2)
             elif self.max_batch_size == 8:
-                core_grid_by_batch = ttnn.CoreGrid(y=1, x=8)
+                grid_by_batch = (8, 1)
             elif self.max_batch_size == 4:
-                core_grid_by_batch = ttnn.CoreGrid(y=1, x=4)
+                grid_by_batch = (4, 1)
             elif self.max_batch_size == 2:
-                core_grid_by_batch = ttnn.CoreGrid(y=1, x=2)
+                grid_by_batch = (2, 1)
             elif self.max_batch_size == 1:
-                core_grid_by_batch = ttnn.CoreGrid(y=1, x=1)
+                grid_by_batch = (1, 1)
             else:
                 raise ValueError(f"Batch size {self.max_batch_size} not supported")
+            core_grid_by_batch = ttnn.CoreGrid(y=grid_by_batch[1], x=grid_by_batch[0])
+            core_range_set_by_batch = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(grid_by_batch[0] - 1, grid_by_batch[1] - 1),
+                    ),
+                }
+            )
 
             self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32, 128),
@@ -343,15 +352,7 @@ class TtModelArgs:
 
             self.model_config["XQKV_WSHARDED_MM_OUTPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32, 128),
-                core_grid=ttnn.CoreGrid(y=4, x=6),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-
-            self.model_config["XQKV_WSHARDED_1CORE_MM_OUTPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, 128 * 48),
-                core_grid=ttnn.CoreGrid(y=1, x=1),
+                core_grid=ttnn.CoreGrid(y=6, x=8),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
@@ -377,16 +378,27 @@ class TtModelArgs:
                 mcast_in0=True,
             )
 
-            self.model_config["ROT_MAT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(4, 1),
+            self.model_config["ROT_MAT_BMM_PROGCFG"] = ttnn.ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=grid_by_batch,
                 in0_block_w=4,
                 out_subblock_h=1,
                 out_subblock_w=4,
                 per_core_M=1,
                 per_core_N=4,
-                fuse_batch=True,
-                fused_activation=None,
-                mcast_in0=False,
+            )
+
+            self.model_config["ROT_MAT_MEMCONFIG"] = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    core_range_set_by_batch,
+                    [
+                        128,
+                        128,
+                    ],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
+                ),
             )
 
     def weight_cache_path(self, dtype):
