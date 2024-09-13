@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from ttnn import ConcatMeshToTensor
+from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 from dataclasses import dataclass
 from loguru import logger
@@ -23,7 +23,7 @@ from models.demos.t3000.llama2_70b.tt.model_config import (
 
 
 class TtLlamaModelForGeneration:
-    def __init__(self, configuration, state_dict, model_args, tt_args, paged_attention_config=None):
+    def __init__(self, configuration, state_dict, model_args, tt_args, paged_attention_config=None, vllm=False):
         # Cache Weights setup
         n_layers = model_args.num_layers or 80
 
@@ -56,6 +56,7 @@ class TtLlamaModelForGeneration:
             cache_path=tt_args.cache_path,
             read_cache=False,
             paged_attention_config=paged_attention_config,
+            vllm=vllm,
         )
 
         del state_dict
@@ -68,7 +69,7 @@ class TtLlamaModelForGeneration:
             llama_version: str = None
             ckpt_dir: str = None
             max_batch_size: int = 32
-            num_layers: int = 80
+            num_layers: int = 1
             max_kv_context_len: int = 4096
 
         @dataclass
@@ -104,18 +105,15 @@ class TtLlamaModelForGeneration:
         )
 
         return cls(
-            configuration=configuration,
-            state_dict=state_dict,
-            model_args=model_args,
-            tt_args=tt_args,
+            configuration=configuration, state_dict=state_dict, model_args=model_args, tt_args=tt_args, vllm=True
         )
 
-    def forward(self, tokens: torch.Tensor, start_pos: int):
+    def forward(self, tokens: torch.Tensor, start_pos: int, page_table=None, kv_cache=None):
         _, seq_len = tokens.shape
         if seq_len == 1:
-            return self.decode_forward(tokens, start_pos)
+            return self.decode_forward(tokens, start_pos, page_table=page_table, kv_cache=kv_cache)
         else:
-            return self.prefill_forward(tokens, start_pos)
+            return self.prefill_forward(tokens, start_pos, page_table=page_table, kv_cache=kv_cache)
 
     def capture_trace(self, tokens: torch.Tensor, start_pos: int):
         tt_inp, start_pos, rot_mat, attn_mask, cache_idxs_tt = self.tt_model.prepare_inputs(tokens, start_pos)
@@ -185,7 +183,7 @@ class TtLlamaModelForGeneration:
 
         return logits
 
-    def decode_forward(self, tokens: torch.Tensor, start_pos: int, page_table=None):
+    def decode_forward(self, tokens: torch.Tensor, start_pos: int, page_table=None, kv_cache=None):
         self._update_model_config("decode", tokens.shape[0], 1)
         batch = tokens.shape[0]
         tt_inp, start_pos, rot_mat, attn_mask, cache_idxs_tt = self.tt_model.prepare_inputs(tokens, start_pos)
@@ -194,6 +192,17 @@ class TtLlamaModelForGeneration:
         tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
         rot_mat = ttnn.to_device(rot_mat, self.mesh_device, memory_config=self.model_config["ROT_MAT_MM_IN1_MEMCFG"])
         cache_idxs_tt = ttnn.to_device(cache_idxs_tt, self.mesh_device, memory_config=self.model_config["DRAM_MEMCFG"])
+
+        if isinstance(page_table, torch.Tensor):
+            # Support vLLM tensor page_table input
+            page_table = ttnn.as_tensor(
+                page_table,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+            )
         tt_logits = self.tt_model(
             tt_inp_emb,
             rot_mat,
@@ -201,6 +210,7 @@ class TtLlamaModelForGeneration:
             attn_mask,
             cache_idxs=cache_idxs_tt,
             page_table=page_table,
+            kv_cache=kv_cache,
         )
 
         # del tt_inp_emb
@@ -216,7 +226,7 @@ class TtLlamaModelForGeneration:
         return logits
 
     def prefill_forward_single_user(
-        self, tokens: torch.Tensor, start_pos: int, user_id: int, last_token_idx=None, page_table=None
+        self, tokens: torch.Tensor, start_pos: int, user_id: int, last_token_idx=None, page_table=None, kv_cache=None
     ):
         batch, seq_len = tokens.shape
         assert batch == 1
@@ -229,6 +239,17 @@ class TtLlamaModelForGeneration:
             tokens, start_pos=start_pos, valid_seq_len=seq_len
         )
 
+        if isinstance(page_table, torch.Tensor):
+            # Support vLLM tensor page_table input
+            page_table = ttnn.as_tensor(
+                page_table,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+            )
+
         tt_logits = self.tt_model(
             tt_inp_emb,
             rot_mat,
@@ -237,6 +258,7 @@ class TtLlamaModelForGeneration:
             user_id=user_id,
             last_token_idx=last_token_idx,
             page_table=page_table,
+            kv_cache=kv_cache,
         )
 
         del tt_inp_emb
@@ -248,7 +270,7 @@ class TtLlamaModelForGeneration:
         del tt_logits
         return logits
 
-    def prefill_forward(self, tokens: torch.Tensor, start_pos: int):
+    def prefill_forward(self, tokens: torch.Tensor, start_pos: int, page_table=None, kv_cache=None):
         batch, seq_len = tokens.shape
         assert seq_len <= 8 * 1024, f"Only prefill up to 2048 tokens is supported, got {seq_len}"
 
@@ -265,7 +287,12 @@ class TtLlamaModelForGeneration:
             logger.info(f"Filling kv cache for user {user_id + 1}")
 
             logits = self.prefill_forward_single_user(
-                prefill_ids[user_id : user_id + 1], start_pos, user_id, last_token_idx=last_token_idx
+                prefill_ids[user_id : user_id + 1],
+                start_pos,
+                user_id,
+                last_token_idx=last_token_idx,
+                page_table=page_table,
+                kv_cache=kv_cache,
             )
 
             # output_logits[user_id] = logits[:, :seq_len, :]

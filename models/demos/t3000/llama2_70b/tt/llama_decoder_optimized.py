@@ -25,6 +25,7 @@ class TtLlamaDecoder_optimized:
         cache_path=None,
         read_cache=False,
         paged_attention_config=None,
+        vllm=False,
     ):
         super().__init__()
 
@@ -59,6 +60,7 @@ class TtLlamaDecoder_optimized:
             cache_path=cache_path,
             read_cache=read_cache,
             paged_attention_config=paged_attention_config,
+            vllm=vllm,
         )
 
         self.mlp = TtLlamaMLP_optimized(
@@ -151,11 +153,16 @@ class TtLlamaDecoder_optimized:
         user_id: int = 0,
         cache_idxs=None,
         page_table=None,
+        kv_cache=None,
     ) -> ttnn.Tensor:
         if self.model_config["LLM_MODE"] == "prefill":
-            return self.prefill_forward(xs, rot_mats, start_pos, attn_masks, user_id, page_table=page_table)
+            return self.prefill_forward(
+                xs, rot_mats, start_pos, attn_masks, user_id, page_table=page_table, kv_cache=kv_cache
+            )
         elif self.model_config["LLM_MODE"] == "decode":
-            return self.decode_forward(xs, rot_mats, start_pos, attn_masks, cache_idxs, page_table=page_table)
+            return self.decode_forward(
+                xs, rot_mats, start_pos, attn_masks, cache_idxs, page_table=page_table, kv_cache=kv_cache
+            )
         else:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
@@ -167,6 +174,7 @@ class TtLlamaDecoder_optimized:
         attn_masks: List[ttnn.Tensor],
         cache_idxs,
         page_table=None,
+        kv_cache=None,
     ) -> List[ttnn.Tensor]:
         ### xs (residual stream) is fractured on all chips
         xs_replicated = ttnn.all_gather(
@@ -189,7 +197,13 @@ class TtLlamaDecoder_optimized:
 
         # attn_outs is fractured
         attn_outs = self.attention(
-            attn_norm_replicated, rot_mats, start_pos, attn_masks, cache_idxs=cache_idxs, page_table=page_table
+            attn_norm_replicated,
+            rot_mats,
+            start_pos,
+            attn_masks,
+            cache_idxs=cache_idxs,
+            page_table=page_table,
+            kv_cache=kv_cache,
         )
 
         ### Fractured residual add
@@ -267,6 +281,7 @@ class TtLlamaDecoder_optimized:
         attn_masks: List[ttnn.Tensor],
         user_id: int = 0,
         page_table=None,
+        kv_cache=None,
     ) -> List[ttnn.Tensor]:
         ### xs (residual stream) is fractured on all chips
         # TODO: Reenable when typcast supports multidevice
@@ -286,7 +301,7 @@ class TtLlamaDecoder_optimized:
 
         # attn_outs is fractured
         attn_outs = self.attention(
-            attn_norm_interleaved, rot_mats, start_pos, attn_masks, user_id, page_table=page_table
+            attn_norm_interleaved, rot_mats, start_pos, attn_masks, user_id, page_table=page_table, kv_cache=kv_cache
         )
 
         attn_norm_interleaved.deallocate(True)
