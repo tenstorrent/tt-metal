@@ -710,13 +710,13 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
                             std::array<uint32_t, 4>{1, 1, 1, 1} //Step
                             );
                         log_debug(tt::LogOp, "Sliced input tensor shape: {}", sliced_input_tensor.get_shape());
-                        if(pad_top>0)
+                        if(pad_top>0 || pad_bottom > 0)
                         {
                             auto pad_top_tensor = ttnn::pad(
+                                DefaultQueueId,
                                 sliced_input_tensor,
-                                tt::tt_metal::Array4D({1, input_slice_height + pad_top, input_width, in_channels}),
-                                tt::tt_metal::Array4D({0, 0, 0, 0}),
-                                0);
+                                std::vector<std::pair<uint32_t, uint32_t>>{{0, 0}, {pad_top, pad_bottom}, {0, 0}, {0, 0}},
+                                0, true, std::nullopt);
                             sliced_input_tensor = pad_top_tensor;
                         }
                         log_debug(tt::LogOp, "Padded sliced input tensor shape: {}", sliced_input_tensor.get_shape());
@@ -730,7 +730,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
                             device,
                             in_channels,
                             out_channels,
-                            1, input_slice_height + pad_top, input_width,
+                            1, input_slice_height + pad_top + pad_bottom, input_width,
                             kernel_size, stride, {0,padding[1]}, dilation,
                             groups,
                             first_run ?  bias_tensor : (std::optional<const ttnn::Tensor>)(bias_tensor_on_device),

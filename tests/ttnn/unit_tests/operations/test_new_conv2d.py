@@ -321,7 +321,11 @@ def run_conv_with_split(
 @pytest.mark.parametrize("stride", [1])
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, pad_h, pad_w, act_block_w_div",
-    ((64, 32, 130, 130, 3, 3, 0, 0, 1),),
+    (
+        (64, 32, 130, 130, 3, 3, 0, 0, 1),
+        (64, 32, 128, 128, 3, 3, 1, 1, 1),
+        (64, 32, 1024, 1024, 3, 3, 1, 1, 1),
+    ),
 )
 @pytest.mark.parametrize(
     "has_bias",
@@ -423,6 +427,7 @@ def test_conv_dram(
         reshard_if_not_optimal=True,
         act_block_w_div=act_block_w_div,
         output_height_in_l1=64,
+        act_block_h_override=64,
     )
     [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
