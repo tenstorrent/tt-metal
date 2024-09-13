@@ -34,12 +34,14 @@ class TtLlamaModel_optimized:
         cache_path=None,
         read_cache=False,
         paged_attention_config=None,
+        vllm=False,
     ):
         self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.num_devices = mesh_device.get_num_devices()
         self.model_config = model_config
         self.read_cache = read_cache
+        self.vllm = vllm
 
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
@@ -79,6 +81,7 @@ class TtLlamaModel_optimized:
                 cache_path=cache_path,
                 read_cache=read_cache,
                 paged_attention_config=paged_attention_config,
+                vllm=vllm,
             )
             for layer_num in tqdm(range(n_layers))
         ]
@@ -249,7 +252,7 @@ class TtLlamaModel_optimized:
             if isinstance(start_pos, int):
                 cache_idxs = torch.tensor([start_pos for _ in range(batch)], dtype=torch.int64)
             else:
-                cache_idxs = start_pos
+                cache_idxs = start_pos.to(dtype=torch.int64)
 
             rot_mat = get_rotation_mat(self.rot_emb, cache_idxs, seq_len, batch=batch)
             assert rot_mat.size() == (1, batch, self.head_dim, self.head_dim)
@@ -291,13 +294,26 @@ class TtLlamaModel_optimized:
         cache_idxs=None,
         last_token_idx=None,
         page_table=None,
+        kv_cache=None,
     ) -> ttnn.Tensor:
+        if self.vllm:
+            assert page_table is not None
+            assert kv_cache is not None
         if self.model_config["LLM_MODE"] == "prefill":
             return self.prefill_forward(
-                xs, rot_mats, start_pos, attn_masks, user_id, last_token_idx=last_token_idx, page_table=page_table
+                xs,
+                rot_mats,
+                start_pos,
+                attn_masks,
+                user_id,
+                last_token_idx=last_token_idx,
+                page_table=page_table,
+                kv_cache=kv_cache,
             )
         elif self.model_config["LLM_MODE"] == "decode":
-            return self.decode_forward(xs, rot_mats, start_pos, attn_masks, cache_idxs, page_table=page_table)
+            return self.decode_forward(
+                xs, rot_mats, start_pos, attn_masks, cache_idxs, page_table=page_table, kv_cache=kv_cache
+            )
         else:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
@@ -309,11 +325,12 @@ class TtLlamaModel_optimized:
         attn_masks: List[ttnn.Tensor],
         cache_idxs,
         page_table=None,
+        kv_cache=None,
     ) -> ttnn.Tensor:
         ### Run all layers
         for layer in self.layers:
             xs = layer(
-                xs, rot_mats, start_pos, attn_masks, cache_idxs=cache_idxs, page_table=page_table
+                xs, rot_mats, start_pos, attn_masks, cache_idxs=cache_idxs, page_table=page_table, kv_cache=kv_cache
             )  # xs is sharded
 
         xs = ttnn.all_gather(
@@ -386,10 +403,13 @@ class TtLlamaModel_optimized:
         user_id: int = 0,
         last_token_idx=None,
         page_table=None,
+        kv_cache=None,
     ) -> ttnn.Tensor:
         ### Run all layers
         for layer in self.layers:
-            xs = layer(xs, rot_mats, start_pos, attn_masks, user_id, page_table=page_table)  # xs is sharded
+            xs = layer(
+                xs, rot_mats, start_pos, attn_masks, user_id, page_table=page_table, kv_cache=kv_cache
+            )  # xs is sharded
 
         # Distributed rmsnorm
         norm_out = self.tt_distributed_rmsnorm(xs, self.norm_eps, self.norm_sharded)

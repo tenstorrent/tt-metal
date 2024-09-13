@@ -23,6 +23,7 @@ class TtLlamaAttention_optimized:
         batch_size=None,
         read_cache=False,
         paged_attention_config=None,
+        vllm=False,
     ):
         self.state_dict = state_dict
         self.mesh_device = mesh_device
@@ -30,6 +31,7 @@ class TtLlamaAttention_optimized:
         self.model_config = model_config
         self.read_cache = read_cache
         self.paged_attention_config = paged_attention_config
+        self.vllm = vllm
 
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
@@ -47,6 +49,7 @@ class TtLlamaAttention_optimized:
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices
         self.padded_local_heads = 32
 
+        self.layer_num = layer_num
         self.layer_name = f"{base_url}.{layer_num}"
         self.cache_path = cache_path
         self.transformation_mats = transformation_mats
@@ -54,7 +57,9 @@ class TtLlamaAttention_optimized:
         self.kv_dtype = ttnn.bfloat8_b
 
         self.load_weights()
-        self.init_kv_cache()
+        if not vllm:
+            # vLLM provides its own kv cache
+            self.init_kv_cache()
 
     def set_model_config(self, model_config):
         self.model_config = model_config
@@ -190,19 +195,33 @@ class TtLlamaAttention_optimized:
 
         self.wo = ttnn.to_device(wo_ttnn, self.mesh_device)
 
-    def __call__(self, xs, rot_mats, start_pos: int, attn_masks, user_id: int = 0, cache_idxs=None, page_table=None):
+    def __call__(
+        self,
+        xs,
+        rot_mats,
+        start_pos: int,
+        attn_masks,
+        user_id: int = 0,
+        cache_idxs=None,
+        page_table=None,
+        kv_cache=None,
+    ):
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
         if self.model_config["LLM_MODE"] == "decode":
-            return self.decode_forward(xs, rot_mats, start_pos, attn_masks, cache_idxs, page_table=page_table)
+            return self.decode_forward(
+                xs, rot_mats, start_pos, attn_masks, cache_idxs, page_table=page_table, kv_cache=kv_cache
+            )
         # Prefill should have input tensor of shape (1, batch=1, seqlen, hidden_size)
         elif self.model_config["LLM_MODE"] == "prefill":
-            return self.prefill_forward(xs, rot_mats, attn_masks, user_id, page_table=page_table)
+            return self.prefill_forward(xs, rot_mats, attn_masks, user_id, page_table=page_table, kv_cache=kv_cache)
         else:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
-    def decode_forward(self, xs, rot_mats, start_pos: int, attn_masks, cache_idxs, page_table=None):
+    def decode_forward(self, xs, rot_mats, start_pos: int, attn_masks, cache_idxs, page_table=None, kv_cache=None):
         query_layer, key_layer, value_layer = self.attn_qkv(xs, rot_mats)
-        attn_outputs = self.attn_mqa(query_layer, key_layer, value_layer, start_pos, cache_idxs, page_table=page_table)
+        attn_outputs = self.attn_mqa(
+            query_layer, key_layer, value_layer, start_pos, cache_idxs, page_table=page_table, kv_cache=kv_cache
+        )
         return self.attn_selfout(attn_outputs)
 
     def attn_qkv(
@@ -262,16 +281,20 @@ class TtLlamaAttention_optimized:
 
         return query_layer, key_layer, value_layer
 
-    def attn_mqa(self, query_layer, key_layer, value_layer, start_pos: int, cache_idxs, page_table=None):
+    def attn_mqa(self, query_layer, key_layer, value_layer, start_pos: int, cache_idxs, page_table=None, kv_cache=None):
         # K CACHE UPDATE
-        keys = self.layer_past[0]
+        if kv_cache:
+            keys = kv_cache[self.layer_num][0]
+            values = kv_cache[self.layer_num][1]
+        else:
+            keys = self.layer_past[0]
+            values = self.layer_past[1]
         # ttnn.update_cache(keys, key_layer, start_pos, batch_offset=batch_offset)
         ttnn.experimental.paged_update_cache(keys, key_layer, update_idxs_tensor=cache_idxs, page_table=page_table)
 
         key_layer.deallocate(True)
 
         # V CACHE UPDATE
-        values = self.layer_past[1]
         # ttnn.update_cache(values, value_layer, start_pos, batch_offset=batch_offset)
         ttnn.experimental.paged_update_cache(values, value_layer, update_idxs_tensor=cache_idxs, page_table=page_table)
 
@@ -335,10 +358,10 @@ class TtLlamaAttention_optimized:
 
         return attn_output
 
-    def prefill_forward(self, xs, rot_mats, attn_masks, user_id: int = 0, page_table=None):
+    def prefill_forward(self, xs, rot_mats, attn_masks, user_id: int = 0, page_table=None, kv_cache=None):
         query_layer, key_layer, value_layer = self.prefill_attn_qkv(xs, rot_mats)
         attn_outputs = self.prefill_attn_mqa(
-            query_layer, key_layer, value_layer, attn_masks, user_id, page_table=page_table
+            query_layer, key_layer, value_layer, attn_masks, user_id, page_table=page_table, kv_cache=kv_cache
         )
         return self.prefill_attn_selfout(attn_outputs)
 
@@ -400,9 +423,15 @@ class TtLlamaAttention_optimized:
 
         return query_layer_ret, key_layer_ret, value_layer
 
-    def prefill_attn_mqa(self, query_layer, key_layer, value_layer, attn_masks, user_id: int = 0, page_table=None):
-        keys = self.layer_past[0]
-        values = self.layer_past[1]
+    def prefill_attn_mqa(
+        self, query_layer, key_layer, value_layer, attn_masks, user_id: int = 0, page_table=None, kv_cache=None
+    ):
+        if kv_cache:
+            keys = kv_cache[self.layer_num][0]
+            values = kv_cache[self.layer_num][1]
+        else:
+            keys = self.layer_past[0]
+            values = self.layer_past[1]
 
         if page_table:
             ttnn.experimental.paged_fill_cache(
