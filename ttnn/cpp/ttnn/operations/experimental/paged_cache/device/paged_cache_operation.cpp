@@ -32,12 +32,12 @@ void PagedUpdateCacheDeviceOperation::validate(const std::vector<Tensor>& input_
         uint32_t batch_size;
         if (!paged_cache) {
             // TT_FATAL(cache_tensor.get_legacy_shape()[1] == 1, "Only supports 1 head now.");
-            TT_FATAL(input_tensor.get_shape()[2] == cache_tensor.get_shape()[1]);
+            TT_FATAL(input_tensor.get_shape()[2] == cache_tensor.get_shape()[1], "Error");
             if (this->share_cache){
-                TT_FATAL(cache_tensor.get_legacy_shape()[0] == 1);
+                TT_FATAL(cache_tensor.get_legacy_shape()[0] == 1, "Error");
             }
             else {
-                TT_FATAL(input_tensor.get_legacy_shape()[1] == cache_tensor.get_legacy_shape()[0]);
+                TT_FATAL(input_tensor.get_legacy_shape()[1] == cache_tensor.get_legacy_shape()[0], "Error");
             }
         } else {
             TT_FATAL(optional_input_tensors.at(0).has_value(), "Paged cache requires update_idxs tensor");
