@@ -13,12 +13,12 @@ namespace ccl {
 void AllGatherFusedOpSignaler::init_fused_op(
     const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
     const std::vector<uint32_t>& fused_op_receiver_signal_semaphores,
-    bool mcast_fused_op_cores
+    FusedOpSignalerMode fused_op_signaler_mode
 ) {
     this->fused_op_receiver_cores_noc = fused_op_receiver_cores_noc;
     this->fused_op_receiver_signal_semaphores = fused_op_receiver_signal_semaphores;
     this->num_fused_op_cores_to_signal = fused_op_receiver_cores_noc.size();
-    this->mcast_fused_op_cores = mcast_fused_op_cores;
+    this->fused_op_signaler_mode = fused_op_signaler_mode;
 
     initialized_fused_op = true;
 }
@@ -74,7 +74,7 @@ void AllGatherFusedOpSignaler::push_all_gather_fused_op_rt_args(
         static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[all_gather_direction])
     );
 
-    out_rt_args.push_back(static_cast<uint32_t>(this->mcast_fused_op_cores));
+    out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_signaler_mode == FusedOpSignalerMode::SINGLE ? 0 : 1));
 }
 
 
@@ -105,9 +105,9 @@ void MatmulFusedOpSignaler::init_fused_op(
     Program& program,
     Device const* device,
     const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
-    bool mcast_fused_op_cores
+    FusedOpSignalerMode fused_op_signaler_mode
 ) {
-    this->mcast_fused_op_cores = mcast_fused_op_cores;
+    this->fused_op_signaler_mode = fused_op_signaler_mode;
 
     // Clear the existing receiver cores
     this->fused_op_receiver_cores_noc.clear();

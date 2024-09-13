@@ -133,7 +133,7 @@ def run_all_gather_matmul_on_t3000_impl(
             )
             return tt_all_gather_out_tensor, tt_matmul_out_tensor, None
         else:
-            return ttl.all_gather_matmul(
+            return ttnn.experimental.all_gather_matmul(
                 input_tensor_mesh,
                 weight_tt,
                 dim,
@@ -191,8 +191,8 @@ def run_all_gather_matmul_on_t3000_impl(
     if USE_DATACOPY:
         print("Checking outputs for All Gather Matmul (Datacopy)")
         for i, t in enumerate(ttnn.get_device_tensors(tt_datacopy_out_tensor)):
-            tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-            if ag_input_dtype == ttl.tensor.DataType.BFLOAT16:
+            tt_output_tensor = t.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
+            if ag_input_dtype == ttnn.experimental.tensor.DataType.BFLOAT16:
                 eq, output = comp_equal(tt_output_tensor, input_tensor)
             else:
                 eq, output = comp_pcc(tt_output_tensor, input_tensor)

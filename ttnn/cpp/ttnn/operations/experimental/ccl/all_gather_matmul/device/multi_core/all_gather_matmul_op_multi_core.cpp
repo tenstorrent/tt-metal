@@ -324,7 +324,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
         all_gather_fused_op_signaler->init_fused_op(
             matmul_fused_op_signaler->fused_op_receiver_cores_noc,
             matmul_fused_op_signaler->fused_op_receiver_signal_semaphores,
-            matmul_fused_op_signaler->mcast_fused_op_cores
+            matmul_fused_op_signaler->fused_op_signaler_mode
         );
     }
 

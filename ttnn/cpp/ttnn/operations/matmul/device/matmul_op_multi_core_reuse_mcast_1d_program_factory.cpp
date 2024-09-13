@@ -368,7 +368,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
 
     if (fuse_op) {
         // Create semaphores
-        fused_op_signaler->init_fused_op(program, device, in0_mcast_sender_cores, in0_is_sharded == false /* mcast_fused_op_cores */);
+        fused_op_signaler->init_fused_op(program, device, in0_mcast_sender_cores,
+            in0_is_sharded ? ttnn::experimental::ccl::FusedOpSignalerMode::SINGLE : ttnn::experimental::ccl::FusedOpSignalerMode::MULTI);
     }
 
     auto mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id = tt_metal::CreateKernel(

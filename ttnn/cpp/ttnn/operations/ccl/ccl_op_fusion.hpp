@@ -19,11 +19,20 @@ struct CoreSemPair{
     CoreSemPair(CoreCoord core, uint32_t sem_id) : core(core), sem_id(sem_id) {}
 };
 
+enum class FusedOpSignalerMode {
+    // When signaling the fused op, only one core is signaled
+    // when a tensor slice is ready to be processed by the fused op
+    SINGLE,
+    // When signaling the fused op, all the cores of the fused op are signaled
+    // when a tensor slice is ready to be processed by the fused op
+    MULTI
+};
+
 struct AllGatherFusedOpSignaler {
     uint32_t num_fused_op_cores_to_signal;
     std::vector<CoreCoord> fused_op_receiver_cores_noc;
     std::vector<uint32_t> fused_op_receiver_signal_semaphores;
-    bool mcast_fused_op_cores = true;
+    FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI;
 
     /* All Gather specific */
     std::vector<CoreCoord> all_gather_worker_cores_noc;
@@ -37,7 +46,7 @@ struct AllGatherFusedOpSignaler {
     void init_fused_op(
         const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
         const std::vector<uint32_t>& fused_op_receiver_signal_semaphores,
-        const bool mcast_fused_op_cores = true
+        const FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI
     );
 
     void init_all_gather(
@@ -63,7 +72,7 @@ struct MatmulFusedOpSignaler {
     uint32_t num_fused_op_cores_to_signal;
     std::vector<CoreCoord> fused_op_receiver_cores_noc;
     std::vector<uint32_t> fused_op_receiver_signal_semaphores; // [dir0, dir1]
-    bool mcast_fused_op_cores = true;
+    FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI;
 
     /* All Gather specs */
     uint32_t num_transfers;
@@ -94,7 +103,7 @@ struct MatmulFusedOpSignaler {
         Program& program,
         Device const* device,
         const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
-        bool mcast_fused_op_cores = true
+        FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI
     );
 
     void push_matmul_fused_op_rt_args(
