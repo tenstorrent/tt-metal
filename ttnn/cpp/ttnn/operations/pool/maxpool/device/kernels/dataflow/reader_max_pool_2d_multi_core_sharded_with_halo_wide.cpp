@@ -78,7 +78,6 @@ void kernel_main() {
     // Reduce scalar = 1
     if (reader_id == 0) {
         cb_reserve_back(in_scalar_cb_id, 1);
-
         uint32_t bf16_one_u16 = bf16_one_u32 >> 16;
         // fill 1 row w/ scalar
         fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_one_u16);
@@ -94,19 +93,22 @@ void kernel_main() {
     uint32_t npages_to_reserve = 1;
     uint32_t counter = reader_id;
     while (counter < reader_nindices) {
-        cb_reserve_back(in_cb_id, npages_to_reserve);
-        uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
-        uint32_t out_l1_write_addr = out_l1_write_addr_base;
         uint16_t top_left_local_index = reader_indices_ptr[counter ++];
-        uint32_t h_multiples = 0;
-        for (uint32_t h = 0; h < window_h; ++ h, h_multiples += in_w_padded) {
-            uint32_t stick_offset = top_left_local_index + h_multiples;
-            uint32_t read_offset = in_l1_read_base_addr + (stick_offset << in_nbytes_c_log2);
-            noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c * window_w);
-            out_l1_write_addr += in_nbytes_c * window_w;
+        for (uint32_t c_i = 0; c_i < in_nblocks_c; ++ c_i) {
+            cb_reserve_back(in_cb_id, npages_to_reserve);
+            uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
+            uint32_t out_l1_write_addr = out_l1_write_addr_base;
+            for (uint32_t h = 0; h < window_h; ++ h) {
+                for (uint32_t w = 0; w < window_w; ++ w) {
+                    uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;
+                    uint32_t read_offset = in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * TILE_WIDTH * 8 * 2);      // 2 bytes, max 8 tiles
+                    noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, TILE_WIDTH * 8 * 2);
+                    out_l1_write_addr += TILE_WIDTH * 8 * 2;
+                }
+            }
+            noc_async_read_barrier();
+            cb_push_back(in_cb_id, npages_to_reserve);
         }
         if (split_reader) counter++; // interleave the indices
-        noc_async_read_barrier();
-        cb_push_back(in_cb_id, npages_to_reserve);
     }
 } // kernel_main()
