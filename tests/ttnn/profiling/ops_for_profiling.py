@@ -284,59 +284,59 @@ def scale_mask_softmax_in_place_shape_func(input_shape):
 
 
 def primary_moreh_mean_0(x):
-    ttnn.experimental.operations.primary.moreh_mean(x, dim=[0])
+    ttnn.operations.moreh.mean(x, dim=[0])
 
 
 def primary_moreh_mean_01(x):
-    ttnn.experimental.operations.primary.moreh_mean(x, dim=[0, 1])
+    ttnn.operations.moreh.mean(x, dim=[0, 1])
 
 
 def primary_moreh_mean_012(x):
-    ttnn.experimental.operations.primary.moreh_mean(x, dim=[0, 1, 2])
+    ttnn.operations.moreh.mean(x, dim=[0, 1, 2])
 
 
 def primary_moreh_mean_0123(x):
-    ttnn.experimental.operations.primary.moreh_mean(x, dim=[0, 1, 2, 3])
+    ttnn.operations.moreh.mean(x, dim=[0, 1, 2, 3])
 
 
 def primary_moreh_mean_013(x):
-    ttnn.experimental.operations.primary.moreh_mean(x, dim=[0, 1, 3])
+    ttnn.operations.moreh.mean(x, dim=[0, 1, 3])
 
 
 def primary_moreh_mean_023(x):
-    ttnn.experimental.operations.primary.moreh_mean(x, dim=[0, 2, 3])
+    ttnn.operations.moreh.mean(x, dim=[0, 2, 3])
 
 
 def primary_moreh_mean_1(x):
-    ttnn.experimental.operations.primary.moreh_mean(x, dim=[1])
+    ttnn.operations.moreh.mean(x, dim=[1])
 
 
 def primary_moreh_mean_12(x):
-    ttnn.experimental.operations.primary.moreh_mean(x, dim=[1, 2])
+    ttnn.operations.moreh.mean(x, dim=[1, 2])
 
 
 def primary_moreh_mean_123(x):
-    ttnn.experimental.operations.primary.moreh_mean(x, dim=[1, 2, 3])
+    ttnn.operations.moreh.mean(x, dim=[1, 2, 3])
 
 
 def primary_moreh_mean_13(x):
-    ttnn.experimental.operations.primary.moreh_mean(x, dim=[1, 3])
+    ttnn.operations.moreh.mean(x, dim=[1, 3])
 
 
 def primary_moreh_mean_2(x):
-    ttnn.experimental.operations.primary.moreh_mean(x, dim=[2])
+    ttnn.operations.moreh.mean(x, dim=[2])
 
 
 def primary_moreh_mean_23(x):
-    ttnn.experimental.operations.primary.moreh_mean(x, dim=[2, 3])
+    ttnn.operations.moreh.mean(x, dim=[2, 3])
 
 
 def primary_moreh_mean_3(x):
-    ttnn.experimental.operations.primary.moreh_mean(x, dim=[3])
+    ttnn.operations.moreh.mean(x, dim=[3])
 
 
 def primary_moreh_mean_backward(x, y):
-    ttnn.experimental.operations.primary.moreh_mean_backward(x, dim=[0], keepdim=True, input_grad=y)
+    ttnn.operations.moreh.mean_backward(x, dim=[0], keepdim=True, input_grad=y)
 
 
 def celu_bw(x, y):
@@ -1009,7 +1009,7 @@ all_binary_ops = [
     },
     {
         "op": primary_moreh_mean_backward,
-        "name": "ttnn.experimental.operations.primary.moreh_mean_backward",
+        "name": "ttnn.operations.moreh.mean_backward",
     },
 ]
 
@@ -2269,55 +2269,55 @@ all_unary_ops = [
     },
     {
         "op": primary_moreh_mean_0,
-        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_0",
+        "name": "ttnn.operations.moreh.mean_dims_0",
     },
     {
         "op": primary_moreh_mean_01,
-        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_01",
+        "name": "ttnn.operations.moreh.mean_dims_01",
     },
     {
         "op": primary_moreh_mean_012,
-        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_012",
+        "name": "ttnn.operations.moreh.mean_dims_012",
     },
     {
         "op": primary_moreh_mean_013,
-        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_013",
+        "name": "ttnn.operations.moreh.mean_dims_013",
     },
     {
         "op": primary_moreh_mean_023,
-        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_023",
+        "name": "ttnn.operations.moreh.mean_dims_023",
     },
     {
         "op": primary_moreh_mean_0123,
-        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_0123",
+        "name": "ttnn.operations.moreh.mean_dims_0123",
     },
     {
         "op": primary_moreh_mean_1,
-        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_1",
+        "name": "ttnn.operations.moreh.mean_dims_1",
     },
     {
         "op": primary_moreh_mean_12,
-        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_12",
+        "name": "ttnn.operations.moreh.mean_dims_12",
     },
     {
         "op": primary_moreh_mean_13,
-        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_13",
+        "name": "ttnn.operations.moreh.mean_dims_13",
     },
     {
         "op": primary_moreh_mean_123,
-        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_123",
+        "name": "ttnn.operations.moreh.mean_dims_123",
     },
     {
         "op": primary_moreh_mean_2,
-        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_2",
+        "name": "ttnn.operations.moreh.mean_dims_2",
     },
     {
         "op": primary_moreh_mean_23,
-        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_23",
+        "name": "ttnn.operations.moreh.mean_dims_23",
     },
     {
         "op": primary_moreh_mean_3,
-        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_3",
+        "name": "ttnn.operations.moreh.mean_dims_3",
     },
 ]
 
