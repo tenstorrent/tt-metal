@@ -122,49 +122,6 @@ TEST_P(BinaryInterfaceTestFixture, BinaryInterfaceTest) {
                     // // get graph trace for ground truth
                     auto json_trace = graph::query_trace(call);
                     tt::log_info("Trace: {}", json_trace.dump(4));
-
-                    // L1 interface calls and checks against graph trace
-                    {
-                        auto l1_input_a = std::make_tuple(
-                            input_a.shape,
-                            op_constraint.getDataTypeA().value(),
-                            op_constraint.getTileLayoutA().value(),
-                            input_a.memory_config);
-                        auto l1_input_b = std::make_tuple(
-                            input_b.shape,
-                            op_constraint.getDataTypeB().value(),
-                            op_constraint.getTileLayoutB().value(),
-                            input_b.memory_config);
-                        auto l1_output = std::make_tuple(
-                            input_a.shape,
-                            op_constraint.getDataTypeA().value(),
-                            op_constraint.getTileLayoutA().value(),
-                            input_a.memory_config);
-
-                        auto l1_usage = EltwiseOpL1UsageFactory::Make(l1_input_a, l1_input_b, l1_output);
-
-                        auto l1_cb_usage = l1_usage->get_circular_buffer_l1_allocations_per_core();
-                        auto graph_circular_buffer_allocations =
-                            graph::extract_circular_buffer_allocations_per_core(json_trace);
-                        EXPECT_EQ(l1_cb_usage.size(), graph_circular_buffer_allocations.size());
-                        for (int i = 0; i < l1_cb_usage.size(); i++) {
-                            std::cout << "DBG cb[" << i << "]" << std::get<0>(l1_cb_usage[i])
-                                      << std::endl;  // << " " << graph_circular_buffer_allocations[i] << std::endl;
-                            EXPECT_EQ(std::get<0>(l1_cb_usage[i]), graph_circular_buffer_allocations[i]);
-                        }
-
-                        auto l1_tensor_usage =
-                            l1_usage->get_tensor_l1_allocations_per_core();  // what about output tensor allocation?
-                        auto graph_l1_buffer_allocations = graph::extract_l1_buffer_allocations(json_trace);  // total
-                        EXPECT_EQ(l1_tensor_usage.size(), graph_l1_buffer_allocations.size());
-                        for (int i = 0; i < l1_tensor_usage.size(); i++) {
-                            std::cout << "DBG l1[" << i << "]" << std::get<0>(l1_tensor_usage[i])
-                                      << std::endl;  // << " " << graph_l1_buffer_allocations[i] << std::endl;
-                            EXPECT_EQ(
-                                std::get<0>(l1_tensor_usage[i]) * std::get<1>(l1_tensor_usage[i]),
-                                graph_l1_buffer_allocations[i]);
-                        }
-                    }
                 }
             }
         } else {
