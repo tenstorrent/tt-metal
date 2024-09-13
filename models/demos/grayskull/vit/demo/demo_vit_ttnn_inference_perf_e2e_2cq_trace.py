@@ -14,7 +14,6 @@ import time
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models.experimental.functional_vit.tt import ttnn_optimized_sharded_vit
 from models.utility_functions import is_wormhole_b0, torch2tt_tensor, is_blackhole
 from models.experimental.vit.vit_helper_funcs import get_data_loader, get_batch
 
@@ -152,7 +151,7 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1700000}], indirect=True
+    "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1824800}], indirect=True
 )
 def test_vit(device, use_program_cache):
     torch.manual_seed(0)
@@ -160,7 +159,7 @@ def test_vit(device, use_program_cache):
     profiler.clear()
     disable_persistent_kernel_cache()
 
-    batch_size = 8
+    batch_size = 9
 
     first_key = f"first_iter_batchsize{batch_size}"
     second_key = f"second_iter_batchsize{batch_size}"
@@ -178,10 +177,6 @@ def test_vit(device, use_program_cache):
 
     run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measurement_iterations)
 
-    ## ??
-    # enable_persistent_kernel_cache()
-
-    #####
     #####
     first_iter_time = profiler.get(f"compile") + profiler.get(f"cache")
 

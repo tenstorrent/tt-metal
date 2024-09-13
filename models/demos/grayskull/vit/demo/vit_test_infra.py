@@ -109,11 +109,11 @@ class VitTestInfra:
             {
                 ttnn.CoreRange(
                     ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(7, 0),
+                    ttnn.CoreCoord(int(batch_size - 1), 0),
                 ),
             }
         )
-        n_cores = 8
+        n_cores = batch_size
         shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
         input_mem_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec

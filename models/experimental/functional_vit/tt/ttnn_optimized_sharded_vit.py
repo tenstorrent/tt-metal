@@ -10,14 +10,11 @@ from ttnn.model_preprocessing import (
 )
 
 import ttnn
-
 from ttnn.dot_access import DotAccessDict
-
-core_grid = ttnn.CoreGrid(y=8, x=12)
 
 
 def update_model_config(config, batch_size):
-    core_grid = ttnn.CoreGrid(y=8, x=12)
+    core_grid = ttnn.CoreGrid(y=batch_size, x=12)
     seqL_t = int(224 / 32)  # 7
     dim_t = int(768 / 32)  # 24
     dim_t__x = int(dim_t / core_grid.x)  # 2
@@ -25,8 +22,6 @@ def update_model_config(config, batch_size):
     head_seqL_t = int(head_num * seqL_t / core_grid.x)  # 7
     head_size_t__x = int(dim_t / head_num)  # 2
     class__x = int(1152 / 32 / core_grid.x)  # 3
-
-    print(seqL_t, dim_t__x, head_seqL_t, head_size_t__x, class__x)
 
     # sharding configs
     program_configs = {
@@ -149,7 +144,7 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
         bias=parameters.projection.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=8, x=12),
+        core_grid=config.core_grid,
     )
 
     patch_embedding_output = ttnn.to_layout(patch_embedding_output, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -401,7 +396,11 @@ def vit_encoder(
     encoder_input = ttnn.to_memory_config(
         embeddings,
         memory_config=ttnn.create_sharded_memory_config(
-            [8, 224, 768],  # embeddings.shape, # hardcoded because a bug where it still sees the 197 not 224
+            [
+                config.core_grid.y,
+                224,
+                768,
+            ],  # embeddings.shape, # hardcoded because a bug where it still sees the 197 not 224
             core_grid=config.core_grid,
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
