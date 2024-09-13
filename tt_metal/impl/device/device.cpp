@@ -2823,6 +2823,25 @@ void Device::initialize_synchronous_sw_cmd_queue() {
     }
 }
 
+// Controlled by env var TT_METAL_ARC_DEBUG_BUFFER_SIZE=<size_bytes>
+// Allocates a buffer for debugging purposes
+void Device::allocate_dram_debug_buffer() {
+    uint32_t arc_debug_buffer_size = llrt::OptionsG.get_arc_debug_buffer_size();
+    if (arc_debug_buffer_size) {
+        tt::tt_metal::InterleavedBufferConfig dram_config{
+            .device = this,
+            .size = arc_debug_buffer_size,
+            .page_size =  arc_debug_buffer_size,
+            .buffer_type = tt::tt_metal::BufferType::DRAM
+            };
+
+        dram_debug_buffer_ = tt_metal::CreateBuffer(dram_config);
+        log_info(tt::LogMetal, "ARC_DEBUG_BUFFER allocated at address: {} of size: {}", dram_debug_buffer_->address(), dram_debug_buffer_->size());
+    } else {
+        log_debug(tt::LogMetal, "Did not allocate allocate_dram_debug_buffer");
+    }
+}
+
 bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap, bool minimal) {
     ZoneScoped;
     log_info(tt::LogMetal, "Initializing device {}. Program cache is {}enabled", this->id_, this->program_cache.is_enabled() ? "": "NOT ");
@@ -2843,6 +2862,7 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
 
     // Mark initialized before compiling and sending dispatch kernels to device because compilation expects device to be initialized
     this->work_executor.initialize();
+
     this->initialized_ = true;
 
     return true;

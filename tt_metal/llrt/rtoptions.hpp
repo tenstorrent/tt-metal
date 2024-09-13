@@ -125,6 +125,8 @@ class RunTimeOptions {
 
     tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
 
+    uint32_t arc_debug_buffer_size = 0;
+
    public:
     RunTimeOptions();
 
@@ -279,6 +281,9 @@ class RunTimeOptions {
     inline void set_dispatch_data_collection_enabled(bool enable) { enable_dispatch_data_collection = enable; }
 
     inline tt_metal::DispatchCoreType get_dispatch_core_type() { return dispatch_core_type; }
+
+    inline uint32_t get_arc_debug_buffer_size() { return arc_debug_buffer_size; }
+    inline void set_arc_debug_buffer_size(uint32_t size) { arc_debug_buffer_size = size; }
 
    private:
     // Helper functions to parse feature-specific environment vaiables.

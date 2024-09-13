@@ -120,6 +120,11 @@ RunTimeOptions::RunTimeOptions() {
     if (getenv("TT_METAL_SKIP_LOADING_FW")) {
         this->skip_loading_fw = true;
     }
+
+    const char *arc_debug_enabled_str = std::getenv("TT_METAL_ARC_DEBUG_BUFFER_SIZE");
+    if (arc_debug_enabled_str != nullptr) {
+        sscanf(arc_debug_enabled_str, "%u", &arc_debug_buffer_size);
+    }
 }
 
 const std::string &RunTimeOptions::get_root_dir() {
