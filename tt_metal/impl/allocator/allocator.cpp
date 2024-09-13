@@ -120,14 +120,16 @@ uint64_t BankManager::allocate_buffer(
         is_sharded = true;
         TT_FATAL(
             num_shards.value() <= num_compute_banks,
-            fmt::format("Expected number of shards {} to be less than or equal to total number of L1 banks {} in compute cores", num_shards.value(), num_compute_banks));
+            "Expected number of shards {} to be less than or equal to total number of L1 banks {} in compute cores",
+            num_shards.value(),
+            num_compute_banks);
         num_banks = num_shards.value();
     }
     DeviceAddr size_per_bank = tt::tt_metal::detail::SizeBytesPerBank(size, page_size, num_banks, this->alignment_bytes_);
     DeviceAddr address_limit = 0;
     if (!is_sharded and this->buffer_type_ == BufferType::L1) {
         address_limit = this->interleaved_address_limit_;
-        TT_FATAL(address_limit > 0);
+        TT_FATAL(address_limit > 0, "Address limit {} needs to be larger than zero.", address_limit);
     }
     TT_ASSERT(bool(this->allocator_), "Allocator not initialized!");
     auto address = this->allocator_->allocate(size_per_bank, bottom_up, address_limit);

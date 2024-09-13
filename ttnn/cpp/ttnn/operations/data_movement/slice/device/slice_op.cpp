@@ -72,14 +72,14 @@ void SliceDeviceOperation::validate_with_output_tensors(
     const auto &input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.get_layout() == Layout::TILE || input_tensor_a.get_layout() == Layout::ROW_MAJOR);
-    TT_FATAL(input_tensor_a.get_legacy_shape().rank() == this->slice_start.rank() && this->slice_start.rank() == this->slice_end.rank());
+    TT_FATAL(input_tensor_a.get_layout() == Layout::TILE || input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Error");
+    TT_FATAL(input_tensor_a.get_legacy_shape().rank() == this->slice_start.rank() && this->slice_start.rank() == this->slice_end.rank(), "Error");
     for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
-        TT_FATAL(this->slice_start[i] < input_tensor_a.get_legacy_shape()[i]);
-        TT_FATAL(this->slice_end[i] < input_tensor_a.get_legacy_shape()[i]);
+        TT_FATAL(this->slice_start[i] < input_tensor_a.get_legacy_shape()[i], "Error");
+        TT_FATAL(this->slice_end[i] < input_tensor_a.get_legacy_shape()[i], "Error");
 
         // Check if start shape is <= end shape
-        TT_FATAL(this->slice_start[i] <= this->slice_end[i]);
+        TT_FATAL(this->slice_start[i] <= this->slice_end[i], "Error");
     }
 
     auto output_tensor_shape = this->compute_output_shapes(input_tensors)[0];
@@ -89,7 +89,7 @@ void SliceDeviceOperation::validate_with_output_tensors(
         TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Strided slice is only supported for BFLOAT16");
     }
     if (input_tensor_a.get_layout() == Layout::TILE) {
-        TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
+        TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
         TT_FATAL(
             (output_tensor_shape[-2] % TILE_HEIGHT == 0) && (this->slice_start[-2] % TILE_HEIGHT == 0),
             "Can only unpad tilized tensor with full tiles");
@@ -99,11 +99,11 @@ void SliceDeviceOperation::validate_with_output_tensors(
     } else if (input_tensor_a.get_layout() == Layout::ROW_MAJOR) {
         TT_FATAL(
             (output_tensor_shape[-1] * input_tensor_a.element_size() % sizeof(uint32_t) == 0),
-            fmt::format("An unpadding slice operations for a RowMajor layout on the output tensor requires the last dimension to be on a 32 bit boundary. For example, the final dimension needs to be divisible by 2 for bfloat16. The resulting tensor shape is {}, which is not 4B aligned as the last dimension is {}",
-                        output_tensor_shape[-1], input_tensor_a.element_size()));
+            "An unpadding slice operations for a RowMajor layout on the output tensor requires the last dimension to be on a 32 bit boundary. For example, the final dimension needs to be divisible by 2 for bfloat16. The resulting tensor shape is {}, which is not 4B aligned as the last dimension is {}",
+                        output_tensor_shape[-1], input_tensor_a.element_size());
         if (this->step.has_value()) {
             for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
-                TT_FATAL(this->step.value()[i] > 0, fmt::format("Step({}) = {} should be positive", i, this->step.value()[i]));
+                TT_FATAL(this->step.value()[i] > 0, "Step({}) = {} should be positive", i, this->step.value()[i]);
             }
         }
         else {

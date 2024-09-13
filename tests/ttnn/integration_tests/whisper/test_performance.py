@@ -17,8 +17,8 @@ import ttnn
 
 def get_expected_times(functional_whisper):
     return {
-        ttnn_functional_whisper: (11.7, 4.16),
-        ttnn_optimized_functional_whisper: (1.3, 1.35),
+        ttnn_functional_whisper: (11, 4.16),
+        ttnn_optimized_functional_whisper: (1.2, 1.35),
     }[functional_whisper]
 
 

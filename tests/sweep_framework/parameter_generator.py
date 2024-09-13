@@ -87,7 +87,7 @@ def export_suite_vectors(module_name, suite_name, vectors):
         vector = dict()
         for elem in vectors[i].keys():
             vector[elem] = serialize(vectors[i][elem], warnings)
-        input_hash = hashlib.sha224(str(vectors[i]).encode("utf-8")).hexdigest()
+        input_hash = hashlib.sha224(str(vector).encode("utf-8")).hexdigest()
         new_vector_hashes.add(input_hash)
         vector["timestamp"] = current_time
         vector["input_hash"] = input_hash

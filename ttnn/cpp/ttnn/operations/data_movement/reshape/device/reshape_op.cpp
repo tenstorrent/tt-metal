@@ -17,7 +17,7 @@ void ReshapeDeviceOperation::validate(const std::vector<Tensor> &input_tensors) 
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to reshape need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16);
+    TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Error");
 
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE || input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Only tile and row major reshape supported!");
 
@@ -28,15 +28,15 @@ void ReshapeDeviceOperation::validate(const std::vector<Tensor> &input_tensors) 
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Reshape does not currently support sharding");
 
     if (input_tensor_a.get_layout() == Layout::TILE) {
-        TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
-        TT_FATAL(output_shape[2] % TILE_HEIGHT == 0 && output_shape[3] % TILE_WIDTH == 0 && "Expected a multiple of 32 for H, W (or -1 evaluating to such) for reshape!");
+        TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
+        TT_FATAL(output_shape[2] % TILE_HEIGHT == 0 && output_shape[3] % TILE_WIDTH == 0, "Expected a multiple of 32 for H, W (or -1 evaluating to such) for reshape!");
     } else if (input_tensor_a.get_layout() == Layout::ROW_MAJOR) {
         uint32_t ROW_MAJOR_WIDTH = 8;
         TT_FATAL(input_tensor_a.get_legacy_shape()[3] % ROW_MAJOR_WIDTH == 0 && output_shape[3] % ROW_MAJOR_WIDTH == 0, "Operand/target width must be a multiple of 8");
         uint32_t num_old_sticks = input_tensor_a.get_legacy_shape()[0] * input_tensor_a.get_legacy_shape()[1] * input_tensor_a.get_legacy_shape()[2];
         uint32_t num_new_sticks = output_shape[0] * output_shape[1] * output_shape[2];
     } else {
-        TT_FATAL(false, "Unsupported layout for reshape");
+        TT_THROW("Unsupported layout for reshape");
     }
 }
 

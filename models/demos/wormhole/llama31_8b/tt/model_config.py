@@ -6,6 +6,9 @@ import os
 import ttnn
 from pathlib import Path
 from loguru import logger
+import torch
+import json
+from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 
 
 class TtModelArgs:
@@ -61,25 +64,28 @@ class TtModelArgs:
         "OUTPUT_MM",
     )
 
-    def __init__(self, device, instruct=False):
-        # Assert if all folders and files exist
-        assert os.path.exists(
-            self.DEFAULT_CKPT_DIR
-        ), f"Checkpoint directory {self.DEFAULT_CKPT_DIR} does not exist, please use export LLAMA_CKPT_DIR=..."
-        assert os.path.isfile(
-            self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
-        ), f"Tokenizer file {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'} does not exist, please use export LLAMA_TOKENIZER_PATH=..."
-        assert os.path.exists(
-            self.DEFAULT_CACHE_PATH
-        ), f"Cache directory {self.DEFAULT_CACHE_PATH} does not exist, please use export LLAMA_CACHE_PATH=..."
-        # Check if weights exist in the specified folder. If not warn the user to run the download and untar script.
-        assert os.path.isfile(
-            self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
-        ), f"weights consolidated.00.pth file does not exist. Please use the script `models/demos/wormhole/llama31_8b/scripts/get_weights.py` to download and untar the weights."
+    def __init__(self, device, instruct=False, dummy_weights=False):
+        if not dummy_weights:
+            # Assert if all folders and files exist
+            assert os.path.exists(
+                self.DEFAULT_CKPT_DIR
+            ), f"Checkpoint directory {self.DEFAULT_CKPT_DIR} does not exist, please use export LLAMA_CKPT_DIR=..."
+            assert os.path.isfile(
+                self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
+            ), f"Tokenizer file {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'} does not exist, please use export LLAMA_TOKENIZER_PATH=..."
+            assert os.path.exists(
+                self.DEFAULT_CACHE_PATH
+            ), f"Cache directory {self.DEFAULT_CACHE_PATH} does not exist, please use export LLAMA_CACHE_PATH=..."
+            # Check if weights exist in the specified folder. If not warn the user to run the download and untar script.
+            assert os.path.isfile(
+                self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
+            ), f"weights consolidated.00.pth file does not exist. Please use the script `models/demos/wormhole/llama31_8b/scripts/get_weights.py` to download and untar the weights."
 
         logger.info(f"Checkpoint directory: {self.DEFAULT_CKPT_DIR}")
         logger.info(f"Tokenizer file: {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'}")
         logger.info(f"Cache directory: {self.DEFAULT_CACHE_PATH}")
+        if dummy_weights:
+            logger.info(f"Note: Using dummy weights, weight caching disabled")
 
         # Some consumers like SentencePiece only accept str not Path for files
         self.model_base_path = Path(self.DEFAULT_CKPT_DIR)
@@ -90,9 +96,12 @@ class TtModelArgs:
         self.tokenizer_path = self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
 
         self.instruct = instruct
+        self.dummy_weights = dummy_weights
 
         # Enable workarounds by default until di/dt issues are fixed
         self.di_dt_workaround = os.getenv("DISABLE_DI_DT_WORKAROUND") != "1"
+        if not self.di_dt_workaround:
+            logger.info("Disabling di/dt workaround, re-enable if you see hangs")
 
         DRAM_MEMCFG = ttnn.DRAM_MEMORY_CONFIG
         L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
@@ -344,3 +353,20 @@ class TtModelArgs:
 
     def get_compute_kernel_config(self):
         return self.compute_kernel_config
+
+    def load_state_dict(self):
+        """Generate or load state_dict for n_layers of the model"""
+        if self.dummy_weights:
+            reference_model = Transformer(self)
+            state_dict = reference_model.state_dict()
+            state_dict = {k: torch.randn_like(v) for k, v in state_dict.items()}
+        else:
+            state_dict = torch.load(self.consolidated_weights_path, map_location=torch.device("cpu"))
+
+        keys_dict = list(state_dict.keys())[:]
+        remv = [f"layers.{i}." for i in list(range(self.n_layers, 32))]
+        for k in keys_dict:
+            if any([r in k for r in remv]):
+                state_dict.pop(k)
+
+        return state_dict

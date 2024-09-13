@@ -66,7 +66,7 @@ std::string kernel_attributes_str(std::shared_ptr<Kernel> kernel) {
     if (std::holds_alternative<DataMovementConfig>(config)) {
         attr_str += "NOC: " + std::to_string(std::get<DataMovementConfig>(config).noc) + " ";
     } else {
-        TT_ASSERT(std::holds_alternative<ComputeConfig>(config), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(config),__FILE__, __LINE__));
+        TT_ASSERT(std::holds_alternative<ComputeConfig>(config), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(config));
         auto compute_config = std::get<ComputeConfig>(config);
         std::stringstream math_fidel_str;
         math_fidel_str << compute_config.math_fidelity;

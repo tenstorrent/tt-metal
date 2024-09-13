@@ -25,23 +25,22 @@ void EmbeddingBackward::validate(const std::vector<Tensor> &input_tensors) const
         index_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0,
         "Embedding backwards is only implemented for Wormhole!");
 
-    TT_FATAL(index_tensor.get_layout() == Layout::ROW_MAJOR);
+    TT_FATAL(index_tensor.get_layout() == Layout::ROW_MAJOR, "Error");
     TT_FATAL(
         index_tensor.get_dtype() == DataType::UINT32 or index_tensor.get_dtype() == DataType::BFLOAT16,
         "Index tensor must be UINT32 or BFLOAT16");
 
     TT_FATAL(
         index_tensor_shape[1] == 1 && index_tensor_shape[2] == 1,
-        fmt::format(
-            "Only dim 0 && 3 for the index tensor can be non 1, but found {} && {}.",
-            index_tensor_shape[1],
-            index_tensor_shape[2]));
+        "Only dim 0 && 3 for the index tensor can be non 1, but found {} && {}.",
+        index_tensor_shape[1],
+        index_tensor_shape[2]);
 
     TT_FATAL(
         index_tensor_shape[-1] % TILE_WIDTH == 0,
         "Number of columns in the index tensor must be divisible by tile width");
 
-    TT_FATAL(grad_tensor.get_layout() == Layout::TILE);
+    TT_FATAL(grad_tensor.get_layout() == Layout::TILE, "Error");
     TT_FATAL(
         grad_tensor.get_dtype() == DataType::BFLOAT16 or grad_tensor.get_dtype() == DataType::BFLOAT8_B,
         "Output gradient tensor must be BFLOAT16 or BFLOAT8_B");
@@ -56,10 +55,9 @@ void EmbeddingBackward::validate(const std::vector<Tensor> &input_tensors) const
 
     TT_FATAL(
         grad_tensor_shape[0] == 1 && grad_tensor_shape[1] == 1,
-        fmt::format(
-            "First two dimensions for the gradient tensor must be 1, but found {} && {}.",
-            grad_tensor_shape[0],
-            grad_tensor_shape[1]));
+        "First two dimensions for the gradient tensor must be 1, but found {} && {}.",
+        grad_tensor_shape[0],
+        grad_tensor_shape[1]);
 
     TT_FATAL(
         grad_tensor_shape[-1] % TILE_WIDTH == 0,

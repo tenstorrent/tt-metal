@@ -101,7 +101,7 @@ int main(int argc, char **argv) {
         // for convenience
         if (Nt % cb_n != 0) {
             log_error(LogTest, "activations({} tiles) should be divided cb buffer ({} tiles)", Nt, cb_n);
-            TT_FATAL(false);
+            TT_FATAL(false, "Error");
         }
 
         tt::DataFormat data_format = tt::DataFormat::Float16_b;
@@ -349,7 +349,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

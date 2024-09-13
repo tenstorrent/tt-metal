@@ -26,7 +26,7 @@ using std::vector;
 
 namespace {
 const char* get_reader_name(bool multibank, BcastDim::Enum bcast_dim) {
-    TT_FATAL(multibank && "Only multibank is supported correctly.");
+    TT_FATAL(multibank && "Only multibank is supported correctly.", "Error");
     if (bcast_dim == BcastDim::H) {
         return multibank ?
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bcast_h_8bank.cpp" :
@@ -40,7 +40,7 @@ const char* get_reader_name(bool multibank, BcastDim::Enum bcast_dim) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bcast_hw_8bank.cpp" :
             "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp";
     }
-    TT_FATAL(false && "Unexpected bcast_dim!");
+    TT_THROW("Unexpected bcast_dim!");
     return "";
 }
 
@@ -49,7 +49,7 @@ const char* get_compute_name(BcastDim::Enum bcast_dim) {
         case BcastDim::H:  return "tests/tt_metal/tt_metal/test_kernels/compute/bcast_h.cpp";
         case BcastDim::W:  return "tests/tt_metal/tt_metal/test_kernels/compute/bcast_w.cpp";
         case BcastDim::HW: return "tests/tt_metal/tt_metal/test_kernels/compute/bcast_hw.cpp";
-        default:           TT_FATAL(false && "Unexpected bcast_dim!");
+        default:           TT_THROW("Unexpected bcast_dim!");
     }
     return "";
 }
@@ -101,8 +101,8 @@ int main(int argc, char **argv) {
         vector<uint32_t> shape = {2, 4, 2*TILE_HEIGHT, 3*TILE_WIDTH};
         uint32_t W = shape[3], H = shape[2], NC = shape[1]*shape[0], N = shape[0], C = shape[1];
         uint32_t HW = H*W;
-        TT_FATAL(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
-        TT_FATAL(H > 0 && W > 0 && NC > 0);
+        TT_FATAL(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0, "Error");
+        TT_FATAL(H > 0 && W > 0 && NC > 0, "Error");
         uint32_t Wt = W/TILE_WIDTH;
         uint32_t Ht = H/TILE_HEIGHT;
         uint32_t num_tensor_tiles = NC*H*W / (32*32);
@@ -164,7 +164,7 @@ int main(int argc, char **argv) {
             // convert the reference broadcast tensor to tiled format
             tiled_bcast_values = convert_layout<uint16_t>(
                 ref_bcast_values, ref_bcast_shape, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES);
-            TT_FATAL(tiled_bcast_values[0] == bcast_1value16);
+            TT_FATAL(tiled_bcast_values[0] == bcast_1value16, "Error");
             // restore ref values and shape to 1
             ref_bcast_shape[3] = 1;
             ref_bcast_shape[4] = 1;
@@ -173,7 +173,7 @@ int main(int argc, char **argv) {
             // At least that's the behavior i've seen from a single tile bcast-H
             // So this is why here we create a W-sized vector
             // Same for the if branch for BCAST_W below
-            TT_FATAL(W%32 == 0);
+            TT_FATAL(W%32 == 0, "Error");
             // pad values and shape with extra 32 values because the reader kernel expects it
             // generate broadcast values along the W axis with one extra tile (needed by the kernel I believe)
             // TODO(AP): need to figure out why the extra tile in broadcast inputs is expected by the kernel
@@ -346,7 +346,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

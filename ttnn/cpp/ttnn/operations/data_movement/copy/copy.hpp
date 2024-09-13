@@ -40,7 +40,8 @@ struct AssignOperation {
         uint8_t queue_id,
         const Tensor& input,
         const MemoryConfig& output_mem_config,
-        std::optional<const DataType> output_dtype = std::nullopt);
+        std::optional<const DataType> output_dtype = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
 
     static ttnn::Tensor invoke(
         const Tensor& input,

@@ -61,7 +61,7 @@ inline std::vector<uint32_t> gold_standard_flatten(std::vector<uint32_t> src_vec
         start_dram_addr_offset_for_tensor_row += num_tile_cols * 16;
     }
 
-    TT_FATAL(expected_dst_vec.size() == (num_tile_rows * 32) * (num_tile_cols * 16) * 32);
+    TT_FATAL(expected_dst_vec.size() == (num_tile_rows * 32) * (num_tile_cols * 16) * 32, "Unexpected dst vec size {}.", expected_dst_vec.size());
     return expected_dst_vec;
 }
 
@@ -175,7 +175,7 @@ bool flatten(CommonFixture *fixture, tt_metal::Device *device, uint32_t num_tile
     //                      Validation & Teardown
     ////////////////////////////////////////////////////////////////////////////
 
-    TT_FATAL(golden.size() == result_vec.size());
+    TT_FATAL(golden.size() == result_vec.size(), "Size mismatch between golden {} and result vec {}.", golden.size(), result_vec.size());
     pass &= (golden == result_vec);
 
     if (not pass) {

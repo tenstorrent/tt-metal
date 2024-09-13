@@ -87,9 +87,9 @@ operation::ProgramWithOptionalOutputTensors moreh_groupnorm_backward_gamma_beta_
          num_channels_per_core_group_1,
          num_channels_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_channels);
 
-    log_debug(LogTest, fmt::format("num_cores_to_be_used: {}", num_cores_to_be_used).c_str());
-    log_debug(LogTest, fmt::format("num_channels_per_core_group_1: {}", num_channels_per_core_group_1).c_str());
-    log_debug(LogTest, fmt::format("num_channels_per_core_group_2: {}", num_channels_per_core_group_2).c_str());
+    log_debug(LogTest, "num_cores_to_be_used: {}", num_cores_to_be_used);
+    log_debug(LogTest, "num_channels_per_core_group_1: {}", num_channels_per_core_group_1);
+    log_debug(LogTest, "num_channels_per_core_group_2: {}", num_channels_per_core_group_2);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup

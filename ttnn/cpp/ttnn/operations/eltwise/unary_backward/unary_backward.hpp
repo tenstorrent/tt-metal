@@ -106,6 +106,20 @@ struct ExecuteUnaryBackwardOp {
     }
 };
 
+struct ExecuteUnaryBackwardRsqrt {
+    static std::vector<std::optional<Tensor>> invoke(
+        uint8_t queue_id,
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt);
+
+    static std::vector<std::optional<Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardOptionalFloatParamsWithDefault {
     static std::vector<Tensor> invoke(
@@ -251,17 +265,30 @@ struct ExecuteUnaryBackwardAbs {
 };
 
 
+struct ExecuteUnaryBackwardGelu{
+    static std::vector<std::optional<ttnn::Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        string parameter_a,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<std::optional<ttnn::Tensor>> invoke(
+        uint8_t queue_id,
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        string parameter_a,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt);
+
+};
+
+
 }  // operations::unary
 
 constexpr auto threshold_bw = ttnn::register_operation<
     "ttnn::threshold_bw",
     operations::unary_backward::ExecuteUnaryBackwardTwoFloat<
         operations::unary_backward::UnaryBackwardOpType::THRESHOLD_BW>>();
-
-constexpr auto assign_bw = ttnn::register_operation<
-    "ttnn::assign_bw",
-    operations::unary_backward::ExecuteUnaryBackwardWoFloat<
-        operations::unary_backward::UnaryBackwardOpType::ASSIGN_BW>>();
 
 constexpr auto multigammaln_bw = ttnn::register_operation<
     "ttnn::multigammaln_bw",
@@ -375,8 +402,7 @@ constexpr auto sigmoid_bw = ttnn::register_operation<
 
 constexpr auto rsqrt_bw = ttnn::register_operation<
     "ttnn::rsqrt_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::RSQRT_BW>>();
+    operations::unary_backward::ExecuteUnaryBackwardRsqrt>();
 
 constexpr auto neg_bw = ttnn::register_operation<
     "ttnn::neg_bw",
@@ -538,8 +564,7 @@ constexpr auto rdiv_bw = ttnn::register_operation<
 
 constexpr auto gelu_bw = ttnn::register_operation<
     "ttnn::gelu_bw",
-    operations::unary_backward::ExecuteUnaryBackwardStringDefault<
-        operations::unary_backward::UnaryBackwardOpType::GELU_BW>>();
+    operations::unary_backward::ExecuteUnaryBackwardGelu>();
 
 constexpr auto repeat_bw = ttnn::register_operation<
     "ttnn::repeat_bw",

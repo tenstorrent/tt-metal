@@ -76,7 +76,7 @@ uint32_t validate_generate_halo_kernel_config(
             if (pad_metadata[idx] != val) {
                 invalids++;
                 log_info(
-                    tt::LogTest, "Error at index = {}, Expected = {}, Calculated = {}", idx, val, pad_metadata[idx]);
+                    tt::LogTest, "Error at index = {}, Expected = {}, Calculated = {}", idx, val, bool(pad_metadata[idx]));
             }
         }
         return invalids;
@@ -155,7 +155,7 @@ uint32_t validate_generate_functions(
     if (ref_pad_metadata != pad_metadata) {
         for (auto i = 0; i < ref_pad_metadata.size(); i++) {
             if (ref_pad_metadata[i] != pad_metadata[i])
-                log_info(tt::LogTest, "Error at i = {}, Calculated = {}", i, ref_pad_metadata[i]);
+                log_info(tt::LogTest, "Error at i = {}, Calculated = {}", i, bool(ref_pad_metadata[i]));
         }
         log_error(
             tt::LogTest,
@@ -425,6 +425,6 @@ int main() {
         }
     }
     log_info(tt::LogTest, "Tests for Sliding window metadata calcations ends");
-    TT_FATAL(tt::tt_metal::CloseDevice(device));
+    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
     return 0;
 }

@@ -129,7 +129,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
             num_pages_per_core = num_pages_per_core_group_2;
         } else {
-            TT_FATAL(false, "Core not in specified core ranges");
+            TT_THROW("Core not in specified core ranges");
         }
 
         bool is_controller = (i == 0);
@@ -199,7 +199,7 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
     auto input_layout = input.get_layout();
     TT_FATAL(
         input_layout == output.get_layout() && input_dtype == output.get_dtype() &&
-        shard_shape == output.shard_spec().value().shape && input_shape == output.get_legacy_shape());
+        shard_shape == output.shard_spec().value().shape && input_shape == output.get_legacy_shape(), "Error");
     const uint32_t src_cb_sharded = tt::CB::c_in0;
     const uint32_t dst_cb_sharded = tt::CB::c_in1;
     uint32_t tile_size_bytes = tile_size(cb_data_format);

@@ -317,18 +317,21 @@ def run_conv_with_split(
     assert_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("stride", [1, 2])
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, pad_h, pad_w, act_block_w_div",
     (
+        (128, 128, 8, 8, 3, 3, 0, 0, 1),
         (128, 256, 8, 8, 3, 3, 1, 1, 1),
+        (576, 576, 8, 8, 3, 3, 0, 0, 1),
+        (960, 960, 4, 4, 3, 3, 0, 0, 1),
         (256, 2048, 8, 8, 3, 3, 1, 1, 8),
         (512, 2048, 16, 16, 3, 3, 1, 1, 4),
-        (768, 768, 8, 8, 3, 3, 1, 1, 1),
-        (768, 768, 16, 16, 3, 3, 1, 1, 1),
-        (1280, 1280, 16, 16, 3, 3, 1, 1, 1),
+        (768, 768, 16, 16, 3, 3, 0, 0, 1),
         (1280, 2560, 16, 16, 3, 3, 1, 1, 2),
+        (1280, 2560, 16, 16, 3, 3, 0, 0, 2),
     ),
 )
 @pytest.mark.parametrize(
@@ -360,12 +363,6 @@ def test_conv_ws(
     weights_dtype,
     activations_dtype,
 ):
-    if is_grayskull():
-        if input_channels >= 2048:
-            pytest.skip("Skipping on grayskull due to insufficient L1")
-        if input_channels >= 768 and input_height >= 10:
-            pytest.skip("Skipping on grayskull due to insufficient L1")
-
     stride_h = stride
     stride_w = stride
     batch_size = 2
@@ -457,13 +454,15 @@ def test_conv_ws(
 
     # torch_output_tensor is in row major layout and NHWC shape
     # NHWC to NCHW
+    # torch_output_tensor = torch_output_tensor[:, :, : batch_size * out_height * out_width, :]
     torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, output_channels)
-
+    logger.info(f"Output Shape : {torch_output_tensor.shape}")
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
     reader_patterns_cache.clear()
 
     pcc = 0.94
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
+    logger.info(f"{pcc_msg} Threshold : {pcc}")
     if not passing:
         logger.error("Fails with PCC ", pcc_msg)
     assert passing

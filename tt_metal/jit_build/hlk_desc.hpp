@@ -216,7 +216,7 @@ struct std::hash<tt::tt_hlk_desc>
         }
         else
         {
-            TT_ASSERT("Mismatching values, either hlk_args == nullptr and hlk_args_size == 0 or hlk_args != nullptr and hlk_args_size > 0!");
+            TT_THROW("Mismatching values, either hlk_args == nullptr and hlk_args_size == 0 or hlk_args != nullptr and hlk_args_size > 0!");
         }
 
         return hash_value;

@@ -16,18 +16,18 @@ void NLPConcatHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format");
-    TT_FATAL(input_tensor.get_layout() == Layout::TILE);
+    TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
     TT_FATAL(input_shape[0] == 1, "seqlen=1 for decode");
     TT_FATAL(input_shape[1] <= 32, "currently only support less than 32 users");
     TT_FATAL(input_shape[2] == 32, "currently only support 32 padded heads");
     TT_FATAL(input_shape[2] >= this->num_heads, "head_dim must be multiple of TILE_WIDTH");
 
     // input tensor shard spec
-    TT_FATAL(input_tensor.is_sharded());
-    TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+    TT_FATAL(input_tensor.is_sharded(), "Error");
+    TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
     auto shard_spec = input_tensor.shard_spec().value();
-    TT_FATAL(shard_spec.shape[1] == input_tensor.get_legacy_shape()[-1]);
-    TT_FATAL(shard_spec.shape[0] == input_tensor.get_legacy_shape()[-2]);
+    TT_FATAL(shard_spec.shape[1] == input_tensor.get_legacy_shape()[-1], "Error");
+    TT_FATAL(shard_spec.shape[0] == input_tensor.get_legacy_shape()[-2], "Error");
     auto shard_grid = shard_spec.grid.bounding_box().grid_size();
     auto num_cores = shard_grid.x * shard_grid.y;
     TT_FATAL(num_cores == input_shape[1], "num_cores must be equal to num users");

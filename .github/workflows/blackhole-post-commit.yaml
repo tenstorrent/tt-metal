@@ -64,8 +64,8 @@ jobs:
 #     needs: build-artifact-profiler
 #     uses: ./.github/workflows/run-profiler-regression.yaml
 #     secrets: inherit
-#   eager-package-main:
-#     uses: ./.github/workflows/eager-package-main.yaml
+#   build-and-test-wheels:
+#     uses: Check all-post-commit yaml for directions
 #     secrets: inherit
 #   build-docs:
 #     needs: build-artifact
