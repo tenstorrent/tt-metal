@@ -40,25 +40,25 @@ def run_eltwise_mul_tests(input_shape, dtype, dlayout, in_mem_config, output_mem
 
 test_sweep_args = [
     (
-        [(150, 72), (150, 72)],
+        [(160, 96), (160, 96)],
         [ttnn.bfloat16, ttnn.bfloat16],
-        [ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT],
         (ttnn.DRAM_MEMORY_CONFIG),
         (ttnn.DRAM_MEMORY_CONFIG),
         17799073,
     ),
     (
-        [(3, 201, 228), (3, 201, 228)],
+        [(3, 224, 256), (3, 224, 256)],
         [ttnn.bfloat16, ttnn.bfloat16],
-        [ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT],
         (ttnn.DRAM_MEMORY_CONFIG),
         (ttnn.DRAM_MEMORY_CONFIG),
         3121221,
     ),
     (
-        [(6, 6, 230, 138), (6, 6, 230, 138)],
+        [(6, 6, 256, 160), (6, 6, 256, 160)],
         [ttnn.bfloat16, ttnn.bfloat16],
-        [ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT],
         (ttnn.DRAM_MEMORY_CONFIG),
         (ttnn.DRAM_MEMORY_CONFIG),
         10286194,
