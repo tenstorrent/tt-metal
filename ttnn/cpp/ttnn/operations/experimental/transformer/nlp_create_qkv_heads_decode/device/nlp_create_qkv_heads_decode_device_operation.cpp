@@ -26,11 +26,14 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
     TT_FATAL(input_shape[2] == 32, "Unsupported input shape");  // 32 users
     TT_FATAL(input_shape[1] == 1, "Unsupported input shape");
     TT_FATAL(input_shape[0] == 1, "Unsupported input shape");
-    TT_FATAL(input_tensor.is_sharded(), "Input must be sharded");
-    TT_FATAL(input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_legacy_shape()[-1], "Error");
-    TT_FATAL(input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR, "Error");
-    // we either put everything in one shard or split it into minimum tile width accross as many cores as possible
-    TT_FATAL(input_tensor.shard_spec().value().shape[1] == (this->num_q_heads + this->num_kv_heads * 2) * this->head_dim || input_tensor.shard_spec().value().shape[1] == 32, "Error");
+    const auto QKV_memcfg = input_tensor.memory_config();
+    if (input_tensor.is_sharded()) {
+        TT_FATAL(QKV_memcfg.memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Error");
+        TT_FATAL(input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_legacy_shape()[-1], "Error");
+        TT_FATAL(input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR, "Error");
+        // we either put everything in one shard or split it into minimum tile width accross as many cores as possible
+        TT_FATAL(input_tensor.shard_spec().value().shape[1] == (this->num_q_heads + this->num_kv_heads * 2) * this->head_dim || input_tensor.shard_spec().value().shape[1] == 32, "Error");
+    }
     auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
 
     // output
