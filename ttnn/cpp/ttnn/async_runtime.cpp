@@ -56,7 +56,6 @@ DeviceBuffer allocate_buffer_on_device(
     Layout layout,
     const MemoryConfig& memory_config,
     const std::optional<ShardSpecBuffer>& shard_spec) {
-    std::cout << "buffer_size_bytes " << buffer_size_bytes << std::endl;
     if (memory_config.memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
         return allocate_interleaved_buffer_on_device(
             buffer_size_bytes, device, shape, data_type, layout, memory_config);
