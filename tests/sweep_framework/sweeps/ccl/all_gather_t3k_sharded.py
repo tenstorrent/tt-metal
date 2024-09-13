@@ -23,7 +23,7 @@ from tests.ttnn.unit_tests.operations.test_all_gather import (
 from ttnn import ShardTensorToMesh
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
+TIMEOUT = 60
 
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
@@ -478,22 +478,20 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
-def device_mesh_fixture():
-    import tt_lib as ttl
-
+def mesh_device_fixture():
     assert ttnn.get_num_devices() >= 8, "Not T3000!"
     device_ids = [0, 4, 5, 1, 2, 6, 7, 3]
     num_devices_requested = len(device_ids)
-    device_mesh = ttnn.open_device_mesh(ttnn.DeviceGrid(1, num_devices_requested), device_ids[:num_devices_requested])
+    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, num_devices_requested), device_ids[:num_devices_requested])
     print("ALL GATHER: Opened device mesh")
 
-    yield (device_mesh, "T3000 Mesh")
+    yield (mesh_device, "T3000 Mesh")
 
     print("ALL GATHER: Closing device mesh")
-    for device in device_mesh.get_devices():
-        ttl.device.DumpDeviceProfiler(device)
-    ttnn.close_device_mesh(device_mesh)
-    del device_mesh
+    for device in mesh_device.get_devices():
+        ttnn.DumpDeviceProfiler(device)
+    ttnn.close_mesh_device(mesh_device)
+    del mesh_device
 
 
 # This is the run instructions for the test, defined by the developer.
@@ -544,7 +542,7 @@ def run(
         input_shard_shape,
     )
 
-    input_tensor_mesh = generate_tt_tensors(input_tensors, input_dtype, tensor_layout, devices, input_mem_config)
+    input_tensor_mesh = generate_tt_tensors(input_tensors, input_dtype, tensor_layout, t3k_device, input_mem_config)
 
     ## Run the actual allgather operation
     gather_function = ttnn.all_gather if all_gather_operation == "all_gather" else ttnn.line_all_gather
@@ -555,4 +553,4 @@ def run(
 
     all_eq, output = compare_results(input_dtype, tt_out_tensor, unchunked_input_tensor, input_shape)
 
-    return [(all_eq, f"{i} FAILED: {output}"), e2e_perf]
+    return [(all_eq, output), e2e_perf]

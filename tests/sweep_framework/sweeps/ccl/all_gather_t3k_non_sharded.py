@@ -60,210 +60,210 @@ tile_input_shapes = generate_input_shapes(tile_batch_size, tile_Y, tile_X)
 row_input_shapes = generate_input_shapes(row_batch_size, row_Y, row_X)
 
 parameters = {
-    "all_gather_tile_non_sharded_single_bank_ring_bf16": {
+    "all_gather_tile_non_sharded_dram_ring_bf16": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
         "input_shape": tile_input_shapes,
         "dim": [0, 1, 2, 3],
         "tensor_layout": [ttnn.TILE_LAYOUT],
         "input_dtype": [ttnn.bfloat16],
-        "tensor_mem_layout": [
-            ttnn.TensorMemoryLayout.SINGLE_BANK,
-        ],
-        "all_gather_operation": ["all_gather"],
-        "num_iters": [1],
-    },
-    "all_gather_tile_non_sharded_single_bank_ring_bf8": {
-        "num_devices": [4, 8],
-        "num_links": [1, 2],
-        "input_shape": tile_input_shapes,
-        "dim": [0, 1, 2, 3],
-        "tensor_layout": [ttnn.TILE_LAYOUT],
-        "input_dtype": [ttnn.bfloat8_b],
-        "tensor_mem_layout": [
-            ttnn.TensorMemoryLayout.SINGLE_BANK,
-        ],
-        "all_gather_operation": ["all_gather"],
-        "num_iters": [1],
-    },
-    "all_gather_tile_non_sharded_single_bank_line_bf16": {
-        "num_devices": [4, 8],
-        "num_links": [1, 2],
-        "input_shape": tile_input_shapes,
-        "dim": [0, 1, 2, 3],
-        "tensor_layout": [ttnn.TILE_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],
-        "tensor_mem_layout": [
-            ttnn.TensorMemoryLayout.SINGLE_BANK,
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ],
         "all_gather_operation": ["line_all_gather"],
         "num_iters": [1],
     },
-    "all_gather_tile_non_sharded_single_bank_line_bf8": {
+    "all_gather_tile_non_sharded_dram_ring_bf8": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
         "input_shape": tile_input_shapes,
         "dim": [0, 1, 2, 3],
         "tensor_layout": [ttnn.TILE_LAYOUT],
         "input_dtype": [ttnn.bfloat8_b],
-        "tensor_mem_layout": [
-            ttnn.TensorMemoryLayout.SINGLE_BANK,
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ],
-        "all_gather_operation": ["line_all_gather"],
+        "all_gather_operation": ["all_gather"],
         "num_iters": [1],
     },
-    "all_gather_tile_non_sharded_interleaved_ring_bf16": {
+    "all_gather_tile_non_sharded_dram_line_bf16": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
         "input_shape": tile_input_shapes,
         "dim": [0, 1, 2, 3],
         "tensor_layout": [ttnn.TILE_LAYOUT],
         "input_dtype": [ttnn.bfloat16],
-        "tensor_mem_layout": [
-            ttnn.TensorMemoryLayout.INTERLEAVED,
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ],
-        "all_gather_operation": ["all_gather"],
+        "all_gather_operation": ["line_all_gather"],
         "num_iters": [1],
     },
-    "all_gather_tile_non_sharded_interleaved_ring_bf8": {
+    "all_gather_tile_non_sharded_dram_line_bf8": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
         "input_shape": tile_input_shapes,
         "dim": [0, 1, 2, 3],
         "tensor_layout": [ttnn.TILE_LAYOUT],
         "input_dtype": [ttnn.bfloat8_b],
-        "tensor_mem_layout": [
-            ttnn.TensorMemoryLayout.INTERLEAVED,
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ],
-        "all_gather_operation": ["all_gather"],
+        "all_gather_operation": ["line_all_gather"],
         "num_iters": [1],
     },
-    "all_gather_tile_non_sharded_interleaved_line_bf16": {
+    "all_gather_tile_non_sharded_l1_ring_bf16": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
         "input_shape": tile_input_shapes,
         "dim": [0, 1, 2, 3],
         "tensor_layout": [ttnn.TILE_LAYOUT],
         "input_dtype": [ttnn.bfloat16],
-        "tensor_mem_layout": [
-            ttnn.TensorMemoryLayout.INTERLEAVED,
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
         ],
-        "all_gather_operation": ["line_all_gather"],
+        "all_gather_operation": ["all_gather"],
         "num_iters": [1],
     },
-    "all_gather_tile_non_sharded_interleaved_line_bf8": {
+    "all_gather_tile_non_sharded_l1_ring_bf8": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
         "input_shape": tile_input_shapes,
         "dim": [0, 1, 2, 3],
         "tensor_layout": [ttnn.TILE_LAYOUT],
         "input_dtype": [ttnn.bfloat8_b],
-        "tensor_mem_layout": [
-            ttnn.TensorMemoryLayout.INTERLEAVED,
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        ],
+        "all_gather_operation": ["all_gather"],
+        "num_iters": [1],
+    },
+    "all_gather_tile_non_sharded_l1_line_bf16": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": tile_input_shapes,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.TILE_LAYOUT],
+        "input_dtype": [ttnn.bfloat16],
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
         ],
         "all_gather_operation": ["line_all_gather"],
         "num_iters": [1],
     },
-    "all_gather_row_non_sharded_single_bank_ring_bf16": {
+    "all_gather_tile_non_sharded_l1_line_bf8": {
+        "num_devices": [4, 8],
+        "num_links": [1, 2],
+        "input_shape": tile_input_shapes,
+        "dim": [0, 1, 2, 3],
+        "tensor_layout": [ttnn.TILE_LAYOUT],
+        "input_dtype": [ttnn.bfloat8_b],
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        ],
+        "all_gather_operation": ["line_all_gather"],
+        "num_iters": [1],
+    },
+    "all_gather_row_non_sharded_dram_ring_bf16": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
         "input_shape": row_input_shapes,
         "dim": [0, 1, 2, 3],
         "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
         "input_dtype": [ttnn.bfloat16],
-        "tensor_mem_layout": [
-            ttnn.TensorMemoryLayout.SINGLE_BANK,
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ],
         "all_gather_operation": ["all_gather"],
         "num_iters": [1],
     },
-    "all_gather_row_non_sharded_single_bank_ring_bf8": {
+    "all_gather_row_non_sharded_dram_ring_bf8": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
         "input_shape": row_input_shapes,
         "dim": [0, 1, 2, 3],
         "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
         "input_dtype": [ttnn.bfloat8_b],
-        "tensor_mem_layout": [
-            ttnn.TensorMemoryLayout.SINGLE_BANK,
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ],
         "all_gather_operation": ["all_gather"],
         "num_iters": [1],
     },
-    "all_gather_row_non_sharded_single_bank_line_bf16": {
+    "all_gather_row_non_sharded_dram_line_bf16": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
         "input_shape": row_input_shapes,
         "dim": [0, 1, 2, 3],
         "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
         "input_dtype": [ttnn.bfloat16],
-        "tensor_mem_layout": [
-            ttnn.TensorMemoryLayout.SINGLE_BANK,
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ],
         "all_gather_operation": ["line_all_gather"],
         "num_iters": [1],
     },
-    "all_gather_row_non_sharded_single_bank_line_bf8": {
+    "all_gather_row_non_sharded_dram_line_bf8": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
         "input_shape": row_input_shapes,
         "dim": [0, 1, 2, 3],
         "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
         "input_dtype": [ttnn.bfloat8_b],
-        "tensor_mem_layout": [
-            ttnn.TensorMemoryLayout.SINGLE_BANK,
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ],
         "all_gather_operation": ["line_all_gather"],
         "num_iters": [1],
     },
-    "all_gather_row_non_sharded_interleaved_ring_bf16": {
+    "all_gather_row_non_sharded_l1_ring_bf16": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
         "input_shape": row_input_shapes,
         "dim": [0, 1, 2, 3],
         "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
         "input_dtype": [ttnn.bfloat16],
-        "tensor_mem_layout": [
-            ttnn.TensorMemoryLayout.INTERLEAVED,
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
         ],
         "all_gather_operation": ["all_gather"],
         "num_iters": [1],
     },
-    "all_gather_row_non_sharded_interleaved_ring_bf8": {
+    "all_gather_row_non_sharded_l1_ring_bf8": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
         "input_shape": row_input_shapes,
         "dim": [0, 1, 2, 3],
         "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
         "input_dtype": [ttnn.bfloat8_b],
-        "tensor_mem_layout": [
-            ttnn.TensorMemoryLayout.INTERLEAVED,
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
         ],
         "all_gather_operation": ["all_gather"],
         "num_iters": [1],
     },
-    "all_gather_row_non_sharded_interleaved_line_bf16": {
+    "all_gather_row_non_sharded_l1_line_bf16": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
         "input_shape": row_input_shapes,
         "dim": [0, 1, 2, 3],
         "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
         "input_dtype": [ttnn.bfloat16],
-        "tensor_mem_layout": [
-            ttnn.TensorMemoryLayout.INTERLEAVED,
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
         ],
         "all_gather_operation": ["line_all_gather"],
         "num_iters": [1],
     },
-    "all_gather_row_non_sharded_interleaved_line_bf8": {
+    "all_gather_row_non_sharded_l1_line_bf8": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
         "input_shape": row_input_shapes,
         "dim": [0, 1, 2, 3],
         "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
         "input_dtype": [ttnn.bfloat8_b],
-        "tensor_mem_layout": [
-            ttnn.TensorMemoryLayout.INTERLEAVED,
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
         ],
         "all_gather_operation": ["line_all_gather"],
         "num_iters": [1],
@@ -288,22 +288,20 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
-def device_mesh_fixture():
-    import tt_lib as ttl
-
+def mesh_device_fixture():
     assert ttnn.get_num_devices() >= 8, "Not T3000!"
     device_ids = [0, 4, 5, 1, 2, 6, 7, 3]
     num_devices_requested = len(device_ids)
-    device_mesh = ttnn.open_device_mesh(ttnn.DeviceGrid(1, num_devices_requested), device_ids[:num_devices_requested])
+    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, num_devices_requested), device_ids[:num_devices_requested])
     print("ALL GATHER: Opened device mesh")
 
-    yield (device_mesh, "T3000 Mesh")
+    yield (mesh_device, "T3000 Mesh")
 
     print("ALL GATHER: Closing device mesh")
-    for device in device_mesh.get_devices():
-        ttl.device.DumpDeviceProfiler(device)
-    ttnn.close_device_mesh(device_mesh)
-    del device_mesh
+    for device in mesh_device.get_devices():
+        ttnn.DumpDeviceProfiler(device)
+    ttnn.close_mesh_device(mesh_device)
+    del mesh_device
 
 
 # This is the run instructions for the test, defined by the developer.
@@ -318,7 +316,7 @@ def run(
     num_links,
     input_dtype,
     tensor_layout,
-    tensor_mem_layout,
+    mem_config,
     # num_cores,
     num_iters,
     all_gather_operation,
