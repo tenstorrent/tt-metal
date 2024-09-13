@@ -50,7 +50,9 @@ jobs:
       ARCH_NAME: ${{ inputs.arch }}
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
-    runs-on: ${{ inputs.runner-label }}
+    runs-on: 
+      - ${{ inputs.runner-label }}
+      - "in-service"
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Ensure weka mount is active
