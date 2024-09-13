@@ -415,8 +415,10 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     const std::optional<const Tensor> b,
     const std::optional<const Tensor> gamma,
     const std::optional<const Tensor> beta,
+    const std::optional<const Tensor> stats,
     Tensor& output,
     LayerNormType norm_type,
+    DistributedLayerNormStage distributed_norm_stage,
     float eps,
     CoreCoord compute_grid_size,
     uint32_t subblock_wt,
@@ -425,6 +427,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     DeviceComputeKernelConfig compute_kernel_config
 ) {
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
+    bool is_pre_all_gather = distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER;
+    bool is_post_all_gather = distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
@@ -550,6 +554,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     }
     uint32_t num_rows_per_all_to_all_worker_last = block_ht - (block_ht / num_rows_per_all_to_all_worker) * num_rows_per_all_to_all_worker;
     uint32_t in0_block_tiles = block_wt * block_ht;
+    // pre_all_gather_stats_block_tiles
+    uint32_t pre_all_gather_stats_block_tiles = rms_norm ? 1 : 2;
+
     uint32_t in0_CB_tiles = in0_block_tiles;
     uint32_t in0_CB_size = in0_CB_tiles * in_single_tile_size;
     // block size for in1 (tensor b)
@@ -566,14 +573,21 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t x_CB_size = in0_block_tiles * single_tile_size;
     uint32_t xmm_CB_size = in0_block_tiles * single_tile_size;
     uint32_t ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
+    if (is_pre_all_gather){
+        ex_partial_CB_size = ex_partial_CB_size * pre_all_gather_stats_block_tiles;
+    }
     uint32_t ex_CB_size = ex_partial_CB_size;
     uint32_t ex_global_CB_size = ex_partial_CB_size;
     uint32_t ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
     uint32_t xmm2_CB_size = in0_block_tiles * single_tile_size / block_ht;
     uint32_t ex2pe_CB_size = num_rows_per_all_to_all_worker * single_tile_size;
     // output buffer size
-    uint32_t out_CB_size = in0_block_tiles * out_single_tile_size;
-
+    uint32_t out_CB_size;
+    if(is_pre_all_gather) {
+        out_CB_size = pre_all_gather_stats_block_tiles * out_single_tile_size;
+    } else {
+        out_CB_size = in0_block_tiles * out_single_tile_size;
+    }
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -604,6 +618,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     // change tt::CB external size
     if (use_two_stage_reduce) {
         ex_external_CB_size = (num_blocks_first_stage + num_blocks_second_stage - 1) * single_tile_size;
+    }
+    if (is_pre_all_gather) {
+        ex_external_CB_size = ex_external_CB_size * pre_all_gather_stats_block_tiles;
     }
     uint32_t num_none_all_to_all_workers = num_blocks - num_cores_all_to_all;
     if (num_rows_per_all_to_all_worker_last == 0)
@@ -833,9 +850,20 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
 
     // reader kernel
+    std::string sender_reader_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln.cpp";
+    std::string reciever_reader_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln.cpp";
+
+    if (is_pre_all_gather) {
+        sender_reader_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp";
+        reciever_reader_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp";
+    } else if(is_post_all_gather) {
+        sender_reader_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_post_allgather.cpp";
+        reciever_reader_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp";
+    }
+
     auto reader_mcast_sender_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln.cpp",
+        sender_reader_kernel_file,
         sender_cores,
         tt::tt_metal::DataMovementConfig{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = reader_noc, .compile_args = reader_mcast_sender_compile_time_args, .defines = reader_mcast_sender_defines}
     );
@@ -844,7 +872,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     if (use_mcast) {
         reader_mcast_receiver_kernels_id_all_to_all = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln.cpp",
+            reciever_reader_kernel_file,
             all_to_all_workers_except_sender,
             tt::tt_metal::DataMovementConfig{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = reader_noc, .compile_args = reader_mcast_receiver_all_to_all_compile_time_args, .defines = reader_mcast_receiver_defines}
         );
@@ -852,7 +880,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     if (num_none_all_to_all_workers > 0) {
         reader_mcast_receiver_kernels_id = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln.cpp",
+            reciever_reader_kernel_file,
             not_all_to_all_workers,
             tt::tt_metal::DataMovementConfig{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = reader_noc, .compile_args = reader_mcast_receiver_compile_time_args, .defines = reader_mcast_receiver_defines}
         );
@@ -922,7 +950,13 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
     // writer kernel
     bool use_row_major_kernel = (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) or (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR);
-    std::string writer_kernel = use_row_major_kernel ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/writer_unary_sharded_ln_rm_gb.cpp" : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/writer_unary_sharded_ln.cpp";
+    std::string writer_kernel;
+    if (is_pre_all_gather) {
+        writer_kernel = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/writer_unary_sharded_ln_pre_all_gather.cpp";
+    }
+    else{
+        writer_kernel = use_row_major_kernel ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/writer_unary_sharded_ln_rm_gb.cpp" : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/writer_unary_sharded_ln.cpp";
+    }
     auto writer_mcast_sender_kernels_id = CreateKernel(
         program,
         writer_kernel,
@@ -976,17 +1010,25 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         num_blocks_second_stage
     };
     // compute kernel
+    std::string compute_kernel_file;
+    if (is_pre_all_gather) {
+        compute_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_pre_allgather.cpp";
+    } else if (is_post_all_gather) {
+        compute_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_post_allgather.cpp";
+    } else {
+        compute_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp";
+    }
     KernelHandle compute_kernels_id = -1;
     auto compute_kernels_id_all_to_all = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp",
+        compute_kernel_file,
         all_to_all_cores,
         tt::tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = all_to_all_except_top_compute_compile_time_args, .defines = compute_defines}
     );
     if (num_none_all_to_all_workers > 0) {
         compute_kernels_id = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp",
+            compute_kernel_file,
             not_all_to_all_workers,
             tt::tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = not_all_to_all_compute_compile_time_args, .defines = compute_defines}
         );
