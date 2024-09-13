@@ -756,7 +756,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     log_trace(tt::LogOp, "num_edm_channels: {}", num_edm_channels);
     auto edm_termination_mode = ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED;
 
-    constexpr std::size_t num_buffers_per_channel = 1; // enable double buffering later
+    constexpr std::size_t num_buffers_per_channel = 2; // enable double buffering later
     auto const& edm_builder = create_erisc_datamover_builder(
         num_edm_channels, op_config.get_page_size(), num_buffers_per_channel, buffer_sharing_mode, edm_termination_mode);
     TT_ASSERT(num_edm_channels > 0);
