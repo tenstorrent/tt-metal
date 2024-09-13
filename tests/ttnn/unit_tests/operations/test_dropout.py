@@ -7,9 +7,10 @@ import torch
 import pytest
 import ttnn
 import numpy as np
-from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import skip_for_grayskull
 
 
+@skip_for_grayskull()
 def test_dopout(device):
     t = torch.ones(
         (
