@@ -238,7 +238,8 @@ EltwiseOpTypes EltwiseOpConstraintsFactory::GetEltwiseOpType(
             if (memory_config_o.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                 return EltwiseOpTypes::NotSupported;
             }
-            // Check if we need this.
+            // TODO: Check if we need this. This will have the consequence that building the constraint framework will
+            // require a TT card in the system.
             /*uint32_t num_blocks = Volume(input_shape_a) / input_shape_a[-1] / tt::constants::TILE_HEIGHT;
             auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
             uint32_t num_cores = core_grid.x * core_grid.y;
