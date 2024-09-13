@@ -226,7 +226,6 @@ void kernel_main() {
     uint64_t data_words_sent = 0;
     uint64_t iter = 0;
     uint64_t start_timestamp = get_timestamp();
-    uint32_t progress_timestamp = start_timestamp & 0xFFFFFFFF;
     uint32_t switch_counter = 0;
     while (!all_outputs_finished) {
         iter++;
@@ -237,8 +236,7 @@ void kernel_main() {
                 bool full_packet_sent;
                 uint32_t words_sent =
                     output_queues[i].forward_data_from_input(0, full_packet_sent, input_queues[i].get_end_of_cmd());
-
-                progress_timestamp = get_timestamp_32b();
+                data_words_sent += words_sent;
                 if (words_sent > 0) {
                     switch_counter = 0;
                     all_outputs_finished = false;
