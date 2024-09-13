@@ -86,15 +86,15 @@ uint32_t increment_arg_idx(uint32_t& arg_idx, uint32_t num_args=1) {
 
 // Used to signal an operation that it can start processing data, resulting in overlapping
 struct OpSignaler {
-    uint32_t num_workers_to_sync;
-    uint32_t* workers_noc_coords; // Worker NOC coordinates [x1, y1, x2, y2...], first one is for master
-    uint32_t worker_sync_sem_addr;
+    uint32_t num_workers_to_sync = 0;
+    uint32_t* workers_noc_coords = nullptr; // Worker NOC coordinates [x1, y1, x2, y2...], first one is for master
+    uint32_t worker_sync_sem_addr = 0;
 
-    uint32_t num_fused_op_cores_to_signal;
-    uint32_t* signal_op_cores_noc_coords;
-    uint32_t signal_op_sem_addr;
-    bool mcast_signal_op_cores;
-    uint32_t curr_worker_is_master;
+    uint32_t num_fused_op_cores_to_signal = 0;
+    uint32_t* signal_op_cores_noc_coords = nullptr;
+    uint32_t signal_op_sem_addr = 0;
+    bool mcast_signal_op_cores = true;
+    uint32_t curr_worker_is_master = 0;
 
     bool initialized = false;
 
@@ -180,25 +180,25 @@ FORCE_INLINE void advance_start_page_idx(
 
 struct MatmulOpReceiver {
     static constexpr uint32_t num_directions = 2; // ASSUMPTION: Always 2 directions
-    uint32_t num_tensor_slices;
+    uint32_t num_tensor_slices = 0;
 
-    bool wait_for_op_signal;
-    uint32_t num_transfers;
-    uint32_t ring_size;
-    uint32_t tensor_slice_shape_width; // In tiles
-    uint32_t output_page_offset;
-    uint32_t last_output_page_offset;
+    bool wait_for_op_signal = 0;
+    uint32_t num_transfers = 0;
+    uint32_t ring_size = 0;
+    uint32_t tensor_slice_shape_width = 0; // In tiles
+    uint32_t output_page_offset = 0;
+    uint32_t last_output_page_offset = 0;
 
-    uint32_t num_blocks;
-    uint32_t num_blocks_per_slice;
+    uint32_t num_blocks = 0;
+    uint32_t num_blocks_per_slice = 0;
 
     // Used to track internal state
-    std::array<uint32_t, num_directions> ring_idxs;
-    std::array<uint32_t, num_directions> start_page_idxs;
-    std::array<bool, num_directions> is_clockwise_dirs;
-    std::array<volatile tt_l1_ptr uint32_t*, num_directions> signal_op_semaphore_addr_ptrs;
-    uint32_t curr_dir;
-    uint32_t curr_transfer_idx;
+    std::array<uint32_t, num_directions> ring_idxs = {};
+    std::array<uint32_t, num_directions> start_page_idxs = {};
+    std::array<bool, num_directions> is_clockwise_dirs = {};
+    std::array<volatile tt_l1_ptr uint32_t*, num_directions> signal_op_semaphore_addr_ptrs = {};
+    uint32_t curr_dir = 0;
+    uint32_t curr_transfer_idx = 0;
 
 
     bool initialized = false;

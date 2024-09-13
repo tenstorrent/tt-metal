@@ -29,14 +29,14 @@ enum class FusedOpSignalerMode {
 };
 
 struct AllGatherFusedOpSignaler {
-    uint32_t num_fused_op_cores_to_signal;
-    std::vector<CoreCoord> fused_op_receiver_cores_noc;
-    std::vector<uint32_t> fused_op_receiver_signal_semaphores;
+    uint32_t num_fused_op_cores_to_signal = 0;
+    std::vector<CoreCoord> fused_op_receiver_cores_noc = {};
+    std::vector<uint32_t> fused_op_receiver_signal_semaphores = {};
     FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI;
 
     /* All Gather specific */
-    std::vector<CoreCoord> all_gather_worker_cores_noc;
-    uint32_t all_gather_worker_sync_semaphore;
+    std::vector<CoreCoord> all_gather_worker_cores_noc = {};
+    uint32_t all_gather_worker_sync_semaphore = 0;
 
     bool initialized_fused_op = false;
     bool initialized_all_gather = false;
@@ -69,21 +69,21 @@ struct AllGatherFusedOpSignaler {
 
 // Used to propagate semaphore information from matmul to all_gather in all_gather_matmul op
 struct MatmulFusedOpSignaler {
-    uint32_t num_fused_op_cores_to_signal;
-    std::vector<CoreCoord> fused_op_receiver_cores_noc;
-    std::vector<uint32_t> fused_op_receiver_signal_semaphores; // [dir0, dir1]
+    uint32_t num_fused_op_cores_to_signal = 0;
+    std::vector<CoreCoord> fused_op_receiver_cores_noc = {};
+    std::vector<uint32_t> fused_op_receiver_signal_semaphores = {}; // [dir0, dir1]
     FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI;
 
     /* All Gather specs */
-    uint32_t num_transfers;
-    uint32_t ring_size;
-    uint32_t start_ring_index;
-    uint32_t tensor_slice_shape_width;
-    uint32_t output_page_offset;
-    uint32_t last_output_page_offset;
-    bool is_clockwise_dir;
+    uint32_t num_transfers = 0;
+    uint32_t ring_size = 0;
+    uint32_t start_ring_index = 0;
+    uint32_t tensor_slice_shape_width = 0;
+    uint32_t output_page_offset = 0;
+    uint32_t last_output_page_offset = 0;
+    bool is_clockwise_dir = true;
 
-    uint32_t weight_output_page_offset;
+    uint32_t weight_output_page_offset = 0;
 
     bool initialized_all_gather = false;
     bool initialized_fused_op = false;
