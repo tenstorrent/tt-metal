@@ -306,8 +306,8 @@ def test_moreh_matmul_1d(input_shape, device):
     logger.debug(f"Output pcc={output_pcc}")
 
     assert passing
-    
-    
+
+
 @pytest.mark.parametrize(
     "params",
     (
@@ -381,3 +381,76 @@ def test_moreh_matmul_backward(params, requires_grad, device):
     else:
         assert tt_other_grad is None
 
+
+@pytest.mark.parametrize(
+    "input_shape",
+    (
+        [1, 1, 1, 10],  # test not mutiple of 32 case
+        [1, 1, 1, 32],  # test single tile
+        [1, 1, 1, 352],  # test multiple tiles
+        [1, 1, 1, 323],  # test multiple tiles, not a multiple of 32
+    ),
+)
+@pytest.mark.parametrize(
+    "requires_grad",
+    (
+        (True, False),
+        (False, True),
+        (True, True),
+    ),
+)
+def test_moreh_matmul_1d_backward(input_shape, requires_grad, device):
+    torch.manual_seed(3072)
+    require_input_grad, require_other_grad = requires_grad
+    output_shape = [1, 1, 1, 1]
+    # get tensors
+    (
+        tt_input,
+        tt_other,
+        _,
+        tt_output_grad,
+        tt_input_grad,
+        tt_other_grad,
+        torch_input,
+        torch_other,
+        torch_output_grad,
+    ) = get_tensors(input_shape, input_shape, output_shape, require_input_grad, require_other_grad, True, device)
+
+    # torch matmul
+    torch_out = torch.matmul(
+        torch_input.requires_grad_(require_input_grad), torch_other.requires_grad_(require_other_grad)
+    )
+    torch_out.backward(torch_output_grad)
+
+    # tt matmul backward
+    ttnn.operations.moreh.matmul_backward(
+        tt_output_grad,
+        tt_input,
+        tt_other,
+        are_required_outputs=(require_input_grad, require_other_grad),
+        input_a_grad=tt_input_grad,
+        input_b_grad=tt_other_grad,
+    )
+
+    # test for equivalance
+    rtol = atol = 0.1
+    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
+    if require_input_grad:
+        ttcpu_input_grad = tt_input_grad.cpu().to(cpu_layout).unpad_from_tile(input_shape).to_torch()
+
+        passing, output_pcc = comp_allclose_and_pcc(
+            torch_input.grad, ttcpu_input_grad.reshape(-1), pcc=0.999, rtol=rtol, atol=atol
+        )
+        logger.debug(f"input_grad passing={passing}")
+        logger.debug(f"input_grad pcc={output_pcc}")
+        assert passing
+
+    if require_other_grad:
+        ttcpu_other_grad = tt_other_grad.cpu().to(cpu_layout).unpad_from_tile(input_shape).to_torch()
+
+        passing, output_pcc = comp_allclose_and_pcc(
+            torch_other.grad, ttcpu_other_grad.reshape(-1), pcc=0.999, rtol=rtol, atol=atol
+        )
+        logger.debug(f"other_grad passing={passing}")
+        logger.debug(f"other_grad pcc={output_pcc}")
+        assert passing
