@@ -220,6 +220,32 @@ INSTANTIATE_TEST_SUITE_P(
 );
 
 INSTANTIATE_TEST_SUITE_P(
+    MlirInterfaceTestsBATCHED,                            // Prefix for the instantiated test suite
+    MatmulMultiCoreReuseMultiCastOpInterfaceTestFixture,  // Test suite name
+    ::testing::Combine(
+        ::testing::Values(OperandShapeTestParam{
+            .shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 4 * 32, 8 * 32}),
+            .memory_config = ttnn::L1_MEMORY_CONFIG,
+        }),
+
+        ::testing::Values(OperandShapeTestParam{
+            .shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 8 * 32, 4 * 32}),
+            .memory_config = ttnn::L1_MEMORY_CONFIG,
+        }),
+
+        ::testing::Values(ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
+            .compute_with_storage_grid_size = CoreCoord(4, 4),
+            .in0_block_w = 4,
+            .out_subblock_h = 3,
+            .out_subblock_w = 1,
+            .per_core_M = 3,
+            .per_core_N = 1,
+            .transpose_mcast = false,
+            .fused_activation = std::nullopt}))
+
+);
+
+INSTANTIATE_TEST_SUITE_P(
     MlirInterfaceTestsBLOCK_SHARDED,                      // Prefix for the instantiated test suite
     MatmulMultiCoreReuseMultiCastOpInterfaceTestFixture,  // Test suite name
     ::testing::Combine(
