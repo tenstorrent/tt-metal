@@ -21,12 +21,13 @@ struct MorehDotBackwardOperation {
         const Tensor &output_grad;
         const Tensor &input;
         const Tensor &other;
-        const std::optional<const Tensor> &input_grad;
-        const std::optional<const Tensor> &other_grad;
+
+        // (o2buzzle): May I present: thanhnguyen's mistake that costed me 3 hours.
+        const std::vector<std::optional<Tensor>> output_tensors;
     };
 
-    using shape_return_value_t = std::vector<ttnn::Shape>;
-    using tensor_return_value_t = std::vector<Tensor>;
+    using shape_return_value_t = std::vector<std::optional<Shape>>;
+    using tensor_return_value_t = std::vector<std::optional<Tensor>>;
 
     struct SingleCore {
         struct shared_variables_t {
@@ -52,7 +53,6 @@ struct MorehDotBackwardOperation {
     static program_factory_t select_program_factory(const operation_attributes_t &, const tensor_args_t &);
     static void validate_on_program_cache_miss(const operation_attributes_t &, const tensor_args_t &);
     static void validate_on_program_cache_hit(const operation_attributes_t &, const tensor_args_t &);
-    static void validate(const operation_attributes_t &, const tensor_args_t &);
     static shape_return_value_t compute_output_shapes(const operation_attributes_t &, const tensor_args_t &);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t &, const tensor_args_t &);
 

@@ -4,12 +4,24 @@
 
 #include "moreh_matmul_backward.hpp"
 
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_dot_op_backward/moreh_dot_backward.hpp"
 #include "ttnn/operations/moreh/moreh_matmul/device/moreh_matmul_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 
 namespace ttnn::operations::moreh::moreh_matmul_backward {
-/////////////////////////////////////////
+
+inline bool is_dot_backward(const Tensor& output_grad, const Tensor& input, const Tensor& other) {
+    // TODO: non-4d support for dot backward.
+    if (output_grad.get_legacy_shape().rank() != 4 || input.get_legacy_shape().rank() != 4 ||
+        other.get_legacy_shape().rank() != 4) {
+        return false;
+    }
+    return tt::operations::primary::is_scalar(output_grad) && tt::operations::primary::is_1d_tensor(input) &&
+           tt::operations::primary::is_1d_tensor(other) && tt::operations::primary::is_same_shape(input, other);
+}
+
 std::vector<std::optional<Tensor>> MorehMatmulBackward::invoke(
     const Tensor& output_grad,
     const Tensor& input,
@@ -19,6 +31,10 @@ std::vector<std::optional<Tensor>> MorehMatmulBackward::invoke(
     const std::optional<const Tensor>& other_grad,
     const std::optional<ttnn::MemoryConfig>& output_mem_config,
     const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    if (is_dot_backward(output_grad, input, other)) {
+        return ttnn::moreh_dot_backward(output_grad, input, other, input_grad, other_grad, output_mem_config);
+    }
+
     std::vector<std::optional<Tensor>> outputs(2);
     outputs.reserve(2);
 

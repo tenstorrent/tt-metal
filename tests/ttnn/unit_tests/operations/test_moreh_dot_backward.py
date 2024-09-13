@@ -117,8 +117,8 @@ def test_moreh_matmul_1d_backward(input_shape, requires_grad, device):
     torch_out.backward(torch_output_grad)
 
     # tt matmul backward
-    ttnn.experimental.operations.primary.moreh_matmul_backward(
-        tt_output_grad, tt_input, tt_other, (require_input_grad, require_other_grad), tt_input_grad, tt_other_grad
+    ttnn.operations.moreh.dot_backward(
+        tt_output_grad, tt_input, tt_other, input_grad=tt_input_grad, other_grad=tt_other_grad
     )
 
     # test for equivalance
