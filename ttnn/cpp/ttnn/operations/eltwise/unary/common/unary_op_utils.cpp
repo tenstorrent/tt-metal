@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "unary_op_utils.hpp"
+#include <optional>
 
 namespace ttnn::operations::unary::utils {
 
@@ -75,9 +76,9 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
     };
 }
 
-std::pair<std::string, std::string> get_op_init_and_func_parameterized(
+std::vector<std::string> get_op_init_and_func_parameterized(
     UnaryOpType op_type, const std::vector<float>& params, const std::string& idst) {
-    std::pair<std::string, std::string> op_init_and_name;
+    std::vector<std::string> op_init_and_name;
     TT_FATAL(is_parametrized_type(op_type) && "operator should support at least one parameter", "Error");
     float param0 = params[0];
     switch (op_type) {
@@ -235,8 +236,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             float scale = params[2];
             uint32_t uprob = static_cast<uint32_t>((double)INT_MAX * prob); // kernel requirement, please read it in the kernel comments
             op_init_and_name = {
-                fmt::format("dropout_tile_init({}u);", (uint32_t)param0),
-                fmt::format("dropout_tile({}, {}u, {}u);", idst, uprob, Converter::to_hex(scale))
+                "",
+                fmt::format("dropout_tile({}, {}u, {}u);", idst, uprob, Converter::to_hex(scale)),
+                //fmt::format("dropout_global_init({}u);", (uint32_t)param0) // temporary commented out because this call breaks caching
+                ""
             };
             break;
         }
@@ -245,8 +248,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     return op_init_and_name;
 }
 
-std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, std::string idst) {
-    std::pair<std::string, std::string> op_init_and_name;
+std::vector<string> get_op_init_and_func_default(UnaryOpType op_type, std::string idst) {
+    std::vector<std::string> op_init_and_name;
     switch (op_type) {
         case UnaryOpType::RECIP: op_init_and_name = {"recip_tile_init();", fmt::format("recip_tile({});", idst)}; break;
         case UnaryOpType::RELU: op_init_and_name = {"relu_tile_init();", fmt::format("relu_tile({});", idst)}; break;
@@ -333,9 +336,21 @@ std::map<string, string> get_defines_impl(
     const std::vector<float>& params,
     std::string idst,
     std::string init_def,
-    std::string func_def) {
-    std::pair<string, string> op_init_and_name = get_op_init_and_func(op_type, params, idst);
-    std::map<string, string> defines = {{init_def, op_init_and_name.first}, {func_def, op_init_and_name.second}};
+    std::string func_def,
+    std::string global_init_def) {
+
+    constexpr size_t k_init_index = 0;
+    constexpr size_t k_func_index = 1;
+    constexpr size_t k_global_init_index = 2;
+    std::vector<string> op_init_and_name = get_op_init_and_func(op_type, params, idst);
+    std::map<string, string> defines = {{init_def, op_init_and_name[k_init_index]},
+                                        {func_def, op_init_and_name[k_func_index]}};
+    std::string global_def = "";
+    if (op_init_and_name.size() > k_global_init_index) {
+        global_def = op_init_and_name[k_global_init_index];
+    }
+    defines[global_init_def] = global_def;
+
     update_macro_defines(op_type, defines);
     return defines;
 }
@@ -389,27 +404,31 @@ std::map<string, string> get_defines(
     UnaryOpType op_type, const std::optional<std::vector<float>>& params, const std::string& id, const std::string& idst) {
     std::string init_def = fmt::format("SFPU_OP_INIT_{}", id);
     std::string func_def = fmt::format("SFPU_OP_FUNC_{}", id);
+    std::string global_init_def = "SFPU_OP_FUNC_GLOBAL_INIT";
     return get_defines_impl(
-        op_type, params.has_value() ? params.value() : std::vector<float>{}, idst, init_def, func_def);
+        op_type, params.has_value() ? params.value() : std::vector<float>{}, idst, init_def, func_def, global_init_def);
 }
 
-std::pair<string, string> get_op_init_and_func(UnaryOpType op_type, const std::vector<float>& params, const std::string& idst) {
+std::vector<string> get_op_init_and_func(UnaryOpType op_type, const std::vector<float>& params, const std::string& idst) {
     return params.size() > 0 ? get_op_init_and_func_parameterized(op_type, params, idst)
                              : get_op_init_and_func_default(op_type, idst);
 }
 
 std::map<string, string> get_block_defines(
     const std::vector<UnaryWithParam>& op_chain, const std::string& block_id, const std::string& idst) {
-    std::vector<std::pair<string, string>> op_init_and_name;
     std::map<string, string> block_defines;
     std::string block_define = "";
+    std::string block_global_init_define = "";
     for (uint32_t i = 0; i < op_chain.size(); i++) {
         std::string init_def = fmt::format("SFPU_OP_CHAIN_{}_INIT_{}", block_id, i);
         std::string func_def = fmt::format("SFPU_OP_CHAIN_{}_FUNC_{}", block_id, i);
+        std::string global_init_def = fmt::format("SFPU_OP_CHAIN_{}_GLOBAL_INIT_{}", block_id, i);
         block_define += init_def + " " + func_def + " ";
-        block_defines.merge(get_defines_impl(op_chain[i].op_type, op_chain[i].params, idst, init_def, func_def));
+        block_global_init_define += global_init_def + " ";
+        block_defines.merge(get_defines_impl(op_chain[i].op_type, op_chain[i].params, idst, init_def, func_def, global_init_def));
     }
     block_defines[fmt::format("SFPU_OP_CHAIN_{}", block_id)] = block_define;
+    block_defines[fmt::format("SFPU_OP_CHAIN_{}_GLOBAL_INIT", block_id)] = block_global_init_define;
     return block_defines;
 }
 

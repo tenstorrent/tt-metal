@@ -14,6 +14,11 @@ void MAIN {
     uint32_t per_core_block_dim = get_compile_time_arg_val(1);
 
     init_sfpu(tt::CB::c_in0);
+
+    #ifdef SFPU_OP_CHAIN_0_GLOBAL_INIT
+        SFPU_OP_CHAIN_0_GLOBAL_INIT
+    #endif
+
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         cb_reserve_back(tt::CB::c_out0, per_core_block_dim);
         for(uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {

@@ -19,7 +19,7 @@ UnaryWithParam string_to_unary_with_param(const std::string& name);
 
 bool get_op_approx_mode(UnaryOpType op_type);
 
-std::pair<std::string, std::string> get_op_init_and_func(UnaryOpType op_type, const std::vector<float>& params = {}, const std::string& idst = "0");
+std::vector<std::string> get_op_init_and_func(UnaryOpType op_type, const std::vector<float>& params = {}, const std::string& idst = "0");
 
 std::map<std::string, std::string> get_defines(
     UnaryOpType op_type, const std::optional<std::vector<float>>& params = std::nullopt, const std::string& id = "0", const std::string& idst = "0");
