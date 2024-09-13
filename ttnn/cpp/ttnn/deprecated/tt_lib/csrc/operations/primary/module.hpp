@@ -20,8 +20,7 @@
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_linear_backward/moreh_linear_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_mean/moreh_mean_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_mean_backward/moreh_mean_backward_op.hpp"
+
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss_backward/moreh_nll_loss_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss_unreduced/moreh_nll_loss_unreduced_op.hpp"
@@ -483,31 +482,6 @@ void py_module(py::module& m_primary) {
         Performs a moreh_groupnorm_backward operation.
     )doc");
 
-    m_primary.def(
-        "moreh_mean",
-        &moreh_mean,
-        py::arg("input").noconvert(),
-        py::kw_only(),
-        py::arg("dim").noconvert() = std::nullopt,
-        py::arg("keepdim").noconvert() = false,
-        py::arg("divisor").noconvert() = std::nullopt,
-        py::arg("output").noconvert() = std::nullopt,
-        py::arg("memory_config").noconvert() = std::nullopt,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs mean operation. Returns an output tensor.");
-
-    m_primary.def(
-        "moreh_mean_backward",
-        &moreh_mean_backward,
-        py::arg("output_grad").noconvert(),
-        py::kw_only(),
-        py::arg("dim").noconvert() = std::nullopt,
-        py::arg("keepdim").noconvert() = false,
-        py::arg("input_grad_shape").noconvert() = std::nullopt,
-        py::arg("input_grad").noconvert() = std::nullopt,
-        py::arg("memory_config").noconvert() = std::nullopt,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs mean backward operation. Returns an input_grad tensor.");
 
 }
 

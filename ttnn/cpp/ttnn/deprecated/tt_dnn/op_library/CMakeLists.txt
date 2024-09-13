@@ -39,12 +39,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum/moreh_sum.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum_backward/moreh_sum_backward_impl/moreh_sum_backward_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum_backward/moreh_sum_backward_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_mean/moreh_mean_h/moreh_mean_h.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_mean/moreh_mean_w/moreh_mean_w.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_mean/moreh_mean_nc/moreh_mean_nc.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_mean/moreh_mean_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_mean_backward/moreh_mean_backward.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_mean_backward/moreh_mean_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_bmm/moreh_bmm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_bmm_backward/moreh_bmm_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_linear/moreh_linear_op.cpp

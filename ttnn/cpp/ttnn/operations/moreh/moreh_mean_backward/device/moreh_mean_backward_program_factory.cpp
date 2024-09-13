@@ -1,21 +1,16 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_mean_backward/moreh_mean_backward_op.hpp"
+#include <vector>
+
+#include "common/bfloat16.hpp"
+#include "moreh_mean_backward_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
-
-namespace tt {
-using namespace constants;
-namespace operations {
-
-namespace primary {
-
-namespace {
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/reduction/generic/device/common.hpp"
+#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
 void get_tensor_dim(std::vector<uint32_t> &dim, const Shape &shape) {
     const auto rank = shape.rank();
@@ -24,48 +19,49 @@ void get_tensor_dim(std::vector<uint32_t> &dim, const Shape &shape) {
 
         // last 2-dim
         if (idx == rank - 1 || idx == rank - 2) {
-            dim[i] = shape[idx] / TILE_HEIGHT;
+            dim[i] = shape[idx] / tt::constants::TILE_HEIGHT;
         } else {
             dim[i] = shape[idx];
         }
-    }
-
-    log_debug(LogOp, "rank {}", rank);
-    for (auto i = 0; i < rank; ++i) {
-        log_debug(LogOp, "dim[{}] = {}", i, dim[i]);
     }
 }
 
 Shape get_output_grad_shape(
     const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keepdim) {
     if (keepdim) {
-        return output_grad.get_legacy_shape();
+        return output_grad.get_shape().value;
     }
 
-    auto shape = input_grad.get_legacy_shape();
+    auto shape = input_grad.get_shape();
     auto rank = shape.rank();
-    auto padding = shape.padding();
+    auto padding = shape.value.padding();
     for (auto dim : dims) {
         TT_FATAL(dim < rank, "dim {} < rank {}", dim, rank);
         bool is_tile_dim = (dim == rank - 1 || dim == rank - 2);
         if (is_tile_dim) {
-            shape[dim] = TILE_HEIGHT;
+            shape.value[dim] = tt::constants::TILE_HEIGHT;
             padding[dim] = Padding::PadDimension{0, 31};
         } else {
-            shape[dim] = 1;
+            shape.value[dim] = 1;
         }
     }
 
-    return Shape(shape, padding);
+    return Shape(tt::tt_metal::Shape(shape.value, padding));
 }
-}  // namespace
 
-operation::ProgramWithCallbacks moreh_mean_backward_impl(
-    const Tensor &output_grad,
-    const Tensor &input_grad,
-    const std::vector<int64_t> &dims,
-    const bool keepdim,
-    const ttnn::DeviceComputeKernelConfig &compute_kernel_config) {
+namespace ttnn::operations::moreh::moreh_mean_backward {
+
+MorehMeanBackwardOperation::MorehMeanBackwardFactory::cached_program_t
+MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
+    const operation_attributes_t &operation_attributes,
+    const tensor_args_t &tensor_args,
+    tensor_return_value_t &output_tensor) {
+    const auto &output_grad = tensor_args.output_grad;
+    const auto &input_grad = output_tensor;
+    auto keepdim = operation_attributes.keepdim;
+    auto dims = operation_attributes.dims;
+    auto compute_kernel_config =
+        init_device_compute_kernel_config(output_grad.device()->arch(), operation_attributes.compute_kernel_config);
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -76,20 +72,18 @@ operation::ProgramWithCallbacks moreh_mean_backward_impl(
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format = datatype_to_dataformat_converter(output_grad.get_dtype());
-    const auto single_tile_size = detail::TileSize(cb_data_format);
+    const auto single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
     const auto &input_grad_shape = input_grad.get_legacy_shape();
     const auto &input_grad_shape_wo_padding = input_grad_shape.without_padding();
     const uint32_t input_grad_rank = input_grad_shape.rank();
 
     std::vector<uint32_t> input_grad_dim(input_grad_rank, 1);
-    log_debug(LogOp, "input_grad");
     get_tensor_dim(input_grad_dim, input_grad_shape);
     const auto &output_grad_shape = get_output_grad_shape(output_grad, input_grad, dims, keepdim);
     const auto &output_grad_shape_wo_padding = output_grad_shape.without_padding();
 
     std::vector<uint32_t> output_grad_dim(input_grad_rank, 1);
-    log_debug(LogOp, "output_grad");
     get_tensor_dim(output_grad_dim, output_grad_shape);
 
     std::vector<uint32_t> need_bcast_dim(input_grad_rank, 0);
@@ -103,21 +97,9 @@ operation::ProgramWithCallbacks moreh_mean_backward_impl(
             need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
         }
     }
-    const auto num_input_grad_tiles = input_grad.volume() / TILE_HW;
+    const auto num_input_grad_tiles = input_grad.volume() / tt::constants::TILE_HW;
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
         get_compute_kernel_config_args(output_grad.device()->arch(), compute_kernel_config);
-
-    for (auto i = 0; i < input_grad_rank; ++i) {
-        log_debug(LogOp, "need_bcast_dim [{}] = {}", i, need_bcast_dim[i]);
-    }
-    log_debug(LogOp, "num_input_grad_tiles {}", num_input_grad_tiles);
-    log_debug(
-        LogOp,
-        "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
-        math_fidelity,
-        math_approx_mode,
-        fp32_dest_acc_en,
-        packer_l1_acc);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
@@ -132,34 +114,38 @@ operation::ProgramWithCallbacks moreh_mean_backward_impl(
          core_group_1,
          core_group_2,
          num_cols_per_core_group_1,
-         num_cols_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_input_grad_tiles);
+         num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_input_grad_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    CreateCircularBuffer(
+    tt::operations::primary::CreateCircularBuffer(
         program,
         all_cores,
         cb_data_format,
         {
-            {CB::c_in0, 2},  // input
-            {CB::c_in1, 1},  // zero
-            {CB::c_in2, 1},  // scalar
-            {CB::c_intermed0, 1},
-            {CB::c_out0, 2},  // output
+            {tt::CB::c_in0, 2},  // input
+            {tt::CB::c_in1, 1},  // zero
+            {tt::CB::c_in2, 1},  // scalar
+            {tt::CB::c_intermed0, 1},
+            {tt::CB::c_out0, 2},  // output
         });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(is_dram(output_grad)), input_grad_rank};
-    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(is_dram(input_grad))};
+    std::vector<uint32_t> reader_compile_time_args = {
+        static_cast<uint32_t>(tt::operations::primary::is_dram(output_grad)), input_grad_rank};
+    std::vector<uint32_t> writer_compile_time_args = {
+        static_cast<uint32_t>(tt::operations::primary::is_dram(input_grad))};
     const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean_backward/kernels/reader_moreh_mean_backward.cpp";
+        "ttnn/cpp/ttnn/operations/moreh/moreh_mean_backward/device/kernels/reader_moreh_mean_backward.cpp";
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean_backward/kernels/writer_moreh_mean_backward.cpp";
-    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
-    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+        "ttnn/cpp/ttnn/operations/moreh/moreh_mean_backward/device/kernels/writer_moreh_mean_backward.cpp";
+    const auto reader_kernel_id =
+        tt::operations::primary::CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto writer_kernel_id =
+        tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -170,17 +156,17 @@ operation::ProgramWithCallbacks moreh_mean_backward_impl(
     }
 
     const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean_backward/kernels/moreh_mean_backward.cpp";
+        "ttnn/cpp/ttnn/operations/moreh/moreh_mean_backward/device/kernels/moreh_mean_backward.cpp";
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1, need_bcast_dim[0], need_bcast_dim[1]};
     const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2, need_bcast_dim[0], need_bcast_dim[1]};
-    auto compute_kernel_ids = CreateComputeKernel(
+    auto compute_kernel_ids = tt::operations::primary::CreateComputeKernel(
         program,
         compute_kernel_file,
         {
             {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
             {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
         },
-        ComputeKernelConfig{
+        tt::operations::primary::ComputeKernelConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             // TODO(hyungsuk): change preserve_fp32_precision from false to fp32_dest_acc_en after fix #10337
@@ -225,15 +211,22 @@ operation::ProgramWithCallbacks moreh_mean_backward_impl(
 
         tile_offset += num_tiles_per_core;
     }
+    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores_to_be_used, num_cores_y}};
+}
 
-    auto override_runtime_arguments_callback = [reader_kernel_id, writer_kernel_id, num_cores_to_be_used, num_cores_y](
-                                                   const void *operation,
-                                                   const Program &program,
-                                                   const std::vector<Tensor> &input_tensors,
-                                                   const std::vector<std::optional<const Tensor>> &,
-                                                   const std::vector<Tensor> &output_tensors) {
-        const auto *output_grad_buffer = input_tensors.at(0).buffer();
-        const auto *input_grad_buffer = output_tensors.at(0).buffer();
+void MorehMeanBackwardOperation::MorehMeanBackwardFactory::override_runtime_arguments(
+    cached_program_t &cached_program,
+    const operation_attributes_t &operation_attributes,
+    const tensor_args_t &tensor_args,
+    tensor_return_value_t &output_tensor){
+        auto& program = cached_program.program;
+        auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
+        auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+        auto num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
+        auto num_cores_y = cached_program.shared_variables.num_cores_y;
+
+        const auto *output_grad_buffer = tensor_args.output_grad.buffer();
+        const auto *input_grad_buffer = output_tensor.buffer();
         for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
             {
@@ -246,11 +239,5 @@ operation::ProgramWithCallbacks moreh_mean_backward_impl(
                 runtime_args[0] = input_grad_buffer->address();
             }
         }
-    };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
-}
-
-}  // namespace primary
-}  // namespace operations
-}  // namespace tt
+    }
+}  // namespace ttnn::operations::moreh::moreh_mean_backward
