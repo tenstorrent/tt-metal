@@ -42,7 +42,7 @@ def load_inputs(user_input, batch):
     return in_prompt
 
 
-def preprocess_inputs(input_prompts, tokenizer, batch_size, dtype, embd, instruct, device):
+def preprocess_inputs(input_prompts, tokenizer, batch_size, dtype, instruct, device, embed_on_device=False):
     """
     Run tokenizer on inputs, and create embeddings for the first token of each input
     """
@@ -67,9 +67,12 @@ def preprocess_inputs(input_prompts, tokenizer, batch_size, dtype, embd, instruc
     seqlen = 1  # Generating one token per user at a time
     # Select the first token from the prompts for initial decoding
     pt_tokenized_inputs = torch.tensor(input_tokens)
-    emb_inputs = embd(pt_tokenized_inputs[:, 0]).view(batch_size, seqlen, -1)
+    if embed_on_device:
+        tt_out_tok = pt_tokenized_inputs[:, 0].view(1, batch_size)
+    else:
+        tt_out_tok = pt_tokenized_inputs[:, 0].view(batch_size, seqlen)
 
-    return emb_inputs, pt_tokenized_inputs, input_mask, None
+    return tt_out_tok, pt_tokenized_inputs, input_mask, None
 
 
 # Load the draft model
@@ -143,7 +146,8 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, GENERATION_LEN
     # This module requires the env paths above for CI runs
     from models.demos.wormhole.llama31_8b.tt.model_config import TtModelArgs
 
-    embed_on_device = False
+    embed_on_device = True
+    acceptance_criteria = "EXACT_MATCH"  # "PROBABILITY"
     dtype = ttnn.bfloat8_b
 
     # Load model args, weights, and tokenizer
@@ -176,8 +180,8 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, GENERATION_LEN
     users_decoding = True
 
     # Preprocess initial prompt inputs
-    tt_decode_input, pt_encoded_input, input_mask, rot_emb_matrix_list = preprocess_inputs(
-        input_prompts, tokenizer, batch_size, dtype, embd, instruct_mode, device
+    tt_out_tok, pt_encoded_input, input_mask, rot_emb_matrix_list = preprocess_inputs(
+        input_prompts, tokenizer, batch_size, dtype, instruct_mode, device, embed_on_device
     )
     # pre-compute the rotational embedding matrix and send to device
     current_rot_mat_torch, rot_matrix_torch = get_rotary_mat_for_speculation(
@@ -233,8 +237,20 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, GENERATION_LEN
     # compile run
     dummy_input = torch.zeros(1, 1, 32, model_args.dim)
     dummy_input = ttnn.from_torch(dummy_input, device=tt_model.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_out = tt_model(dummy_input, list(range(0, SPECULATION_LENGTH + 1)), rot_mat=current_rot_mat)
-    tt_out = ttnn.untilize(tt_out, use_multicore=False)
+    tt_dummy_out = tt_model(dummy_input, list(range(0, SPECULATION_LENGTH + 1)), rot_mat=current_rot_mat)
+    tt_dummy_out = ttnn.untilize(tt_dummy_out, use_multicore=False)
+    tt_dummy_out.deallocate()
+    if embed_on_device:
+        dummy_out_tok = torch.zeros(1, 32)
+        dummy_out_tok = ttnn.from_torch(
+            dummy_out_tok,
+            device=device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        tt_dummy_input = tt_embd(dummy_out_tok)
+        tt_dummy_input.deallocate()
 
     breakpoint()
 
@@ -251,22 +267,39 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, GENERATION_LEN
             curr_pos = generation_start_pos + iteration
 
             # Get the speculated tokens from draft model
-            speculated_tokens = draft_model(all_outputs, generation_length=SPECULATION_LENGTH, sampling=False)
+            speculated_tokens, _ = draft_model(all_outputs, generation_length=SPECULATION_LENGTH, sampling=False)
 
             # Construct model decode input based on speculated tokens
-            assert embed_on_device == False, "speculative_decode does not support embedding on device"
-            tt_decode_speculated_input = embd(torch.tensor(speculated_tokens)).view(SPECULATION_LENGTH, 1, -1)
-            tt_decode_input = torch.cat((tt_decode_input, tt_decode_speculated_input), dim=0)
-
             # Prepare inputs for decode mode (rotary embeddings, attention mask, padding)
-            # TODO Move the attn mask to device
-            decode_input, current_pos = prepare_inputs_ttnn(
-                tt_decode_input,
-                curr_pos,
-                model_args.dim,
-                model_args.sliding_window,
-                tt_model.device,
-            )
+            if embed_on_device:
+                # extend with the speculated tokens
+                speculated_tok_torch = torch.tensor(speculated_tokens).view(1, SPECULATION_LENGTH)
+                tt_out_tok = torch.cat((tt_out_tok, speculated_tok_torch), dim=1)
+
+                # Pad tt_out_tok to batch size of 32
+                padded_tt_out_tok = torch.zeros(1, 32, dtype=tt_out_tok.dtype, device=tt_out_tok.device)
+                padded_tt_out_tok[:, : tt_out_tok.shape[1]] = tt_out_tok
+                tt_out_tok = ttnn.from_torch(
+                    padded_tt_out_tok,
+                    device=device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+                tt_decode_input = tt_embd(tt_out_tok)
+                current_pos = curr_pos
+                decode_input = tt_decode_input
+            else:
+                tt_decode_input = embd(tt_out_tok)
+                tt_decode_speculated_input = embd(torch.tensor(speculated_tokens)).view(SPECULATION_LENGTH, 1, -1)
+                tt_decode_input = torch.cat((tt_decode_input, tt_decode_speculated_input), dim=0)
+                decode_input, current_pos = prepare_inputs_ttnn(
+                    tt_decode_input,
+                    curr_pos,
+                    model_args.dim,
+                    model_args.sliding_window,
+                    tt_model.device,
+                )
             current_pos = list(range(current_pos, current_pos + SPECULATION_LENGTH + 1))
 
             # Run ttnn llama model
@@ -302,9 +335,15 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, GENERATION_LEN
                     all_outputs.append(user_tok[0])
 
             else:
-                while tok_index < len(speculated_tokens) and int(tt_out_tok[tok_index]) == speculated_tokens[tok_index]:
-                    num_correct_speculations[tok_index] += 1
-                    tok_index += 1
+                if acceptance_criteria == "EXACT_MATCH":
+                    while (
+                        tok_index < len(speculated_tokens)
+                        and int(tt_out_tok[tok_index]) == speculated_tokens[tok_index]
+                    ):
+                        num_correct_speculations[tok_index] += 1
+                        tok_index += 1
+                elif acceptance_criteria == "PROBABILITY":
+                    raise NotImplementedError("PROBABILITY acceptance criteria not implemented yet")
 
                 # Save output token to print out later
                 user_tok = tt_out_tok.squeeze().tolist()
@@ -318,12 +357,6 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, GENERATION_LEN
 
             # take the next input as the last corrected speculated token
             tt_out_tok = tt_out_tok[tok_index : tok_index + 1]
-
-            if embed_on_device:
-                tt_out_tok = ttnn.from_torch(tt_out_tok, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-                tt_decode_input = tt_embd(tt_out_tok)
-            else:
-                tt_decode_input = embd(tt_out_tok)
 
             num_generated_tokens = tok_index + 1
 

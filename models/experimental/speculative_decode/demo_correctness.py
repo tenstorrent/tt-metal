@@ -200,7 +200,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, GENERATION_LEN
         logger.info(f"----------------Iteration {iteration}-----------------")
 
         # Get the speculated tokens from draft model
-        speculated_tokens = draft_model(all_outputs[0], generation_length=SPECULATION_LENGTH, sampling=False)
+        speculated_tokens, _ = draft_model(all_outputs[0], generation_length=SPECULATION_LENGTH, sampling=False)
         logger.info(f"Next Input + Speculated tokens: {all_outputs[0][-1:] + speculated_tokens}")
         logger.info(
             f"Next Input + Speculated tokens decoded: {tokenizer.decode(all_outputs[0][-1:] + speculated_tokens)}"

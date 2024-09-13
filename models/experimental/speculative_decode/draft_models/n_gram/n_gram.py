@@ -105,7 +105,7 @@ class NGramModel(object):
                     best_candidate = max(candidates.items(), key=lambda x: x[1])
                     return best_candidate
 
-        return (self.tokenizer.eos_id, 1)
+        return (self.tokenizer.eos_id, 0)
 
     def __call__(self, sent, generation_length=5, sampling=True):
         """Continue generate n tokens based on history.
@@ -117,6 +117,7 @@ class NGramModel(object):
 
         """
         sent = sent.copy()
+        probabilities = []
 
         if len(sent) < self.n - 1:
             sent = [self.tokenizer.bos_id] * (self.n - 1 - len(sent)) + sent
@@ -124,10 +125,11 @@ class NGramModel(object):
         for _ in range(generation_length):
             prev = () if self.n == 1 else tuple(sent[-(self.n - 1) :])
             blacklist = [self.tokenizer.eos_id] if len(sent) < generation_length else []
-            next_token, _ = self._best_candidate(prev, without=blacklist, sampling=sampling)
+            next_token, p = self._best_candidate(prev, without=blacklist, sampling=sampling)
             sent.append(next_token)
+            probabilities.append(p)
 
-        return sent[-generation_length:]
+        return sent[-generation_length:], probabilities
 
     def generate_sentences_demo(self, num, min_len=12, max_len=24, sampling=True):
         """Generate num random sentences using the language model.
