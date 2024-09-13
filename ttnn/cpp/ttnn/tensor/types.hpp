@@ -24,53 +24,6 @@ namespace tt_metal {
 
 static constexpr std::uint8_t VERSION_ID = 3;
 
-constexpr std::array<std::array<std::array<uint32_t, 2>, 2>, 3> TILE_FACE_HW_CHOICES = {{
-    {{ {32, 32}, {16, 16} }},
-    {{ {16, 32}, {16, 16} }},
-    {{ {32, 16}, {16, 16} }}
-}};
-
-struct Tile {
-    std::array<uint32_t, 2> tile_shape;
-    std::array<uint32_t, 2> face_shape;
-    uint32_t num_faces;
-    uint32_t tile_hw;
-    uint32_t face_hw;
-
-    Tile(const std::array<uint32_t, 2>& tile_shape) : tile_shape(tile_shape) {
-        auto it = std::find_if(TILE_FACE_HW_CHOICES.begin(), TILE_FACE_HW_CHOICES.end(),
-                           [this, &tile_shape](const auto& pair) {
-                               if (pair[0] == tile_shape) {
-                                   this->face_shape = pair[1];
-                                   return true;
-                               }
-                               return false;
-                           });
-        if (it == TILE_FACE_HW_CHOICES.end()) {
-            TT_THROW("Tile size is not valid for our hardware");
-        }
-
-        tile_hw = tile_shape[0] * tile_shape[1];
-        face_hw = face_shape[0] * face_shape[1];
-        num_faces = tile_hw / face_hw;
-    }
-
-    // Getter methods
-    const uint32_t get_num_faces() const { return num_faces; }
-    const uint32_t get_tile_hw() const { return tile_hw; }
-    const uint32_t get_face_hw() const { return face_hw; }
-    const std::array<uint32_t, 2> get_tile_shape() const { return tile_shape; }
-    const std::array<uint32_t, 2> get_face_shape() const { return face_shape; }
-
-    // operators
-    bool operator==(const Tile& other) const {
-        return tile_shape == other.tile_shape && face_shape == other.face_shape;
-    }
-
-    static constexpr auto attribute_names = std::forward_as_tuple("tile_shape", "face_shape", "num_faces");
-    const auto attribute_values() const { return std::forward_as_tuple(tile_shape, face_shape, num_faces); }
-};
-
 enum class Layout { ROW_MAJOR = 0, TILE = 1, INVALID = 2 };
 
 enum class DataType {

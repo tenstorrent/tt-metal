@@ -239,6 +239,8 @@ class Program {
 
     void set_cb_data_fmt( Device *device, const std::vector<CoreRange> & crs, JitBuildOptions& build_options) const;
 
+    void set_cb_tile_dims( Device *device, const std::vector<CoreRange> & crs, JitBuildOptions& build_options) const;
+
     void update_kernel_groups(uint32_t programmable_core_type_index);
 
     uint32_t& get_program_config_size(uint32_t programmable_core_type_index);

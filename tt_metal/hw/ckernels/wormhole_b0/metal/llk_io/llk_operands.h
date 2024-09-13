@@ -23,30 +23,30 @@ inline const uint32_t get_operand_dst_format(const std::uint32_t operand_id)
 
 inline const uint32_t get_operand_num_faces(const std::uint32_t operand_id)
 {
-   return 4;
+   return unpack_tile_num_faces[operand_id];
 }
 
 inline const uint32_t get_operand_partial_face(const std::uint32_t operand_id)
 {
-   return 0;
+   return unpack_partial_face[operand_id];
 }
 
 inline const uint32_t get_operand_face_r_dim(const std::uint32_t operand_id)
 {
-   return 16;
+   return unpack_tile_face_r_dim[operand_id];
 }
 
 inline const uint32_t get_operand_narrow_tile(const std::uint32_t operand_id)
 {
-   return 0;
+   return unpack_narrow_tile[operand_id];
 }
 
 inline const uint32_t get_operand_tile_r_dim(const std::uint32_t operand_id)
 {
-   return 32;
+   return unpack_tile_r_dim[operand_id];
 }
 
 inline const uint32_t get_operand_tile_c_dim(const std::uint32_t operand_id)
 {
-   return 32;
+   return unpack_tile_c_dim[operand_id];
 }

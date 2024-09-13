@@ -225,6 +225,8 @@ inline std::vector<T> convert_layout_row_major_to_tile(const tt::tt_metal::Legac
 
 template <typename T, template <typename> typename BufferType>
 inline std::vector<T> convert_layout_tile_to_row_major(const tt::tt_metal::LegacyShape& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
+    auto tile_shape = std::vector<uint32_t>{ tile.get_tile_shape()[0], tile.get_tile_shape()[1] };
+    auto face_shape = std::vector<uint32_t>{ tile.get_face_shape()[0], tile.get_face_shape()[1] };
     return convert_layout(
         data_to_convert, detail::to_vector(shape), TensorLayout::TILED32_4FACES, TensorLayout::LIN_ROW_MAJOR, tile_shape, face_shape);
 }

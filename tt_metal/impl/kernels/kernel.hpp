@@ -28,7 +28,7 @@ using Config = std::variant<DataMovementConfig, EthernetConfig, ComputeConfig>;
 
 class Kernel : public JitBuildSettings {
    public:
-    Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &compile_args, const std::map<std::string, std::string>&defines);
+    Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &compile_args, const std::map<std::string, std::string>&defines, const std::vector<std::array<uint32_t, 2>>& tile_shapes);
 
     virtual ~Kernel() {}
 
@@ -61,6 +61,8 @@ class Kernel : public JitBuildSettings {
     uint32_t get_common_runtime_args_count() const  { return this->common_runtime_args_count_; }
 
     std::map<std::string, std::string> defines() const { return defines_; }
+
+    std::vector<std::array<uint32_t, 2>> tile_shapes() const { return tile_shapes_; }
 
     virtual RISCV processor() const = 0;
     dispatch_core_processor_classes dispatch_class() { return this->dispatch_class_; }
@@ -114,6 +116,7 @@ class Kernel : public JitBuildSettings {
     CoreCoord core_with_max_runtime_args_;              // For validation
     std::map<std::string, std::string> defines_;        // preprocessor defines. this is to be able to generate generic instances.
     std::set<CoreCoord> logical_cores_;
+    std::vector<std::array<uint32_t, 2>> tile_shapes_;
 
     virtual uint8_t expected_num_binaries() const = 0;
 
@@ -122,7 +125,7 @@ class Kernel : public JitBuildSettings {
 
 class DataMovementKernel : public Kernel {
    public:
-    DataMovementKernel(const std::string &kernel_path, const CoreRangeSet &cr_set, const DataMovementConfig &config) : Kernel(kernel_path, cr_set, config.compile_args, config.defines), config_(config) { this->dispatch_class_ = (config.processor == DataMovementProcessor::RISCV_0) ? DISPATCH_CLASS_TENSIX_DM0 : DISPATCH_CLASS_TENSIX_DM1; }
+    DataMovementKernel(const std::string &kernel_path, const CoreRangeSet &cr_set, const DataMovementConfig &config) : Kernel(kernel_path, cr_set, config.compile_args, config.defines, config.tile_shapes), config_(config) { this->dispatch_class_ = (config.processor == DataMovementProcessor::RISCV_0) ? DISPATCH_CLASS_TENSIX_DM0 : DISPATCH_CLASS_TENSIX_DM1; }
 
     ~DataMovementKernel() {}
 
@@ -149,7 +152,7 @@ class DataMovementKernel : public Kernel {
 class EthernetKernel : public Kernel {
    public:
     EthernetKernel(const std::string &kernel_path, const CoreRangeSet &cr_set, const EthernetConfig &config) :
-        Kernel(kernel_path, cr_set, config.compile_args, config.defines), config_(config) { this->dispatch_class_ = DISPATCH_CLASS_ETH_DM0; }
+        Kernel(kernel_path, cr_set, config.compile_args, config.defines, config.tile_shapes), config_(config) { this->dispatch_class_ = DISPATCH_CLASS_ETH_DM0; }
 
     ~EthernetKernel() {}
 
@@ -175,7 +178,7 @@ class EthernetKernel : public Kernel {
 
 class ComputeKernel : public Kernel {
    public:
-    ComputeKernel(const std::string &kernel_path, const CoreRangeSet &cr_set, const ComputeConfig &config) : Kernel(kernel_path, cr_set, config.compile_args, config.defines), config_(config) { this->dispatch_class_ = DISPATCH_CLASS_TENSIX_COMPUTE; }
+    ComputeKernel(const std::string &kernel_path, const CoreRangeSet &cr_set, const ComputeConfig &config) : Kernel(kernel_path, cr_set, config.compile_args, config.defines, config.tile_shapes), config_(config) { this->dispatch_class_ = DISPATCH_CLASS_TENSIX_COMPUTE; }
 
     ~ComputeKernel() {}
 

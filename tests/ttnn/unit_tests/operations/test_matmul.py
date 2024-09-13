@@ -10,6 +10,128 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_grayskull, is_wormhole_b0, is_grayskull, is_blackhole
 
 
+def find_max_subblock(out_block_h, out_block_w):
+    max_product = 0
+    best_h = 1
+    best_w = 1
+
+    for h in range(1, out_block_h + 1):
+        if out_block_h % h == 0:  # h is a divisor of out_block_h
+            for w in range(1, out_block_w + 1):
+                if out_block_w % w == 0 and h * w <= 8:  # w is a divisor and product condition met
+                    if h * w > max_product:
+                        max_product = h * w
+                        best_h = h
+                        best_w = w
+    if out_block_w > best_w:
+        best_h = 1
+    return best_h, best_w, max_product
+
+
+@pytest.mark.parametrize("n", [1])
+@pytest.mark.parametrize("c", [2])
+@pytest.mark.parametrize("h", [71])
+@pytest.mark.parametrize("w", [35])
+@pytest.mark.parametrize("tile_h", [1, 2, 4, 8, 16, 32])
+@pytest.mark.parametrize("tile_w", [16, 32])
+def test_tiny_tiles(device, n, c, h, w, tile_h, tile_w):
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        tile=(tile_h, tile_w),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(input_tensor)
+    assert_with_pcc(torch_input_tensor, output_tensor, 1)
+
+
+@pytest.mark.parametrize("b", [8])
+@pytest.mark.parametrize("h", [4])
+@pytest.mark.parametrize("m", [256])
+@pytest.mark.parametrize("k", [256])
+@pytest.mark.parametrize("n", [256])
+@pytest.mark.parametrize("tile_h", [16, 32])
+@pytest.mark.parametrize("tile_w", [16, 32])
+@pytest.mark.parametrize("in0_sharded", [True, False])
+@pytest.mark.parametrize("in1_sharded", [True, False])
+@pytest.mark.parametrize("out_sharded", [True, False])
+def test_matmul_reuse_config_sharded_tiny_tile(
+    device, b, h, m, k, n, tile_h, tile_w, in0_sharded, in1_sharded, out_sharded
+):
+    torch.manual_seed(0)
+
+    grid_size = (b, h)
+
+    in0 = torch.ones([b, h, m, k]).bfloat16().float()
+    in1 = torch.randn([b, h, k, n]).bfloat16().float()
+
+    if in0_sharded:
+        in0_memory_config = ttnn.create_sharded_memory_config(
+            (b, h, m, k),
+            core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+    else:
+        in0_memory_config = ttnn.L1_MEMORY_CONFIG
+    in0_t = ttnn.from_torch(
+        in0,
+        tile=(tile_h, 32),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in0_memory_config,
+    )
+
+    if in1_sharded:
+        in1_memory_config = ttnn.create_sharded_memory_config(
+            (b, h, k, n),
+            core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+    else:
+        in1_memory_config = ttnn.L1_MEMORY_CONFIG
+    in1_t = ttnn.from_torch(
+        in1,
+        tile=(32, tile_w),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in1_memory_config,
+    )
+
+    out_block_h = m // tile_h
+    out_block_w = n // tile_w
+    out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
+
+    program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=k // 32,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=out_block_h,
+        per_core_N=out_block_w,
+    )
+    if out_sharded:
+        out_mem_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+        )
+    else:
+        out_mem_config = ttnn.L1_MEMORY_CONFIG
+    output_t = ttnn.matmul(in0_t, in1_t, program_config=program_config, memory_config=out_mem_config)
+    output_tensor = ttnn.to_torch(output_t)
+    pt_out = in0 @ in1
+
+    print(output_tensor)
+
+    assert_with_pcc(pt_out, output_tensor, 0.999)
+
+
 # fmt: off
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("m_size,k_size,n_size", [

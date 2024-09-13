@@ -61,10 +61,13 @@ operation::ProgramWithCallbacks create_program(
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                              : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
 
-    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
-    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
-    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
-    uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_data_format);
+    auto in0_tile = in0.get_tile();
+    auto in1_tile = in1.get_tile();
+    auto output_tile = output.get_tile();
+    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
+    uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
+    uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
     tt_metal::Buffer* in0_buffer = in0.buffer();
     tt_metal::Buffer* in1_buffer = in1.buffer();
@@ -176,13 +179,19 @@ operation::ProgramWithCallbacks create_program(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
         all_cores,
-        ReaderDataMovementConfig(reader_compile_time_args, mm_kernel_in0_reader_defines));
+        ReaderDataMovementConfig(
+            reader_compile_time_args,
+            mm_kernel_in0_reader_defines,
+            {in0_tile.get_tile_shape()}));
 
     KernelHandle mm_kernel_in1_reader_writer_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp",
         all_cores,
-        WriterDataMovementConfig(reader_writer_compile_time_args, mm_kernel_in1_reader_writer_defines));
+        WriterDataMovementConfig(
+            reader_writer_compile_time_args,
+            mm_kernel_in1_reader_writer_defines,
+            {in1_tile.get_tile_shape(), output_tile.get_tile_shape()}));
 
     vector<uint32_t> compute_kernel_args_group_1 = {
         in0_block_w,             // in0_block_w
@@ -224,7 +233,8 @@ operation::ProgramWithCallbacks create_program(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args_group_1,
-            .defines = mm_kernel_defines});
+            .defines = mm_kernel_defines,
+            .tile_shapes = {in0_tile.get_tile_shape(), in1_tile.get_tile_shape(), output_tile.get_tile_shape()}});
     if (!core_group_2.ranges().empty()) {
         vector<uint32_t> compute_kernel_args_group_2 = {
             in0_block_w,             // in0_block_w
@@ -254,14 +264,16 @@ operation::ProgramWithCallbacks create_program(
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .math_approx_mode = math_approx_mode,
                 .compile_args = compute_kernel_args_group_2,
-                .defines = mm_kernel_defines});
+                .defines = mm_kernel_defines,
+                .tile_shapes = {in0_tile.get_tile_shape(), in1_tile.get_tile_shape(), output_tile.get_tile_shape()}});
     }
 
     // Create circular buffers
     uint32_t src0_cb_index = 0;
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
-            .set_page_size(src0_cb_index, in0_single_tile_size);
+            .set_page_size(src0_cb_index, in0_single_tile_size)
+            .set_tile_dims(src0_cb_index, in0_tile);
     if (in0_is_sharded) {
         cb_src0_config = cb_src0_config.set_globally_allocated_address(*in0_buffer);
     }
@@ -270,7 +282,8 @@ operation::ProgramWithCallbacks create_program(
     uint32_t src1_cb_index = 1;
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
-            .set_page_size(src1_cb_index, in1_single_tile_size);
+            .set_page_size(src1_cb_index, in1_single_tile_size)
+            .set_tile_dims(src1_cb_index, in1_tile);
     if (in1_is_sharded) {
         cb_src1_config = cb_src1_config.set_globally_allocated_address(*in1_buffer);
     }
@@ -289,13 +302,15 @@ operation::ProgramWithCallbacks create_program(
             {output_cb_index, output_data_format},
         };
         output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
-                               .set_page_size(output_cb_index, output_single_tile_size);
+                               .set_page_size(output_cb_index, output_single_tile_size)
+                               .set_tile_dims(output_cb_index, output_tile);
         // interm0
         std::map<uint8_t, tt::DataFormat> interm0_cb_data_format_spec{
             {interm0_cb_index, interm0_data_format},
         };
         interm0_cb_config = tt_metal::CircularBufferConfig(interm0_CB_size, interm0_cb_data_format_spec)
-                                .set_page_size(interm0_cb_index, interm0_single_tile_size);
+                                .set_page_size(interm0_cb_index, interm0_single_tile_size)
+                                .set_tile_dims(interm0_cb_index, output_tile);
 
         auto cb_interm0 = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
     } else {
@@ -304,7 +319,9 @@ operation::ProgramWithCallbacks create_program(
             {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
         output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
                                .set_page_size(output_cb_index, output_single_tile_size)
-                               .set_page_size(interm0_cb_index, interm0_single_tile_size);
+                               .set_page_size(interm0_cb_index, interm0_single_tile_size)
+                               .set_tile_dims(output_cb_index, output_tile)
+                               .set_tile_dims(interm0_cb_index, output_tile);
     }
     // std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec {
     //     {output_cb_index, output_data_format},
@@ -474,6 +491,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
     bool untilize_out) {
     const auto& ashape = a.get_legacy_shape();
     const auto& bshape = b.get_legacy_shape();
+    auto in0_tile_shape = a.get_tile().get_tile_shape();
+    auto in1_tile_shape = b.get_tile().get_tile_shape();
 
     TT_FATAL(
         (bcast_batch == false) or (ashape[0] == 1) or (ashape.rank() == 2),
@@ -486,8 +505,6 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
 
     tt_metal::Device* device = a.device();
 
-    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
-    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     tt_metal::Buffer* in1_buffer = b.buffer();
 
@@ -529,9 +546,9 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
     // NOTE: Only supports matmuls where output is blocks of 16 x 16 tiles (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
     uint32_t B = get_batch_size(ashape);
-    uint32_t Mt = ashape[-2] / TILE_HEIGHT;
-    uint32_t Kt = ashape[-1] / TILE_WIDTH;
-    uint32_t Nt = bshape[-1] / TILE_WIDTH;
+    uint32_t Mt = ashape[-2] / in0_tile_shape[0];
+    uint32_t Kt = ashape[-1] / in0_tile_shape[1];
+    uint32_t Nt = bshape[-1] / in1_tile_shape[1];
 
     // TODO: Generalize
     TT_FATAL(!fuse_batch, "Only fuse_batch=false is supported for optimized bmm!");
