@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,9 +12,9 @@ void kernel_main() {
     auto ignore_index = static_cast<int32_t>(get_arg_val<uint32_t>(i++));
     auto num_tiles_per_core = get_arg_val<uint32_t>(i++);
     auto start_id = get_arg_val<uint32_t>(i++);
+    auto num_inner_tile = get_arg_val<uint32_t>(i++);
     auto C = get_arg_val<uint32_t>(i++);
     auto Ct = get_arg_val<uint32_t>(i++);
-    auto Wt = get_arg_val<uint32_t>(i++);
 
     constexpr uint32_t cb_target = tt::CB::c_in0;
     constexpr uint32_t cb_output_grad = tt::CB::c_in1;
@@ -37,6 +37,10 @@ void kernel_main() {
 
     const InterleavedAddrGen<target_is_dram> addrg_target = {
         .bank_base_address = target_addr, .page_size = target_tile_bytes};
+    const InterleavedAddrGenFast<output_grad_is_dram> addrg_output_grad = {
+        .bank_base_address = output_grad_addr,
+        .page_size = output_grad_tile_bytes,
+        .data_format = output_grad_data_format};
     constexpr uint32_t onetile = 1;
 
 #if defined(WEIGHT)
@@ -52,27 +56,21 @@ void kernel_main() {
     auto weight_l1_ptr = get_read_ptr<uint16_t>(cb_weight);
 #endif
 
-    const InterleavedAddrGenFast<output_grad_is_dram> addrg_output_grad = {
-        .bank_base_address = output_grad_addr,
-        .page_size = output_grad_tile_bytes,
-        .data_format = output_grad_data_format};
-
     auto zero = float_to_bfloat16(0.0f);
 
     uint32_t end_id = start_id + num_tiles_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {
-        uint32_t wt = i % Wt;
-        uint32_t nct = i / Wt;
-        uint32_t n = nct / Ct;
-        uint32_t nt = n / TILE_HEIGHT;
-        uint32_t ct = nct % Ct;
+        uint32_t inner = i % num_inner_tile;
+        uint32_t nc = i / num_inner_tile;
+        uint32_t n = nc / C;
+        uint32_t c = nc % C;
 
-        // target: (N, W)
-        auto target_noc_id = nt * Wt + wt;
+        // target: (N, H, W)
+        auto target_noc_id = n * num_inner_tile + inner;
         read_tile(cb_target, addrg_target, target_noc_id);
 
-        // output_grad: (N, W)
-        auto output_grad_noc_id = nt * Wt + wt;
+        // output_grad: (N, H, W)
+        auto output_grad_noc_id = n * num_inner_tile + inner;
         read_tile(cb_output_grad, addrg_output_grad, output_grad_noc_id);
 
         cb_reserve_back(cb_input_grad, onetile);
@@ -85,16 +83,14 @@ void kernel_main() {
 
         for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
             for (uint32_t w = 0; w < TILE_WIDTH; w++) {
-                uint32_t nw_tilized_idx = get_tilized_idx(n % TILE_HEIGHT, w); // target(n, w)
-                int32_t target_val = target_l1_ptr[nw_tilized_idx];
+                uint32_t idx = h * TILE_WIDTH + w; // target and input_grad idx
 
-                uint32_t c = ct * TILE_HEIGHT + h;
-                uint32_t input_grad_idx = get_tilized_idx(h, w); // input_grad(c, w)
+                int32_t target_val = target_l1_ptr[idx];
 
                 uint16_t input_grad_val;
 
                 if (target_val != ignore_index && target_val == static_cast<int32_t>(c)) {
-                    float output_grad_val = bfloat16_to_float(output_grad_l1_ptr[nw_tilized_idx]);
+                    float output_grad_val = bfloat16_to_float(output_grad_l1_ptr[idx]);
 
 #if defined(WEIGHT)
                     float weight_val = bfloat16_to_float(weight_l1_ptr[target_val]);
@@ -106,14 +102,14 @@ void kernel_main() {
                 } else {
                     input_grad_val = zero;
                 }
-                input_grad_l1_ptr[input_grad_idx] = input_grad_val;
+
+                input_grad_l1_ptr[idx] = input_grad_val;
             }
         }
 
         cb_push_back(cb_input_grad, onetile);
 
         cb_pop_front(cb_target, onetile);
-
         cb_pop_front(cb_output_grad, onetile);
     }
 }
