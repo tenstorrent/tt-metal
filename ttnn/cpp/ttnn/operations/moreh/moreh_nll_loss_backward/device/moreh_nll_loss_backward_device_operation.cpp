@@ -22,12 +22,15 @@ void MorehNllLossBackwardDeviceOperation::validate_inputs(
     TT_FATAL(target_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
     TT_FATAL(target_tensor.buffer() != nullptr, "Operands to nll_loss need to be allocated in buffers on device!");
     TT_FATAL((target_tensor.get_layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
-    TT_FATAL(target_tensor.get_dtype() == DataType::INT32);
+    TT_FATAL(target_tensor.get_dtype() == DataType::INT32, "Invalid target_tensor dtype {}", target_tensor.get_dtype());
 
     TT_FATAL(output_grad_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
     TT_FATAL(output_grad_tensor.buffer() != nullptr, "Operands to nll_loss need to be allocated in buffers on device!");
     TT_FATAL((output_grad_tensor.get_layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
-    TT_FATAL(output_grad_tensor.get_dtype() == DataType::BFLOAT16);
+    TT_FATAL(
+        output_grad_tensor.get_dtype() == DataType::BFLOAT16,
+        "Invalid output_grad_tensor dtype {}",
+        output_grad_tensor.get_dtype());
 
     if (input_grad_tensor.has_value()) {
         TT_FATAL(
@@ -37,7 +40,10 @@ void MorehNllLossBackwardDeviceOperation::validate_inputs(
             input_grad_tensor.value().buffer() != nullptr,
             "Operands to nll_loss need to be allocated in buffers on device!");
         TT_FATAL((input_grad_tensor.value().get_layout() == Layout::TILE), "target_tensor to nll_loss must be tilized");
-        TT_FATAL(input_grad_tensor.value().get_dtype() == DataType::BFLOAT16);
+        TT_FATAL(
+            input_grad_tensor.value().get_dtype() == DataType::BFLOAT16,
+            "Invalid input_grad_tensor dtype {}",
+            input_grad_tensor.value().get_dtype());
     }
 
     if (weight_tensor.has_value()) {
@@ -48,7 +54,10 @@ void MorehNllLossBackwardDeviceOperation::validate_inputs(
             weight_tensor.value().buffer() != nullptr,
             "weight_tensor to nll_loss need to be allocated in buffers on device!");
         TT_FATAL((weight_tensor.value().get_layout() == Layout::TILE), "weight_tensor to nll_loss must be in tilized");
-        TT_FATAL(weight_tensor.value().get_dtype() == DataType::BFLOAT16);
+        TT_FATAL(
+            weight_tensor.value().get_dtype() == DataType::BFLOAT16,
+            "Invalid weight_tensor dtype {}",
+            weight_tensor.value().get_dtype());
     }
 
     if (divisor_tensor.has_value()) {
@@ -59,7 +68,10 @@ void MorehNllLossBackwardDeviceOperation::validate_inputs(
             divisor_tensor.value().buffer() != nullptr,
             "divisor_tensor to nll_loss need to be allocated in buffers on device!");
         TT_FATAL((divisor_tensor.value().get_layout() == Layout::TILE), "divisor_tensor to nll_loss must be tilized");
-        TT_FATAL(divisor_tensor.value().get_dtype() == DataType::BFLOAT16);
+        TT_FATAL(
+            divisor_tensor.value().get_dtype() == DataType::BFLOAT16,
+            "Invalid divisor_tensor dtype {}",
+            divisor_tensor.value().get_dtype());
     }
 }
 

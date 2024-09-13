@@ -26,7 +26,7 @@ void MorehNllLossUnreducedBackwardDeviceOperation::validate_inputs(
     TT_FATAL(
         target_tensor.buffer() != nullptr, "Operands to nll_loss_unreduced need to be allocated in buffers on device!");
     TT_FATAL((target_tensor.get_layout() == Layout::TILE), "target_tensor to nll_loss_unreduced must be tilized");
-    TT_FATAL(target_tensor.get_dtype() == DataType::INT32);
+    TT_FATAL(target_tensor.get_dtype() == DataType::INT32, "Invalid target_tensor dtype {}", target_tensor.get_dtype());
 
     TT_FATAL(
         output_grad_tensor.storage_type() == StorageType::DEVICE,
@@ -35,7 +35,10 @@ void MorehNllLossUnreducedBackwardDeviceOperation::validate_inputs(
         output_grad_tensor.buffer() != nullptr,
         "Operands to nll_loss_unreduced need to be allocated in buffers on device!");
     TT_FATAL((output_grad_tensor.get_layout() == Layout::TILE), "target_tensor to nll_loss_unreduced must be tilized");
-    TT_FATAL(output_grad_tensor.get_dtype() == DataType::BFLOAT16);
+    TT_FATAL(
+        output_grad_tensor.get_dtype() == DataType::BFLOAT16,
+        "Invalid output_grad_tensor dtype {}",
+        output_grad_tensor.get_dtype());
 
     if (input_grad_tensor.has_value()) {
         TT_FATAL(
@@ -47,7 +50,10 @@ void MorehNllLossUnreducedBackwardDeviceOperation::validate_inputs(
         TT_FATAL(
             (input_grad_tensor.value().get_layout() == Layout::TILE),
             "target_tensor to nll_loss_unreduced must be tilized");
-        TT_FATAL(input_grad_tensor.value().get_dtype() == DataType::BFLOAT16);
+        TT_FATAL(
+            input_grad_tensor.value().get_dtype() == DataType::BFLOAT16,
+            "Invalid input_grad_tensor dtype {}",
+            input_grad_tensor.value().get_dtype());
     }
 
     if (weight_tensor.has_value()) {
@@ -60,7 +66,10 @@ void MorehNllLossUnreducedBackwardDeviceOperation::validate_inputs(
         TT_FATAL(
             (weight_tensor.value().get_layout() == Layout::TILE),
             "weight_tensor to nll_loss_unreduced must be in tilized");
-        TT_FATAL(weight_tensor.value().get_dtype() == DataType::BFLOAT16);
+        TT_FATAL(
+            weight_tensor.value().get_dtype() == DataType::BFLOAT16,
+            "Invalid weight_tensor dtype {}",
+            weight_tensor.value().get_dtype());
     }
 }
 
