@@ -38,6 +38,7 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_bases[hv(HalMemAddrType::PROFILER)] = GET_ETH_MAILBOX_ADDRESS_HOST(profiler);
     mem_map_bases[hv(HalMemAddrType::KERNEL_CONFIG)] = eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE;
     mem_map_bases[hv(HalMemAddrType::UNRESERVED)] = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    mem_map_bases[hv(HalMemAddrType::CORE_INFO)] = GET_ETH_MAILBOX_ADDRESS_HOST(core_info);
 
     std::vector<uint32_t> mem_map_sizes;
     mem_map_sizes.resize(hv(HalMemAddrType::COUNT));

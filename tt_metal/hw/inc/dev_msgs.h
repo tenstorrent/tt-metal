@@ -254,6 +254,27 @@ struct profiler_msg_t {
     uint32_t buffer[PROFILER_RISC_COUNT][kernel_profiler::PROFILER_L1_VECTOR_SIZE];
 };
 
+struct addressable_core_t {
+    volatile uint8_t x, y;
+    volatile AddressableCoreType type;
+};
+
+// TODO: This can move into the hal eventually, currently sized for WH.
+constexpr static std::uint32_t MAX_NON_WORKER_CORES = 36 + 1 + 16;
+constexpr static std::uint32_t MAX_HARVESTED_ROWS = 2;
+constexpr static std::uint8_t CORE_COORD_INVALID = 0xFF;
+struct core_info_msg_t {
+    volatile uint64_t noc_pcie_addr_base;
+    volatile uint64_t noc_pcie_addr_end;
+    volatile uint64_t noc_dram_addr_base;
+    volatile uint64_t noc_dram_addr_end;
+    addressable_core_t non_worker_cores[MAX_NON_WORKER_CORES];
+    volatile uint8_t harvested_y[MAX_HARVESTED_ROWS];
+    volatile uint8_t noc_size_x;
+    volatile uint8_t noc_size_y;
+    volatile uint8_t pad[29];
+};
+
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
     struct slave_sync_msg_t slave_sync;
@@ -263,11 +284,13 @@ struct mailboxes_t {
     struct dprint_buf_msg_t dprint_buf;
     uint32_t pads_2[PROFILER_NOC_ALIGMENT_PAD_COUNT];
     struct profiler_msg_t profiler;
+    struct core_info_msg_t core_info;
 };
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_hex_vec_to_core().
 static_assert(sizeof(watcher_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(kernel_config_msg_t) % sizeof(uint32_t) == 0);
+static_assert(sizeof(core_info_msg_t) % sizeof(uint32_t) == 0);
 
 #ifndef TENSIX_FIRMWARE
 // Validate assumptions on mailbox layout on host compile

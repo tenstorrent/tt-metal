@@ -33,13 +33,11 @@
     defined(COMPILE_FOR_IDLE_ERISC)) &&                                                        \
     (defined(WATCHER_ENABLED)) && (!defined(WATCHER_DISABLE_NOC_SANITIZE))
 
-#include "generated_bank_to_noc_coord_mapping.h"
 #include "watcher_common.h"
 
 extern uint8_t noc_index;
 
 #include "dev_msgs.h"
-#include "noc_addr_ranges_gen.h"
 #include "noc_overlay_parameters.h"
 #include "noc_parameters.h"
 
@@ -51,6 +49,46 @@ typedef bool debug_sanitize_noc_dir_t;
 #define DEBUG_SANITIZE_NOC_UNICAST false
 typedef bool debug_sanitize_noc_cast_t;
 
+// Helper function to get the core type from noc coords.
+AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y) {
+    core_info_msg_t tt_l1_ptr *core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
+
+    for (uint32_t idx = 0; idx < MAX_NON_WORKER_CORES; idx++) {
+        uint8_t core_x = core_info->non_worker_cores[idx].x;
+        uint8_t core_y = core_info->non_worker_cores[idx].y;
+        if (x == NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t) core_x) &&
+            y == NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t) core_y)) {
+            return core_info->non_worker_cores[idx].type;
+        }
+    }
+
+    for (uint32_t idx = 0; idx < MAX_HARVESTED_ROWS; idx++) {
+        uint16_t harvested_y = core_info->harvested_y[idx];
+        if (y == NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t) harvested_y)) {
+            return AddressableCoreType::HARVESTED;
+        }
+    }
+
+    // Tensix
+    if (noc_id == 0) {
+        if (x >= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t) 1) &&
+            x <= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t) core_info->noc_size_x - 1) &&
+            y >= NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t) 1) &&
+            y <= NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t) core_info->noc_size_y - 1)) {
+            return AddressableCoreType::TENSIX;
+        }
+    } else {
+        if (x <= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t) 1) &&
+            x >= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t) core_info->noc_size_x - 1) &&
+            y <= NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t) 1) &&
+            y >= NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t) core_info->noc_size_y - 1)) {
+            return AddressableCoreType::TENSIX;
+        }
+    }
+
+    return AddressableCoreType::UNKNOWN;
+}
+
 // TODO(PGK): remove soft reset when fw is downloaded at init
 #define DEBUG_VALID_REG_ADDR(a, l)                                                      \
     (((((a) >= NOC_OVERLAY_START_ADDR) &&                                               \
@@ -58,10 +96,16 @@ typedef bool debug_sanitize_noc_cast_t;
       ((a) == RISCV_DEBUG_REG_SOFT_RESET_0)) &&                                         \
      (l) == 4)
 #define DEBUG_VALID_WORKER_ADDR(a, l) ((a >= MEM_L1_BASE) && (a + l <= MEM_L1_BASE + MEM_L1_SIZE) && ((a) + (l) > (a)))
-#define DEBUG_VALID_PCIE_ADDR(a, l) \
-    (((a) >= NOC_PCIE_ADDR_BASE) && ((a) + (l) <= NOC_PCIE_ADDR_END) && ((a) + (l) > (a)))
-#define DEBUG_VALID_DRAM_ADDR(a, l) \
-    (((a) >= NOC_DRAM_ADDR_BASE) && ((a) + (l) <= NOC_DRAM_ADDR_END) && ((a) + (l) > (a)))
+inline bool debug_valid_pcie_addr(uint64_t addr, uint64_t len) {
+    core_info_msg_t tt_l1_ptr *core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
+    return ((addr) >= core_info->noc_pcie_addr_base) && ((addr) + (len) <= core_info->noc_pcie_addr_end) &&
+           ((addr) + (len) > (addr));
+}
+inline bool debug_valid_dram_addr(uint64_t addr, uint64_t len) {
+    core_info_msg_t tt_l1_ptr *core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
+    return ((addr) >= core_info->noc_dram_addr_base) && ((addr) + (len) <= core_info->noc_dram_addr_end) &&
+           ((addr) + (len) > (addr));
+}
 
 #define DEBUG_VALID_ETH_ADDR(a, l) (((a) >= MEM_ETH_BASE) && ((a) + (l) <= MEM_ETH_BASE + MEM_ETH_SIZE))
 
@@ -112,22 +156,26 @@ uint32_t debug_sanitize_noc_addr(
     debug_sanitize_noc_cast_t multicast,
     debug_sanitize_noc_dir_t dir) {
     // Different encoding of noc addr depending on multicast vs unitcast
-    uint32_t x, y;
+    uint8_t x, y;
     if (multicast) {
-        x = NOC_MCAST_ADDR_START_X(noc_addr);
-        y = NOC_MCAST_ADDR_START_Y(noc_addr);
+        x = (uint8_t) NOC_MCAST_ADDR_START_X(noc_addr);
+        y = (uint8_t) NOC_MCAST_ADDR_START_Y(noc_addr);
     } else {
-        x = NOC_UNICAST_ADDR_X(noc_addr);
-        y = NOC_UNICAST_ADDR_Y(noc_addr);
+        x = (uint8_t) NOC_UNICAST_ADDR_X(noc_addr);
+        y = (uint8_t) NOC_UNICAST_ADDR_Y(noc_addr);
     }
     uint64_t noc_local_addr = NOC_LOCAL_ADDR(noc_addr);
+    AddressableCoreType core_type = get_core_type(noc_id, x, y);
 
     // Extra check for multicast
     if (multicast) {
-        uint32_t x_end = NOC_MCAST_ADDR_END_X(noc_addr);
-        uint32_t y_end = NOC_MCAST_ADDR_END_Y(noc_addr);
+        uint8_t x_end = (uint8_t) NOC_MCAST_ADDR_END_X(noc_addr);
+        uint8_t y_end = (uint8_t) NOC_MCAST_ADDR_END_Y(noc_addr);
 
-        if (!NOC_WORKER_XY_P(noc_id, x, y) || !NOC_WORKER_XY_P(noc_id, x_end, y_end) || (x > x_end || y > y_end)) {
+        AddressableCoreType end_core_type = get_core_type(noc_id, x_end, y_end);
+
+        // Multicast supports workers only
+        if (core_type != AddressableCoreType::TENSIX || end_core_type != AddressableCoreType::TENSIX || (x > x_end || y > y_end)) {
             debug_sanitize_post_noc_addr_and_hang(
                 noc_id, noc_addr, l1_addr, noc_len, multicast, DebugSanitizeNocInvalidMulticast);
         }
@@ -138,21 +186,23 @@ uint32_t debug_sanitize_noc_addr(
     // Reads and writes may have different alignment requirements, see noc_parameters.h for details.
     uint32_t alignment_mask = (dir == DEBUG_SANITIZE_NOC_READ ? NOC_L1_READ_ALIGNMENT_BYTES : NOC_L1_WRITE_ALIGNMENT_BYTES) - 1;  // Default alignment, only override in ceratin cases.
     uint32_t invalid = multicast ? DebugSanitizeNocInvalidMulticast : DebugSanitizeNocInvalidUnicast;
-    if (NOC_PCIE_XY_P(noc_id, x, y)) {
+    if (core_type == AddressableCoreType::PCIE) {
         alignment_mask = (dir == DEBUG_SANITIZE_NOC_READ ? NOC_PCIE_READ_ALIGNMENT_BYTES : NOC_PCIE_WRITE_ALIGNMENT_BYTES) - 1;
-        if (!DEBUG_VALID_PCIE_ADDR(noc_local_addr, noc_len)) {
+        if (!debug_valid_pcie_addr(noc_local_addr, noc_len)) {
             debug_sanitize_post_noc_addr_and_hang(noc_id, noc_addr, l1_addr, noc_len, multicast, invalid);
         }
-    } else if (NOC_DRAM_XY_P(noc_id, x, y)) {
+    } else if (core_type == AddressableCoreType::DRAM) {
         alignment_mask = (dir == DEBUG_SANITIZE_NOC_READ ? NOC_DRAM_READ_ALIGNMENT_BYTES : NOC_DRAM_WRITE_ALIGNMENT_BYTES) - 1;
-        if (!DEBUG_VALID_DRAM_ADDR(noc_local_addr, noc_len)) {
+        if (!debug_valid_dram_addr(noc_local_addr, noc_len)) {
             debug_sanitize_post_noc_addr_and_hang(noc_id, noc_addr, l1_addr, noc_len, multicast, invalid);
         }
-    } else if (NOC_ETH_XY_P(noc_id, x, y)) {
+#ifndef ARCH_GRAYSKULL
+    } else if (core_type == AddressableCoreType::ETH) {
         if (!DEBUG_VALID_REG_ADDR(noc_local_addr, noc_len) && !DEBUG_VALID_ETH_ADDR(noc_local_addr, noc_len)) {
             debug_sanitize_post_noc_addr_and_hang(noc_id, noc_addr, l1_addr, noc_len, multicast, invalid);
         }
-    } else if (NOC_WORKER_XY_P(noc_id, x, y)) {
+#endif
+    } else if (core_type == AddressableCoreType::TENSIX) {
         if (!DEBUG_VALID_REG_ADDR(noc_local_addr, noc_len) && !DEBUG_VALID_WORKER_ADDR(noc_local_addr, noc_len)) {
             debug_sanitize_post_noc_addr_and_hang(noc_id, noc_addr, l1_addr, noc_len, multicast, invalid);
         }

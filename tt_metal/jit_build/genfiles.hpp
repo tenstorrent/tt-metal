@@ -32,19 +32,6 @@ void jit_build_genfiles_bank_to_noc_coord_descriptor(
     const std::map<CoreCoord, int32_t>& profiler_flat_id_map
 );
 
-void jit_build_genfiles_noc_addr_ranges_header(
-    const std::string& path,
-    uint64_t pcie_addr_base,
-    uint64_t pcie_addr_size,
-    uint64_t dram_addr_base,
-    uint64_t dram_addr_size,
-    const std::vector<CoreCoord>& pcie_cores,
-    const std::vector<CoreCoord>& dram_cores,
-    const std::vector<CoreCoord>& ethernet_cores,
-    CoreCoord grid_size,
-    const std::vector<uint32_t>& harvested_rows,
-    bool has_pcie_cores);
-
 void jit_build_genfiles_descriptors(const JitBuildEnv& env,
                                     JitBuildOptions& options);
 

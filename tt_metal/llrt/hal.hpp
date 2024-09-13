@@ -37,7 +37,8 @@ enum class HalMemAddrType : uint8_t {
     PROFILER = 4,
     KERNEL_CONFIG = 5,
     UNRESERVED = 6,
-    COUNT = 7
+    CORE_INFO = 7,
+    COUNT = 8
 };
 
 using DeviceAddr = std::uint64_t;
