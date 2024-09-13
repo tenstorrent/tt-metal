@@ -10,6 +10,7 @@ arange = ttnn._ttnn.operations.moreh.moreh_arange
 bmm = ttnn._ttnn.operations.moreh.moreh_bmm
 bmm_backward = ttnn._ttnn.operations.moreh.moreh_bmm_backward
 dot = ttnn._ttnn.operations.moreh.moreh_dot
+dot_backward = ttnn._ttnn.operations.moreh.moreh_dot_backward
 getitem = ttnn._ttnn.operations.moreh.moreh_getitem
 group_norm = ttnn._ttnn.operations.moreh.moreh_group_norm
 group_norm_backward = ttnn._ttnn.operations.moreh.moreh_group_norm_backward
