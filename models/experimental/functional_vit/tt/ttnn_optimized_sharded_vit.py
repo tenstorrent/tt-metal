@@ -15,13 +15,13 @@ from ttnn.dot_access import DotAccessDict
 
 def update_model_config(config, batch_size):
     core_grid = ttnn.CoreGrid(y=batch_size, x=12)
-    seqL_t = int(224 / 32)  # 7
-    dim_t = int(768 / 32)  # 24
-    dim_t__x = int(dim_t / core_grid.x)  # 2
+    seqL_t = 224 // 32  # 7
+    dim_t = 768 // 32  # 24
+    dim_t__x = dim_t // core_grid.x  # 2
     head_num = 12
-    head_seqL_t = int(head_num * seqL_t / core_grid.x)  # 7
-    head_size_t__x = int(dim_t / head_num)  # 2
-    class__x = int(1152 / 32 / core_grid.x)  # 3
+    head_seqL_t = (head_num * seqL_t) // core_grid.x  # 7
+    head_size_t__x = dim_t // head_num  # 2
+    class__x = (1152 // 32) // core_grid.x  # 3
 
     # sharding configs
     program_configs = {
@@ -29,9 +29,9 @@ def update_model_config(config, batch_size):
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             in0_block_w=dim_t__x,  # 2,
             out_subblock_h=1,
-            out_subblock_w=int(3 * dim_t__x),  # 6,
+            out_subblock_w=(3 * dim_t__x),  # 6,
             per_core_M=seqL_t,  # 7,
-            per_core_N=int(3 * dim_t__x),  # 6,
+            per_core_N=(3 * dim_t__x),  # 6,
             transpose_mcast=False,
             fused_activation=None,
         ),
@@ -65,15 +65,15 @@ def update_model_config(config, batch_size):
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             in0_block_w=dim_t__x,  # 2,
             out_subblock_h=1,
-            out_subblock_w=int(4 * dim_t__x / 2),  # 4,
+            out_subblock_w=(4 * dim_t__x) // 2,  # 4,
             per_core_M=seqL_t,  # 7,
-            per_core_N=int(4 * dim_t__x),  # 8,
+            per_core_N=(4 * dim_t__x),  # 8,
             transpose_mcast=False,
             fused_activation=(ttnn.UnaryOpType.GELU, True),
         ),
         "ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=int(4 * dim_t__x),  # 8,
+            in0_block_w=(4 * dim_t__x),  # 8,
             out_subblock_h=seqL_t,  # 7,
             out_subblock_w=dim_t__x,  # 2,
             per_core_M=seqL_t,  # 7,
@@ -124,8 +124,8 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
     batch_size, img_h, img_w, img_c = pixel_values.shape  # permuted input NHWC
     patch_size = 16
     patch_count = img_h // patch_size  # 14
-    patch_size_sq_trpl = int(patch_size * patch_size * 3)  # 768
-    patch_count_all = int(patch_count * patch_count)  # 196
+    patch_size_sq_trpl = patch_size * patch_size * 3  # 768
+    patch_count_all = patch_count * patch_count  # 196
     stride_h = patch_size
     stride_w = 1
 
