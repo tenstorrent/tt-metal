@@ -29,6 +29,8 @@
 #include "ttnn/operations/eltwise/binary/binary_l1_interface.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_l1_interface.hpp"
+#include "ttnn/operations/matmul/device/matmul_types.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
 #include "ttnn/operations/normalization/softmax/softmax_l1_interface.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -80,8 +82,16 @@ void compare_l1_circular_buffer_allocations(
     std::cout << std::endl;
 
     for (int i = 0; i < graph_circular_buffer_allocations.size(); i++) {
-        std::cout << "DBG cb[" << i << "]" << std::get<0>(usage_estimator_result[i]) << std::endl
-                  << " " << graph_circular_buffer_allocations[i] << std::endl;
+        std::cout << "DBG cb[" << i << "] " << std::get<0>(usage_estimator_result[i]) << " "
+                  << graph_circular_buffer_allocations[i] << std::endl;
+
+        // If the size of CB returned by the estimator is c_cb_shares_space_with_sharded_operand that means that the CB
+        // is sharing space with sharded operand, so we skip the comparison as the graph capture doesn't recognize this
+        // case.
+        if (std::get<0>(usage_estimator_result[i]) == c_cb_shares_space_with_sharded_operand) {
+            continue;
+        }
+
         EXPECT_EQ(std::get<0>(usage_estimator_result[i]), graph_circular_buffer_allocations[i]);
     }
 }

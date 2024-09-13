@@ -88,3 +88,12 @@ uint32_t calculate_tensor_l1_allocation_size_per_core(
     }
     return (uint32_t)0;  // dram not implemented yet
 }
+
+bool is_sharded(const L1InterfaceOperandParams& operand) {
+    return std::get<tt::tt_metal::MemoryConfig>(operand).is_sharded();
+}
+
+uint32_t get_tile_size(const L1InterfaceOperandParams& operand) {
+    return tt::tt_metal::detail::TileSize(
+        tt::tt_metal::datatype_to_dataformat_converter(std::get<tt::tt_metal::DataType>(operand)));
+}
