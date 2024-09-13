@@ -297,3 +297,112 @@ def test_create_min_width_shard(
             n_local_kv_heads,
             head_dim,
         )
+
+
+def run_test_create_width_shard_by_head(
+    device,
+    n_local_heads,
+    n_local_kv_heads,
+    head_dim,
+):
+    ## Split Heads
+    batch = 16
+    seq_len = 1
+    total_heads = n_local_heads + n_local_kv_heads * 2
+    total_cores = total_heads
+    core_x = min(total_cores, 8)
+    core_y = max(1, total_cores // core_x)
+    # Prepare input
+    proj_output = torch.rand(1, seq_len, batch, head_dim * total_heads)
+
+    # TT configs
+    shard_spec_n_cores_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(core_x - 1, core_y - 1),
+            ),
+        }
+    )
+    CREATE_HEAD_INPUT_MEMCFG = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            shard_spec_n_cores_grid,
+            [
+                32,
+                head_dim,
+            ],
+            ttnn.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
+    )
+    HEIGHT_SHARDED_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+
+    # Prepare tt input
+    proj_output_tt = ttnn.from_torch(proj_output, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16).to(
+        device=device, mem_config=CREATE_HEAD_INPUT_MEMCFG
+    )
+
+    # tt operation
+    (
+        q_heads_tt,  # [seqlen, n_local_heads, bsz, head_dim]
+        k_heads_tt,  # [seqlen, n_local_kv_heads, bsz, head_dim]
+        v_heads_tt,  # [seqlen, n_local_kv_heads, bsz, head_dim]
+    ) = ttnn.experimental.nlp_create_qkv_heads_decode(
+        proj_output_tt,
+        num_heads=n_local_heads,
+        num_kv_heads=n_local_kv_heads,
+        memory_config=HEIGHT_SHARDED_MEMCFG,
+    )
+    logger.info(f"q_heads_tt: {q_heads_tt.shape}, {q_heads_tt.memory_config()}")
+    logger.info(f"k_heads_tt: {k_heads_tt.shape}, {k_heads_tt.memory_config()}")
+    logger.info(f"v_heads_tt: {v_heads_tt.shape}, {v_heads_tt.memory_config()}")
+
+    # torch operation
+    q_heads_torch = proj_output[:, :, :, : head_dim * n_local_heads].view(seq_len, batch, n_local_heads, head_dim)
+    k_heads_torch = proj_output[:, :, :, head_dim * n_local_heads : head_dim * (n_local_heads + n_local_kv_heads)].view(
+        seq_len, batch, n_local_kv_heads, head_dim
+    )
+    v_heads_torch = proj_output[:, :, :, head_dim * (n_local_heads + n_local_kv_heads) :].view(
+        seq_len, batch, n_local_kv_heads, head_dim
+    )
+
+    # compare
+    q_heads_tt_cpu = ttnn.to_torch(q_heads_tt)
+    out_pass_q, output_pcc_q = comp_pcc(q_heads_tt_cpu, q_heads_torch)
+    logger.info(f"PCC value: {output_pcc_q}")
+
+    k_heads_tt_cpu = ttnn.to_torch(k_heads_tt)
+    out_pass_k, output_pcc_k = comp_pcc(k_heads_tt_cpu, k_heads_torch)
+    logger.info(f"PCC value: {output_pcc_k}")
+
+    v_heads_tt_cpu = ttnn.to_torch(v_heads_tt)
+    out_pass_v, output_pcc_v = comp_pcc(v_heads_tt_cpu, v_heads_torch)
+    logger.info(f"PCC value: {output_pcc_v}")
+
+    assert out_pass_q and out_pass_k and out_pass_v
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "n_local_heads, n_local_kv_heads, head_dim",
+    ((32, 8, 128),),
+)
+def test_create_width_shard_by_head(
+    n_local_heads,
+    n_local_kv_heads,
+    head_dim,
+    device,
+    use_program_cache,
+):
+    torch.manual_seed(0)
+
+    for i in range(3):
+        # multiple loops to test program caching
+        run_test_create_width_shard_by_head(
+            device,
+            n_local_heads,
+            n_local_kv_heads,
+            head_dim,
+        )
