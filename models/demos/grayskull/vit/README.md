@@ -37,7 +37,7 @@ scripts/build_scripts/build_with_profiler_opt.sh # need build to enable the prof
 ## Results
 
 - The Imagenet-21K inference accuracy is 79%
-- Model runtime (host end-2-end) is 430 FPS
-- Device OPs runtime summation will is 640 FPS
+- Model runtime (host end-2-end) with batch_size=9 is 1360 FPS
+- Device OPs runtime summation will is 1750 FPS (batch_size=9)
 
 ---
