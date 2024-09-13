@@ -160,8 +160,6 @@ When writing ERISC kernels, it is important to use the dataflow API calls in [`e
 
 By default, with the current data flow APIs, it is currently not possible to avoid calling of the `run_routing()` function unless the kernel has an infinite loops that does not call any of the ethernet data flow API functions under [`eth/dataflow_api.hpp`](https://github.com/tenstorrent/tt-metal/blob/97b21652e1a00579882427a21e95db318bc0c079/tt_metal/hw/inc/ethernet/dataflow_api.h).
 
-TODO: Track link retraining counts
-
 ## Ethernet and Cluster Connectivity
 
 The Tenstorrent’s Wormhole and future architectures provide cluster configurability with the same underlying hardware and programming model. For example, one system could be configured as a 2D mesh while another may be deployed as a 3D torus. Standard configurations are provided in the N300, T3000, and Galaxy products, which can be used as building blocks for larger deployments. This subsection describes cluster topology and connectivity from NoC to cluster level.
@@ -1084,9 +1082,6 @@ Line and ring topologies map well onto static routing and static channel allocat
 
 Additionally, with these ring and line algorithms where all transfers are only to immediate neighbor chips, it is always sufficient to perform a single handshake between the ERISC cores on either end of the link of the directly connected chips to ensure end-to-end synchronization with respect to source and destination readiness. 
 
-## EDM Performance
-
-Plot TODO but measured upwards of 20 GB/s link util
 
 # Host CCL Op Builder Components {#host-ccl-op-builder-components}
 
@@ -1122,7 +1117,7 @@ There is currently one usability improvement to the builder that is missing that
 
 In the example, we are only instantiating a single channel that will be used by a single worker and forward a fixed number of messages before terminating. We use the `create_erisc_datamover_builder` function to streamline address generation.  
 ```  
-Std::size_t num_edm_channels = 1;  
+std::size_t num_edm_channels = 1;  
 auto buffer_sharing_mode = ccl::EriscDataMoverBufferSharingMode::NOT_SHARED;  
 auto edm_termination_mode = ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED;   
 ccl::EriscDataMoverBuilder edm_builder = create_erisc_datamover_builder(  
