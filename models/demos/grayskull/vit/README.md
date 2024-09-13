@@ -19,10 +19,10 @@ To run the demo for question answering using the Bloom model, follow these instr
   pytest --disable-warnings  models/demos/grayskull/vit/demo/demo_vit_ttnn_imagenet_inference.py
   ```
 
--  For the inference overall rutime (end-2-end), use the following command to run the demo:
+-  For the inference overall runtime (end-2-end), use the following command to run the demo:
 
   ```sh
-  pytest --disable-warnings  models/demos/grayskull/vit/demo/demo_vit_ttnn_inference_throughput.py
+  pytest --disable-warnings  models/demos/grayskull/vit/demo/demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
   ```
 
 -  For running the inference device OPs analysis, use the following command to run the demo:
@@ -37,7 +37,7 @@ scripts/build_scripts/build_with_profiler_opt.sh # need build to enable the prof
 ## Results
 
 - The Imagenet-21K inference accuracy is 79%
-- Model runtime (host end-2-end) is 430 FPS
-- Device OPs runtime summation will is 640 FPS
+- Model runtime (host end-2-end) with batch_size=9 is 1360 FPS
+- Device OPs runtime summation will is 1750 FPS (batch_size=9)
 
 ---
