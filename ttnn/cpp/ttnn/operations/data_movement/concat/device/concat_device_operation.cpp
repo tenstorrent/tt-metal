@@ -123,7 +123,7 @@ Tensor concat_impl(std::vector<Tensor> &input_tensors, const std::int64_t dim, c
                             "Current concat implementation requires aligned last dim when concatting on last dim");
                     }
                 }
-                Layout target_layout = Layout::TILE;
+                Layout target_layout = Layout::ROW_MAJOR;
                 for (const auto &input_tensor : input_tensors) {
                     if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
                         const auto &input_shape = input_tensor.get_legacy_shape();

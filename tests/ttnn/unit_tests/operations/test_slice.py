@@ -128,7 +128,7 @@ def slice_test(
     )
 
     tt_output_tensor = ttnn.slice(tt_input_tensor, output_tensor_start, output_tensor_end, memory_config=out_mem_config)
-
+    print(tt_input_tensor.shape, output_tensor_start, output_tensor_end, tt_output_tensor.shape)
     a_pt = ttnn.to_torch(tt_output_tensor)
 
     # Pytorch reference

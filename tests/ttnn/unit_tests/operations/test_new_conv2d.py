@@ -318,6 +318,151 @@ def run_conv_with_split(
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("stride", [1])
+@pytest.mark.parametrize(
+    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, pad_h, pad_w, act_block_w_div",
+    ((64, 32, 130, 130, 3, 3, 0, 0, 1),),
+)
+@pytest.mark.parametrize(
+    "has_bias",
+    [True],
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat16],
+)
+def test_conv_dram(
+    device,
+    use_program_cache,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    pad_h,
+    pad_w,
+    act_block_w_div,
+    stride,
+    has_bias,
+    weights_dtype,
+    activations_dtype,
+):
+    if is_grayskull():
+        if input_channels >= 2048:
+            pytest.skip("Skipping on grayskull due to insufficient L1")
+        if input_channels >= 768 and input_height >= 10:
+            pytest.skip("Skipping on grayskull due to insufficient L1")
+
+    stride_h = stride
+    stride_w = stride
+    batch_size = 2
+    fp32_accum = False
+    packer_l1_acc = False
+    deallocate_activation = False
+    debug = False
+    groups = 1
+
+    torch.manual_seed(0)
+    conv_input_shape = [batch_size, input_channels, input_height, input_width]
+    conv_weight_shape = [output_channels, input_channels // groups, filter_height, filter_width]
+    conv_bias_shape = [1, 1, 1, output_channels]
+
+    torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
+    torch_input_tensor_nchw = torch_input_tensor_nchw.broadcast_to(conv_input_shape).float()
+    torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
+
+    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+
+    tt_bias_tensor = None
+    torch_bias_tensor = None
+    if has_bias:
+        torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() * 50
+        tt_bias_tensor = ttnn.from_torch(
+            torch_bias_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+        )
+        torch_bias_tensor = torch_bias_tensor.reshape(-1)
+    ref = torch.nn.functional.conv2d(
+        torch_input_tensor_nchw,
+        torch_weight_tensor,
+        bias=torch_bias_tensor,
+        stride=(stride_h, stride_w),
+        padding=(pad_h, pad_w),
+        groups=groups,
+    )
+    output_shape_nhwc = [
+        ref.shape[0],
+        ref.shape[2],
+        ref.shape[3],
+        ref.shape[1],
+    ]
+
+    reader_patterns_cache = {}
+    tt_weight_tensor = ttnn.from_torch(
+        torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+    )
+
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn.bfloat16)
+
+    conv_config = ttnn.Conv2dConfig(
+        dtype=activations_dtype,
+        weights_dtype=weights_dtype,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        input_channels_alignment=32,
+        deallocate_activation=deallocate_activation,
+        fp32_dest_acc_enabled=fp32_accum,
+        packer_l1_accum_enabled=packer_l1_acc,
+        enable_act_double_buffer=False,
+        enable_split_reader=False,
+        enable_subblock_padding=False,
+        reshard_if_not_optimal=True,
+        act_block_w_div=act_block_w_div,
+        output_height_in_l1=64,
+    )
+    [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
+        input_tensor=tt_input_tensor,
+        weight_tensor=tt_weight_tensor,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        bias_tensor=tt_bias_tensor,
+        kernel_size=(filter_height, filter_width),
+        stride=(stride_h, stride_w),
+        padding=(pad_h, pad_w),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        conv_config=conv_config,
+        conv_op_cache=reader_patterns_cache,
+        debug=debug,
+        groups=groups,
+    )
+
+    tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
+    out = tt_output_tensor.cpu().to_torch()
+
+    # out is in row major layout and NHWC shape
+    # NHWC to NCHW
+    # ref = torch.permute(ref, (0, 2, 3, 1))
+    out = out.reshape(batch_size, out_height, out_width, output_channels)
+
+    out = torch.permute(out, (0, 3, 1, 2))
+    reader_patterns_cache.clear()
+
+    pcc = 0.94
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(out, ref, pcc=pcc)
+    logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
+    if not passing:
+        logger.error("Fails with PCC ", pcc_msg)
+    assert passing
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("stride", [1, 2])
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, pad_h, pad_w, act_block_w_div",
