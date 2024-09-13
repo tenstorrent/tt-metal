@@ -154,7 +154,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
     model_args = TtModelArgs(device, instruct=instruct_mode)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
-    model_args.n_layers = 32
+    model_args.n_layers = 1
 
     logger.info("Loading weights...")
     profiler.start("weight_loading")

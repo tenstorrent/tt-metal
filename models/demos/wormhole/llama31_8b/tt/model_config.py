@@ -154,18 +154,6 @@ class TtModelArgs:
                 fuse_batch=False,
             )
 
-            self.model_config["PREFILL_MLP_W3_PRG_CONFIG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
-                in0_block_w=4,  # how much inner dim you take each time
-                out_subblock_h=1,  # Must be divisible by per_core_M
-                out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=4,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=56,  # N / TILE_WIDTH / Grid_Size
-                transpose_mcast=False,
-                fused_activation=None,
-                fuse_batch=False,
-            )
-
             self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 in0_block_w=4,  # how much inner dim you take each time
@@ -190,19 +178,54 @@ class TtModelArgs:
                 fused_activation=ttnn.UnaryOpType.SILU,
                 fuse_batch=False,
             )
-            self.model_config[
-                "PREFILL_MLP_W3_PRG_CONFIG_128"
-            ] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
-                in0_block_w=1,  # how much inner dim you take each time
-                out_subblock_h=1,  # Must be divisible by per_core_M
-                out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=seq_len // 32,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=7,  # 14336/32/64cores = 7: N / TILE_WIDTH / Grid_Size
-                mcast_in0=True,
-                fused_activation=None,
-                fuse_batch=False,
+
+            # self.model_config["DECODE_MLP_W1_PRG_CONFIG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            #     compute_with_storage_grid_size=(8, 8),
+            #     in0_block_w=7,  # K = 4096/TILE - how much inner dim you take each time
+            #     out_subblock_h=1,  # Must be divisible by per_core_M
+            #     out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            #     per_core_M=1,  # M (32) / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            #     per_core_N=56,  # N (14336) / TILE_WIDTH / Grid_Size
+            #     transpose_mcast=False,
+            #     fused_activation=ttnn.UnaryOpType.SILU,
+            #     fuse_batch=False,
+            # )
+            # 32 shards
+            # self.model_config["MLP_W1_SHARDED_MEM_CFG"] = ttnn.create_sharded_memory_config(
+            #     (128, 448),  # [4096, 14336]
+            #     ttnn.CoreGrid(y=8, x=8),
+            #     ttnn.ShardStrategy.HEIGHT,
+            #     ttnn.ShardOrientation.ROW_MAJOR,
+            #     use_height_and_width_as_shard_shape=True,
+            # )
+
+            # Width sharded
+            self.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+                (32, 4096 // 8),  # [32, 512] -> [1, 16]
+                ttnn.CoreGrid(y=8, x=8),
+                ttnn.ShardStrategy.WIDTH,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
             )
+            #     x = shard[32, 512] -> [1, 16]
+            # W1/W3 = shard[4096, 1216] -> [128, 38]
+            self.model_config["DECODE_MLP_W1_PRG_CONFIG"] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                # Grid size = [8, 8]
+                in0_block_w=1,  # K = 4096 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+                per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
+                per_core_N=38,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
+                fused_activation=None,
+            )
+            # w2_in = shard[32,1216] -> [1, 38]
+            # w2 = shard[14336, 352] -> [448, 44]
+            self.model_config["DECODE_MLP_W2_PRG_CONFIG"] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                # Grid size = [8, 8]
+                in0_block_w=1,  # K = 4096 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+                per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
+                per_core_N=7,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
+                fused_activation=None,
+            )
+
             if self.di_dt_workaround:
                 self.model_config[
                     "PREFILL_MLP_W2_PRG_CONFIG_128"
@@ -276,10 +299,10 @@ class TtModelArgs:
                 self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=(8, 8),
                     in0_block_w=2,
-                    per_core_M=1,
-                    per_core_N=72,  # vocab size = 128k = 4008 tiles. 4008/56cores = 72
                     out_subblock_h=1,
                     out_subblock_w=4,
+                    per_core_M=1,
+                    per_core_N=72,  # vocab size = 128k = 4008 tiles. 4008/56cores = 72
                     fuse_batch=True,
                     fused_activation=None,
                     mcast_in0=True,

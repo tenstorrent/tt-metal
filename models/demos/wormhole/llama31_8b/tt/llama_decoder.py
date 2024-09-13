@@ -102,6 +102,6 @@ class TtTransformerBlock(torch.nn.Module):
         r = r[0]
         # r = ttnn.reshape(r, (1, 1, 32, 4096))
         h = ttnn.add(x, r, memory_config=skip_mem_cfg)
-        r = self.feed_forward.forward(self.ffn_norm(h))
+        r = self.feed_forward.forward(self.ffn_norm(h), mode)
         out = ttnn.add(h, r, memory_config=skip_mem_cfg)
         return out
