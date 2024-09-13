@@ -12,7 +12,19 @@ on:
           - blackhole
       runner-label:
         required: true
+        type: choice
+        options:
+          - E150
+          - N150
+          - N300
+          - config-t3000
+          - config-tg
+          - config-tgg
+          - BH
+      runner-label:
+        required: false
         type: string
+        default: '["in-service"]'
       build-type:
         required: false
         type: choice
@@ -53,7 +65,7 @@ jobs:
     environment: dev
     runs-on:
       - ${{ inputs.runner-label }}
-      - "in-service"
+      - ${{ inputs.hw-config }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Ensure weka mount is active
