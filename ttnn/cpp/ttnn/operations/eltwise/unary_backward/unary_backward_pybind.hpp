@@ -117,6 +117,57 @@ void bind_unary_backward_op(
 }
 
 template <typename unary_backward_operation_t>
+void bind_unary_backward_rsqrt(
+    py::module& module, const unary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
+    auto doc = fmt::format(
+        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+
+        {2}
+
+        Args:
+            * :attr:`grad_tensor`
+            * :attr:`input_tensor`
+
+        Keyword args:
+            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+            * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
+            * :attr:`queue_id` (Optional[uint8]): command queue id
+
+        {3}
+
+        Example:
+
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> output = {1}(grad_tensor, input)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        supported_dtype,
+        description);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& input_grad,
+               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+                return self(queue_id, grad_tensor, input_tensor, memory_config, input_grad);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("input_grad") = std::nullopt,
+            py::arg("queue_id") = ttnn::DefaultQueueId});
+}
+
+template <typename unary_backward_operation_t>
 void bind_unary_backward_op_reciprocal(
     py::module& module, const unary_backward_operation_t& operation, std::string_view description) {
     auto doc = fmt::format(
@@ -1216,7 +1267,7 @@ void py_module(py::module& module) {
         +----------------------------+---------------------------------+-------------------+)doc",
         R"doc(Performs backward operations for sigmoid on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
 
-    detail::bind_unary_backward_op(
+    detail::bind_unary_backward_rsqrt(
         module,
         ttnn::rsqrt_bw,
         R"doc(Supported dtypes, layouts, and ranks:
