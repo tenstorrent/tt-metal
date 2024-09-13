@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -37,10 +37,6 @@ except ModuleNotFoundError:
     use_signpost = False
 
 #################
-import os
-
-os.environ["TTNN_CONFIG_OVERRIDES"] = '{"enable_fast_runtime_mode": true}'
-#################
 
 
 def get_expected_times(functional_vit):
@@ -53,7 +49,6 @@ def get_expected_times(functional_vit):
 
 
 def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measurement_iterations):
-    ops_parallel_config = {}
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
 
