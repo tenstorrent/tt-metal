@@ -97,3 +97,15 @@ uint32_t get_tile_size(const L1InterfaceOperandParams& operand) {
     return tt::tt_metal::detail::TileSize(
         tt::tt_metal::datatype_to_dataformat_converter(std::get<tt::tt_metal::DataType>(operand)));
 }
+
+tt::tt_metal::Shape get_legacy_shape(const L1InterfaceOperandParams& operand) {
+    return std::get<ttnn::Shape>(operand).value;
+}
+
+bool has_layout(const L1InterfaceOperandParams& operand, TensorMemoryLayout layout) {
+    return std::get<tt::tt_metal::MemoryConfig>(operand).memory_layout == layout;
+}
+
+std::optional<tt::tt_metal::ShardSpec> get_shard_spec(const L1InterfaceOperandParams& operand) {
+    return std::get<tt::tt_metal::MemoryConfig>(operand).shard_spec;
+}

@@ -7,11 +7,14 @@
 #include <tuple>
 #include <vector>
 
+#include "ttnn/tensor/types.hpp"
+
 // forward declarations
 namespace tt {
 namespace tt_metal {
 enum class DataType;
 enum class Layout;
+enum class TensorMemoryLayout;
 struct MemoryConfig;
 struct ShardSpec;
 }  // namespace tt_metal
@@ -70,3 +73,9 @@ uint32_t calculate_max_block_size(const std::optional<tt::tt_metal::ShardSpec>& 
 bool is_sharded(const L1InterfaceOperandParams& operand);
 
 uint32_t get_tile_size(const L1InterfaceOperandParams& operand);
+
+tt::tt_metal::Shape get_legacy_shape(const L1InterfaceOperandParams& operand);
+
+bool has_layout(const L1InterfaceOperandParams& operand, TensorMemoryLayout layout);
+
+std::optional<tt::tt_metal::ShardSpec> get_shard_spec(const L1InterfaceOperandParams& operand);
