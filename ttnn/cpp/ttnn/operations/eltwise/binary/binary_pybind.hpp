@@ -170,21 +170,30 @@ template <typename binary_operation_t>
 void bind_binary_composite(py::module& module, const binary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
         R"doc(
-            {2}
+        {2}
 
-            Args:
-                * :attr:`input_tensor_a`
-                * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
 
-            Keyword Args:
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+        Args:
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (ttnn.Tensor): the input tensor.
 
-            Example:
 
-                >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-                >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
-                >>> output = {1}(tensor1, tensor2)
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+
+        Example:
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
+            >>> output = {1}(tensor1, tensor2)
+
+
         )doc",
+
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description);
@@ -259,24 +268,33 @@ template <typename binary_operation_t>
 void bind_binary_composite_with_rtol_atol(py::module& module, const binary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
         R"doc(
-            {2}
+        {2}
 
-            Args:
-                * :attr:`input_tensor_a`
-                * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
-                * :attr:`rtol`
-                * :attr:`atol`
-                * :attr:`equal_nan`
 
-            Keyword Args:
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+        Args:
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (ttnn.Tensor): the input tensor.
+            rtol (float)
+            atol (float)
+            equal_nan (bool)
 
-            Example:
 
-                >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-                >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
-                >>> output = {1}(tensor1, tensor2, rtol, atol, equal_nan)
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+
+        Example:
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
+            >>> output = {1}(tensor1, tensor2, rtol, atol, equal_nan)
+
+
         )doc",
+
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description);
@@ -429,20 +447,30 @@ template <typename binary_operation_t>
 void bind_polyval(py::module& module, const binary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
         R"doc(
-            {2}
+        {2}
 
-            Args:
-                * :attr:`input_tensor_a`
-                * :attr:`coeffs` (Vector of floats)
 
-            Keyword Args:
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+            Coeffs (Vector of floats)
 
-            Example:
-                >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-                >>> coeffs = (1, 2, 3, 4)
-                >>> output = {1}(tensor1, coeffs)
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+
+        Example:
+            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> coeffs = (1, 2, 3, 4)
+            >>> output = {1}(tensor, coeffs)
+
+
         )doc",
+
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description);
