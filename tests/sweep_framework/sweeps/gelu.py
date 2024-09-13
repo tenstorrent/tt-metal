@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_equal, start_measuring_time, stop_measuring_time
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
@@ -27,11 +27,9 @@ parameters = {
             [1, 1, 32, 16384],
         ],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_layout": [ttnn.TILE_LAYOUT],
-        "input_b_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
 
@@ -43,17 +41,14 @@ parameters = {
 def run(
     input_shape,
     input_a_dtype,
-    input_b_dtype,
     input_a_layout,
-    input_b_layout,
     input_a_memory_config,
-    input_b_memory_config,
+    output_memory_config,
     *,
     device,
 ) -> list:
-    torch_input_tensor_a = torch_random(input_shape, -100, 100, dtype=torch.float32)
-    torch_input_tensor_b = torch_random(input_shape, -100, 100, dtype=torch.float32)
-    torch_output_tensor = torch_input_tensor_a.logical_or_(torch_input_tensor_b)
+    torch_input_tensor_a = torch_random(input_shape, -100, 100, dtype=torch.float16)
+    torch_output_tensor = torch.nn.functional.gelu(torch_input_tensor_a)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -62,16 +57,10 @@ def run(
         device=device,
         memory_config=input_a_memory_config,
     )
-    input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b,
-        dtype=input_b_dtype,
-        layout=input_b_layout,
-        device=device,
-        memory_config=input_b_memory_config,
-    )
+
     start_time = start_measuring_time()
-    ttnn.logical_or_(input_tensor_a, input_tensor_b)
-    output_tensor = ttnn.to_torch(input_tensor_a)
+    result = ttnn.gelu(input_tensor_a, memory_config=output_memory_config)
+    output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
-    return [assert_equal(torch_output_tensor, output_tensor), e2e_perf]
+    return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
