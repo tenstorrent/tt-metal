@@ -62,14 +62,12 @@ def test_to_layout_2D(device, height, width, on_device, from_layout, to_layout, 
 
 @pytest.mark.parametrize(
     "shape",
-    [
-        (1, 1, 32, 128 * 1024),
-    ],
+    [(1, 1, 32, 128 * 1024), (1, 1, 128, 5120)],
 )
 @pytest.mark.parametrize("on_device", [True])
 @pytest.mark.parametrize("from_layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("to_layout", [ttnn.ROW_MAJOR_LAYOUT])
-def test_to_layout_llama(device, shape, on_device, from_layout, to_layout):
+def test_to_layout_wide_tensor(device, shape, on_device, from_layout, to_layout):
     torch.manual_seed(0)
     torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input_tensor)
