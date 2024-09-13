@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "debug/dprint.h"
 
 // split REDUCE across cores
 void kernel_main() {
@@ -128,14 +127,11 @@ void kernel_main() {
     };
 
 
-    DPRINT << " Before Ex2 global mcast" << ENDL();
     cb_wait_front(cb_stats2, stats_tiles*block_h);
-    DPRINT << " Before Ex2pe  global mcast" << ENDL();
     cb_reserve_back(cb_ex2_global, block_h);
     global_reduce_sender(cb_stats2, cb_ex2_global);
     cb_push_back(cb_ex2_global, stats_tiles*block_h);
     cb_pop_front(cb_stats2, stats_tiles*block_h);
     global_semaphore_set();
-    DPRINT << "Sender core 0,0 done" << ENDL();
 
 }

@@ -129,7 +129,6 @@ void kernel_main() {
     noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
     // inc remote sem
     cb_reserve_back(cb_ex2_global, stats_tiles*block_h);
-    DPRINT << "Receiver wait sem" << ENDL();
     noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
     cb_push_back(cb_ex2_global, stats_tiles*block_h);
 }

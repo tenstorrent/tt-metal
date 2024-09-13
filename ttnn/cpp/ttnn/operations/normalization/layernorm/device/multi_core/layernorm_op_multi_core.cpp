@@ -556,6 +556,13 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t in0_block_tiles = block_wt * block_ht;
     // pre_all_gather_stats_block_tiles
     uint32_t pre_all_gather_stats_block_tiles = rms_norm ? 1 : 2;
+    // post_all_gather_stats_block_tiles
+    uint32_t post_all_gather_stats_block_tiles = 1;
+    uint32_t num_distributed_devices = 1;
+    if (is_post_all_gather && stats.has_value()) {
+        post_all_gather_stats_block_tiles = stats.value().get_legacy_shape()[-1] / TILE_WIDTH;
+        num_distributed_devices = post_all_gather_stats_block_tiles / pre_all_gather_stats_block_tiles;
+    }
 
     uint32_t in0_CB_tiles = in0_block_tiles;
     uint32_t in0_CB_size = in0_CB_tiles * in_single_tile_size;
@@ -581,6 +588,10 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
     uint32_t xmm2_CB_size = in0_block_tiles * single_tile_size / block_ht;
     uint32_t ex2pe_CB_size = num_rows_per_all_to_all_worker * single_tile_size;
+    uint32_t stats_cb_size = 0;
+    if (is_post_all_gather) {
+        stats_cb_size = post_all_gather_stats_block_tiles * single_tile_size;
+    }
     // output buffer size
     uint32_t out_CB_size;
     if(is_pre_all_gather) {

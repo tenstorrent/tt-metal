@@ -18,7 +18,6 @@ ttnn::Tensor ExecuteRMSNormPreAllGather::invoke(
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch() : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
     if(input_tensor.is_sharded()){
-        std::cout<< " Running LayerNorm with RMSNORM and PRE_ALL_GATHER"<<std::endl;
         return operation::run(
                 LayerNorm{
                     .norm_type = LayerNormType::RMSNORM,
