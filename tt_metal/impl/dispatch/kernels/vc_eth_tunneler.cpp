@@ -180,6 +180,7 @@ tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(
 constexpr uint32_t timeout_cycles = get_compile_time_arg_val(46);
 constexpr uint32_t inner_stop_mux_d_bypass = get_compile_time_arg_val(47);
 
+#define SWITCH_THRESHOLD 16
 void kernel_main() {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
@@ -221,42 +222,40 @@ void kernel_main() {
 
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000001);
 
-    bool timeout = false;
     bool all_outputs_finished = false;
     uint64_t data_words_sent = 0;
     uint64_t iter = 0;
     uint64_t start_timestamp = get_timestamp();
-    uint32_t progress_timestamp = start_timestamp & 0xFFFFFFFF;
-    while (!all_outputs_finished && !timeout) {
+    uint32_t switch_counter = 0;
+    while (!all_outputs_finished) {
         iter++;
-        if (timeout_cycles > 0) {
-            uint32_t cycles_since_progress = get_timestamp_32b() - progress_timestamp;
-            if (cycles_since_progress > timeout_cycles) {
-                timeout = true;
-                break;
-            }
-        }
-        all_outputs_finished = true;
+        switch_counter++;
+        all_outputs_finished = switch_counter >= SWITCH_THRESHOLD;
         for (uint32_t i = 0; i < tunnel_lanes; i++) {
             if (input_queues[i].get_curr_packet_valid()) {
                 bool full_packet_sent;
                 uint32_t words_sent =
                     output_queues[i].forward_data_from_input(0, full_packet_sent, input_queues[i].get_end_of_cmd());
-
-                progress_timestamp = get_timestamp_32b();
+                data_words_sent += words_sent;
+                if (words_sent > 0) {
+                    switch_counter = 0;
+                    all_outputs_finished = false;
+                }
             }
             output_queues[i].prev_words_in_flight_check_flush();
-            bool output_finished = output_queues[i].is_remote_finished();
-            if (output_finished) {
-                uint32_t return_vc = (inner_stop_mux_d_bypass >> 24) & 0xFF;
-                if ((i == return_vc) && (inner_stop_mux_d_bypass != 0)) {
-                    input_queues[i].remote_x = inner_stop_mux_d_bypass & 0xFF;
-                    input_queues[i].remote_y = (inner_stop_mux_d_bypass >> 8) & 0xFF;
-                    input_queues[i].set_remote_ready_status_addr((inner_stop_mux_d_bypass >> 16) & 0xFF);
+            if (switch_counter >= SWITCH_THRESHOLD) {
+                bool output_finished = output_queues[i].is_remote_finished();
+                if (output_finished) {
+                    uint32_t return_vc = (inner_stop_mux_d_bypass >> 24) & 0xFF;
+                    if ((i == return_vc) && (inner_stop_mux_d_bypass != 0)) {
+                        input_queues[i].remote_x = inner_stop_mux_d_bypass & 0xFF;
+                        input_queues[i].remote_y = (inner_stop_mux_d_bypass >> 8) & 0xFF;
+                        input_queues[i].set_remote_ready_status_addr((inner_stop_mux_d_bypass >> 16) & 0xFF);
+                    }
+                    input_queues[i].send_remote_finished_notification();
                 }
-                input_queues[i].send_remote_finished_notification();
+                all_outputs_finished &= output_finished;
             }
-            all_outputs_finished &= output_finished;
         }
 
         tt_l1_ptr launch_msg_t * const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch);
@@ -265,33 +264,25 @@ void kernel_main() {
         }
         // need to optimize this.
         // context switch to base fw is very costly.
-        internal_::risc_context_switch();
+        if (switch_counter >= SWITCH_THRESHOLD) {
+            internal_::risc_context_switch();
+            switch_counter = SWITCH_THRESHOLD;
+        }
 
     }
 
-    if (!timeout) {
-        write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000002);
-        for (uint32_t i = 0; i < tunnel_lanes; i++) {
-            if (!output_queues[i].output_barrier(timeout_cycles)) {
-                timeout = true;
-                break;
-            }
-        }
+    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000002);
+    for (uint32_t i = 0; i < tunnel_lanes; i++) {
+        output_queues[i].output_barrier();
     }
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
-    if (!timeout) {
-        write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000003);
-    }
+    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000003);
 
     set_64b_result(kernel_status, data_words_sent, PQ_TEST_WORD_CNT_INDEX);
     set_64b_result(kernel_status, cycles_elapsed, PQ_TEST_CYCLES_INDEX);
     set_64b_result(kernel_status, iter, PQ_TEST_ITER_INDEX);
 
-    if (timeout) {
-        write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
-    } else {
-        write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
-        write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff00005);
-    }
+    write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
+    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff00005);
 }

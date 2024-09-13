@@ -44,14 +44,14 @@ inline Tensor convert_to_cpp_supported_dtype(const Tensor& input_tensor) {
         input_tensor.get_storage());
 
     if (input_dtype == DataType::BFLOAT8_B) {
-        TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(buffer),__FILE__, __LINE__));
+        TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(buffer));
         auto uint32_data = std::get<owned_buffer::Buffer<std::uint32_t>>(std::get<OwnedBuffer>(buffer)).get();
         auto float_unpacked_data =
             unpack_bfp8_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
         buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
         input_dtype = DataType::FLOAT32;
     } else if (input_dtype == DataType::BFLOAT4_B) {
-        TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(buffer),__FILE__, __LINE__));
+        TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(buffer));
         auto uint32_data = std::get<owned_buffer::Buffer<std::uint32_t>>(std::get<OwnedBuffer>(buffer)).get();
         auto float_unpacked_data =
             unpack_bfp4_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
@@ -147,7 +147,7 @@ inline Tensor create_tensor_from_buffer(
                 .to(ttnn::TILE_LAYOUT);  // has to be in tile layout
         }
         default: {
-            TT_THROW(fmt::format("Unsupported DataType: {}", dtype));
+            TT_THROW("Unsupported DataType: {}", dtype);
             break;
         }
     }
@@ -178,7 +178,7 @@ inline Tensor convert_to_dtype(const Tensor& input_tensor, const Layout& input_l
                 auto buffer = host_buffer::get_as<::bfloat16>(input_tensor);
                 return create_tensor_from_buffer(buffer, input_tensor.get_shape(), input_layout, dtype);
             }
-            default: TT_THROW(fmt::format("Unsupported DataType: {}", input_dtype)); break;
+            default: TT_THROW("Unsupported DataType: {}", input_dtype); break;
         }
     };
     return is_multi_device_tensor(input_tensor) ? transform(input_tensor, convert_dtype) : convert_dtype(input_tensor);

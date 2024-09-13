@@ -15,7 +15,7 @@ namespace ttnn::operations::experimental::transformer {
     static inline operation::ProgramWithCallbacks create_heads_combined_qkv_sharded(const Tensor &input_tensor, const std::vector<uint32_t> &&heads_per_group, const uint32_t head_dim, const uint32_t groups, std::vector<Tensor> &output, bool transpose_k) {
         // groups = kv_heads usually
         // heads_per_group = [x 1 1] if qkv since q_heads >= kv_heads and k=v heads but this should be generic
-        TT_FATAL(head_dim % TILE_WIDTH == 0, fmt::format("head dim {} needs to be a multiple of tile width {}", head_dim, TILE_WIDTH));
+        TT_FATAL(head_dim % TILE_WIDTH == 0, "head dim {} needs to be a multiple of tile width {}", head_dim, TILE_WIDTH);
         TT_FATAL(heads_per_group.size() == output.size() && output.size() == 3, "Error");
 
         const uint32_t total_heads_per_group = std::accumulate(heads_per_group.begin(), heads_per_group.end(), 0); // num q heads + 2 * num_kv_heads
@@ -24,8 +24,8 @@ namespace ttnn::operations::experimental::transformer {
 
         const auto &input_shape = input_tensor.get_legacy_shape();
 
-        TT_FATAL(input_shape[3] % elements_per_group == 0, fmt::format("flattened inner tensor dimension {} does not divide evenly into head dim {}, heads per group, and groups {}", input_shape[3], head_dim, groups));
-        TT_FATAL(input_shape[2] % TILE_HEIGHT == 0, fmt::format("Sequence length {} must divide evenly into Tiles of Tile Height {}", input_shape[2], TILE_HEIGHT));
+        TT_FATAL(input_shape[3] % elements_per_group == 0, "flattened inner tensor dimension {} does not divide evenly into head dim {}, heads per group, and groups {}", input_shape[3], head_dim, groups);
+        TT_FATAL(input_shape[2] % TILE_HEIGHT == 0, "Sequence length {} must divide evenly into Tiles of Tile Height {}", input_shape[2], TILE_HEIGHT);
         TT_FATAL(input_tensor.shard_spec().has_value() == true, "Unsharded input is invalid for create_qkv_heads");
 
         auto shard_spec = input_tensor.shard_spec().value();
@@ -36,8 +36,8 @@ namespace ttnn::operations::experimental::transformer {
         uint32_t num_h_cores = rm ? bbox.end_coord.y + 1 : bbox.end_coord.x + 1;
         uint32_t num_w_cores = rm ? bbox.end_coord.x + 1 : bbox.end_coord.y + 1;
 
-        TT_FATAL(input_shape[3] % (num_w_cores * TILE_WIDTH) == 0, fmt::format("Flattened hidden dimensions of QKV {} must be a multiple of width cores {} times tile width {}", input_shape[3], num_w_cores, TILE_WIDTH));
-        TT_FATAL(groups % num_w_cores == 0, fmt::format("number of groups {} must be a multiple of the number of width cores {}", groups, num_w_cores));
+        TT_FATAL(input_shape[3] % (num_w_cores * TILE_WIDTH) == 0, "Flattened hidden dimensions of QKV {} must be a multiple of width cores {} times tile width {}", input_shape[3], num_w_cores, TILE_WIDTH);
+        TT_FATAL(groups % num_w_cores == 0, "number of groups {} must be a multiple of the number of width cores {}", groups, num_w_cores);
 
         uint32_t groups_per_block = groups / num_w_cores;
         uint32_t M = input_shape[2]*input_shape[0];
@@ -46,14 +46,14 @@ namespace ttnn::operations::experimental::transformer {
         uint32_t Kt = K / TILE_WIDTH;
         uint32_t block_wt = Kt / num_w_cores; // number of tiles in width dimension  - multiple tiles per head, multiple heads per group, multiple tensors in group, multiple groups per cores
 
-        TT_FATAL(Mt % num_h_cores == 0, fmt::format("Outer dimension of batch {} times sequence length {} must divide evenly across cores {}", input_shape[0], input_shape[2], num_h_cores));
+        TT_FATAL(Mt % num_h_cores == 0, "Outer dimension of batch {} times sequence length {} must divide evenly across cores {}", input_shape[0], input_shape[2], num_h_cores);
         uint32_t block_ht = Mt / num_h_cores; // number of tiles in each each batch*seq_len dimension
-        TT_FATAL(input_shape[2] % (block_ht * TILE_HEIGHT) == 0, fmt::format("Per core work load must be within a batch. The sequence length {} and elements in each height shard {} must divide evenly", input_shape[2], block_ht*TILE_HEIGHT));
+        TT_FATAL(input_shape[2] % (block_ht * TILE_HEIGHT) == 0, "Per core work load must be within a batch. The sequence length {} and elements in each height shard {} must divide evenly", input_shape[2], block_ht*TILE_HEIGHT);
         uint32_t per_core_tiles = block_ht * block_wt;
 
         auto data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
         uint32_t single_tile_size = tile_size(data_format);
-        TT_FATAL(L1_SIZE >= 2 * per_core_tiles * single_tile_size, fmt::format("Workload of Tiles {} at Tile Size {} (times 2 for output) exceeds L1 capacity {}", per_core_tiles, single_tile_size, L1_SIZE));
+        TT_FATAL(L1_SIZE >= 2 * per_core_tiles * single_tile_size, "Workload of Tiles {} at Tile Size {} (times 2 for output) exceeds L1 capacity {}", per_core_tiles, single_tile_size, L1_SIZE);
 
         std::vector<uint32_t> num_tiles_per_group;
         num_tiles_per_group.reserve(output.size());
@@ -191,7 +191,7 @@ namespace ttnn::operations::experimental::transformer {
      * Combined batch/sequence sharding is possible too...that may best be left as an extension
     */
     operation::ProgramWithCallbacks multi_core_create_qkv_heads_sharded(const Tensor &input_tensor_qkv, const uint32_t num_q_heads, const uint32_t num_kv_heads, const uint32_t head_dim, const bool transpose_k_heads, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
-        TT_FATAL(num_q_heads % num_kv_heads == 0, fmt::format("num q heads {} / num kv heads {} needs to be a whole number", num_q_heads, num_kv_heads));
+        TT_FATAL(num_q_heads % num_kv_heads == 0, "num q heads {} / num kv heads {} needs to be a whole number", num_q_heads, num_kv_heads);
         return create_heads_combined_qkv_sharded(input_tensor_qkv, {num_q_heads/num_kv_heads, 1, 1}, head_dim, num_kv_heads, output, transpose_k_heads);
     }
 } // namespace ttnn::operations::experimental::transformer

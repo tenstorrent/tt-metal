@@ -7,6 +7,7 @@
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "ttnn/cpp/ttnn/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -378,21 +379,33 @@ std::vector<Tensor> _sigmoid_bw(
     return grad_tensor;
 }
 
-std::vector<Tensor> _rsqrt_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor rsqrt_result = ttnn::power(ttnn::rsqrt(input, true, output_mem_config), 3, output_mem_config);
-    Tensor result = ttnn::multiply(ttnn::multiply(grad, rsqrt_result, std::nullopt, output_mem_config), -0.5, std::nullopt, output_mem_config);
+std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardRsqrt::invoke(uint8_t queue_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
+    std::vector<std::optional<Tensor>> result;
+    if(!input_grad.has_value()){
+        input_grad = ttnn::zeros_like(grad);
+    }
     float t_inf = std::numeric_limits<float>::infinity();
-    result = where(ttnn::eqz(input, output_mem_config), t_inf, result, output_mem_config);
     float t_nan = std::nanf("");
-    result = where(ttnn::ltz(input, output_mem_config), t_nan, result, output_mem_config);
-    result = where(
-        ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
+
+    ttnn::rsqrt(queue_id, input, true, output_mem_config, input_grad);
+    ttnn::power(queue_id, input_grad.value(), 3, output_mem_config, input_grad);
+    ttnn::multiply(queue_id, ttnn::multiply(queue_id, grad, input_grad.value(), std::nullopt, output_mem_config), -0.5, std::nullopt, output_mem_config, input_grad);
+    where(queue_id, ttnn::eqz(queue_id, input, output_mem_config), t_inf, input_grad.value(), output_mem_config, input_grad);
+    where(queue_id, ttnn::ltz(queue_id, input, output_mem_config), t_nan, input_grad.value(), output_mem_config, input_grad);
+    where(
+        queue_id,
+        ttnn::logical_and(queue_id, ttnn::eqz(queue_id, input, output_mem_config), ttnn::eqz(queue_id, grad, output_mem_config), std::nullopt, output_mem_config),
         t_nan,
-        result,
-        output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
+        input_grad.value(),
+        output_mem_config,
+        input_grad);
+
+    result.emplace_back(input_grad);
+    return result;
+}
+
+std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardRsqrt::invoke(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    return ExecuteUnaryBackwardRsqrt::invoke(DefaultQueueId, grad, input, output_mem_config);
 }
 
 std::vector<std::optional<Tensor>> ExecuteUnaryBackwardNeg::invoke(uint8_t queue_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {

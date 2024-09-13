@@ -137,13 +137,18 @@ Every Wormhole Ethernet core is uniform in performance, all capable of sending a
 
 Minimum Packet Size: 16 B  
 Maximum Packet Size: 1500 B  
-Packet Header Size + CRC: 22 + 1 B = 33B
+Packet Overheads: 50+B
+- 14B Raw Packet header
+- 16 Byte Packet header
+- 16B MAC header
+- some bytes for FEC header
+- 4B CRC
 
-The numbers above lead to a workload bandwidth utilization curve which is shown below. For any reasonably sized payload (as small as a single bfp4 tile) leads to minimal overheads of less than 5%. Payloads larger than 1KB are in the roughly 3% to 1.5% packet header overhead range. 
+The numbers above lead to a workload bandwidth utilization curve which is shown below. For any reasonably sized payload (as small as a single bfp4 tile) leads to minimal overheads. For small packets, ~91% utilization is possible and for typical packets - tiles of bfp8, fp16 - there are overheads of  less than 5% . Payloads larger than 1KB are in the roughly 6% to 3% packet header + CRC overhead range. 
 
 Note: The payload sent can be larger than the maximum packet size. The Ethernet subsystem will break the larger payload into smaller packets.  
 
-![](images/workload_theoretical_peak_util.png) 
+![](images/workload_theoretical_peak_util.svg) 
 
 In aggregate, when all 16 Ethernet links are active, a single Wormhole chip provides 1600Gbps of ethernet bandwidth in each direction, for a total of 3200 Gbps (400 GB/s) bi-directional bandwidth. 
 
@@ -154,8 +159,6 @@ Ethernet links may occasionally go down from time to time. Although rare in isol
 When writing ERISC kernels, it is important to use the dataflow API calls in [`eth/dataflow_api.hpp`](https://github.com/tenstorrent/tt-metal/blob/97b21652e1a00579882427a21e95db318bc0c079/tt_metal/hw/inc/ethernet/dataflow_api.h) instead of [`dataflow_api.hpp`](https://github.com/tenstorrent/tt-metal/blob/97b21652e1a00579882427a21e95db318bc0c079/tt_metal/hw/inc/dataflow_api.h) because of the embedded calls to `run_routing()`.
 
 By default, with the current data flow APIs, it is currently not possible to avoid calling of the `run_routing()` function unless the kernel has an infinite loops that does not call any of the ethernet data flow API functions under [`eth/dataflow_api.hpp`](https://github.com/tenstorrent/tt-metal/blob/97b21652e1a00579882427a21e95db318bc0c079/tt_metal/hw/inc/ethernet/dataflow_api.h).
-
-TODO: Track link retraining counts
 
 ## Ethernet and Cluster Connectivity
 
@@ -270,7 +273,7 @@ When both the eth_channel_sync_t and payload are merged, the channel synchroniza
 
 The following code snippet shows an example of a packet send that extends the payload size by 16 bytes (or one Ethernet word) to include a channel synchronization flit that was allocated at the end of the buffer.
 
-```
+```c++
 // Sender channel side, src, dest buffer addresses match in this example  
 volatile eth_channel_sync_t* channel_sync = buffer_base_address + buffer_size_bytes;  
 channel_sync->bytes_sent = buffer_size_bytes;  
@@ -443,7 +446,7 @@ When writing ERISC kernels, Ethernet cores must be targeted by the `CreateKernel
 When specifying Ethernet cores logically, the logical coordinate is of the form CoreCoord(0, channel_id), where channel_id is the index into the `eth` list in the (Wormhole) architecture file:
 
 
-```   
+```yaml   
 eth:  
 [ 9-0, 1-0, 8-0, 2-0, 7-0, 3-0, 6-0, 4-0,  
   9-6, 1-6, 8-6, 2-6, 7-6, 3-6, 6-6, 4-6]
@@ -462,7 +465,7 @@ To aid the user in identifying Ethernet core and link connectivity, an API is ma
 
 The following example shows how a user can identify an Ethernet core pair between their chosen local device and the device with chip ID = 1.
 
-```  
+```c++
 // Acquire your device  
 Device *local_device = …;
 
@@ -503,7 +506,7 @@ auto [remote_device_id, receiver_core] =
 
 Creating ERISC core kernels is the same process as creating kernels on Tensix cores, with the key difference being the kernel type that is specified. For ERISC kernels, specify the `EthernetConfig` kernel config.
 
-```  
+```c++
 auto eth_sender_kernel = tt_metal::CreateKernel(  
     program,  
     "path_to_ethernet_kernel",  
@@ -524,7 +527,7 @@ The following snippet is an example implementation of a simple handshaking schem
 
 The 16B payload to/from `handshake_scratch_address` is a dummy payload that is sent to an address that is safe to clobber with the handshake payload.  
    
-```  
+```c++  
 // Pick an arbitrary address to send the payload for eth_send_bytes to use  
 // ERISC_L1_UNRESERVED_BASE is the base address of the kernel usable memory address   
 // range  
@@ -543,8 +546,9 @@ if (is_master_in_handshake) {
 
 ## Ethernet Kernel Teardown
 
-In this example, the ERISC kernel is using the built in `ERISC_info->channels` for flow control over the ethernet link. For a number of these channels, the ERISC kernel is acting as a sender. This code excerpt is intended to be run at the end of the kernel.  
-```  
+In this example, the ERISC kernel is using the built in `ERISC_info->channels` for flow control over the ethernet link. For a number of these channels, the ERISC kernel is acting as a sender. This code excerpt is intended to be run at the end of the kernel.
+
+```c++  
 for (std::size_t i = sender_channels_start;   
      i < sender_channels_start + num_sender_channels;   
      i++  
@@ -603,7 +607,8 @@ The implementation of each device kernel is described in further detail in this 
 ### Receiver Kernel
 
 Intialization: initialize local data-structures and wait for go signal from setup kernel  
-```  
+
+```c++  
 // This address resides in the eth_channel_sync data-structure for the Ethernet   
 // channel  
 *(volatile uint32_t*)channels_sem_addr = 0;
@@ -619,13 +624,13 @@ eth_noc_semaphore_wait(start_semaphore, 1);
 ```
 
 Handshake with sender over Ethernet link: make sure it’s safe to send/receive over the link.  
-```  
+```c++  
  eth_setup_handshake(handshake_addr, false);  
 ```  
 Refer to section “Ethernet Kernel Setup (Device Side)” for a sample eth handshake implementation
 
 Send the pings in a loop. The first one isn’t measured because other chips might not be programmed or initialized yet.  
-```  
+```c++  
 // Clear the ring  
 roundtrip_ping<false>(  
     channels_addrs,   
@@ -653,7 +658,7 @@ for (uint32_t i = 0; i < num_samples; i++) {
 #### Master Receiver roundtrip_ping Implementation 
 
 The “Master Receiver” roundtrip_ping starts with injecting a packet into the ring to the downstream “Sender” kernel on the local chip:  
-```  
+```c++  
 uint32_t sender_sem = channels_sem_addrs[i];  
 uint32_t buffer_addr = channels_addrs[i];  
 uint64_t send_buffer_noc_addr = get_noc_addr(eth_noc_x, eth_noc_y, buffer_addr);  
@@ -669,7 +674,7 @@ eth_noc_async_write_barrier();
 ```
 
 Next, the kernel waits for the payload from the producer “Sender” kernel, from over the Ethernet link. We explicitly avoid using the context switching eth_dataflow_api call because this is a microbenchmark and we want minimal overhead. In real-world workloads, we must ensure there is an escape path to eventually reach the Erisc context switch in case links need to be retrained. If this loop is in production, it is recommended to modify it to have an idle count that occasionally context switches after many loop iterations. This recommendation is in place until updated APIs are made available to directly query Ethernet link health with only a few register read operations.  
-```  
+```c++  
 while(!eth_bytes_are_available_on_channel(i)) {  
     asm volatile ("");  
 }  
@@ -680,13 +685,13 @@ while(!eth_bytes_are_available_on_channel(i)) {
 This code sequence is for the non-master receiver kernel, but has overlap with the “Master Receiver” roundtrip_ping implementation. Similar to the “Master Receiver” Ethernet packet wait code block, we use a non-context switching loop. 
 
 First wait for the packet to arrive over Ethernet. 
-```  
+```c++  
 while(!eth_bytes_are_available_on_channel(i)) {  
     asm volatile ("");  
 }  
 ```  
 Next, send the “Sender” kernel on the local chip the payload that was just received. Also notify it of a payload available with a semaphore increment.  
-```  
+```c++  
 // Forward the payload to the sender on this chip  
 uint64_t send_buffer_noc_addr = get_noc_addr(eth_noc_x, eth_noc_y, channel_buffer_addr);  
 uint64_t send_sem_noc_addr = get_noc_addr(eth_noc_x, eth_noc_y, channel_sender_sem);  
@@ -697,7 +702,7 @@ noc_semaphore_inc(send_sem_noc_addr, 1);
 ```
 
 Finally, we must complete the transaction with the upstream sender by acknowledging the payload and sending completion.   
-```  
+```c++  
 // We send an acknowledgement to the upstream sender, as soon as possible, so that the // ack isn’t delayed behind the write to the local sender kernel to complete  
 eth_receiver_channel_ack(0, eth_channel_sync_ack_addr);  
 eth_noc_async_write_barrier();
@@ -717,7 +722,7 @@ The sender does not wait for a response signal from the set up worker because it
 #### Sender Kernel ‘forward_ping’ Implementation
 
 The core functionality of the forward_ping operation for the “Sender” kernel is specified below. This implementation is simplified to support only one transaction channel. 
-``` 
+```c++ 
 // We use a non-context switching semaphore wait. To use the context switching   
 // version, use the version of the function that is prefixed with `eth_`  
 noc_semaphore_wait(sem_addr, 1);  
@@ -741,7 +746,7 @@ Most of the host program code will be omitted because it is common and typical f
 
 First, depending on the ring size that is desired for the workload, a device ordering is specified. A T3000 system is assumed for this workload. This device ordering ensures that all the devices are adjacent in the ring, rather than being distributed in a non-ring topology.
 
-```  
+```c++  
 auto get_device_list = [](std::vector<Device*> const& all_devices, std::size_t n_hops) {  
   switch (n_hops) {  
     case 2:  
@@ -773,7 +778,7 @@ auto get_device_list = [](std::vector<Device*> const& all_devices, std::size_t n
 
 For every chip in the multichip ring, the specific Ethernet links between neighboring chips must be chosen. In other words, a route for the ring must be chosen. For each hop on the ring, Ethernet cores are chosen that connect to the same Ethernet links as the Ethernet cores on the neighbor hop chip. 
 
-``` 
+```c++ 
 std::vector<hop_eth_sockets> build_eth_sockets_list(  
   std::vector<Device*> const& devices  
 ) {  
@@ -844,7 +849,7 @@ std::vector<hop_eth_sockets> build_eth_sockets_list(
 
 The kernel setup is done with the data structures that are initialized in the prior two steps. The routine iterates through each hop in the ring, and instantiates the “Receiver”, “Sender”, and helper worker kernels for each one. In this particular test, we may hop over a given chip more than once, so we keep track of which program maps to which device in the event that we need to add more kernels -for a future hop -to that chip’s program.
 
-```
+```c++
 void build_and_run_roundtrip_latency_test(  
    std::vector<Device*> devices,  
    std::vector<hop_eth_sockets> hop_eth_sockets,  
@@ -973,7 +978,8 @@ This subsection outlines, step by step, how the sequence between the sender work
 
 The below snippet shows a simple sequence to implement the transaction sequence from sender worker to EDM sender channel. This snippet could be wrapped in one (or more loops), if the op requires multiple packets to be sent.
 
-``` // sender worker snippet  
+```c++
+// sender worker snippet  
 // wait for EDM to signal to sender worker that a buffer can be written to  
 noc_semaphore_wait(receiver_local_semaphore_address, 1);
 
@@ -1030,7 +1036,8 @@ EDM Channel Fields:
 
 This subsection outlines, step by step, how the sequence between the EDM receiver channel and receiver worker progresses. 
 
-``` // receiver worker snippet  
+```c++
+// receiver worker snippet  
 // wait for EDM to signal to worker that a packet is available  
 noc_semaphore_wait(receiver_local_semaphore_address, 1);
 
@@ -1079,9 +1086,6 @@ Line and ring topologies map well onto static routing and static channel allocat
 
 Additionally, with these ring and line algorithms where all transfers are only to immediate neighbor chips, it is always sufficient to perform a single handshake between the ERISC cores on either end of the link of the directly connected chips to ensure end-to-end synchronization with respect to source and destination readiness. 
 
-## EDM Performance
-
-Plot TODO but measured upwards of 20 GB/s link util
 
 # Host CCL Op Builder Components {#host-ccl-op-builder-components}
 
@@ -1116,8 +1120,8 @@ First we can create an EDM builder. Today, we must, ahead of time, decide on the
 There is currently one usability improvement to the builder that is missing that will be resolved in the future which is that it is currently up to the user to identify the EDM channel buffer addresses ahead of time before instantiating the builder. This logic will be incorporated and hidden in the builder in the future, which will streamline its use and remove certain bug categories from appearing. The recommendation to avoid this issue is to use the [`ccl::create_erisc_datamover_builder`](https://github.com/tenstorrent/tt-metal/blob/8b3ad7d17f76e611a77661dbc44fb30b1213a44d/tt_eager/tt_dnn/op_library/ccl/ccl_common.cpp#L111) function which abstracts this concern away.
 
 In the example, we are only instantiating a single channel that will be used by a single worker and forward a fixed number of messages before terminating. We use the `create_erisc_datamover_builder` function to streamline address generation.  
-```  
-Std::size_t num_edm_channels = 1;  
+```c++  
+std::size_t num_edm_channels = 1;  
 auto buffer_sharing_mode = ccl::EriscDataMoverBufferSharingMode::NOT_SHARED;  
 auto edm_termination_mode = ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED;   
 ccl::EriscDataMoverBuilder edm_builder = create_erisc_datamover_builder(  
@@ -1130,7 +1134,7 @@ ccl::EriscDataMoverBuilder edm_builder = create_erisc_datamover_builder(
 After this point, the EDM builder can be used to establish connections between workers and channels. These associations produce resolved buffer and semaphore addresses when kernel runtime arguments are specified.
 
 We may wish to assign a worker to a sender channel of the builder. For this channel, the worker will *push* packets to the EDM channel. We create the association with the [`add_sender_channel`](https://github.com/tenstorrent/tt-metal/blob/d14f694198a1993ccac2d629225abd8ce92f56a8/tt_eager/tt_dnn/op_library/ccl/ccl_host_datastructures.hpp#L222) method.   
-```  
+```c++  
 ccl::EriscDatamoverBuilder::ChannelBufferInterface const& sender_channel_buffer_info =  
     edm_builder.add_sender_channel(  
         worker_sender_semaphore_address,  
@@ -1139,7 +1143,7 @@ ccl::EriscDatamoverBuilder::ChannelBufferInterface const& sender_channel_buffer_
         packet_size_bytes);  
 ```  
 With the returned `ChannelBufferInterface`, we can generate arguments at a later point  
-```  
+```c++  
 // ... later in the host code, when setting arguments for the sender worker
 
 tt_metal::SetRuntimeArgs(  
@@ -1151,7 +1155,7 @@ tt_metal::SetRuntimeArgs(
 
         // This argument tells the sender worker where to write the payload  
         // in the EDM L1  
-     sender_channel_buffer_info.eth_buffer_l1_address,
+        sender_channel_buffer_info.eth_buffer_l1_address,
 
         // This argument tells the sender worker where to signal to the EDM  
         // that a new payload is available  
@@ -1163,7 +1167,7 @@ tt_metal::SetRuntimeArgs(
 Note that both sender and receiver channels can be added to an EDM builder.
 
 After all channels have been registered with a given EDM, the EDM can be built with the ccl::generate_edm_kernel function. This function should only be called once per EDM per link per chip. Calling this function multiple times for a given Ethernet core is an error.  
-```  
+```c++  
 auto edm_sender_kernel =  
     ccl::generate_edm_kernel(  
         program,   
@@ -1293,7 +1297,7 @@ All-gather has a special attribute that it is a pure data movement operation wit
 
 Invoking allgather is straightforward when a mesh tensor is available for the input. The all-gather op currently doesn’t support out of order tensors with respect to chip ordering in the line or ring. Any constructed mesh tensor must therefore also contain the ordered tensors as they would be mapped to the ring.
 
-```  
+```python  
 result_mesh_tensor = ttnn.all_gather(input_mesh_tensor, dim)  
 optional kw_args: 
 

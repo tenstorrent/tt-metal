@@ -108,7 +108,7 @@ ParallelConfig determine_parallel_config(
             return 1u;
         }
 
-        TT_FATAL("Conv2d supports Height, Block or Width Sharded Layouts but got ",shard_layout);
+        TT_THROW("Conv2d supports Height, Block or Width Sharded Layouts but got {}",shard_layout);
         return 0u;
     };
 
@@ -138,7 +138,7 @@ ParallelConfig determine_parallel_config(
             return grid;
 
         } else {
-           TT_FATAL("Conv2d supports Height, Block or Width Sharded Layouts but got ",shard_layout);
+           TT_THROW("Conv2d supports Height, Block or Width Sharded Layouts but got {}", shard_layout);
             return CoreRangeSet({});
         }
     };
@@ -217,7 +217,7 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
         nhw_padded = round_up(nhw_shape, num_cores_nhw * tile_size);
     }
     uint32_t nhw_shard = nhw_padded / num_cores_nhw;
-    TT_ASSERT(channels % num_cores_channels == 0, channels, num_cores_channels);
+    TT_ASSERT(channels % num_cores_channels == 0, "Channels: {}, num core channels: {}", channels, num_cores_channels);
     uint32_t channel_shard = channels / num_cores_channels;
     auto shard_spec = ShardSpec{parallel_config.grid, {nhw_shard, channel_shard}, shard_orientation};
     return MemoryConfig{shard_scheme, BufferType::L1, shard_spec};
@@ -229,13 +229,13 @@ OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_o
     TT_ASSERT(conv_output_mem_config.shard_spec.has_value());
     const auto& shard_spec = conv_output_mem_config.shard_spec.value();
     const auto& shard_shape = shard_spec.shape;
-    TT_ASSERT(shard_shape[0] % 32 == 0);
+    TT_ASSERT(conv_output_mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED || shard_shape[0] % 32 == 0);
     TT_ASSERT(shard_shape[1] % 32 == 0);
     return {
         .grid_size = shard_spec.grid.bounding_box().grid_size(),
         .num_cores_nhw = num_cores_nhw,
         .num_cores_c = num_cores_c,
-        .per_core_out_matrix_height_ntiles = shard_shape[0] / 32,
+        .per_core_out_matrix_height_ntiles = tt::round_up(shard_shape[0], 32) / 32,
         .per_core_out_matrix_width_ntiles = shard_shape[1] / 32,
     };
 }
@@ -765,8 +765,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             sliding_window_config.pad_hw.first==0 &&
             sliding_window_config.pad_hw.second==0
             );
-        if(bypass_halo)
-        {
+        if(bypass_halo) {
             // call conv micro op
             auto conv_output = optimized_conv_new(
                 input_tensor_post_tm,

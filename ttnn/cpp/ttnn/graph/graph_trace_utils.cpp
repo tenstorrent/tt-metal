@@ -165,7 +165,7 @@ std::unordered_set<uint32_t> extract_output_tensors(const nlohmann::json& trace)
                 return v;
             }
         }
-        TT_FATAL(false, "No function_end node found in the trace");
+        TT_THROW("No function_end node found in the trace");
     };
 
     const auto& function_end_node = find_function_end_node(trace);

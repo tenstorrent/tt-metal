@@ -113,7 +113,7 @@ def run_max_pool(
     # interleaved_mem_config = ttnn.L1_MEMORY_CONFIG
     # output = ttnn.to_memory_config(output, interleaved_mem_config)
     output_host = output.cpu()
-    output_pytorch_padded = ttnn.to_torch(output_host)
+    output_pytorch_padded = torch.Tensor(ttnn.to_torch(output_host))
     output_pytorch = output_pytorch_padded[:, :, :, :in_c]
 
     ## reference
@@ -129,9 +129,11 @@ def run_max_pool(
     ## test for equivalance
     golden_shape = golden_pytorch.shape
     output_pytorch = output_pytorch.reshape(golden_shape[0], golden_shape[2], golden_shape[3], golden_shape[1])
-    output_pytorch = torch.permute(output_pytorch, (0, 3, 1, 2))  ## N, C, H, W
+
     # torch.save(output_pytorch, "output_pytorch.pt")
     # torch.save(golden_pytorch, "golden_pytorch.pt")
+
+    output_pytorch = torch.permute(output_pytorch, (0, 3, 1, 2))  ## N, C, H, W
     passing, pcc = assert_with_pcc(output_pytorch, golden_pytorch)
 
     logger.debug(f"Passing: {passing}, PCC: {pcc}")
@@ -187,6 +189,10 @@ def run_max_pool(
             # [64, 16, 528, 80],  ## oom
             # [128, 16, 528, 80], ## oom
             # [256, 16, 528, 80], ## oom
+            ## wide for vgg
+            [1, 256, 56, 56],
+            [1, 512, 28, 28],
+            [1, 512, 14, 14],
         )
     ),
 )
@@ -218,6 +224,7 @@ def test_run_max_pool(
     dilation,
     device,
     dtype,
+    use_program_cache,
 ):
     run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype)
 
@@ -258,6 +265,7 @@ def test_run_max_pool_yolov4(
     dilation,
     device,
     dtype,
+    use_program_cache,
 ):
     run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype)
 

@@ -1,5 +1,4 @@
-
-#/bin/bash
+#!/bin/bash
 set -eo pipefail
 
 run_tgg_tests() {

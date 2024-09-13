@@ -32,10 +32,9 @@ void EmbeddingBackward::validate(const std::vector<Tensor> &input_tensors) const
 
     TT_FATAL(
         index_tensor_shape[1] == 1 && index_tensor_shape[2] == 1,
-        fmt::format(
-            "Only dim 0 && 3 for the index tensor can be non 1, but found {} && {}.",
-            index_tensor_shape[1],
-            index_tensor_shape[2]));
+        "Only dim 0 && 3 for the index tensor can be non 1, but found {} && {}.",
+        index_tensor_shape[1],
+        index_tensor_shape[2]);
 
     TT_FATAL(
         index_tensor_shape[-1] % TILE_WIDTH == 0,
@@ -56,10 +55,9 @@ void EmbeddingBackward::validate(const std::vector<Tensor> &input_tensors) const
 
     TT_FATAL(
         grad_tensor_shape[0] == 1 && grad_tensor_shape[1] == 1,
-        fmt::format(
-            "First two dimensions for the gradient tensor must be 1, but found {} && {}.",
-            grad_tensor_shape[0],
-            grad_tensor_shape[1]));
+        "First two dimensions for the gradient tensor must be 1, but found {} && {}.",
+        grad_tensor_shape[0],
+        grad_tensor_shape[1]);
 
     TT_FATAL(
         grad_tensor_shape[-1] % TILE_WIDTH == 0,
