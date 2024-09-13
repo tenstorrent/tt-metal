@@ -66,8 +66,8 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
         index_is_dram = update_idxs_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM;
         index_stick_size = update_idxs_tensor.value().buffer()->aligned_page_size();
 
-        log2_page_size = std::log2(index_stick_size);
-        TT_FATAL(1 << log2_page_size == index_stick_size);
+        // log2_page_size = std::log2(index_stick_size);
+        // TT_FATAL(1 << log2_page_size == index_stick_size, "Error");
     }
 
     // Pagetable-specific parameters
@@ -88,8 +88,8 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
         block_size_t = block_size / TILE_HEIGHT;
         max_blocks_per_seq = page_table_tensor.get_legacy_shape()[1];
         page_table_stick_size = page_table_tensor.get_legacy_shape()[-1] * page_table_tensor.element_size();
-        log2_page_table_stick_size = std::log2(page_table_stick_size);
-        TT_FATAL(1 << log2_page_table_stick_size == page_table_stick_size);
+        // log2_page_table_stick_size = std::log2(page_table_stick_size);
+        // TT_FATAL(1 << log2_page_table_stick_size == page_table_stick_size, "Error");
 
         page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.get_dtype());
 

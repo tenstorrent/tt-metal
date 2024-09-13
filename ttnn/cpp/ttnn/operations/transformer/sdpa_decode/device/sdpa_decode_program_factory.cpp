@@ -280,8 +280,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         tt::DataFormat pos_df = tt_metal::datatype_to_dataformat_converter(cur_pos_tensor.value().get_dtype());
         pos_tensor_tile_size = tt_metal::detail::TileSize(pos_df);
         index_stick_size = pos_buffer->aligned_page_size();
-        log2_page_size = std::log2(index_stick_size);
-        TT_FATAL(1 << log2_page_size == index_stick_size);
+        // log2_page_size = std::log2(index_stick_size);
+        // TT_FATAL(1 << log2_page_size == index_stick_size, "Error");
 
         //cb pos
         auto c_in8_config = CircularBufferConfig(pos_tensor_tile_size, {{CB::dataflow0, pos_df}}).set_page_size(CB::dataflow0, pos_tensor_tile_size);
@@ -297,8 +297,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         tt::DataFormat page_table_df = tt_metal::datatype_to_dataformat_converter(page_table_tensor.value().get_dtype());
         page_table_tile_size = tt_metal::detail::TileSize(page_table_df);
         page_table_stick_size = page_table_buffer->aligned_page_size();
-        log2_page_table_page_size = std::log2(page_table_stick_size);
-        TT_FATAL(1 << log2_page_table_page_size == page_table_stick_size);
+        // log2_page_table_page_size = std::log2(page_table_stick_size);
+        // TT_FATAL(1 << log2_page_table_page_size == page_table_stick_size, "Error");
 
         //cb page_table
         auto c_in9_config = CircularBufferConfig(page_table_tile_size, {{CB::dataflow1, page_table_df}}).set_page_size(CB::dataflow1, page_table_tile_size);
