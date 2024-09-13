@@ -1,43 +1,52 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-// based on reduce_op_multi_core_w.cpp in reduce op
 
-#include <algorithm>
+#include <vector>
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_mean/moreh_mean_op.hpp"
+#include "common/bfloat16.hpp"
+#include "moreh_mean_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/reduction/generic/device/common.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
-namespace tt {
-using namespace constants;
-namespace operations {
+namespace ttnn::operations::moreh::moreh_mean {
+MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::MorehMeanWFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    using namespace tt;
+    using namespace tt::tt_metal;
+    using namespace tt::operations::primary;
 
-namespace primary {
+    auto input = tensor_args.input;
+    auto output = output_tensor;
+    auto compute_kernel_config =
+        init_device_compute_kernel_config(input.device()->arch(), operation_attributes.compute_kernel_config);
+    const auto shape = input.get_shape();
 
-operation::ProgramWithCallbacks moreh_mean_w(
-    const Tensor &input,
-    const Tensor &output,
-    const CoreRange core_range,
-    const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
-    const auto shape = input.get_legacy_shape();
-    uint32_t W = shape[-1], H = shape[-2];
+    auto device = input.device();
+    auto kernel_config_val =
+        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
+
+    auto grid_coord = device->compute_with_storage_grid_size();
+    const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
+
+    uint32_t W = shape.value[-1], H = shape.value[-2];
     uint32_t HW = H * W;
 
-    uint32_t Wt = W / TILE_WIDTH;
-    uint32_t Ht = H / TILE_HEIGHT;
+    uint32_t Wt = W / constants::TILE_WIDTH;
+    uint32_t Ht = H / constants::TILE_HEIGHT;
 
     // check mask for w-dim
-    const auto input_shape_without_padding = shape.without_padding();
+    const auto input_shape_without_padding = shape.value.without_padding();
     const auto origin_W = input_shape_without_padding[-1];
-    const bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
-    const auto mask_w = do_mask_w ? origin_W % TILE_WIDTH : TILE_WIDTH;
+    const bool do_mask_w = (origin_W % constants::TILE_WIDTH) != 0;
+    const auto mask_w = do_mask_w ? origin_W % constants::TILE_WIDTH : constants::TILE_WIDTH;
 
-    auto program = tt_metal::CreateProgram();
+    auto program = CreateProgram();
 
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
@@ -50,7 +59,7 @@ operation::ProgramWithCallbacks moreh_mean_w(
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
     // create circular buffers
-    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat data_format = datatype_to_dataformat_converter(input.get_dtype());
 
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
@@ -70,10 +79,11 @@ operation::ProgramWithCallbacks moreh_mean_w(
         });
 
     float scaler = 1.0f / origin_W;
-    bfloat16 bfloat_scaler_value = bfloat16(scaler);
+    auto bfloat_scaler_value = *(new class bfloat16(scaler));
     auto packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
 
-    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(is_dram(input)), packed_scaler_value};
+    std::vector<uint32_t> reader_compile_time_args = {
+        static_cast<uint32_t>(is_dram(input)), packed_scaler_value};
 
     std::vector<uint32_t> writer_compile_time_args = {
         static_cast<uint32_t>(CB::c_out0), static_cast<uint32_t>(is_dram(output))};
@@ -84,24 +94,23 @@ operation::ProgramWithCallbacks moreh_mean_w(
     }
     const auto reader_kernel_id = CreateReadKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean/kernels/reader_moreh_mean_w.cpp",
+        "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/reader_moreh_mean_w.cpp",
         all_cores,
         reader_compile_time_args,
         reader_defines);
 
     const auto writer_kernel_id = CreateWriteKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean/kernels/"
-        "writer_moreh_mean_unary_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/writer_moreh_mean_unary_interleaved_start_id.cpp",
         all_cores,
         writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ///////////////////////////////////////////////////////////////////////////
-    string compute_kernel_name = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean/kernels/moreh_mean_w.cpp";
-    auto reduce_op = tt_metal::ReduceOpMath::SUM;
-    auto reduce_dim = tt_metal::ReduceOpDim::W;
+    string compute_kernel_name = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_w.cpp";
+    auto reduce_op = ReduceOpMath::SUM;
+    auto reduce_dim = ReduceOpDim::W;
     std::map<string, string> compute_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = 1;
@@ -147,7 +156,7 @@ operation::ProgramWithCallbacks moreh_mean_w(
             TT_ASSERT(false, "Core not in specified core ranges");
         }
         uint32_t num_tensor_tiles_per_core = units_per_core * Wt;
-        tt_metal::SetRuntimeArgs(
+        SetRuntimeArgs(
             program,
             reader_kernel_id,
             core,
@@ -156,7 +165,7 @@ operation::ProgramWithCallbacks moreh_mean_w(
              tile_offset,  // tile index of row to start reading from
              mask_w});
 
-        tt_metal::SetRuntimeArgs(
+        SetRuntimeArgs(
             program,
             writer_kernel_id,
             core,
@@ -167,33 +176,35 @@ operation::ProgramWithCallbacks moreh_mean_w(
             });
         tile_offset += num_tensor_tiles_per_core;
     }
-
-    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, num_cores, core_h](
-                                              const Program &program,
-                                              const std::vector<Buffer *> &input_buffers,
-                                              const std::vector<Buffer *> &output_buffers) {
-        auto src_dram_buffer = input_buffers.at(0);
-
-        auto dst_dram_buffer = output_buffers.at(0);
-
-        for (uint32_t i = 0; i < num_cores; i++) {
-            CoreCoord core = {i / core_h, i % core_h};
-
-            {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = src_dram_buffer->address();
-            }
-
-            {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = dst_dram_buffer->address();
-            }
-        }
-    };
-
-    return {std::move(program), override_runtime_args_callback};
+    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, core_h}};
 }
 
-}  // namespace primary
-}  // namespace operations
-}  // namespace tt
+void MorehMeanOperation::MorehMeanWFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto& program = cached_program.program;
+    auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
+    auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    auto num_cores = cached_program.shared_variables.num_cores;
+    auto core_h = cached_program.shared_variables.core_h;
+
+    auto src_buffer = tensor_args.input.buffer();
+    auto dst_buffer = tensor_return_value.buffer();
+
+    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
+        CoreCoord core = {i / core_h, i % core_h};
+
+        {
+            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            runtime_args[0] = src_buffer->address();
+        }
+
+        {
+            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            runtime_args[0] = dst_buffer->address();
+        }
+    }
+}
+}  // namespace ttnn::operations::moreh::moreh_mean

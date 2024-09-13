@@ -79,7 +79,7 @@ def run_moreh_mean(input_shape_dim, device, keepdim=False, compute_kernel_option
     # run tt
     (tt_input, tt_output) = get_tt_tensors(torch_input, torch_output.shape, device)
 
-    ttnn.experimental.operations.primary.moreh_mean(
+    ttnn.operations.moreh.mean(
         tt_input, dim=dim, keepdim=keepdim, output=tt_output, compute_kernel_config=compute_kernel_config
     )
     tt_output_cpu = to_cpu(tt_output, torch_output.shape)
@@ -113,8 +113,8 @@ def run_moreh_mean_backward(input_shape_dim, device, keepdim=False, compute_kern
     tt_output_grad, tt_input_grad = get_tt_backward_tensors(torch_output_grad, torch_input.shape, device)
 
     if create_output:
-        input_grad_shape = ttnn._ttnn.tensor.Shape(torch_input.shape)
-        tt_input_grad = ttnn.experimental.operations.primary.moreh_mean_backward(
+        input_grad_shape = ttnn._ttnn.types.Shape(torch_input.shape)
+        tt_input_grad = ttnn.operations.moreh.mean_backward(
             tt_output_grad,
             dim=dim,
             keepdim=keepdim,
@@ -122,7 +122,7 @@ def run_moreh_mean_backward(input_shape_dim, device, keepdim=False, compute_kern
             compute_kernel_config=compute_kernel_config,
         )
     else:
-        ttnn.experimental.operations.primary.moreh_mean_backward(
+        ttnn.operations.moreh.mean_backward(
             tt_output_grad,
             dim=dim,
             keepdim=keepdim,
