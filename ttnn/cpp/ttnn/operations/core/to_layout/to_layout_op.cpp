@@ -4,12 +4,14 @@
 
 #include "to_layout_op.hpp"
 
+#include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 
@@ -158,8 +160,20 @@ Tensor to_layout_impl(
                     padded_output_shape.push_back(tensor.get_shape()[index]);
                 }
             }
-            tensor = ttnn::tilize_with_val_padding(
-                tensor, padded_output_shape, 0, output_memory_config, dtype, use_multicore_tilize);
+            if (tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+                // ttnn::tilize_with_val_padding doesn't support height sharded tensors
+                // workaround by applying padding and then tilizing
+                std::vector<std::pair<uint32_t, uint32_t>> padding = {
+                    {0, 0},
+                    {0, 0},
+                    {0, padded_output_shape[2] - output_shape[2]},
+                    {0, padded_output_shape[3] - output_shape[3]}};
+                tensor = ttnn::pad(0, tensor, padding, 0, true, std::nullopt);
+                return ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize);
+            } else {
+                tensor = ttnn::tilize_with_val_padding(
+                    tensor, padded_output_shape, 0, output_memory_config, dtype, use_multicore_tilize);
+            }
 
             return reshape(tensor, ttnn::Shape(tt::tt_metal::LegacyShape{output_shape, padded_output_shape}));
 
