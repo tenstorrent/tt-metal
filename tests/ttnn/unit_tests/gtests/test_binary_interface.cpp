@@ -44,7 +44,6 @@ struct InputShapeTestParam {
     ttnn::types::Shape shape;
     tt::tt_metal::MemoryConfig memory_config;
     tt::tt_metal::DataType data_type = tt::tt_metal::DataType::BFLOAT16;
-    tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE;
 };
 
 class BinaryInterfaceTestFixture : public TTNNFixtureWithDevice,

@@ -45,7 +45,6 @@ struct InputShapeTestParam {
     ttnn::types::Shape shape;
     tt::tt_metal::MemoryConfig memory_config;
     tt::tt_metal::DataType data_type = tt::tt_metal::DataType::BFLOAT16;
-    tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE;
 };
 
 class MatmulInterfaceTestFixture : public TTNNFixtureWithDevice,
@@ -118,16 +117,19 @@ TEST_P(MatmulInterfaceTestFixture, MatmulInterfaceTest) {
             // Run the test
             {
                 for (const auto& op_constraint : op_constraints) {
-                    auto input_tensor_a = ttnn::zeros(
-                        input_a.shape, input_a.data_type, input_a.layout, this->getDevice(), input_a.memory_config);
-                    auto input_tensor_b = ttnn::zeros(
-                        input_b.shape, input_b.data_type, input_b.layout, this->getDevice(), input_b.memory_config);
-
                     auto call = [&] {
                         auto input_tensor_a = ttnn::zeros(
-                            input_a.shape, input_a.data_type, input_a.layout, this->getDevice(), input_a.memory_config);
+                            input_a.shape,
+                            op_constraint.getDataTypeA().value(),
+                            op_constraint.getTileLayoutA().value(),
+                            this->getDevice(),
+                            input_a.memory_config);
                         auto input_tensor_b = ttnn::zeros(
-                            input_b.shape, input_b.data_type, input_b.layout, this->getDevice(), input_b.memory_config);
+                            input_b.shape,
+                            op_constraint.getDataTypeB().value(),
+                            op_constraint.getTileLayoutB().value(),
+                            this->getDevice(),
+                            input_b.memory_config);
                         const auto output_tensor = ttnn::matmul(
                             input_tensor_a,
                             input_tensor_b,

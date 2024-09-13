@@ -8,24 +8,20 @@ std::vector<OpConstraint> SoftmaxOpConstraintsBuilder::build_constraints() {
     // reducing search space
     // data types are required
     std::vector<Layout> tile_layouts_a = {Layout::ROW_MAJOR, Layout::TILE};
-    if (tile_layout_a.has_value())
-    {
+    if (tile_layout_a.has_value()) {
         tile_layouts_a = {tile_layout_a.value()};
     }
     std::vector<Layout> tile_layouts_o = {Layout::ROW_MAJOR, Layout::TILE};
-    if (tile_layout_o.has_value())
-    {
+    if (tile_layout_o.has_value()) {
         tile_layouts_o = {tile_layout_b.value()};
     }
     // Only two for now. TODO: add other storage types.
     std::vector<StorageType> storage_types_a = {StorageType::OWNED, StorageType::DEVICE};
-    if (storage_type_a.has_value())
-    {
+    if (storage_type_a.has_value()) {
         storage_types_a = {storage_type_a.value()};
     }
     std::vector<StorageType> storage_types_o = {StorageType::OWNED, StorageType::DEVICE};
-    if (storage_type_o.has_value())
-    {
+    if (storage_type_o.has_value()) {
         storage_types_o = {storage_type_a.value()};
     }
 
@@ -59,7 +55,8 @@ std::vector<OpConstraint> SoftmaxOpConstraintsBuilder::build_constraints() {
 bool SoftmaxConstraintsBuilder::is_valid_op_constraint(const OpConstraint& constraint) const {
     const tt::tt_metal::DataType data_type_a = constraint.getDataTypeA().value();
     const tt::tt_metal::Layout c_tile_layout_a = constraint.getTileLayoutA().value();
-    if (!is_tensor_valid(memory_config_a, shape_a, c_tile_layout_a, data_type_a)) {
+    if (memory_config_a.is_sharded() &&
+        !is_sharded_tensor_valid(memory_config_a, shape_a, c_tile_layout_a, data_type_a)) {
         return false;
     }
     // made-up constraint - tiles only
@@ -74,8 +71,7 @@ bool SoftmaxConstraintsBuilder::is_valid_op_constraint(const OpConstraint& const
     return true;
 }
 
-bool SoftmaxConstraintsBuilder::can_build_constraints() const
-{
+bool SoftmaxConstraintsBuilder::can_build_constraints() const {
     return data_type_a.has_value() && data_type_o.has_value();
 }
 

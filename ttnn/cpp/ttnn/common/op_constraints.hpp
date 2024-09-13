@@ -57,7 +57,15 @@ class OpConstraint {
 };
 
 class OpConstraintsBuilder {
-   public:
+   private:
+    uint32_t get_packed_size_in_bytes(const tt::tt_metal::DataType& data_type, const ttnn::Shape& shape) const;
+    bool can_allocate_sharded_buffer(
+        const MemoryConfig& memory_config,
+        const ttnn::Shape& shape,
+        const Layout& layout,
+        const DataType& data_type) const;
+
+   protected:
     std::optional<tt::tt_metal::DataType> data_type_a;  // required
     std::optional<tt::tt_metal::Layout> tile_layout_a;
     std::optional<tt::tt_metal::StorageType> storage_type_a;
@@ -74,7 +82,7 @@ class OpConstraintsBuilder {
     virtual bool is_valid_external_constraint(const OpConstraint& constraint) const;
     virtual bool is_valid_op_constraint(const OpConstraint& constraint) const = 0;
 
-    virtual bool is_tensor_valid(
+    bool is_sharded_tensor_valid(
         const MemoryConfig& memory_config,
         const ttnn::Shape& shape,
         const Layout& layout,
