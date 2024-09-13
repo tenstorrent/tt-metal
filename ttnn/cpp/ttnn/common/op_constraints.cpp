@@ -1,7 +1,10 @@
 #include "ttnn/common/op_constraints.hpp"
+
 #include <optional>
 
+#include "tt_metal/impl/buffers/buffer.hpp"
 #include "ttnn/cpp/ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/cpp/ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn/cpp/ttnn/tensor/tensor_utils.hpp"
 
 bool OpConstraintsBuilder::is_valid_external_constraint(const OpConstraint& constraint) const {
@@ -35,14 +38,11 @@ bool OpConstraintsBuilder::is_valid_external_constraint(const OpConstraint& cons
     return true;
 }
 
-bool OpConstraintsBuilder::is_tensor_valid(
+bool OpConstraintsBuilder::is_sharded_tensor_valid(
     const MemoryConfig& memory_config,
     const ttnn::Shape& shape,
     const Layout& layout,
     const DataType& data_type) const {
-    if (!memory_config.is_sharded()) {
-        return true;
-    }
     uint32_t total_height = tt::tt_metal::compute_volume(shape) / shape[-1];
     uint32_t total_width = shape[-1];
     if (memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -109,6 +109,9 @@ bool OpConstraintsBuilder::is_tensor_valid(
             return false;
         }
     }
+    if (!can_allocate_sharded_buffer(memory_config, shape, layout, data_type)) {
+        return false;
+    }
     return true;
 }
 
@@ -162,4 +165,51 @@ OpConstraintsBuilder& OpConstraintsBuilder::setTileLayoutO(tt::tt_metal::Layout 
 OpConstraintsBuilder& OpConstraintsBuilder::setStorageTypeO(tt::tt_metal::StorageType storageType) {
     storage_type_o = storageType;
     return *this;
+}
+
+uint32_t OpConstraintsBuilder::get_packed_size_in_bytes(
+    const tt::tt_metal::DataType& data_type, const ttnn::Shape& shape) const {
+    return tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
+}
+
+bool OpConstraintsBuilder::can_allocate_sharded_buffer(
+    const MemoryConfig& memory_config,
+    const ttnn::Shape& shape,
+    const Layout& layout,
+    const DataType& data_type) const {
+    TT_ASSERT(memory_config.is_sharded(), "This check should only be done for sharded buffers.");
+    uint32_t buffer_size_bytes = get_packed_size_in_bytes(data_type, shape);
+    auto page_shape = tensor_impl::get_sharded_page_shape(layout, data_type, memory_config.shard_spec.value().shape);
+
+    auto width = shape[-1];
+    auto other_dims = 1;
+    for (int i = 0; i < shape.rank() - 1; i++) {
+        other_dims *= shape[i];
+    }
+
+    std::array<uint32_t, 2> tensor2d_size = {other_dims / page_shape[0], width / page_shape[1]};
+    std::optional<ShardSpecBuffer> shard_spec_buffer_opt =
+        ShardSpecBuffer(memory_config.shard_spec.value(), page_shape, tensor2d_size);
+    const auto& shard_params_page_shape = shard_spec_buffer_opt.value().page_shape;
+    uint32_t page_size = tt::tt_metal::tensor_impl::get_page_size(data_type, layout, buffer_size_bytes, page_shape);
+    if (buffer_size_bytes == 0 || page_size == 0) {
+        return false;
+    }
+    if (buffer_size_bytes % page_size != 0) {
+        return false;
+    }
+    if (page_size % sizeof(uint32_t) != 0) {
+        return false;
+    }
+
+    if (is_sharded(memory_config.memory_layout)) {
+        if (shard_spec_buffer_opt == std::nullopt) {
+            return false;
+        }
+    } else if (memory_config.memory_layout == TensorMemoryLayout::SINGLE_BANK) {
+        if (page_size != buffer_size_bytes) {
+            return false;
+        }
+    }
+    return true;
 }

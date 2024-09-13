@@ -6,34 +6,28 @@ std::vector<OpConstraint> EltwiseOpConstraintsBuilder::build_constraints() {
     }
 
     std::vector<Layout> tile_layouts_a = {Layout::ROW_MAJOR, Layout::TILE};
-    if (tile_layout_a.has_value())
-    {
+    if (tile_layout_a.has_value()) {
         tile_layouts_a = {tile_layout_a.value()};
     }
     std::vector<Layout> tile_layouts_b = {Layout::ROW_MAJOR, Layout::TILE};
-    if (tile_layout_b.has_value())
-    {
+    if (tile_layout_b.has_value()) {
         tile_layouts_a = {tile_layout_b.value()};
     }
     std::vector<Layout> tile_layouts_o = {Layout::ROW_MAJOR, Layout::TILE};
-    if (tile_layout_o.has_value())
-    {
+    if (tile_layout_o.has_value()) {
         tile_layouts_o = {tile_layout_b.value()};
     }
     // Only two for now. TODO: add other storage types.
     std::vector<StorageType> storage_types_a = {StorageType::OWNED, StorageType::DEVICE};
-    if (storage_type_a.has_value())
-    {
+    if (storage_type_a.has_value()) {
         storage_types_a = {storage_type_a.value()};
     }
     std::vector<StorageType> storage_types_b = {StorageType::OWNED, StorageType::DEVICE};
-    if (storage_type_b.has_value())
-    {
+    if (storage_type_b.has_value()) {
         storage_types_b = {storage_type_b.value()};
     }
     std::vector<StorageType> storage_types_o = {StorageType::OWNED, StorageType::DEVICE};
-    if (storage_type_o.has_value())
-    {
+    if (storage_type_o.has_value()) {
         storage_types_o = {storage_type_a.value()};
     }
 
@@ -73,10 +67,12 @@ bool EltwiseOpConstraintsBuilder::is_valid_op_constraint(const OpConstraint& con
     const tt::tt_metal::Layout c_tile_layout_b = constraint.getTileLayoutB().value();
     const tt::tt_metal::DataType data_type_a = constraint.getDataTypeA().value();
     const tt::tt_metal::DataType data_type_b = constraint.getDataTypeB().value();
-    if (!is_tensor_valid(memory_config_a, shape_a, c_tile_layout_a, data_type_a)) {
+    if (memory_config_a.is_sharded() &&
+        !is_sharded_tensor_valid(memory_config_a, shape_a, c_tile_layout_a, data_type_a)) {
         return false;
     }
-    if (!is_tensor_valid(memory_config_b, shape_b, c_tile_layout_b, data_type_b)) {
+    if (memory_config_b.is_sharded() &&
+        !is_sharded_tensor_valid(memory_config_b, shape_b, c_tile_layout_b, data_type_b)) {
         return false;
     }
     if (c_tile_layout_a != tt::tt_metal::Layout::TILE) {
@@ -242,7 +238,8 @@ EltwiseOpTypes EltwiseOpConstraintsFactory::GetEltwiseOpType(
             if (memory_config_o.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                 return EltwiseOpTypes::NotSupported;
             }
-            // Check if we need this.
+            // TODO: Check if we need this. This will have the consequence that building the constraint framework will
+            // require a TT card in the system.
             /*uint32_t num_blocks = Volume(input_shape_a) / input_shape_a[-1] / tt::constants::TILE_HEIGHT;
             auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
             uint32_t num_cores = core_grid.x * core_grid.y;

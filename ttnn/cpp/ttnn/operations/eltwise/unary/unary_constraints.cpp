@@ -95,7 +95,8 @@ bool UnaryOpConstraintsBuilder::is_valid_op_constraint(const OpConstraint& const
     const tt::tt_metal::DataType data_type_a = constraint.getDataTypeA().value();
     const tt::tt_metal::StorageType storage_type_a = constraint.getStorageTypeA().value();
     tt::tt_metal::DataType data_type_o = constraint.getDataTypeO().value();
-    if (!is_tensor_valid(memory_config_a, shape_a, c_tile_layout_a, data_type_a)) {
+    if (memory_config_a.is_sharded() &&
+        !is_sharded_tensor_valid(memory_config_a, shape_a, c_tile_layout_a, data_type_a)) {
         return false;
     }
     if (!is_supported_dtype(data_type_a, data_type_o, op_type)) {

@@ -68,10 +68,15 @@ bool MatmulOpConstraintsBuilder::is_valid_op_constraint(const OpConstraint& cons
     const tt::tt_metal::Layout c_tile_layout_b = constraint.getTileLayoutB().value();
     const tt::tt_metal::DataType data_type_a = constraint.getDataTypeA().value();
     const tt::tt_metal::DataType data_type_b = constraint.getDataTypeB().value();
-    if (!is_tensor_valid(memory_config_a, shape_a, c_tile_layout_a, data_type_a)) {
+    if (c_tile_layout_a != Layout::TILE || c_tile_layout_b != Layout::TILE) {
         return false;
     }
-    if (!is_tensor_valid(memory_config_b, shape_b, c_tile_layout_b, data_type_b)) {
+    if (memory_config_a.is_sharded() &&
+        !is_sharded_tensor_valid(memory_config_a, shape_a, c_tile_layout_a, data_type_a)) {
+        return false;
+    }
+    if (memory_config_b.is_sharded() &&
+        !is_sharded_tensor_valid(memory_config_b, shape_b, c_tile_layout_b, data_type_b)) {
         return false;
     }
     if (!is_floating_point(data_type_a)) {
