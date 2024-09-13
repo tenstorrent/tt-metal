@@ -9,6 +9,7 @@ on:
         options:
           - grayskull
           - wormhole_b0
+          - blackhole
       runner-label:
         required: true
         type: string
@@ -50,13 +51,14 @@ jobs:
       ARCH_NAME: ${{ inputs.arch }}
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
-    runs-on: 
+    runs-on:
       - ${{ inputs.runner-label }}
       - "in-service"
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Ensure weka mount is active
         timeout-minutes: 3
+        if: ${{ inputs.arch != 'blackhole' }}
         run: |
           sudo systemctl restart mnt-MLPerf.mount
           sudo /etc/rc.local
