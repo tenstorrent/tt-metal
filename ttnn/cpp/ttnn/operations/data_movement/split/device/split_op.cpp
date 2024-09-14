@@ -51,8 +51,10 @@ std::vector<Tensor> SplitDeviceOperation::create_output_tensors(const std::vecto
 
 operation::ProgramWithCallbacks SplitDeviceOperation::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return detail::split_last_dim_two_chunks_tiled(input_tensor, output_tensors, this->output_mem_config);
+    if (output_tensors.size() == 2) {
+        return detail::split_last_dim_two_chunks_tiled(input_tensor, output_tensors, this->output_mem_config);
+    } else {
+        return detail::split_last_dim_n_chunks_tiled(input_tensor, output_tensors, this->output_mem_config);
+    }
 }
-
-
 }

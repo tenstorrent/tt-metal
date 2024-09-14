@@ -30,7 +30,7 @@ void bind_split(py::module& module) {
             Args:
                 * :attr:`input_tensor`: Input Tensor.
                 * :attr:`num_splits`: Number of ways to split.
-                * :attr:`dim2`: Dim to split. Defaults to 0.
+                * :attr:`dim`: Dim to split. Defaults to 0.
 
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor
