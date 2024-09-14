@@ -5,24 +5,25 @@
 - [1. Overview](#1-overview)
 - [2. ViT TT-NN - Optimization Techniques] (#2-vit-tt-nn-optimization-techniques)
 - [3. ViT TT-NN Code Structure](#3-vit-tt-nn-code-structure)
-  - [2.1 Input](#21-input)
-  - [2.2 Layer Normalization (Laynorm)](#22-layer-normalization-laynorm)
-  - [2.3 Linear Projection](#23-linear-projection)
-  - [2.4 Splitting into Q-K-V](#24-splitting-into-q-k-v)
-  - [2.5 Attention Mechanism](#25-attention-mechanism)
-  - [2.6 Matmul with Value](#26-matmul-with-value)
-  - [2.7 Concatenating Heads](#27-concatenating-heads)
-  - [2.8 Linear Projection (again)](#28-linear-projection-again)
-  - [2.9 Add and Norm](#29-add-and-norm)
-  - [2.10 Feed-Forward Network](#210-feed-forward-network)
-  - [2.11 Add and Norm (again)](#211-add-and-norm-again)
-  - [2.12 Output](#212-output)
-- [3. Futher Implementation](#3-futher-implementation)
-  - [3.1 Patch Embedding](#31-patch-embedding)
-  - [3.2 Self-Attention](#32-self-attention)
-  - [3.3 Feed-Forward Network and Residual Connections](#33-feed-forward-network-and-residual-connections)
-- [4. Conclusion](#4-conclusion)
-- [4. References](#5-references)
+- [4. ViT Encoder TT-NN Deep Dive](#4-vit-encoder-tt-nn-deep-dive)
+  - [4.1 Input](#41-input)
+  - [4.2 Layer Normalization (Laynorm)](#42-layer-normalization-laynorm)
+  - [4.3 Linear Projection](#43-linear-projection)
+  - [4.4 Splitting into Q-K-V](#44-splitting-into-q-k-v)
+  - [4.5 Attention Mechanism](#45-attention-mechanism)
+  - [4.6 Matmul with Value](#46-matmul-with-value)
+  - [4.7 Concatenating Heads](#47-concatenating-heads)
+  - [4.8 Linear Projection (again)](#48-linear-projection-again)
+  - [4.9 Add and Norm](#49-add-and-norm)
+  - [4.10 Feed-Forward Network](#410-feed-forward-network)
+  - [4.11 Add and Norm (again)](#411-add-and-norm-again)
+  - [4.12 Output](#412-output)
+- [3. Futher Implementation]
+  - [3.1 Patch Embedding]
+  - [3.2 Self-Attention]
+  - [3.3 Feed-Forward Network and Residual Connections]
+- [5. Conclusion](#5-conclusion)
+- [6. References](#6-references)
 
 ## 1. Overview
 
@@ -31,14 +32,129 @@ For more details on the architecture, please refer to the [References](#5-refere
 
 ## 2. ViT TT-NN Optimization Techniques
 
+The implemented optimization techniques in TT-NN compared to the conventional flow are:
+  - Applying sharding techniques to harvest the optimum utilization of the computation OPs, by elminating the need for data movement inter-tensix-cores between the consecutive OPs. (https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md#42-sharding) 
+![Sharding Concepts](images/sharding_concepts.png)  
+![Sharding Example](images/sharding_example.png)   
+
+  - Fusing GeLU OP with its perceding Linear OP
+  - Merging Q,K,V Linear operations in one large OP for higher utilization of Tensix computation power.
+  - Customized tensor manipulation operations that are highly optimized as Transformer-based OPs in TT-NN.
+  - Pre-processing of model weights, to apply the data format conversion as well as merging and transposing to match the OP configuration.
+
+  ![Multi-Head Attenion in TT-NN](images/mha_ttnn_1.png) 
+  ![](images/mha_ttnn_2.png)  
+
 
 ## 3. ViT TT-NN Code Structure
+
+**Top-level module**:
+ViT model has 3 main modules: Embeddings, Encoder (12 Layers), and Classification head.
+
+```python
+def vit(
+    config,
+    pixel_values,
+    attention_mask,
+    cls_token,
+    position_embeddings,
+    parameters,
+):
+    # Embeddings
+    embeddings_output = vit_embeddings(config, pixel_values, cls_token, position_embeddings, parameters=parameters)
+
+    # Encoder (12 layers)
+    hidden_states = vit_encoder(
+        config,
+        embeddings_output,
+        attention_mask,
+        parameters=parameters.vit.encoder,
+    )
+
+    # Final LayerNorm
+    output = ttnn.layer_norm(
+        hidden_states,
+        weight=parameters.vit.layernorm.weight,
+        bias=parameters.vit.layernorm.bias,
+        epsilon=config.layer_norm_eps,
+        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        program_config=config.program_configs["layernorm_program_config"],
+    )
+
+    # Classifier
+    classifier_output = ttnn.linear(
+        output,
+        parameters.classifier.weight,
+        bias=parameters.classifier.bias,
+        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        dtype=ttnn.bfloat8_b,
+        program_config=config.program_configs["classifer_matmul_program_config"],
+    )
+
+    return classifier_output
+```
+
+**Embeddings module**:
+ViT Embeddings include: Patch + Position embeddings and Linear projection of flattended patches
+
+```python
+def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=False):
+    batch_size, img_h, img_w, img_c = pixel_values.shape  # permuted input NHWC
+    patch_size = 16
+    patch_count = img_h // patch_size  # 14
+    patch_size_sq_trpl = patch_size * patch_size * 3  # 768
+    patch_count_all = patch_count * patch_count  # 196
+    stride_h = patch_size
+    stride_w = 1
+
+    # Folding the input image into folded patches of size (14x14) each
+    folded_pixel_values = ttnn.fold(pixel_values, stride_h, stride_w)  # 1568, 1024
+    ttnn.deallocate(pixel_values)
+    folded_pixel_values = ttnn.to_memory_config(folded_pixel_values, memory_config=ttnn.L1_MEMORY_CONFIG)
+    folded_pixel_values = ttnn.to_layout(folded_pixel_values, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+
+    # linear projction of flattened patches
+    patch_embedding_output = ttnn.linear(
+        folded_pixel_values,
+        parameters.projection.weight,
+        bias=parameters.projection.bias,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+        core_grid=config.core_grid,
+    )
+    patch_embedding_output = ttnn.to_layout(patch_embedding_output, layout=ttnn.ROW_MAJOR_LAYOUT)
+    patch_embedding_output = ttnn.reshape(patch_embedding_output, (batch_size, patch_count_all, patch_size_sq_trpl))
+
+    return patch_embedding_output
+
+
+def vit_embeddings(
+    config,
+    pixel_values,
+    cls_token,
+    position_embeddings,
+    *,
+    parameters,
+):
+    parameters = parameters.vit.embeddings
+    l1_memory_config = ttnn.L1_MEMORY_CONFIG
+    # Patch embedding
+    patch_embeddings = vit_patch_embeddings(config, pixel_values, parameters=parameters.patch_embeddings)
+    # Concatenating Position Embeddings
+    embedding_output = ttnn.concat([cls_token, patch_embeddings], -2, memory_config=l1_memory_config)
+    embedding_output = ttnn.to_layout(embedding_output, layout=ttnn.TILE_LAYOUT)
+    embedding_output = ttnn.add(
+        embedding_output, position_embeddings, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
+    )
+    return embedding_output
+```
+## 4. ViT Encoder TT-NN Deep Dive
 
 This is a step-by-step walkthrough of the ViT encoder implementation in TT-NN on Grayskull. The diagram below summarizes all of these steps in a flow chart, which is examined in smaller pieces below.
 
 ![laynorm](images/diagram.png)
 
-### 3.1 Input
+### 4.1 Input
 The input to the Vision Transformer consists of image patches that are flattened and embedded into a higher-dimensional space. The input is represented as:
 
 `b × seqL × dim`
@@ -99,7 +215,7 @@ def vit_patch_embeddings(config, pixel_values, *, parameters):
     return patch_embedding_output
 ```
 
-### 2.2 Layer Normalization (Laynorm)
+### 4.2 Layer Normalization (Laynorm)
 After embedding the patches, Layer Normalization is applied to the input sequence. This ensures that the input embeddings are normalized before the attention mechanism, which improves the training stability of the model. The **block sharding** in the diagram (see section 2.4 below) illustrates how data is partitioned and distributed across multiple processing cores for parallel computation, enhancing efficiency during training.
 
 **Functional Code**:
@@ -140,7 +256,7 @@ def vit_layernorm_before(config, hidden_states, *, parameters):
 )
 ```
 
-### 2.3 Linear Projection
+### 4.3 Linear Projection
 Following normalization, the input is passed through a linear projection layer that transforms the input from one dimension to another. Again, **block sharding** is used. This prepares the input for the self-attention mechanism by aligning the dimensions.
 
 **Functional Code**:
@@ -172,7 +288,7 @@ def vit_linear_projection(config, hidden_states, *, parameters):
 
 ![input](images/laynormlinear.png)
 
-### 2.4 Splitting into Q-K-V
+### 4.4 Splitting into Q-K-V
 The input embeddings are then split into **Query** (Q), **Key** (K), and **Value** (V) matrices. This is done by projecting the input embeddings into three separate matrices. Each matrix has a size of:
 
 `lh × seqL × head_size`
@@ -200,7 +316,7 @@ query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(query
 
 ![laynorm](images/qkvsplit.png)
 
-### 2.5 Attention Mechanism
+### 4.5 Attention Mechanism
 The attention mechanism begins by calculating the dot product between the Query and Key matrices. This result is then scaled by the size of the attention head to form the Attention Scores. These scores are passed through a Softmax operation, which normalizes them across the sequence length. **Height sharding** is applied during this process, where the sequence length is split across cores to parallelize the computation of the Attention Scores, making the operation more efficient.
 
 **Functional Code**:
@@ -238,7 +354,7 @@ attention_probs = ttnn.transformer.attention_softmax_(attention_scores, attentio
 
 ![attn](images/attention.png)
 
-### 2.6 Matmul with Value
+### 4.6 Matmul with Value
 The normalized attention scores are then multiplied by the Value matrix to produce the attention output. This is the core of the self-attention mechanism, allowing the model to focus on different parts of the input sequence. **Height sharding** is used.
 
 **Functional Code**:
@@ -263,7 +379,7 @@ context_layer = ttnn.matmul(attention_probs, value, memory_config=ttnn.L1_HEIGHT
 )
 ```
 
-### 2.7 Concatenating Heads
+### 4.7 Concatenating Heads
 The outputs from all attention heads are concatenated back together. This creates a unified representation of the attention across all heads:
 
 ` seqL × head_count × head_size` 
@@ -286,7 +402,7 @@ context_layer = ttnn.transformer.concatenate_heads(context_layer. memory_config=
 
 ![concat](images/conc.png)
 
-### 2.8 Linear Projection (again)
+### 4.8 Linear Projection (again)
 After concatenating the attention heads, the output is passed through another linear layer to project it back to the original embedding dimension. Like the previous linear layer, **block sharding** is used. This ensures that the final output of the attention block has the correct shape for subsequent operations.
 
 **Functional Code**:
@@ -324,7 +440,7 @@ self_output = ttnn.linear(
 )
 ```
 
-### 2.9 Add and Norm
+### 4.9 Add and Norm
 A residual connection (skip connection) is applied, adding the original input to the attention block back to the output of the attention block. This helps in maintaining gradient flow through the network and stabilizes training. The resulting tensor is then normalized again using layer normalization. Additionally, **block sharding** is used.
 
 **Functional Code**:
@@ -371,7 +487,7 @@ layernorm_after_output = ttnn.layer_norm(
 
 ![addnorm](images/addnorm.png)
 
-### 2.10 Feed-Forward Network
+### 4.10 Feed-Forward Network
 The output from the attention block is passed through a **Feed-Forward Network** (FFN). The FFN consists of two linear transformations with a GeLU activation function between them. The first linear layer expands the dimensionality of the embeddings, and the second linear layer projects it back to the original size. **Block sharding** is utilized in the FFN, where the computations are split across multiple blocks, allowing for parallel processing and improved efficiency during the linear transformations.
 
 **Functional Code**:
@@ -400,7 +516,7 @@ def vit_feedforward(config, hidden_states, attention_output, *, parameters):
 
 ![ffn](images/ffn.png)
 
-### 2.11 Add and Norm (again)
+### 4.11 Add and Norm (again)
 Another residual connection is applied after the feed-forward network, adding the input of the FFN block back to its output. This is followed by layer normalization to stabilize the network and facilitate deeper stacking of layers.
 
 **Functional Code**:
@@ -415,16 +531,16 @@ feedforward_output = ttnn.add(feedforward_output, multi_head_attention_output)
 feedforward_output = vit_feedforward(config, layernorm_after_output, multi_head_attention_output, parameters=parameters)
 ```
 
-### 2.12 Output
+### 4.12 Output
 The final result after the feed-forward network and the second normalization step is the **Encoder Output**. This output has the following shape:
 
 `b × seqL × dim`
 
 The output can either be passed to the next layer in the Transformer encoder or to the classification head, depending on the specific task.
 
-## 3. Futher Implementation
+## 5. Futher Implementation
 
-### 3.1 Patch Embedding
+### 5.1 Patch Embedding
 The code for patch embedding is implemented in the vit_patch_embeddings function. This function takes the pixel values of the input image, reshapes them into patches, and then projects these patches into the embedding space using a linear transformation.
 
 **Functional Code**:
@@ -527,11 +643,11 @@ def vit_intermediate(config, hidden_states, *, parameters):
     return output
 ```
 
-## 4. Conclusion
+## 5. Conclusion
 
 This walkthrough provided an in-depth explanation of the Vision Transformer (ViT) encoder and its implementation in the TT-NN library. From patch embedding to self-attention and feed-forward networks, the ViT model effectively applies the principles of attention-based mechanisms to image processing.
 
-## 5. Refernces
+## 6. Refernces
   - https://huggingface.co/docs/transformers/en/model_doc/vit
   - https://medium.com/@hansahettiarachchi/unveiling-vision-transformers-revolutionizing-computer-vision-beyond-convolution-c410110ef061
   - https://www.v7labs.com/blog/vision-transformer-guide
