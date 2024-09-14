@@ -47,7 +47,7 @@
 | [ResNet-50 (224x224) (data parallel)](./models/demos/t3000/resnet50)        | 128   | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 32,250  | 56,000     |             |
 | [ResNet-50 (224x224) (data parallel)](./models/demos/tg/resnet50)           | 512   | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 66,150  | 224,000    |             |
 | [ResNet-50 (224x224) (data parallel)](./models/demos/tgg/resnet50)          | 1024  | [Two Galaxies](https://tenstorrent.com/hardware/galaxy)  | 128,800 | 448,000    |             |
-| [ViT](./models/demos/grayskull/vit)                                         | 8     | [e150](https://tenstorrent.com/hardware/grayskull)       | 860     | 2,000      |             |
+| [ViT](./models/demos/grayskull/vit)                                         | 9     | [e150](https://tenstorrent.com/hardware/grayskull)       | 1,360   | 2,000      |             |
 | [Stable Diffusion 1.4 (512x512)](./models/demos/wormhole/stable_diffusion)  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.167   | 0.3        |             |
 | [Unet (shallow)](./models/experimental/functional_unet)                     | 2     | [n150](https://tenstorrent.com/hardware/wormhole)        | 51      | 1000       |             |
 

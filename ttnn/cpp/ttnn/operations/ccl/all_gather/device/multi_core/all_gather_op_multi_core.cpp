@@ -907,11 +907,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                                 worker_writer_sender_rt_args,
                                 global_num_workers_per_direction,
                                 b,
-                                is_clockwise_direction ? 0 : 1,
-                                std::make_optional<experimental::ccl::CoreSemPair>(
-                                    {fused_op_signaler->all_gather_worker_cores_noc[0],
-                                    fused_op_signaler->all_gather_worker_sync_semaphore}
-                                )
+                                is_clockwise_direction ? 0 : 1
                             );
                         }
 
