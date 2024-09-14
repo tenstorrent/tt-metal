@@ -6,6 +6,8 @@
   - [Contents](#contents)
   - [1. Overview](#1-overview)
   - [2. ViT TT-NN Optimization Techniques](#2-vit-tt-nn-optimization-techniques)
+    - [2.1 Sharding on all relevant OPs:](#21-sharding-on-all-relevant-ops)
+    - [2.2 Transformer optimizations:](#22-transformer-optimizations)
   - [3. ViT TT-NN Code Structure](#3-vit-tt-nn-code-structure)
   - [4. ViT Encoder TT-NN Deep Dive](#4-vit-encoder-tt-nn-deep-dive)
     - [4.1 Input](#41-input)
@@ -35,15 +37,15 @@ For more details on the architecture, please refer to the [References](#5-refere
 ## 2. ViT TT-NN Optimization Techniques
 
 The implemented optimization techniques in TT-NN compared to the conventional flow are:
-
-**Sharding on all relevant OPs**:
+### 2.1 Sharding on all relevant OPs:
   - Applying sharding techniques to harvest the optimum utilization of the computation OPs, by elminating the need for data movement inter-tensix-cores between the consecutive OPs. 
-  - Please refer to the [related tech-report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md#42-sharding) 
-  
-![Sharding Concept](images/sharding_concept.png)  
+  - For more details, please refer to the [related tech-report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md#42-sharding) 
+  - Sharding Concepts
+![Sharding Concept](images/sharding_concept.png) 
+  - Illustrative example 
 ![Sharding Example](images/sharding_example.png)   
 
-**Transformer optimizations**:
+### 2.2 Transformer optimizations:
   - Fusing GeLU OP with its perceding Linear OP
   - Merging Q,K,V Linear operations in one large OP for higher utilization of Tensix computation power.
   - Customized tensor manipulation operations that are highly optimized as Transformer-based OPs in TT-NN.
