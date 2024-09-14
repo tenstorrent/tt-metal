@@ -2,28 +2,30 @@
 
 ## Contents
 
-- [1. Overview](#1-overview)
-- [2. ViT TT-NN - Optimization Techniques] (#2-vit-tt-nn-optimization-techniques)
-- [3. ViT TT-NN Code Structure](#3-vit-tt-nn-code-structure)
-- [4. ViT Encoder TT-NN Deep Dive](#4-vit-encoder-tt-nn-deep-dive)
-  - [4.1 Input](#41-input)
-  - [4.2 Layer Normalization (Laynorm)](#42-layer-normalization-laynorm)
-  - [4.3 Linear Projection](#43-linear-projection)
-  - [4.4 Splitting into Q-K-V](#44-splitting-into-q-k-v)
-  - [4.5 Attention Mechanism](#45-attention-mechanism)
-  - [4.6 Matmul with Value](#46-matmul-with-value)
-  - [4.7 Concatenating Heads](#47-concatenating-heads)
-  - [4.8 Linear Projection (again)](#48-linear-projection-again)
-  - [4.9 Add and Norm](#49-add-and-norm)
-  - [4.10 Feed-Forward Network](#410-feed-forward-network)
-  - [4.11 Add and Norm (again)](#411-add-and-norm-again)
-  - [4.12 Output](#412-output)
-- [3. Futher Implementation]
-  - [3.1 Patch Embedding]
-  - [3.2 Self-Attention]
-  - [3.3 Feed-Forward Network and Residual Connections]
-- [5. Conclusion](#5-conclusion)
-- [6. References](#6-references)
+- [ViT in TT-NN](#vit-in-tt-nn)
+  - [Contents](#contents)
+  - [1. Overview](#1-overview)
+  - [2. ViT TT-NN Optimization Techniques](#2-vit-tt-nn-optimization-techniques)
+  - [3. ViT TT-NN Code Structure](#3-vit-tt-nn-code-structure)
+  - [4. ViT Encoder TT-NN Deep Dive](#4-vit-encoder-tt-nn-deep-dive)
+    - [4.1 Input](#41-input)
+    - [4.2 Layer Normalization (Laynorm)](#42-layer-normalization-laynorm)
+    - [4.3 Linear Projection](#43-linear-projection)
+    - [4.4 Splitting into Q-K-V](#44-splitting-into-q-k-v)
+    - [4.5 Attention Mechanism](#45-attention-mechanism)
+    - [4.6 Matmul with Value](#46-matmul-with-value)
+    - [4.7 Concatenating Heads](#47-concatenating-heads)
+    - [4.8 Linear Projection (again)](#48-linear-projection-again)
+    - [4.9 Add and Norm](#49-add-and-norm)
+    - [4.10 Feed-Forward Network](#410-feed-forward-network)
+    - [4.11 Add and Norm (again)](#411-add-and-norm-again)
+    - [4.12 Output](#412-output)
+  - [5. Futher Implementation](#5-futher-implementation)
+    - [5.1 Patch Embedding](#51-patch-embedding)
+    - [3.2 Self-Attention](#32-self-attention)
+    - [3.3 Feed-Forward Network and Residual Connections](#33-feed-forward-network-and-residual-connections)
+  - [5. Conclusion](#5-conclusion)
+  - [6. Refernces](#6-refernces)
 
 ## 1. Overview
 
@@ -33,10 +35,15 @@ For more details on the architecture, please refer to the [References](#5-refere
 ## 2. ViT TT-NN Optimization Techniques
 
 The implemented optimization techniques in TT-NN compared to the conventional flow are:
-  - Applying sharding techniques to harvest the optimum utilization of the computation OPs, by elminating the need for data movement inter-tensix-cores between the consecutive OPs. (https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md#42-sharding) 
-![Sharding Concepts](images/sharding_concepts.png)  
+
+**Sharding on all relevant OPs**:
+  - Applying sharding techniques to harvest the optimum utilization of the computation OPs, by elminating the need for data movement inter-tensix-cores between the consecutive OPs. 
+  - Please refer to the [related tech-report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md#42-sharding) 
+  
+![Sharding Concept](images/sharding_concept.png)  
 ![Sharding Example](images/sharding_example.png)   
 
+**Transformer optimizations**:
   - Fusing GeLU OP with its perceding Linear OP
   - Merging Q,K,V Linear operations in one large OP for higher utilization of Tensix computation power.
   - Customized tensor manipulation operations that are highly optimized as Transformer-based OPs in TT-NN.
