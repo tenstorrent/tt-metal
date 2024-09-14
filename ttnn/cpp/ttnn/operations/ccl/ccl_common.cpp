@@ -38,7 +38,7 @@ RingTopology::RingTopology(
         // Get the cores for the sender and receiver worker cores
         if (!is_linear || ring_index != ring_size - 1) {
             uint32_t receiver_device = receiver_device_id.value();
-            auto const& sockets = device->get_ethernet_sockets(receiver_device);
+            auto const& sockets = DeviceGetEthernetSockets(device, receiver_device);
             auto eth_sender_core = sockets.at(sender_socket_idx);
             eth_sender_cores.push_back(eth_sender_core);
             log_trace(
@@ -46,7 +46,7 @@ RingTopology::RingTopology(
         }
         if (!is_linear || ring_index != 0) {
             uint32_t sender_device = sender_device_id.value();
-            auto const& sockets = device->get_ethernet_sockets(sender_device);
+            auto const& sockets = DeviceGetEthernetSockets(device, sender_device);
             auto eth_receiver_core = sockets.at(receiver_socket_idx);
             eth_receiver_cores.push_back(eth_receiver_core);
             log_trace(
@@ -179,11 +179,11 @@ static std::pair<std::vector<uint32_t>,std::vector<uint32_t>> shard_noc_cores_fr
     std::vector<uint32_t> logical_to_noc_row_map;
     std::vector<uint32_t> logical_to_noc_col_map;
     for (uint32_t y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-        CoreCoord noc_core = d->physical_core_from_logical_core(CoreCoord(0, y), CoreType::WORKER);
+        CoreCoord noc_core = DevicePhysicalCoreFromLogicalCore(d, CoreCoord(0, y), CoreType::WORKER);
         logical_to_noc_row_map.push_back(noc_core.y);
     }
     for (uint32_t x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-        CoreCoord noc_core = d->physical_core_from_logical_core(CoreCoord(x, 0), CoreType::WORKER);
+        CoreCoord noc_core = DevicePhysicalCoreFromLogicalCore(d, CoreCoord(x, 0), CoreType::WORKER);
         logical_to_noc_col_map.push_back(noc_core.x);
     }
 

@@ -173,7 +173,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
         need_other_mask_h, need_other_mask_w,
         other_mask_h, other_mask_w);
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(DeviceArch(device), compute_kernel_config);
     log_debug(
         LogOp,
         "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
@@ -184,7 +184,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Grid Configuration For Workload
     ////////////////////////////////////////////////////////////////////////////
-    auto grid = device->compute_with_storage_grid_size();
+    auto grid = DeviceComputeWithStorageGridSize(device);
     const auto num_cores_y = grid.y;
 
     const auto

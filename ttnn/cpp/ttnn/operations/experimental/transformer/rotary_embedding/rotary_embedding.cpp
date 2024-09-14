@@ -54,7 +54,7 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
                             cos_cache.get_legacy_shape()[-2]));
     }
 
-    auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch() : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = input_tensor.storage_type() == StorageType::DEVICE ? DeviceArch(input_tensor.device()) : DeviceArch(ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice());
     auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
 
     tt::tt_metal::MemoryConfig default_memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG;

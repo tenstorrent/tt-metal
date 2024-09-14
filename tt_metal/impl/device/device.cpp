@@ -6,7 +6,7 @@
 #include <chrono>
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/device/device_impl.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
 #include "tt_metal/common/core_descriptor.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
@@ -29,6 +29,104 @@ namespace tt_metal {
 
 void ::detail::ProgramDeleter::operator()(Program *p) {
     delete p;
+}
+
+ARCH DeviceArch(const Device *device) { return device->arch(); }
+
+chip_id_t DeviceId(const Device *device) { return device->id(); }
+
+bool DeviceIsInitialized(Device *device) { return device->is_initialized(); }
+
+int DeviceNumDramChannels(Device *device) { return device->num_dram_channels(); }
+
+uint32_t DeviceL1SizePerCore(Device *device) { return device->l1_size_per_core(); }
+
+CoreCoord DeviceLogicalGridSize(Device *device) { return device->logical_grid_size(); }
+
+CoreCoord DeviceComputeWithStorageGridSize(const Device *device) { return device->compute_with_storage_grid_size(); }
+
+CoreCoord DeviceDramGridSize(Device *device) { return device->dram_grid_size(); }
+
+CoreCoord DevicePhysicalCoreFromLogicalCore(const Device *device, const CoreCoord &logical_core, CoreType core_type) {
+    return device->physical_core_from_logical_core(logical_core, core_type);
+}
+
+CoreCoord DeviceWorkerCoreFromLogicalCore(const Device *device, const CoreCoord &logical_core) {
+    return device->worker_core_from_logical_core(logical_core);
+}
+
+CoreCoord DeviceEthernetCoreFromLogicalCore(const Device *device, const CoreCoord &logical_core) {
+    return device->ethernet_core_from_logical_core(logical_core);
+}
+
+std::vector<CoreCoord> DeviceGetEthernetSockets(const Device *device, chip_id_t connected_chip_id) {
+    return device->get_ethernet_sockets(connected_chip_id);
+}
+
+bool DeviceIsMmioCapable(Device *device) { return device->is_mmio_capable(); }
+
+uint32_t DeviceNumBanks(Device *device, BufferType buffer_type) { return device->num_banks(buffer_type); }
+
+CoreCoord DeviceDramCoreFromDramChannel(Device *device, uint32_t dram_channel) { return device->dram_core_from_dram_channel(dram_channel); }
+
+int32_t DeviceBankOffset(Device *device, BufferType buffer_type, uint32_t bank_id) {
+    return device->bank_offset(buffer_type, bank_id);
+}
+
+const std::vector<uint32_t> &DeviceBankIdsFromLogicalCore(Device *device, BufferType buffer_type, const CoreCoord &logical_core) {
+    return device->bank_ids_from_logical_core(buffer_type, logical_core);
+}
+
+void DeviceDeallocateBuffers(Device *device) { return device->deallocate_buffers(); }
+
+float DeviceSfpuEps(Device *device) { return device->sfpu_eps(); }
+float DeviceSfpuNan(Device *device) { return device->sfpu_nan(); }
+float DeviceSfpuInf(Device *device) { return device->sfpu_inf(); }
+
+CommandQueue &DeviceCommandQueue(Device *device, size_t cq_id) { return device->command_queue(cq_id); }
+
+void DeviceBeginTrace(Device *device, uint8_t cq_id, uint32_t tid) { return device->begin_trace(cq_id, tid); }
+void DeviceEndTrace(Device *device, uint8_t cq_id, uint32_t tid) { return device->end_trace(cq_id, tid); }
+void DeviceReplayTrace(Device *device, uint8_t cq_id, uint32_t tid, bool blocking) { return device->replay_trace(cq_id, tid, blocking); }
+void DeviceReleaseTrace(Device *device, uint32_t tid) { return device->release_trace(tid); }
+
+void DevicePushWork(Device *device, std::function<void()> &&work, bool blocking) { return device->push_work(std::move(work), blocking); }
+
+void DeviceSynchronize(Device *device) { return device->synchronize(); }
+
+void DeviceEnableAsync(Device *device, bool enable) { return device->enable_async(enable); }
+
+WorkExecutorMode DeviceGetWorkerMode(Device *device) { return device->get_worker_mode(); }
+
+program_cache::detail::ProgramCache &DeviceGetProgramCache(Device *device) { return device->program_cache; }
+
+void DeviceEnableProgramCache(Device *device) { return device->enable_program_cache(); }
+void DeviceDisableAndClearProgramCache(Device *device) { return device->disable_and_clear_program_cache(); }
+
+size_t DeviceNumProgramCacheEntries(Device *device) { return device->num_program_cache_entries(); }
+
+bool DeviceInMainThread(Device *device) { return device->in_main_thread(); }
+
+Allocator *DeviceGetAllocator(Device *device) { return device->allocator_.get(); }
+
+std::set<CoreCoord> &DeviceGetComputeCores(Device *device) { return device->compute_cores_; }
+
+WorkExecutor &DeviceGetWorkExecutor(Device *device) { return device->work_executor; }
+
+inline HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord phys_core) const {
+
+    HalProgrammableCoreType programmable_core_type = HalProgrammableCoreType::TENSIX;
+    if (tt::llrt::is_ethernet_core(phys_core, this->id_)) {
+        // Eth pcores have a different address, but only active ones.
+        CoreCoord logical_core = this->logical_core_from_ethernet_core(phys_core);
+        if (this->is_active_ethernet_core(logical_core)) {
+            programmable_core_type = HalProgrammableCoreType::ACTIVE_ETH;
+        } else {
+            programmable_core_type = HalProgrammableCoreType::IDLE_ETH;
+        }
+    }
+
+    return programmable_core_type;
 }
 
 Device::Device(

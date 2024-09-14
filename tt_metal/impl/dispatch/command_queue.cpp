@@ -26,6 +26,7 @@
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
+#include "tt_metal/impl/device/device_impl.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"

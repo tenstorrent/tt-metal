@@ -18,7 +18,7 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/llrt/llrt.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/device/device_impl.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/graph/graph_tracking.hpp"

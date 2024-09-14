@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <memory>
+#include <type_traits>
 #include <variant>
 #include <vector>
 
@@ -58,6 +60,14 @@ size_t GetNumPCIeDevices();
 
 chip_id_t GetPCIeDeviceID(chip_id_t device_id);
 
+struct DeviceOptions {
+    uint8_t num_hw_cqs{1};
+    size_t l1_small_size{DEFAULT_L1_SMALL_SIZE};
+    size_t trace_region_size{DEFAULT_TRACE_REGION_SIZE};
+    DispatchCoreType dispatch_core_type{DispatchCoreType::WORKER};
+    std::vector<uint32_t> l1_bank_remap{};
+};
+
 /**
  * Instantiates a device object.
  *
@@ -65,15 +75,14 @@ chip_id_t GetPCIeDeviceID(chip_id_t device_id);
  *
  * | Argument   | Description                | Type            | Valid Range                       | Required |
  * |------------|----------------------------|-----------------|-----------------------------------|----------|
- * | device_id  | ID of the device to target| chip_id_t (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
+ * | device_id  | ID of the device to target | chip_id_t (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
  * */
-Device *CreateDevice(
-    chip_id_t device_id,
-    const uint8_t num_hw_cqs = 1,
-    const size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
-    const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
-    DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER,
-    const std::vector<uint32_t> &l1_bank_remap = {});
+Device *CreateDevice(chip_id_t device_id, DeviceOptions device_options = {});
+
+struct DeviceMinimalOptions {
+    uint8_t num_hw_cqs{1};
+    DispatchCoreType dispatch_core_type{DispatchCoreType::WORKER};
+};
 
 /**
  * Instantiates a device with minimal setup, used to attach to a device in a bad state.
@@ -82,10 +91,9 @@ Device *CreateDevice(
  *
  * | Argument   | Description                | Type            | Valid Range                       | Required |
  * |------------|----------------------------|-----------------|-----------------------------------|----------|
- * | device_id  | ID of the device to target| chip_id_t (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
+ * | device_id  | ID of the device to target | chip_id_t (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
  * */
-Device *CreateDeviceMinimal(
-    chip_id_t device_id, const uint8_t num_hw_cqs = 1, DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER);
+Device *CreateDeviceMinimal(chip_id_t device_id, DeviceMinimalOptions device_options = {});
 
 /**
  * Resets device and closes device

@@ -31,13 +31,13 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
     std::visit([&](auto&& compute_kernel_config) {
         using T = std::decay_t<decltype(compute_kernel_config)>;
         if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-            TT_ASSERT(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+            TT_ASSERT(DeviceArch(device) == ARCH::GRAYSKULL, "kernel config is not for graykull");
             math_fidelity = compute_kernel_config.math_fidelity;
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = false;
             packer_l1_acc = false;
         } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-            TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
+            TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(DeviceArch(device)), "kernel config is not for wormhole_b0 or blackhole");
             math_fidelity = compute_kernel_config.math_fidelity;
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
@@ -80,8 +80,8 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
     auto num_output_blocks_total = ashape[1]; // ashape[1] is Q num_heads; only parallelize on this
     auto [num_cores, all_cores, core_group_1, core_group_2, num_output_blocks_per_core_group_1, num_output_blocks_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_blocks_total);
 
-    auto all_device_cores = CoreRange({0, 0}, {a.device()->compute_with_storage_grid_size().x - 1, a.device()->compute_with_storage_grid_size().y - 1});
-    auto total_num_cores = a.device()->compute_with_storage_grid_size().x * a.device()->compute_with_storage_grid_size().y;
+    auto all_device_cores = CoreRange({0, 0}, {DeviceComputeWithStorageGridSize(a.device()).x - 1, DeviceComputeWithStorageGridSize(a.device()).y - 1});
+    auto total_num_cores = DeviceComputeWithStorageGridSize(a.device()).x * DeviceComputeWithStorageGridSize(a.device()).y;
 
     tt::tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");

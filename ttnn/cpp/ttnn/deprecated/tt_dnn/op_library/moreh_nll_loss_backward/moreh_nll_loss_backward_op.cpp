@@ -128,11 +128,11 @@ Tensor moreh_nll_loss_backward_(
     const MemoryConfig& input_grad_mem_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto device = output_grad_tensor.device();
-    auto grid_coord = device->compute_with_storage_grid_size();
+    auto grid_coord = DeviceComputeWithStorageGridSize(device);
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
     auto kernel_config_val =
-        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
+        init_device_compute_kernel_config(DeviceArch(device), compute_kernel_config, MathFidelity::HiFi4);
 
     std::vector<Tensor> output_tensors = {Tensor(
         operation::get_workers_for_op_output({target_tensor, output_grad_tensor}, {weight_tensor, divisor_tensor}))};

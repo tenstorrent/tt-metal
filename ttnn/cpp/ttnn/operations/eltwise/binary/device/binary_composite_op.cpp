@@ -63,7 +63,7 @@ Tensor _addalpha(
 
 // nextafter
 Tensor _nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    const float eps = input_a.device()->sfpu_eps();
+    const float eps = DeviceSfpuEps(input_a.device());
     Tensor result(input_a);
     {
         Tensor eps_gt(input_a);
@@ -172,7 +172,7 @@ Tensor _div_overload(const Tensor& input_a, float value, bool accurate_mode, con
 
 Tensor _div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, const std::string& round_mode, const std::optional<MemoryConfig>& output_mem_config) {
     TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
-    auto arch = input_a.device()->arch();
+    auto arch = DeviceArch(input_a.device());
     if (arch == tt::ARCH::WORMHOLE_B0) {
         DataType input_dtype = input_a.get_dtype();
         Tensor a = typecast(input_a, DataType::FLOAT32);
@@ -240,7 +240,7 @@ Tensor _div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::opti
 
 // Binary remainder will be overloaded by unary remainder in another PR
 Tensor ExecuteBinaryRemainder::invoke(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    auto arch = input_a.device()->arch();
+    auto arch = DeviceArch(input_a.device());
     TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     DataType input_dtype = input_a.get_dtype();
     Tensor a = typecast(input_a, DataType::FLOAT32);
@@ -259,7 +259,7 @@ Tensor ExecuteBinaryRemainder::invoke(const Tensor& input, float scalar, const s
 
 // Binary FMOD will be overloaded by unary FMOD in another PR
 Tensor ExecuteBinaryFmod::invoke(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    auto arch = input_a.device()->arch();
+    auto arch = DeviceArch(input_a.device());
     TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     DataType input_dtype = input_a.get_dtype();
     Tensor a = typecast(input_a, DataType::FLOAT32);
@@ -274,7 +274,7 @@ Tensor ExecuteBinaryFmod::invoke(const Tensor& input, float scalar, const std::o
 }
 
 Tensor _floor_div_overload(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
-    auto arch = input_a.device()->arch();
+    auto arch = DeviceArch(input_a.device());
     TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     if (value == 0) {
         Tensor t_inf = ttnn::full_like(input_a, std::numeric_limits<float>::infinity());
@@ -289,7 +289,7 @@ Tensor _floor_div_overload(const Tensor& input_a, float value, const std::option
 }
 
 Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    auto arch = input_a.device()->arch();
+    auto arch = DeviceArch(input_a.device());
     TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     Tensor temp = ttnn::div(input_a, input_b, true, "None", output_mem_config);
     Tensor result = ttnn::div(input_a, input_b, true, "floor", output_mem_config);

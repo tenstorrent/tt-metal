@@ -60,7 +60,7 @@ struct Tensor {
         // since pushing to the queue requires an extra datacopy in the main thread, that gets balanced by the
         // worker, however the worker cannot modify main_thread_ref_count.
         void increment_main_thread_ref_count(Device *worker) {
-            if (worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS and worker->in_main_thread()) {
+            if (DeviceGetWorkerMode(worker) == WorkExecutorMode::ASYNCHRONOUS and DeviceInMainThread(worker)) {
                 main_thread_ref_count++;
                 if (track_ref_count) {
                     tt::log_info(
@@ -73,7 +73,7 @@ struct Tensor {
         }
 
         void decrement_main_thread_ref_count(Device *worker) {
-            if (worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS and worker->in_main_thread()) {
+            if (DeviceGetWorkerMode(worker) == WorkExecutorMode::ASYNCHRONOUS and DeviceInMainThread(worker)) {
                 main_thread_ref_count--;
                 if (track_ref_count) {
                     tt::log_info(
@@ -88,7 +88,7 @@ struct Tensor {
         uint32_t record_main_thread_ref_count() { return main_thread_ref_count; }
 
         void update_main_thread_ref_count(Device *worker, uint32_t ref_count) {
-            if (worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS and worker->in_main_thread()) {
+            if (DeviceGetWorkerMode(worker) == WorkExecutorMode::ASYNCHRONOUS and DeviceInMainThread(worker)) {
                 if (track_ref_count) {
                     tt::log_info(
                         "Update Ref Count on tensor {}. Main Thread Ref Count: {}. Total Ref Count: {}.",
@@ -135,9 +135,9 @@ struct Tensor {
         // When creating a host tensor, specify num_buffers.
         // If neither are specified, a dummy tensor is being created. Do nothing.
         if (workers.size()) {
-            bool in_main_thread_based_on_first_worker = workers.at(0)->in_main_thread();
+            bool in_main_thread_based_on_first_worker = DeviceInMainThread(workers.at(0));
             for (auto &worker : workers) {
-                bool in_main_thread_based_on_curr_worker = worker->in_main_thread();
+                bool in_main_thread_based_on_curr_worker = DeviceInMainThread(worker);
                 TT_FATAL(
                     in_main_thread_based_on_curr_worker == in_main_thread_based_on_first_worker,
                     "in_main_thread() inconsistency found across worker threads. Some worker threads have incorrectly "
@@ -159,7 +159,7 @@ struct Tensor {
                     workers.cend(),
                     std::back_inserter(
                         std::get<MultiDeviceStorage>(this->tensor_attributes->storage).ordered_device_ids),
-                    [](const Device *worker) { return worker->id(); });
+                    DeviceId);
             }
             this->tensor_attributes->num_shards_to_be_populated = workers.size();
         } else if (num_buffers) {
@@ -187,7 +187,7 @@ struct Tensor {
         tensor_attributes(other.tensor_attributes),
         deallocate_through_destructor(other.deallocate_through_destructor) {
         if (this->workers.size()) {
-            if (this->workers.at(0)->in_main_thread()) {
+            if (DeviceInMainThread(this->workers.at(0))) {
                 this->tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
             }
         }
@@ -203,7 +203,7 @@ struct Tensor {
             this->tensor_attributes = other.tensor_attributes;
             this->deallocate_through_destructor = other.deallocate_through_destructor;
             if (this->workers.size()) {
-                if (this->workers.at(0)->in_main_thread()) {
+                if (DeviceInMainThread(this->workers.at(0))) {
                     this->tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
                 }
             }

@@ -6,6 +6,7 @@
 
 #include "tt_metal/impl/device/mesh_device.hpp"
 #include "tt_metal/impl/device/mesh_device_view.hpp"
+#include "tt_metal/impl/device/device_impl.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
@@ -178,6 +179,10 @@ std::shared_ptr<const MeshDeviceView> MeshDevice::get_view() const {
 std::shared_ptr<MeshDeviceView> MeshDevice::get_view() {
     return this->view;
 }
+
+ARCH DeviceArch(const MeshDevice *device) { return device->arch(); }
+
+CoreCoord DeviceComputeWithStorageGridSize(const MeshDevice *device) { return device->compute_with_storage_grid_size(); }
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) {
     return os << mesh_device.to_string();

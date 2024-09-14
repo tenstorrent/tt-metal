@@ -31,13 +31,13 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
     std::visit([&](auto&& compute_kernel_config) {
         using T = std::decay_t<decltype(compute_kernel_config)>;
         if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-            TT_ASSERT(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+            TT_ASSERT(DeviceArch(device) == ARCH::GRAYSKULL, "kernel config is not for graykull");
             math_fidelity = compute_kernel_config.math_fidelity;
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = false;
             packer_l1_acc = false;
         } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-            TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
+            TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(DeviceArch(device)), "kernel config is not for wormhole_b0 or blackhole");
             math_fidelity = compute_kernel_config.math_fidelity;
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
@@ -67,7 +67,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // Load kernels on all device cores, because we use cached program for input shapes with changing shapes
-    CoreCoord device_compute_with_storage_grid = device->compute_with_storage_grid_size();
+    CoreCoord device_compute_with_storage_grid = DeviceComputeWithStorageGridSize(device);
     auto all_device_cores = CoreRange({0, 0}, {device_compute_with_storage_grid.x - 1, device_compute_with_storage_grid.y - 1});
 
     // See set_runtime_args for how input shapes are used; these are the variables needed for setting up kernels and CBs
@@ -117,10 +117,10 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
     std::vector<uint32_t> in1_mcast_sender_noc_x(mcast_sender_grid.x);
     std::vector<uint32_t> in1_mcast_sender_noc_y(mcast_sender_grid.y);
     for(uint32_t core_idx_x = 0; core_idx_x < mcast_sender_grid.x; ++core_idx_x) {
-        in1_mcast_sender_noc_x[core_idx_x] = device->worker_core_from_logical_core({core_idx_x, 0}).x;
+        in1_mcast_sender_noc_x[core_idx_x] = DeviceWorkerCoreFromLogicalCore(device, {core_idx_x, 0}).x;
     }
     for(uint32_t core_idx_y = 0; core_idx_y < mcast_sender_grid.y; ++core_idx_y) {
-        in1_mcast_sender_noc_y[core_idx_y] = device->worker_core_from_logical_core({0, core_idx_y}).y;
+        in1_mcast_sender_noc_y[core_idx_y] = DeviceWorkerCoreFromLogicalCore(device, {0, core_idx_y}).y;
     }
 
     // Set up CBs
@@ -219,7 +219,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         writer_kernel_defines["OUT_SHARDED"] = "1";
     }
 
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch()); // Default is NOC_1
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(DeviceArch(device)); // Default is NOC_1
     const bool reader_noc_is_NOC_0 = reader_noc == tt::tt_metal::NOC::NOC_0;
     tt::tt_metal::NOC writer_noc = reader_noc_is_NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
     auto reader_id = tt::tt_metal::CreateKernel(
@@ -369,8 +369,8 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         uint32_t mcast_num_cores = mcast_receiver_cores_bounding_box.size();
         CoreCoord top_left_core = mcast_receiver_cores_bounding_box.start_coord;
         CoreCoord bottom_right_core = mcast_receiver_cores_bounding_box.end_coord;
-        CoreCoord top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-        CoreCoord bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+        CoreCoord top_left_core_physical = DeviceWorkerCoreFromLogicalCore(device, top_left_core);
+        CoreCoord bottom_right_core_physical = DeviceWorkerCoreFromLogicalCore(device, bottom_right_core);
 
         // Default reader runtime args
         std::vector<uint32_t> reader_runtime_args = {

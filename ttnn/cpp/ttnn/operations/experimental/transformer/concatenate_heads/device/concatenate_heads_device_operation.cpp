@@ -60,7 +60,7 @@ operation::ProgramWithCallbacks ConcatenateHeadsDeviceOperation::create_program(
     auto& output_tensor = output_tensors.at(0);
     const auto batch_size = input_tensor.get_legacy_shape()[0];
 
-    auto device_compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    auto device_compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(input_tensor.device());
     TT_FATAL(
         (this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x &&
          this->compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y),

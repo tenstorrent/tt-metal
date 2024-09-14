@@ -38,7 +38,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
     tt::tt_metal::Device *device = a.device();
     const tt::tt_metal::Shape& cshape = output.get_legacy_shape();  // C=A*B, N1MK*11KN->N1MN
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(device);
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t c_batch_size = get_batch_size(cshape);

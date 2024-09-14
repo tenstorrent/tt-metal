@@ -26,7 +26,7 @@ void InterleavedToShardedPartialDeviceOperation::validate(const std::vector<Tens
     if (input_tensor.get_dtype() != this->output_dtype) {
         TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
     }
-    auto device_grid = input_tensor.device()->compute_with_storage_grid_size();
+    auto device_grid = DeviceComputeWithStorageGridSize(input_tensor.device());
     TT_FATAL(this->grid_size.x <= device_grid.x && this->grid_size.y <= device_grid.y, "Grid size for sharding must be less than or equal to total grid available");
     // Divisibility of num_cores and shard size with tensor shape is done in tensor creation, so no need to assert here
 }

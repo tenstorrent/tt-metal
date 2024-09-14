@@ -132,7 +132,7 @@ void device_module(py::module &m_device) {
 
     m_device.def(
         "CreateDevice",
-        [](int device_id, uint8_t num_command_queues, size_t l1_small_size, size_t trace_region_size, tt::tt_metal::DispatchCoreType dispatch_core_type) { return tt::tt_metal::CreateDevice(device_id, num_command_queues, l1_small_size, trace_region_size, dispatch_core_type); },
+        [](int device_id, uint8_t num_command_queues, size_t l1_small_size, size_t trace_region_size, tt::tt_metal::DispatchCoreType dispatch_core_type) { return tt::tt_metal::CreateDevice(device_id, {num_command_queues, l1_small_size, trace_region_size, dispatch_core_type}); },
         R"doc(
         Creates an instance of TT device.
 
@@ -278,11 +278,11 @@ void device_module(py::module &m_device) {
         [] (Device* device, const std::optional<uint8_t> cq_id) {
             // Send finish command to issue queue through worker thread
             // Worker thread will stall until the device is flushed.
-            device->push_work([device, cq_id] () mutable {
+            DevicePushWork(device, [device, cq_id] () mutable {
                 Synchronize(device, cq_id);
             });
             // Main thread stalls until worker is complete (full device and worker queue flush).
-            device->synchronize();
+            DeviceSynchronize(device);
         }, R"doc(
         Synchronize the device with host by waiting for all operations to complete.
         If cq_id is provided then only the operations associated with that cq_id are waited for,

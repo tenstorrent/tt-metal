@@ -22,10 +22,10 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<uint32_t> valid_seq_len) {
-    auto arch = input_tensor_q.storage_type() == StorageType::DEVICE ? input_tensor_q.device()->arch()
-                                                                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = input_tensor_q.storage_type() == StorageType::DEVICE ? DeviceArch(input_tensor_q.device())
+                                                                     : DeviceArch(ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice());
     auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
+        DeviceArch(input_tensor_q.device()), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
     return operation::run(
                ScaledDotProductAttention{

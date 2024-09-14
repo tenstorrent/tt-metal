@@ -23,7 +23,7 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Te
 
 
     auto bbox = q_input_tensor.shard_spec().value().grid.bounding_box();
-    TT_FATAL((bbox.end_coord.x < q_input_tensor.device()->compute_with_storage_grid_size().x && bbox.end_coord.y < q_input_tensor.device()->compute_with_storage_grid_size().y), "Error");
+    TT_FATAL((bbox.end_coord.x < DeviceComputeWithStorageGridSize(q_input_tensor.device()).x && bbox.end_coord.y < DeviceComputeWithStorageGridSize(q_input_tensor.device()).y), "Error");
 
     TT_FATAL(q_input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Error");
     TT_FATAL(kv_input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Error");
@@ -87,7 +87,7 @@ std::vector<tt::tt_metal::Shape> CreateQKVHeadsSeparateTensorsDeviceOperation::c
 operation::ProgramWithCallbacks CreateQKVHeadsSeparateTensorsDeviceOperation::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_q = input_tensors.at(0);
     const auto& input_tensor_kv = input_tensors.at(1);
-    CoreCoord compute_with_storage_grid_size = input_tensor_q.device()->compute_with_storage_grid_size();
+    CoreCoord compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(input_tensor_q.device());
     return  multi_core_create_q_and_kv_heads_sharded(input_tensor_q, input_tensor_kv, this->num_q_heads, this->num_kv_heads, this->head_dim, this->transpose_k_heads, output_tensors, compute_with_storage_grid_size);
 }
 

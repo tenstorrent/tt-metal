@@ -128,7 +128,7 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
     uint32_t num_output_tiles = (output_shape[1] * output_shape[2] * output_shape[3] / tt::constants::TILE_HW);
 
     // Currently added to support Bert large, TODO: Make op more generic, parallelize
-    uint32_t available_l1 = device->l1_size_per_core() - L1_UNRESERVED_BASE;
+    uint32_t available_l1 = DeviceL1SizePerCore(device) - L1_UNRESERVED_BASE;
     if (num_input_tiles * single_tile_size + num_output_tiles * single_tile_size > available_l1) {
         if (old_stick_size >= new_stick_size) {
             if (old_stick_size % new_stick_size == 0) {
@@ -383,7 +383,7 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor &a, Tensor& o
         TT_FATAL(new_stick_size % old_stick_size == 0, "Error");
     }
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(device);
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;

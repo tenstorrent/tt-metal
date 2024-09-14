@@ -161,20 +161,20 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         }
 
         if (transpose_mcast) {
-            in0_mcast_receiver_grid_diff_coord_start = device->worker_core_from_logical_core({0, start_core_y}).y;
+            in0_mcast_receiver_grid_diff_coord_start = DeviceWorkerCoreFromLogicalCore(device, {0, start_core_y}).y;
             in0_mcast_receiver_grid_diff_coord_end =
-                device->worker_core_from_logical_core({0, start_core_y + num_blocks_x - 1}).y;
+                DeviceWorkerCoreFromLogicalCore(device, {0, start_core_y + num_blocks_x - 1}).y;
             in0_mcast_noc_y.reserve(in0_sender_num_cores_along_width);
             for (uint32_t core_idx_y = 0; core_idx_y < in0_sender_num_cores_along_width; ++core_idx_y) {
-                in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+                in0_mcast_noc_y.push_back(DeviceWorkerCoreFromLogicalCore(device, {0, core_idx_y}).y);
             }
         } else {
-            in0_mcast_receiver_grid_diff_coord_start = device->worker_core_from_logical_core({start_core_x, 0}).x;
+            in0_mcast_receiver_grid_diff_coord_start = DeviceWorkerCoreFromLogicalCore(device, {start_core_x, 0}).x;
             in0_mcast_receiver_grid_diff_coord_end =
-                device->worker_core_from_logical_core({start_core_x + num_blocks_x - 1, 0}).x;
+                DeviceWorkerCoreFromLogicalCore(device, {start_core_x + num_blocks_x - 1, 0}).x;
             in0_mcast_noc_x.reserve(in0_sender_num_cores_along_width);
             for (uint32_t core_idx_x = 0; core_idx_x < in0_sender_num_cores_along_width; ++core_idx_x) {
-                in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+                in0_mcast_noc_x.push_back(DeviceWorkerCoreFromLogicalCore(device, {core_idx_x, 0}).x);
             }
         }
 
@@ -285,7 +285,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t num_dram_banks = 0;
     uint32_t per_core_N_storage = 0;
     if (in1_is_sharded and in1_is_dram) {
-        num_dram_banks = device->num_dram_channels();
+        num_dram_banks = DeviceNumDramChannels(device);
         per_core_N_storage = (N + num_dram_banks - 1) / num_dram_banks;
     }
 
@@ -472,7 +472,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    bmm_op_utils::add_stagger_defines_if_needed(device->arch(), cores.size(), mm_kernel_defines);
+    bmm_op_utils::add_stagger_defines_if_needed(DeviceArch(device), cores.size(), mm_kernel_defines);
 
     if (in0_receiver_interleaved.num_cores() == 0) {
         mm_kernel_in0_sender_interleaved_defines["SKIP_MCAST"] = "1";
@@ -499,10 +499,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     }
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt_metal::NOC in1_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
-    tt_metal::NOC in0_split_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
-    tt_metal::NOC in1_split_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
+    tt_metal::NOC in0_noc = detail::GetPreferredNOCForDRAMWrite(DeviceArch(device));
+    tt_metal::NOC in1_noc = detail::GetPreferredNOCForDRAMRead(DeviceArch(device));
+    tt_metal::NOC in0_split_noc = detail::GetPreferredNOCForDRAMRead(DeviceArch(device));
+    tt_metal::NOC in1_split_noc = detail::GetPreferredNOCForDRAMWrite(DeviceArch(device));
 
     KernelHandle mm_kernel_in0_sender_id = 0;
     KernelHandle mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id = 0;
@@ -830,12 +830,12 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core_y + 1};
         CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_with_work_r - 1};
 
-        auto left_core_physical = device->worker_core_from_logical_core(left_core);
-        auto left_core_plus_one_physical = device->worker_core_from_logical_core(left_core_plus_one);
-        auto right_core_physical = device->worker_core_from_logical_core(right_core);
-        auto top_core_physical = device->worker_core_from_logical_core(top_core);
-        auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
-        auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+        auto left_core_physical = DeviceWorkerCoreFromLogicalCore(device, left_core);
+        auto left_core_plus_one_physical = DeviceWorkerCoreFromLogicalCore(device, left_core_plus_one);
+        auto right_core_physical = DeviceWorkerCoreFromLogicalCore(device, right_core);
+        auto top_core_physical = DeviceWorkerCoreFromLogicalCore(device, top_core);
+        auto top_core_plus_one_physical = DeviceWorkerCoreFromLogicalCore(device, top_core_plus_one);
+        auto bottom_core_physical = DeviceWorkerCoreFromLogicalCore(device, bottom_core);
         uint32_t in0_idx = core.y - start_core_y;
         uint32_t in1_idx = core.x - start_core_x;
 
@@ -868,7 +868,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             uint32_t in0_mcast_receiver_grid_same_coord;
             std::vector<uint32_t> mm_in0_sender_args;
             if (transpose_mcast) {
-                in0_mcast_receiver_grid_same_coord = device->worker_core_from_logical_core(core).x;
+                in0_mcast_receiver_grid_same_coord = DeviceWorkerCoreFromLogicalCore(device, core).x;
                 mm_in0_sender_args.push_back(core.y);
                 mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
                 mm_in0_sender_args.push_back(in0_mcast_receiver_grid_diff_coord_start);
@@ -877,7 +877,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
                 mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
             } else {
-                in0_mcast_receiver_grid_same_coord = device->worker_core_from_logical_core(core).y;
+                in0_mcast_receiver_grid_same_coord = DeviceWorkerCoreFromLogicalCore(device, core).y;
                 mm_in0_sender_args.push_back(core.x);
                 mm_in0_sender_args.push_back(in0_mcast_receiver_grid_diff_coord_start);
                 mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
@@ -1283,13 +1283,13 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
         [&](auto&& compute_kernel_config) {
             using T = std::decay_t<decltype(compute_kernel_config)>;
             if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-                TT_FATAL(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+                TT_FATAL(DeviceArch(device) == ARCH::GRAYSKULL, "kernel config is not for graykull");
                 math_fidelity = compute_kernel_config.math_fidelity;
                 math_approx_mode = compute_kernel_config.math_approx_mode;
                 fp32_dest_acc_en = false;
                 packer_l1_acc = false;
             } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                TT_FATAL(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
+                TT_FATAL(ttnn::device::is_wormhole_or_blackhole(DeviceArch(device)), "kernel config is not for wormhole_b0 or blackhole");
                 math_fidelity = compute_kernel_config.math_fidelity;
                 math_approx_mode = compute_kernel_config.math_approx_mode;
                 fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;

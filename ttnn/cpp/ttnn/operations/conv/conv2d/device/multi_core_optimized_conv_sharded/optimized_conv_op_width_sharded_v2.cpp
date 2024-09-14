@@ -95,13 +95,13 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         [&](auto&& compute_kernel_config) {
             using T = std::decay_t<decltype(compute_kernel_config)>;
             if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-                TT_FATAL(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+                TT_FATAL(DeviceArch(device) == ARCH::GRAYSKULL, "kernel config is not for graykull");
                 math_fidelity = compute_kernel_config.math_fidelity;
                 math_approx_mode = compute_kernel_config.math_approx_mode;
                 fp32_dest_acc_en = false;
                 packer_l1_acc = false;
             } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                TT_FATAL(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
+                TT_FATAL(DeviceArch(device) == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
                 math_fidelity = compute_kernel_config.math_fidelity;
                 math_approx_mode = compute_kernel_config.math_approx_mode;
                 fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
@@ -529,8 +529,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
     CoreCoord act_mcast_start_core_logical(0,0);
     CoreCoord act_mcast_end_core_logical(p_config.grid_size.x-1,p_config.grid_size.y-1);
-    auto act_mcast_start = device->worker_core_from_logical_core(act_mcast_start_core_logical);
-    auto act_mcast_end = device->worker_core_from_logical_core(act_mcast_end_core_logical);
+    auto act_mcast_start = DeviceWorkerCoreFromLogicalCore(device, act_mcast_start_core_logical);
+    auto act_mcast_end = DeviceWorkerCoreFromLogicalCore(device, act_mcast_end_core_logical);
     TT_FATAL(act_block_h_datums % 2 == 0, "2 Indices are packed in one uint32_t word.");
 
     activation_kernel_compile_args = {
@@ -774,16 +774,16 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
             .defines = compute_defines
     });
 
-    auto full_core_grid = device->compute_with_storage_grid_size();
+    auto full_core_grid = DeviceComputeWithStorageGridSize(device);
     std::vector<uint32_t> act_mcast_noc_y;
     std::vector<uint32_t> act_mcast_noc_x;
 
     for(uint32_t core_index = 0; core_index < full_core_grid.x; core_index++) {
-        act_mcast_noc_x.push_back( device->worker_core_from_logical_core( CoreCoord(core_index, 0)).x );
+        act_mcast_noc_x.push_back( DeviceWorkerCoreFromLogicalCore(device,  CoreCoord(core_index, 0)).x );
     }
 
     for(uint32_t core_index = 0; core_index < full_core_grid.y; core_index++) {
-        act_mcast_noc_y.push_back( device->worker_core_from_logical_core( CoreCoord(0,core_index) ).y );
+        act_mcast_noc_y.push_back( DeviceWorkerCoreFromLogicalCore(device,  CoreCoord(0,core_index) ).y );
     }
 
     uint32_t bias_base_address = 0;

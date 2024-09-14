@@ -137,7 +137,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
 
     uint32_t num_unpadded_sticks = output.volume() / output.get_legacy_shape()[-1];
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(device);
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
@@ -493,7 +493,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
             uint32_t worker_x_logical = row_major ? shard_grid_inner_dim_id : shard_grid_outer_dim_id;
 
             if (worker_x_logical < num_cores_x_padded and worker_y_logical < num_cores_y_padded) {
-                auto core_physical = device->worker_core_from_logical_core(CoreCoord{worker_x_logical, worker_y_logical});
+                auto core_physical = DeviceWorkerCoreFromLogicalCore(device, CoreCoord{worker_x_logical, worker_y_logical});
                 // save stick id in a shard, and core coord into a map
                 std::pair<uint32_t, uint32_t> xy_pair = row_major ? std::make_pair(core_physical.y, core_physical.x)
                                                                     : std::make_pair(core_physical.x, core_physical.y);
@@ -608,7 +608,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(device);
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
@@ -835,7 +835,7 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
 
     uint32_t num_unpadded_tiles = output.volume() / TILE_HW;
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(device);
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto num_cores_total = num_cores_x * num_cores_y;

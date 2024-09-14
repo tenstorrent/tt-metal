@@ -86,7 +86,7 @@ operation::ProgramWithCallbacks RepeatAndInterleaveEltwiseMul::create_program(
     auto& output_tensor = output_tensors.at(0);
     const auto hidden_size = HIDDEN_SIZE;
 
-    auto device_compute_with_storage_grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
+    auto device_compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(input_tensor_a.device());
 
     return detail::multi_core_ssm_eltwise_mul(
         input_tensor_a,

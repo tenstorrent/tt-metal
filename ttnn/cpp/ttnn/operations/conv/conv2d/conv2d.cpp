@@ -91,7 +91,7 @@ ParallelConfig determine_parallel_config(
         conv_out_2d_matrix_height_ntiles = conv_out_2d_matrix_height;
         conv_out_2d_matrix_width_ntiles = output_channels;
     }
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(device);
     std::vector<uint32_t> device_grid_size = {
         (uint32_t)compute_with_storage_grid_size.x, (uint32_t)compute_with_storage_grid_size.y};
     CoreCoord device_grid_size_coord = {
@@ -722,7 +722,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     bool input_is_on_device = ttnn::is_tensor_on_device_or_multidevice(input_tensor_post_tm);
     TT_ASSERT(input_is_on_device);
     DeviceComputeKernelConfig compute_kernel_config;
-    switch (device->arch()) {
+    switch (DeviceArch(device)) {
         case tt::ARCH::WORMHOLE_B0:
             compute_kernel_config = WormholeComputeKernelConfig(
                 {.math_fidelity = conv_config.math_fidelity,

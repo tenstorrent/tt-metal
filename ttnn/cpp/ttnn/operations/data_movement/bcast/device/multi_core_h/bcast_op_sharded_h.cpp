@@ -35,7 +35,7 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
     uint32_t ncores = shard_spec.num_cores();
 
 
-    uint32_t ncores_x = device->compute_with_storage_grid_size().x;
+    uint32_t ncores_x = DeviceComputeWithStorageGridSize(device).x;
 
     auto out_shard_spec = output.shard_spec().value();
     TT_FATAL(out_shard_spec.num_cores() == ncores, "Output tensor should have same number of cores {} as input tensor {}", out_shard_spec.num_cores(), ncores);

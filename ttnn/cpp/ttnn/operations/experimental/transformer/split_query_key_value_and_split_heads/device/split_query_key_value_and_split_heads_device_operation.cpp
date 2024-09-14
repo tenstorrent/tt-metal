@@ -107,7 +107,7 @@ operation::ProgramWithCallbacks SplitFusedQKVAndSplitHeadsDeviceOperation::creat
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
 
-    auto device_compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    auto device_compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(input_tensor.device());
     TT_ASSERT(
         (this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x &&
          this->compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y),

@@ -78,7 +78,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     uint32_t out_w_loop_count = std::ceil((float)out_w / nblocks);
 
     // distributing out_hw across the grid
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = DeviceComputeWithStorageGridSize(device);
     auto all_cores = input.shard_spec().value().grid;
     uint32_t ncores = all_cores.num_cores();
     auto core_range = all_cores;

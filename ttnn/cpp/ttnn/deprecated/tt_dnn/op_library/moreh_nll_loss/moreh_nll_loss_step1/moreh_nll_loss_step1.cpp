@@ -49,7 +49,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_step1_impl(
         split_work_to_cores(core_range, units_to_divide);
 
     auto* device = target.device();
-    auto arch = device->arch();
+    auto arch = DeviceArch(device);
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
@@ -64,7 +64,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_step1_impl(
     const auto data_tile_size = tt_metal::detail::TileSize(data_format);
     const auto intermed_tile_size = tt_metal::detail::TileSize(intermed_data_format);
 
-    const uint32_t available_L1 = device->l1_size_per_core() - L1_UNRESERVED_BASE;
+    const uint32_t available_L1 = DeviceL1SizePerCore(device) - L1_UNRESERVED_BASE;
 
     uint32_t target_num_tile = 1;
     uint32_t weight_num_tile = weight_has_value ? div_up(channel_size, TILE_WIDTH) : 0;

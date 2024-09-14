@@ -6,6 +6,7 @@
 
 #include <numa.h>
 
+#include "tt_metal/impl/device/device_impl.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
 namespace tt {

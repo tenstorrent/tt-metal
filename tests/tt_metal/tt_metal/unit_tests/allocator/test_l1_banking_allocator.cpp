@@ -12,7 +12,7 @@
 
 // TODO: Uplift to DeviceFixture once it does not skip GS
 TEST_F(BasicFixture, TestL1BuffersAllocatedTopDown) {
-    tt::tt_metal::Device *device = tt::tt_metal::CreateDevice(0, 1, 0);
+    tt::tt_metal::Device *device = tt::tt_metal::CreateDevice(0);
 
     std::vector<uint32_t> alloc_sizes = {32 * 1024, 64 * 1024, 128 * 1024};
     size_t total_size_bytes = 0;
@@ -43,7 +43,7 @@ TEST_F(BasicFixture, TestL1BuffersAllocatedTopDown) {
 
 // TODO: Uplift to DeviceFixture once it does not skip GS
 TEST_F(BasicFixture, TestL1BuffersDoNotGrowBeyondBankSize) {
-    tt::tt_metal::Device *device = tt::tt_metal::CreateDevice(0, 1, 0);
+    tt::tt_metal::Device *device = tt::tt_metal::CreateDevice(0);
 
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(device->id());
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());

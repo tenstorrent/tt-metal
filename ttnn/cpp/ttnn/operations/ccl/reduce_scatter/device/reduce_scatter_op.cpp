@@ -97,8 +97,8 @@ Tensor reduce_scatter(
                     bool is_last_chip_in_clockwise_direction = is_ring ? false : i == (input_tensors.size() - 1);
                     bool is_last_chip_in_counter_clockwise_direction = is_ring ? false : i == 0;
                     device_index = i;
-                    receiver_device_id = devices.at((i + 1) % num_devices)->id(); // Next device in the ring
-                    sender_device_id = devices.at((i + num_devices - 1) % num_devices)->id(); // Previous device in the ring
+                    receiver_device_id = DeviceId(devices.at((i + 1) % num_devices)); // Next device in the ring
+                    sender_device_id = DeviceId(devices.at((i + num_devices - 1) % num_devices)); // Previous device in the ring
                     break;
                 }
             }

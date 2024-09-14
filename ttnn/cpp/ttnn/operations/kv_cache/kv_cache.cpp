@@ -17,7 +17,7 @@ ttnn::Tensor ExecuteUpdateCache::invoke(
     const uint32_t update_index,
     const uint32_t batch_offset,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-        auto kernel_config_val = init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config);
+        auto kernel_config_val = init_device_compute_kernel_config(DeviceArch(input.device()), compute_kernel_config);
         operation::run(
             UpdateCache{
                 0, update_index, batch_offset, UpdateCacheOpType::UPDATE, kernel_config_val},

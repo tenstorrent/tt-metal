@@ -34,7 +34,7 @@ void AllGatherFusedOpSignaler::init_all_gather(
     // Get the noc coords for the all gather workers
     this->all_gather_worker_cores_noc.clear();
     for (const auto& core : all_gather_worker_cores) {
-        this->all_gather_worker_cores_noc.push_back(device->worker_core_from_logical_core(core));
+        this->all_gather_worker_cores_noc.push_back(DeviceWorkerCoreFromLogicalCore(device, core));
     }
     initialized_all_gather = true;
 }
@@ -127,14 +127,14 @@ void MatmulFusedOpSignaler::init_fused_op(
             // Handle CoreRange
             const auto& cores = grid_to_cores(arg.start_coord, arg.end_coord, true);
             for (auto& core : cores) {
-                this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                this->fused_op_receiver_cores_noc.push_back(DeviceWorkerCoreFromLogicalCore(device, core));
             }
         } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
             // Handle CoreRangeSet
             for (const auto& range : arg.ranges()) {
                 const auto& cores = grid_to_cores(range.start_coord, range.end_coord, true);
                 for (auto& core : cores) {
-                    this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                    this->fused_op_receiver_cores_noc.push_back(DeviceWorkerCoreFromLogicalCore(device, core));
                 }
             }
         }

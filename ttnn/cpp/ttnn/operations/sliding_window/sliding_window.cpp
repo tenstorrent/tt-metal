@@ -162,9 +162,9 @@ uint32_t generate_max_out_nsticks_per_core(const std::vector<std::pair<uint32_pa
 
 std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tensors(const std::vector<std::pair<bool, uint32_pair_t>>& tensor_metadata, const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries, bool is_block_sharded, bool transpose_mcast, bool remote_read, Device* device) {
     auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
-        auto num_cores_x = device->compute_with_storage_grid_size().x;
+        auto num_cores_x = DeviceComputeWithStorageGridSize(device).x;
         auto core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id)) : CoreCoord(core_id % num_cores_x, core_id / num_cores_x);
-        return device->worker_core_from_logical_core(core_coord);
+        return DeviceWorkerCoreFromLogicalCore(device, core_coord);
     };
 
     const uint16_t pad_local = 0xFFFF;

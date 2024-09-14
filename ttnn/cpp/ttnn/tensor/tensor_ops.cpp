@@ -26,11 +26,11 @@ namespace{
         // Push empty work to threads and ensure its been picked up
         static auto empty_work = std::make_shared<std::function<void()>>([](){});
         for (auto target_device : workers) {
-            target_device->work_executor.push_work(empty_work);
+            DeviceGetWorkExecutor(target_device).push_work(empty_work);
         }
         // Block until work has been picked up, to flush the queue
         for (auto target_device : workers) {
-            while(not target_device->work_executor.worker_queue.empty());
+            while(not DeviceGetWorkExecutor(target_device).worker_queue.empty());
         }
     }
 }
@@ -49,7 +49,7 @@ Tensor tensor_to(const Tensor& input_tensor, Device* target_device, const Memory
     // Record main thread ref count for tensors before pushing to queue.
     uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
     uint32_t original_tensor_ref_count = async_safe_tensor.tensor_attributes->record_main_thread_ref_count();
-    target_device->push_work([async_safe_tensor, device_tensor, mem_config, target_device]() mutable {
+    DevicePushWork(target_device, [async_safe_tensor, device_tensor, mem_config, target_device]() mutable {
         if (async_safe_tensor.storage_type() == StorageType::DEVICE) {
             TT_ASSERT(async_safe_tensor.device() == target_device && "Currently do not support moving between devices");
             device_tensor.populate_buffers_and_metadata(async_safe_tensor);
@@ -86,7 +86,7 @@ Tensor tensor_to(const Tensor& input_tensor, const std::vector<Device*>& workers
     uint32_t num_workers = workers.size();
     for (int worker_index = 0; worker_index < workers.size(); ++worker_index) {
         auto& worker = workers[worker_index];
-        worker->push_work([worker, input_tensor, device_tensor, mem_config, num_workers, worker_index]() mutable {
+        DevicePushWork(worker, [worker, input_tensor, device_tensor, mem_config, num_workers, worker_index]() mutable {
             auto shard = get_shard_for_device(input_tensor, worker, worker_index);
             if (shard.storage_type() == StorageType::OWNED) {
                 shard = tensor_impl::to_device_wrapper(shard, worker, mem_config, std::nullopt);
@@ -126,7 +126,7 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, uint8_t cq_id) {
     uint32_t original_tensor_ref_count = input_tensor.tensor_attributes->record_main_thread_ref_count();
     for (int worker_index = 0; worker_index < workers.size(); worker_index++) {
         auto target_device = workers[worker_index];
-        target_device->push_work([host_tensor, blocking, target_device, input_tensor, workers, worker_index, cq_id]() mutable {
+        DevicePushWork(target_device, [host_tensor, blocking, target_device, input_tensor, workers, worker_index, cq_id]() mutable {
             TT_ASSERT(
                 input_tensor.storage_type() == StorageType::DEVICE or input_tensor.storage_type() == StorageType::MULTI_DEVICE,
                 "Can only use worker queue for cpu call if tensor is on device.");
@@ -166,11 +166,11 @@ Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, Device* worke
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to", input_tensor, target_layout, worker);
     // Only push layout conversion to worker if running in async mode
-    if (worker and worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS) {
+    if (worker and DeviceGetWorkerMode(worker) == WorkExecutorMode::ASYNCHRONOUS) {
         // Tensor can be using borrowed storage. If so, when running in async mode, copy this tensor to owned storage.
         Tensor async_safe_tensor = copy_borrowed_tensor_in_async_mode(worker, input_tensor);
         Tensor tensor_modified_layout = Tensor({}, 1);
-        worker->push_work([async_safe_tensor, tensor_modified_layout, target_layout]() mutable {
+        DevicePushWork(worker, [async_safe_tensor, tensor_modified_layout, target_layout]() mutable {
             TT_ASSERT(
                 async_safe_tensor.storage_type() == StorageType::OWNED or
                 async_safe_tensor.storage_type() == StorageType::BORROWED &&
@@ -210,7 +210,7 @@ Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, MeshDevice* m
         Tensor tensor_modified_layout = Tensor({}, workers.size(), distributed_config);
         for (int worker_index = 0; worker_index < workers.size(); ++worker_index) {
             auto& worker = workers[worker_index];
-            worker->push_work([input_tensor, tensor_modified_layout, target_layout, worker, worker_index]() mutable {
+            DevicePushWork(worker, [input_tensor, tensor_modified_layout, target_layout, worker, worker_index]() mutable {
                 TT_ASSERT(
                     input_tensor.storage_type() == StorageType::OWNED || input_tensor.storage_type() == StorageType::BORROWED ||
                     input_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST &&

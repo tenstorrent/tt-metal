@@ -45,7 +45,7 @@ operation::ProgramWithCallbacks moreh_mean_h(
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(core_range, units_to_divide);
 
-    auto arch = input.device()->arch();
+    auto arch = DeviceArch(input.device());
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 

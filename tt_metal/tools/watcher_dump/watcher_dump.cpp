@@ -39,7 +39,7 @@ void dump_data(vector<unsigned>& device_ids, bool dump_watcher, bool dump_cqs, b
         string iq_fname = cq_dir.string() + fmt::format("device_{}_issue_q.txt", id);
         std::ofstream iq_file = std::ofstream(iq_fname);
         // Minimal setup, since we'll be attaching to a potentially hanging chip.
-        auto* device = tt::tt_metal::CreateDeviceMinimal(id, num_hw_cqs, DispatchCoreType::WORKER);
+        auto* device = tt::tt_metal::CreateDeviceMinimal(id, {num_hw_cqs, DispatchCoreType::WORKER});
         if (dump_cqs) {
             std::unique_ptr<SystemMemoryManager> sysmem_manager =
                 std::make_unique<SystemMemoryManager>(id, num_hw_cqs);

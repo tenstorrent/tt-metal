@@ -26,7 +26,7 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(const operati
         TT_FATAL(input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_legacy_shape()[-1], "Error");
         TT_FATAL(operation_attributes.output_mem_config.is_sharded() && operation_attributes.output_mem_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED, "Error");
         TT_FATAL(input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR, "Error");
-        auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
+        auto core_grid = DeviceComputeWithStorageGridSize(input_tensor.device());
         uint32_t num_cores = core_grid.x * core_grid.y;
         // 1 Head Per Core Max for now
         TT_FATAL(operation_attributes.num_q_heads <= num_cores, "Error");
@@ -104,7 +104,7 @@ NlpCreateHeadsDeviceOperation::tensor_return_value_t NlpCreateHeadsDeviceOperati
         return {output_tensors.at(0).value(), output_tensors.at(1).value(), output_tensors.at(2).value()};
     }
     if (operation_attributes.output_mem_config.is_sharded()) {
-        auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
+        auto core_grid = DeviceComputeWithStorageGridSize(input_tensor.device());
         auto q_shard_grid = num_cores_to_corerange_set(operation_attributes.num_q_heads, core_grid, true);
         ShardSpec q_shard_spec{q_shard_grid, {TILE_HEIGHT, operation_attributes.head_dim}};
         auto q_mem_config = operation_attributes.output_mem_config;

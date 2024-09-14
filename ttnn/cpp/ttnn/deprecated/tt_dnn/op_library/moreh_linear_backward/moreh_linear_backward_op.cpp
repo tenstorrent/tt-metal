@@ -112,7 +112,7 @@ std::vector<std::optional<Tensor>> moreh_linear_backward(
         "input and weight tensors need to be on device");
 
     TT_FATAL(output_grad.storage_type() == StorageType::DEVICE, "Error");
-    auto kernel_config_val = init_device_compute_kernel_config(output_grad.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
+    auto kernel_config_val = init_device_compute_kernel_config(DeviceArch(output_grad.device()), compute_kernel_config, MathFidelity::HiFi4);
 
     moreh_linear_backward_validate(output_grad, input, weight, input_grad, weight_grad, bias_grad);
 

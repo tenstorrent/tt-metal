@@ -72,7 +72,7 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_input_grad_impl(
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto grid = device->compute_with_storage_grid_size();
+    auto grid = DeviceComputeWithStorageGridSize(device);
     const auto num_cores_y = grid.y;
 
     const auto
@@ -116,7 +116,7 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_input_grad_impl(
     const auto cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + in7_t + out0_t + im0_t + im1_t +
                            im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) *
                           single_tile_size;
-    const auto available_L1 = device->l1_size_per_core() - L1_UNRESERVED_BASE;
+    const auto available_L1 = DeviceL1SizePerCore(device) - L1_UNRESERVED_BASE;
     const bool use_large_algorithm = cb_usage >= available_L1;
 
     if (use_large_algorithm) {

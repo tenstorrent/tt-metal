@@ -73,12 +73,12 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     std::visit([&](auto&& compute_kernel_config) {
         using T = std::decay_t<decltype(compute_kernel_config)>;
         if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-            TT_ASSERT(device->arch() == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
+            TT_ASSERT(DeviceArch(device) == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
             math_fidelity = compute_kernel_config.math_fidelity;
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = false;
         } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-            TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
+            TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(DeviceArch(device)), "kernel config is not for wormhole_b0 or blackhole");
             math_fidelity = compute_kernel_config.math_fidelity;
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = in0_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
@@ -141,7 +141,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     TT_ASSERT(W <= TILE_WIDTH*im0_t && "W exceeds the maximum supported size of tile buffer (kernel limitation right now).");
 
     uint32_t num_tile_rows = NC * Ht;
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = DeviceComputeWithStorageGridSize(device);
     auto all_device_cores = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
 
@@ -469,12 +469,12 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     std::visit([&](auto&& compute_kernel_config) {
         using T = std::decay_t<decltype(compute_kernel_config)>;
         if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-            TT_ASSERT(device->arch() == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
+            TT_ASSERT(DeviceArch(device) == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
             math_fidelity = compute_kernel_config.math_fidelity;
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = false;
         } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-            TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
+            TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(DeviceArch(device)), "kernel config is not for wormhole_b0 or blackhole");
             math_fidelity = compute_kernel_config.math_fidelity;
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = in0_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;

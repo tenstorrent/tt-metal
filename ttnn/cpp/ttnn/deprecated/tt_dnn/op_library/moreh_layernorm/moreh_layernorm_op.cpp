@@ -103,7 +103,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto grid = device->compute_with_storage_grid_size();
+    auto grid = DeviceComputeWithStorageGridSize(device);
     const auto num_cores_y = grid.y;
 
     // core_group_2 works more.
@@ -117,7 +117,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
          num_rows_per_core_group_1,
          num_rows_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_outer);
 
-    auto arch = input.device()->arch();
+    auto arch = DeviceArch(input.device());
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
@@ -162,7 +162,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     const uint32_t cb_usage =
         (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + out1_t + out2_t) * single_tile_size +
         (im0_t + im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) * intermed_single_tile_size;
-    const uint32_t available_L1 = device->l1_size_per_core() - L1_UNRESERVED_BASE;
+    const uint32_t available_L1 = DeviceL1SizePerCore(device) - L1_UNRESERVED_BASE;
     const bool use_large_algorithm = cb_usage >= available_L1;
 
     if (use_large_algorithm) {
@@ -523,7 +523,7 @@ std::vector<std::optional<Tensor>> moreh_layernorm(
 
     auto device = input.device();
     auto compute_kernel_config_val =
-        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
+        init_device_compute_kernel_config(DeviceArch(device), compute_kernel_config, MathFidelity::HiFi4);
 
     operation::launch_op(
         [normalized_dims, eps, memory_config, compute_kernel_config_val, compute_mean, compute_rstd](
@@ -602,7 +602,7 @@ std::vector<std::optional<Tensor>> moreh_layernorm(
     auto device = input.device();
 
     auto compute_kernel_config_val =
-        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
+        init_device_compute_kernel_config(DeviceArch(device), compute_kernel_config, MathFidelity::HiFi4);
 
     operation::launch_op(
         [normalized_dims, eps, memory_config, compute_kernel_config_val, compute_mean, compute_rstd](

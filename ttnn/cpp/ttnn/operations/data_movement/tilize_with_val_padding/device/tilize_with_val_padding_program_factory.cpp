@@ -58,7 +58,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
 
     uint32_t num_tiles_in_row = output_x / TILE_WIDTH;
     // Ensure we don't intrude into storage space
-    uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
+    uint32_t max_l1_size = DeviceL1SizePerCore(a.device()) / 2 - L1_UNRESERVED_BASE;
     // Memory usage is 2 CBs of width W, plus buffer of size alignment + (W * datum size)
     uint32_t max_X = (max_l1_size - alignment) / (a.element_size() * TILE_HEIGHT * 2 + a.element_size());
     uint32_t max_tiles = max_X / TILE_WIDTH;
@@ -205,7 +205,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
     Device* device = a.device();
-    CoreCoord grid_size = device->compute_with_storage_grid_size();
+    CoreCoord grid_size = DeviceComputeWithStorageGridSize(device);
 
     uint32_t num_blocks = output.volume() / output.get_legacy_shape()[-1] / TILE_HEIGHT;
     uint32_t num_tiles_per_row = output.get_legacy_shape()[-1] / TILE_WIDTH;

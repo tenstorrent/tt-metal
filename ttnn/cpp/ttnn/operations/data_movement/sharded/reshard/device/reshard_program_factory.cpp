@@ -51,7 +51,7 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
 
     auto output_core_host_page_indices = output_buffer_page_mapping.core_host_page_indices_;
     auto device = input_buffer->device();
-    auto full_grid = device->compute_with_storage_grid_size();
+    auto full_grid = DeviceComputeWithStorageGridSize(device);
     CoreCoord end_core = (*output_buffer->shard_spec().grid().ranges().rbegin()).end_coord;
     uint32_t output_core_id = 0;
     for (auto output_core : output_cores) {
@@ -306,8 +306,8 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     const auto input_shard_spec = input.shard_spec().value();
     const auto output_shard_spec = output.shard_spec().value();
     const auto& all_cores = output_shard_spec.grid;
-    auto grid = input.buffer()->buffer_type() == BufferType::DRAM ? device->dram_grid_size()
-                                                                  : device->compute_with_storage_grid_size();
+    auto grid = input.buffer()->buffer_type() == BufferType::DRAM ? DeviceDramGridSize(device)
+                                                                  : DeviceComputeWithStorageGridSize(device);
     auto input_core_type = input.buffer()->core_type();
     constexpr uint32_t dst_cb_index = tt::CB::c_in0;
     auto input_cores = corerange_to_cores(
@@ -353,9 +353,9 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     uint32_t input_core_units_rem = input_units_per_shard;
     uint32_t input_address = input.buffer()->address();
     auto input_buffer_type = input.buffer()->buffer_type();
-    auto bank_id = device->bank_ids_from_logical_core(input_buffer_type, input_cores[input_core_idx])[0];
-    uint32_t bank_offset = device->bank_offset(input_buffer_type, bank_id);
-    auto input_core = device->physical_core_from_logical_core(input_cores[input_core_idx], input_core_type);
+    auto bank_id = DeviceBankIdsFromLogicalCore(device, input_buffer_type, input_cores[input_core_idx])[0];
+    uint32_t bank_offset = DeviceBankOffset(device, input_buffer_type, bank_id);
+    auto input_core = DevicePhysicalCoreFromLogicalCore(device, input_cores[input_core_idx], input_core_type);
 
     std::array<tt::tt_metal::KernelHandle, 2> kernels = {kernel_id_0, kernel_id_1};
     uint32_t output_units_left = num_output_units;
@@ -375,13 +375,13 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
                     if (input_core_units_rem == 0) {
                         input_core_idx++;
                         input_core_units_rem = input_units_per_shard;
-                        bank_id = device->bank_ids_from_logical_core(input_buffer_type, input_cores[input_core_idx])[0];
-                        bank_offset = device->bank_offset(input_buffer_type, bank_id);
-                        input_core = device->physical_core_from_logical_core(input_cores[input_core_idx], input_core_type);
+                        bank_id = DeviceBankIdsFromLogicalCore(device, input_buffer_type, input_cores[input_core_idx])[0];
+                        bank_offset = DeviceBankOffset(device, input_buffer_type, bank_id);
+                        input_core = DevicePhysicalCoreFromLogicalCore(device, input_cores[input_core_idx], input_core_type);
                     }
                     uint32_t units_to_read = std::min(input_core_units_rem, output_units_to_get);
                     auto input_core =
-                        device->physical_core_from_logical_core(input_cores[input_core_idx], input_core_type);
+                        DevicePhysicalCoreFromLogicalCore(device, input_cores[input_core_idx], input_core_type);
                     kernel_args.insert(
                         kernel_args.end(),
                         {static_cast<uint32_t>(input_core.x),
@@ -431,8 +431,8 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
     auto input_shard_spec = input.shard_spec().value();
     auto output_shard_spec = output.shard_spec().value();
     auto all_cores = output_shard_spec.grid;
-    auto grid = input.buffer()->buffer_type() == BufferType::DRAM ? device->dram_grid_size()
-                                                                  : device->compute_with_storage_grid_size();
+    auto grid = input.buffer()->buffer_type() == BufferType::DRAM ? DeviceDramGridSize(device)
+                                                                  : DeviceComputeWithStorageGridSize(device);
     auto input_core_type = input.buffer()->core_type();
     uint32_t dst_cb_index = 16;
     auto cores =
@@ -473,11 +473,11 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
     std::vector<uint32_t> physical_core_coords;
     physical_core_coords.reserve(grid.x * grid.y);
     for (uint32_t i = 0; i < grid.x; i++) {
-        auto physical_input_core = device->physical_core_from_logical_core(CoreCoord(i, 0), input_core_type);
+        auto physical_input_core = DevicePhysicalCoreFromLogicalCore(device, CoreCoord(i, 0), input_core_type);
         physical_core_coords.push_back(physical_input_core.x);
     }
     for (uint32_t i = 0; i < grid.y; i++) {
-        auto physical_input_core = device->physical_core_from_logical_core(CoreCoord(0, i), input_core_type);
+        auto physical_input_core = DevicePhysicalCoreFromLogicalCore(device, CoreCoord(0, i), input_core_type);
         physical_core_coords.push_back(physical_input_core.y);
     }
 

@@ -29,8 +29,8 @@ AllGather create_all_gather_struct(
     for (uint32_t i = 0; i < num_devices; ++i) {
         if (devices[i] == input_tensor.device()) {
             device_index = i;
-            receiver_device_id = devices[(i + 1) % num_devices]->id(); // Next device in the ring
-            sender_device_id = devices[(i + num_devices - 1) % num_devices]->id(); // Previous device in the ring
+            receiver_device_id = DeviceId(devices[(i + 1) % num_devices]); // Next device in the ring
+            sender_device_id = DeviceId(devices[(i + num_devices - 1) % num_devices]); // Previous device in the ring
             break;
         }
     }
@@ -129,13 +129,13 @@ void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr , "Operands to all_gather need to be allocated in buffers on device!");
     TT_FATAL(this->num_links > 0, "Error");
-    TT_FATAL(this->num_links <= input_tensor.device()->compute_with_storage_grid_size().y, "Worker cores used by links are parallelizaed over rows");
+    TT_FATAL(this->num_links <= DeviceComputeWithStorageGridSize(input_tensor.device()).y, "Worker cores used by links are parallelizaed over rows");
     TT_FATAL(this->receiver_device_id.has_value() || this->sender_device_id.has_value(), "Error");
     if (this->receiver_device_id == this->sender_device_id) {
-        TT_FATAL(input_tensor.device()->get_ethernet_sockets(this->receiver_device_id.value()).size() >= 2 * this->num_links, "2 Device all gather requires at least 2 eth connections per link");
+        TT_FATAL(DeviceGetEthernetSockets(input_tensor.device(), this->receiver_device_id.value()).size() >= 2 * this->num_links, "2 Device all gather requires at least 2 eth connections per link");
     } else {
-        TT_FATAL(this->topology == all_gather_op::Topology::Linear || (this->receiver_device_id.has_value() && input_tensor.device()->get_ethernet_sockets(this->receiver_device_id.value()).size() >= this->num_links), "All gather requires at least 1 eth connection per link between sender device {} and receiver device {}", this->sender_device_id, this->receiver_device_id);
-        TT_FATAL(this->topology == all_gather_op::Topology::Linear || (this->sender_device_id.has_value() &&input_tensor.device()->get_ethernet_sockets(this->sender_device_id.value()).size() >= this->num_links), "All gather requires at least 1 eth connection per link between sender device {} and receiver device {}", this->sender_device_id, this->receiver_device_id);
+        TT_FATAL(this->topology == all_gather_op::Topology::Linear || (this->receiver_device_id.has_value() && DeviceGetEthernetSockets(input_tensor.device(), this->receiver_device_id.value()).size() >= this->num_links), "All gather requires at least 1 eth connection per link between sender device {} and receiver device {}", this->sender_device_id, this->receiver_device_id);
+        TT_FATAL(this->topology == all_gather_op::Topology::Linear || (this->sender_device_id.has_value() &&DeviceGetEthernetSockets(input_tensor.device(), this->sender_device_id.value()).size() >= this->num_links), "All gather requires at least 1 eth connection per link between sender device {} and receiver device {}", this->sender_device_id, this->receiver_device_id);
     }
 
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||

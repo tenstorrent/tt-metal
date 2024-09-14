@@ -60,7 +60,7 @@ operation::ProgramWithCallbacks moreh_softmax_backward_h_small(const Tensor &out
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(core_range, num_cols_tiles);
 
-    auto arch = input_grad.device()->arch();
+    auto arch = DeviceArch(input_grad.device());
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(arch, compute_kernel_config);
 
     Program program = Program();

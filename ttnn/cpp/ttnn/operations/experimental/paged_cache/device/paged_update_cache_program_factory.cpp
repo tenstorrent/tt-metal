@@ -20,10 +20,10 @@ bool enable_fp32_dest(const tt_metal::Device * device, const ttnn::DeviceCompute
     std::visit([&](auto&& compute_kernel_config) {
         using T = std::decay_t<decltype(compute_kernel_config)>;
         if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-            TT_ASSERT(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+            TT_ASSERT(DeviceArch(device) == ARCH::GRAYSKULL, "kernel config is not for graykull");
             fp32_dest_acc_en = false;
         } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-            TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
+            TT_ASSERT(DeviceArch(device) == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
             fp32_dest_acc_en = input_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
         } else {
             TT_THROW("arch not supported");

@@ -14,7 +14,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 
 #include "tt_metal/third_party/tracy/public/tracy/TracyTTDevice.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/device/device_impl.hpp"
 
 namespace tt {
 

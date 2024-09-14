@@ -86,13 +86,13 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         [&](auto&& compute_kernel_config) {
             using T = std::decay_t<decltype(compute_kernel_config)>;
             if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-                TT_FATAL(device->arch() == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
+                TT_FATAL(DeviceArch(device) == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
                 math_fidelity = compute_kernel_config.math_fidelity;
                 math_approx_mode = compute_kernel_config.math_approx_mode;
                 fp32_dest_acc_en = false;
             } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
                 TT_FATAL(
-                    ttnn::device::is_wormhole_or_blackhole(device->arch()),
+                    ttnn::device::is_wormhole_or_blackhole(DeviceArch(device)),
                     "kernel config is not for wormhole_b0 or blackhole");
                 math_fidelity = compute_kernel_config.math_fidelity;
                 math_approx_mode = compute_kernel_config.math_approx_mode;
@@ -111,12 +111,12 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     auto out0_buffer = output_tensor.buffer();
 
     CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
-                                                     : device->compute_with_storage_grid_size();
+                                                     : DeviceComputeWithStorageGridSize(device);
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores = grid_size.x * grid_size.y;
 
-    TT_FATAL(num_cores <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y, "Error");
+    TT_FATAL(num_cores <= DeviceComputeWithStorageGridSize(device).x * DeviceComputeWithStorageGridSize(device).y, "Error");
 
     // Parallelization scheme
     // We will choose parallelization factors for batch, num_heads, and q_seq_len in that order

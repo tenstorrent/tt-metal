@@ -66,7 +66,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
 
     uint32_t num_tiles_in_row = input_x / TILE_WIDTH;
     // Ensure we don't intrude into storage space
-    uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
+    uint32_t max_l1_size = DeviceL1SizePerCore(a.device()) / 2 - L1_UNRESERVED_BASE;
     // Memory usage is 2 CBs of width W, plus buffer of size alignment + (W * datum size)
     uint32_t max_X = (max_l1_size - alignment) / (output.element_size() * TILE_HEIGHT * 2 + output.element_size());
     uint32_t max_tiles = max_X / TILE_WIDTH;
@@ -216,7 +216,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     const auto& output_shape = output.get_legacy_shape();
 
     Device* device = a.device();
-    CoreCoord grid_size = device->compute_with_storage_grid_size();
+    CoreCoord grid_size = DeviceComputeWithStorageGridSize(device);
 
     uint32_t num_blocks = a.volume() / input_shape[-1] / TILE_HEIGHT;
     uint32_t num_tiles_per_row = a.get_legacy_shape()[-1] / TILE_WIDTH;
@@ -385,7 +385,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
 
     Device* device = a.device();
 
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = DeviceComputeWithStorageGridSize(device);
     uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0,
              num_output_rows_unpadded = 0;
     CoreCoord end_core;

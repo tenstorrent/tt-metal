@@ -33,14 +33,14 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
     const std::optional<MemoryConfig> &memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    auto arch = input_tensor_q.storage_type() == StorageType::DEVICE ? input_tensor_q.device()->arch()
-                                                                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = input_tensor_q.storage_type() == StorageType::DEVICE ? DeviceArch(input_tensor_q.device())
+                                                                     : DeviceArch(ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice());
     //uint32_t max_cur_pos = *std::max_element(cur_pos.begin(), cur_pos.end());
     uint32_t k_chunk_size = 512; //get_chunk_size(max_cur_pos + 1);
 
     // get chunk size and then pass to sdpa decode as an attribute for prgm cache
     auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
+        DeviceArch(input_tensor_q.device()), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
     return operation::run(
                ScaledDotProductAttentionDecode{
@@ -93,14 +93,14 @@ ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
     const std::optional<MemoryConfig> &memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    auto arch = input_tensor_q.storage_type() == StorageType::DEVICE ? input_tensor_q.device()->arch()
-                                                                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = input_tensor_q.storage_type() == StorageType::DEVICE ? DeviceArch(input_tensor_q.device())
+                                                                     : DeviceArch(ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice());
     //uint32_t max_cur_pos = *std::max_element(cur_pos.begin(), cur_pos.end());
     uint32_t k_chunk_size = 512; //get_chunk_size(max_cur_pos + 1);
 
     // get chunk size and then pass to sdpa decode as an attribute for prgm cache
     auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
+        DeviceArch(input_tensor_q.device()), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
     return operation::run(
                ScaledDotProductAttentionDecode{

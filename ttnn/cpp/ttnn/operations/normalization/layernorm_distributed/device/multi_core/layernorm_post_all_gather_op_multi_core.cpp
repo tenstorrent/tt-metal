@@ -98,12 +98,12 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
     std::visit([&](auto&& compute_kernel_config) {
         using T = std::decay_t<decltype(compute_kernel_config)>;
         if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-            TT_ASSERT(device->arch() == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
+            TT_ASSERT(DeviceArch(device) == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
             math_fidelity = compute_kernel_config.math_fidelity;
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = false;
         } else if constexpr (std::is_same_v<T, ttnn::WormholeComputeKernelConfig>) {
-            TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
+            TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(DeviceArch(device)), "kernel config is not for wormhole_b0 or blackhole");
             math_fidelity = compute_kernel_config.math_fidelity;
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype()) == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
@@ -217,7 +217,7 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
     TT_ASSERT(intermed7_tiles % block_size == 0 && "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
 
 
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = DeviceComputeWithStorageGridSize(device);
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
 
     tt::log_debug("num_cores: {}", num_cores);

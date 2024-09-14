@@ -17,7 +17,7 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(const Tensor &batch_ids,
     tt::tt_metal::Program program{};
     Device *device = input_a.device();
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(device);
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto set_of_core_ranges = tt::tt_metal::num_cores_to_corerange_set(num_cores_x*num_cores_y, compute_with_storage_grid_size);

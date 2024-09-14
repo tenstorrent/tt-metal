@@ -67,11 +67,11 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
 
     uint32_t num_pages = tilized ? output.volume() / TILE_HW : output.volume() / output.get_legacy_shape()[-1];
     tt::tt_metal::Device *device = output.device();
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(device);
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages);
 
-    const auto num_dram_banks = device->num_banks(BufferType::DRAM);
+    const auto num_dram_banks = DeviceNumBanks(device, BufferType::DRAM);
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
     uint32_t size_per_l1_bank = tt::tt_metal::detail::SizeBytesPerBank(output.buffer()->size(), output.buffer()->page_size(), num_l1_banks, L1_ALIGNMENT);
@@ -106,12 +106,12 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
     );
 
     const CoreCoord logical_controller = CoreCoord{0, 0};
-    CoreCoord noc_controller = device->worker_core_from_logical_core(logical_controller);
+    CoreCoord noc_controller = DeviceWorkerCoreFromLogicalCore(device, logical_controller);
     std::vector<CoreRange> logical_multicast_regions = get_multicast_regions(device, all_cores, logical_controller);
 
     std::vector<CoreRange> noc_multicast_regions;
     for (const auto &logical_cr : logical_multicast_regions) {
-        CoreRange noc_cr(device->worker_core_from_logical_core(logical_cr.start_coord), device->worker_core_from_logical_core(logical_cr.end_coord));
+        CoreRange noc_cr(DeviceWorkerCoreFromLogicalCore(device, logical_cr.start_coord), DeviceWorkerCoreFromLogicalCore(device, logical_cr.end_coord));
         noc_multicast_regions.push_back(std::move(noc_cr));
     }
 

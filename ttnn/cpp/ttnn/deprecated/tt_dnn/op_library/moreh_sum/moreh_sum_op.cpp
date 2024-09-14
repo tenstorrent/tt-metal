@@ -33,7 +33,7 @@ Tensor _moreh_sum(
 
     TT_FATAL(input.storage_type() == StorageType::DEVICE || input.storage_type() == StorageType::MULTI_DEVICE, "Error");
     auto kernel_config_val =
-        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
+        init_device_compute_kernel_config(DeviceArch(input.device()), compute_kernel_config, MathFidelity::HiFi4);
 
     operation::launch_op(
         [dim, keep_batch_dim, output_mem_config, kernel_config_val, queue_id](

@@ -77,7 +77,7 @@ std::vector<Tensor> RotaryEmbedding::create_output_tensors(const std::vector<Ten
             shard_spec = input_tensor.shard_spec().value();
         } else {
             uint32_t num_blocks = input_tensor.volume() / input_tensor.get_legacy_shape()[-1] / TILE_HEIGHT;
-            auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
+            auto core_grid = DeviceComputeWithStorageGridSize(input_tensor.device());
             uint32_t num_grid_cores = core_grid.x * core_grid.y;
             uint32_t num_cores = 0;
             for (uint32_t i = num_grid_cores; i > 0; --i) {

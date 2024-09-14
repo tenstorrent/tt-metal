@@ -669,7 +669,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
     uint32_t ntiles_h = output_tensor_shape[2] / TILE_HEIGHT;
     uint32_t ntiles_w = output_tensor_shape[3] / TILE_WIDTH;
 
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = DeviceComputeWithStorageGridSize(device);
     uint32_t nbatch = output_tensor_shape[0];
     uint32_t nchannel = output_tensor_shape[1];
     // first the batch dim is distributed along H, and within each batch then the tiles are distributed.
@@ -997,7 +997,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(const Tensor 
 
     Device *device = a.device();
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(device);
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
@@ -1241,7 +1241,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
         // figure out the stick id in a shard, and the core id for the stick.
         std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> core_stick_map;
-        auto first_core = device->worker_core_from_logical_core(CoreCoord{0, 0});
+        auto first_core = DeviceWorkerCoreFromLogicalCore(device, CoreCoord{0, 0});
         std::pair<uint32_t, uint32_t> prev_xy_pair = std::make_pair(first_core.x, first_core.y);
         for (uint32_t j = 0; j < num_sticks_per_core_padded; ++j) {
             int stick_id = stick_ids_per_core[j];
@@ -1263,7 +1263,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
                 uint32_t worker_x_logical = row_major ? shard_grid_inner_dim_id : shard_grid_outer_dim_id;
 
                 if (worker_x_logical < num_cores_x_unpadded and worker_y_logical < num_cores_y_unpadded) {
-                    auto core_physical = device->worker_core_from_logical_core(CoreCoord{worker_x_logical, worker_y_logical});
+                    auto core_physical = DeviceWorkerCoreFromLogicalCore(device, CoreCoord{worker_x_logical, worker_y_logical});
                     // save stick id in a shard, and core coord into a map
                     std::pair<uint32_t, uint32_t> xy_pair = row_major ? std::make_pair(core_physical.y, core_physical.x)
                                                                         : std::make_pair(core_physical.x, core_physical.y);
@@ -1392,7 +1392,7 @@ operation::ProgramWithCallbacks pad_rm_sharded(const Tensor &a,
     tt::log_debug("all_cores_unpadded: {}", all_cores_unpadded);
     tt::log_debug("num_cores_unpadded: {}", num_cores_unpadded);
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(device);
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});

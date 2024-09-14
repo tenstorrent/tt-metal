@@ -103,9 +103,9 @@ Tensor moreh_mean_backward_(
 
     auto device = output_grad.device();
     auto kernel_config_val =
-        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
+        init_device_compute_kernel_config(DeviceArch(device), compute_kernel_config, MathFidelity::HiFi4);
 
-    auto grid_coord = device->compute_with_storage_grid_size();
+    auto grid_coord = DeviceComputeWithStorageGridSize(device);
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
     operation::launch_op(

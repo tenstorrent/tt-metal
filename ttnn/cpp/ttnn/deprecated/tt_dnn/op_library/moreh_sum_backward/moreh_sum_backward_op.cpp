@@ -123,7 +123,7 @@ Tensor moreh_sum_backward(
         input_tensors.emplace_back(*input);
     }
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({output_grad}))};
-    auto kernel_config_val = init_device_compute_kernel_config(output_grad.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
+    auto kernel_config_val = init_device_compute_kernel_config(DeviceArch(output_grad.device()), compute_kernel_config, MathFidelity::HiFi4);
     operation::launch_op(
         [dims, keep_batch_dim, input_grad_mem_config, kernel_config_val](
             const std::vector<Tensor> &input_tensors,

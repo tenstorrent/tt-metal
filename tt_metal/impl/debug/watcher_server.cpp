@@ -21,6 +21,7 @@
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
 #include "debug/ring_buffer.h"
+#include "device/device_impl.hpp"
 #include "watcher_device_reader.hpp"
 
 namespace tt {

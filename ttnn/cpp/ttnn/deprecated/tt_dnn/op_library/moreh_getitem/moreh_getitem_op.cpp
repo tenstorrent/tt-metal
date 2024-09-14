@@ -194,7 +194,7 @@ Tensor moreh_getitem(
     std::optional<Tensor> output_tensor,
     const MemoryConfig& output_mem_config) {
     auto device = input_tensor.device();
-    auto grid_coord = device->compute_with_storage_grid_size();
+    auto grid_coord = DeviceComputeWithStorageGridSize(device);
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
     std::vector<Tensor> new_input_tensors;

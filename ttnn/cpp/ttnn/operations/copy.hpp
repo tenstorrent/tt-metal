@@ -50,7 +50,7 @@ struct Typecast {
                 output_dtype == optional_output_tensor.value().get_dtype(),
                 "If both output dtype and output tensor provided dtype should match");
         }
-        if (input.device()->arch() == tt::ARCH::GRAYSKULL) {
+        if (DeviceArch(input.device()) == tt::ARCH::GRAYSKULL) {
             return ttnn::experimental::typecast(queue_id, input, output_dtype, memory_config_arg, optional_output_tensor);
         }
         DataType input_dtype = input.get_dtype();
@@ -88,7 +88,7 @@ struct Typecast {
         const std::optional<MemoryConfig>& memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
         TT_ASSERT(
-            input_tensor.device()->arch() != tt::ARCH::GRAYSKULL,
+            DeviceArch(input_tensor.device()) != tt::ARCH::GRAYSKULL,
             "eltwise_typecast is not currently supported on Grayskull");
         TT_FATAL(
             tt_input_dtype == input_tensor.get_dtype(), "input dtype and input tensor's dtype provided should match");

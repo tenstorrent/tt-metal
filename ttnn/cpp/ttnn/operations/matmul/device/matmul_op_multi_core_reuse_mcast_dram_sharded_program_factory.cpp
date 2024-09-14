@@ -27,16 +27,16 @@ void get_dram_reader_core_coords_grayskull(
     uint32_t full_grid_size_y = 12;
 
     // get all the logical coord
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(device);
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // get dram banks and coords
-    uint32_t num_banks = device->num_dram_channels();
+    uint32_t num_banks = DeviceNumDramChannels(device);
     uint32_t max_bank_id = num_banks - 1;
     std::vector<CoreCoord> dram_coord_phy;
     for (int i = 0; i < num_banks; ++i) {
-        dram_coord_phy.push_back(device->dram_core_from_dram_channel(i));
+        dram_coord_phy.push_back(DeviceDramCoreFromDramChannel(device, i));
     }
 
     // get worker logical coords
@@ -52,7 +52,7 @@ void get_dram_reader_core_coords_grayskull(
     uint32_t max_worker_y_physical = 0;
     uint32_t min_worker_y_physical = 10000;
     for (int i = 0; i < num_cores_y; ++i) {
-        auto core_phy = device->worker_core_from_logical_core(CoreCoord(0, i));
+        auto core_phy = DeviceWorkerCoreFromLogicalCore(device, CoreCoord(0, i));
         all_worker_cores_y_physical.push_back(core_phy.y);
         if (core_phy.y > max_worker_y_physical) {
             max_worker_y_physical = core_phy.y;
@@ -99,7 +99,7 @@ void get_dram_reader_core_coords_grayskull(
     std::vector<CoreCoord> adj_core_logical_realloc;
     for (int i = 0; i < adj_core_physical.size(); ++i) {
         for (int j = 0; j < all_worker_cores_logical.size(); ++j) {
-            auto core = device->worker_core_from_logical_core(all_worker_cores_logical[j]);
+            auto core = DeviceWorkerCoreFromLogicalCore(device, all_worker_cores_logical[j]);
             if (adj_core_physical[i] == core) {
                 adj_core_logical_realloc.push_back(all_worker_cores_logical[j]);
             }
@@ -122,17 +122,17 @@ void get_dram_reader_core_coords_wormhole_b0(
     uint32_t x_step = 3;
 
     // get all the logical coord
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(device);
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // get dram banks and coords
-    uint32_t num_banks = device->num_dram_channels();
+    uint32_t num_banks = DeviceNumDramChannels(device);
     uint32_t max_bank_id = num_banks - 1;
     std::vector<CoreCoord> dram_coord_phy;
     dram_coord_phy.reserve(num_banks);
     for (int i = 0; i < num_banks; ++i) {
-        dram_coord_phy.push_back(device->dram_core_from_dram_channel(i));
+        dram_coord_phy.push_back(DeviceDramCoreFromDramChannel(device, i));
     }
 
     // get worker logical coords
@@ -150,7 +150,7 @@ void get_dram_reader_core_coords_wormhole_b0(
     uint32_t max_worker_y_physical = 0;
     uint32_t min_worker_y_physical = 10000;
     for (int i = 0; i < num_cores_y; ++i) {
-        auto core_phy = device->worker_core_from_logical_core(CoreCoord(0, i));
+        auto core_phy = DeviceWorkerCoreFromLogicalCore(device, CoreCoord(0, i));
         all_worker_cores_y_physical.push_back(core_phy.y);
         if (core_phy.y > max_worker_y_physical) {
             max_worker_y_physical = core_phy.y;
@@ -294,7 +294,7 @@ void get_dram_reader_core_coords_wormhole_b0(
     adj_core_logical_realloc.reserve(num_banks);
     for (int i = 0; i < adj_core_physical_realloc.size(); ++i) {
         for (int j = 0; j < all_worker_cores_logical.size(); ++j) {
-            auto core = device->worker_core_from_logical_core(all_worker_cores_logical[j]);
+            auto core = DeviceWorkerCoreFromLogicalCore(device, all_worker_cores_logical[j]);
             if (adj_core_physical_realloc[i] == core) {
                 adj_core_logical_realloc.push_back(all_worker_cores_logical[j]);
             }
@@ -372,7 +372,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     CoreRangeSet all_worker_cores = CoreRangeSet{{}};
     std::vector<CoreCoord> all_worker_cores_ordered;
 
-    if (device->arch() == tt::ARCH::WORMHOLE_B0) {
+    if (DeviceArch(device) == tt::ARCH::WORMHOLE_B0) {
         get_dram_reader_core_coords_wormhole_b0(device, all_worker_cores, all_worker_cores_ordered);
     } else {
         get_dram_reader_core_coords_grayskull(device, all_worker_cores, all_worker_cores_ordered);
@@ -536,14 +536,14 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
 
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(device);
 
     CoreCoord top_left_core = {(std::size_t)start_core_x, (std::size_t)start_core_y};
     CoreCoord bottom_right_core = {
         (std::size_t)start_core_x + compute_with_storage_grid_size.x - 1,
         (std::size_t)start_core_y + compute_with_storage_grid_size.y - 1};
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = DeviceWorkerCoreFromLogicalCore(device, top_left_core);
+    auto bottom_right_core_physical = DeviceWorkerCoreFromLogicalCore(device, bottom_right_core);
 
     bool in0_is_dram = false;
     bool in1_is_dram = true;
@@ -553,8 +553,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt_metal::NOC in1_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt_metal::NOC in0_noc = detail::GetPreferredNOCForDRAMWrite(DeviceArch(device));
+    tt_metal::NOC in1_noc = detail::GetPreferredNOCForDRAMRead(DeviceArch(device));
 
     CoreCoord start_core_noc = top_left_core_physical;
     CoreCoord end_core_noc = bottom_right_core_physical;
@@ -850,10 +850,10 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         return a.x < b.x;
     });
     for (auto core : mcast_senders_coords) {
-        in0_mcast_sender_noc_x.push_back((std::uint32_t)device->worker_core_from_logical_core(core).x);
+        in0_mcast_sender_noc_x.push_back((std::uint32_t)DeviceWorkerCoreFromLogicalCore(device, core).x);
     }
     for (auto core : mcast_senders_coords) {
-        in0_mcast_sender_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
+        in0_mcast_sender_noc_y.push_back((std::uint32_t)DeviceWorkerCoreFromLogicalCore(device, core).y);
     }
 
     uint32_t sender_id = 0;
@@ -1185,13 +1185,13 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
         [&](auto&& compute_kernel_config) {
             using T = std::decay_t<decltype(compute_kernel_config)>;
             if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-                TT_FATAL(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+                TT_FATAL(DeviceArch(device) == ARCH::GRAYSKULL, "kernel config is not for graykull");
                 math_fidelity = compute_kernel_config.math_fidelity;
                 math_approx_mode = compute_kernel_config.math_approx_mode;
                 fp32_dest_acc_en = false;
                 packer_l1_acc = false;
             } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                TT_FATAL(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
+                TT_FATAL(ttnn::device::is_wormhole_or_blackhole(DeviceArch(device)), "kernel config is not for wormhole_b0 or blackhole");
                 math_fidelity = compute_kernel_config.math_fidelity;
                 math_approx_mode = compute_kernel_config.math_approx_mode;
                 fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;

@@ -232,7 +232,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(const Tensor &input_t
     auto input_shape = input_tensor.get_legacy_shape();
     uint32_t Ht = (input_shape[0]*input_shape[1]*input_shape[2])/TILE_HEIGHT;
     const auto & [num_cores, local_topk_input_size, rem, final_topk_input_size] =
-    cores_utilized(input_shape[dim], 64, input_shape[dim]/2, device->compute_with_storage_grid_size(), k, value_tile_size, index_tile_size);
+    cores_utilized(input_shape[dim], 64, input_shape[dim]/2, DeviceComputeWithStorageGridSize(device), k, value_tile_size, index_tile_size);
 
     CoreRange core(
         {0, 0},
@@ -346,8 +346,8 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(const Tensor &input_t
 
 
 
-    CoreCoord local_cores_physical_start = device->worker_core_from_logical_core({0, 0});
-    CoreCoord local_cores_physical_end = device->worker_core_from_logical_core({0, num_cores - 2u});
+    CoreCoord local_cores_physical_start = DeviceWorkerCoreFromLogicalCore(device, {0, 0});
+    CoreCoord local_cores_physical_end = DeviceWorkerCoreFromLogicalCore(device, {0, num_cores - 2u});
     std::vector<uint32_t> reader_compile_time_args =             {
                 (std::uint32_t) receiver_semaphore_id,
                 (std::uint32_t) sender_semaphore_id,
@@ -366,7 +366,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(const Tensor &input_t
         final_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    CoreCoord final_cores_physical = device->worker_core_from_logical_core({0, num_cores - 1u});
+    CoreCoord final_cores_physical = DeviceWorkerCoreFromLogicalCore(device, {0, num_cores - 1u});
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) receiver_semaphore_id,
         (std::uint32_t) sender_semaphore_id,

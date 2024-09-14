@@ -58,7 +58,7 @@ operation::ProgramWithCallbacks PrefixScan::create_program(
     const auto& bx = input_tensors.at(1);
     const auto& h = input_tensors.at(2);
     auto& output = output_tensors.at(0);
-    auto device_compute_with_storage_grid_size = a.device()->compute_with_storage_grid_size();
+    auto device_compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(a.device());
     return detail::multi_core_ssm_prefix_scan(a, bx, h, output, math_fidelity, device_compute_with_storage_grid_size);
 }
 }  // namespace ttnn::operations::experimental::ssm

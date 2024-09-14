@@ -254,7 +254,7 @@ Tensor Softplus::invoke(
     const float threshold,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    TT_ASSERT(input.device()->arch() != tt::ARCH::GRAYSKULL, "Softplus is not currently supported on Grayskull");
+    TT_ASSERT(DeviceArch(input.device()) != tt::ARCH::GRAYSKULL, "Softplus is not currently supported on Grayskull");
     return detail::unary_impl(
         queue_id,
         input,
@@ -269,7 +269,7 @@ Tensor Softplus::invoke(
     const float threshold,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    TT_ASSERT(input.device()->arch() != tt::ARCH::GRAYSKULL, "Softplus is not currently supported on Grayskull");
+    TT_ASSERT(DeviceArch(input.device()) != tt::ARCH::GRAYSKULL, "Softplus is not currently supported on Grayskull");
     return detail::unary_impl(
         DefaultQueueId,
         input,

@@ -71,7 +71,7 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
     uint32_t src1_single_tile_size = tt_metal::detail::TileSize(src1_cb_data_format);
     uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(device);
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;

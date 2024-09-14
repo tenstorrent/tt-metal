@@ -25,7 +25,7 @@ bool is_moreh_softmax_w_small_available(const Tensor &tensor, const ttnn::Device
     auto w = tensor.get_legacy_shape()[-1];
     int32_t Wt = (w + TILE_WIDTH - 1) / TILE_WIDTH;
 
-    auto arch = tensor.device()->arch();
+    auto arch = DeviceArch(tensor.device());
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(arch, compute_kernel_config);
 
     auto data_format = tt_metal::datatype_to_dataformat_converter(tensor.get_dtype());
@@ -68,7 +68,7 @@ operation::ProgramWithCallbacks moreh_softmax_w_small(const Tensor &input, const
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(core_range, num_kernel_rows);
 
-    auto arch = input.device()->arch();
+    auto arch = DeviceArch(input.device());
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(arch, compute_kernel_config);
 
     Program program = Program();

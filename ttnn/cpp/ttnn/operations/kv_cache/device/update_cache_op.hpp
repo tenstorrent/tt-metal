@@ -61,7 +61,7 @@ inline Tensor update_cache_impl(const Tensor& cache_tensor, const Tensor& input_
         [update_idx, batch_offset, compute_kernel_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto& cache_tensor = input_tensors.at(0);
             auto& input_tensor = input_tensors.at(1);
-            auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config);
+            auto kernel_config_val = init_device_compute_kernel_config(DeviceArch(input_tensor.device()), compute_kernel_config);
             return operation::run(UpdateCache{0, update_idx, batch_offset, UpdateCacheOpType::UPDATE, kernel_config_val}, {cache_tensor, input_tensor});
         }, {cache_tensor, input_tensor}, dummy_output_tensors);
     return cache_tensor;

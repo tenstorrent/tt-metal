@@ -20,6 +20,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
+#include "tt_metal/impl/device/device_impl.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
@@ -861,22 +862,19 @@ chip_id_t GetPCIeDeviceID(chip_id_t device_id){
 
 Device *CreateDevice(
     chip_id_t device_id,
-    const uint8_t num_hw_cqs,
-    const size_t l1_small_size,
-    const size_t trace_region_size,
-    DispatchCoreType dispatch_core_type,
-    const std::vector<uint32_t> &l1_bank_remap) {
+    DeviceOptions device_options) {
     ZoneScoped;
 
-    tt::DevicePool::initialize({device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type, l1_bank_remap);
+    auto &&[num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type, l1_bank_remap] = device_options;
+    tt::DevicePool::initialize({device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type, std::move(l1_bank_remap));
     auto dev = tt::DevicePool::instance().get_active_device(device_id);
     return dev;
 }
 
-Device *CreateDeviceMinimal(chip_id_t device_id, const uint8_t num_hw_cqs, DispatchCoreType dispatch_core_type) {
+Device *CreateDeviceMinimal(chip_id_t device_id, DeviceMinimalOptions device_options) {
     ZoneScoped;
-    tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_type);
-    Device *dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
+    tt::tt_metal::dispatch_core_manager::initialize(device_options.dispatch_core_type);
+    Device *dev = new Device(device_id, device_options.num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     return dev;
 }

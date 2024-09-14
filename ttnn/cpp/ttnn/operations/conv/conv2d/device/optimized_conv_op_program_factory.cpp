@@ -105,8 +105,8 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
                     input_bias_format_params = {.pad_shape=bias.value().get_legacy_shape(), .pad_value=0, .target_layout=Layout::TILE};
                 }
                 auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
-                auto arch = is_tensor_on_device_or_multidevice(a) ? a.device()->arch() : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-                bool fp32_accum = a.device()->arch() == tt::ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ? compute_kernel_config.value().fp32_dest_acc_en : false;
+                auto arch = is_tensor_on_device_or_multidevice(a) ? DeviceArch(a.device()) : DeviceArch(ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice());
+                bool fp32_accum = DeviceArch(a.device()) == tt::ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ? compute_kernel_config.value().fp32_dest_acc_en : false;
                 auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::LoFi, true, fp32_accum, false);
                 return operation::run_without_autoformat(
                     OptimizedConvNew(sliding_window_config, output_channels, groups, untilize_out, bias.has_value(), fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, kernel_config_val, enable_act_double_buffer, enable_split_reader, enable_subblock_padding
@@ -269,7 +269,7 @@ operation::OpPerformanceModel OptimizedConvNew::create_op_performance_model(cons
         tt::log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
     }
 
-    auto arch = t.storage_type() == StorageType::DEVICE ? t.device()->arch() : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = t.storage_type() == StorageType::DEVICE ? DeviceArch(t.device()) : DeviceArch(ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice());
     const int num_cores = (arch == tt::ARCH::WORMHOLE_B0) ? 8 * 8 : 9 * 12;
     const int tensix_mul_adds_per_cycle_lofi = (arch == tt::ARCH::WORMHOLE_B0) ? 4096 : 2048;
 

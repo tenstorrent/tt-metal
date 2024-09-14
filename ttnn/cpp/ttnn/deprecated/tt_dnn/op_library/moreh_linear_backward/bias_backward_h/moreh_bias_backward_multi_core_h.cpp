@@ -41,9 +41,9 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &o
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
     Device *device = output_grad.device();
-    auto grid = device->compute_with_storage_grid_size();
+    auto grid = DeviceComputeWithStorageGridSize(device);
     const auto num_cores_y = grid.y;
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(DeviceArch(device), compute_kernel_config);
     log_debug(
         LogOp,
         "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",

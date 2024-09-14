@@ -366,7 +366,7 @@ operation::ProgramWithCallbacks downsample_single_core(
     uint32_t unpadded_output_volume = ceil((double)unpadded_input_volume / (double)(img_stride_h * img_stride_w));
     TT_ASSERT(output.volume() >= unpadded_output_volume);
 
-    uint32_t ncores_x_full_grid = device->compute_with_storage_grid_size().x;
+    uint32_t ncores_x_full_grid = DeviceComputeWithStorageGridSize(device).x;
     auto [num_cores_height_sliced, num_cores_width_sliced] = get_num_cores_height_width_sliced(
         a.shard_spec().value().grid, a.memory_config().memory_layout, a.shard_spec().value().orientation);
     uint32_t num_cores = num_cores_height_sliced * num_cores_width_sliced;
@@ -673,7 +673,7 @@ operation::ProgramWithCallbacks downsample_single_core(
 
             TT_ASSERT(
                 (halo_prev_start_addr + halo_prev_addr_offset) % 32 == 0);  // read address should be 32 byte aligned
-            auto halo_noc_coords = device->worker_core_from_logical_core(prev_core);
+            auto halo_noc_coords = DeviceWorkerCoreFromLogicalCore(device, prev_core);
             halo_prev_noc_x = halo_noc_coords.x;
             halo_prev_noc_y = halo_noc_coords.y;
             TT_ASSERT(v.input_flat_h >= halo_prev_start_tile_id_h * TILE_HEIGHT);
@@ -752,7 +752,7 @@ operation::ProgramWithCallbacks downsample_single_core(
             halo_next_start_addr = GetCircularBufferConfig(program, input_cb).globally_allocated_address().value();
             TT_ASSERT(
                 (halo_next_start_addr + halo_next_addr_offset) % 32 == 0);  // read address should be 32 byte aligned
-            auto halo_noc_coords = device->worker_core_from_logical_core(next_core);
+            auto halo_noc_coords = DeviceWorkerCoreFromLogicalCore(device, next_core);
             halo_next_noc_x = halo_noc_coords.x;
             halo_next_noc_y = halo_noc_coords.y;
             TT_ASSERT(halo_prev_input_num_rows_of_tiles == 0);

@@ -66,7 +66,7 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     uint32_t num_embeddings_tiles = num_embeddings / TILE_HEIGHT;
 
     // We split work based on the number of tiles in the embedding dimension
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = DeviceComputeWithStorageGridSize(device);
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(grid_size, embedding_tiles);
     uint32_t max_tiles_per_core = std::max(num_tiles_per_core_group_1, num_tiles_per_core_group_2);

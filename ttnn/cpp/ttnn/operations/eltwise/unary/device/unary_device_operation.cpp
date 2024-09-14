@@ -67,7 +67,7 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(const operation_attrib
         output_datatype = preallocated_output_tensor->get_dtype();
     }
 
-    auto arch = input_tensor.device()->arch();
+    auto arch = DeviceArch(input_tensor.device());
     auto input_datatype = input_tensor.get_dtype();
     for (const auto& unary_op : args.op_chain) {
         validate_supported_arch_dtype(arch, input_datatype, output_datatype, unary_op.op_type);

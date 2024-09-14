@@ -97,7 +97,7 @@ operation::ProgramWithCallbacks AttnMatmulDeviceOperation::create_program(
     const auto& input_tensor_b = input_tensors.at(1);
     auto& output_tensor = output_tensors.at(0);
 
-    auto device_compute_with_storage_grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
+    auto device_compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(input_tensor_a.device());
     TT_ASSERT(
         (this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x &&
          this->compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y),

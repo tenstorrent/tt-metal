@@ -37,7 +37,7 @@ operation::ProgramWithCallbacks moreh_sum_w_impl(const Tensor &a, const Tensor &
     const bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
     const auto mask_w = do_mask_w ? origin_W % TILE_WIDTH : TILE_WIDTH;
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(a.device()->arch(), compute_kernel_config);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(DeviceArch(a.device()), compute_kernel_config);
     log_debug(
         LogOp,
         "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
@@ -65,7 +65,7 @@ operation::ProgramWithCallbacks moreh_sum_w_impl(const Tensor &a, const Tensor &
 
     tt_metal::Device *device = a.device();
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(device);
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto num_rows = other_dims_product * Ht;
 

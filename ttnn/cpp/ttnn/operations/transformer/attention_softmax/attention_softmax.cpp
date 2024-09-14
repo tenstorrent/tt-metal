@@ -32,7 +32,7 @@ ttnn::Tensor ExecuteAttentionSoftmax<in_place>::invoke(
 
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
     auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+        DeviceArch(input_tensor.device()), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
     auto output_tensor = operation::run(
                             ttnn::operations::normalization::Softmax{
                                     head_size,

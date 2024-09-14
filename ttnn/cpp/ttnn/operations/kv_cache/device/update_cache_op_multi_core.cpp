@@ -30,10 +30,10 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
     std::visit([&](auto&& compute_kernel_config) {
         using T = std::decay_t<decltype(compute_kernel_config)>;
         if constexpr (std::is_same_v<T, ttnn::GrayskullComputeKernelConfig>) {
-            TT_ASSERT(device->arch() == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
+            TT_ASSERT(DeviceArch(device) == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
             fp32_dest_acc_en = false;
         } else if constexpr (std::is_same_v<T, ttnn::WormholeComputeKernelConfig>) {
-            TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
+            TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(DeviceArch(device)), "kernel config is not for wormhole_b0 or blackhole");
             fp32_dest_acc_en = input_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
         } else {
             TT_THROW("arch not supported");
@@ -69,7 +69,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
     uint32_t tile_update_offset = update_idx % tt::constants::TILE_HEIGHT * Wbytes;
     uint32_t batch_read_offset = batch_offset * Wbytes;  // Offset to read from input tensor
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(device);
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
@@ -330,7 +330,7 @@ operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor
     uint32_t start_idx = batch_idx * cache_CHtWt + update_idxt * Wt;
     tt::tt_metal::Device *device = input_tensor.device();
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(device);
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 

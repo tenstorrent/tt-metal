@@ -58,7 +58,7 @@ operation::ProgramWithCallbacks HCSumReduce::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    auto device_compute_with_storage_grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
+    auto device_compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(input_tensor_a.device());
     return detail::multi_core_ssm_1d_sum_reduce(
         input_tensor_a, output_tensor, math_fidelity, device_compute_with_storage_grid_size);
 }

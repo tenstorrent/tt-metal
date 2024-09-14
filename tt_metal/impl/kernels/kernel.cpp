@@ -12,6 +12,7 @@
 #include "llrt/llrt.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
+#include "tt_metal/impl/device/device_impl.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/common/utils.hpp"
 #include "tt_metal/common/core_coord.h"

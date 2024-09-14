@@ -46,7 +46,7 @@ void TopK::validate_with_output_tensors(
 
         uint32_t value_tile_size = tile_size(value_cb_data_format);
         uint32_t index_tile_size = tile_size(index_cb_data_format);
-        TT_FATAL(topk_utils::verify_available_cores(input_shape[this->dim], 64, input_shape[this->dim]/2, device->compute_with_storage_grid_size(),
+        TT_FATAL(topk_utils::verify_available_cores(input_shape[this->dim], 64, input_shape[this->dim]/2, DeviceComputeWithStorageGridSize(device),
                             this->k, value_tile_size, index_tile_size), "Not enough cores available to run topk operation");
     }
 }

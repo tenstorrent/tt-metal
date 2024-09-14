@@ -374,11 +374,11 @@ static void add_worker_config_to_edm_builders(
         std::vector<ttnn::ccl::WorkerXY> receiver_worker_coords;
         for (uint32_t w = c * num_workers_per_eth_buffer; w < (c + 1) * num_workers_per_eth_buffer; ++w) {
             sender_worker_coords.push_back(ttnn::ccl::WorkerXY(
-                device->worker_core_from_logical_core(worker_cores.at(w)).x,
-                device->worker_core_from_logical_core(worker_cores.at(w)).y));
+                DeviceWorkerCoreFromLogicalCore(device, worker_cores.at(w)).x,
+                DeviceWorkerCoreFromLogicalCore(device, worker_cores.at(w)).y));
             receiver_worker_coords.push_back(ttnn::ccl::WorkerXY(
-                device->worker_core_from_logical_core(worker_cores.at(w)).x,
-                device->worker_core_from_logical_core(worker_cores.at(w)).y));
+                DeviceWorkerCoreFromLogicalCore(device, worker_cores.at(w)).x,
+                DeviceWorkerCoreFromLogicalCore(device, worker_cores.at(w)).y));
         }
 
         // Get the maximum message size we'd like to use. Not the actual packet size
@@ -501,8 +501,8 @@ static void set_reduce_scatter_worker_rt(
         CoreCoord const& receiver_edm = is_in_clockwise_direction ? topology_config.eth_receiver_cores.at(link)
                                                                   : topology_config.eth_sender_cores.at(link);
        ttnn::ccl::WorkerXY receiver_edm_noc_coord =ttnn::ccl::WorkerXY(
-            device->ethernet_core_from_logical_core(receiver_edm).x,
-            device->ethernet_core_from_logical_core(receiver_edm).y);
+            DeviceEthernetCoreFromLogicalCore(device, receiver_edm).x,
+            DeviceEthernetCoreFromLogicalCore(device, receiver_edm).y);
         const uint32_t edm_core_semaphore_address =
             is_in_clockwise_direction
                 ? edm_interface_addresses.worker_receiver_edm_semaphore_addresses.at(global_worker_index)
@@ -537,8 +537,8 @@ static void set_reduce_scatter_worker_rt(
         CoreCoord sender_edm = is_in_clockwise_direction ? topology_config.eth_sender_cores.at(link)
                                                          : topology_config.eth_receiver_cores.at(link);
        ttnn::ccl::WorkerXY const sender_edm_noc_coord =ttnn::ccl::WorkerXY(
-            device->ethernet_core_from_logical_core(sender_edm).x,
-            device->ethernet_core_from_logical_core(sender_edm).y);
+            DeviceEthernetCoreFromLogicalCore(device, sender_edm).x,
+            DeviceEthernetCoreFromLogicalCore(device, sender_edm).y);
         TT_ASSERT(sender_edm_noc_coord.y == 0 || sender_edm_noc_coord.y == 6);
         const uint32_t edm_core_semaphore_address =
             is_in_clockwise_direction

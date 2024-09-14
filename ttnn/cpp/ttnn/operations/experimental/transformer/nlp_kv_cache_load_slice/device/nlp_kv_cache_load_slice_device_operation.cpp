@@ -30,7 +30,7 @@ void NlpKVCacheLoadSliceDeviceOperation::validate(const std::vector<Tensor> &inp
     auto dim0 = input_shape[0];
     auto dim1 = input_shape[1];
     auto fused_batch_heads = dim0 * dim1;
-    auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+    auto core_grid = DeviceComputeWithStorageGridSize(input_tensor_a.device());
     // Need at least fused_batch_heads cores to unpad into sharded tensor
     TT_FATAL(fused_batch_heads <= core_grid.x * core_grid.y, "Error");
     TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
@@ -60,7 +60,7 @@ std::vector<Tensor> NlpKVCacheLoadSliceDeviceOperation::create_output_tensors(co
     auto head_dim = input_shape[3];
     auto fused_batch_heads = dim0 * dim1;
 
-    auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+    auto core_grid = DeviceComputeWithStorageGridSize(input_tensor_a.device());
     auto shard_grid = num_cores_to_corerange_set(fused_batch_heads, core_grid, true);
     ShardSpec shard_spec{shard_grid, {unpad_length, head_dim}};
     auto mem_config = tt::tt_metal::MemoryConfig{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1};

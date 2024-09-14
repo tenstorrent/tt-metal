@@ -29,13 +29,13 @@ void LineAllGather::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr , "Operands to all_gather need to be allocated in buffers on device!");
     TT_FATAL(this->num_links > 0, "Error");
-    TT_FATAL(this->num_links <= input_tensor.device()->compute_with_storage_grid_size().y, "Worker cores used by links are parallelizaed over rows");
+    TT_FATAL(this->num_links <= DeviceComputeWithStorageGridSize(input_tensor.device()).y, "Worker cores used by links are parallelizaed over rows");
     TT_FATAL(this->receiver_device_id.has_value() || this->sender_device_id.has_value(), "Error");
     if (this->receiver_device_id == this->sender_device_id) {
-        TT_FATAL(input_tensor.device()->get_ethernet_sockets(this->receiver_device_id.value()).size() >= 2 * this->num_links, "2 Device all gather requires at least 2 eth connections per link");
+        TT_FATAL(DeviceGetEthernetSockets(input_tensor.device(), this->receiver_device_id.value()).size() >= 2 * this->num_links, "2 Device all gather requires at least 2 eth connections per link");
     } else {
-        TT_FATAL(this->topology == all_gather_op::Topology::Linear || (this->receiver_device_id.has_value() && input_tensor.device()->get_ethernet_sockets(this->receiver_device_id.value()).size() >= this->num_links), "All gather requires at least 1 eth connection per link between sender device {} and receiver device {}", this->sender_device_id, this->receiver_device_id);
-        TT_FATAL(this->topology == all_gather_op::Topology::Linear || (this->sender_device_id.has_value() &&input_tensor.device()->get_ethernet_sockets(this->sender_device_id.value()).size() >= this->num_links), "All gather requires at least 1 eth connection per link between sender device {} and receiver device {}", this->sender_device_id, this->receiver_device_id);
+        TT_FATAL(this->topology == all_gather_op::Topology::Linear || (this->receiver_device_id.has_value() && DeviceGetEthernetSockets(input_tensor.device(), this->receiver_device_id.value()).size() >= this->num_links), "All gather requires at least 1 eth connection per link between sender device {} and receiver device {}", this->sender_device_id, this->receiver_device_id);
+        TT_FATAL(this->topology == all_gather_op::Topology::Linear || (this->sender_device_id.has_value() &&DeviceGetEthernetSockets(input_tensor.device(), this->sender_device_id.value()).size() >= this->num_links), "All gather requires at least 1 eth connection per link between sender device {} and receiver device {}", this->sender_device_id, this->receiver_device_id);
     }
 
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
@@ -105,10 +105,10 @@ Tensor line_all_gather(
                     bool is_last_chip_in_counter_clockwise_direction = i == 0;
                     receiver_device_id = is_last_chip_in_clockwise_direction ?
                         std::nullopt :
-                        std::optional<chip_id_t>(devices.at(i+1)->id());
+                        std::optional<chip_id_t>(DeviceId(devices.at(i+1)));
                     sender_device_id = is_last_chip_in_counter_clockwise_direction ?
                         std::nullopt :
-                        std::optional<chip_id_t>(devices.at(i-1)->id());
+                        std::optional<chip_id_t>(DeviceId(devices.at(i-1)));
                     break;
                 }
             }
@@ -144,7 +144,7 @@ Tensor line_all_gather(
 
             const auto& input_device_tensor = input_tensors.at(0);
 
-            const auto coordinate = mesh_view->find_device(input_device_tensor.device()->id());
+            const auto coordinate = mesh_view->find_device(DeviceId(input_device_tensor.device()));
             const auto view_index = (cluster_axis == 0) ? coordinate.col : coordinate.row;
             const auto device_index = (cluster_axis == 0) ? coordinate.row : coordinate.col;
 

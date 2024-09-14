@@ -31,7 +31,7 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
     TT_FATAL(input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR, "Error");
     // we either put everything in one shard or split it into minimum tile width accross as many cores as possible
     TT_FATAL(input_tensor.shard_spec().value().shape[1] == (this->num_q_heads + this->num_kv_heads * 2) * this->head_dim || input_tensor.shard_spec().value().shape[1] == 32, "Error");
-    auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
+    auto core_grid = DeviceComputeWithStorageGridSize(input_tensor.device());
 
     // output
     TT_FATAL(this->output_mem_config.is_sharded() && this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
@@ -73,7 +73,7 @@ std::vector<Tensor> NLPCreateHeadsDecodeDeviceOperation::create_output_tensors(c
     auto batch = q_output_shape[1];
     auto num_q_heads_padded = (this->num_q_heads / TILE_HEIGHT + 1) * TILE_HEIGHT;
     auto num_kv_heads_padded = (this->num_kv_heads / TILE_HEIGHT + 1) * TILE_HEIGHT;
-    auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
+    auto core_grid = DeviceComputeWithStorageGridSize(input_tensor.device());
     auto q_shard_grid = num_cores_to_corerange_set(batch, core_grid, true);
     ShardSpec q_shard_spec{q_shard_grid, {num_q_heads_padded, this->head_dim}};
     auto q_mem_config = this->output_mem_config;
@@ -93,7 +93,7 @@ operation::ProgramWithCallbacks NLPCreateHeadsDecodeDeviceOperation::create_prog
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
 
-    CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    CoreCoord compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(input_tensor.device());
     return  multi_core_nlp_create_qkv_heads_decode(input_tensor, this->num_q_heads, this->num_kv_heads, this->head_dim, output_tensors, compute_with_storage_grid_size);
 }
 

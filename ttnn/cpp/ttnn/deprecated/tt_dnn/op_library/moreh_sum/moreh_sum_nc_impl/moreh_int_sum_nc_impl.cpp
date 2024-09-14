@@ -33,7 +33,7 @@ operation::ProgramWithCallbacks moreh_sum_int_nc_impl(const Tensor &input, const
     const auto [Wt, Ht, inner_tile_size, reduce_tile_size] = extract_and_scale_spatial_dims(input_shape, static_cast<uint32_t>(dim));
     const auto num_reduce_input_tile {input_shape[dim]};
     const auto num_output_tiles {output.volume() / TILE_HW};
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(DeviceArch(input.device()), compute_kernel_config);
 
     log_debug(LogOp, "reduce_tile_size {} inner_tile_size {} Ht {} Wt {}", reduce_tile_size, inner_tile_size, Ht, Wt);
     log_debug(
@@ -54,7 +54,7 @@ operation::ProgramWithCallbacks moreh_sum_int_nc_impl(const Tensor &input, const
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto grid = device->compute_with_storage_grid_size();
+    auto grid = DeviceComputeWithStorageGridSize(device);
     const auto num_cores_y = grid.y;
 
     const uint32_t in0_t = 2;        // input

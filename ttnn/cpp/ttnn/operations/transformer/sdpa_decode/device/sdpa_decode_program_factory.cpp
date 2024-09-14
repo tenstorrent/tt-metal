@@ -91,12 +91,12 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     std::visit([&](auto&& compute_kernel_config) {
         using T = std::decay_t<decltype(compute_kernel_config)>;
         if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-            TT_FATAL(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+            TT_FATAL(DeviceArch(device) == ARCH::GRAYSKULL, "kernel config is not for graykull");
             math_fidelity = compute_kernel_config.math_fidelity;
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = false;
         } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-            TT_FATAL(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
+            TT_FATAL(ttnn::device::is_wormhole_or_blackhole(DeviceArch(device)), "kernel config is not for wormhole_b0 or blackhole");
             math_fidelity = compute_kernel_config.math_fidelity;
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
@@ -117,12 +117,12 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     // We will assign cores to batches
     // Split to cores
     CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
-                                                     : device->compute_with_storage_grid_size();
+                                                     : DeviceComputeWithStorageGridSize(device);
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores_available = grid_size.x * grid_size.y;
 
-    TT_FATAL(num_cores_available <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y, "Error");
+    TT_FATAL(num_cores_available <= DeviceComputeWithStorageGridSize(device).x * DeviceComputeWithStorageGridSize(device).y, "Error");
 
     // balance the number of cores to use based on batch
     uint32_t num_cores_per_batch = num_cores_available / B;
@@ -442,7 +442,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             reduce_core_noc_y = core.y;
             // get physical core
             CoreCoord reduce_core = {(std::size_t)reduce_core_noc_x, (std::size_t)reduce_core_noc_y};
-            auto reduce_core_physical = device->worker_core_from_logical_core(reduce_core);
+            auto reduce_core_physical = DeviceWorkerCoreFromLogicalCore(device, reduce_core);
             reduce_core_physical_xs.push_back((uint32_t) reduce_core_physical.x);
             reduce_core_physical_ys.push_back((uint32_t) reduce_core_physical.y);
         }

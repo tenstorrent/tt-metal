@@ -173,10 +173,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         in0_mcast_noc_x.reserve(in0_mcast_sender_cores_grid.x);
         in0_mcast_noc_y.reserve(in0_mcast_sender_cores_grid.y);
         for (uint32_t core_idx_x = 0; core_idx_x < in0_mcast_sender_cores_grid.x; ++core_idx_x) {
-            in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+            in0_mcast_noc_x.push_back(DeviceWorkerCoreFromLogicalCore(device, {core_idx_x, 0}).x);
         }
         for (uint32_t core_idx_y = 0; core_idx_y < in0_mcast_sender_cores_grid.y; ++core_idx_y) {
-            in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+            in0_mcast_noc_y.push_back(DeviceWorkerCoreFromLogicalCore(device, {0, core_idx_y}).y);
         }
     } else {
         in0_mcast_cores_with_work_and_in_receiver_grid = CoreRangeSet({CoreRange(start_core, start_core)});
@@ -195,8 +195,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
 
     CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = DeviceWorkerCoreFromLogicalCore(device, top_left_core);
+    auto bottom_right_core_physical = DeviceWorkerCoreFromLogicalCore(device, bottom_right_core);
 
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -348,7 +348,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, mm_kernel_defines);
+    bmm_op_utils::add_stagger_defines_if_needed(DeviceArch(device), num_cores, mm_kernel_defines);
 
     if (output_is_sharded) {
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
@@ -363,8 +363,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt_metal::NOC in1_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt_metal::NOC in0_noc = detail::GetPreferredNOCForDRAMWrite(DeviceArch(device));
+    tt_metal::NOC in1_noc = detail::GetPreferredNOCForDRAMRead(DeviceArch(device));
 
     if (fuse_op) {
         // Create semaphores
@@ -947,8 +947,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
 
     CoreCoord top_left_core = in1_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in1_mcast_receiver_cores_bounding_box.end_coord;
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = DeviceWorkerCoreFromLogicalCore(device, top_left_core);
+    auto bottom_right_core_physical = DeviceWorkerCoreFromLogicalCore(device, bottom_right_core);
 
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -1092,7 +1092,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, mm_kernel_defines);
+    bmm_op_utils::add_stagger_defines_if_needed(DeviceArch(device), num_cores, mm_kernel_defines);
 
     if (in0_is_sharded) {
         mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
@@ -1109,8 +1109,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     }
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt_metal::NOC in1_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt_metal::NOC in0_noc = detail::GetPreferredNOCForDRAMWrite(DeviceArch(device));
+    tt_metal::NOC in1_noc = detail::GetPreferredNOCForDRAMRead(DeviceArch(device));
 
     auto mm_kernel_in0_sender_id = tt_metal::CreateKernel(
         program,
@@ -1580,13 +1580,13 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
         [&](auto&& compute_kernel_config) {
             using T = std::decay_t<decltype(compute_kernel_config)>;
             if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-                TT_FATAL(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+                TT_FATAL(DeviceArch(device) == ARCH::GRAYSKULL, "kernel config is not for graykull");
                 math_fidelity = compute_kernel_config.math_fidelity;
                 math_approx_mode = compute_kernel_config.math_approx_mode;
                 fp32_dest_acc_en = false;
                 packer_l1_acc = false;
             } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                TT_FATAL(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
+                TT_FATAL(ttnn::device::is_wormhole_or_blackhole(DeviceArch(device)), "kernel config is not for wormhole_b0 or blackhole");
                 math_fidelity = compute_kernel_config.math_fidelity;
                 math_approx_mode = compute_kernel_config.math_approx_mode;
                 fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;

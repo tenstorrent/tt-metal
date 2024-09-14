@@ -521,7 +521,7 @@ Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id)
 }
 
 Tensor get_device_tensor(const Tensor& multi_device_tensor, const Device* device) {
-    return get_device_tensor(multi_device_tensor, device->id());
+    return get_device_tensor(multi_device_tensor, DeviceId(device));
 }
 
 bool is_multi_device_tensor(const Tensor& tensor) {
@@ -586,7 +586,7 @@ Tensor create_multi_device_tensor(
         for (const auto& tensor : tensors) {
             TT_ASSERT(std::holds_alternative<DeviceStorage>(tensor.get_storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(tensor.get_storage()),__FILE__, __LINE__));
             Device* device = std::get<DeviceStorage>(tensor.get_storage()).buffer->device();
-            auto device_id = device->id();
+            auto device_id = DeviceId(device);
             ordered_device_ids.push_back(device_id);
             device_buffers.insert({device_id, std::get<DeviceStorage>(tensor.get_storage()).buffer});
             shapes.insert({device_id, tensor.get_legacy_shape()});
@@ -730,7 +730,7 @@ Tensor copy_borrowed_tensor_in_async_mode(Device* worker, const Tensor& tensor) 
     ZoneScopedN("ConvertBorrowedToOwned");
     // Tensor has workers (on device) or runtime mode is synchronous or tensor has multiple buffers.
     // No need to check for borrowed storage.
-    if (worker->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS or
+    if (DeviceGetWorkerMode(worker) == WorkExecutorMode::SYNCHRONOUS or
         tensor.tensor_attributes->num_shards_to_be_populated > 1)
         return tensor;
 

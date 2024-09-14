@@ -341,7 +341,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
             ccl::EriscDataMoverBufferSharingMode::NOT_SHARED,
             ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED,
             all_gather_config.get_num_buffers_per_channel(),
-            input_tensor.device()->id());
+            DeviceId(input_tensor.device()));
         counter_clockwise_edm_builders.emplace_back(
             all_gather_config.get_eth_buffer_size(),
             all_gather_config.get_erisc_handshake_address(),
@@ -350,7 +350,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
             ccl::EriscDataMoverBufferSharingMode::NOT_SHARED,
             ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED,
             all_gather_config.get_num_buffers_per_channel(),
-            input_tensor.device()->id());
+            DeviceId(input_tensor.device()));
     }
 
     // KERNEL CREATION
@@ -559,12 +559,12 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
         for (uint32_t l = 0; l < num_links; ++l) {
             // Get the cores for the sender and receiver worker cores
             if (!is_linear || ring_index != ring_size - 1) {
-                auto eth_sender_core = device->get_ethernet_sockets(receiver_device_id.value()).at(sender_socket_idx + l);
+                auto eth_sender_core = DeviceGetEthernetSockets(device, receiver_device_id.value()).at(sender_socket_idx + l);
                 eth_sender_cores.push_back(eth_sender_core);
                 log_trace(tt::LogOp, "\teth_sender_core on link {}: (x={},y={})", l, eth_sender_core.x, eth_sender_core.y);
             }
             if (!is_linear || ring_index != 0) {
-                auto eth_receiver_core = device->get_ethernet_sockets(sender_device_id.value()).at(receiver_socket_idx + l);
+                auto eth_receiver_core = DeviceGetEthernetSockets(device, sender_device_id.value()).at(receiver_socket_idx + l);
                 eth_receiver_cores.push_back(eth_receiver_core);
                 log_trace(tt::LogOp, "\teth_receiver_core on link {}: (x={},y={})", l, eth_receiver_core.x, eth_receiver_core.y);
             }
@@ -737,8 +737,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                     std::vector<ccl::WorkerXY> sender_worker_coords;
                     sender_worker_coords.push_back(
                         ttnn::ccl::WorkerXY(
-                            device->worker_core_from_logical_core(sender_worker_cores.at(b)).x,
-                            device->worker_core_from_logical_core(sender_worker_cores.at(b)).y));
+                            DeviceWorkerCoreFromLogicalCore(device, sender_worker_cores.at(b)).x,
+                            DeviceWorkerCoreFromLogicalCore(device, sender_worker_cores.at(b)).y));
                     auto &sender_edm_builder = is_buffer_in_clockwise_direction(b) ? clockwise_edm_builders.at(i) : counter_clockwise_edm_builders.at(i);
                     log_trace(tt::LogOp, "Adding sender EDM channel");
                     EriscDatamoverBuilder::ChannelBufferInterface const& sender_channel_buffer_info =
@@ -757,8 +757,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                     std::vector<ccl::WorkerXY> receiver_worker_coords;
                     receiver_worker_coords.push_back(
                         ttnn::ccl::WorkerXY(
-                            device->worker_core_from_logical_core(receiver_worker_cores.at(b)).x,
-                            device->worker_core_from_logical_core(receiver_worker_cores.at(b)).y));
+                            DeviceWorkerCoreFromLogicalCore(device, receiver_worker_cores.at(b)).x,
+                            DeviceWorkerCoreFromLogicalCore(device, receiver_worker_cores.at(b)).y));
                     auto &receiver_edm_builder = is_buffer_in_clockwise_direction(b) ? counter_clockwise_edm_builders.at(i) : clockwise_edm_builders.at(i);
                     log_trace(tt::LogOp, "Adding receiver EDM channel");
                     EriscDatamoverBuilder::ChannelBufferInterface const& receiver_channel_buffer_info =
@@ -873,8 +873,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                             static_cast<uint32_t>(tensor_slicer.col_offset),
                             static_cast<uint32_t>(tensor_slicer.num_rows),
                             static_cast<uint32_t>(tensor_slicer.num_cols),
-                            static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_sender_core).x),
-                            static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_sender_core).y),
+                            static_cast<uint32_t>(DeviceEthernetCoreFromLogicalCore(device, worker_eth_sender_core).x),
+                            static_cast<uint32_t>(DeviceEthernetCoreFromLogicalCore(device, worker_eth_sender_core).y),
                             static_cast<bool>(fuse_op && direction == 1)
                         };
 
@@ -899,8 +899,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                         log_trace(tt::LogOp, "\tcol_offset: {}", tensor_slicer.col_offset);
                         log_trace(tt::LogOp, "\tnum_rows: {}", tensor_slicer.num_rows);
                         log_trace(tt::LogOp, "\tnum_cols: {}", tensor_slicer.num_cols);
-                        log_trace(tt::LogOp, "\tethernet_core_x: {}", device->ethernet_core_from_logical_core(worker_eth_sender_core).x);
-                        log_trace(tt::LogOp, "\tethernet_core_y: {}", device->ethernet_core_from_logical_core(worker_eth_sender_core).y);
+                        log_trace(tt::LogOp, "\tethernet_core_x: {}", DeviceEthernetCoreFromLogicalCore(device, worker_eth_sender_core).x);
+                        log_trace(tt::LogOp, "\tethernet_core_y: {}", DeviceEthernetCoreFromLogicalCore(device, worker_eth_sender_core).y);
 
                         if (fuse_op && direction == 1) {
                             fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
@@ -978,8 +978,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                             static_cast<uint32_t>(num_full_chunks_per_worker.at(b)),
                             static_cast<uint32_t>(pages_per_chunk),
                             static_cast<uint32_t>(rem_pages_per_worker.at(b)),
-                            static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_receiver_core).x),
-                            static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_receiver_core).y),
+                            static_cast<uint32_t>(DeviceEthernetCoreFromLogicalCore(device, worker_eth_receiver_core).x),
+                            static_cast<uint32_t>(DeviceEthernetCoreFromLogicalCore(device, worker_eth_receiver_core).y),
                             static_cast<uint32_t>(receiver_eth_sem_addrs.at(b)),
                         };
 
@@ -989,8 +989,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                         log_trace(tt::LogOp, "\tnum_full_chunks_per_worker: {}", num_full_chunks_per_worker.at(b));
                         log_trace(tt::LogOp, "\tpages_per_chunk: {}", pages_per_chunk);
                         log_trace(tt::LogOp, "\trem_pages_per_worker: {}", rem_pages_per_worker.at(b));
-                        log_trace(tt::LogOp, "\tethernet_core_x: {}", device->ethernet_core_from_logical_core(worker_eth_receiver_core).x);
-                        log_trace(tt::LogOp, "\tethernet_core_y: {}", device->ethernet_core_from_logical_core(worker_eth_receiver_core).y);
+                        log_trace(tt::LogOp, "\tethernet_core_x: {}", DeviceEthernetCoreFromLogicalCore(device, worker_eth_receiver_core).x);
+                        log_trace(tt::LogOp, "\tethernet_core_y: {}", DeviceEthernetCoreFromLogicalCore(device, worker_eth_receiver_core).y);
                         log_trace(tt::LogOp, "\treceiver_eth_sem_addrs: {}", receiver_eth_sem_addrs.at(b));
                         return worker_reader_receiver_rt_args;
                     };
@@ -1006,7 +1006,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                     auto build_worker_receive_writer_rt_args = [&]() {
                         uint32_t sender_core_x = -1, sender_core_y = -1;
                         if (sender_enabled) {
-                            auto worker_sender_reader = device->worker_core_from_logical_core(sender_worker_cores.at(b));
+                            auto worker_sender_reader = DeviceWorkerCoreFromLogicalCore(device, sender_worker_cores.at(b));
                             sender_core_x = worker_sender_reader.x;
                             sender_core_y = worker_sender_reader.y;
                         }

@@ -36,7 +36,7 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
         // For sharded, we infer number of tiles each core handles from shard so no issues there
         if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED and input_tensor.get_legacy_shape()[1] > 1) {
             const uint32_t num_blocks_of_work = input_tensor.get_legacy_shape()[1] * input_tensor.get_legacy_shape()[-2] / TILE_HEIGHT;
-            const auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+            const auto compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(input_tensor.device());
             TT_FATAL((num_blocks_of_work <= compute_with_storage_grid_size.x * compute_with_storage_grid_size.y), "Error");
         }
 

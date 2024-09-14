@@ -60,7 +60,7 @@ std::vector<Tensor> NLPConcatHeadsDecodeDeviceOperation::create_output_tensors(c
     auto output_shape = this->compute_output_shapes(input_tensors).at(0);
     auto batch = output_shape[2];
 
-    auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
+    auto core_grid = DeviceComputeWithStorageGridSize(input_tensor.device());
     auto shard_grid = num_cores_to_corerange_set(num_heads, core_grid, true);
     ShardSpec shard_spec{shard_grid, {batch, head_dim}};
     auto mem_config = tt::tt_metal::MemoryConfig{TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1};
@@ -73,7 +73,7 @@ operation::ProgramWithCallbacks NLPConcatHeadsDecodeDeviceOperation::create_prog
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
 
-    CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    CoreCoord compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(input_tensor.device());
 
     return  multi_core_nlp_concat_heads_decode(input_tensor, output_tensor, compute_with_storage_grid_size);
 }

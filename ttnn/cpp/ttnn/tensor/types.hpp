@@ -574,28 +574,28 @@ struct MultiDeviceStorage {
         TT_ASSERT(
             device == buffer->device(),
             "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
-        buffers.insert({device->id(), buffer});
-        shapes.insert({device->id(), shape});
+        buffers.insert({DeviceId(device), buffer});
+        shapes.insert({DeviceId(device), shape});
     }
 
     inline DeviceBuffer get_buffer_for_device(Device *device) const {
         std::lock_guard<std::mutex> lock(buffer_mtx);
         TT_ASSERT(
-            buffers.find(device->id()) != buffers.end(), "Buffer not found for device " + std::to_string(device->id()));
+            buffers.find(DeviceId(device)) != buffers.end(), "Buffer not found for device " + std::to_string(DeviceId(device)));
         TT_ASSERT(
-            buffers.at(device->id())->device() == device,
+            buffers.at(DeviceId(device))->device() == device,
             "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
-        return buffers.at(device->id());
+        return buffers.at(DeviceId(device));
     }
 
     inline DeviceBuffer &get_buffer_for_device(Device *device) {
         std::lock_guard<std::mutex> lock(buffer_mtx);
         TT_ASSERT(
-            buffers.find(device->id()) != buffers.end(), "Buffer not found for device " + std::to_string(device->id()));
+            buffers.find(DeviceId(device)) != buffers.end(), "Buffer not found for device " + std::to_string(DeviceId(device)));
         TT_ASSERT(
-            buffers.at(device->id())->device() == device,
+            buffers.at(DeviceId(device))->device() == device,
             "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
-        return buffers.at(device->id());
+        return buffers.at(DeviceId(device));
     }
 
     inline DeviceBuffer get_buffer_for_device_id(uint32_t device_id) const {
@@ -606,8 +606,8 @@ struct MultiDeviceStorage {
     inline Shape get_tensor_shape_for_device(Device *device) const {
         std::lock_guard<std::mutex> lock(shape_mtx);
         TT_ASSERT(
-            shapes.find(device->id()) != shapes.end(), "Shape not found for device " + std::to_string(device->id()));
-        return shapes.at(device->id());
+            shapes.find(DeviceId(device)) != shapes.end(), "Shape not found for device " + std::to_string(DeviceId(device)));
+        return shapes.at(DeviceId(device));
     }
 
     inline uint32_t num_buffers() const {
@@ -617,7 +617,7 @@ struct MultiDeviceStorage {
 
     inline bool has_buffer_for_device(Device *device) const {
         std::lock_guard<std::mutex> lock(buffer_mtx);
-        return buffers.find(device->id()) != buffers.end();
+        return buffers.find(DeviceId(device)) != buffers.end();
     }
 
     inline bool has_buffer_for_device_id(uint32_t device_id) const {

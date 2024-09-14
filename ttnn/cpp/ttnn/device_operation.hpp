@@ -251,7 +251,7 @@ template <DeviceOperationConcept device_operation_t>
 void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& operation_attributes, const auto& tensor_args, auto &tensor_return_value, auto& device) {
     ZoneScopedN("TT_DNN_DEVICE_OP");
 
-    auto& program_cache = device->program_cache;
+    auto& program_cache = DeviceGetProgramCache(device);
 
     auto program_hash = 0;
     bool program_cache_hit = false;
@@ -264,7 +264,7 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
 
     log_operation<device_operation_t>(
             device_operation_id,
-            device->id(),
+            DeviceId(device),
             operation_attributes,
             tensor_args,
             program_hash,
@@ -284,7 +284,7 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
     const auto enqueue_or_launch_program = [=](Program& program) {
         if (USE_FAST_DISPATCH) {
             ZoneScopedN("EnqueueProgram");
-            auto& queue = device->command_queue(cq_id);
+            auto& queue = DeviceCommandQueue(device, cq_id);
             tt::tt_metal::EnqueueProgram(queue, program, false);
         } else {
             ZoneScopedN("LaunchProgram");
@@ -308,7 +308,7 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
         TracyOpTTNNDevice(
             device_operation_t{},
             device_operation_id,
-            device->id(),
+            DeviceId(device),
             program,
             operation_attributes,
             tensor_args,
@@ -337,7 +337,7 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
         TracyOpTTNNDevice(
             device_operation_t{},
             device_operation_id,
-            device->id(),
+            DeviceId(device),
             *program,
             operation_attributes,
             tensor_args,

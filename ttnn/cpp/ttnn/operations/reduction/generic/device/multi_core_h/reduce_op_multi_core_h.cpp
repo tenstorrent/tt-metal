@@ -28,7 +28,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     uint32_t HtWt = Ht * Wt;
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
-        get_compute_kernel_config_args(a.device()->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(DeviceArch(a.device()), compute_kernel_config);
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -45,7 +45,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
     bool in_sharded = a.is_sharded();
     bool out_sharded = output.is_sharded();
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(device);
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto num_cols = NC * Wt;

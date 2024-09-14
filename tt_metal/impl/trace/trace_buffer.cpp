@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "trace_buffer.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/device/device_impl.hpp"
 
 namespace tt::tt_metal {
 

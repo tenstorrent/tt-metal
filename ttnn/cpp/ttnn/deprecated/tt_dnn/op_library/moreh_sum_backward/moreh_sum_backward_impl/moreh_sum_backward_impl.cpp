@@ -106,7 +106,7 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(
     }
     const auto num_input_grad_tiles = input_grad.volume() / TILE_HW;
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
-        get_compute_kernel_config_args(output_grad.device()->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(DeviceArch(output_grad.device()), compute_kernel_config);
 
     for (auto i = 0; i < input_grad_rank; ++i) {
         log_debug(LogOp, "need_bcast_dim [{}] = {}", i, need_bcast_dim[i]);
@@ -123,7 +123,7 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto grid = device->compute_with_storage_grid_size();
+    auto grid = DeviceComputeWithStorageGridSize(device);
     const auto num_cores_y = grid.y;
 
     const auto

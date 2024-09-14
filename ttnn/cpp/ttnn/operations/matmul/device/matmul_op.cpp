@@ -93,7 +93,7 @@ operation::OpPerformanceModel create_op_performance_model_for_matmul(
         tt::log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
     }
 
-    auto arch = t.storage_type() == StorageType::DEVICE ? t.device()->arch() : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = t.storage_type() == StorageType::DEVICE ? DeviceArch(t.device()) : DeviceArch(ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice());
     const int num_cores = (arch == ARCH::WORMHOLE_B0) ? 8 * 8 : 9 * 12;
     const int tensix_mul_adds_per_cycle_lofi = (arch == ARCH::WORMHOLE_B0) ? 4096 : 2048;
 
@@ -183,9 +183,9 @@ inline uint32_t get_estimated_size_of_cbs(
 inline uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
     tt::tt_metal::Device* device = input_tensor_a.device();
     const std::vector<uint32_t>& bank_ids =
-        device->bank_ids_from_logical_core(BufferType::L1, *device->compute_cores_.begin());
-    std::optional<uint64_t> lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids[0]);
-    uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
+        DeviceBankIdsFromLogicalCore(device, BufferType::L1, *DeviceGetComputeCores(device).begin());
+    std::optional<uint64_t> lowest_address = allocator::lowest_occupied_l1_address(*DeviceGetAllocator(device), bank_ids[0]);
+    uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : DeviceL1SizePerCore(device);
     max_l1_space = max_l1_space - L1_UNRESERVED_BASE;
     return max_l1_space;
 }
@@ -302,7 +302,7 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     const std::optional<const CoreCoord> compute_with_storage_grid_size,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto device = input_tensor_a.device();
-    auto grid_size = compute_with_storage_grid_size.value_or(device->compute_with_storage_grid_size());
+    auto grid_size = compute_with_storage_grid_size.value_or(DeviceComputeWithStorageGridSize(device));
     uint32_t M = fuse_batch ? input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1]
                             : input_tensor_a.get_legacy_shape()[-2];
     uint32_t K = input_tensor_a.get_legacy_shape()[-1];
@@ -453,7 +453,7 @@ MatmulProgramConfig create_matmul_program_config(
             n_size % ttnn::TILE_SIZE == 0,
         "The last two dimensions of the first tensor and the last dimension of the second tensor must be a multiple of "
         "tile size");
-    auto core_coord = input_tensor_a.device()->compute_with_storage_grid_size();
+    auto core_coord = DeviceComputeWithStorageGridSize(input_tensor_a.device());
     bool has_user_core_coord = user_core_coord.has_value();
     if (has_user_core_coord) {
         auto x = user_core_coord.value().x;
@@ -751,7 +751,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
                 input_tensor_a, input_tensor_b, user_core_coord, user_fused_activation, compute_kernel_config);
         } else {
             tt::tt_metal::Device* device = input_tensor_a.device();
-            auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+            auto compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(device);
             return create_simple_matmul_program_config(
                 input_tensor_a, input_tensor_b, compute_kernel_config, compute_with_storage_grid_size);
         }
@@ -787,11 +787,11 @@ inline MatmulProgramConfig get_program_config(
                 not std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
                 TT_FATAL(
                     program_config.compute_with_storage_grid_size.x <=
-                        input_tensor_a.device()->compute_with_storage_grid_size().x,
+                        DeviceComputeWithStorageGridSize(input_tensor_a.device()).x,
                     "Number of columns in matmul compute grid exceeds maximum device compute grid size!");
                 TT_FATAL(
                     program_config.compute_with_storage_grid_size.y <=
-                        input_tensor_a.device()->compute_with_storage_grid_size().y,
+                        DeviceComputeWithStorageGridSize(input_tensor_a.device()).y,
                     "Number of rows in matmul compute grid exceeds maximum device compute grid size!");
                 TT_FATAL(
                     program_config.compute_with_storage_grid_size.x > 0,
@@ -883,7 +883,7 @@ namespace matmul {
 
 Matmul create_matmul_struct(
     const Tensor& input_tensor_a, const Tensor& input_tensor_b, const struct Matmul& parameters) {
-    auto arch = input_tensor_a.device()->arch();
+    auto arch = DeviceArch(input_tensor_a.device());
     const bool has_user_grid = parameters.user_core_coord.has_value();
     const bool has_program_config = parameters.program_config.has_value();
     const auto increase_fidelity = !has_program_config && !has_user_grid;

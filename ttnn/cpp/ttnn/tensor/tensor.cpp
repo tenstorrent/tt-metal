@@ -46,7 +46,7 @@ Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, L
                 this->tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
                 // This tensor is being created from scratch in a worker. Track this and allow it to be explicitly
                 // deallocated inside the worker (composite ops do this).
-                if (not this->workers.at(0)->in_main_thread()) {
+                if (not DeviceInMainThread(this->workers.at(0))) {
                     this->tensor_attributes->main_thread_tensor = false;
                 }
                 this->tensor_attributes->num_shards_to_be_populated = 1;
@@ -58,7 +58,7 @@ Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, L
                     auto device_id = storage.ordered_device_ids[i];
                     auto buffer = storage.get_buffer_for_device_id(device_id);
                     TT_ASSERT(buffer->device() != nullptr);
-                    TT_ASSERT(buffer->device()->id() == device_id);
+                    TT_ASSERT(DeviceId(buffer->device()) == device_id);
                     tensor_impl::validate_on_device_dtype_and_layout(buffer->device(), shape.value, dtype, layout);
                     workers.push_back(buffer->device());
                 }
@@ -66,7 +66,7 @@ Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, L
                 this->tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
                 // This tensor is being created from scratch in a worker. Track this and allow it to be explicitly
                 // deallocated inside the worker (composite ops do this).
-                if (not this->workers.at(0)->in_main_thread()) {
+                if (not DeviceInMainThread(this->workers.at(0))) {
                     this->tensor_attributes->main_thread_tensor = false;
                 }
                 this->tensor_attributes->num_shards_to_be_populated = storage.num_buffers();
@@ -109,10 +109,10 @@ void Tensor::deallocate(bool force) {
                         std::visit([](auto&& buffer) { buffer.reset(); }, storage.buffer);
                     }
                 } else if constexpr (std::is_same_v<T, DeviceStorage>) {
-                    if (not this->workers.at(0)->is_initialized()) {
+                    if (not DeviceIsInitialized(this->workers.at(0))) {
                         return;
                     }
-                    if (this->workers.at(0)->in_main_thread() or not this->tensor_attributes->main_thread_tensor) {
+                    if (DeviceInMainThread(this->workers.at(0)) or not this->tensor_attributes->main_thread_tensor) {
                         if (not this->tensor_attributes->main_thread_tensor) {
                             TT_ASSERT(
                                 not this->tensor_attributes->main_thread_ref_count,
@@ -122,13 +122,13 @@ void Tensor::deallocate(bool force) {
                         // worker thread, allow deallocation in worker and use shared_ptr ref count, since this is a
                         // thread_local tensor
                         uint32_t ref_count_to_use =
-                            (this->workers.at(0)->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS or
+                            (DeviceGetWorkerMode(this->workers.at(0)) == WorkExecutorMode::SYNCHRONOUS or
                              not this->tensor_attributes->main_thread_tensor)
                                 ? this->tensor_attributes.use_count()
                                 : this->tensor_attributes->main_thread_ref_count;
                         if ((force or ref_count_to_use == 1) and not this->tensor_attributes->deallocated) {
                             this->tensor_attributes->deallocated = true;
-                            this->workers.at(0)->push_work(std::make_shared<std::function<void()>>(
+                            DevicePushWork(this->workers.at(0),
                                 [force, attr = this->tensor_attributes]() mutable {
                                     // Cross worker synchronization: If the tensor being deallocated is shared across
                                     // workers (ex: all_gather op), wait until all workers are done with this tensor
@@ -164,7 +164,7 @@ void Tensor::deallocate(bool force) {
                                             }
                                         },
                                         attr->storage);
-                                }));
+                                });
                         }
                     } else {
                         TT_FATAL(
@@ -177,15 +177,15 @@ void Tensor::deallocate(bool force) {
                         TT_THROW("Cannot deallocate tensor with borrowed storage!");
                     }
                 } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                    if (not this->workers.at(0)->is_initialized()) {
+                    if (not DeviceIsInitialized(this->workers.at(0))) {
                         return;
                     }
-                    if (this->workers.at(0)->in_main_thread() or not this->tensor_attributes->main_thread_tensor) {
+                    if (DeviceInMainThread(this->workers.at(0)) or not this->tensor_attributes->main_thread_tensor) {
                         // If owned by the main thread, deallocate this tensor only from the main thread. If owned by
                         // worker thread, allow deallocation in worker and use shared_ptr ref count, since this is a
                         // thread_local tensor
                         uint32_t ref_count_to_use =
-                            (this->workers.at(0)->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS or
+                            (DeviceGetWorkerMode(this->workers.at(0)) == WorkExecutorMode::SYNCHRONOUS or
                              not this->tensor_attributes->main_thread_tensor)
                                 ? this->tensor_attributes.use_count()
                                 : this->tensor_attributes->main_thread_ref_count;
@@ -206,8 +206,8 @@ void Tensor::deallocate(bool force) {
                                 });
 
                             for (auto worker : this->workers) {
-                                worker->push_work(std::make_shared<std::function<void()>>(
-                                    [worker, dealloc_lambda]() mutable { (*dealloc_lambda)(worker); }));
+                                DevicePushWork(worker,
+                                    [worker, dealloc_lambda]() mutable { (*dealloc_lambda)(worker); });
                             }
                         }
                     } else {
@@ -238,8 +238,8 @@ void Tensor::perform_cleanup_for_async_mode() {
     // or move assignment operator
     if (this->tensor_attributes) {
         // Object has tensor_attributes that will be reassigned
-        if (this->workers.size() and this->workers.at(0)->in_main_thread() and
-            this->workers.at(0)->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS) {
+        if (this->workers.size() and DeviceInMainThread(this->workers.at(0)) and
+            DeviceGetWorkerMode(this->workers.at(0)) == WorkExecutorMode::ASYNCHRONOUS) {
             // Operator called in main thread with async mode. Main thread Ref Count must be decremented.
             // This is the last tensor in the main thread holding these attributes. Deallocate the buffer
             // for this tensor.
@@ -613,7 +613,7 @@ void memcpy(
 }
 
 void memcpy(void* dst, const Tensor& src, const std::optional<std::size_t> transfer_size, bool blocking) {
-    memcpy(src.device()->command_queue(), dst, src, transfer_size, blocking);
+    memcpy(DeviceCommandQueue(src.device()), dst, src, transfer_size, blocking);
 }
 
 void memcpy(CommandQueue& queue, Tensor& dst, const void* src, const std::optional<std::size_t> transfer_size) {
@@ -629,7 +629,7 @@ void memcpy(CommandQueue& queue, Tensor& dst, const void* src, const std::option
 }
 
 void memcpy(Tensor& dst, const void* src, const std::optional<std::size_t> transfer_size) {
-    memcpy(dst.device()->command_queue(), dst, src, transfer_size);
+    memcpy(DeviceCommandQueue(dst.device()), dst, src, transfer_size);
 }
 
 void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<std::size_t> transfer_size) {
@@ -652,9 +652,9 @@ void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, const std::opti
 
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<std::size_t> transfer_size) {
     if (is_cpu_tensor(dst) && is_device_tensor(src)) {
-        memcpy(src.device()->command_queue(), dst, src, transfer_size);
+        memcpy(DeviceCommandQueue(src.device()), dst, src, transfer_size);
     } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
-        memcpy(dst.device()->command_queue(), dst, src, transfer_size);
+        memcpy(DeviceCommandQueue(dst.device()), dst, src, transfer_size);
     } else {
         TT_THROW("Unsupported memcpy");
     }
@@ -665,7 +665,7 @@ Tensor allocate_tensor_on_device(
     // Top level wrapper to asynchronously create a device tensor (single device)
     Tensor device_tensor = Tensor({device});
     uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
-    device->push_work([shape, data_type, layout, device, memory_config, device_tensor]() mutable {
+    DevicePushWork(device, [shape, data_type, layout, device, memory_config, device_tensor]() mutable {
         auto local_tensor = create_device_tensor(shape.value, data_type, layout, device, memory_config);
         device_tensor.populate_buffers_and_metadata(local_tensor);
     });
@@ -687,7 +687,7 @@ Tensor allocate_tensor_on_device(
 
     for (int worker_index = 0; worker_index < num_workers; ++worker_index) {
         auto& worker = workers[worker_index];
-        worker->push_work([shape, data_type, layout, worker, memory_config, device_tensor, worker_index]() mutable {
+        DevicePushWork(worker, [shape, data_type, layout, worker, memory_config, device_tensor, worker_index]() mutable {
             auto local_tensor = create_device_tensor(shape.value, data_type, layout, worker, memory_config);
             insert_buffer_and_shape_for_device(worker, local_tensor, device_tensor, worker_index);
 
@@ -713,7 +713,7 @@ void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id) {
 
     for (int worker_index = 0; worker_index < device_tensor.workers.size(); ++worker_index) {
         auto& worker = device_tensor.workers[worker_index];
-        worker->push_work([cq_id, worker, worker_index, async_safe_tensor, device_tensor]() mutable {
+        DevicePushWork(worker, [cq_id, worker, worker_index, async_safe_tensor, device_tensor]() mutable {
             TT_FATAL(
                 async_safe_tensor.storage_type() == StorageType::BORROWED or
                     async_safe_tensor.storage_type() == StorageType::OWNED or
@@ -741,14 +741,14 @@ void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id) {
                             auto host_storage = std::get<OwnedStorage>(async_safe_tensor.get_storage());
                             std::visit([&host_data](auto&& b) { host_data = b.begin(); }, host_storage.get_buffer());
                         }
-                        EnqueueWriteBuffer(worker->command_queue(cq_id), s.get_buffer(), host_data, false);
+                        EnqueueWriteBuffer(DeviceCommandQueue(worker, cq_id), s.get_buffer(), host_data, false);
                     } else if constexpr (std::is_same_v<MultiDeviceStorage, StorageType>) {
                         auto host_storage = std::get<MultiDeviceHostStorage>(async_safe_tensor.get_storage());
                         std::visit(
                             [worker_index, &host_data](auto&& b) { host_data = b.begin(); },
                             host_storage.get_buffer(worker_index));
                         EnqueueWriteBuffer(
-                            worker->command_queue(cq_id), s.get_buffer_for_device(worker), host_data, false);
+                            DeviceCommandQueue(worker, cq_id), s.get_buffer_for_device(worker), host_data, false);
                     }
                 },
                 device_tensor.get_storage());

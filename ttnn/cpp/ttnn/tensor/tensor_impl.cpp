@@ -609,7 +609,7 @@ std::string to_string(const Tensor& tensor, std::optional<DataType> original_dty
                 auto device_index = 0;
                 std::stringstream ss;
                 apply(host_tensor, [&](const Tensor& device_tensor) {
-                    ss << "device_id:" << devices.at(device_index++)->id() << std::endl;
+                    ss << "device_id:" << DeviceId(devices.at(device_index++)) << std::endl;
                     ss << to_string<T>(device_tensor) << std::endl;
                 });
                 return ss.str();
@@ -656,7 +656,7 @@ Tensor to_host_helper(const Tensor& tensor, bool blocking = true, uint8_t cq_id 
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         data_vec.resize(size_in_bytes / sizeof(T));
-        read_data_from_device_buffer<T>(device->command_queue(cq_id), device_buffer, data_vec.data(), blocking);
+        read_data_from_device_buffer<T>(DeviceCommandQueue(device, cq_id), device_buffer, data_vec.data(), blocking);
     } else {
         read_data_from_device_buffer<T>(device_buffer, data_vec);
     }
@@ -801,7 +801,7 @@ DeviceBuffer initialize_data_on_device(
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         write_data_to_device_buffer<T>(
-            queue.has_value() ? queue.value().get() : device->command_queue(), data_to_write, device_buffer);
+            queue.has_value() ? queue.value().get() : DeviceCommandQueue(device), data_to_write, device_buffer);
     } else {
         write_data_to_device_buffer<T>(data_to_write, *device_buffer);
     }

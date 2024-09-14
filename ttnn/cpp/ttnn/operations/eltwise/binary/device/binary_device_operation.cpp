@@ -91,7 +91,7 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
         if (attributes.memory_config.is_sharded()) {
             TT_FATAL(attributes.memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
             uint32_t num_blocks = input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1] / TILE_HEIGHT;
-            auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+            auto core_grid = DeviceComputeWithStorageGridSize(input_tensor_a.device());
             uint32_t num_cores = core_grid.x * core_grid.y;
             TT_FATAL(num_blocks < num_cores or num_blocks % num_cores == 0, "Error");
 
@@ -195,7 +195,7 @@ BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_outpu
                 shard_spec = input_tensor_b.shard_spec().value();
             } else {
                 uint32_t num_blocks = input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1] / TILE_HEIGHT;
-                auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+                auto core_grid = DeviceComputeWithStorageGridSize(input_tensor_a.device());
                 uint32_t num_grid_cores = core_grid.x * core_grid.y;
                 uint32_t target_num_cores = num_blocks < num_grid_cores ? num_blocks : num_grid_cores;
                 shard_spec.grid = tt::tt_metal::num_cores_to_corerange_set(target_num_cores, core_grid, true);

@@ -34,8 +34,8 @@ ttnn::Tensor ExecuteScaledDotProductAttentionGQADecode::invoke(
     const std::optional<MemoryConfig> &memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    auto arch = input_tensor_q.storage_type() == StorageType::DEVICE ? input_tensor_q.device()->arch()
-                                                                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = input_tensor_q.storage_type() == StorageType::DEVICE ? DeviceArch(input_tensor_q.device())
+                                                                     : DeviceArch(ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice());
     // formatting input tensors
     auto q_shape = input_tensor_q.get_legacy_shape();
     auto k_shape = input_tensor_k.get_legacy_shape();
@@ -61,7 +61,7 @@ ttnn::Tensor ExecuteScaledDotProductAttentionGQADecode::invoke(
     uint32_t k_chunk_size = get_chunk_size(max_cur_pos + 1);
     // get chunk size and then pass to sdpa decode as an attribute for prgm cache
     auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
+        DeviceArch(input_tensor_q.device()), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
     auto output_tensors = operation::run(
         ScaledDotProductAttentionGQADecode{

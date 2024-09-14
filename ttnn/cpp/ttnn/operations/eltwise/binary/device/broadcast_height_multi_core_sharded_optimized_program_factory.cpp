@@ -67,7 +67,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
     auto all_cores = shard_spec.grid;
     uint32_t ncores = shard_spec.num_cores();
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(device);
     uint32_t ncores_x = compute_with_storage_grid_size.x;
 
     auto out_shard_spec = output.shard_spec().value();

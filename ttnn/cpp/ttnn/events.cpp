@@ -27,15 +27,15 @@ std::shared_ptr<Event> create_event(Device* device) {
 
 void record_event(uint8_t cq_id, const std::shared_ptr<Event>& event) {
     Device* device = event->device;
-    device->push_work([device, event, cq_id] {
-        EnqueueRecordEvent(device->command_queue(cq_id), event);
+    DevicePushWork(device, [device, event, cq_id] {
+        EnqueueRecordEvent(DeviceCommandQueue(device, cq_id), event);
     });
 }
 
 void wait_for_event(uint8_t cq_id, const std::shared_ptr<Event>& event) {
     Device* device = event->device;
-    device->push_work([device, event, cq_id] {
-        EnqueueWaitForEvent(device->command_queue(cq_id), event);
+    DevicePushWork(device, [device, event, cq_id] {
+        EnqueueWaitForEvent(DeviceCommandQueue(device, cq_id), event);
     });
 }
 

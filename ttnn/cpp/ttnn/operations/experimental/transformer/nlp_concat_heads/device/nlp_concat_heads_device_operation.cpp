@@ -62,7 +62,7 @@ operation::ProgramWithCallbacks NLPConcatHeadsDeviceOperation::create_program(co
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
 
-    CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    CoreCoord compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(input_tensor.device());
 
     return  multi_core_nlp_concat_heads(input_tensor, output_tensor, compute_with_storage_grid_size);
 }

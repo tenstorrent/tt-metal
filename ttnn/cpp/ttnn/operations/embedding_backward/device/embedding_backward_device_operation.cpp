@@ -22,7 +22,7 @@ void EmbeddingBackward::validate(const std::vector<Tensor> &input_tensors) const
     const auto &grad_tensor_shape = grad_tensor.get_legacy_shape();
 
     TT_FATAL(
-        index_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0,
+        DeviceArch(index_tensor.device()) == tt::ARCH::WORMHOLE_B0,
         "Embedding backwards is only implemented for Wormhole!");
 
     TT_FATAL(index_tensor.get_layout() == Layout::ROW_MAJOR, "Error");

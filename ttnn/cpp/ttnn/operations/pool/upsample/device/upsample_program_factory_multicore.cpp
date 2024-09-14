@@ -42,7 +42,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     auto shard_spec = input.shard_spec().value();
     auto all_cores = shard_spec.grid;
     uint32_t ncores = shard_spec.num_cores();
-    uint32_t ncores_x = device->compute_with_storage_grid_size().x;
+    uint32_t ncores_x = DeviceComputeWithStorageGridSize(device).x;
     uint32_t ncores_nhw = ncores;
 
     auto out_shard_spec = output.shard_spec().value();

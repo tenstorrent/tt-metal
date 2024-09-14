@@ -88,7 +88,7 @@ static Tensor full(
             bool using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
 
             if (using_fast_dispatch && device != nullptr) {
-                auto& cmd_queue = device->command_queue(queue_id);
+                auto& cmd_queue = DeviceCommandQueue(device, queue_id);
                 if (CommandQueue::default_mode() == CommandQueue::CommandQueueMode::ASYNC) {
                     tt::tt_metal::EnqueueWriteBuffer(cmd_queue, device_buffer, owned_buffer.get_ptr(), false);
                 } else {
@@ -450,7 +450,7 @@ static Tensor fill_first_val_into_tensor(
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         data_vec.resize(size_in_bytes / sizeof(T));
         tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(
-            input_tensor.device()->command_queue(), device_buffer, data_vec.data(), true);
+            DeviceCommandQueue(input_tensor.device()), device_buffer, data_vec.data(), true);
     } else {
         tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(device_buffer, data_vec);
     }
@@ -483,7 +483,7 @@ static Tensor prod_result_computation_GS(
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         data_vec.resize(size_in_bytes / sizeof(T));
         tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(
-            input_tensor.device()->command_queue(), device_buffer, data_vec.data(), true);
+            DeviceCommandQueue(input_tensor.device()), device_buffer, data_vec.data(), true);
     } else {
         tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(device_buffer, data_vec);
     }
@@ -532,7 +532,7 @@ static Tensor prod_result_computation_WH_B0(
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         data_vec.resize(size_in_bytes / sizeof(T));
         tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(
-            input_tensor.device()->command_queue(), device_buffer, data_vec.data(), true);
+            DeviceCommandQueue(input_tensor.device()), device_buffer, data_vec.data(), true);
     } else {
         tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(device_buffer, data_vec);
     }
@@ -659,7 +659,7 @@ static Tensor manual_insertion(
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         data_vec.resize(size_in_bytes / sizeof(T));
         tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(
-            input_tensor.device()->command_queue(), device_buffer, data_vec.data(), true);
+            DeviceCommandQueue(input_tensor.device()), device_buffer, data_vec.data(), true);
     } else {
         tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(device_buffer, data_vec);
     }

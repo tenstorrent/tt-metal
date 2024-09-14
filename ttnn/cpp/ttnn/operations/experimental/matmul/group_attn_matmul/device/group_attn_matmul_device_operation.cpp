@@ -176,7 +176,7 @@ operation::ProgramWithCallbacks GroupAttnMatmulDeviceOperation::create_program(
     const auto& input_tensor_b = input_tensors.at(1);
     auto& output_tensor = output_tensors.at(0);
 
-    auto device_compute_with_storage_grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
+    auto device_compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(input_tensor_a.device());
     TT_ASSERT(
         (this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x &&
          this->compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y),
@@ -212,11 +212,11 @@ const operation::Hash GroupAttnMatmulDeviceOperation::compute_program_hash(const
         std::get<DeviceStorage>(input_tensor_a.storage()).memory_config().memory_layout,
         std::get<DeviceStorage>(input_tensor_a.storage()).memory_config().buffer_type,
         input_tensor_a.dtype(),
-        std::get<DeviceStorage>(input_tensor_b.storage()).buffer->device()->id(),
+        DeviceId(std::get<DeviceStorage>(input_tensor_b.storage()).buffer->device()),
         std::get<DeviceStorage>(input_tensor_b.storage()).memory_config().memory_layout,
         std::get<DeviceStorage>(input_tensor_b.storage()).memory_config().buffer_type,
         input_tensor_b.dtype(),
-        std::get<DeviceStorage>(input_tensor_b.storage()).buffer->device()->id());
+        DeviceId(std::get<DeviceStorage>(input_tensor_b.storage()).buffer->device()));
 }
 
 

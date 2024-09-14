@@ -82,12 +82,12 @@ namespace ttnn::operations::experimental::transformer {
         std::vector<uint32_t> noc_x_coords;
         noc_x_coords.reserve(in_num_cores_x);
         for (uint32_t x = 0; x < in_num_cores_x; ++x) {
-            noc_x_coords.push_back(device->worker_core_from_logical_core({x, 0}).x);
+            noc_x_coords.push_back(DeviceWorkerCoreFromLogicalCore(device, {x, 0}).x);
         }
         std::vector<uint32_t> noc_y_coords;
         noc_y_coords.reserve(in_num_cores_y);
         for (uint32_t y = 0; y < in_num_cores_y; ++y) {
-            noc_y_coords.push_back(device->worker_core_from_logical_core({0, y}).y);
+            noc_y_coords.push_back(DeviceWorkerCoreFromLogicalCore(device, {0, y}).y);
         }
 
         // We parallize the reader on risc0 and risc1, where each risc reads a sub-tile of the input (phase1 and phase2 of a tile respectively)

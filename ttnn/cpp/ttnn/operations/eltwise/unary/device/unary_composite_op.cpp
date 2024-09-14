@@ -89,7 +89,7 @@ Tensor _acosh(const Tensor& input_a, const std::optional<MemoryConfig>& output_m
        // input < 1, output is nan
        // input > 1, output is acosh(input)
        Tensor nan_res = ttnn::multiply(
-           ttnn::le(input_a, t_one, std::nullopt, output_mem_config), input_a.device()->sfpu_nan(), std::nullopt, output_mem_config);
+           ttnn::le(input_a, t_one, std::nullopt, output_mem_config), DeviceSfpuNan(input_a.device()), std::nullopt, output_mem_config);
        t_result = ttnn::multiply(
            ttnn::gt(input_a, t_one, std::nullopt, output_mem_config), ln_res, std::nullopt, output_mem_config);
        t_result = ttnn::add(nan_res, t_result, std::nullopt, output_mem_config);
@@ -366,7 +366,7 @@ Tensor _swish(const Tensor& a, const std::optional<MemoryConfig>& output_mem_con
 }
 
 Tensor _trunc(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-    auto arch = input.device()->arch();
+    auto arch = DeviceArch(input.device());
     TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Op is not supported on Grayskull");
     Tensor floor_res = ttnn::floor(input, output_mem_config);
     Tensor trunc_res = ttnn::where(ttnn::ne(input, floor_res), ttnn::add(floor_res, 1.0f, std::nullopt, output_mem_config), floor_res);
@@ -620,7 +620,7 @@ Tensor is_odd(const Tensor& input, const std::optional<MemoryConfig>& output_mem
 }
 
 Tensor _round(const Tensor& input, int32_t decimals, const std::optional<MemoryConfig>&  output_mem_config) {
-    auto arch = input.device()->arch();
+    auto arch = DeviceArch(input.device());
     TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     Tensor floor_res = ttnn::floor(input, output_mem_config);
     if (decimals != 0) {  // TODO: For decimal value!=0
@@ -724,11 +724,11 @@ Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig
     Tensor linput_m1 = ttnn::rsub(logit_input, 1.0, output_mem_config);
     Tensor log_input = ttnn::multiply(logit_input, ttnn::reciprocal(linput_m1, output_mem_config), std::nullopt, output_mem_config);
     linput_m1.deallocate();
-    Tensor t_inf = ttnn::multiply(ttnn::sign(input_a, output_mem_config), input_a.device()->sfpu_inf(), std::nullopt, output_mem_config);
+    Tensor t_inf = ttnn::multiply(ttnn::sign(input_a, output_mem_config), DeviceSfpuInf(input_a.device()), std::nullopt, output_mem_config);
     Tensor logit_result = ttnn::where(
         ttnn::eq(logit_input, 1.0, std::nullopt, output_mem_config),
         t_inf,
-        ttnn::where(ttnn::ltz(log_input, output_mem_config), input_a.device()->sfpu_nan(), ttnn::log(log_input, output_mem_config))
+        ttnn::where(ttnn::ltz(log_input, output_mem_config), DeviceSfpuNan(input_a.device()), ttnn::log(log_input, output_mem_config))
         );
     return logit_result;
 }
@@ -790,7 +790,7 @@ Tensor _normalize_global(const Tensor& y,  const std::optional<MemoryConfig>& ou
 }
 
 Tensor _frac(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-    auto arch = input.device()->arch();
+    auto arch = DeviceArch(input.device());
     TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     Tensor trunc_res = ttnn::trunc(input);
     Tensor result = ttnn::subtract(input, trunc_res, std::nullopt, output_mem_config);

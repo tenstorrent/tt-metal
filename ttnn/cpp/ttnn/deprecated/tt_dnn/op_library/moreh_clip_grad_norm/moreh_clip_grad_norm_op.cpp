@@ -21,8 +21,8 @@ namespace primary {
 namespace {
 
 inline uint32_t get_num_device_cores(Device *device) {
-    const auto num_cores_x = static_cast<uint32_t>(device->compute_with_storage_grid_size().x);
-    const auto num_cores_y = static_cast<uint32_t>(device->compute_with_storage_grid_size().y);
+    const auto num_cores_x = static_cast<uint32_t>(DeviceComputeWithStorageGridSize(device).x);
+    const auto num_cores_y = static_cast<uint32_t>(DeviceComputeWithStorageGridSize(device).y);
     return num_cores_x * num_cores_y;
 }
 }  // namespace

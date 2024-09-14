@@ -26,7 +26,7 @@ class MultiCommandQueueSingleDeviceFixture : public ::testing::Test {
             tt::log_warning(tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
             dispatch_core_type = DispatchCoreType::ETH;
         }
-        device_ = tt::tt_metal::CreateDevice(0, 2, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+        device_ = tt::tt_metal::CreateDevice(0, {.num_hw_cqs = 2, .dispatch_core_type = dispatch_core_type});
     }
 
     void TearDown() override {

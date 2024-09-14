@@ -4,6 +4,7 @@
 
 #include "tt_metal/impl/device/mesh_device_view.hpp"
 #include "tt_metal/impl/device/mesh_device.hpp"
+#include "tt_metal/impl/device/device_impl.hpp"
 #include <algorithm>
 #include <stdexcept>
 

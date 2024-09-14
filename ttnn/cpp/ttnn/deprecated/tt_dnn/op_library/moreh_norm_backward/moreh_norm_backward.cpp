@@ -118,7 +118,7 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
     }
 
     const auto num_input_grad_tiles = input_grad.volume() / tt::constants::TILE_HW;
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(output_grad.device()->arch(), compute_kernel_config);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(DeviceArch(output_grad.device()), compute_kernel_config);
 
     auto [floored_p, decimal, p_is_negative] = get_floored_p_and_decimal_and_p_is_negative(p);
     auto [floored_p_minus_one, decimal_minus_one, p_minus_one_is_negative] =
@@ -141,7 +141,7 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto grid = device->compute_with_storage_grid_size();
+    auto grid = DeviceComputeWithStorageGridSize(device);
     const auto num_cores_y = grid.y;
 
     const auto

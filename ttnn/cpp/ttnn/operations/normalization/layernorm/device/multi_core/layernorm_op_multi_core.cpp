@@ -85,12 +85,12 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     std::visit([&](auto&& compute_kernel_config) {
         using T = std::decay_t<decltype(compute_kernel_config)>;
         if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-            TT_ASSERT(device->arch() == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
+            TT_ASSERT(DeviceArch(device) == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
             math_fidelity = compute_kernel_config.math_fidelity;
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = false;
         } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-            TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
+            TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(DeviceArch(device)), "kernel config is not for wormhole_b0 or blackhole");
             math_fidelity = compute_kernel_config.math_fidelity;
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype()) == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
@@ -189,7 +189,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     TT_ASSERT(num_beta_tiles % block_size == 0);
 
     uint32_t num_tile_rows = NC * Ht;
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = DeviceComputeWithStorageGridSize(device);
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -441,12 +441,12 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     std::visit([&](auto&& compute_kernel_config) {
         using T = std::decay_t<decltype(compute_kernel_config)>;
         if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-            TT_ASSERT(device->arch() == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
+            TT_ASSERT(DeviceArch(device) == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
             math_fidelity = compute_kernel_config.math_fidelity;
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = false;
         } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-            TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
+            TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(DeviceArch(device)), "kernel config is not for wormhole_b0 or blackhole");
             math_fidelity = compute_kernel_config.math_fidelity;
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = in_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
@@ -509,9 +509,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     bool use_two_stage_reduce = false;
     if (mcast_1d) {
         // only do this for row/col dim are full length
-        if (row_wise && grid_size.x == device->compute_with_storage_grid_size().x && grid_size.y > 1) { // row major and multiple rows
+        if (row_wise && grid_size.x == DeviceComputeWithStorageGridSize(device).x && grid_size.y > 1) { // row major and multiple rows
             use_two_stage_reduce = true;
-        } else if (!row_wise && grid_size.x > 1 && grid_size.y == device->compute_with_storage_grid_size().y) { // col major and multiple cols
+        } else if (!row_wise && grid_size.x > 1 && grid_size.y == DeviceComputeWithStorageGridSize(device).y) { // col major and multiple cols
             use_two_stage_reduce = true;
         }
     }
@@ -829,8 +829,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         (std::uint32_t) reduce_second_stage_semaphore_id
     };
 
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
-    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(DeviceArch(device));
+    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(DeviceArch(device));
 
     // reader kernel
     auto reader_mcast_sender_kernels_id = CreateKernel(
@@ -1116,10 +1116,10 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     in0_mcast_noc_x.reserve(num_cores_x);
     in0_mcast_noc_y.reserve(num_cores_y);
     for(uint32_t core_idx_x = 0; core_idx_x < num_cores_x; ++core_idx_x) {
-        in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+        in0_mcast_noc_x.push_back(DeviceWorkerCoreFromLogicalCore(device, {core_idx_x, 0}).x);
     }
     for(uint32_t core_idx_y = 0; core_idx_y < num_cores_y; ++core_idx_y) {
-        in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+        in0_mcast_noc_y.push_back(DeviceWorkerCoreFromLogicalCore(device, {0, core_idx_y}).y);
     }
 
     uint32_t last_core_width_index = 0;
@@ -1191,23 +1191,23 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             if (mcast_1d) {
                 CoreCoord top_left_core = {(std::size_t) start_core.x, (std::size_t) start_core.y};
                 CoreCoord bottom_right_core = {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_y - 1};
-                auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-                auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+                auto top_left_core_physical = DeviceWorkerCoreFromLogicalCore(device, top_left_core);
+                auto bottom_right_core_physical = DeviceWorkerCoreFromLogicalCore(device, bottom_right_core);
                 mcast_start = top_left_core_physical;
                 mcast_end = bottom_right_core_physical;
             } else {
                 if (row_wise) {
                     CoreCoord left_core_plus_one    = {(std::size_t) start_core.x + 1, (std::size_t) core.y};
                     CoreCoord right_core   = {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) core.y};
-                    auto left_core_plus_one_physical = device->worker_core_from_logical_core(left_core_plus_one);
-                    auto right_core_physical = device->worker_core_from_logical_core(right_core);
+                    auto left_core_plus_one_physical = DeviceWorkerCoreFromLogicalCore(device, left_core_plus_one);
+                    auto right_core_physical = DeviceWorkerCoreFromLogicalCore(device, right_core);
                     mcast_start = left_core_plus_one_physical;
                     mcast_end = right_core_physical;
                 } else {
                     CoreCoord top_core_plus_one     = {(std::size_t) core.x, (std::size_t) start_core.y + 1};
                     CoreCoord bottom_core  = {(std::size_t) core.x, (std::size_t) start_core.y + num_cores_y - 1};
-                    auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
-                    auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+                    auto top_core_plus_one_physical = DeviceWorkerCoreFromLogicalCore(device, top_core_plus_one);
+                    auto bottom_core_physical = DeviceWorkerCoreFromLogicalCore(device, bottom_core);
                     mcast_start = top_core_plus_one_physical;
                     mcast_end = bottom_core_physical;
                 }

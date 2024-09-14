@@ -34,7 +34,7 @@ namespace detail {
         if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
             data_vec.resize(size_in_bytes / sizeof(uint16_t));
             tt::tt_metal::tensor_impl::read_data_from_device_buffer<uint16_t>(
-                input_tensor.device()->command_queue(), device_buffer, data_vec.data(), true);
+                DeviceCommandQueue(input_tensor.device()), device_buffer, data_vec.data(), true);
         } else {
             tt::tt_metal::tensor_impl::read_data_from_device_buffer<uint16_t>(device_buffer, data_vec);
         }

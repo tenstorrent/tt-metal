@@ -177,7 +177,7 @@ Tensor moreh_layernorm_backward_input_grad(
 
     auto device = input.device();
     auto compute_kernel_config_val =
-        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
+        init_device_compute_kernel_config(DeviceArch(device), compute_kernel_config, MathFidelity::HiFi4);
 
     std::vector<Tensor> output_tensors = {
         Tensor(operation::get_workers_for_op_output({output_grad, input, mean, rstd}, {gamma}))};
@@ -216,7 +216,7 @@ std::vector<std::optional<Tensor>> moreh_layernorm_backward_gamma_beta_grad(
 
     auto device = input.device();
     auto compute_kernel_config_val =
-        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
+        init_device_compute_kernel_config(DeviceArch(device), compute_kernel_config, MathFidelity::HiFi4);
 
     std::vector<std::optional<Tensor>> outputs(2);
     if (!gamma_grad.has_value() && !beta_grad.has_value()) {

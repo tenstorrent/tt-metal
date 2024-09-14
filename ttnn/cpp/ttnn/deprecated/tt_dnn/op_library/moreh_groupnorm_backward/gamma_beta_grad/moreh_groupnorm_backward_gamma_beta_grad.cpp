@@ -76,7 +76,7 @@ operation::ProgramWithOptionalOutputTensors moreh_groupnorm_backward_gamma_beta_
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto grid = device->compute_with_storage_grid_size();
+    auto grid = DeviceComputeWithStorageGridSize(device);
     const auto num_cores_y = grid.y;
 
     const auto

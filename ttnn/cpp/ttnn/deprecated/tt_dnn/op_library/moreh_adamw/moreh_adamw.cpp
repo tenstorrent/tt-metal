@@ -50,7 +50,7 @@ operation::ProgramWithCallbacks moreh_adamw_(
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Device* device = param_in.device();
-    auto grid = device->compute_with_storage_grid_size();
+    auto grid = DeviceComputeWithStorageGridSize(device);
     const auto num_cores_y = grid.y;
 
     uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
@@ -61,7 +61,7 @@ operation::ProgramWithCallbacks moreh_adamw_(
             split_work_to_cores(core_range, num_units);
 
 
-    auto arch = param_in.device()->arch();
+    auto arch = DeviceArch(param_in.device());
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 

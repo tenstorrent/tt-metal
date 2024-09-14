@@ -8,7 +8,7 @@
 #include "common/core_coord.h"
 #include "hw/inc/debug/ring_buffer.h"
 #include "hw/inc/dev_msgs.h"
-#include "impl/device/device.hpp"
+#include "impl/device/device_impl.hpp"
 #include "llrt/rtoptions.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"

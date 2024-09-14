@@ -26,7 +26,7 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     const uint32_t head_dim = operation_attributes.head_dim;
     const bool transpose_k_heads = operation_attributes.transpose_k_heads;
     auto& output = tensor_return_value;
-    CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    CoreCoord compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(input_tensor.device());
 
     const auto& input_shape = input_tensor.get_legacy_shape();
 
@@ -429,12 +429,12 @@ NlpCreateHeadsDeviceOperation::Sharded::cached_program_t NlpCreateHeadsDeviceOpe
     std::vector<uint32_t> noc_x_coords;
     noc_x_coords.reserve(num_cores_x);
     for (uint32_t x = 0; x < num_cores_x; ++x) {
-        noc_x_coords.push_back(device->worker_core_from_logical_core({x, 0}).x);
+        noc_x_coords.push_back(DeviceWorkerCoreFromLogicalCore(device, {x, 0}).x);
     }
     std::vector<uint32_t> noc_y_coords;
     noc_y_coords.reserve(num_cores_y);
     for (uint32_t y = 0; y < num_cores_y; ++y) {
-        noc_y_coords.push_back(device->worker_core_from_logical_core({0, y}).y);
+        noc_y_coords.push_back(DeviceWorkerCoreFromLogicalCore(device, {0, y}).y);
     }
 
     uint32_t remote_q_head_start_idx = 0;

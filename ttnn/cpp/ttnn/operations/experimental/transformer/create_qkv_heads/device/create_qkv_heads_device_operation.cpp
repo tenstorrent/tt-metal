@@ -20,7 +20,7 @@ void CreateQKVHeadsDeviceOperation::validate(const std::vector<Tensor> &input_te
     TT_FATAL(input_shape[1] == 1, "Unsupported input shape");
 
     auto bbox = input_tensor.shard_spec().value().grid.bounding_box();
-    TT_FATAL((bbox.end_coord.x < input_tensor.device()->compute_with_storage_grid_size().x && bbox.end_coord.y < input_tensor.device()->compute_with_storage_grid_size().y), "Error");
+    TT_FATAL((bbox.end_coord.x < DeviceComputeWithStorageGridSize(input_tensor.device()).x && bbox.end_coord.y < DeviceComputeWithStorageGridSize(input_tensor.device()).y), "Error");
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Error");
     ShardOrientation shard_orientation = input_tensor.shard_spec().value().orientation;
     bool rm = shard_orientation == ShardOrientation::ROW_MAJOR;
@@ -51,7 +51,7 @@ std::vector<tt::tt_metal::Shape> CreateQKVHeadsDeviceOperation::compute_output_s
 operation::ProgramWithCallbacks CreateQKVHeadsDeviceOperation::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
 
-    CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    CoreCoord compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(input_tensor.device());
     return  multi_core_create_qkv_heads_sharded(input_tensor, this->num_q_heads, this->num_kv_heads, this->head_dim, this->transpose_k_heads, output_tensors, compute_with_storage_grid_size);
 }
 

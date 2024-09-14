@@ -63,6 +63,10 @@ public:
     bool is_galaxy_;
 };
 
+ARCH DeviceArch(const MeshDevice *device);
+
+CoreCoord DeviceComputeWithStorageGridSize(const MeshDevice *device);
+
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);
 bool validate_worker_modes(const std::vector<Device*>& workers);
 

@@ -477,8 +477,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t) per_core_Mt,
         (std::uint32_t) TILE_HEIGHT
     };
-    tt::tt_metal::NOC reader_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt::tt_metal::NOC writer_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt::tt_metal::NOC reader_noc = detail::GetPreferredNOCForDRAMWrite(DeviceArch(device));
+    tt::tt_metal::NOC writer_noc = detail::GetPreferredNOCForDRAMRead(DeviceArch(device));
     // reader kernel
     auto reader_mcast_sender_kernels_id = CreateKernel(
         program,
@@ -785,7 +785,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
 
         for (int j=0; j < group.size(); ++j) {
             CoreCoord core = group[j];
-            CoreCoord core_physical = device->worker_core_from_logical_core(core);
+            CoreCoord core_physical = DeviceWorkerCoreFromLogicalCore(device, core);
 
             if (j == 0) { // mcast sender
                 // get the bounding box for the mcast
@@ -796,8 +796,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
                     split_and_form_rectangle_grids(group, mcast_group_first, mcast_group_mid, mcast_group_last);
                 }
 
-                CoreCoord mcast_start = device->worker_core_from_logical_core(mcast_group_mid.front());
-                CoreCoord mcast_end = device->worker_core_from_logical_core(mcast_group_mid.back());
+                CoreCoord mcast_start = DeviceWorkerCoreFromLogicalCore(device, mcast_group_mid.front());
+                CoreCoord mcast_end = DeviceWorkerCoreFromLogicalCore(device, mcast_group_mid.back());
 
                 if (reader_noc == NOC::NOC_1) {
                     std::swap(mcast_start, mcast_end);
@@ -820,8 +820,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
                 log_debug(tt::LogOp, "mcast mid group start coord: {} {} end coord: {} {}", mcast_start.x, mcast_start.y, mcast_end.x, mcast_end.y);
 
                 if (not mcast_group_first.empty()) {
-                    CoreCoord mcast_first_start = device->worker_core_from_logical_core(mcast_group_first.front());
-                    CoreCoord mcast_first_end = device->worker_core_from_logical_core(mcast_group_first.back());
+                    CoreCoord mcast_first_start = DeviceWorkerCoreFromLogicalCore(device, mcast_group_first.front());
+                    CoreCoord mcast_first_end = DeviceWorkerCoreFromLogicalCore(device, mcast_group_first.back());
 
                     if (reader_noc == NOC::NOC_1) {
                         std::swap(mcast_start, mcast_end);
@@ -836,8 +836,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
                     log_debug(tt::LogOp, "mcast first group size: {}", mcast_group_first.size() - 1);
                 }
                 if (not mcast_group_last.empty()) {
-                    CoreCoord mcast_last_start = device->worker_core_from_logical_core(mcast_group_last.front());
-                    CoreCoord mcast_last_end = device->worker_core_from_logical_core(mcast_group_last.back());
+                    CoreCoord mcast_last_start = DeviceWorkerCoreFromLogicalCore(device, mcast_group_last.front());
+                    CoreCoord mcast_last_end = DeviceWorkerCoreFromLogicalCore(device, mcast_group_last.back());
 
                     if (reader_noc == NOC::NOC_1) {
                         std::swap(mcast_start, mcast_end);
@@ -855,11 +855,11 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
                 // add all coords within a group
                 std::vector<uint32_t> mcast_noc_xy;
                 for (int c=0; c < group.size(); ++c) {
-                    CoreCoord coord = device->worker_core_from_logical_core(group[c]);
+                    CoreCoord coord = DeviceWorkerCoreFromLogicalCore(device, group[c]);
                     mcast_noc_xy.push_back(coord.x);
                 }
                 for (int c=0; c < group.size(); ++c) {
-                    CoreCoord coord = device->worker_core_from_logical_core(group[c]);
+                    CoreCoord coord = DeviceWorkerCoreFromLogicalCore(device, group[c]);
                     mcast_noc_xy.push_back(coord.y);
                 }
                 mcast_sender_args.insert(mcast_sender_args.end(), mcast_noc_xy.begin(), mcast_noc_xy.end());
@@ -868,8 +868,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
             } else { // mcast receiver
                 log_debug(tt::LogOp, "mcast receiver receive from coord: {} {}", group.front().x, group.front().y);
                 std::vector<uint32_t> mcast_receiver_args;
-                mcast_receiver_args.push_back(device->worker_core_from_logical_core(group.front()).x);
-                mcast_receiver_args.push_back(device->worker_core_from_logical_core(group.front()).y);
+                mcast_receiver_args.push_back(DeviceWorkerCoreFromLogicalCore(device, group.front()).x);
+                mcast_receiver_args.push_back(DeviceWorkerCoreFromLogicalCore(device, group.front()).y);
                 tt::tt_metal::SetRuntimeArgs(program, reader_mcast_receiver_kernels_id, core, mcast_receiver_args);
             }
 

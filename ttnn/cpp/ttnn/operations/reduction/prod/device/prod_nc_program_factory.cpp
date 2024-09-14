@@ -55,7 +55,7 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto grid = device->compute_with_storage_grid_size();
+    auto grid = DeviceComputeWithStorageGridSize(device);
     const auto num_cores_y = grid.y;
 
     const uint32_t in0_t = 2;        // input

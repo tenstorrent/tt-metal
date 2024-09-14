@@ -45,7 +45,7 @@ operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const 
     const bool do_mask_h {(origin_H % TILE_HEIGHT) != 0};
     const auto mask_h {do_mask_h ? origin_H % TILE_HEIGHT: TILE_HEIGHT};
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(DeviceArch(input.device()), compute_kernel_config);
     log_debug(
         LogOp,
         "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
@@ -63,7 +63,7 @@ operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto grid{device->compute_with_storage_grid_size()};
+    auto grid{DeviceComputeWithStorageGridSize(device)};
     const auto num_cores_y{grid.y};
 
     const uint32_t in0_t{2};        // input
@@ -224,7 +224,7 @@ operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const 
     // const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0;
     // const auto mask_h = do_mask_h ? origin_H % TILE_HEIGHT : TILE_HEIGHT;
 
-    // auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
+    // auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(DeviceArch(input.device()), compute_kernel_config);
     // log_debug(
     //     LogOp,
     //     "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
@@ -255,7 +255,7 @@ operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const 
 
     // tt_metal::Device *device = input.device();
 
-    // auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    // auto compute_with_storage_grid_size = DeviceComputeWithStorageGridSize(device);
     // uint32_t num_cores_x = compute_with_storage_grid_size.x;
     // uint32_t num_cores_y = compute_with_storage_grid_size.y;
     // auto num_cols = other_dims_product * Wt;

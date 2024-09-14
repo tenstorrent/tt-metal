@@ -37,7 +37,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     auto amsgrad = operation_attributes.amsgrad;
 
     auto compute_kernel_config =
-        init_device_compute_kernel_config(param_in.device()->arch(), operation_attributes.compute_kernel_config);
+        init_device_compute_kernel_config(DeviceArch(param_in.device()), operation_attributes.compute_kernel_config);
 
     uint32_t num_tiles = param_in.volume() / tt::constants::TILE_HW;
 
@@ -47,13 +47,13 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     tt::tt_metal::Device* device = param_in.device();
-    auto grid = device->compute_with_storage_grid_size();
+    auto grid = DeviceComputeWithStorageGridSize(device);
     const auto num_cores_y = grid.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(grid, num_tiles);
 
-    auto arch = param_in.device()->arch();
+    auto arch = DeviceArch(param_in.device());
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 

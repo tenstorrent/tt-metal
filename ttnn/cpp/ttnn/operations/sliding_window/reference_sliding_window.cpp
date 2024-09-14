@@ -234,10 +234,10 @@ std::vector<uint32_t> input_indices_from_flattened_remote_config(
     bool transpose_mcast) {
     std::vector<uint32_t> abs_indices;
     auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
-        size_t num_cores_x = device->compute_with_storage_grid_size().x;
+        size_t num_cores_x = DeviceComputeWithStorageGridSize(device).x;
         CoreCoord core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id))
                                                 : CoreCoord(core_id % num_cores_x, core_id / num_cores_x);
-        return device->worker_core_from_logical_core(core_coord);
+        return DeviceWorkerCoreFromLogicalCore(device, core_coord);
     };
 
     std::unordered_map<CoreCoord, uint32_t> phy_to_log_core_map;

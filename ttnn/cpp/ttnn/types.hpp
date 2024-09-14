@@ -112,7 +112,7 @@ class Buffer : public tt::tt_metal::Buffer {
         uint32_t buffer_id = 0;
         void allocate() {
             TT_ASSERT(this->device());
-            this->device()->push_work([this] () mutable {
+            DevicePushWork(this->device(), [this] () mutable {
                 bool bottom_up = this->bottom_up_.value_or(this->is_dram());
                 tt::tt_metal::detail::AllocateBuffer(this, bottom_up);
                 // The address inserted here, will be used during asynchronous deallocate
@@ -121,15 +121,15 @@ class Buffer : public tt::tt_metal::Buffer {
             });
         }
         void deallocate() {
-            if (this->device() == nullptr or not this->device()->initialized_ or this->size() == 0) {
+            if (this->device() == nullptr or not DeviceIsInitialized(this->device()) or this->size() == 0) {
                 return;
             }
             this->set_size(0);
-            TT_ASSERT(this->device()->allocator_ != nullptr, "Expected allocator to be initialized!");
+            TT_ASSERT(DeviceGetAllocator(this->device()) != nullptr, "Expected allocator to be initialized!");
             // Extract the required buffer attributes from main thread (these are guaranteed to be correctly populated) and send to worker
-            this->device()->push_work([dev = this->device(), id = this->buffer_id, type = this->buffer_type()] () mutable {
+            DevicePushWork(this->device(), [dev = this->device(), id = this->buffer_id, type = this->buffer_type()] () mutable {
                 // At this point, the address for this buffer has made it to GLOBAL_BUFFER_ADDRESS_MAP, since the worker has allocated the buffer.
-                tt::tt_metal::allocator::deallocate_buffer(*(dev->allocator_), GLOBAL_BUFFER_ADDRESS_MAP.buffer_address(id), type);
+                tt::tt_metal::allocator::deallocate_buffer(*DeviceGetAllocator(dev), GLOBAL_BUFFER_ADDRESS_MAP.buffer_address(id), type);
                 GLOBAL_BUFFER_ADDRESS_MAP.erase(id);
             });
         }

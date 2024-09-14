@@ -212,7 +212,7 @@ operation::ProgramWithCallbacks create_program(
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, mm_kernel_defines);
+    bmm_op_utils::add_stagger_defines_if_needed(DeviceArch(device), num_cores, mm_kernel_defines);
 
     // Create compute kernel
     auto mm_kernel_group_1_id = tt_metal::CreateKernel(
@@ -500,13 +500,13 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
         [&](auto&& compute_kernel_config) {
             using T = std::decay_t<decltype(compute_kernel_config)>;
             if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-                TT_FATAL(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
+                TT_FATAL(DeviceArch(device) == ARCH::GRAYSKULL, "kernel config is not for graykull");
                 math_fidelity = compute_kernel_config.math_fidelity;
                 math_approx_mode = compute_kernel_config.math_approx_mode;
                 fp32_dest_acc_en = false;
                 packer_l1_acc = false;
             } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                TT_FATAL(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
+                TT_FATAL(ttnn::device::is_wormhole_or_blackhole(DeviceArch(device)), "kernel config is not for wormhole_b0 or blackhole");
                 math_fidelity = compute_kernel_config.math_fidelity;
                 math_approx_mode = compute_kernel_config.math_approx_mode;
                 fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;

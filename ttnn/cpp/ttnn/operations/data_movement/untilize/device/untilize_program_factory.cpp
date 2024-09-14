@@ -41,7 +41,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
 
     Device* device = a.device();
 
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = DeviceComputeWithStorageGridSize(device);
     uint32_t ntiles = a.volume() / TILE_HW;
     uint32_t ncores_x = grid_size.x;
     //uint32_t ncores_x = 2;
@@ -55,7 +55,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
     uint32_t ntiles_per_block = ntiles/(ncores_x * ncores_y);
 
     //TODO increase block size to increase untilize performance, currently each untilize block is a single tile
-    //uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
+    //uint32_t max_l1_size = DeviceL1SizePerCore(a.device()) / 2 - L1_UNRESERVED_BASE;
     //uint32_t max_tiles = (max_l1_size / (input_single_tile_size + output_single_tile_size))/2;  // 2 CBs, double buffering each
     uint32_t max_tiles = 1;
 
@@ -294,14 +294,14 @@ operation::ProgramWithCallbacks untilize_multi_core(
     uint32_t nblocks = ceil((float)ntiles / ntiles_per_block);
     uint32_t block_size_nbytes = a.get_legacy_shape()[-1] * output.element_size();
 
-    uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
+    uint32_t max_l1_size = DeviceL1SizePerCore(a.device()) / 2 - L1_UNRESERVED_BASE;
     uint32_t max_tiles = (max_l1_size / (input_single_tile_size + output_single_tile_size));  // 2 CBs, double buffering each
     if (ntiles_per_block > max_tiles) {
         if(!src_sharded and !out_sharded) {
             return untilize_multi_core_parallelize_column(a, output, use_pack_untilize, fp32_dest_acc_en);
         }
     }
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = DeviceComputeWithStorageGridSize(device);
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
         ttnn::split_blocks_for_tilize(grid_size, nblocks);
     uint32_t ncores_x = grid_size.x;
@@ -318,7 +318,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         auto shard_spec = a.shard_spec().value();
         src_block_sharded = a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED;
         row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-        ncores_y = device->compute_with_storage_grid_size().y;
+        ncores_y = DeviceComputeWithStorageGridSize(device).y;
         all_cores = shard_spec.grid;
         uint32_t num_cores = all_cores.num_cores();
         ncores = num_cores;
@@ -705,7 +705,7 @@ operation::ProgramWithCallbacks untilize_single_core(
     uint32_t stick_s = a.get_legacy_shape()[-1];
     uint32_t num_tiles_in_row = stick_s / TILE_WIDTH;
     // Ensure we don't intrude into storage space
-    uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
+    uint32_t max_l1_size = DeviceL1SizePerCore(a.device()) / 2 - L1_UNRESERVED_BASE;
     uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size);  // 2 CBs
     // Currently need the number of tiles in a row to be divisible by tiles in a block
     uint32_t num_tiles_per_block = 1;

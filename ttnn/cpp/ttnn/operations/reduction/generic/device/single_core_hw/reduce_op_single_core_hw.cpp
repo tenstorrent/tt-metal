@@ -24,7 +24,7 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
     uint32_t HW = H * W;
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
-        get_compute_kernel_config_args(a.device()->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(DeviceArch(a.device()), compute_kernel_config);
 
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;

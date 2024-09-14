@@ -24,7 +24,7 @@ class CommandQueueFixture : public ::testing::Test {
         const int device_id = 0;
 
         const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
-        this->device_ = tt::tt_metal::CreateDevice(device_id, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+        this->device_ = tt::tt_metal::CreateDevice(device_id, {.dispatch_core_type = dispatch_core_type});
     }
 
     void TearDown() override {
@@ -123,7 +123,7 @@ protected:
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
         const int device_id = 0;
-        this->device_ = tt::tt_metal::CreateDevice(device_id, num_hw_cqs, 0, buffer_size);;
+        this->device_ = tt::tt_metal::CreateDevice(device_id, {.trace_region_size = buffer_size});
     }
 
     void TearDown() override {

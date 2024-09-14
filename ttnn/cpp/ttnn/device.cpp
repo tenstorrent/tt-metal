@@ -19,15 +19,15 @@ bool is_device_open(int device_id){
 }
 
 void enable_program_cache(Device &device) {
-    device.enable_program_cache();
+    DeviceEnableProgramCache(&device);
 }
 
 void disable_and_clear_program_cache(Device &device) {
-    device.disable_and_clear_program_cache();
+    DeviceDisableAndClearProgramCache(&device);
 }
 
 void close_device(Device &device) {
-    tt::DevicePool::instance().close_device(device.id());
+    tt::DevicePool::instance().close_device(DeviceId(&device));
 
 }
 
@@ -36,8 +36,8 @@ bool is_wormhole_or_blackhole(tt::ARCH arch) {
 }
 
 void deallocate_buffers(Device* device) {
-        device->push_work([device] () mutable {
-            device->deallocate_buffers();
+        DevicePushWork(device, [device] () mutable {
+            DeviceDeallocateBuffers(device);
         });
 }
 

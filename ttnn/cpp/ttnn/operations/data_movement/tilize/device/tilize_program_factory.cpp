@@ -46,7 +46,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
 
     uint32_t num_tiles_in_row = stick_s / TILE_WIDTH;
     // Ensure we don't intrude into storage space
-    uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
+    uint32_t max_l1_size = DeviceL1SizePerCore(a.device()) / 2 - L1_UNRESERVED_BASE;
     uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size);  // 2 CBs
     // Currently need the number of tiles in a row to be divisible by tiles in a block
     uint32_t num_tiles_per_block = 1;
@@ -169,7 +169,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     uint32_t block_size_nbytes = a.get_legacy_shape()[-1] * a.element_size();
 
     Device* device = a.device();
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = DeviceComputeWithStorageGridSize(device);
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
         ttnn::split_blocks_for_tilize(grid_size, nblocks);
 
@@ -328,7 +328,7 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
     uint32_t num_tiles_per_shard = shard_spec.shape[0] * shard_spec.shape[1] / TILE_HW;
     uint32_t num_tiles_per_row = shard_spec.shape[1] / TILE_WIDTH;
     auto all_cores = shard_spec.grid;
-    uint32_t num_cores_x = device->compute_with_storage_grid_size().x;
+    uint32_t num_cores_x = DeviceComputeWithStorageGridSize(device).x;
     uint32_t num_cores = all_cores.num_cores();
 
     auto [src0_cb_index, cb_src0] = create_cb(

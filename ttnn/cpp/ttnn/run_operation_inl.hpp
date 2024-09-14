@@ -78,7 +78,7 @@ void launch_op(
     ZoneScopedN("LaunchOp");
     auto& workers = get_workers(output_tensors);
     std::size_t workers_size = workers.size();
-    if (not enable_autoformat_device and workers.empty() or not workers.at(0)->in_main_thread()) {
+    if (not enable_autoformat_device and workers.empty() or not DeviceInMainThread(workers.at(0))) {
         // Run in main thread or immediately in worker thread
         output_tensors = op_func(input_tensors, optional_input_tensors, optional_output_tensors);
         return;
@@ -239,8 +239,8 @@ void launch_op(
             });
 
         for (auto target_device : workers) {
-            target_device->push_work(std::make_shared<std::function<void()>>(
-                [target_device, work_lambda]() mutable { (*work_lambda)(target_device); }));
+            DevicePushWork(target_device,
+                [target_device, work_lambda]() mutable { (*work_lambda)(target_device); });
         }
     }
 
