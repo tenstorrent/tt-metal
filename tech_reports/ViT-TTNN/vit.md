@@ -6,13 +6,13 @@
   - [Contents](#contents)
   - [1. Overview](#1-overview)
   - [2. ViT TT-NN Optimization Techniques](#2-vit-tt-nn-optimization-techniques)
-    - [2.1 Sharding on all relevant OPs:](#21-sharding-on-all-relevant-ops)
-    - [2.2 Transformer optimizations:](#22-transformer-optimizations)
+    - [2.1 Sharding on all relevant OPs](#21-sharding-on-all-relevant-ops)
+    - [2.2 Transformer optimizations](#22-transformer-optimizations)
   - [3. ViT TT-NN Code Structure](#3-vit-tt-nn-code-structure)
-    - [3.1 Top-level module:](#31-top-level-module)
-    - [3.2 Embeddings module:](#32-embeddings-module)
-    - [3.3 Encoder module:](#33-encoder-module)
-    - [3.4 Encoder Layer module:](#34-encoder-layer-module)
+    - [3.1 Top-level modules](#31-top-level-modules)
+    - [3.2 Embeddings module](#32-embeddings-module)
+    - [3.3 Encoder module](#33-encoder-module)
+    - [3.4 Encoder One Layer module](#34-encoder-one-layer-module)
   - [4. ViT Encoder Layer TT-NN Deep Dive](#4-vit-encoder-layer-tt-nn-deep-dive)
     - [4.1 Input](#41-input)
     - [4.2 Sharding parametrization](#42-sharding-parametrization)
@@ -24,10 +24,11 @@
       - [4.4.4 Matmul with Value](#444-matmul-with-value)
       - [4.4.5 Concatenating Heads and Self-Output Linear OP](#445-concatenating-heads-and-self-output-linear-op)
     - [4.5 Add and Norm](#45-add-and-norm)
-    - [4.6 Feed-Forward Network](#46-feed-forward-network)
+    - [4.6 Feed-Forward](#46-feed-forward)
     - [4.7 Output](#47-output)
-  - [5. Conclusion](#5-conclusion)
-  - [6. Refernces](#6-refernces)
+  - [5. To be added soon - High Resolution and Temporal Sharding](#5-to-be-added-soon---high-resolution-and-temporal-sharding)
+  - [6. Conclusion](#6-conclusion)
+  - [7. Refernces](#7-refernces)
 
 ## 1. Overview
 
@@ -37,7 +38,7 @@ For more details on the architecture, please refer to the [References](#5-refere
 ## 2. ViT TT-NN Optimization Techniques
 
 The implemented optimization techniques in TT-NN compared to the conventional flow are:
-### 2.1 Sharding on all relevant OPs:
+### 2.1 Sharding on all relevant OPs
   - Applying sharding techniques to harvest the optimum utilization of the computation OPs, by elminating the need for data movement inter-tensix-cores between the consecutive OPs. 
   - For more details, please refer to the [related tech-report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md#42-sharding) 
   - Sharding Concepts
@@ -45,7 +46,7 @@ The implemented optimization techniques in TT-NN compared to the conventional fl
   - Illustrative example 
 ![Sharding Example](images/sharding_example.png)   
 
-### 2.2 Transformer optimizations:
+### 2.2 Transformer optimizations
   - Fusing GeLU OP with its perceding Linear OP
   - Merging Q,K,V Linear operations in one large OP for higher utilization of Tensix computation power.
   - Customized tensor manipulation operations that are highly optimized as Transformer-based OPs in TT-NN.
@@ -59,7 +60,7 @@ The implemented optimization techniques in TT-NN compared to the conventional fl
 
 ## 3. ViT TT-NN Code Structure
 
-### 3.1 Top-level module:
+### 3.1 Top-level modules
 ViT model has 3 main modules: Embeddings, Encoder (12 Layers), and Classification head.
 
 ```python
@@ -105,7 +106,7 @@ def vit(
     return classifier_output
 ```
 
-### 3.2 Embeddings module:
+### 3.2 Embeddings module
 ViT Embeddings module includes: Patch + Position embeddings and Linear projection of flattended patches
 
 ```python
@@ -160,7 +161,7 @@ def vit_embeddings(
     return embedding_output
 ```
 
-### 3.3 Encoder module:
+### 3.3 Encoder module
 ViT Encoder module includes: 12 layers of the Transformer encoder
 
 ```python
@@ -196,7 +197,7 @@ def vit_encoder(
     return encoder_output
 ```
 
-### 3.4 Encoder Layer module:
+### 3.4 Encoder One Layer module
 ViT Encoder layer includes: 12 layers of the Transformer encoder
 
 ```python
@@ -525,7 +526,7 @@ layernorm_after_output = ttnn.layer_norm(
 
 ![addnorm](images/addnorm.png)
 
-### 4.6 Feed-Forward Network
+### 4.6 Feed-Forward 
 The output from the attention block is passed through a **Feed-Forward Network** (FFN). The FFN consists of two linear transformations with a GeLU activation function between them. The first linear layer expands the dimensionality of the embeddings, and the second linear layer projects it back to the original size. **Block sharding** is utilized in the FFN, where the computations are split across multiple blocks, allowing for parallel processing and improved efficiency during the linear transformations.
 
 **Optimized Code**:
@@ -621,11 +622,12 @@ The final result after the feed-forward network and the second normalization ste
 
 The output can either be passed to the next layer in the Transformer encoder or to the classification head, depending on the specific task.
 
-## 5. Conclusion
+## 5. To be added soon - High Resolution and Temporal Sharding
+## 6. Conclusion
 
 This walkthrough provided an in-depth explanation of the Vision Transformer (ViT) encoder and its implementation in the TT-NN library. From patch embedding to self-attention and feed-forward networks, the ViT model effectively applies the principles of attention-based mechanisms to image processing.
 
-## 6. Refernces
+## 7. Refernces
   - https://huggingface.co/docs/transformers/en/model_doc/vit
   - https://medium.com/@hansahettiarachchi/unveiling-vision-transformers-revolutionizing-computer-vision-beyond-convolution-c410110ef061
   - https://www.v7labs.com/blog/vision-transformer-guide
