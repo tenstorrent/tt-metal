@@ -14,10 +14,10 @@ from tests.ttnn.unit_tests.operations.backward.utility_funcs import skip_for_gra
 def test_dopout(device):
     t = torch.ones(
         (
+            4,
             1,
-            1,
-            1,
-            1024,
+            32,
+            64,
         )
     )
     t_tt = ttnn.from_torch(t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
