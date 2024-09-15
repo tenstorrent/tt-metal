@@ -65,7 +65,7 @@ jobs:
 #     uses: ./.github/workflows/run-profiler-regression.yaml
 #     secrets: inherit
 #   build-and-test-wheels:
-#     uses: ./.github/workflows/_build-and-test-wheels-impl.yaml
+#     uses: Check all-post-commit yaml for directions
 #     secrets: inherit
 #   build-docs:
 #     needs: build-artifact

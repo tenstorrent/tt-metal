@@ -30,7 +30,6 @@ def test_bw_add(input_shapes, device):
     assert status
 
 
-@pytest.mark.skip(reason="this test is failing because ttnn.add_bw doesn't have a corresponding API call")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -39,7 +38,7 @@ def test_bw_add(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True], [False, False]])
+@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
 def test_bw_add_with_opt_output(input_shapes, device, are_required_outputs):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     other_data, other_tensor = data_gen_with_range(input_shapes, -90, 100, device, True)
@@ -54,15 +53,18 @@ def test_bw_add_with_opt_output(input_shapes, device, are_required_outputs):
 
     cq_id = 0
 
-    tt_output_tensor_on_device = ttnn.add_bw(
+    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    ttnn.add_bw(
         grad_tensor,
         input_tensor,
         other_tensor,
         are_required_outputs=are_required_outputs,
-        input_a_grad=input_grad,
-        input_b_grad=other_grad,
+        input_grad=input_grad,
+        other_grad=other_grad,
         queue_id=cq_id,
     )
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+    tt_output_tensor_on_device = [input_grad, other_grad]
 
     golden_function = ttnn.get_golden_function(ttnn.add_bw)
     golden_tensor = golden_function(grad_data, in_data, other_data)

@@ -221,10 +221,6 @@ Primary Operations
 
 .. autofunction:: tt_lib.operations.primary.moreh_logsoftmax_backward
 
-.. autofunction:: tt_lib.operations.primary.moreh_mean
-
-.. autofunction:: tt_lib.operations.primary.moreh_mean_backward
-
 .. autofunction:: tt_lib.operations.primary.moreh_groupnorm
 
 .. autofunction:: tt_lib.operations.primary.moreh_groupnorm_backward
@@ -232,10 +228,6 @@ Primary Operations
 .. autofunction:: tt_lib.operations.primary.moreh_norm
 
 .. autofunction:: tt_lib.operations.primary.moreh_norm_backward
-
-.. autofunction:: tt_lib.operations.primary.moreh_nll_loss_unreduced
-
-.. autofunction:: tt_lib.operations.primary.moreh_nll_loss_unreduced_backward
 
 Enums
 =====
