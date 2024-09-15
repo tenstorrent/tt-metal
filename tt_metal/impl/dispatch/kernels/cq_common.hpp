@@ -261,10 +261,15 @@ FORCE_INLINE
 void cb_wait_all_pages(uint32_t n) {
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
+
+    // Downstream component sets the MSB as a terminate bit
+    // Mask that off to avoid a race between the sem count and terminate
+    n &= 0x7fffffff;
+
     WAYPOINT("TAPW");
     do {
         invalidate_l1_cache();
-    } while ((*sem_addr) != n);
+    } while ((*sem_addr & 0x7fffffff) != n); // mask off terminate bit
     WAYPOINT("TAPD");
 }
 
