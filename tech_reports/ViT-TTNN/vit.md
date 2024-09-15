@@ -1,7 +1,6 @@
 # ViT in TT-NN
 Authors: Vishal Shenoy, Mohamed Bahnas
 ## Contents
-
 - [ViT in TT-NN](#vit-in-tt-nn)
   - [Contents](#contents)
   - [1. Overview](#1-overview)
@@ -28,12 +27,12 @@ Authors: Vishal Shenoy, Mohamed Bahnas
     - [4.7 Output](#47-output)
   - [5. To be added soon - High Resolution and Temporal Sharding](#5-to-be-added-soon---high-resolution-and-temporal-sharding)
   - [6. Conclusion](#6-conclusion)
-  - [7. Refernces](#7-refernces)
+  - [7. References](#7-references)
 
 ## 1. Overview
 
 The [Vision Transformer](https://arxiv.org/pdf/2010.11929) (ViT) is a transformer model that is utilized for vision procesing tasks. The ViT architecture in TT-NN leverages the self-attention mechanism, originally designed for NLP tasks, to process image data by treating each image as a sequence of patches. This walkthrough explains the key components of the ViT model and demonstrates how the Tenstorrent TT-NN library implements these components efficiently.
-For more details on the architecture, please refer to the [References](#5-references).
+For more details on the architecture, please refer to the [References](#7-references).
 
 ## 2. ViT TT-NN Optimization Techniques
 
@@ -627,7 +626,7 @@ The output can either be passed to the next layer in the Transformer encoder or 
 
 This walkthrough provided an in-depth explanation of the Vision Transformer (ViT) encoder and its implementation in the TT-NN library. From patch embedding to self-attention and feed-forward networks, the ViT model effectively applies the principles of attention-based mechanisms to image processing.
 
-## 7. Refernces
+## 7. References
   - https://huggingface.co/docs/transformers/en/model_doc/vit
   - https://medium.com/@hansahettiarachchi/unveiling-vision-transformers-revolutionizing-computer-vision-beyond-convolution-c410110ef061
   - https://www.v7labs.com/blog/vision-transformer-guide
