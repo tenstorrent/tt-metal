@@ -1,5 +1,5 @@
 # ViT in TT-NN
-
+Authors: Vishal Shenoy, Mohamed Bahnas
 ## Contents
 
 - [ViT in TT-NN](#vit-in-tt-nn)
