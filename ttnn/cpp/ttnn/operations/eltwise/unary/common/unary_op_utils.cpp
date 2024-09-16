@@ -70,6 +70,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
         case UnaryOpType::LEFT_SHIFT: defines["SFPU_OP_LEFT_SHIFT_INCLUDE"] = "1"; break;
         case UnaryOpType::REMAINDER: defines["SFPU_OP_REMAINDER_INCLUDE"] = "1"; break;
         case UnaryOpType::FMOD: defines["SFPU_OP_FMOD_INCLUDE"] = "1"; break;
+        case UnaryOpType::DROPOUT: defines["SFPU_OP_DROPOUT_INCLUDE"] = "1"; break;
         default: defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1"; break;
     };
 }
@@ -228,6 +229,20 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::to_string((uint32_t)datatype_to_dataformat_converter((DataType)params[0])),
                     std::to_string((uint32_t)datatype_to_dataformat_converter((DataType)params[1])))};
             break;
+        case UnaryOpType::DROPOUT: {
+            TT_ASSERT(params.size() == 3, "Expected Dropout to take 3 parameters: seed, probability and scale factor");
+            float prob = params[1];
+            float scale = params[2];
+            uint32_t uprob = static_cast<uint32_t>((double)INT_MAX * prob); // kernel requirement, please read it in the kernel comments
+            op_init_and_name = {
+                // DO NOT ADD seed support till runtime args support will be added.
+                // Current approach doesn't work with dropout unary op because we will compile a new file for each new seed
+                "",//fmt::format("dropout_tile_init({}u);", (uint32_t)param0),
+
+                fmt::format("dropout_tile({}, {}u, {}u);", idst, uprob, Converter::to_hex(scale))
+            };
+            break;
+        }
         default: TT_ASSERT(false && "unexpected parameterized type");
     };
     return op_init_and_name;
