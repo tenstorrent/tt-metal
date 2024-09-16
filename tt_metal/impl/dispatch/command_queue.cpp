@@ -2142,27 +2142,6 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         expected_workers_completed);
     this->enqueue_command(command, blocking);
 
-    if (program.has_multi_device_dependencies() and not this->device->is_mmio_capable() and
-        tt::Cluster::instance().is_galaxy_cluster() and not this->tid.has_value()) {
-        // Issue #19078 - Temporary workaround to avoid deadlocks on Galaxy, until Ethernet Routing Fabric supports VCs:
-        // For programs that require syncs between devices (ex: CCLs), it must be ensured that all devices in a tunnel
-        // receive the full set of program commands. Due to demux being a shared resource (it has a single input queue)
-        // and cannot toggle its output queue id, until a txn is completed (prefetch_d corresponding to the current
-        // packet is unblocked), it is possible that all devices do not get the program commands and enter a deadlock
-        // (dispatch_d gets blocked waiting for the multi-device program to complete, causing prefetch_d to
-        // backpressure, as its picked up other commands -> demux has CCL program commands for other devices in its
-        // queue, but is blocked sending a downstream command to the backpressured prefetch_d). To resolve this,
-        // prefetch_h for all devices involved in the multi-device program will stall sending commands, until dispatch_d
-        // has notified prefetch_h that workers have completed execution (all chips got the program commands, and there
-        // is no further scope of a deadlock).
-        // This pipeline flush does not need to be issued when using trace, since prefetch_h will stall sending pages to
-        // prefetch_d until it has been notified of trace completion (due to cmddat_q reuse). Additionally, events can
-        // currently not be traced, thus this is skipped during trace capture.
-        std::shared_ptr<Event> event = std::make_shared<Event>();
-        this->enqueue_record_event(event);
-        this->enqueue_wait_for_event(event);
-    }
-
 #ifdef DEBUG
     if (tt::llrt::OptionsG.get_validate_kernel_binaries()) {
         TT_FATAL(!this->manager.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
