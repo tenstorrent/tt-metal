@@ -152,8 +152,8 @@ If you are going to try our pre-built models in `models/`, then you must execute
 the following to:
 
 - install their required dependencies
-- set appropriate indenvironment variables
-- Set CPU performance governor to ensure high performance on the host
+- set appropriate environment variables
+- set the CPU performance governor to ensure high performance on the host
 
 ```sh
 export PYTHONPATH=$(pwd)
