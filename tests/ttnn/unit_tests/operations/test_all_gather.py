@@ -59,6 +59,57 @@ def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, in
     return False, ""
 
 
+def run_with_trace(
+    t3k_mesh_device,
+    devices,
+    all_gather_operation,
+    input_tensor_mesh,
+    dim,
+    num_links,
+    output_mem_config,
+    n_worker,
+    n_buffer,
+    num_iter,
+):
+    # Compile Run
+    logger.info("Compiling model")
+    tt_out_tensor = all_gather_operation(
+        input_tensor_mesh,
+        dim,
+        num_links=num_links,
+        memory_config=output_mem_config,
+        num_workers=n_worker,
+        num_buffers_per_channel=n_buffer,
+    )
+    for d in devices:
+        ttnn.synchronize_device(d)
+
+    # Capture trace
+    logger.info("Capturing trace")
+    trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
+    for i in range(num_iter):
+        tt_out_tensor = all_gather_operation(
+            input_tensor_mesh,
+            dim,
+            num_links=num_links,
+            memory_config=output_mem_config,
+            num_workers=n_worker,
+            num_buffers_per_channel=n_buffer,
+        )
+    ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
+    for d in devices:
+        ttnn.synchronize_device(d)
+
+    # Run the op
+    logger.info("Starting Trace perf test...")
+    ttnn.execute_trace(t3k_mesh_device, trace_id, blocking=False)
+    ttnn.release_trace(t3k_mesh_device, trace_id)
+    for d in devices:
+        ttnn.synchronize_device(d)
+
+    return tt_out_tensor
+
+
 def run_all_gather_on_t3000_impl(
     all_devices,
     num_devices,
@@ -863,7 +914,7 @@ def test_all_gather_on_t3000_nightly(
 
 
 def run_all_gather_sharded(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -878,9 +929,17 @@ def run_all_gather_sharded(
     use_program_cache,
     function_level_defaults,
     all_gather_operation,
+    enable_async,
+    n_worker=None,
+    n_buffer=None,
+    num_iter=1,
+    trace_mode=False,
 ):
-    if len(all_devices) != 8:
+    if len(t3k_mesh_device.get_device_ids()) != 8:
         pytest.skip("Not T3000!")
+
+    for device_id in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device_id).enable_async(enable_async)
 
     numel = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3] * num_devices
     unchunked_input_shape = list(input_shape)
@@ -903,7 +962,7 @@ def run_all_gather_sharded(
     unchunked_input_tensor = unchunked_input_tensor.bfloat16()
 
     input_tensors = torch.chunk(unchunked_input_tensor, num_devices, dim)
-    devices = get_devices_for_t3000(all_devices, num_devices)
+    devices = [t3k_mesh_device.get_device(t3k_mesh_device.get_device_ids()[i]) for i in range(num_devices)]
 
     # num_cores =
     # compute_grid_size = devices[0].compute_with_storage_grid_size()
@@ -962,11 +1021,33 @@ def run_all_gather_sharded(
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
 
-    ## Run the actual allgather operation
-    tt_out_tensor = all_gather_operation(input_tensor_mesh, dim, num_links=num_links, memory_config=output_mem_config)
-    ## Wait for completion
-    for d in devices:
-        ttnn.synchronize_device(d)
+    if trace_mode:
+        tt_out_tensor = run_with_trace(
+            t3k_mesh_device,
+            devices,
+            all_gather_operation,
+            input_tensor_mesh,
+            dim,
+            num_links,
+            output_mem_config,
+            n_worker,
+            n_buffer,
+            num_iter,
+        )
+    else:
+        ## Run the actual allgather operation
+        for i in range(num_iter):
+            tt_out_tensor = all_gather_operation(
+                input_tensor_mesh,
+                dim,
+                num_links=num_links,
+                memory_config=output_mem_config,
+                num_workers=n_worker,
+                num_buffers_per_channel=n_buffer,
+            )
+        ## Wait for completion
+        for d in devices:
+            ttnn.synchronize_device(d)
 
     torch.set_printoptions(sci_mode=False)
     all_eq = True
@@ -1047,8 +1128,9 @@ def run_all_gather_sharded(
         ),
     ),
 )
+@pytest.mark.parametrize("enable_async", [True])
 def test_all_gather_sharded_post_commit(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -1062,9 +1144,10 @@ def test_all_gather_sharded_post_commit(
     # num_cores,
     use_program_cache,
     function_level_defaults,
+    enable_async,
 ):
     run_all_gather_sharded(
-        all_devices,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         input_shard_shape,
@@ -1079,6 +1162,7 @@ def test_all_gather_sharded_post_commit(
         use_program_cache,
         function_level_defaults,
         all_gather_operation=ttnn.all_gather,
+        enable_async=enable_async,
     )
 
 
@@ -1134,8 +1218,9 @@ def test_all_gather_sharded_post_commit(
         ),
     ),
 )
+@pytest.mark.parametrize("enable_async", [True])
 def test_all_gather_height_sharded_post_commit(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -1149,9 +1234,10 @@ def test_all_gather_height_sharded_post_commit(
     # num_cores,
     use_program_cache,
     function_level_defaults,
+    enable_async,
 ):
     run_all_gather_sharded(
-        all_devices,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         input_shard_shape,
@@ -1166,6 +1252,7 @@ def test_all_gather_height_sharded_post_commit(
         use_program_cache,
         function_level_defaults,
         all_gather_operation=ttnn.all_gather,
+        enable_async=enable_async,
     )
 
 
@@ -1215,8 +1302,9 @@ def test_all_gather_height_sharded_post_commit(
         ),
     ),
 )
+@pytest.mark.parametrize("enable_async", [True])
 def test_all_gather_block_sharded_post_commit(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -1230,9 +1318,10 @@ def test_all_gather_block_sharded_post_commit(
     # num_cores,
     use_program_cache,
     function_level_defaults,
+    enable_async,
 ):
     run_all_gather_sharded(
-        all_devices,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         input_shard_shape,
@@ -1247,6 +1336,7 @@ def test_all_gather_block_sharded_post_commit(
         use_program_cache,
         function_level_defaults,
         all_gather_operation=ttnn.all_gather,
+        enable_async=enable_async,
     )
 
 
@@ -1304,8 +1394,9 @@ def test_all_gather_block_sharded_post_commit(
         ),
     ),
 )
+@pytest.mark.parametrize("enable_async", [True])
 def test_line_all_gather_sharded_post_commit(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -1319,9 +1410,10 @@ def test_line_all_gather_sharded_post_commit(
     # num_cores,
     use_program_cache,
     function_level_defaults,
+    enable_async,
 ):
     run_all_gather_sharded(
-        all_devices,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         input_shard_shape,
@@ -1336,6 +1428,7 @@ def test_line_all_gather_sharded_post_commit(
         use_program_cache,
         function_level_defaults,
         all_gather_operation=ttnn.line_all_gather,
+        enable_async=enable_async,
     )
 
 
@@ -1463,9 +1556,10 @@ def test_line_all_gather_sharded_post_commit(
         ),
     ),
 )
+@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("all_gather_operation", [ttnn.all_gather, ttnn.line_all_gather])
 def test_sharded_all_gather_nightly(
-    all_devices,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -1480,9 +1574,10 @@ def test_sharded_all_gather_nightly(
     use_program_cache,
     function_level_defaults,
     all_gather_operation,
+    enable_async,
 ):
     run_all_gather_sharded(
-        all_devices,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         input_shard_shape,
@@ -1497,6 +1592,7 @@ def test_sharded_all_gather_nightly(
         use_program_cache,
         function_level_defaults,
         all_gather_operation=all_gather_operation,
+        enable_async=enable_async,
     )
 
 

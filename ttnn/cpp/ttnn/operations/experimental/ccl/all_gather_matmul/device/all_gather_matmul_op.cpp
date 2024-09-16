@@ -95,6 +95,8 @@ operation::ProgramWithCallbacks AllGatherMatmul::create_program(const std::vecto
         this->all_gather_struct.num_links,
         this->all_gather_struct.ring_size,
         this->all_gather_struct.ring_index,
+        this->all_gather_struct.user_defined_num_workers,
+        this->all_gather_struct.user_defined_num_buffers_per_channel,
         this->all_gather_struct.receiver_device_id,
         this->all_gather_struct.sender_device_id,
         this->all_gather_struct.topology,
@@ -122,6 +124,8 @@ std::vector <ttnn::Tensor> all_gather_matmul(
     const CoreCoord all_gather_core_grid_offset,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config_ag,
+    std::optional<size_t> user_defined_num_workers,
+    std::optional<size_t> user_defined_num_buffers_per_channel,
     const std::optional<MemoryConfig>& memory_config_mm,
     const bool transpose_a,
     const bool transpose_b,
@@ -142,7 +146,7 @@ std::vector <ttnn::Tensor> all_gather_matmul(
 
 
     operation::launch_op(
-        [dim, all_gather_core_grid_offset, num_links, memory_config_ag, memory_config_mm, transpose_a, transpose_b, dtype, program_config, activation, compute_kernel_config, core_grid, devices](
+        [dim, all_gather_core_grid_offset, num_links, memory_config_ag, user_defined_num_workers, user_defined_num_buffers_per_channel, memory_config_mm, transpose_a, transpose_b, dtype, program_config, activation, compute_kernel_config, core_grid, devices](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -151,7 +155,7 @@ std::vector <ttnn::Tensor> all_gather_matmul(
             const auto& weight_tensor = input_tensors[1];
 
             /* AllGather setup */
-            ttnn::AllGather all_gather_struct = ttnn::create_all_gather_struct(input_tensor, dim, num_links, memory_config_ag, devices);
+            ttnn::AllGather all_gather_struct = ttnn::create_all_gather_struct(input_tensor, dim, num_links, memory_config_ag, user_defined_num_workers, user_defined_num_buffers_per_channel, devices);
 
             // Create the all gather output tensor used as input (activation) to the matmul
             ttnn::Tensor all_gather_out_tensor = all_gather_struct.create_output_tensors({input_tensor})[0];

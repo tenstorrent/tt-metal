@@ -12,8 +12,11 @@ ttnn::Tensor ExecuteLineAllGather::invoke(
     const ttnn::Tensor& input_tensor,
     const uint32_t dim,
     const uint32_t num_links,
-    const std::optional<ttnn::MemoryConfig>& memory_config) {
-    return ttnn::operations::ccl::line_all_gather(input_tensor, dim, num_links, memory_config);
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<size_t> num_workers,
+    const std::optional<size_t> num_buffers_per_channel
+    ) {
+    return ttnn::operations::ccl::line_all_gather(input_tensor, dim, num_links, memory_config, num_workers, num_buffers_per_channel);
 }
 
 ttnn::Tensor ExecuteLineAllGather::invoke(
@@ -22,9 +25,12 @@ ttnn::Tensor ExecuteLineAllGather::invoke(
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const uint32_t num_links,
-    const std::optional<ttnn::MemoryConfig>& memory_config) {
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<size_t> num_workers,
+    const std::optional<size_t> num_buffers_per_channel
+    ) {
     return ttnn::operations::ccl::line_all_gather(
-        input_tensor, dim, cluster_axis, mesh_device, num_links, memory_config);
+        input_tensor, dim, cluster_axis, mesh_device, num_links, memory_config, num_workers, num_buffers_per_channel);
 }
 
 }  // namespace ttnn::operations::ccl

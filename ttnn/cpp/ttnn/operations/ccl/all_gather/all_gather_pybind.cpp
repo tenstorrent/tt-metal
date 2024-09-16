@@ -26,14 +26,18 @@ void bind_all_gather(pybind11::module& module, const ccl_operation_t& operation,
                const ttnn::Tensor& input_tensor,
                const uint32_t dim,
                const uint32_t num_links,
-               const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(input_tensor, dim, num_links, memory_config);
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<size_t> num_workers,
+               const std::optional<size_t> num_buffers_per_channel) -> ttnn::Tensor {
+                return self(input_tensor, dim, num_links, memory_config, num_workers, num_buffers_per_channel);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
             py::kw_only(),
             py::arg("num_links") = 1,
-            py::arg("memory_config") = std::nullopt});
+            py::arg("memory_config") = std::nullopt,
+            py::arg("num_workers") = std::nullopt,
+            py::arg("num_buffers_per_channel") = std::nullopt});
 }
 
 }  // namespace detail
@@ -43,7 +47,7 @@ void py_bind_all_gather(pybind11::module& module) {
     detail::bind_all_gather(
         module,
         ttnn::all_gather,
-        R"doc(all_gather(input_tensor: ttnn.Tensor, dim: int, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(all_gather(input_tensor: ttnn.Tensor, dim: int, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None, num_workers: int = None, num_buffers_per_channel: int = None) -> ttnn.Tensor
 
         Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
 
@@ -54,6 +58,8 @@ void py_bind_all_gather(pybind11::module& module) {
         Keyword Args:
             * :attr:`num_links` (int): Number of links to use for the all-gather operation.
             * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+            * :attr:`num_workers` (int): Number of workers to use for the operation.
+            * :attr:`num_buffers_per_channel` (int): Number of buffers per channel to use for the operation.
 
         Example:
 
