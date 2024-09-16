@@ -266,11 +266,16 @@ TEST_P(EltwiseBinaryOpInterfaceTestFixture, MlirInterfaceTest) {
     input_a.shape = pad_shape_to_tile(input_a.shape);
     input_b.shape = pad_shape_to_tile(input_b.shape);
     std::cout << "OP = " << input_a.shape << " + " << input_b.shape << std::endl;
-
+    const CoreCoord chip_size{8, 8};
     // Check input params against op constraints
     try {
         std::unique_ptr<EltwiseOpConstraintsBuilder> builder = EltwiseOpConstraintsFactory::Make(
-            input_a.shape, input_a.memory_config, input_b.shape, input_b.memory_config, output.memory_config);
+            input_a.shape,
+            input_a.memory_config,
+            input_b.shape,
+            input_b.memory_config,
+            output.memory_config,
+            chip_size);
         if (builder) {
             const auto op_constraints =
                 (*builder)

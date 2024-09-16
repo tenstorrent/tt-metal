@@ -92,7 +92,8 @@ class MatmulOpConstraintsFactory {
         const ttnn::Shape& input_shape_b,
         tt::tt_metal::MemoryConfig& memory_config_b,
         tt::tt_metal::MemoryConfig& memory_config_o,
-        const ttnn::operations::matmul::MatmulProgramConfig& program_config);
+        const ttnn::operations::matmul::MatmulProgramConfig& program_config,
+        const CoreCoord& chip_grid);
 
     static const uint32_t Volume(const ttnn::Shape& shape);
 

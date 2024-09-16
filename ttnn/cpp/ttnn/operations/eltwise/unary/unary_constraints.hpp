@@ -93,7 +93,8 @@ class UnaryOpConstraintsFactory {
         const ttnn::Shape& input_shape_a,
         const tt::tt_metal::MemoryConfig& memory_config_a,
         const ttnn::Shape& input_shape_o,
-        const tt::tt_metal::MemoryConfig& memory_config_o);
+        const tt::tt_metal::MemoryConfig& memory_config_o,
+        const CoreCoord& chip_size);
 
     static bool is_supported_arch(tt::ARCH arch, UnaryOpType op_type);
 

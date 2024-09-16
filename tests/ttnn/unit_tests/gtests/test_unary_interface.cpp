@@ -49,13 +49,14 @@ struct InputShapeTestParam {
 class UnaryInterfaceTestFixture
     : public TTNNFixtureWithDevice,
       public testing::WithParamInterface<
-          std::tuple<InputShapeTestParam, InputShapeTestParam, tt::tt_metal::IGraphProcessor::RunMode>> {};
+          std::tuple<InputShapeTestParam, InputShapeTestParam, CoreCoord, tt::tt_metal::IGraphProcessor::RunMode>> {};
 
 TEST_P(UnaryInterfaceTestFixture, UnaryInterfaceTest) {
     auto param_combination = GetParam();
     auto input_a = std::get<0>(param_combination);
     auto input_o = std::get<1>(param_combination);
-    auto run_mode = std::get<2>(param_combination);
+    auto core_chip_grid = std::get<2>(param_combination);
+    auto run_mode = std::get<3>(param_combination);
 
     // pad input shapes (this isn't happening automagically)
     auto pad_shape_to_tile = [](const ttnn::Shape& shape) {
@@ -81,7 +82,13 @@ TEST_P(UnaryInterfaceTestFixture, UnaryInterfaceTest) {
     // Check input params against op constraints
     try {
         std::unique_ptr<unary::UnaryOpConstraintsBuilder> builder = unary::UnaryOpConstraintsFactory::Make(
-            unary_op_type, arch, input_a.shape, input_a.memory_config, input_o.shape, input_o.memory_config);
+            unary_op_type,
+            arch,
+            input_a.shape,
+            input_a.memory_config,
+            input_o.shape,
+            input_o.memory_config,
+            core_chip_grid);
         if (builder) {
             const auto op_constraints =
                 (*builder)
@@ -188,7 +195,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .shape = ttnn::Shape(tt::tt_metal::Array4D{4, 2, 5 * 32, 5 * 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
             }),
-
+        ::testing::Values(CoreCoord{8, 8}),
         ::testing::Values(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH)));
 
 }  // namespace test

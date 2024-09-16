@@ -52,6 +52,7 @@ class MatmulInterfaceTestFixture : public TTNNFixtureWithDevice,
                                        InputShapeTestParam,
                                        InputShapeTestParam,
                                        InputShapeTestParam,
+                                       CoreCoord,
                                        tt::tt_metal::IGraphProcessor::RunMode>> {};
 
 TEST_P(MatmulInterfaceTestFixture, MatmulInterfaceTest) {
@@ -59,7 +60,8 @@ TEST_P(MatmulInterfaceTestFixture, MatmulInterfaceTest) {
     auto input_a = std::get<0>(param_combination);
     auto input_b = std::get<1>(param_combination);
     auto input_o = std::get<2>(param_combination);
-    auto run_mode = std::get<3>(param_combination);
+    auto core_chip_grid = std::get<3>(param_combination);
+    auto run_mode = std::get<4>(param_combination);
 
     // pad input shapes (this isn't happening automagically)
     auto pad_shape_to_tile = [](const ttnn::Shape& shape) {
@@ -100,7 +102,8 @@ TEST_P(MatmulInterfaceTestFixture, MatmulInterfaceTest) {
             input_b.shape,
             input_b.memory_config,
             input_o.memory_config,
-            matmul_program_config);
+            matmul_program_config,
+            core_chip_grid);
         if (builder) {
             const auto op_constraints =
                 (*builder)
@@ -229,7 +232,7 @@ INSTANTIATE_TEST_SUITE_P(
                              {32, 160},
                              ShardOrientation::COL_MAJOR}},
             }),
-
+        ::testing::Values(CoreCoord{8, 8}),  // Change this for more than 2-row harvested.
         ::testing::Values(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH)));
 
 }  // namespace test

@@ -80,8 +80,15 @@ std::unique_ptr<SoftmaxOpConstraintsBuilder> SoftmaxOpConstraintsFactory::Make(
     const tt::tt_metal::MemoryConfig& memory_config_a,
     const ttnn::Shape& input_shape_o,
     const tt::tt_metal::MemoryConfig& memory_config_o,
+    const CoreCoord& chip_grid,
     const std::optional<const ttnn::Shape>& input_shape_b,
     const std::optional<const tt::tt_metal::MemoryConfig>& memory_config_b) {
+    if (!OpConstraintsFactory::Can_fit_op_on_chip(memory_config_a, chip_grid)) {
+        return nullptr;
+    }
+    if (!OpConstraintsFactory::Can_fit_op_on_chip(memory_config_o, chip_grid)) {
+        return nullptr;
+    }
     auto Softmax_op_type = GetSoftmaxOpType(input_shape_a, memory_config_a, input_shape_b, memory_config_b);
     switch (Softmax_op_type) {
         case SoftmaxOpTypes::Softmax:

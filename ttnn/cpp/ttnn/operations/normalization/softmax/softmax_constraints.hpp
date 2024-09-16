@@ -66,6 +66,7 @@ class SoftmaxOpConstraintsFactory {
         const tt::tt_metal::MemoryConfig& memory_config_a,
         const ttnn::Shape& input_shape_o,
         const tt::tt_metal::MemoryConfig& memory_config_o,
+        const CoreCoord& chip_grid,
         const std::optional<const ttnn::Shape>& input_shape_b = std::nullopt,
         const std::optional<const tt::tt_metal::MemoryConfig>& memory_config_b = std::nullopt);
 
