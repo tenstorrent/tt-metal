@@ -156,7 +156,8 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
         scale,
         this->compute_kernel_config,
         this->program_config,
-        this->k_chunk_size);
+        this->k_chunk_size,
+        false);
 }
 
 operation::Hash ScaledDotProductAttentionDecode::compute_program_hash(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {

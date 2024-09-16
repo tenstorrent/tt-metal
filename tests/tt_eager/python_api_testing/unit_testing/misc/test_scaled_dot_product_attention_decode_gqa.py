@@ -81,6 +81,7 @@ def run_test_sdpa_decode_single_iter(
     q_dtype=ttnn.bfloat16,
     start_indices=None,
     transpose_q=True,
+    share_cache=False,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
@@ -106,11 +107,27 @@ def run_test_sdpa_decode_single_iter(
     )
     dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
-    K = fa_rand(b, nkv, s, d)
-    V = fa_rand(b, nkv, s, d)
+    if share_cache:
+        K = fa_rand(1, nkv, s, d).repeat(b, 1, 1, 1)
+        V = fa_rand(1, nkv, s, d).repeat(b, 1, 1, 1)
+    else:
+        K = fa_rand(b, nkv, s, d)
+        V = fa_rand(b, nkv, s, d)
 
-    tt_K = ttnn.as_tensor(K, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
-    tt_V = ttnn.as_tensor(V, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
+    tt_K = ttnn.as_tensor(
+        K[:1] if share_cache else K,
+        device=device,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=dram_memcfg,
+    )
+    tt_V = ttnn.as_tensor(
+        V[:1] if share_cache else V,
+        device=device,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=dram_memcfg,
+    )
 
     start_indices = [s // 2 for _ in range(b * nkv)] if start_indices is None else start_indices
     max_start_idx = max(start_indices)
@@ -154,6 +171,7 @@ def run_test_sdpa_decode_single_iter(
         tt_V,
         start_indices,
         transpose_q=transpose_q,
+        share_cache=share_cache,
         scale=scale,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
@@ -211,9 +229,17 @@ def run_test_sdpa_decode_single_iter(
     "transpose_q",
     (True, False),
 )
-def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, transpose_q, single_iter, use_program_cache):
+@pytest.mark.parametrize(
+    "share_cache",
+    (True, False),
+)
+def test_sdpa_decode(
+    device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, transpose_q, single_iter, share_cache, use_program_cache
+):
     ttnn.device.DisablePersistentKernelCache()
-    run_test_sdpa_decode_single_iter(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, transpose_q=transpose_q)
+    run_test_sdpa_decode_single_iter(
+        device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, transpose_q=transpose_q, share_cache=share_cache
+    )
 
 
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
@@ -235,7 +261,11 @@ def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, transp
     "transpose_q",
     (True, False),
 )
-def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, transpose_q, use_program_cache):
+@pytest.mark.parametrize(
+    "share_cache",
+    (True, False),
+)
+def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, transpose_q, share_cache, use_program_cache):
     ttnn.device.DisablePersistentKernelCache()
 
     for i in range(2):
@@ -251,6 +281,7 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, transpose_q,
             dtype,
             start_indices=None,
             transpose_q=transpose_q,
+            share_cache=share_cache,
         )
 
     assert device.num_program_cache_entries() == 5

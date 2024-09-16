@@ -15,6 +15,7 @@ namespace ttnn::operations::transformer {
 
 struct ScaledDotProductAttentionGQADecode {
     std::vector<uint32_t> cur_pos;
+    const std::optional<bool> share_cache;
     const std::optional<float> scale;
     const MemoryConfig output_mem_config;
     const std::optional<SDPAProgramConfig> program_config;
