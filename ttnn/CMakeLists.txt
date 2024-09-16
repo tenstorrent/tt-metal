@@ -444,94 +444,94 @@ set(TTNN_OP_SRCS
 )
 
 set(TTNN_SUBLIBRARIES
-    ttnn/operations/core
-    ttnn/operations/normalization/layernorm
-    ttnn/operations/reduction/reduction_pybind
-    ttnn/operations/core/to_layout
-    ttnn/operations/eltwise/complex_binary
-    ttnn/operations/reduction/argmax
-    ttnn/operations/pool/avgpool
-    ttnn/operations/reduction/prod
-    ttnn/operations/reduction/generic
     ttnn/operations/ccl/
-    ttnn/operations/data_movement/fill_rm
-    ttnn/operations/data_movement/permute
-    ttnn/operations/normalization/groupnorm
-    ttnn/operations/data_movement/sharded
-    ttnn/operations/normalization/softmax
-    ttnn/operations/reduction/topk
-    ttnn/operations/experimental/ssm
-    ttnn/operations/matmul/matmul
-    ttnn/operations/transformer/transformer_pybind
-    ttnn/operations/transformer/concatenate_heads
-    ttnn/operations/data_movement/sharded_partial
-    ttnn/operations/transformer/attention_softmax
-    ttnn/operations/examples/example
-    ttnn/operations/embedding_backward/embedding_backward_pybind
-    ttnn/operations/kv_cache/kv_cache
-    ttnn/operations/experimental/experimental_pybind
-    ttnn/operations/pool/maxpool
-    ttnn/operations/data_movement/tilize_with_val_padding
-    ttnn/operations/sliding_window/sliding_window
-    ttnn/operations/data_movement/pad
-    ttnn/operations/normalization/layernorm_distributed
-    ttnn/operations/data_movement/non_zero_indices
-    ttnn/operations/data_movement/fold
-    ttnn/operations/matmul/device
-    ttnn/operations/data_movement/slice
-    ttnn/operations/loss/loss
-    ttnn/operations/normalization/rmsnorm_distributed
-    ttnn/operations/kv_cache/kv_cache_pybind
-    ttnn/operations/embedding_backward/embedding_backward
-    ttnn/operations/eltwise/binary
-    ttnn/operations/data_movement/indexed_fill
-    ttnn/operations/loss/loss_pybind
-    ttnn/operations/transformer/split_query_key_value_and_split_heads
-    ttnn/operations/embedding_backward/device
-    ttnn/operations/data_movement/move
-    ttnn/operations/transformer/sdpa_decode_gqa
-    ttnn/operations/data_movement/untilize
-    ttnn/operations/data_movement/repeat_interleave
-    ttnn/operations/data_movement/repeat
-    ttnn/operations/experimental/ccl
-    ttnn/operations/pool/downsample
-    ttnn/operations/data_movement/data_transfer
-    ttnn/operations/sliding_window/reference_sliding_window
-    ttnn/operations/embedding/device
-    ttnn/operations/experimental/transformer
-    ttnn/operations/transformer/sdpa
-    ttnn/operations/experimental/auto_format
-    ttnn/operations/normalization/rmsnorm
-    ttnn/operations/eltwise/unary_backward
-    ttnn/operations/transformer/sdpa_decode
     ttnn/operations/conv/conv2d
-    ttnn/operations/eltwise/ternary
-    ttnn/operations/experimental/matmul
-    ttnn/operations/experimental/reduction
-    ttnn/operations/data_movement/untilize_with_halo_v2
-    ttnn/operations/experimental/paged_cache
-    ttnn/operations/experimental/copy
+    ttnn/operations/core
     ttnn/operations/core/compute_kernel
-    ttnn/operations/data_movement/transpose
-    ttnn/operations/eltwise/complex
+    ttnn/operations/core/to_layout
     ttnn/operations/data_movement/bcast
     ttnn/operations/data_movement/concat
-    ttnn/operations/data_movement/reshape
-    ttnn/operations/data_movement/tilize
-    ttnn/operations/data_movement/split
-    ttnn/operations/kv_cache/device
-    ttnn/operations/eltwise/complex_unary
-    ttnn/operations/sliding_window/halo
-    ttnn/operations/data_movement/untilize_with_unpadding
-    ttnn/operations/reduction/moe
     ttnn/operations/data_movement/copy
-    ttnn/operations/matmul/matmul_pybind
-    ttnn/operations/eltwise/unary
-    ttnn/operations/eltwise/complex_unary_backward
-    ttnn/operations/eltwise/ternary_backward
+    ttnn/operations/data_movement/data_transfer
+    ttnn/operations/data_movement/fill_rm
+    ttnn/operations/data_movement/fold
+    ttnn/operations/data_movement/indexed_fill
+    ttnn/operations/data_movement/move
+    ttnn/operations/data_movement/non_zero_indices
+    ttnn/operations/data_movement/pad
+    ttnn/operations/data_movement/permute
+    ttnn/operations/data_movement/repeat
+    ttnn/operations/data_movement/repeat_interleave
+    ttnn/operations/data_movement/reshape
+    ttnn/operations/data_movement/sharded
+    ttnn/operations/data_movement/sharded_partial
+    ttnn/operations/data_movement/slice
+    ttnn/operations/data_movement/split
+    ttnn/operations/data_movement/tilize
+    ttnn/operations/data_movement/tilize_with_val_padding
+    ttnn/operations/data_movement/transpose
+    ttnn/operations/data_movement/untilize
+    ttnn/operations/data_movement/untilize_with_halo_v2
+    ttnn/operations/data_movement/untilize_with_unpadding
+    ttnn/operations/eltwise/binary
     ttnn/operations/eltwise/binary_backward
-    ttnn/operations/pool/upsample
+    ttnn/operations/eltwise/complex
+    ttnn/operations/eltwise/complex_binary
+    ttnn/operations/eltwise/complex_unary
+    ttnn/operations/eltwise/complex_unary_backward
+    ttnn/operations/eltwise/ternary
+    ttnn/operations/eltwise/ternary_backward
+    ttnn/operations/eltwise/unary
+    ttnn/operations/eltwise/unary_backward
+    ttnn/operations/embedding/device
+    ttnn/operations/embedding_backward/device
+    ttnn/operations/embedding_backward/embedding_backward
+    ttnn/operations/embedding_backward/embedding_backward_pybind
+    ttnn/operations/examples/example
+    ttnn/operations/experimental/auto_format
+    ttnn/operations/experimental/ccl
+    ttnn/operations/experimental/copy
+    ttnn/operations/experimental/experimental_pybind
+    ttnn/operations/experimental/matmul
+    ttnn/operations/experimental/paged_cache
+    ttnn/operations/experimental/reduction
+    ttnn/operations/experimental/ssm
+    ttnn/operations/experimental/transformer
+    ttnn/operations/kv_cache/device
+    ttnn/operations/kv_cache/kv_cache
+    ttnn/operations/kv_cache/kv_cache_pybind
+    ttnn/operations/loss/loss
+    ttnn/operations/loss/loss_pybind
+    ttnn/operations/matmul/device
+    ttnn/operations/matmul/matmul
+    ttnn/operations/matmul/matmul_pybind
     ttnn/operations/moreh
+    ttnn/operations/normalization/groupnorm
+    ttnn/operations/normalization/layernorm
+    ttnn/operations/normalization/layernorm_distributed
+    ttnn/operations/normalization/rmsnorm
+    ttnn/operations/normalization/rmsnorm_distributed
+    ttnn/operations/normalization/softmax
+    ttnn/operations/pool/avgpool
+    ttnn/operations/pool/downsample
+    ttnn/operations/pool/maxpool
+    ttnn/operations/pool/upsample
+    ttnn/operations/reduction/argmax
+    ttnn/operations/reduction/generic
+    ttnn/operations/reduction/moe
+    ttnn/operations/reduction/prod
+    ttnn/operations/reduction/reduction_pybind
+    ttnn/operations/reduction/topk
+    ttnn/operations/sliding_window/halo
+    ttnn/operations/sliding_window/reference_sliding_window
+    ttnn/operations/sliding_window/sliding_window
+    ttnn/operations/transformer/attention_softmax
+    ttnn/operations/transformer/concatenate_heads
+    ttnn/operations/transformer/sdpa
+    ttnn/operations/transformer/sdpa_decode
+    ttnn/operations/transformer/sdpa_decode_gqa
+    ttnn/operations/transformer/split_query_key_value_and_split_heads
+    ttnn/operations/transformer/transformer_pybind
 )
 
 
@@ -608,7 +608,6 @@ if(WITH_PYTHON_BINDINGS)
     list(APPEND TTNN_PUBLIC_LINK_LIBRARIES pch_pybinds ${Python3_LIBRARIES})
 endif()
 
-set(ALL_TTNN_SUBLIBRARIES)
 
 function(add_ttnn_sublibrary SUBLIBRARY_NAME)
     message("Adding sublibrary with ${SUBLIBRARY_NAME} ")
@@ -653,9 +652,9 @@ endif()
 
 target_include_directories(ttnn PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
 target_link_libraries(ttnn PUBLIC ${TTNN_PUBLIC_LINK_LIBRARIES})
-target_link_libraries(ttnn PRIVATE ${ALL_TTNN_SUBLIBRARIES})
-target_link_libraries(ttnn PRIVATE ttnn_tensor)
-target_link_libraries(ttnn PRIVATE tt_dnn)
+target_link_libraries(ttnn PUBLIC ${ALL_TTNN_SUBLIBRARIES})
+target_link_libraries(ttnn PUBLIC ttnn_tensor)
+target_link_libraries(ttnn PUBLIC tt_dnn)
 
 target_link_directories(ttnn PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
 target_precompile_headers(ttnn PRIVATE ${TTNN_PRECOMPILED_HEADERS})
@@ -678,3 +677,5 @@ set_target_properties(ttnn PROPERTIES
     CXX_VISIBILITY_PRESET "default"
     ADDITIONAL_CLEAN_FILES "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_ttnn.so;${PROJECT_SOURCE_DIR}/ttnn/ttnn.egg-info"
 )
+
+set_property(GLOBAL PROPERTY TTNN_SUBLIB  ${ALL_TTNN_SUBLIBRARIES})
