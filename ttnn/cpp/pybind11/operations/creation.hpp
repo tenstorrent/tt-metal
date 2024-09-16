@@ -36,7 +36,7 @@ void bind_full_operation(py::module& module, const creation_operation_t& operati
                const std::optional<Layout>& layout,
                const std::optional<std::reference_wrapper<Device>>& device,
                const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(ttnn::Shape{tt::tt_metal::Shape{shape}}, fill_value, dtype, layout, device, memory_config);
+                return self(ttnn::Shape{tt::tt_metal::LegacyShape{shape}}, fill_value, dtype, layout, device, memory_config);
             },
             py::arg("shape"),
             py::arg("fill_value"),
@@ -52,7 +52,7 @@ void bind_full_operation(py::module& module, const creation_operation_t& operati
                const std::optional<Layout>& layout,
                const std::optional<std::reference_wrapper<Device>>& device,
                const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(ttnn::Shape{tt::tt_metal::Shape{shape}}, fill_value, dtype, layout, device, memory_config);
+                return self(ttnn::Shape{tt::tt_metal::LegacyShape{shape}}, fill_value, dtype, layout, device, memory_config);
             },
             py::arg("shape"),
             py::arg("fill_value"),
@@ -79,7 +79,7 @@ void bind_full_operation_with_hard_coded_value(py::module& module, const creatio
                const std::optional<Layout>& layout,
                const std::optional<std::reference_wrapper<Device>>& device,
                const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(ttnn::Shape{tt::tt_metal::Shape{shape}}, dtype, layout, device, memory_config);
+                return self(ttnn::Shape{tt::tt_metal::LegacyShape{shape}}, dtype, layout, device, memory_config);
             },
             py::arg("shape"),
             py::arg("dtype") = std::nullopt,

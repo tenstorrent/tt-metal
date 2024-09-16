@@ -236,7 +236,7 @@ void device_module(py::module &m_device) {
         bool pad_c = false,
         bool pad_n = false,
         bool pad_h = true,
-        bool pad_w = true) -> tt::tt_metal::Shape {
+        bool pad_w = true) -> tt::tt_metal::LegacyShape {
             return ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(unpadded_shape, pad_c, pad_n, pad_h, pad_w);
         });
 

@@ -162,12 +162,12 @@ void MorehArange::validate_with_output_tensors(
 
 }
 
-std::vector<Shape> MorehArange::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehArange::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     // return size is ceil((end - start) / step)
     uint32_t num_elems = static_cast<uint32_t>(ceil(((this->end - this->start) / this->step)));
 
     if (this->untilize_out) {
-        Shape output_shape = {num_elems};
+        tt::tt_metal::LegacyShape output_shape = {num_elems};
 
         return {output_shape};
     }
@@ -179,7 +179,7 @@ std::vector<Shape> MorehArange::compute_output_shapes(const std::vector<Tensor> 
     dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = round_up(num_elems, TILE_WIDTH) - num_elems});
 
     const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-    auto output_shape = Shape(output_size_vec, padding);
+    auto output_shape = tt::tt_metal::LegacyShape(output_size_vec, padding);
 
     return {output_shape};
 }

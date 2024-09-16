@@ -30,7 +30,7 @@ void UpSample::validate(const std::vector<Tensor> &input_tensors) const {
     }
 }
 
-std::vector<Shape> UpSample::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> UpSample::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     // NOTE1: data is packed in { N, H , W, C }
     // NOTE2: Mapping it into in 2D format should be {N*H*W, C}
     // NOTE3: Assuming output data type is same as input
@@ -42,7 +42,7 @@ std::vector<Shape> UpSample::compute_output_shapes(const std::vector<Tensor> &in
     uint32_t out_w = input_shape[2] * scale_factor_w_;
     uint32_t out_c = input_shape[3];
     const auto out_dims = std::vector<uint32_t>({ out_n, out_h, out_w, out_c }); //in the NHWC format
-    auto out_shape = Shape{out_dims};
+    auto out_shape = tt::tt_metal::LegacyShape{out_dims};
 
     return {out_shape};
 }

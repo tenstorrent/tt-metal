@@ -134,7 +134,7 @@ void ScaledDotProductAttention::validate(
     }
 }
 
-std::vector<tt::tt_metal::Shape> ScaledDotProductAttention::compute_output_shapes(
+std::vector<tt::tt_metal::LegacyShape> ScaledDotProductAttention::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     return {input_tensors.at(0).get_legacy_shape()};
 }

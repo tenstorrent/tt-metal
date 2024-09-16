@@ -52,8 +52,8 @@ operation::ProgramWithCallbacks moreh_getitem_rm(
     for (auto index = 0; index < output_shape.rank(); index++) {
         new_output_shape[index + output_dim_offset] = output_shape[index];
     }
-    Shape input_5d_shape(new_input_shape);
-    Shape output_5d_shape(new_output_shape);
+    tt::tt_metal::LegacyShape input_5d_shape(new_input_shape);
+    tt::tt_metal::LegacyShape output_5d_shape(new_output_shape);
 
     uint32_t index_start_dim = index_dims.front();
     uint32_t index_end_dim = index_dims.back();

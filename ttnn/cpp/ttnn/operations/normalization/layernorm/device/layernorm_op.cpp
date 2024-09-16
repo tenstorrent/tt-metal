@@ -129,7 +129,7 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
 
 
 }
-std::vector<tt::tt_metal::Shape> LayerNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> LayerNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     return {input_tensor.get_legacy_shape()};
 }

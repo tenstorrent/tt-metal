@@ -83,7 +83,7 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
         this->compute_kernel_config);
 }
 
-std::vector<tt::tt_metal::Shape> ScaledDotProductAttentionDecode::compute_output_shapes(
+std::vector<tt::tt_metal::LegacyShape> ScaledDotProductAttentionDecode::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     return {input_tensors.at(0).get_legacy_shape()};
 }

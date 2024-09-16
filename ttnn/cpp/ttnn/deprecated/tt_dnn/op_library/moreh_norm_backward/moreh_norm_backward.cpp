@@ -36,7 +36,7 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
 }
 
 
-void get_tensor_dim(std::vector<uint32_t> &dim, const Shape& shape) {
+void get_tensor_dim(std::vector<uint32_t> &dim, const tt::tt_metal::LegacyShape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -56,7 +56,7 @@ void get_tensor_dim(std::vector<uint32_t> &dim, const Shape& shape) {
     }
 }
 
-Shape get_output_grad_shape(const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keep_batch_dim) {
+tt::tt_metal::LegacyShape get_output_grad_shape(const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keep_batch_dim) {
     if (keep_batch_dim) {
         return output_grad.get_legacy_shape();
     }
@@ -75,7 +75,7 @@ Shape get_output_grad_shape(const Tensor &output_grad, const Tensor &input_grad,
         }
     }
 
-    return Shape(shape, padding);
+    return tt::tt_metal::LegacyShape(shape, padding);
 }
 
 }  // namespace

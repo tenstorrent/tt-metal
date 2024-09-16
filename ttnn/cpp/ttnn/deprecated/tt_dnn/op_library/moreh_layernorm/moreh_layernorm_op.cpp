@@ -405,11 +405,11 @@ void MorehLayerNorm::validate_with_output_tensors(
     }
 }
 
-std::vector<Shape> MorehLayerNorm::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehLayerNorm::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     auto input = input_tensors.at(0);
 
     // compute mean_rstd_shape
-    Shape input_shape = input.get_legacy_shape();
+    tt::tt_metal::LegacyShape input_shape = input.get_legacy_shape();
     auto input_shape_without_padding = input_shape.without_padding();
     auto input_rank = input_shape.rank();
     auto output_rank = input_rank - normalized_dims;
@@ -437,7 +437,7 @@ std::vector<Shape> MorehLayerNorm::compute_output_shapes(const std::vector<Tenso
     }
 
     const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-    auto mean_rstd_output_shape = Shape(output_size_vec, padding);
+    auto mean_rstd_output_shape = tt::tt_metal::LegacyShape(output_size_vec, padding);
 
     return {input_shape, mean_rstd_output_shape, mean_rstd_output_shape};
 }

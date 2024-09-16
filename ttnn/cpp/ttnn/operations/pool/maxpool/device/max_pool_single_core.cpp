@@ -33,8 +33,8 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
     Buffer *src_dram_buffer = input.buffer();
     Buffer *dst_dram_buffer = output.buffer();
 
-    Shape input_shape = input.get_legacy_shape();
-    Shape output_shape = output.get_legacy_shape();
+    tt::tt_metal::LegacyShape input_shape = input.get_legacy_shape();
+    tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
 
     log_debug("SHAPES: input = {}, output = {}", input_shape, output_shape);
 
@@ -107,7 +107,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
     uint32_t const_buffer_size = input_shape[3];    // set it equal to 1 row
     auto minus_inf_const_buffer = owned_buffer::create(std::vector<bfloat16>(const_buffer_size, bfloat16(0xf7ff)));
     const Tensor minus_inf_const_tensor = Tensor(OwnedStorage{minus_inf_const_buffer},
-                                                 Shape({1, 1, 1, const_buffer_size}),
+                                                 tt::tt_metal::LegacyShape({1, 1, 1, const_buffer_size}),
                                                  DataType::BFLOAT16,
                                                  Layout::ROW_MAJOR)
                                             .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED,

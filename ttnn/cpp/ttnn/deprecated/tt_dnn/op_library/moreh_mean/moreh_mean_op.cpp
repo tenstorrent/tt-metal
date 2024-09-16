@@ -35,7 +35,7 @@ void MorehMean::validate_with_output_tensors(
     }
 }
 
-std::vector<Shape> MorehMean::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehMean::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     auto input_shape = input_tensors[0].get_legacy_shape();
     auto output_shape = input_shape;
     auto input_rank = input_shape.rank();
@@ -52,7 +52,7 @@ std::vector<Shape> MorehMean::compute_output_shapes(const std::vector<Tensor>& i
             output_shape[dim] = 1;
         }
 
-        return {Shape(output_shape, padding)};
+        return {tt::tt_metal::LegacyShape(output_shape, padding)};
     }
 
     std::vector<uint32_t> shape;
@@ -73,7 +73,7 @@ std::vector<Shape> MorehMean::compute_output_shapes(const std::vector<Tensor>& i
     }
 
     auto padding = Padding(pad_dimensions, input_padding.pad_value());
-    return {Shape(shape, padding)};
+    return {tt::tt_metal::LegacyShape(shape, padding)};
 }
 
 std::vector<Tensor> MorehMean::create_output_tensors(

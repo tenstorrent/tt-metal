@@ -118,7 +118,7 @@ uint32_t get_num_cores_nhw_from_parallel_config(const sliding_window::ParallelCo
 
 uint32_t get_num_cores_channels_from_parallel_config(const sliding_window::ParallelConfig& pconfig);
 
-MemoryConfig create_sharded_memory_config_from_parallel_config(const Shape& tensor_shape, sliding_window::ParallelConfig& parallel_config, uint32_t tile_size);
+MemoryConfig create_sharded_memory_config_from_parallel_config(const ttnn::Shape& tensor_shape, sliding_window::ParallelConfig& parallel_config, uint32_t tile_size);
 
 OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw);
 

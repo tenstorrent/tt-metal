@@ -70,7 +70,7 @@ MaxPoolNew::shape_return_value_t MaxPoolNew::compute_output_shapes(const operati
     const auto padding = Padding(
         {{0, 0}, {0, 0}, {0, out_nhw_padded - out_nhw}, {0, out_c_padded - out_c}},
         Padding::PadValue::NegativeInfinity);
-    auto out_shape = Shape(tt::tt_metal::Shape(out_dims, padding));
+    auto out_shape = Shape(tt::tt_metal::LegacyShape(out_dims, padding));
     return out_shape;
 }
 

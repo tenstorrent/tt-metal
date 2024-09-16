@@ -43,7 +43,7 @@ uint32_t element_size_bytes(DataType dtype) {
     }
 }
 
-uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const Shape& shape) {
+uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const tt::tt_metal::LegacyShape& shape) {
     uint32_t W = shape[-1];
     uint32_t page_size = 0;
     switch (layout) {
@@ -98,7 +98,7 @@ std::array<uint32_t, 2> get_sharded_page_shape(Layout layout, DataType dtype, st
 }
 
 void validate_sharded_buffer_allocation(
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     Layout layout,
     DataType data_type,
     const ShardSpecBuffer& shard_params,
@@ -181,7 +181,7 @@ namespace detail {
 DeviceBuffer allocate_interleaved_buffer_on_device(
     uint32_t buffer_size_bytes,
     Device* device,
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config) {
@@ -197,7 +197,7 @@ DeviceBuffer allocate_contiguous_buffer_on_device(
 DeviceBuffer allocate_sharded_buffer_on_device(
     uint32_t buffer_size_bytes,
     Device* device,
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     DataType data_type,
     Layout layout,
     const ShardSpecBuffer& shard_params,
@@ -215,7 +215,7 @@ DeviceBuffer allocate_sharded_buffer_on_device(
 DeviceBuffer allocate_buffer_on_device(
     uint32_t buffer_size_bytes,
     Device* device,
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
@@ -232,7 +232,7 @@ DeviceBuffer allocate_buffer_on_device(
     }
 }
 
-void validate_on_device_dtype_and_layout(Device* device, const Shape& shape, DataType dtype, Layout layout) {
+void validate_on_device_dtype_and_layout(Device* device, const tt::tt_metal::LegacyShape& shape, DataType dtype, Layout layout) {
     // TODO: Get supported layout and dtypes from device
     auto supported_dtype = [&dtype]() {
         TT_ASSERT(
@@ -280,7 +280,7 @@ void validate_on_device_dtype_and_layout(Device* device, const Shape& shape, Dat
 }
 
 Tensor pad_bfloat8_b(
-    const Tensor& tensor, const Shape& output_tensor_shape, const Shape& input_tensor_start, float pad_value) {
+    const Tensor& tensor, const tt::tt_metal::LegacyShape& output_tensor_shape, const tt::tt_metal::LegacyShape& input_tensor_start, float pad_value) {
     // TODO(arakhmati): do not convert to FLOAT32
 
     // Convert to FLOAT32 tensor and pad
@@ -304,7 +304,7 @@ Tensor pad_bfloat8_b(
         tensor.get_layout());
 }
 
-Tensor unpad_bfloat8_b(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end) {
+Tensor unpad_bfloat8_b(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end) {
     // TODO(arakhmati): do not convert to FLOAT32
 
     // Convert to FLOAT32 tensor and unpad
@@ -329,7 +329,7 @@ Tensor unpad_bfloat8_b(const Tensor& tensor, const Shape& output_tensor_start, c
 }
 
 Tensor pad_bfloat4_b(
-    const Tensor& tensor, const Shape& output_tensor_shape, const Shape& input_tensor_start, float pad_value) {
+    const Tensor& tensor, const tt::tt_metal::LegacyShape& output_tensor_shape, const tt::tt_metal::LegacyShape& input_tensor_start, float pad_value) {
     // TODO(arakhmati): do not convert to FLOAT32
 
     // Convert to FLOAT32 tensor and pad
@@ -353,7 +353,7 @@ Tensor pad_bfloat4_b(
         tensor.get_layout());
 }
 
-Tensor unpad_bfloat4_b(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end) {
+Tensor unpad_bfloat4_b(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end) {
     // TODO(arakhmati): do not convert to FLOAT32
 
     // Convert to FLOAT32 tensor and unpad
@@ -443,7 +443,7 @@ template <typename BufferType, std::int64_t Rank, std::int64_t Dim = 0>
 void to_string_row_major(
     std::stringstream& ss,
     const BufferType& buffer,
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     std::size_t outer_index,
     const std::size_t buffer_offset) {
     auto stride = 1;
@@ -498,7 +498,7 @@ template <typename BufferType, std::int64_t Rank, std::int64_t Dim = 0>
 void to_string_tile(
     std::stringstream& ss,
     const BufferType& buffer,
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     std::size_t outer_index,
     const std::size_t buffer_offset) {
     // For now, print it the same way as row-major
@@ -506,7 +506,7 @@ void to_string_tile(
 }
 
 template <typename BufferType>
-std::string to_string(const BufferType& buffer, const Shape& shape, DataType dtype, Layout layout) {
+std::string to_string(const BufferType& buffer, const tt::tt_metal::LegacyShape& shape, DataType dtype, Layout layout) {
     std::stringstream ss;
     ss << TENSOR_TYPE_STRING << "(";
 
@@ -786,7 +786,7 @@ template <typename T, template <typename> typename BufferType>
 DeviceBuffer initialize_data_on_device(
     BufferType<T>& data_to_write,
     Device* device,
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
@@ -812,7 +812,7 @@ template <typename T>
 DeviceBuffer to_device_buffer(
     const Storage& storage,
     Device* device,
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
@@ -986,7 +986,7 @@ Tensor to_layout(const Tensor& tensor, Layout target_layout) {
                 return OwnedStorage{output_buffer};
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
                 std::vector<OwnedBuffer> output_buffers;
-                std::vector<Shape> output_shapes;
+                std::vector<tt::tt_metal::LegacyShape> output_shapes;
                 for (int i = 0; i < storage.num_buffers(); i++) {
                     const auto input_data = owned_buffer::get_as<T>(storage.get_buffer(i));
                     auto output_buffer = owned_buffer::create<T>(std::move(convert(input_data)));
@@ -1142,7 +1142,7 @@ Tensor to_layout<bfloat4_b>(const Tensor& tensor, Layout target_layout) {
 // ======================================================================================
 
 template <typename T>
-Tensor pad(const Tensor& tensor, const Shape& output_shape, const Shape& input_tensor_start, float pad_value) {
+Tensor pad(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_shape, const tt::tt_metal::LegacyShape& input_tensor_start, float pad_value) {
     if (is_multi_device_tensor(tensor)) {
         return transform(tensor, [&](const Tensor& device_tensor) {
             return pad<T>(device_tensor, output_shape, input_tensor_start, pad_value);
@@ -1156,7 +1156,7 @@ Tensor pad(const Tensor& tensor, const Shape& output_shape, const Shape& input_t
 
     auto pad = [&input_shape, &input_strides, &input_data_type, &output_shape, &input_tensor_start, &pad_value_](
                    const auto& input_buffer) {
-        auto compute_stride = [](const Shape& shape, uint32_t index) {
+        auto compute_stride = [](const tt::tt_metal::LegacyShape& shape, uint32_t index) {
             uint32_t stride = 1;
             for (auto i = index + 1; i < shape.rank(); i++) {
                 stride *= shape[i];
@@ -1232,32 +1232,32 @@ Tensor pad(const Tensor& tensor, const Shape& output_shape, const Shape& input_t
 }
 
 template Tensor pad<bfloat16>(
-    const Tensor& tensor, const Shape& output_shape, const Shape& input_tensor_start, float pad_value);
+    const Tensor& tensor, const tt::tt_metal::LegacyShape& output_shape, const tt::tt_metal::LegacyShape& input_tensor_start, float pad_value);
 template Tensor pad<float>(
-    const Tensor& tensor, const Shape& output_shape, const Shape& input_tensor_start, float pad_value);
+    const Tensor& tensor, const tt::tt_metal::LegacyShape& output_shape, const tt::tt_metal::LegacyShape& input_tensor_start, float pad_value);
 template Tensor pad<int32_t>(
-    const Tensor& tensor, const Shape& output_shape, const Shape& input_tensor_start, float pad_value);
+    const Tensor& tensor, const tt::tt_metal::LegacyShape& output_shape, const tt::tt_metal::LegacyShape& input_tensor_start, float pad_value);
 template Tensor pad<uint32_t>(
-    const Tensor& tensor, const Shape& output_shape, const Shape& input_tensor_start, float pad_value);
+    const Tensor& tensor, const tt::tt_metal::LegacyShape& output_shape, const tt::tt_metal::LegacyShape& input_tensor_start, float pad_value);
 template Tensor pad<uint16_t>(
-    const Tensor& tensor, const Shape& output_shape, const Shape& input_tensor_start, float pad_value);
+    const Tensor& tensor, const tt::tt_metal::LegacyShape& output_shape, const tt::tt_metal::LegacyShape& input_tensor_start, float pad_value);
 template Tensor pad<uint8_t>(
-    const Tensor& tensor, const Shape& output_shape, const Shape& input_tensor_start, float pad_value);
+    const Tensor& tensor, const tt::tt_metal::LegacyShape& output_shape, const tt::tt_metal::LegacyShape& input_tensor_start, float pad_value);
 
 template <>
 Tensor pad<bfloat8_b>(
-    const Tensor& tensor, const Shape& output_shape, const Shape& input_tensor_start, float pad_value) {
+    const Tensor& tensor, const tt::tt_metal::LegacyShape& output_shape, const tt::tt_metal::LegacyShape& input_tensor_start, float pad_value) {
     return pad_bfloat8_b(tensor, output_shape, input_tensor_start, pad_value);
 }
 
 template <>
 Tensor pad<bfloat4_b>(
-    const Tensor& tensor, const Shape& output_shape, const Shape& input_tensor_start, float pad_value) {
+    const Tensor& tensor, const tt::tt_metal::LegacyShape& output_shape, const tt::tt_metal::LegacyShape& input_tensor_start, float pad_value) {
     return pad_bfloat4_b(tensor, output_shape, input_tensor_start, pad_value);
 }
 
 template <typename T>
-Tensor unpad(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end) {
+Tensor unpad(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end) {
     const auto input_shape = tensor.get_legacy_shape();
     const auto input_strides = tensor.strides();
 
@@ -1319,20 +1319,20 @@ Tensor unpad(const Tensor& tensor, const Shape& output_tensor_start, const Shape
     return Tensor(OwnedStorage{output_buffer}, output_shape, tensor.get_dtype(), tensor.get_layout());
 }
 
-template Tensor unpad<bfloat16>(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end);
-template Tensor unpad<float>(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end);
-template Tensor unpad<int32_t>(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end);
-template Tensor unpad<uint32_t>(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end);
-template Tensor unpad<uint16_t>(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end);
-template Tensor unpad<uint8_t>(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end);
+template Tensor unpad<bfloat16>(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end);
+template Tensor unpad<float>(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end);
+template Tensor unpad<int32_t>(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end);
+template Tensor unpad<uint32_t>(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end);
+template Tensor unpad<uint16_t>(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end);
+template Tensor unpad<uint8_t>(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end);
 
 template <>
-Tensor unpad<bfloat8_b>(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end) {
+Tensor unpad<bfloat8_b>(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end) {
     return unpad_bfloat8_b(tensor, output_tensor_start, output_tensor_end);
 }
 
 template <>
-Tensor unpad<bfloat4_b>(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end) {
+Tensor unpad<bfloat4_b>(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end) {
     return unpad_bfloat4_b(tensor, output_tensor_start, output_tensor_end);
 }
 
@@ -1345,7 +1345,7 @@ Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id) {
     auto buffer = tensor.buffer();
     auto buffer_shard_shape = buffer->shard_spec().shape();
     std::array<uint32_t, 4> shard_shape_array = {1, 1, buffer_shard_shape[0], buffer_shard_shape[1]};
-    Shape shard_shape(shard_shape_array);
+    tt::tt_metal::LegacyShape shard_shape(shard_shape_array);
     std::vector<uint32_t> device_data;
     ::detail::ReadShard(*buffer, device_data, core_id);
 

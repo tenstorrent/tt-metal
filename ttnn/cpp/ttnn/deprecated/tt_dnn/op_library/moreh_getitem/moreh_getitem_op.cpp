@@ -72,7 +72,7 @@ void MorehGetitem::validate_with_output_tensors(
     TT_FATAL(dtype == output_tensors.front().value().get_dtype());
 }
 
-std::vector<Shape> MorehGetitem::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehGetitem::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     auto input_shape = input_tensors.at(0).get_legacy_shape();
     auto output_shape = input_shape;
     auto layout = input_tensors.at(0).get_layout();
@@ -122,7 +122,7 @@ std::vector<Shape> MorehGetitem::compute_output_shapes(const std::vector<Tensor>
         }
 
         const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-        output_shape = Shape(output_size_vec, padding);
+        output_shape = tt::tt_metal::LegacyShape(output_size_vec, padding);
     } else {
         // compute output shape
         // ex)
@@ -150,7 +150,7 @@ std::vector<Shape> MorehGetitem::compute_output_shapes(const std::vector<Tensor>
             }
         }
 
-        output_shape = Shape(output_size_vec);
+        output_shape = tt::tt_metal::LegacyShape(output_size_vec);
     }
 
     return {output_shape};

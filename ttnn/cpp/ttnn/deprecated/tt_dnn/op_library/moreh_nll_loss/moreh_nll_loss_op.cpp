@@ -42,7 +42,7 @@ void MorehNllLossStep1::validate(
     }
 }
 
-std::vector<Shape> MorehNllLossStep1::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehNllLossStep1::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& target_tensor = input_tensors.at(0);
     auto target_shape = target_tensor.get_legacy_shape();
 
@@ -121,7 +121,7 @@ void MorehNllLossStep2::validate(
     }
 }
 
-std::vector<Shape> MorehNllLossStep2::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehNllLossStep2::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto input_shape = input_tensor.get_legacy_shape();
     auto input_shape_without_padding = input_shape.without_padding();
@@ -161,7 +161,7 @@ std::vector<Shape> MorehNllLossStep2::compute_output_shapes(const std::vector<Te
     }
 
     const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-    auto output_shape = Shape(output_shape_vec, padding);
+    auto output_shape = tt::tt_metal::LegacyShape(output_shape_vec, padding);
 
     return {output_shape};
 }

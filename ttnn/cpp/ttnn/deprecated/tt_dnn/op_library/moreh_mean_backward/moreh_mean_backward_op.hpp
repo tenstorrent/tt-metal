@@ -22,14 +22,14 @@ using namespace tt_metal;
 struct MorehMeanBackward {
     std::vector<int64_t> dims;
     bool keepdim;
-    std::optional<Shape> input_grad_shape;
+    std::optional<tt::tt_metal::LegacyShape> input_grad_shape;
     MemoryConfig memory_config;
     const CoreRange core_range;  // unused for now
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
 
     void validate_with_output_tensors(
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     operation::ProgramWithCallbacks create_program(
@@ -58,7 +58,7 @@ Tensor moreh_mean_backward_(
     const Tensor& output_grad,
     std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
     const bool keepdim,
-    std::optional<Shape> input_grad_shape,
+    std::optional<tt::tt_metal::LegacyShape> input_grad_shape,
     const std::optional<const Tensor> input_grad,
     const std::optional<MemoryConfig> memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
@@ -67,7 +67,7 @@ Tensor moreh_mean_backward(
     const Tensor &output_grad,
     std::optional<std::variant<int64_t, std::vector<int64_t>>> dim = std::nullopt,
     const bool keepdim = false,
-    std::optional<Shape> input_grad_shape = std::nullopt,
+    std::optional<tt::tt_metal::LegacyShape> input_grad_shape = std::nullopt,
     const std::optional<const Tensor> input_grad = std::nullopt,
     const std::optional<MemoryConfig> memory_config = std::nullopt,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);

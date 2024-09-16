@@ -22,7 +22,7 @@ pair<uint32_t, uint32_t> compute_conv_output_face_shape(uint32_t conv_activation
     uint32_t conv_output_w = ((conv_activation_w - filter_w + (2 * pad_w)) / stride_w) + 1;
     return {conv_output_h, conv_output_w};
 }
-pair<vector<uint32_t>, vector<uint32_t>> compute_conv_activation_as_mm_shape(Shape conv_activation_shape, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, bool use_fast_reader) {
+pair<vector<uint32_t>, vector<uint32_t>> compute_conv_activation_as_mm_shape(tt::tt_metal::LegacyShape conv_activation_shape, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, bool use_fast_reader) {
     uint32_t filter_h = (uint32_t) conv_params[0];
     uint32_t filter_w = (uint32_t) conv_params[1];
     uint32_t stride_h = (uint32_t) conv_params[2];
@@ -657,7 +657,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
 
 // generates address map for reader kernel which reads from dram buffer (tiled layout) into l1 buffer
 std::pair<vector<uint32_t>, vector<uint32_t>> generate_conv_weight_address_map(
-                            const Shape& weight_shape,
+                            const ttnn::Shape& weight_shape,
                             uint32_t weight_block_h_datums,
                             uint32_t weight_block_w_datums,
                             uint32_t num_blocks_act_h,
@@ -740,7 +740,7 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_conv_weight_address_map(
 }
 
 std::pair<vector<uint32_t>, vector<uint32_t>> generate_conv_activation_address_map(
-                            const Shape& activation_shape,
+                            const ttnn::Shape& activation_shape,
                             const vector<int>& conv_params,
                             uint32_t act_block_h_datums,
                             uint32_t act_block_w_datums,
@@ -1381,7 +1381,7 @@ inline Tensor conv_(const Tensor& a, const Tensor &b, std::optional<const Tensor
                     uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels,
                     bool use_address_map, bool use_fast_reader, bool untilize_out, bool has_bias = false, bool fuse_relu = false, MathFidelity math_fidelity = MathFidelity::HiFi4) {
     TT_ASSERT(b.get_layout() == Layout::TILE); // Weights should already be formatted
-    auto padded_a_shape = Shape(std::vector<uint32_t>{a.get_legacy_shape()[0], a.get_legacy_shape()[1], a.get_legacy_shape()[2], round_up(a.get_legacy_shape()[3], 16)});
+    auto padded_a_shape = ttnn::Shape(std::vector<uint32_t>{a.get_legacy_shape()[0], a.get_legacy_shape()[1], a.get_legacy_shape()[2], round_up(a.get_legacy_shape()[3], 16)});
     ttnn::operations::experimental::auto_format::FormatParams input_a_format_params = {.pad_shape=padded_a_shape.value, .pad_value=0.0, .target_layout=Layout::ROW_MAJOR};
     ttnn::operations::experimental::auto_format::FormatParams input_b_format_params = {.pad_shape=b.get_legacy_shape(), .pad_value=0.0, .target_layout=Layout::TILE};
     ttnn::operations::experimental::auto_format::FormatParams input_bias_format_params = {};
@@ -1417,7 +1417,7 @@ void Conv::validate(const std::vector<Tensor>& input_tensors, const std::vector<
     // TODO: ...
 }
 
-std::vector<tt_metal::Shape> Conv::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt_metal::LegacyShape> Conv::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     uint32_t conv_activation_h = input_tensor_a.get_legacy_shape()[1];
     uint32_t conv_activation_w = input_tensor_a.get_legacy_shape()[2];
@@ -1436,7 +1436,7 @@ std::vector<tt_metal::Shape> Conv::compute_output_shapes(const std::vector<Tenso
         // pad the output channels to TILE_WIDTH as conv writer kernel does not remove padding for tile
         // TODO (nshanker): specify padding explicitly here with "Padding" object and add unit test
         auto output_channels = round_up(this->output_channels, TILE_WIDTH);
-        Shape output_tensor_shape = Shape(std::vector<uint32_t>{1, conv_output_h, conv_output_w, output_channels});
+        auto output_tensor_shape = ttnn::Shape(std::vector<uint32_t>{1, conv_output_h, conv_output_w, output_channels});
         return {output_tensor_shape.value};
     } else {
         // Tiled output shape is padded shape. Padded to tile shape.
@@ -1445,7 +1445,7 @@ std::vector<tt_metal::Shape> Conv::compute_output_shapes(const std::vector<Tenso
         auto padded_shape_w = round_up(shape_w, TILE_HEIGHT);
         auto padded_shape_c = round_up(this->output_channels, TILE_WIDTH);
         auto output_padding = Padding({{0, 0}, {0, 0}, {0, (padded_shape_w - shape_w)}, {0, (padded_shape_c - shape_c)}}, Padding::PadValue::Any);
-        auto output_tensor_shape = Shape(tt::tt_metal::Shape({1, 1, padded_shape_w, padded_shape_c}, output_padding));
+        auto output_tensor_shape = ttnn::Shape(tt::tt_metal::LegacyShape({1, 1, padded_shape_w, padded_shape_c}, output_padding));
         return {output_tensor_shape.value};
     }
 }

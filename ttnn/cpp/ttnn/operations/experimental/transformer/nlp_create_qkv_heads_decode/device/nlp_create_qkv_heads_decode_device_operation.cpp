@@ -43,9 +43,9 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
     TT_FATAL(this->num_q_heads >= this->num_kv_heads);
 }
 
-std::vector<tt::tt_metal::Shape> NLPCreateHeadsDecodeDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> NLPCreateHeadsDecodeDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     using namespace tt::constants;
-    std::vector<Shape> output_shape_vec;
+    std::vector<tt::tt_metal::LegacyShape> output_shape_vec;
     const auto& input_tensor = input_tensors.at(0);
     const auto input_shape = input_tensor.get_legacy_shape();
 
@@ -56,9 +56,9 @@ std::vector<tt::tt_metal::Shape> NLPCreateHeadsDecodeDeviceOperation::compute_ou
     auto num_q_heads_padded = (this->num_q_heads / TILE_HEIGHT + 1) * TILE_HEIGHT;
     auto num_kv_heads_padded = (this->num_kv_heads / TILE_HEIGHT + 1) * TILE_HEIGHT;
 
-    const tt::tt_metal::Shape q_output_shape = {input_shape[0], batch, num_q_heads_padded, head_dim};
-    const tt::tt_metal::Shape v_output_shape = {input_shape[0], batch, num_kv_heads_padded, head_dim};
-    const tt::tt_metal::Shape k_output_shape = v_output_shape;
+    const tt::tt_metal::LegacyShape q_output_shape = {input_shape[0], batch, num_q_heads_padded, head_dim};
+    const tt::tt_metal::LegacyShape v_output_shape = {input_shape[0], batch, num_kv_heads_padded, head_dim};
+    const tt::tt_metal::LegacyShape k_output_shape = v_output_shape;
     return {q_output_shape, k_output_shape, v_output_shape};
 
 }

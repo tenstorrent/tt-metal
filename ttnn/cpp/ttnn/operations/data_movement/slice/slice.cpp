@@ -15,11 +15,11 @@ namespace ttnn::operations::data_movement {
 ttnn::Tensor SliceOperation::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
-    tt::tt_metal::Shape output_tensor_start,
-    tt::tt_metal::Shape output_tensor_end,
+    tt::tt_metal::LegacyShape output_tensor_start,
+    tt::tt_metal::LegacyShape output_tensor_end,
     const std::optional<MemoryConfig>& memory_config_arg) {
     if (input_tensor.storage_type() != StorageType::DEVICE) {
-        tt::tt_metal::Shape output_tensor_shape = {
+        tt::tt_metal::LegacyShape output_tensor_shape = {
             output_tensor_end[0] - output_tensor_start[0] + 1,
             output_tensor_end[1] - output_tensor_start[1] + 1,
             output_tensor_end[2] - output_tensor_start[2] + 1,
@@ -57,7 +57,7 @@ ttnn::Tensor SliceOperation::invoke(
                 std::size_t unpad_val = input_tensor_shape[-2] - output_tensor_end[-2] - 1;
                 new_shape[-2] -= unpad_val;
                 new_pad[-2].back -= std::min(unpad_val, new_pad[-2].back);
-                auto padded_shape = ttnn::Shape(tt::tt_metal::Shape(new_shape, new_pad));
+                auto padded_shape = ttnn::Shape(tt::tt_metal::LegacyShape(new_shape, new_pad));
                 return Tensor(input_tensor.storage(), padded_shape, input_tensor.dtype(), input_tensor.layout());
             }
         }
@@ -71,8 +71,8 @@ ttnn::Tensor SliceOperation::invoke(
 
 ttnn::Tensor SliceOperation::invoke(
     const ttnn::Tensor& input_tensor,
-    tt::tt_metal::Shape output_tensor_start,
-    tt::tt_metal::Shape output_tensor_end,
+    tt::tt_metal::LegacyShape output_tensor_start,
+    tt::tt_metal::LegacyShape output_tensor_end,
     const std::optional<MemoryConfig>& memory_config_arg) {
     return invoke(0, input_tensor, output_tensor_start, output_tensor_end, memory_config_arg);
 }
@@ -86,8 +86,8 @@ ttnn::Tensor SliceOperation::invoke(
     return invoke(
         queue_id,
         input_tensor,
-        tt::tt_metal::Shape(output_tensor_start),
-        tt::tt_metal::Shape(output_tensor_end),
+        tt::tt_metal::LegacyShape(output_tensor_start),
+        tt::tt_metal::LegacyShape(output_tensor_end),
         memory_config_arg);
 }
 
@@ -100,8 +100,8 @@ ttnn::Tensor SliceOperation::invoke(
     return invoke(
         queue_id,
         input_tensor,
-        tt::tt_metal::Shape(output_tensor_start),
-        tt::tt_metal::Shape(output_tensor_end),
+        tt::tt_metal::LegacyShape(output_tensor_start),
+        tt::tt_metal::LegacyShape(output_tensor_end),
         memory_config_arg);
 }
 
@@ -121,5 +121,3 @@ ttnn::Tensor SliceOperation::invoke(
 }
 
 }  // namespace operations
-
-

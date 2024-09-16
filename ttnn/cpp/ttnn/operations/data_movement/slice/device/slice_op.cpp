@@ -8,7 +8,7 @@
 
 namespace ttnn::operations::data_movement {
 
-inline __attribute__((always_inline)) uint32_t get_upper_dims_compressed(const tt::tt_metal::Shape& shape) {
+inline __attribute__((always_inline)) uint32_t get_upper_dims_compressed(const tt::tt_metal::LegacyShape& shape) {
     return std::accumulate(shape.begin(), shape.end() - 2, 1, std::multiplies<uint32_t>{});
 }
 
@@ -100,14 +100,14 @@ void SliceDeviceOperation::validate_with_output_tensors(
     }
 }
 
-std::vector<tt::tt_metal::Shape> SliceDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> SliceDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     std::vector<uint32_t> out_shape;
     auto rank = input_tensors[0].get_legacy_shape().rank();
     out_shape.reserve(rank);
     for (uint32_t i = 0; i < rank; i++) {
         out_shape.push_back(this->slice_end[i] - this->slice_start[i] + 1);
     }
-    tt::tt_metal::Shape output_tensor_shape(out_shape);
+    tt::tt_metal::LegacyShape output_tensor_shape(out_shape);
     return {output_tensor_shape};
 }
 

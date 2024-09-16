@@ -408,7 +408,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
         tt_shards.push_back(detail::convert_python_tensor_to_tt_tensor(shard, data_type, false));
     }
     std::vector<OwnedBuffer> host_owned_buffers;
-    std::vector<Shape> host_owned_shapes;
+    std::vector<tt::tt_metal::LegacyShape> host_owned_shapes;
     for (const auto &shard : tt_shards) {
         TT_ASSERT(std::holds_alternative<OwnedStorage>(shard.get_storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(shard.get_storage()),__FILE__, __LINE__));
         host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
@@ -1553,7 +1553,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
             )doc")
             .def(
                 "shape_without_padding",
-                [](const Tensor &self) { return Shape{self.get_legacy_shape().without_padding()}; },
+                [](const Tensor &self) { return tt::tt_metal::LegacyShape{self.get_legacy_shape().without_padding()}; },
                 R"doc(
                 Get shape without padding of TT Tensor.
 
@@ -1573,7 +1573,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                 )doc")
             .def(
                 "reshape",
-                [](Tensor &self, const Shape &shape) -> Tensor { return self.reshape(shape); },
+                [](Tensor &self, const tt::tt_metal::LegacyShape &shape) -> Tensor { return self.reshape(shape); },
                 R"doc(
                     Reshapes TT tensor
 

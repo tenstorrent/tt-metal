@@ -285,7 +285,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse(
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::tt_metal::Shape cshape = output.get_legacy_shape();  // C=A*B, N1MK*11KN->N1MN
+    tt::tt_metal::LegacyShape cshape = output.get_legacy_shape();  // C=A*B, N1MK*11KN->N1MN
     tt_metal::Buffer *out_buffer = output.buffer();
     TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
 

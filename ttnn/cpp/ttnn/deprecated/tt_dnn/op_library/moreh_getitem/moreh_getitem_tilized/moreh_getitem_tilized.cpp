@@ -60,8 +60,8 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
         new_output_padded_shape[index + output_dim_offset] = output_shape[index];
     }
 
-    Shape input_5d_shape(new_input_shape, new_input_padded_shape);
-    Shape output_5d_shape(new_output_shape, new_output_padded_shape);
+    tt::tt_metal::LegacyShape input_5d_shape(new_input_shape, new_input_padded_shape);
+    tt::tt_metal::LegacyShape output_5d_shape(new_output_shape, new_output_padded_shape);
 
     bool is_w_index_exist = false;
     for (auto dim : index_dims) {

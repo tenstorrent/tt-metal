@@ -32,8 +32,8 @@ struct ConcatenateHeads : public ttnn::operations::experimental::transformer::NL
         NLPConcatHeadsDeviceOperation::validate(input_tensors);
     }
 
-    std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-        std::vector<tt::tt_metal::Shape> output_shape_vec;
+    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+        std::vector<tt::tt_metal::LegacyShape> output_shape_vec;
         const auto& input_tensor = input_tensors.at(0);
         const ttnn::types::Shape input_shape = input_tensor.get_shape();
         const ttnn::types::Shape padded_input_shape = input_shape.with_tile_padding();

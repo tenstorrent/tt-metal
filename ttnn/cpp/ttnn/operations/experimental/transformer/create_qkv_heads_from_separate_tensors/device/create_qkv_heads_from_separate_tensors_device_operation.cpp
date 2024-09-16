@@ -70,7 +70,7 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Te
     TT_FATAL(q_input_shape[0] == num_h_cores, fmt::format("Batch size {} must be equal to num cores {}", q_input_shape[0], num_h_cores));
 }
 
-std::vector<tt::tt_metal::Shape> CreateQKVHeadsSeparateTensorsDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> CreateQKVHeadsSeparateTensorsDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto& input_tensor_kv = input_tensors.at(1);
     const auto input_shape = input_tensor.get_legacy_shape();
@@ -79,7 +79,7 @@ std::vector<tt::tt_metal::Shape> CreateQKVHeadsSeparateTensorsDeviceOperation::c
     const auto q_output_shape = {input_shape[0], this->num_q_heads, input_shape[2], this->head_dim};
     const auto v_output_shape = {input_shape_kv[0], this->num_kv_heads, input_shape_kv[2], this->head_dim};
     const auto k_output_shape = this->transpose_k_heads
-                                     ? tt::tt_metal::Shape{input_shape_kv[0], this->num_kv_heads, head_dim, input_shape_kv[2]}
+                                     ? tt::tt_metal::LegacyShape{input_shape_kv[0], this->num_kv_heads, head_dim, input_shape_kv[2]}
                                      : v_output_shape;
     return {q_output_shape, k_output_shape, v_output_shape};
 }

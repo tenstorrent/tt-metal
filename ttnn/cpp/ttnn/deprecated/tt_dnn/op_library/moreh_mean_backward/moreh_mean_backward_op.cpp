@@ -50,7 +50,7 @@ std::vector<Tensor> MorehMeanBackward::create_output_tensors(
         *this, input_tensors, input_tensors[0].get_dtype(), Layout::TILE, this->memory_config);
 }
 
-std::vector<Shape> MorehMeanBackward::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehMeanBackward::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     auto input_grad_shape = this->input_grad_shape.value();
     auto rank = input_grad_shape.rank();
 
@@ -71,7 +71,7 @@ std::vector<Shape> MorehMeanBackward::compute_output_shapes(const std::vector<Te
     }
 
     const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-    auto output_shape = Shape(shape, padding);
+    auto output_shape = tt::tt_metal::LegacyShape(shape, padding);
 
     return {output_shape};
 }
@@ -80,7 +80,7 @@ Tensor moreh_mean_backward_(
     const Tensor& output_grad,
     std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
     const bool keepdim,
-    std::optional<Shape> input_grad_shape,
+    std::optional<tt::tt_metal::LegacyShape> input_grad_shape,
     const std::optional<const Tensor> input_grad,
     const std::optional<MemoryConfig> memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
@@ -137,7 +137,7 @@ Tensor moreh_mean_backward(
     const Tensor& output_grad,
     std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
     const bool keepdim,
-    std::optional<Shape> input_grad_shape,
+    std::optional<tt::tt_metal::LegacyShape> input_grad_shape,
     const std::optional<const Tensor> input_grad,
     const std::optional<MemoryConfig> memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {

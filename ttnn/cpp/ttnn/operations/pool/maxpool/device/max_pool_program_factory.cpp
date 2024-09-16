@@ -46,7 +46,7 @@ void MaxPool::validate(const std::vector<Tensor> &input_tensors) const {
     }
 }
 
-std::vector<Shape> MaxPool::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MaxPool::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     // NOTE: Only for RM
     // NOTE2: Assuming { N, 1, H * W, C }
     // NOTE3: Assuming output data type is same as input
@@ -72,7 +72,7 @@ std::vector<Shape> MaxPool::compute_output_shapes(const std::vector<Tensor> &inp
         const auto padding = Padding(
             {{0, 0}, {0, 0}, {0, out_nhw_padded - out_nhw}, {0, out_c_padded - out_c}},
             Padding::PadValue::NegativeInfinity);
-        auto out_shape = Shape{out_dims, padding};
+        auto out_shape = tt::tt_metal::LegacyShape{out_dims, padding};
         return {out_shape};
     } else {
         // Single core still uses the old layout w/ batch unfolded
@@ -82,7 +82,7 @@ std::vector<Shape> MaxPool::compute_output_shapes(const std::vector<Tensor> &inp
         const auto out_dims = std::vector<uint32_t>({in_n_, 1, out_hw, out_c_padded});
         const auto padding =
             Padding({{0, 0}, {0, 0}, {0, 0}, {0, out_c_padded - out_c}}, Padding::PadValue::NegativeInfinity);
-        auto out_shape = Shape{out_dims, padding};
+        auto out_shape = tt::tt_metal::LegacyShape{out_dims, padding};
         return {out_shape};
     }
 }
@@ -90,7 +90,7 @@ std::vector<Shape> MaxPool::compute_output_shapes(const std::vector<Tensor> &inp
 std::vector<Tensor> MaxPool::create_output_tensors(const std::vector<Tensor> &inputs) const {
     const auto& input = inputs.at(0);
     if (out_mem_config_.is_sharded()) {
-        Shape output_shape = compute_output_shapes(inputs).at(0);
+        tt::tt_metal::LegacyShape output_shape = compute_output_shapes(inputs).at(0);
         auto mem_config = this->out_mem_config_;
         if (mem_config.shard_spec.has_value()) {
             mem_config.shard_spec->shape[1] = output_shape[3];

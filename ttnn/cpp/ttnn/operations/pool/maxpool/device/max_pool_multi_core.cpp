@@ -199,8 +199,8 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(
     Buffer* src_dram_buffer = input.buffer();
     Buffer* dst_dram_buffer = output.buffer();
 
-    Shape input_shape = input.get_legacy_shape();
-    Shape output_shape = output.get_legacy_shape();
+    tt::tt_metal::LegacyShape input_shape = input.get_legacy_shape();
+    tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
 
     // NOTE: input is assumed to be in {N, 1, H * W, C }
 
@@ -344,7 +344,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(
     const Tensor minus_inf_const_tensor =
         Tensor(
             OwnedStorage{minus_inf_const_buffer},
-            Shape({1, 1, 1, const_buffer_size}),
+            tt::tt_metal::LegacyShape({1, 1, 1, const_buffer_size}),
             DataType::BFLOAT16,
             Layout::ROW_MAJOR)
             .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
@@ -711,8 +711,8 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2_impl
     Buffer* reader_indices_buffer = reader_indices.buffer();
     Buffer* dst_dram_buffer = output.buffer();
 
-    Shape input_shape = input.get_legacy_shape();
-    Shape output_shape = output.get_legacy_shape();
+    tt::tt_metal::LegacyShape input_shape = input.get_legacy_shape();
+    tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
 
     DataFormat in_df = datatype_to_dataformat_converter(input.get_dtype());
     DataFormat out_df = datatype_to_dataformat_converter(output.get_dtype());

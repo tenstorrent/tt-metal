@@ -14,7 +14,7 @@ namespace ttnn::operations::data_movement {
 
 void RepeatDeviceOperation::validate(const std::vector<Tensor> &input_tensors) const {
     const auto &input_tensor = input_tensors[0];
-    tt::tt_metal::Shape input_shape = input_tensor.get_legacy_shape();
+    tt::tt_metal::LegacyShape input_shape = input_tensor.get_legacy_shape();
     TT_FATAL(this->repeat_dim < input_shape.rank(), "Repeat dim specified is larger than input tensor rank.");
     if (input_tensor.get_layout() == Layout::ROW_MAJOR && this->repeat_dim == input_shape.rank() - 1) {
         TT_FATAL(
@@ -32,8 +32,8 @@ void RepeatDeviceOperation::validate(const std::vector<Tensor> &input_tensors) c
         "Output of repeat must be interleaved.");
 }
 
-std::vector<tt::tt_metal::Shape> RepeatDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    tt::tt_metal::Shape shape_out = input_tensors[0].get_legacy_shape();
+std::vector<tt::tt_metal::LegacyShape> RepeatDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    tt::tt_metal::LegacyShape shape_out = input_tensors[0].get_legacy_shape();
     shape_out[this->repeat_dim] *= this->num_repeats;
     return {shape_out};
 }
