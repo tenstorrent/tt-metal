@@ -45,9 +45,7 @@ def test_logsoftmax_for_dim_hw(shape_dim, compute_kernel_options, device):
     dev_x = ttnn.Tensor(x, ttnn.bfloat16).pad_to_tile(float("nan")).to(ttnn.TILE_LAYOUT).to(device)
 
     tt_cpu = F.log_softmax(x, dim)
-    tt_npu = ttnn.experimental.operations.primary.moreh_logsoftmax(
-        dev_x, dim, compute_kernel_config=compute_kernel_config
-    )
+    tt_npu = ttnn.moreh_logsoftmax(dev_x, dim, compute_kernel_config=compute_kernel_config)
 
     tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(shape)
     assert list(tt_dev.get_legacy_shape()) == list(tt_cpu.shape)
@@ -81,12 +79,12 @@ def test_logsoftmax_large_algorithm_for_dim_hw(shape_dim, compute_kernel_options
 
     tt_cpu = F.log_softmax(x, dim)
     strategy = (
-        ttnn.experimental.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_W
+        ttnn.types.MorehSoftmaxOpParallelizationStrategy.LARGE_W
         if dim == 3
-        else ttnn.experimental.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_H
+        else ttnn.types.MorehSoftmaxOpParallelizationStrategy.LARGE_H
     )
-    tt_npu = ttnn.experimental.operations.primary.moreh_logsoftmax(
-        dev_x, dim, None, strategy, compute_kernel_config=compute_kernel_config
+    tt_npu = ttnn.moreh_logsoftmax(
+        dev_x, dim, output_tensor=None, strategy=strategy, compute_kernel_config=compute_kernel_config
     )
 
     assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
@@ -120,9 +118,7 @@ def test_logsoftmax_not_multiple_of_32_for_dim_hw(shape_dim, compute_kernel_opti
     dev_x = ttnn.Tensor(x, ttnn.bfloat16).pad_to_tile(float("nan")).to(ttnn.TILE_LAYOUT).to(device)
 
     tt_cpu = F.log_softmax(x, dim)
-    tt_npu = ttnn.experimental.operations.primary.moreh_logsoftmax(
-        dev_x, dim, compute_kernel_config=compute_kernel_config
-    )
+    tt_npu = ttnn.moreh_logsoftmax(dev_x, dim, compute_kernel_config=compute_kernel_config)
     tt_npu = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(shape)
 
     assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
@@ -158,9 +154,7 @@ def test_logsoftmax_for_dim_nc(shape_dim, compute_kernel_options, device):
     dev_x = ttnn.Tensor(x, ttnn.bfloat16).pad_to_tile(float("nan")).to(ttnn.TILE_LAYOUT).to(device)
 
     tt_cpu = F.log_softmax(x, dim)
-    tt_npu = ttnn.experimental.operations.primary.moreh_logsoftmax(
-        dev_x, dim, compute_kernel_config=compute_kernel_config
-    )
+    tt_npu = ttnn.moreh_logsoftmax(dev_x, dim, compute_kernel_config=compute_kernel_config)
     tt_npu = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(shape)
 
     assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
@@ -169,6 +163,43 @@ def test_logsoftmax_for_dim_nc(shape_dim, compute_kernel_options, device):
     rtol = atol = 0.1
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
     logger.debug(out)
+    assert passing
+
+
+@pytest.mark.parametrize(
+    "shape_dim",
+    (((32, 32), 1),),  # single tile
+)
+@pytest.mark.parametrize(
+    "optional_output_tensor",
+    (True, False),
+)
+def test_logsoftmax_optional_output_tensor(shape_dim, optional_output_tensor, device):
+    device.enable_program_cache()
+
+    shape, dim = shape_dim
+    torch.manual_seed(0)
+
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
+
+    # cpu calculation
+    tt_cpu = F.log_softmax(x, dim)
+
+    # npu calculation
+    dev_x = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    if optional_output_tensor:
+        dev_y = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+        tt_npu = ttnn.moreh_logsoftmax(dev_x, dim, output_tensor=dev_y)
+    else:
+        tt_npu = ttnn.moreh_logsoftmax(dev_x, dim)
+
+    assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
+    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
+
+    rtol = atol = 0.05
+    passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
+    logger.info(out)
     assert passing
 
 
@@ -202,13 +233,10 @@ def test_logsoftmax_backward_for_dim_hw(shape_dim, compute_kernel_options, devic
     dev_dy = ttnn.Tensor(dy, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     y.backward(dy)
-    tt_npu = ttnn.experimental.operations.primary.moreh_logsoftmax_backward(
-        dev_y, dev_dy, dim, compute_kernel_config=compute_kernel_config
-    )
+    tt_npu = ttnn.moreh_logsoftmax_backward(dev_y, dev_dy, dim, compute_kernel_config=compute_kernel_config)
 
     assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
-
     rtol = atol = 0.5
     passing, out = comp_allclose_and_pcc(x.grad, tt_dev, rtol=rtol, atol=atol)
     logger.debug(out)
@@ -237,15 +265,16 @@ def test_logsoftmax_backward_large_algorithm_for_dim_hw(shape_dim, compute_kerne
 
     dy = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
     dev_dy = ttnn.Tensor(dy, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    print(compute_kernel_config)
 
     y.backward(dy)
     strategy = (
-        ttnn.experimental.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_W
+        ttnn.types.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_W
         if dim == 3
-        else ttnn.experimental.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_H
+        else ttnn.types.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_H
     )
-    tt_npu = ttnn.experimental.operations.primary.moreh_logsoftmax_backward(
-        dev_y, dev_dy, dim, None, strategy, compute_kernel_config=compute_kernel_config
+    tt_npu = ttnn.moreh_logsoftmax_backward(
+        dev_y, dev_dy, dim, input_grad_tensor=None, strategy=strategy, compute_kernel_config=compute_kernel_config
     )
 
     assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
@@ -283,9 +312,7 @@ def test_logsoftmax_backward_not_multiple_of_32_for_dim_hw(shape_dim, compute_ke
     dev_dy = ttnn.Tensor(dy, ttnn.bfloat16).pad_to_tile(float("200")).to(ttnn.TILE_LAYOUT).to(device)
 
     y.backward(dy)
-    tt_npu = ttnn.experimental.operations.primary.moreh_logsoftmax_backward(
-        dev_y, dev_dy, dim, compute_kernel_config=compute_kernel_config
-    )
+    tt_npu = ttnn.moreh_logsoftmax_backward(dev_y, dev_dy, dim, compute_kernel_config=compute_kernel_config)
     tt_npu = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(shape)
 
     assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
@@ -325,9 +352,7 @@ def test_logsoftmax_backward_for_dim_nc(shape_dim, compute_kernel_options, devic
     dev_dy = ttnn.Tensor(dy, ttnn.bfloat16).pad_to_tile(float("10")).to(ttnn.TILE_LAYOUT).to(device)
 
     y.backward(dy)
-    tt_npu = ttnn.experimental.operations.primary.moreh_logsoftmax_backward(
-        dev_y, dev_dy, dim, compute_kernel_config=compute_kernel_config
-    )
+    tt_npu = ttnn.moreh_logsoftmax_backward(dev_y, dev_dy, dim, compute_kernel_config=compute_kernel_config)
     tt_npu = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(shape)
     assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to_torch().to(torch.bfloat16)
@@ -335,43 +360,6 @@ def test_logsoftmax_backward_for_dim_nc(shape_dim, compute_kernel_options, devic
     rtol = atol = 0.5
     passing, out = comp_allclose_and_pcc(x.grad, tt_dev, rtol=rtol, atol=atol)
     logger.debug(out)
-    assert passing
-
-
-@pytest.mark.parametrize(
-    "shape_dim",
-    (((32, 32), 1),),  # single tile
-)
-@pytest.mark.parametrize(
-    "optional_output_tensor",
-    (True, False),
-)
-def test_logsoftmax_optional_output_tensor(shape_dim, optional_output_tensor, device):
-    device.enable_program_cache()
-
-    shape, dim = shape_dim
-    torch.manual_seed(0)
-
-    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
-
-    # cpu calculation
-    tt_cpu = F.log_softmax(x, dim)
-
-    # npu calculation
-    dev_x = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
-    if optional_output_tensor:
-        dev_y = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
-
-        tt_npu = ttnn.experimental.operations.primary.moreh_logsoftmax(dev_x, dim, dev_y)
-    else:
-        tt_npu = ttnn.experimental.operations.primary.moreh_logsoftmax(dev_x, dim)
-
-    assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
-    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
-
-    rtol = atol = 0.05
-    passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
-    logger.info(out)
     assert passing
 
 
@@ -401,12 +389,12 @@ def test_logsoftmax_backward_optional_output_tensor(shape_dim, optional_output_t
 
     if optional_output_tensor:
         dev_dx = ttnn.Tensor(dy, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
-        tt_npu = ttnn.experimental.operations.primary.moreh_logsoftmax_backward(dev_y, dev_dy, dim, dev_dx)
+        tt_npu = ttnn.moreh_logsoftmax_backward(dev_y, dev_dy, dim, input_grad_tensor=dev_dx)
     else:
-        tt_npu = ttnn.experimental.operations.primary.moreh_logsoftmax_backward(dev_y, dev_dy, dim)
-
+        tt_npu = ttnn.moreh_logsoftmax_backward(dev_y, dev_dy, dim)
     assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
+
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(x.grad, tt_dev, rtol=rtol, atol=atol)
     logger.info(out)
