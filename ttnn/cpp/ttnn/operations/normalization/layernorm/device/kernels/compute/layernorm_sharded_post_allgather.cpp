@@ -37,6 +37,7 @@ void MAIN {
     const uint32_t num_tiles_per_allgather_worker           = is_allgather_worker ? get_arg_val<uint32_t>(1) : 0;
     const bool use_two_stage_reduce                         = is_allgather_worker ? get_arg_val<uint32_t>(2) == 1 : false;
     const bool is_second_stage_reader                       = is_allgather_worker ? get_arg_val<uint32_t>(3) == 1 : false;
+    const uint32_t num_distributed_blocks                   = is_allgather_worker ? get_arg_val<uint32_t>(4) : 0;
 
     uint32_t num_blocks_reduce;
     if (is_second_stage_reader) {
@@ -53,6 +54,7 @@ void MAIN {
     }
 
     constexpr uint32_t dst0 = 0;
+    constexpr uint32_t dst1 = 1;
     constexpr uint32_t scaler0 = 0;
 
     constexpr uint32_t cb_in0 = tt::CB::c_in0;
@@ -62,36 +64,30 @@ void MAIN {
     constexpr uint32_t cb_scaler_global = tt::CB::c_in4;
     constexpr uint32_t cb_gamma = tt::CB::c_in5;
     constexpr uint32_t cb_beta = tt::CB::c_in6;
-    constexpr uint32_t cb_x = tt::CB::c_intermed0; // x minus mean
-    #if defined RMSNORM
-    constexpr uint32_t cb_xmm = cb_in0; // x minus mean
-    #else
-    constexpr uint32_t cb_xmm = tt::CB::c_intermed1; // x minus mean
-    #endif
-    constexpr uint32_t cb_ex_partial = tt::CB::dataflow0; // E[x] partial reduce
+
     constexpr uint32_t cb_ex = tt::CB::dataflow1; // E[x] global reduce
-    constexpr uint32_t cb_ex_external = tt::CB::dataflow2; // E[x] partials recieved from other cores
-    constexpr uint32_t cb_ex_partial2 = tt::CB::dataflow3; // E[x^2] partial reduce
+    constexpr uint32_t cb_ex2 = tt::CB::dataflow4; // E[x^2]
     constexpr uint32_t cb_stats = tt::CB::c_in7; // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_stats2 = tt::CB::c_intermed4; // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_ex_external2 = tt::CB::dataflow5; // E[x^2] partials recieved from other cores
+    constexpr uint32_t cb_stats_reduced = tt::CB::c_intermed4; // E[(x-E[x])^2] global reduce
     constexpr uint32_t cb_ex_global = tt::CB::dataflow7; // E[x] global reduce
     constexpr uint32_t cb_ex2_global = tt::CB::dataflow6; // E[x^2] global reduce
-    constexpr uint32_t cb_x2 = cb_x; // x^2
     constexpr uint32_t cb_reciprocal = tt::CB::c_intermed3; // [E[x^2]-E[x]^2]+eps
     constexpr uint32_t cb_fusion = tt::CB::c_intermed1; // stream gamma/beta
     constexpr uint32_t cb_out = tt::CB::c_out0;
-    constexpr uint32_t cb_ex_sqr = cb_x2;
+    constexpr uint32_t cb_var = tt::CB::c_intermed2;
+    constexpr uint32_t cb_ex_sqr = tt::CB::c_intermed0; // E[x]^2
+
 
     #ifdef RMSNORM
-    constexpr uint32_t cb_var = cb_stats;
+    binary_op_init_common(cb_stats, cb_scaler_global, cb_var);
     constexpr uint32_t stats_tiles = 1;
-    binary_op_init_common(cb_var, cb_eps, cb_stats2);
+    constexpr uint32_t cb_xmm = cb_in0; // x
     #else
-    constexpr uint32_t cb_var = tt::CB::c_intermed2; // Var(x)
+    binary_op_init_common(cb_stats, cb_scaler_global, cb_stats_reduced);
     constexpr uint32_t stats_tiles = 2;
-    binary_op_init_common(cb_stats, cb_stats, cb_ex_sqr);
+    constexpr uint32_t cb_xmm = tt::CB::c_intermed1; // x minus mean
     #endif
+
 
     // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
     const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
@@ -101,33 +97,54 @@ void MAIN {
     int index_h_offset = 0;
     int index = 0;
 
-    constexpr uint32_t cb_im = (do_gamma | do_beta) ? cb_x : cb_out;
+    constexpr uint32_t cb_im = (do_gamma | do_beta) ? cb_ex_sqr : cb_out;
     constexpr uint32_t cb_outgamma = do_beta ? cb_fusion : cb_out;
-
 
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr(is_allgather_worker) {
-        cb_reserve_back(cb_stats2, stats_tiles);
         if (enable_sqrt) {
-            #ifndef RMSNORM
-            //copy E(x) to cb_stats2
+            #ifdef RMSNORM
+            cb_reserve_back(cb_var, 1);
+            #else
+            cb_reserve_back(cb_stats_reduced, 1);
+            cb_reserve_back(cb_ex2, 1);
+            #endif
 
+            cb_wait_front(cb_scaler_global, 1);
+            reduce_init_delta<false>();
             tile_regs_acquire();
-            copy_tile_to_dst_init_short();
-            copy_tile(cb_stats, 0, dst0);
+            for (uint32_t w = 0; w < stats_tiles*num_distributed_blocks; w++) { // Need to read this interleaved now, we have SUM(X) and SUM(X^2) interleaved
+                reduce_tile(cb_stats, cb_scaler_global, 0, scaler0, w % stats_tiles); // E(x) and E(x^2) interleaved so we reduce each one into different dest reg
+                cb_pop_front(cb_stats, 1);
+            }
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(dst0, cb_stats2);
-            tile_regs_release();
 
+            #ifdef RMSNORM
+            pack_tile(dst0, cb_var);
+            #else
+            pack_tile(dst0, cb_stats_reduced);
+            pack_tile(dst1, cb_ex2);
+            #endif
+            tile_regs_release();
+            reduce_revert_delta();
+            #ifdef RMSNORM
+            cb_push_back(cb_var, stats_tiles);
+            #else
+            cb_push_back(cb_stats_reduced, 1);
+            cb_push_back(cb_ex2, 1);
+            #endif
+
+            #ifndef RMSNORM
             // calculate var = E(x^2) - E(x)^2
             // E(x)^2
-            // unpack_reconfig_data_format(cb_stats, cb_stats);
+            unpack_reconfig_data_format(cb_stats_reduced, cb_stats_reduced);
             cb_reserve_back(cb_ex_sqr, 1);
+            cb_wait_front(cb_stats_reduced, 1);
             tile_regs_acquire();
             mul_tiles_init();
-            mul_tiles(cb_stats, cb_stats, 0, 0, dst0);  // first tile in stats is always E(x)
+            mul_tiles(cb_stats_reduced, cb_stats_reduced, 0, 0, dst0);  // first tile in stats is always E(x)
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(dst0, cb_ex_sqr);
@@ -136,29 +153,31 @@ void MAIN {
 
 
             // E(x^2) - E(x)^2
-            unpack_reconfig_data_format_srcb(cb_stats, cb_ex_sqr);
+            unpack_reconfig_data_format_srca(cb_stats_reduced, cb_ex2);
+            unpack_reconfig_data_format_srcb(cb_stats_reduced, cb_ex_sqr);
             pack_reconfig_data_format(cb_var);
+            cb_wait_front(cb_ex2, 1);
             cb_wait_front(cb_ex_sqr, 1);
             cb_reserve_back(cb_var, 1);
             tile_regs_acquire();
             sub_tiles_init();
-            sub_tiles(cb_stats, cb_ex_sqr, 1, 0, dst0);
+            sub_tiles(cb_ex2, cb_ex_sqr, 0, 0, dst0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(dst0, cb_var);
             cb_push_back(cb_var, 1);
             tile_regs_release();
+            cb_pop_front(cb_ex2, 1);
             cb_pop_front(cb_ex_sqr, 1);
             #endif
 
 
             // 1/[sqrt(Var + eps)],
             unpack_reconfig_data_format(cb_var, cb_eps);    // cb_var is cb_stats in case of RMS norm
-            pack_reconfig_data_format(cb_stats2);
-            #ifndef RMSNORM
+            pack_reconfig_data_format(cb_stats_reduced);
             cb_wait_front(cb_var, 1);
-            #endif
             cb_wait_front(cb_eps, 1);
+            cb_reserve_back(cb_stats_reduced, 1);
 
             add_tiles_init();
             tile_regs_acquire();
@@ -170,33 +189,29 @@ void MAIN {
             recip_tile(dst0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(dst0, cb_stats2);
+            pack_tile(dst0, cb_stats_reduced);
             tile_regs_release();
-
             cb_pop_front(cb_var, 1);
             cb_pop_front(cb_eps, 1);
-            cb_push_back(cb_stats2, stats_tiles);
-            #ifndef RMSNORM
-            cb_pop_front(cb_stats, stats_tiles);
-            #endif
+            cb_push_back(cb_stats_reduced, 1);
         }
     }
 
     #ifndef RMSNORM
     // x - E[x]
-    unpack_reconfig_data_format(cb_in0, cb_ex2_global);
+    unpack_reconfig_data_format(cb_in0, cb_ex_global);
     pack_reconfig_data_format(cb_xmm);
     index_h_offset = 0;
     sub_bcast_cols_init_short();
     cb_reserve_back(cb_xmm, num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
-        cb_wait_front(cb_ex2_global, 1);
+        cb_wait_front(cb_ex_global, 1);
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset;
-                sub_tiles_bcast_cols(cb_in0, cb_ex2_global, index, 0, w);
+                sub_tiles_bcast_cols(cb_in0, cb_ex_global, index, 0, w);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -206,7 +221,7 @@ void MAIN {
             tile_regs_release();
             index_subblock_w_offset += subblock_w;
         }
-        cb_pop_front(cb_ex2_global, 1);
+        cb_pop_front(cb_ex_global, 1);
         cb_pop_front(cb_in0, block_w);
     }
     cb_push_back(cb_xmm, num_tiles_per_block);
@@ -220,7 +235,7 @@ void MAIN {
     }
 
     // (x - Ex) * 1/[sqrt(Var + eps)]
-    unpack_reconfig_data_format(cb_xmm, cb_ex2_global);
+    unpack_reconfig_data_format(cb_xmm, cb_ex_global);
     mul_bcast_cols_init_short();
     index_h_offset = 0;
     cb_reserve_back(cb_im, num_tiles_per_block);
@@ -229,12 +244,12 @@ void MAIN {
     #endif
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
-        cb_wait_front(cb_ex2_global, 1);
+        cb_wait_front(cb_ex_global, 1);
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset + index_h_offset;
-                mul_tiles_bcast_cols(cb_xmm, cb_ex2_global, index, 0, w);
+                mul_tiles_bcast_cols(cb_xmm, cb_ex_global, index, 0, w);
             }
             tile_regs_commit();
 
@@ -247,7 +262,7 @@ void MAIN {
             index_subblock_w_offset += subblock_w;
         }
         index_h_offset += block_w;
-        cb_pop_front(cb_ex2_global, 1);
+        cb_pop_front(cb_ex_global, 1);
     }
     cb_push_back(cb_im, num_tiles_per_block);
 

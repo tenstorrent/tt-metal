@@ -580,7 +580,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t x_CB_size = in0_block_tiles * single_tile_size;
     uint32_t xmm_CB_size = in0_block_tiles * single_tile_size;
     uint32_t ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
-    if (is_pre_all_gather){
+    if (is_pre_all_gather || is_post_all_gather){
         ex_partial_CB_size = ex_partial_CB_size * pre_all_gather_stats_block_tiles;
     }
     uint32_t ex_CB_size = ex_partial_CB_size;
@@ -589,8 +589,10 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t xmm2_CB_size = in0_block_tiles * single_tile_size / block_ht;
     uint32_t ex2pe_CB_size = num_rows_per_all_to_all_worker * single_tile_size;
     uint32_t stats_cb_size = 0;
+    uint32_t stats_reduced_cb_size = 0;
     if (is_post_all_gather) {
         stats_cb_size = post_all_gather_stats_block_tiles * single_tile_size;
+        stats_reduced_cb_size = pre_all_gather_stats_block_tiles * single_tile_size;
     }
     // output buffer size
     uint32_t out_CB_size;
@@ -1142,6 +1144,26 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     tt::tt_metal::CircularBufferConfig ex2pe_cb_config = tt::tt_metal::CircularBufferConfig(ex2pe_CB_size, {{cb_ex2pe_index, cb_data_format}})
         .set_page_size(cb_ex2pe_index, single_tile_size);
     auto cb_ex2pe = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2pe_cb_config);
+    if (is_post_all_gather){
+        // cb_stats
+        uint32_t cb_stats_index;
+        cb_stats_index = tt::CB::c_in7;
+        tt::tt_metal::CircularBufferConfig stats_cb_config = tt::tt_metal::CircularBufferConfig(stats_cb_size, {{cb_stats_index, cb_data_format}})
+            .set_page_size(cb_stats_index, single_tile_size).set_globally_allocated_address(*stats.value().buffer());
+        auto cb_stats = tt::tt_metal::CreateCircularBuffer(program, sender_cores, stats_cb_config);
+        // cb_stats_reduced
+        uint32_t cb_stats_reduced_index;
+        cb_stats_reduced_index = tt::CB::c_intermed4;
+        tt::tt_metal::CircularBufferConfig stats_reduced_cb_config = tt::tt_metal::CircularBufferConfig(stats_reduced_cb_size, {{cb_stats_reduced_index, cb_data_format}})
+            .set_page_size(cb_stats_reduced_index, single_tile_size);
+        auto cb_stats_reduced = tt::tt_metal::CreateCircularBuffer(program, sender_cores, stats_reduced_cb_config);
+
+            // cb_var
+        uint32_t cb_var_index = tt::CB::c_intermed2;
+        tt::tt_metal::CircularBufferConfig cb_var_config = tt::tt_metal::CircularBufferConfig(ex_global_CB_size, {{cb_var_index, cb_data_format}})
+            .set_page_size(cb_var_index, single_tile_size);
+        auto cb_var_global = tt::tt_metal::CreateCircularBuffer(program, sender_cores, cb_var_config);
+    }
     // out
     uint32_t output_cb_index = tt::CB::c_out0; // output operands start at index 16
     tt::tt_metal::CircularBufferConfig output_cb_config = tt::tt_metal::CircularBufferConfig(out_CB_size, {{output_cb_index, out_data_format}})
@@ -1154,7 +1176,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     std::vector<KernelHandle> writer_kernel_ids;
     writer_kernel_ids.reserve(cores.size());
     float winv = 1.0f / block_w; // bcast-w scaler
-    float cinv = 1.0f / num_blocks; // bcast-cores scaler
+    float cinv = is_post_all_gather ? (1.0f / num_distributed_devices) : (1.0f / num_blocks); // bcast-cores scaler
     float cinv_one = 1.0f; // bcast-cores scaler for all-to-all cores not on first row/col
     auto bfloat_cinv_value = bfloat16(cinv);
     uint32_t packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv_value, bfloat_cinv_value});
@@ -1234,6 +1256,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                 is_second_stage_reader = false;
             }
             compute_args.push_back((uint32_t)is_second_stage_reader);
+            if(is_post_all_gather){
+                compute_args.push_back((uint32_t)num_distributed_devices);
+            }
             tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id_all_to_all, core, compute_args);
         } else {
             tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
