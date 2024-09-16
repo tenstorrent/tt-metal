@@ -30,6 +30,7 @@ ttnn::Tensor ExecuteScaledDotProductAttentionGQADecode::invoke(
     const ttnn::Tensor &input_tensor_k,
     const ttnn::Tensor &input_tensor_v,
     const std::vector<uint32_t> cur_pos,
+    const std::optional<const Tensor> cur_pos_tensor,
     std::optional<bool> transpose_q,
     std::optional<bool> share_cache,
     std::optional<float> scale,
@@ -74,8 +75,15 @@ ttnn::Tensor ExecuteScaledDotProductAttentionGQADecode::invoke(
     auto input_tensor_v_gqa =
         ttnn::reshape(input_tensor_v, ttnn::Shape{std::array<uint32_t, 4>{1, Bkv * NKH, k_shape[2], D}});
 
-    uint32_t max_cur_pos = *std::max_element(cur_pos.begin(), cur_pos.end());
-    uint32_t k_chunk_size = get_chunk_size(max_cur_pos + 1);
+    uint32_t k_chunk_size;
+    // since we can't get the max cur_pos value from the tensor, we default to 512
+    if (cur_pos_tensor.has_value()) {
+        k_chunk_size = 512;
+    } else{
+        uint32_t max_cur_pos = *std::max_element(cur_pos.begin(), cur_pos.end());
+        k_chunk_size = get_chunk_size(max_cur_pos + 1);
+    }
+
     // get chunk size and then pass to sdpa decode as an attribute for prgm cache
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
@@ -90,7 +98,7 @@ ttnn::Tensor ExecuteScaledDotProductAttentionGQADecode::invoke(
             .compute_kernel_config = kernel_config_val,
             .k_chunk_size = k_chunk_size},
         {input_tensor_q_gqa, input_tensor_k_gqa, input_tensor_v_gqa},
-        {},
+        {cur_pos_tensor, std::nullopt},
         {},
         queue_id);
 
@@ -108,6 +116,7 @@ ttnn::Tensor ExecuteScaledDotProductAttentionGQADecode::invoke(
     const ttnn::Tensor &input_tensor_k,
     const ttnn::Tensor &input_tensor_v,
     const std::vector<uint32_t> cur_pos,
+    const std::optional<const Tensor> cur_pos_tensor,
     std::optional<bool> transpose_q,
     std::optional<bool> share_cache,
     std::optional<float> scale,
@@ -120,6 +129,7 @@ ttnn::Tensor ExecuteScaledDotProductAttentionGQADecode::invoke(
         input_tensor_k,
         input_tensor_v,
         cur_pos,
+        cur_pos_tensor,
         transpose_q,
         share_cache,
         scale,

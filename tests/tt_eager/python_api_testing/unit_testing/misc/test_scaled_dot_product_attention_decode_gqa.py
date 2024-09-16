@@ -82,6 +82,7 @@ def run_test_sdpa_decode_single_iter(
     start_indices=None,
     transpose_q=True,
     share_cache=False,
+    cur_pos_tensor=False,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
@@ -165,18 +166,33 @@ def run_test_sdpa_decode_single_iter(
         memory_config=dram_memcfg,
     )
 
-    tt_back = ttnn.transformer.scaled_dot_product_attention_decode_gqa(
-        tt_Q,
-        tt_K,
-        tt_V,
-        start_indices,
-        transpose_q=transpose_q,
-        share_cache=share_cache,
-        scale=scale,
-        program_config=program_config,
-        compute_kernel_config=compute_kernel_config,
-        memory_config=dram_memcfg,
-    )
+    if cur_pos_tensor:
+        start_indices_tt = ttnn.Tensor(torch.tensor(start_indices), ttnn.int32).to(device)
+        tt_back = ttnn.transformer.scaled_dot_product_attention_decode_gqa(
+            tt_Q,
+            tt_K,
+            tt_V,
+            cur_pos_tensor=start_indices_tt,
+            transpose_q=transpose_q,
+            share_cache=share_cache,
+            scale=scale,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=dram_memcfg,
+        )
+    else:
+        tt_back = ttnn.transformer.scaled_dot_product_attention_decode_gqa(
+            tt_Q,
+            tt_K,
+            tt_V,
+            start_indices,
+            transpose_q=transpose_q,
+            share_cache=share_cache,
+            scale=scale,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=dram_memcfg,
+        )
 
     tt_back = ttnn.to_torch(tt_back)
 
@@ -206,7 +222,7 @@ def run_test_sdpa_decode_single_iter(
 
 
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
-@pytest.mark.skip("Skipping due to potential nd pcc issue #9370")
+# @pytest.mark.skip("Skipping due to potential nd pcc issue #9370")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
@@ -233,17 +249,45 @@ def run_test_sdpa_decode_single_iter(
     "share_cache",
     (True, False),
 )
+@pytest.mark.parametrize(
+    "cur_pos_tensor",
+    (True, False),
+)
 def test_sdpa_decode(
-    device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, transpose_q, single_iter, share_cache, use_program_cache
+    device,
+    b,
+    nh,
+    nkv,
+    s,
+    d,
+    dtype,
+    grid_size,
+    q_dtype,
+    transpose_q,
+    single_iter,
+    share_cache,
+    cur_pos_tensor,
+    use_program_cache,
 ):
     ttnn.device.DisablePersistentKernelCache()
     run_test_sdpa_decode_single_iter(
-        device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, transpose_q=transpose_q, share_cache=share_cache
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        dtype,
+        grid_size,
+        q_dtype,
+        transpose_q=transpose_q,
+        share_cache=share_cache,
+        cur_pos_tensor=cur_pos_tensor,
     )
 
 
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
-@pytest.mark.skip("Skipping due to potential nd pcc issue #9370")
+# @pytest.mark.skip("Skipping due to potential nd pcc issue #9370")
 @pytest.mark.parametrize(
     "dtype",
     [
