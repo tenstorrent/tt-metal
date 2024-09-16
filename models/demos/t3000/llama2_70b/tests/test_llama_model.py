@@ -30,7 +30,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     should_skip_model_load,
     check_kv_cache,
 )
-import gc
 
 
 DEVICE_PERF_START_SIGNPOST = "START_PERF_RUN"
@@ -119,7 +118,9 @@ def run_test_LlamaModel_inference(
         cache_path=cache_path,
     )
 
-    if model_config["LLM_MODE"] == "prefill" or device_perf:
+    mode = "prefill" if seq_len > 1 else "decode"
+
+    if mode == "prefill" or device_perf:
         generation_length = 1
     else:
         generation_length = UNIT_TEST_GENERATION_LENGTH
@@ -158,24 +159,24 @@ def run_test_LlamaModel_inference(
         if device_perf:
             signpost(DEVICE_PERF_START_SIGNPOST)  # start for device perf measurement
         # TT hardware execution -------------------------------------------------------------
-        tt_inp_emb, start_pos, rot_mat, attn_mask, cache_idxs = tt_model.prepare_inputs(tt_inp_ids, start_pos)
+        tt_inp_emb, start_pos, rot_mat, cache_idxs = tt_model.prepare_inputs(tt_inp_ids, start_pos, mode=mode)
 
         # Send to device
-        if model_config["LLM_MODE"] == "decode":
-            tt_inp_emb = ttnn.to_device(tt_inp_emb, t3k_mesh_device, memory_config=model_config["DRAM_MEMCFG"])
+        if mode == "decode":
+            tt_inp_emb = ttnn.to_device(tt_inp_emb, t3k_mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             tt_inp_emb = tt_model.tt_embd(tt_inp_emb)
             tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
             rot_mat = ttnn.to_device(rot_mat, t3k_mesh_device, memory_config=model_config["ROT_MAT_MM_IN1_MEMCFG"])
-            cache_idxs = ttnn.to_device(cache_idxs, t3k_mesh_device, memory_config=model_config["DRAM_MEMCFG"])
+            cache_idxs = ttnn.to_device(cache_idxs, t3k_mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         tt_out = tt_model(
             tt_inp_emb,
             rot_mat,
             start_pos,
-            attn_mask,
             cache_idxs=cache_idxs,
+            mode=mode,
         )
-        del tt_inp_emb, rot_mat, attn_mask
+        del tt_inp_emb, rot_mat
 
         tt_out = ttnn.from_device(tt_out)
         tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
@@ -185,12 +186,13 @@ def run_test_LlamaModel_inference(
 
         tt_out = tt_out[..., : configuration.vocab_size]
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze()  # [batch, hidden_dim]
-        if model_config["LLM_MODE"] == "decode":
+        if mode == "decode":
             tt_out = tt_out[:batch]
         tt_out = tt_out.float()
-        return
-        if model_config["LLM_MODE"] == "decode":
+        if mode == "decode":
             pytorch_out = pytorch_out.squeeze().reshape(batch, -1)  # [batch, hidden_dim]
+        else:
+            pytorch_out = pytorch_out.squeeze().reshape(seq_len, -1)  # [seq, hidden_dim]
 
         # check outputs ----------------------------------------------------------------------
         does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
@@ -202,9 +204,6 @@ def run_test_LlamaModel_inference(
         )
         logger.info(f"Mean KL Divergence: {kl_divs.mean()}")
 
-        # Write the code to check top-5 and top-1 accuracy. It should show the
-        # percentage where the top-1 prediction in pytorch was in the top-5
-        # predictions in tt.
         reference_top1 = np.argmax(pytorch_out, axis=-1)
         top1_acc = top_k_accuracy_score(reference_top1, tt_out, k=1, labels=np.arange(tt_out.shape[-1]))
         top5_acc = top_k_accuracy_score(reference_top1, tt_out, k=5, labels=np.arange(tt_out.shape[-1]))
@@ -249,15 +248,14 @@ def run_test_LlamaModel_inference(
         generation_start_pos,
         generation_length,
         seq_len,
-        model_config["LLM_MODE"] == "prefill",
+        mode == "prefill",
         pcc,
     )
+    all_tests_pass = all_tests_pass and cache_test_pass
     if all_tests_pass:
         logger.info(f"{llama_version} output Passed!")
-    else:
-        gc.collect()
-        logger.warning(f"{llama_version} output Failed!")
-        assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
+
+    assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
 
 
 @pytest.mark.timeout(240000)
