@@ -93,7 +93,12 @@ def manage_config(name, value):
     logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
 
 
-from ttnn._ttnn.multi_device import get_device_tensor, get_device_tensors, aggregate_as_tensor
+from ttnn._ttnn.multi_device import (
+    get_device_tensor,
+    get_device_tensors,
+    aggregate_as_tensor,
+    get_t3k_physical_device_ids_ring,
+)
 
 from ttnn._ttnn.events import create_event, record_event, wait_for_event
 

@@ -329,7 +329,7 @@ std::unordered_map<chip_id_t, eth_coord_t> Cluster::get_user_chip_ethernet_coord
     auto user_chip_ethernet_coordinates = this->cluster_desc_->get_chip_locations();
     if (this->is_galaxy_cluster()) {
         std::erase_if(user_chip_ethernet_coordinates, [this](const auto& entry) {
-            return this->cluster_desc_->get_board_type(entry.first) != BoardType::GALAXY; // need to fix this
+            return this->cluster_desc_->get_board_type(entry.first) != BoardType::GALAXY;
         });
     }
     return user_chip_ethernet_coordinates;
