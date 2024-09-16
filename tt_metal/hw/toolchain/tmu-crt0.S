@@ -3,8 +3,6 @@
 .type   _start, @function
 
 _start:
-
-CRT_START:
 .option push
 .option norelax
 	// Initialize global pointer,
