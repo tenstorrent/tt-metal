@@ -41,7 +41,6 @@ void kernel_main() {
     constexpr uint32_t cb_ex_partial2 = tt::CB::dataflow3;
     constexpr uint32_t cb_ex2 = tt::CB::dataflow4;
     constexpr uint32_t cb_ex_external2 = tt::CB::dataflow5;
-    constexpr uint32_t cb_ex2pe = tt::CB::c_intermed3;
     constexpr uint32_t cb_ex2_global = tt::CB::dataflow6; // E[x2] global reduce
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial2);
@@ -86,7 +85,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* reduce_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_receiver_semaphore_addr);
     volatile tt_l1_ptr uint32_t* reduce_second_stage_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_second_stage_semaphore_addr);
 
-    const auto& global_reduce_sender = [&](const uint32_t cb_partial, const uint32_t cb_external, const uint32_t cb_ex, const uint32_t cb_ex_global, const uint32_t cb_reduce_first_stage) __attribute__((always_inline))
+    const auto& global_reduce_sender = [&](const uint32_t cb_partial, const uint32_t cb_external, const uint32_t cb_reduce_first_stage) __attribute__((always_inline))
     {
         uint32_t num_tiles_per_partial_result = 2;
         #ifdef RMSNORM
@@ -157,5 +156,5 @@ void kernel_main() {
         }
 
     };
-    global_reduce_sender(cb_ex_partial2, cb_ex_external2, cb_ex2, cb_ex2_global, cb_ex2);
+    global_reduce_sender(cb_ex_partial2, cb_ex_external2, cb_ex2);
 }
