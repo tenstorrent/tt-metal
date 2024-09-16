@@ -72,20 +72,24 @@ void SliceDeviceOperation::validate_with_output_tensors(
     const auto &input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.get_layout() == Layout::TILE || input_tensor_a.get_layout() == Layout::ROW_MAJOR);
-    TT_FATAL(input_tensor_a.get_legacy_shape().rank() == this->slice_start.rank() && this->slice_start.rank() == this->slice_end.rank());
+    TT_FATAL(input_tensor_a.get_layout() == Layout::TILE || input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Error");
+    TT_FATAL(input_tensor_a.get_legacy_shape().rank() == this->slice_start.rank() && this->slice_start.rank() == this->slice_end.rank(), "Error");
     for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
-        TT_FATAL(this->slice_start[i] < input_tensor_a.get_legacy_shape()[i]);
-        TT_FATAL(this->slice_end[i] < input_tensor_a.get_legacy_shape()[i]);
+        TT_FATAL(this->slice_start[i] < input_tensor_a.get_legacy_shape()[i], "Error");
+        TT_FATAL(this->slice_end[i] < input_tensor_a.get_legacy_shape()[i], "Error");
 
         // Check if start shape is <= end shape
-        TT_FATAL(this->slice_start[i] <= this->slice_end[i]);
+        TT_FATAL(this->slice_start[i] <= this->slice_end[i], "Error");
     }
 
     auto output_tensor_shape = this->compute_output_shapes(input_tensors)[0];
-
+    if (step.has_value()) { // if all ones modify before passing in to function
+        TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Strided slice is only supported for row major layout");
+        TT_FATAL(!input_tensor_a.is_sharded(), "Strided slice is not supported for sharded tensor");
+        TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Strided slice is only supported for BFLOAT16");
+    }
     if (input_tensor_a.get_layout() == Layout::TILE) {
-        TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
+        TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
         TT_FATAL(
             (output_tensor_shape[-2] % TILE_HEIGHT == 0) && (this->slice_start[-2] % TILE_HEIGHT == 0),
             "Can only unpad tilized tensor with full tiles");
@@ -94,9 +98,17 @@ void SliceDeviceOperation::validate_with_output_tensors(
             "Can only unpad tilized tensor with full tiles");
     } else if (input_tensor_a.get_layout() == Layout::ROW_MAJOR) {
         TT_FATAL(
-            (output_tensor_shape[-1] * input_tensor_a.element_size() % sizeof(uint32_t) == 0) &&
-                (this->slice_start[-1] * input_tensor_a.element_size() % sizeof(uint32_t) == 0),
-            "RM unpadding requires output X size to be packable");
+            (output_tensor_shape[-1] * input_tensor_a.element_size() % sizeof(uint32_t) == 0),
+            "An unpadding slice operations for a RowMajor layout on the output tensor requires the last dimension to be on a 32 bit boundary. For example, the final dimension needs to be divisible by 2 for bfloat16. The resulting tensor shape is {}, which is not 4B aligned as the last dimension is {}",
+                        output_tensor_shape[-1], input_tensor_a.element_size());
+        if (this->step.has_value()) {
+            for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
+                TT_FATAL(this->step.value()[i] > 0, "Step({}) = {} should be positive", i, this->step.value()[i]);
+            }
+        }
+        else {
+            TT_FATAL(this->slice_start[-1] * input_tensor_a.element_size() % sizeof(uint32_t) == 0, "Slice needs to start at an aligned position");
+        }
     }
 }
 
@@ -104,8 +116,22 @@ std::vector<tt::tt_metal::LegacyShape> SliceDeviceOperation::compute_output_shap
     std::vector<uint32_t> out_shape;
     auto rank = input_tensors[0].get_legacy_shape().rank();
     out_shape.reserve(rank);
-    for (uint32_t i = 0; i < rank; i++) {
-        out_shape.push_back(this->slice_end[i] - this->slice_start[i] + 1);
+    if (!step.has_value()) {
+        for (uint32_t i = 0; i < rank; i++) {
+            out_shape.push_back(this->slice_end[i] - this->slice_start[i] + 1);
+        }
+    }
+    else {
+        auto output_dim_i = [this] (size_t i) {
+            int res = 0;
+            for (int j = this->slice_start[i]; j < this->slice_end[i] + 1; j+=this->step.value()[i]) {
+                res++;
+            }
+            return res;
+        };
+        for (uint32_t i = 0; i < rank; i++) {
+            out_shape.push_back(output_dim_i(i));
+        }
     }
     tt::tt_metal::LegacyShape output_tensor_shape(out_shape);
     return {output_tensor_shape};
@@ -134,7 +160,7 @@ operation::ProgramWithCallbacks SliceDeviceOperation::create_program(
     const auto &input_tensor_a = input_tensors.at(0);
     auto &output_tensor = output_tensors.at(0);
 
-    return detail::slice_multi_core(input_tensor_a, output_tensor, this->slice_start, this->slice_end);
+    return detail::slice_multi_core(input_tensor_a, output_tensor, this->slice_start, this->slice_end, this->step);
 }
 
 

@@ -16,7 +16,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -81,11 +81,11 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
         expand_to_max_dim(output_dim_wo_padding, output_shape_wo_padding);
 
         for (int i = 0; i < input_rank; ++i) {
-            TT_FATAL(input_dim[i] == output_dim[i]);
-            TT_FATAL(input_dim_wo_padding[i] == output_dim_wo_padding[i]);
+            TT_FATAL(input_dim[i] == output_dim[i], "Error");
+            TT_FATAL(input_dim_wo_padding[i] == output_dim_wo_padding[i], "Error");
         }
     } else {
-        TT_FATAL(!is_tile_dim);
+        TT_FATAL(!is_tile_dim, "Error");
         std::vector<uint32_t> expected_output_shape;
         std::vector<uint32_t> expected_output_shape_wo_padding;
         for (int i = 0; i < output_shape.rank(); ++i) {
@@ -103,8 +103,8 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
         for (int i = 0; i < input_rank; ++i) {
             if (i == dim)
                 continue;
-            TT_FATAL(input_shape[i] == expected_output_shape[i]);
-            TT_FATAL(input_shape_wo_padding[i] == expected_output_shape_wo_padding[i]);
+            TT_FATAL(input_shape[i] == expected_output_shape[i], "Error");
+            TT_FATAL(input_shape_wo_padding[i] == expected_output_shape_wo_padding[i], "Error");
         }
     }
 }

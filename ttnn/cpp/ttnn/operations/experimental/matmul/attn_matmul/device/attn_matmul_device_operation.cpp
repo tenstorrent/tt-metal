@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "attn_matmul_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 namespace ttnn::operations::experimental::matmul {
 
@@ -14,7 +14,7 @@ void AttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_tensor
     // intermediate: [q_heads, batch, batch, kv_len]
     // output: [q_len, q_heads, batch, kv_len]
 
-    TT_FATAL(input_tensors.size() == 2);
+    TT_FATAL(input_tensors.size() == 2, "Error");
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     TT_FATAL(
@@ -48,17 +48,17 @@ void AttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_tensor
     if (read_from_kv_cache) {
         if (this->transpose_hw.value()) {
             TT_FATAL(
-                ashape[3] == bshape[3] &&
+                ashape[3] == bshape[3],
                 "For pre-attention matmul, dimension K for B is in B.shape[3], so A.shape[3] must match B.shape[3]");  // A.K == B.K
         } else {
             TT_FATAL(
-                ashape[3] == this->num_tokens &&
+                ashape[3] == this->num_tokens,
                 "For post-attention matmul, dimension K (A.shape[3]) is the kv_seq_len in this case and must match the "
                 "length of the cache we read");  // A.K == B.K
         }
     } else {
         TT_FATAL(
-            ashape[3] == bshape[2] &&
+            ashape[3] == bshape[2],
             "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in attn_matmul op");  // A.K == B.K
     }
 }
@@ -114,8 +114,9 @@ operation::ProgramWithCallbacks AttnMatmulDeviceOperation::create_program(
 }
 
 const operation::Hash AttnMatmulDeviceOperation::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
-    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensors.at(0).storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensors.at(0).get_storage()),__FILE__, __LINE__));
-    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensors.at(1).storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensors.at(1).get_storage()),__FILE__, __LINE__));
+    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensors.at(0).storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(input_tensors.at(0).get_storage()));
+    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensors.at(1).storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(input_tensors.at(1).get_storage()));
+
     return operation::hash_operation<AttnMatmulDeviceOperation>(
         this->transpose_hw,
         this->output_mem_config,

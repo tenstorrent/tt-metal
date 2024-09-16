@@ -6,7 +6,7 @@
 
 #include "ttnn/run_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -39,7 +39,7 @@ void MorehSoftmaxBackward::validate_with_output_tensors(
 
     TT_ASSERT(
         this->dim >= 0 && this->dim < rank,
-        fmt::format("dim {} should be less than output tensor rank {}", this->dim, rank));
+        "dim {} should be less than output tensor rank {}", this->dim, rank);
 
     if (output_tensors.empty() || !output_tensors.at(0).has_value()) {
         // If the user decided to not use any optional output tensors, then this would be empty or would be a nullptr.
@@ -122,23 +122,23 @@ MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackward::get_parallel
         TT_ASSERT(
             this->strategy == MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_H ||
                 this->strategy == MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_H,
-            fmt::format("Invalid parallelization strategy. {} is not for dim H", this->strategy));
+            "Invalid parallelization strategy. {} is not for dim H", this->strategy);
 
         if (this->strategy == MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_H) {
             TT_ASSERT(
                 is_moreh_softmax_backward_h_small_available(output),
-                fmt::format("not enough circular buffer memory for {}", this->strategy));
+                "not enough circular buffer memory for {}", this->strategy);
         }
     } else if (rank - 1 == this->dim) {
         TT_ASSERT(
             this->strategy == MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_W ||
                 this->strategy == MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_W,
-            fmt::format("Invalid parallelization strategy. {} is not for dim W", this->strategy));
+            "Invalid parallelization strategy. {} is not for dim W", this->strategy);
 
         if (this->strategy == MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_W) {
             TT_ASSERT(
                 is_moreh_softmax_backward_w_small_available(output),
-                fmt::format("not enough circular buffer memory for {}", this->strategy));
+                "not enough circular buffer memory for {}", this->strategy);
         }
     } else {
         TT_ASSERT(

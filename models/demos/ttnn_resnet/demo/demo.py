@@ -17,7 +17,7 @@ from models.utility_functions import (
 )
 
 from models.demos.ttnn_resnet.tests.demo_utils import get_data, get_data_loader, get_batch
-from models.demos.ttnn_resnet.tests.ttnn_resnet_test_infra import create_test_infra
+from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra
 
 resnet_model_config = {
     "MATH_FIDELITY": ttnn.MathFidelity.LoFi,
@@ -69,7 +69,7 @@ def run_resnet_imagenet_inference(
     for iter in range(iterations):
         predictions = []
         inputs, labels = get_batch(data_loader, image_processor)
-        tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
+        tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device, inputs)
         test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
         tt_output = test_infra.run()
         tt_output = ttnn.from_device(tt_output, blocking=True).to_torch().to(torch.float)
@@ -137,7 +137,7 @@ def run_resnet_inference(
     profiler.end(f"move_weights")
 
     profiler.start(f"preprocessing")
-    tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
+    tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device, inputs)
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
     ttnn.synchronize_device(device)
     profiler.end(f"preprocessing")

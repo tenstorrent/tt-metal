@@ -13,7 +13,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -48,14 +48,20 @@ DatacopyParams setup_datacopy(
     const uint32_t ring_size,
     const uint32_t ring_index,
     all_gather_op::Topology topology,
+    const std::optional<size_t> user_defined_num_workers,
+    const std::optional<size_t> user_defined_num_buffers_per_channel,
 
     CoreCoord datacopy_core_coord,
     const ttnn::experimental::ccl::MatmulFusedOpSignaler& matmul_fused_op_signaler
 ) {
 
     std::size_t num_edm_buffers_per_channel = 2;
+    if (user_defined_num_buffers_per_channel.has_value()) {
+        // Override with user defined value
+        num_edm_buffers_per_channel = user_defined_num_buffers_per_channel.value();
+    }
     const auto& device = input_tensor.device();
-    auto const& all_gather_config = ttnn::AllGatherConfig(input_tensor, all_gather_output_tensor, dim, ring_size, num_links, topology, num_edm_buffers_per_channel, true);
+    auto const& all_gather_config = ttnn::AllGatherConfig(input_tensor, all_gather_output_tensor, dim, ring_size, num_links, topology, num_edm_buffers_per_channel, true, user_defined_num_workers);
     const uint32_t num_transfers = 4;
 
     auto tensor_slicer = ttnn::ccl::InterleavedRingAllGatherTensorSlicer (
@@ -207,6 +213,8 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
+    const std::optional<size_t> user_defined_num_workers,
+    const std::optional<size_t> user_defined_num_buffers_per_channel,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     all_gather_op::Topology topology,
@@ -285,12 +293,12 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
             );
             matmul_override_runtime_arguments_callback = matmul_program_with_callbacks->override_runtime_arguments_callback;
         } else {
-            TT_FATAL("Unsupported MatmulProgramConfig type");
+            TT_THROW("Unsupported MatmulProgramConfig type. Needs to be 1D or 2D Multicast.");
         }
     }, program_config);
 
     if (!matmul_program_with_callbacks.has_value()) {
-        TT_FATAL("Matmul program with callbacks not created");
+        TT_THROW("Matmul program with callbacks not created");
     }
 
 
@@ -308,6 +316,8 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
             ring_size,
             ring_index,
             topology,
+            user_defined_num_workers,
+            user_defined_num_buffers_per_channel,
             datacopy_core_coord,
             matmul_fused_op_signaler.value()
         );
@@ -323,7 +333,8 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
     } else {
         all_gather_fused_op_signaler->init_fused_op(
             matmul_fused_op_signaler->fused_op_receiver_cores_noc,
-            matmul_fused_op_signaler->fused_op_receiver_signal_semaphores
+            matmul_fused_op_signaler->fused_op_receiver_signal_semaphores,
+            matmul_fused_op_signaler->fused_op_signaler_mode
         );
     }
 
@@ -339,6 +350,8 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
         receiver_device_id,
         sender_device_id,
         topology,
+        user_defined_num_workers,
+        user_defined_num_buffers_per_channel,
         all_gather_fused_op_signaler,
         core_grid_offset);
     const auto all_gather_override_runtime_arguments_callback = program_with_callbacks.override_runtime_arguments_callback;

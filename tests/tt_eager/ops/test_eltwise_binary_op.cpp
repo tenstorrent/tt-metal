@@ -53,51 +53,51 @@ int main() {
     {
         tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
         auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
-        TT_FATAL(allclose);
+        TT_FATAL(allclose, "Error");
     }
 
     {
         tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
         auto allclose = run_test<host_function<std::minus<float>>>(shape, ttnn::subtract, device);
-        TT_FATAL(allclose);
+        TT_FATAL(allclose, "Error");
     }
 
     {
         tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
         auto allclose = run_test<host_function<std::multiplies<float>>>(shape, ttnn::multiply, device, 1e-2f, 1e-3f);
-        TT_FATAL(allclose);
+        TT_FATAL(allclose, "Error");
     }
 
     auto run_binary_ops = [&] {
         {
             tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
             auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
-            TT_FATAL(allclose);
+            TT_FATAL(allclose, "Error");
         }
 
         {
             tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
             auto allclose = run_test<host_function<std::minus<float>>>(shape, ttnn::subtract, device);
-            TT_FATAL(allclose);
+            TT_FATAL(allclose, "Error");
         }
 
         {
             tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT * 2, tt::constants::TILE_WIDTH * 2};
             auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
-            TT_FATAL(allclose);
+            TT_FATAL(allclose, "Error");
         }
 
         {
             tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
             auto allclose =
                 run_test<host_function<std::multiplies<float>>>(shape, ttnn::multiply, device, 1e-2f, 1e-3f);
-            TT_FATAL(allclose);
+            TT_FATAL(allclose, "Error");
         }
 
         {
             tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT * 4, tt::constants::TILE_WIDTH * 4};
             auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
-            TT_FATAL(allclose);
+            TT_FATAL(allclose, "Error");
         }
     };
 
@@ -118,9 +118,9 @@ int main() {
 
     device->disable_and_clear_program_cache();
 
-    TT_FATAL(device->num_program_cache_entries()== 0);
+    TT_FATAL(device->num_program_cache_entries()== 0, "Error");
 
-    TT_FATAL(tt::tt_metal::CloseDevice(device));
+    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
 
     return 0;
 }

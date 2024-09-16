@@ -23,8 +23,8 @@ void Prod_op::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands need to be allocated in buffers on device!");
     TT_FATAL((input_tensor_a.get_layout() == Layout::TILE), "Input Layout must be tilized");
-    TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
-    TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16);
+    TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+    TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Error");
 }
 
 std::vector<tt::tt_metal::LegacyShape> Prod_op::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {

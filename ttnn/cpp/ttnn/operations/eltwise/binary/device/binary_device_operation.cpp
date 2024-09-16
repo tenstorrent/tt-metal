@@ -7,7 +7,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 namespace ttnn::operations::binary {
 
@@ -65,38 +65,38 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
         if (input_tensor_a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
             // If we aren't height sharded, we require all sharding schemes to match until we add blocked
             // reader/writers for width and block sharding
-            TT_FATAL((input_tensor_b.memory_config().is_sharded()));
-            TT_FATAL(input_tensor_a.shard_spec().value().grid.ranges().size() == 1);
+            TT_FATAL((input_tensor_b.memory_config().is_sharded()), "Error");
+            TT_FATAL(input_tensor_a.shard_spec().value().grid.ranges().size() == 1, "Error");
         }
         if (input_tensor_b.memory_config().is_sharded()) {
-            TT_FATAL(input_tensor_a.memory_config().memory_layout == input_tensor_b.memory_config().memory_layout);
-            TT_FATAL(input_tensor_a.shard_spec().value() == input_tensor_b.shard_spec().value());
+            TT_FATAL(input_tensor_a.memory_config().memory_layout == input_tensor_b.memory_config().memory_layout, "Error");
+            TT_FATAL(input_tensor_a.shard_spec().value() == input_tensor_b.shard_spec().value(), "Error");
         }
         if (attributes.memory_config.is_sharded()) {
-            TT_FATAL(input_tensor_a.memory_config().memory_layout == attributes.memory_config.memory_layout);
+            TT_FATAL(input_tensor_a.memory_config().memory_layout == attributes.memory_config.memory_layout, "Error");
         } else {
-            TT_FATAL(attributes.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+            TT_FATAL(attributes.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
         }
     } else if (input_tensor_b.memory_config().is_sharded()) {
-        TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
-        TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+        TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+        TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
         if (attributes.memory_config.is_sharded()) {
-            TT_FATAL(input_tensor_b.memory_config().memory_layout == attributes.memory_config.memory_layout);
+            TT_FATAL(input_tensor_b.memory_config().memory_layout == attributes.memory_config.memory_layout, "Error");
         } else {
-            TT_FATAL(attributes.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+            TT_FATAL(attributes.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
         }
     } else {
-        TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
-        TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+        TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+        TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
         if (attributes.memory_config.is_sharded()) {
-            TT_FATAL(attributes.memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+            TT_FATAL(attributes.memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
             uint32_t num_blocks = input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1] / TILE_HEIGHT;
             auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
             uint32_t num_cores = core_grid.x * core_grid.y;
-            TT_FATAL(num_blocks < num_cores or num_blocks % num_cores == 0);
+            TT_FATAL(num_blocks < num_cores or num_blocks % num_cores == 0, "Error");
 
         } else {
-            TT_FATAL(attributes.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+            TT_FATAL(attributes.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
         }
     }
 
@@ -104,7 +104,7 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
     std::visit(
         [&attributes](auto&& program_factory) {
             if constexpr (std::is_same_v<decltype(program_factory), ElementWiseMultiCore>) {
-                TT_FATAL(not attributes.activations.has_value());
+                TT_FATAL(not attributes.activations.has_value(), "Error");
             }
         },
         program_factory);
@@ -198,7 +198,7 @@ BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_outpu
                 auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
                 uint32_t num_grid_cores = core_grid.x * core_grid.y;
                 uint32_t target_num_cores = num_blocks < num_grid_cores ? num_blocks : num_grid_cores;
-                shard_spec.grid = num_cores_to_corerange_set(target_num_cores, core_grid, true);
+                shard_spec.grid = tt::tt_metal::num_cores_to_corerange_set(target_num_cores, core_grid, true);
                 shard_spec.shape = {
                     num_blocks / target_num_cores * TILE_HEIGHT, input_tensor_a.get_legacy_shape()[-1]};
                 shard_spec.orientation = ShardOrientation::ROW_MAJOR;
@@ -238,18 +238,13 @@ tt::stl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
     auto program_factory = select_program_factory(attributes, tensor_args);
     TT_ASSERT(
         std::holds_alternative<DeviceStorage>(input_tensor_a.get_storage()),
-        fmt::format(
-            "Unexpected type {} in {}:{} ",
-            tt::stl::get_active_type_name_in_variant(input_tensor_a.get_storage()),
-            __FILE__,
-            __LINE__));
+        "Unexpected type {}",
+        tt::stl::get_active_type_name_in_variant(input_tensor_a.get_storage()));
     TT_ASSERT(
         std::holds_alternative<DeviceStorage>(input_tensor_b.get_storage()),
-        fmt::format(
-            "Unexpected type {} in {}:{} ",
-            tt::stl::get_active_type_name_in_variant(input_tensor_b.get_storage()),
-            __FILE__,
-            __LINE__));
+        "Unexpected type {}",
+        tt::stl::get_active_type_name_in_variant(input_tensor_b.get_storage()));
+
     operation::Hash hash = operation::hash_operation<BinaryDeviceOperation>(
         attributes,
         program_factory.index(),

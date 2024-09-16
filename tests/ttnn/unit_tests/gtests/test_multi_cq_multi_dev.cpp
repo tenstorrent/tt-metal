@@ -21,15 +21,15 @@ Tensor dispatch_ops_to_device(Device* dev, Tensor input_tensor, uint8_t cq_id) {
     using ttnn::operations::unary::UnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
 
-    Tensor output_tensor = ttnn::mul_sfpu(cq_id, input_tensor);
+    Tensor output_tensor = ttnn::mul_sfpu(cq_id, input_tensor, 2);
     for (int i = 0; i < 3; i++) {
         output_tensor = ttnn::neg(cq_id, output_tensor);
         output_tensor = ttnn::neg(cq_id, output_tensor);
         output_tensor = ttnn::mul_sfpu(cq_id, output_tensor, 2);
     }
-    output_tensor = ttnn::neg(cq_id, input_tensor);
-    output_tensor = ttnn::mul_sfpu(cq_id, input_tensor, 2);
-    output_tensor = ttnn::add_sfpu(cq_id, input_tensor, 500);
+    output_tensor = ttnn::neg(cq_id, output_tensor);
+    output_tensor = ttnn::mul_sfpu(cq_id, output_tensor, 2);
+    output_tensor = ttnn::add_sfpu(cq_id, output_tensor, 500);
     return output_tensor;
 }
 

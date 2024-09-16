@@ -116,7 +116,8 @@ std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_ct_args(Tensor const& t) {
     TT_FATAL(
         t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
         t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-        t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED
+        t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        "Unsupported memory layout {}.", t.memory_config().memory_layout
     );
     args.push_back(static_cast<uint32_t>(t.memory_config().memory_layout));
     // shard_grid_height (cores)
@@ -141,7 +142,8 @@ bool ShardedAddrGenArgBuilder::shard_grid_is_transposed(Tensor const& t) {
     TT_FATAL(
         t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
         t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-        t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED
+        t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        "Unsupported memory layout {}.", t.memory_config().memory_layout
     );
     bool shard_grid_transposed =
         ((t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
@@ -376,7 +378,7 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::RingReduceScatterBaseTensor
     uint32_t slice_size_in_bytes = std::numeric_limits<uint32_t>::max();
     if (row_major) {
         if (slice_dim_is_width) {
-            TT_FATAL(false, "Reduce scatter row-major interleaved does not yet support a width dim");
+            TT_THROW("Reduce scatter row-major interleaved does not yet support a width dim");
             this->output_addr_offset = input_page_size;
         } else {
             this->output_page_offset = num_rows;

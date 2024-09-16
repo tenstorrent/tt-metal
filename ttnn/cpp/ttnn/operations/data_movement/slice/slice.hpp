@@ -16,12 +16,14 @@ struct SliceOperation {
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::LegacyShape output_tensor_start,
         tt::tt_metal::LegacyShape output_tensor_end,
+        const std::optional<tt::tt_metal::LegacyShape> step,
         const std::optional<MemoryConfig>& memory_config_arg);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::LegacyShape output_tensor_start,
         tt::tt_metal::LegacyShape output_tensor_end,
+        const std::optional<tt::tt_metal::LegacyShape> step,
         const std::optional<MemoryConfig>& memory_config_arg);
 
     static ttnn::Tensor invoke(
@@ -29,6 +31,7 @@ struct SliceOperation {
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::Array1D output_tensor_start,
         tt::tt_metal::Array1D output_tensor_end,
+        const std::optional<tt::tt_metal::Array1D> step,
         const std::optional<MemoryConfig>& memory_config_arg);
 
     static ttnn::Tensor invoke(
@@ -36,18 +39,21 @@ struct SliceOperation {
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::Array4D output_tensor_start,
         tt::tt_metal::Array4D output_tensor_end,
+        const std::optional<tt::tt_metal::Array4D> step,
         const std::optional<MemoryConfig>& memory_config_arg);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::Array4D output_tensor_start,
         tt::tt_metal::Array4D output_tensor_end,
+        const std::optional<tt::tt_metal::Array4D> step,
         const std::optional<MemoryConfig>& memory_config_arg);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::Array4D output_tensor_start,
-        tt::tt_metal::Array4D output_tensor_end);
+        tt::tt_metal::Array4D output_tensor_end,
+        const std::optional<tt::tt_metal::Array4D> step);
 };
 
 }  // namespace data_movement

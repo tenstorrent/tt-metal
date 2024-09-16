@@ -13,7 +13,7 @@
 #include "core_config.h"
 #include "noc/noc_parameters.h"
 #include "dev_mem_map.h"
-#include "eth_l1_address_map.h"
+#include "hostdevcommon/profiler_common.h"
 
 // TODO: move these to processor specific files
 #if defined(COMPILE_FOR_ERISC)
@@ -118,9 +118,9 @@ struct slave_sync_msg_t {
     };
 };
 
-constexpr int num_status_bytes_per_riscv = 4;
-struct debug_status_msg_t {
-    volatile uint8_t status[num_status_bytes_per_riscv];
+constexpr int num_waypoint_bytes_per_riscv = 4;
+struct debug_waypoint_msg_t {
+    volatile uint8_t waypoint[num_waypoint_bytes_per_riscv];
 };
 
 // TODO: Clean up this struct with #6738
@@ -195,6 +195,12 @@ struct debug_ring_buf_msg_t {
     uint32_t data[DEBUG_RING_BUFFER_ELEMENTS];
 };
 
+struct debug_stack_usage_t {
+    volatile uint16_t max_usage[DebugNumUniqueRiscs];
+    volatile uint16_t watcher_kernel_id[DebugNumUniqueRiscs];
+    volatile uint16_t pad[16 - DebugNumUniqueRiscs * 2];
+};
+
 constexpr static std::uint32_t DPRINT_BUFFER_SIZE = 204; // per thread
 // TODO: when device specific headers specify number of processors
 // (and hal abstracts them on host), get these from there
@@ -204,28 +210,17 @@ constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 1;
 constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 5;
 #endif
 
-// TODO: w/ the hal, this can come from core specific defines
-constexpr static std::uint32_t MAX_RISCV_PER_CORE = 5;
-
-struct dprint_buf_msg_t {
-    uint8_t data[DPRINT_BUFFERS_COUNT][DPRINT_BUFFER_SIZE];
-    uint32_t pad; // to 1024 bytes
-};
-
-struct debug_stack_usage_t {
-    volatile uint16_t max_usage[DebugNumUniqueRiscs];
-    volatile uint16_t watcher_kernel_id[DebugNumUniqueRiscs];
-    volatile uint16_t pad[16 - DebugNumUniqueRiscs * 2];
-};
-
 enum watcher_enable_msg_t {
     WatcherDisabled = 2,
     WatcherEnabled = 3,
 };
 
+// TODO: w/ the hal, this can come from core specific defines
+constexpr static std::uint32_t MAX_RISCV_PER_CORE = 5;
+
 struct watcher_msg_t {
     volatile uint32_t enable;
-    struct debug_status_msg_t debug_status[MAX_RISCV_PER_CORE];
+    struct debug_waypoint_msg_t debug_waypoint[MAX_RISCV_PER_CORE];
     struct debug_sanitize_noc_addr_msg_t sanitize_noc[NUM_NOCS];
     struct debug_assert_msg_t assert_status;
     struct debug_pause_msg_t pause_status;
@@ -234,13 +229,40 @@ struct watcher_msg_t {
     struct debug_ring_buf_msg_t debug_ring_buf;
 };
 
+struct dprint_buf_msg_t {
+    uint8_t data[DPRINT_BUFFERS_COUNT][DPRINT_BUFFER_SIZE];
+    uint32_t pad; // to 1024 bytes
+};
+
+
+// NOC aligment max from BH
+static constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
+
+// TODO: when device specific headers specify number of processors
+// (and hal abstracts them on host), get these from there (same as above for dprint)
+#if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
+static constexpr uint32_t PROFILER_RISC_COUNT = 1;
+#else
+static constexpr uint32_t PROFILER_RISC_COUNT = 5;
+#endif
+
+static constexpr uint32_t LAUNCH_NOC_ALIGMENT_PAD_COUNT = 1;
+static constexpr uint32_t PROFILER_NOC_ALIGMENT_PAD_COUNT = 2;
+
+struct profiler_msg_t {
+    uint32_t control_vector[kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE];
+    uint32_t buffer[PROFILER_RISC_COUNT][kernel_profiler::PROFILER_L1_VECTOR_SIZE];
+};
+
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
     struct slave_sync_msg_t slave_sync;
-    uint32_t pad;
+    uint32_t pads_1[LAUNCH_NOC_ALIGMENT_PAD_COUNT];
     struct launch_msg_t launch;
     struct watcher_msg_t watcher;
     struct dprint_buf_msg_t dprint_buf;
+    uint32_t pads_2[PROFILER_NOC_ALIGMENT_PAD_COUNT];
+    struct profiler_msg_t profiler;
 };
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_hex_vec_to_core().
@@ -249,15 +271,26 @@ static_assert(sizeof(kernel_config_msg_t) % sizeof(uint32_t) == 0);
 
 #ifndef TENSIX_FIRMWARE
 // Validate assumptions on mailbox layout on host compile
-static_assert((MEM_MAILBOX_BASE + offsetof(mailboxes_t, launch)) % 32 == 0);
-static_assert((eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE + offsetof(mailboxes_t, launch)) % 32 == 0);
+// Constexpr definitions allow for printing of breaking values at compile time
 #ifdef NCRISC_HAS_IRAM
 // These are only used in ncrisc-halt.S
 static_assert(MEM_MAILBOX_BASE + offsetof(mailboxes_t, slave_sync.ncrisc) == MEM_SLAVE_RUN_MAILBOX_ADDRESS);
 static_assert(
     MEM_MAILBOX_BASE + offsetof(mailboxes_t, ncrisc_halt.stack_save) == MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS);
 #endif
+#if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
+static_assert( eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE + sizeof(mailboxes_t) < eth_l1_mem::address_map::ERISC_MEM_MAILBOX_END);
+static constexpr uint32_t ETH_LAUNCH_CHECK = (eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE  + offsetof(mailboxes_t, launch)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
+static constexpr uint32_t ETH_PROFILER_CHECK = (eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE  + offsetof(mailboxes_t, profiler)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
+static_assert( ETH_LAUNCH_CHECK == 0);
+static_assert( ETH_PROFILER_CHECK == 0);
+#else
 static_assert(MEM_MAILBOX_BASE + sizeof(mailboxes_t) < MEM_MAILBOX_END);
+static constexpr uint32_t TENSIX_LAUNCH_CHECK = (MEM_MAILBOX_BASE + offsetof(mailboxes_t, launch)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
+static constexpr uint32_t TENSIX_PROFILER_CHECK = (MEM_MAILBOX_BASE + offsetof(mailboxes_t, profiler)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
+static_assert( TENSIX_LAUNCH_CHECK == 0);
+static_assert( TENSIX_PROFILER_CHECK == 0);
+#endif
 #endif
 
 struct eth_word_t {

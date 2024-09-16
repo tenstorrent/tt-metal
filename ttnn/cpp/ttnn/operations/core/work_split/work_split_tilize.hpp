@@ -155,7 +155,7 @@ struct FullRep {
         rep{n_rows / 32, n_rows % 32, n_pads / 32, times},
         pad{0, 0, (n_rows + n_pads) * pads_mul, 1},
         times_total(times_total) {
-        TT_FATAL((n_rows + n_pads) % 32 == 0 && "total rows must be divisible by 32");
+        TT_FATAL((n_rows + n_pads) % 32 == 0 && "total rows must be divisible by 32", "Error");
     }
 
     std::vector<BlockRep> to_block_reps() const {

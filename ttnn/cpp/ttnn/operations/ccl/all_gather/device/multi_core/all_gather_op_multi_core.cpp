@@ -13,7 +13,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -120,12 +120,12 @@ static std::vector<std::vector<uint32_t>> compute_worker_sender_num_transfers(
                             break;
 
                         default:
-                            TT_FATAL("Unsupported bidirectional mode");
+                            TT_THROW("Unsupported bidirectional mode {}. Please change.", all_gather_config.get_bidirectional_mode());
                     };
                     break;
 
                 default:
-                    TT_FATAL("Unsupported topology");
+                    TT_THROW("Unsupported topology {}. Please change.", topology);
             };
         }
     }
@@ -158,12 +158,12 @@ static std::vector<std::vector<uint32_t>> compute_worker_receiver_num_transfers(
                             break;
 
                         default:
-                            TT_FATAL("Unsupported bidirectional mode");
+                            TT_THROW("Unsupported bidirectional mode {}. Please change.", all_gather_config.get_bidirectional_mode());
                     };
                     break;
 
                 default:
-                    TT_FATAL("Unsupported topology");
+                    TT_THROW("Unsupported topology {}. Please change.", topology);
             };
         }
     }
@@ -183,7 +183,8 @@ static bool shard_grid_is_transposed(Tensor const& t) {
     TT_FATAL(
         t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
         t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-        t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED
+        t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        "Unsupported memory layout {}.", t.memory_config().memory_layout
     );
     bool shard_grid_transposed =
         ((t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
@@ -208,11 +209,11 @@ static void log_sharded_tensor_kernel_args(Tensor const& tensor, std::size_t pag
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
 //   (in other words, disable the "bidirectional" send flag)
-operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor& input_tensor, Tensor& output_tensor, const uint32_t dim, const uint32_t num_links, const uint32_t ring_size, const uint32_t ring_index, const std::optional<chip_id_t> receiver_device_id, const std::optional<chip_id_t> sender_device_id, all_gather_op::Topology topology) {
+operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor& input_tensor, Tensor& output_tensor, const uint32_t dim, const uint32_t num_links, const uint32_t ring_size, const uint32_t ring_index, const std::optional<chip_id_t> receiver_device_id, const std::optional<chip_id_t> sender_device_id, all_gather_op::Topology topology, const std::optional<size_t> user_defined_num_workers, const std::optional<size_t> user_defined_num_buffers_per_channel) {
 
     tt::tt_metal::Program program{};
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
-    return all_gather_multi_core_with_workers_helper(program, input_tensor, output_tensor, dim, num_links, ring_size, ring_index, receiver_device_id, sender_device_id, topology, empty_fused_op_signaler);
+    return all_gather_multi_core_with_workers_helper(program, input_tensor, output_tensor, dim, num_links, ring_size, ring_index, receiver_device_id, sender_device_id, topology, user_defined_num_workers, user_defined_num_buffers_per_channel, empty_fused_op_signaler);
 }
 
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
@@ -226,6 +227,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     all_gather_op::Topology topology,
+    const std::optional<size_t> user_defined_num_workers,
+    const std::optional<size_t> user_defined_num_buffers_per_channel,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset) {
 
@@ -236,8 +239,11 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     std::unique_ptr<ccl::CclOpTensorConfig> output_tensor_config = ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(output_tensor);
 
     std::size_t num_edm_buffers_per_channel = 2;
-    // Issue #10978: CCLs need to be tagged as having multi-device dependencies, when running on Galaxy.
-    program.capture_multi_device_dependencies();
+    if (user_defined_num_buffers_per_channel.has_value()) {
+        // Override with user defined value
+        num_edm_buffers_per_channel = user_defined_num_buffers_per_channel.value();
+    }
+
     const auto& device = input_tensor.device();
 
     /* All gather fusion */
@@ -248,7 +254,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     if (fuse_op) {
         fused_op_signaler_sender_workers = fused_op_signaler.value();
     }
-    auto const& all_gather_config = AllGatherConfig(input_tensor, output_tensor, dim, ring_size, num_links, topology, num_edm_buffers_per_channel, fuse_op);
+    auto const& all_gather_config = AllGatherConfig(input_tensor, output_tensor, dim, ring_size, num_links, topology, num_edm_buffers_per_channel, fuse_op, user_defined_num_workers);
     auto const& topology_config = ttnn::ccl::RingTopology(device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
 
     bool enable_print = false;
@@ -906,11 +912,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                                 worker_writer_sender_rt_args,
                                 global_num_workers_per_direction,
                                 b,
-                                is_clockwise_direction ? 0 : 1,
-                                std::make_optional<experimental::ccl::CoreSemPair>(
-                                    {fused_op_signaler->all_gather_worker_cores_noc[0],
-                                    fused_op_signaler->all_gather_worker_sync_semaphore}
-                                )
+                                is_clockwise_direction ? 0 : 1
                             );
                         }
 

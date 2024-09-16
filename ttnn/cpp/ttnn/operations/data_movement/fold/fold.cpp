@@ -93,7 +93,7 @@ std::vector<Tensor> fold_with_transpose_(
         n = output_shape.value()[0], w = output_shape.value()[1], h = output_shape.value()[2], c = output_shape.value()[3];
         tt::tt_metal::Array4D slice_output_tensor_start = {0, 0, 0, 0};
         tt::tt_metal::Array4D slice_output_tensor_end = {n - 1, w - 1, h - 1, c - 1};
-        auto slice_output = ttnn::slice(transpose_hc_output2, slice_output_tensor_start, slice_output_tensor_end, L1_mem_config);
+        auto slice_output = ttnn::slice(transpose_hc_output2, slice_output_tensor_start, slice_output_tensor_end, std::nullopt, L1_mem_config);
 
         output_tensors.emplace_back(slice_output);
 
@@ -254,7 +254,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
             shard_spec.orientation,
             override_memory_config
         );
-        tt_output_tensor = ttnn::slice(tt_output_tensor, slice_output_tensor_start, slice_output_tensor_end, slice_mem_config);
+        tt_output_tensor = ttnn::slice(tt_output_tensor, slice_output_tensor_start, slice_output_tensor_end, std::nullopt, slice_mem_config);
 
         output_tensors.emplace_back(tt_output_tensor);
 
@@ -270,7 +270,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
             shard_spec.orientation,
             override_memory_config
         );
-        tt_output_tensor = ttnn::slice(tt_output_tensor, slice_output_tensor_start, slice_output_tensor_end, slice_mem_config);
+        tt_output_tensor = ttnn::slice(tt_output_tensor, slice_output_tensor_start, slice_output_tensor_end, std::nullopt, slice_mem_config);
 
         output_tensors.emplace_back(tt_output_tensor);
 
@@ -296,7 +296,7 @@ Tensor FoldOperation::invoke(uint8_t queue_id,
             if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                 return fold_with_transpose_sharded_(queue_id, input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w, grid_size.value_or(CoreCoord(1,1)), override_memory_config).at(0);
             } else {
-                TT_FATAL("fold op does not support non height-sharding!");
+                TT_THROW("fold op does not support non height-sharding!");
             }
         } else {
             return fold_with_transpose_(queue_id, input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w).at(0);

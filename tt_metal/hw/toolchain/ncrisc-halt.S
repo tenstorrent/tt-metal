@@ -57,8 +57,10 @@ halt:
 ncrisc_resume:
     .option push
     .option norelax
-1:  auipc gp, %pcrel_hi(__global_pointer$)
-    addi  gp, gp, %pcrel_lo(1b)
+	// Initialize global pointer,
+	// Use an absolute reloc, so text placement is irrelevant.
+	lui gp,%hi(__global_pointer$)
+	addi gp,gp,%lo(__global_pointer$)
     .option pop
 	lw  sp, MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS( zero )
 	/* Restore context */

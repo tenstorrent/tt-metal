@@ -44,6 +44,21 @@ def is_sharded(tensor) -> bool:
 get_memory_config = ttnn._ttnn.core.get_memory_config
 
 
+def num_cores_to_corerange_set(
+    target_num_cores: int,
+    grid_size: ttnn.CoreCoord,
+    row_wise: bool = False,
+):
+    """
+    Create a CoreRangeSet containing the specified number of cores
+    """
+    return ttnn._ttnn.operations.core.num_cores_to_corerange_set(
+        target_num_cores,
+        grid_size,
+        row_wise,
+    )
+
+
 def has_tile_padding(tensor, *, dim=None):
     if dim is not None:
         rank = tensor.shape.rank
@@ -321,8 +336,8 @@ def create_sharded_memory_config_(
     return memory_config
 
 
-dump_memory_config = ttnn._ttnn.deprecated.tensor.dump_memory_config
-load_memory_config = ttnn._ttnn.deprecated.tensor.load_memory_config
+dump_memory_config = ttnn._ttnn.tensor.dump_memory_config
+load_memory_config = ttnn._ttnn.tensor.load_memory_config
 
 
 __all__ = []

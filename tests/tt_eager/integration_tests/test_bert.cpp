@@ -285,7 +285,7 @@ void test_bert() {
     run_loop();
     device->disable_and_clear_program_cache();
 
-    TT_FATAL(tt::tt_metal::CloseDevice(device));
+    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
 }
 
 int main(int argc, char** argv) {

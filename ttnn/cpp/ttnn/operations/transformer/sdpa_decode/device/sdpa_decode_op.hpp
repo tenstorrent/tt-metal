@@ -20,6 +20,7 @@ struct ScaledDotProductAttentionDecode {
     const std::optional<SDPAProgramConfig> program_config;
     const DeviceComputeKernelConfig compute_kernel_config;
     const uint32_t k_chunk_size;
+    const bool paged_attention;
 
     void validate(const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;

@@ -14,7 +14,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm_backward/moreh_groupnorm_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -83,9 +83,9 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_input_grad_impl(
          num_rows_per_core_group_1,
          num_rows_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_rows);
 
-    log_debug(LogTest, fmt::format("num_cores_to_be_used: {}", num_cores_to_be_used).c_str());
-    log_debug(LogTest, fmt::format("num_rows_per_core_group_1: {}", num_rows_per_core_group_1).c_str());
-    log_debug(LogTest, fmt::format("num_rows_per_core_group_2: {}", num_rows_per_core_group_2).c_str());
+    log_debug(LogTest, "num_cores_to_be_used: {}", num_cores_to_be_used);
+    log_debug(LogTest, "num_rows_per_core_group_1: {}", num_rows_per_core_group_1);
+    log_debug(LogTest, "num_rows_per_core_group_2: {}", num_rows_per_core_group_2);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup

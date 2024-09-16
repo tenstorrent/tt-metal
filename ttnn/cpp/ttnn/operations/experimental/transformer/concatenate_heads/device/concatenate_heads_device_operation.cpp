@@ -32,7 +32,7 @@ void ConcatenateHeadsDeviceOperation::validate_with_output_tensors(
             "Output dtype must be same as input dtype!");
 
         TT_FATAL(
-            optional_output_tensor.value().get_legacy_shape() == tt::tt_metal::LegacyShape({batch_size, 1, 384, 1024}), "Output shape must be {batch_size, 1, 384, 1024}!");
+            optional_output_tensor.value().get_legacy_shape() == tt::tt_metal::LegacyShape({batch_size, 1, 384, 1024}), "Output shape must be (batch_size, 1, 384, 1024)!");
     }
 }
 

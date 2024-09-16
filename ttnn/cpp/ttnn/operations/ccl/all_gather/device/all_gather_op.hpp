@@ -43,7 +43,7 @@ class AllGatherConfig {
     static AllGatherBidirectionalMode choose_bidirectional_mode(Tensor const& input_tensor, bool fuse_op);
 
    public:
-    AllGatherConfig(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim, uint32_t ring_size, uint32_t num_links, all_gather_op::Topology topology, std::size_t num_buffers_per_worker, bool fuse_op=false);
+    AllGatherConfig(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim, uint32_t ring_size, uint32_t num_links, all_gather_op::Topology topology, std::size_t num_buffers_per_worker, bool fuse_op=false, const std::optional<size_t> user_defined_num_workers=std::nullopt);
 
     uint32_t get_erisc_handshake_address() const { return this->erisc_handshake_address; }
 
@@ -128,6 +128,8 @@ struct AllGather {
     const uint32_t num_links;
     const uint32_t ring_size;
     const uint32_t ring_index;
+    const std::optional<size_t> user_defined_num_workers;
+    const std::optional<size_t> user_defined_num_buffers_per_channel;
     const std::optional<chip_id_t> receiver_device_id;
     const std::optional<chip_id_t> sender_device_id;
     const MemoryConfig output_mem_config;
@@ -144,6 +146,8 @@ AllGather create_all_gather_struct(
     const uint32_t dim,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
+    const std::optional<size_t> user_defined_num_workersm,
+    const std::optional<size_t> user_defined_num_buffers_per_channel,
     const std::vector<Device*>& devices
 );
 
@@ -155,6 +159,8 @@ operation::ProgramWithCallbacks all_gather_full_shard_grid(
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
+    const std::optional<size_t> user_defined_num_workers,
+    const std::optional<size_t> user_defined_num_buffers_per_channel,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     all_gather_op::Topology topology);
@@ -167,7 +173,9 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(
     const uint32_t ring_index,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
-    all_gather_op::Topology topology);
+    all_gather_op::Topology topology,
+    const std::optional<size_t> user_defined_num_workers,
+    const std::optional<size_t> user_defined_num_buffers_per_channel);
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
@@ -179,6 +187,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     all_gather_op::Topology topology,
+    const std::optional<size_t> user_defined_num_workers,
+    const std::optional<size_t> user_defined_num_buffers_per_channel,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset = CoreCoord(0, 0));
 
@@ -191,7 +201,9 @@ Tensor all_gather(
     const Tensor& input_tensor,
     const uint32_t dim,
     const uint32_t num_links = 1,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<size_t> user_defined_num_workers = std::nullopt,
+    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);
 
 } // namespace ccl
 } // namespace operations

@@ -161,25 +161,25 @@ std::vector<DataType> unpack_uint32_vec(std::vector<uint32_t>& data_to_unpack) {
 uint32_t element_size_bytes(DataType dtype);
 
 template <typename T>
-constexpr inline uint32_t packed_buffer_size_bytes(uint32_t volume_unpacked_data) {
+constexpr inline size_t packed_buffer_size_bytes(size_t volume_unpacked_data) {
     auto num_type_in_u32 = sizeof(uint32_t) / sizeof(T);
     return (volume_unpacked_data / num_type_in_u32) * sizeof(uint32_t);
 }
 
 // Specialization for float because it gets converted to bfloat16 before being packed
 template <>
-constexpr inline uint32_t packed_buffer_size_bytes<float>(uint32_t volume_unpacked_data) {
+constexpr inline size_t packed_buffer_size_bytes<float>(size_t volume_unpacked_data) {
     auto num_type_in_u32 = sizeof(uint32_t) / sizeof(float);
     return (volume_unpacked_data / num_type_in_u32) * sizeof(uint32_t);
 }
 
 template <>
-constexpr inline uint32_t packed_buffer_size_bytes<bfloat8_b>(uint32_t volume_unpacked_data) {
+constexpr inline size_t packed_buffer_size_bytes<bfloat8_b>(size_t volume_unpacked_data) {
     return packed_buffer_size_bytes<uint32_t>(volume_unpacked_data);
 }
 
 template <>
-constexpr inline uint32_t packed_buffer_size_bytes<bfloat4_b>(uint32_t volume_unpacked_data) {
+constexpr inline size_t packed_buffer_size_bytes<bfloat4_b>(size_t volume_unpacked_data) {
     return packed_buffer_size_bytes<uint32_t>(volume_unpacked_data);
 }
 
@@ -249,7 +249,7 @@ void validate_sharded_buffer_allocation(
 uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const tt::tt_metal::LegacyShape& shape);
 
 DeviceBuffer allocate_buffer_on_device(
-    uint32_t buffer_size_bytes,
+    size_t buffer_size_bytes,
     Device* device,
     const tt::tt_metal::LegacyShape& shape,
     DataType data_type,

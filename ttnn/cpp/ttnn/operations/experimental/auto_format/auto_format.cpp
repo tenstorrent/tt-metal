@@ -163,6 +163,7 @@ Tensor AutoFormat::format_output_tensor(
                     formatted_output,
                     std::vector<uint32_t>({0, 0, 0, 0}),
                     std::vector<uint32_t>({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),
+                    std::nullopt,
                     mem_config);
                 return formatted_output;
                 // Output is tile but shape cannot be tile. We leave in RM
@@ -189,6 +190,7 @@ Tensor AutoFormat::format_output_tensor(
                     formatted_output,
                     std::vector<uint32_t>({0, 0, 0, 0}),
                     std::vector<uint32_t>({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),
+                    std::nullopt,
                     mem_config);
                 formatted_output = ttnn::tilize(formatted_output, mem_config);
                 return formatted_output;
@@ -206,7 +208,7 @@ Tensor AutoFormat::format_output_tensor(
             convert_layout = formatted_output.get_layout() != target_layout;
         }
         formatted_output =
-            ttnn::slice(formatted_output, tt::tt_metal::Array4D({0, 0, 0, 0}), tt::tt_metal::Array4D({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}));
+            ttnn::slice(formatted_output, tt::tt_metal::Array4D({0, 0, 0, 0}), tt::tt_metal::Array4D({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}), std::nullopt, std::nullopt);
     }
 
     if (convert_layout) {

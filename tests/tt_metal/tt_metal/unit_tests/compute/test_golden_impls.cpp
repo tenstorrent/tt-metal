@@ -49,7 +49,7 @@ std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t> &src_ve
                     // Left face row copy
                     for (int k = 0; k < num_c_dim; k++) {
                         int idx = physical_start_for_tile_row + i * num_c_dim + k + j * tile_size;
-                        TT_FATAL(ind.find(idx) == ind.end(), t);
+                        TT_FATAL(ind.find(idx) == ind.end(), "{}", t);
                         ind.insert(idx);
                         dst_vec.push_back(src_vec.at(idx));
                     }
@@ -58,7 +58,7 @@ std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t> &src_ve
                         // Right face row copy
                         for (int k = 0; k < num_c_dim; k++) {
                             int idx = physical_start_for_tile_row + i * num_c_dim + k + face_size + j * tile_size;
-                            TT_FATAL(ind.find(idx) == ind.end(), t);
+                            TT_FATAL(ind.find(idx) == ind.end(), "{}", t);
                             ind.insert(idx);
                             dst_vec.push_back(src_vec.at(idx));
                         }
@@ -127,7 +127,7 @@ std::vector<uint16_t> gold_transpose_wh(const std::vector<uint16_t> &src_vec, co
     for (int w = 0; w < shape[3]; w++) {
         auto toffs = addrt.offs(n, c, w, h);
         auto offs = addr.offs(n, c, h, w);
-        TT_FATAL(toffs < transposed.size() && offs < src_vec.size());
+        TT_FATAL(toffs < transposed.size() && offs < src_vec.size(), "Error");
         transposed[toffs] = src_vec[offs];
     }
 
@@ -139,7 +139,7 @@ std::vector<uint16_t> gold_transpose_wh(const std::vector<uint16_t> &src_vec, co
 // result is also untilized
 std::vector<uint16_t> gold_reduce_h(const std::vector<uint16_t> &src_vec, const std::vector<uint32_t> &shape, float scaler, bool red_max, bool zeropad) {
     vector<uint32_t> shape_dst{shape[0], shape[1], 1, shape[3]};
-    TT_FATAL(shape[2] > 0);
+    TT_FATAL(shape[2] > 0, "Error");
     if (zeropad)
         shape_dst[2] = 32;
     TensAddr addr(shape);

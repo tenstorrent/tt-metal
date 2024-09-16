@@ -367,7 +367,7 @@ Tensor _swish(const Tensor& a, const std::optional<MemoryConfig>& output_mem_con
 
 Tensor _trunc(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     auto arch = input.device()->arch();
-    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
+    TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Op is not supported on Grayskull");
     Tensor floor_res = ttnn::floor(input, output_mem_config);
     Tensor trunc_res = ttnn::where(ttnn::ne(input, floor_res), ttnn::add(floor_res, 1.0f, std::nullopt, output_mem_config), floor_res);
     Tensor result = ttnn::where(ttnn::gtz(input, output_mem_config), floor_res, trunc_res);
@@ -532,8 +532,8 @@ std::vector<Tensor> split_tensor_for_glu(const Tensor& input_a, int32_t dim, con
     std::vector<uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
     std::vector<uint32_t> e_b = {inshape[0] - 1, inshape[1] - 1, inshape[2] - 1, inshape[3] - 1};
 
-    Tensor t_a = ttnn::slice(0, input_a, s_a, e_a, output_mem_config);
-    Tensor t_b = ttnn::slice(0, input_a, s_b, e_b, output_mem_config);
+    Tensor t_a = ttnn::slice(0, input_a, s_a, e_a, std::nullopt, output_mem_config);
+    Tensor t_b = ttnn::slice(0, input_a, s_b, e_b, std::nullopt, output_mem_config);
 
     t_split.emplace_back(t_a);
     t_split.emplace_back(t_b);

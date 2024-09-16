@@ -52,7 +52,7 @@ std::vector<Tensor> MorehBiasAddBackward::create_output_tensors(
         return {output_tensors.at(0).value()};
     }
 
-    TT_FATAL(input_tensors.size() == 2);
+    TT_FATAL(input_tensors.size() == 2, "Error");
     return operation::generic_create_output_tensors(
         *this, input_tensors, input_tensors.at(1).get_dtype(), Layout::TILE, this->bias_grad_mem_config);
 }
@@ -111,7 +111,7 @@ std::vector<std::optional<Tensor>> moreh_linear_backward(
             weight.storage_type() == StorageType::DEVICE,
         "input and weight tensors need to be on device");
 
-    TT_FATAL(output_grad.storage_type() == StorageType::DEVICE);
+    TT_FATAL(output_grad.storage_type() == StorageType::DEVICE, "Error");
     auto kernel_config_val = init_device_compute_kernel_config(output_grad.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
     moreh_linear_backward_validate(output_grad, input, weight, input_grad, weight_grad, bias_grad);

@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::pool {
 
-MaxPoolNew::program_factory_t MaxPoolNew::select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
+MaxPool2D::program_factory_t MaxPool2D::select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
     return MultiCore{};
 }
 
@@ -32,15 +32,15 @@ void validate_maxpool(const Tensor& input, const sliding_window::SlidingWindowCo
     TT_FATAL(out_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Only height sharded tensors are supported.");
 }
 
-void MaxPoolNew::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
+void MaxPool2D::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     return validate_maxpool(tensors.input_tensor_, op_attr.sliding_window_config_, op_attr.memory_config_);
 }
 
-void MaxPoolNew::validate_on_program_cache_hit(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
+void MaxPool2D::validate_on_program_cache_hit(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     return validate_maxpool(tensors.input_tensor_, op_attr.sliding_window_config_, op_attr.memory_config_);
 }
 
-MaxPoolNew::shape_return_value_t MaxPoolNew::compute_output_shapes(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
+MaxPool2D::shape_return_value_t MaxPool2D::compute_output_shapes(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     auto& input = tensors.input_tensor_;
     auto& sliding_window_config = op_attr.sliding_window_config_;
     auto& out_mem_config = op_attr.memory_config_;
@@ -74,7 +74,7 @@ MaxPoolNew::shape_return_value_t MaxPoolNew::compute_output_shapes(const operati
     return out_shape;
 }
 
-MaxPoolNew::tensor_return_value_t MaxPoolNew::create_output_tensors(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
+MaxPool2D::tensor_return_value_t MaxPool2D::create_output_tensors(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     auto& input = tensors.input_tensor_;
     auto& sliding_window_config = op_attr.sliding_window_config_;
     auto& out_mem_config = op_attr.memory_config_;
@@ -99,13 +99,13 @@ MaxPoolNew::tensor_return_value_t MaxPoolNew::create_output_tensors(const operat
     return create_device_tensor(output_shape, output_dtype, input.get_layout(), input.device(), mem_config);
 }
 
-tt::stl::hash::hash_t MaxPoolNew::compute_program_hash(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
+tt::stl::hash::hash_t MaxPool2D::compute_program_hash(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     auto input_mem_config = tensors.input_tensor_.memory_config();
     auto dtype = tensors.input_tensor_.dtype();
-    return operation::hash_operation<MaxPoolNew>(op_attr.sliding_window_config_.get_hash(), op_attr.memory_config_, input_mem_config, dtype);
+    return operation::hash_operation<MaxPool2D>(op_attr.sliding_window_config_.get_hash(), op_attr.memory_config_, input_mem_config, dtype);
 }
 
-operation::OpPerformanceModel MaxPoolNew::create_op_performance_model(const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output) {
+operation::OpPerformanceModel MaxPool2D::create_op_performance_model(const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output) {
     const auto& input = inputs.input_tensor_;
     const auto& input_shape = input.get_shape();
     auto sliding_window_config = op_attr.sliding_window_config_;
@@ -141,7 +141,7 @@ operation::OpPerformanceModel MaxPoolNew::create_op_performance_model(const oper
 }
 
 
-std::tuple<MaxPoolNew::operation_attributes_t, MaxPoolNew::tensor_args_t> MaxPoolNew::invoke(
+std::tuple<MaxPool2D::operation_attributes_t, MaxPool2D::tensor_args_t> MaxPool2D::invoke(
     const Tensor& input_tensor,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     DataType output_dtype,

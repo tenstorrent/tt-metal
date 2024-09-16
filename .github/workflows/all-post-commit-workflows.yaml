@@ -11,10 +11,31 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  packages: write
 
 jobs:
   static-checks:
     uses: ./.github/workflows/all-static-checks.yaml
+    secrets: inherit
+  build-wheels:
+    needs: build-artifact
+    strategy:
+      matrix:
+        # Since pre-compiled builds only run on 20.04, we can only test on 20.04 for now
+        # The full 22.04 flow can be tested without precompiled
+        os: [ubuntu-20.04]
+        arch: [grayskull, wormhole_b0]
+    uses: ./.github/workflows/_build-wheels-impl.yaml
+    with:
+      os: ${{ matrix.os }}
+      arch: ${{ matrix.arch }}
+      from-precompiled: true
+    secrets: inherit
+  test-wheels:
+    needs: build-wheels
+    uses: ./.github/workflows/_test-wheels-impl.yaml
+    with:
+      from-precompiled: true
     secrets: inherit
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
@@ -57,7 +78,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
-    needs: build-artifact
+    needs: build-wheels
     secrets: inherit
     strategy:
       fail-fast: false
@@ -73,7 +94,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # TTNN FD Unit tests
   ttnn-unit-tests:
-    needs: build-artifact
+    needs: build-wheels
     secrets: inherit
     strategy:
       fail-fast: false
@@ -89,7 +110,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # FD Model Tests
   models-unit-tests:
-    needs: build-artifact
+    needs: build-wheels
     secrets: inherit
     strategy:
       fail-fast: false
@@ -119,13 +140,9 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-
   profiler-regression:
     needs: build-artifact-profiler
     uses: ./.github/workflows/run-profiler-regression.yaml
-    secrets: inherit
-  eager-package-main:
-    uses: ./.github/workflows/eager-package-main.yaml
     secrets: inherit
   build-docs:
     needs: build-artifact

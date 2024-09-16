@@ -47,7 +47,6 @@ def test_bw_sqrt_output(input_shapes, device):
     tt_output_tensor_on_device = ttnn.sqrt_bw(
         grad_tensor,
         input_tensor,
-        are_required_outputs=[True],
         input_grad=input_grad,
         queue_id=cq_id,
     )

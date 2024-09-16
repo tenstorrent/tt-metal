@@ -34,6 +34,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
     mem_map_bases[hv(HalMemAddrType::LAUNCH)] = GET_IERISC_MAILBOX_ADDRESS_HOST(launch);
     mem_map_bases[hv(HalMemAddrType::WATCHER)] = GET_IERISC_MAILBOX_ADDRESS_HOST(watcher);
     mem_map_bases[hv(HalMemAddrType::DPRINT)] = GET_IERISC_MAILBOX_ADDRESS_HOST(dprint_buf);
+    mem_map_bases[hv(HalMemAddrType::PROFILER)] = GET_IERISC_MAILBOX_ADDRESS_HOST(profiler);
     mem_map_bases[hv(HalMemAddrType::KERNEL_CONFIG)] = IDLE_ERISC_L1_KERNEL_CONFIG_BASE;
     mem_map_bases[hv(HalMemAddrType::UNRESERVED)] = ERISC_L1_UNRESERVED_BASE;
 
@@ -43,6 +44,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
     mem_map_sizes[hv(HalMemAddrType::LAUNCH)] = sizeof(launch_msg_t);
     mem_map_sizes[hv(HalMemAddrType::WATCHER)] = sizeof(watcher_msg_t);
     mem_map_sizes[hv(HalMemAddrType::DPRINT)] = sizeof(dprint_buf_msg_t);
+    mem_map_sizes[hv(HalMemAddrType::PROFILER)] = sizeof(profiler_msg_t);
     mem_map_sizes[hv(HalMemAddrType::KERNEL_CONFIG)] = L1_KERNEL_CONFIG_SIZE; // TODO: this is wrong, need idle eth specific value
     mem_map_sizes[hv(HalMemAddrType::UNRESERVED)] = MEM_ETH_SIZE - ERISC_L1_UNRESERVED_BASE;
 

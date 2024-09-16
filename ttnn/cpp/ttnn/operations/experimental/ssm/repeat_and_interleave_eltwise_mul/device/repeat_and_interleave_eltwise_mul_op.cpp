@@ -11,7 +11,7 @@ namespace ttnn::operations::experimental::ssm {
 
 void RepeatAndInterleaveEltwiseMul::validate(const std::vector<Tensor>& input_tensors) const {
     using namespace tt::constants;
-    TT_FATAL(input_tensors.size() == 2);
+    TT_FATAL(input_tensors.size() == 2, "Error");
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     TT_FATAL(

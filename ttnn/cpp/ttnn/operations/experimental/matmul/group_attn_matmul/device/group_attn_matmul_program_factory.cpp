@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "group_attn_matmul_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -43,7 +43,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
             fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
             packer_l1_acc = compute_kernel_config.packer_l1_acc;
         } else {
-            TT_FATAL("arch not supported");
+            TT_THROW("arch not supported");
         }
 
     }, compute_kernel_config);
@@ -320,7 +320,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         // TODO: To generalize to allow parallelizing/sharding across generic batch for KV_heads, we need to track sender cores across batch-number of rows instead of 32
         // TODO: Only support one block of work (ie. 1 Q head per core) because each core assumes only one KV_heads to use
         uint32_t num_active_cores = std::max(Q_HEADS, TILE_HEIGHT);
-        auto [num_cores, all_cores, core_group_1, core_group_2, num_output_blocks_per_core_group_1, num_output_blocks_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_active_cores, row_major);
+        auto [num_cores, all_cores, core_group_1, core_group_2, num_output_blocks_per_core_group_1, num_output_blocks_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_active_cores, row_major);
         // num_cores should be same as num_active_cores
         TT_FATAL(num_output_blocks_per_core_group_1 == 1 and num_output_blocks_per_core_group_2 == 0, "Group attention matmul only supports one q_heads per core. Increase compute grid size to at least have as many cores as q_heads!");
 

@@ -13,6 +13,7 @@
 #include <ttnn/tensor/tensor_utils.hpp>
 #include <ttnn/tensor/types.hpp>
 #include <ttnn/tensor/tensor_impl.hpp>
+#include "ttnn/cpp/ttnn/common/constants.hpp"
 
 namespace tt {
 
@@ -48,12 +49,14 @@ constexpr static DataType get_data_type() {
 
 template <typename T>
 static Tensor full(
+    uint8_t queue_id,
     const tt::tt_metal::LegacyShape& shape,
     T value,
     const Layout layout = Layout::ROW_MAJOR,
     Device* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
-        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+    std::optional<Tensor> optional_output_tensor = std::nullopt) {
     if (layout == Layout::TILE) {
         if (shape.rank() < 2) {
             TT_THROW("TILE layout requires rank >= 2");
@@ -68,17 +71,70 @@ static Tensor full(
             tt::constants::TILE_HEIGHT);
     }
 
-    constexpr DataType data_type = detail::get_data_type<T>();
-    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
-    std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
-    auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
-    if (device != nullptr) {
-        output = output.to(device, output_mem_config);
-    }
-    return output;
+        constexpr DataType data_type = detail::get_data_type<T>();
+        auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
+        std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
+
+        if(!optional_output_tensor.has_value()){
+            auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
+            if (device != nullptr) {
+                output = output.to(device, output_mem_config);
+            }
+            return output;
+        }
+        else {
+            auto device_buffer = std::get<DeviceStorage>(optional_output_tensor.value().tensor_attributes->storage).get_buffer();
+            bool using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
+
+            if (using_fast_dispatch && device != nullptr) {
+                auto& cmd_queue = device->command_queue(queue_id);
+                if (CommandQueue::default_mode() == CommandQueue::CommandQueueMode::ASYNC) {
+                    tt::tt_metal::EnqueueWriteBuffer(cmd_queue, device_buffer, owned_buffer.get_ptr(), false);
+                } else {
+                    tt::tt_metal::EnqueueWriteBuffer(cmd_queue, device_buffer, owned_buffer.data(), false);
+                }
+            } else {
+                auto uint32_data = tt::tt_metal::tensor_impl::pack_vec_into_uint32_vec<T>(owned_buffer);
+                tt::tt_metal::detail::WriteToBuffer(*device_buffer, uint32_data);
+            }
+
+            return optional_output_tensor.value();
+        }
 }
 
 }  // namespace detail
+
+template <typename T>
+static Tensor full_impl(
+    uint8_t queue_id,
+    const tt::tt_metal::LegacyShape& shape,
+    const T value,
+    const DataType data_type,
+    const Layout layout = Layout::ROW_MAJOR,
+    Device* device = nullptr,
+    const MemoryConfig& output_mem_config = MemoryConfig{
+        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+    std::optional<Tensor> optional_output_tensor = std::nullopt) {
+    switch (data_type) {
+        case DataType::UINT8: {
+            return detail::full<uint8_t>(queue_id, shape, uint8_t(value), layout, device, output_mem_config, optional_output_tensor);
+        }
+        case DataType::UINT16: {
+            return detail::full<uint16_t>(queue_id, shape, uint16_t(value), layout, device, output_mem_config, optional_output_tensor);
+        }
+        case DataType::UINT32: {
+            return detail::full<uint32_t>(queue_id, shape, uint32_t(value), layout, device, output_mem_config, optional_output_tensor);
+        }
+        case DataType::FLOAT32: {
+            return detail::full<float>(queue_id, shape, float(value), layout, device, output_mem_config, optional_output_tensor);
+        }
+        case DataType::BFLOAT16: {
+            return detail::full<bfloat16>(
+                queue_id, shape, bfloat16(static_cast<float>(value)), layout, device, output_mem_config, optional_output_tensor);
+        }
+        default: TT_THROW("Unsupported DataType!");
+    }
+}
 
 template <typename T>
 static Tensor full(
@@ -89,25 +145,7 @@ static Tensor full(
     Device* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    switch (data_type) {
-        case DataType::UINT8: {
-            return detail::full<uint8_t>(shape, uint8_t(value), layout, device, output_mem_config);
-        }
-        case DataType::UINT16: {
-            return detail::full<uint16_t>(shape, uint16_t(value), layout, device, output_mem_config);
-        }
-        case DataType::UINT32: {
-            return detail::full<uint32_t>(shape, uint32_t(value), layout, device, output_mem_config);
-        }
-        case DataType::FLOAT32: {
-            return detail::full<float>(shape, float(value), layout, device, output_mem_config);
-        }
-        case DataType::BFLOAT16: {
-            return detail::full<bfloat16>(
-                shape, bfloat16(static_cast<float>(value)), layout, device, output_mem_config);
-        }
-        default: TT_THROW("Unsupported DataType!");
-    }
+    return full_impl(ttnn::DefaultQueueId, shape, value, data_type, layout, device, output_mem_config, std::nullopt);
 }
 
 static Tensor zeros(

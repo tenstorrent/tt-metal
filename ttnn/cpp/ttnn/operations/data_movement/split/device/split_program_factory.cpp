@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
@@ -98,7 +98,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     tt::tt_metal::Buffer *in0_buffer = input_tensor.buffer();
 
     // Output buffers
-    TT_FATAL(output_tensors.size() == num_chunks);
+    TT_FATAL(output_tensors.size() == num_chunks, "Error");
     tt::tt_metal::Tensor &out0 = output_tensors[0];
     tt::tt_metal::Tensor &out1 = output_tensors[1];
 
@@ -122,11 +122,11 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
     // parallelize y
     auto [num_cores_y, per_core_tiles_y] =
-        get_max_cores_divisible_by_tiles_per_core_tiles(num_tiles_dim_3, num_cores_y_limit, /*request_even=*/true);
+        tt::tt_metal::get_max_cores_divisible_by_tiles_per_core_tiles(num_tiles_dim_3, num_cores_y_limit, /*request_even=*/true);
 
     // parallelize x
     auto [num_cores_x, per_core_tiles_x] =
-        get_max_cores_divisible_by_tiles_per_core_tiles(num_tiles_dim_2, num_cores_x_limit / num_cores_z);
+        tt::tt_metal::get_max_cores_divisible_by_tiles_per_core_tiles(num_tiles_dim_2, num_cores_x_limit / num_cores_z);
 
     uint32_t per_core_tiles = per_core_tiles_x * per_core_tiles_y * (z / num_cores_z);
 

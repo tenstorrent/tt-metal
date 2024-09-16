@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -612,7 +612,7 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, CoreRangeSet, CoreRangeSet, uint
                 // ncores_h = (uint32_t) ceil((float) nbatch / nbatch_per_core_h);
                 // ntiles_per_core_h = nbatch_per_core_h * ntiles_h;
             } else {
-                TT_ASSERT("Something went terribly wrong in splitting acrtoss cores");
+                TT_THROW("Something went terribly wrong in splitting acrtoss cores");
             }
             break;
     }
@@ -920,7 +920,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
         // issue more reads before calling barrier
         uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
         if (num_sticks_per_core != 0) {
-            num_sticks_per_core_read = merge_num_sticks_to_read(num_sticks_per_core, W_bytes, max_read_size);
+            num_sticks_per_core_read = tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core, W_bytes, max_read_size);
             num_read_per_barrier = num_sticks_per_core / num_sticks_per_core_read;
         }
 
@@ -1003,7 +1003,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(const Tensor 
     uint32_t num_cores_total = num_cores_x * num_cores_y;
     CoreRange total_cores({0, 0}, {num_cores_x-1, num_cores_y-1});
 
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_padded_per_core_group_1, num_sticks_padded_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, NCH_padded);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_padded_per_core_group_1, num_sticks_padded_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, NCH_padded);
 
     uint32_t src0_cb_index = 0;
     auto num_sticks = num_sticks_padded_per_core_group_1 > num_sticks_padded_per_core_group_2 ? num_sticks_padded_per_core_group_1 : num_sticks_padded_per_core_group_2;
@@ -1116,7 +1116,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(const Tensor 
         uint32_t W_padded = output_tensor_shape[3], H_padded = output_tensor_shape[2], C_padded = output_tensor_shape[1], N_padded = output_tensor_shape[0];
         uint32_t NCH_padded = H_padded * C_padded * N_padded;
 
-        auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_padded_per_core_group_1, num_sticks_padded_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, NCH_padded);
+        auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_padded_per_core_group_1, num_sticks_padded_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, NCH_padded);
         auto all_runtime_args = get_runtime_args_rm(src_tensor, dst_tensor, input_tensor_start, num_cores_total, num_cores, num_cores_y, core_group_1, num_sticks_padded_per_core_group_1, core_group_2, num_sticks_padded_per_core_group_2);
 
         for(uint32_t i = 0; i < num_cores_total; i++) {

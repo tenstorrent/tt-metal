@@ -157,7 +157,6 @@ def test_bw_unary_pow_output(input_shapes, exponent_and_pcc, device):
         grad_tensor,
         input_tensor,
         exponent=exponent,
-        are_required_outputs=[True],
         input_grad=input_grad,
         queue_id=cq_id,
     )

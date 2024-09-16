@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "nlp_kv_cache_load_slice_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -13,14 +13,14 @@ void NlpKVCacheLoadSliceDeviceOperation::validate(const std::vector<Tensor> &inp
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to unpad need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.get_layout() == Layout::TILE);
+    TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Error");
 
     for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
-        TT_FATAL(this->output_tensor_start[i] < input_tensor_a.get_legacy_shape()[i]);
-        TT_FATAL(this->output_tensor_end[i] < input_tensor_a.get_legacy_shape()[i]);
+        TT_FATAL(this->output_tensor_start[i] < input_tensor_a.get_legacy_shape()[i], "Error");
+        TT_FATAL(this->output_tensor_end[i] < input_tensor_a.get_legacy_shape()[i], "Error");
 
         // Check if start shape is <= end shape
-        TT_FATAL(this->output_tensor_start[i] <= this->output_tensor_end[i]);
+        TT_FATAL(this->output_tensor_start[i] <= this->output_tensor_end[i], "Error");
     }
 
     tt::tt_metal::LegacyShape output_tensor_shape = this->compute_output_shapes(input_tensors)[0];
@@ -32,8 +32,8 @@ void NlpKVCacheLoadSliceDeviceOperation::validate(const std::vector<Tensor> &inp
     auto fused_batch_heads = dim0 * dim1;
     auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
     // Need at least fused_batch_heads cores to unpad into sharded tensor
-    TT_FATAL(fused_batch_heads <= core_grid.x * core_grid.y);
-    TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
+    TT_FATAL(fused_batch_heads <= core_grid.x * core_grid.y, "Error");
+    TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
     TT_FATAL((output_tensor_shape[-2] % TILE_HEIGHT == 0) &&
                 (this->output_tensor_start[-2] % TILE_HEIGHT == 0),
             "Can only unpad tilized tensor with full tiles");

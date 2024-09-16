@@ -9,7 +9,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
@@ -368,7 +368,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
 
     if (fuse_op) {
         // Create semaphores
-        fused_op_signaler->init_fused_op(program, device, in0_mcast_cores_with_work_and_in_receiver_grid);
+        fused_op_signaler->init_fused_op(program, device, in0_mcast_sender_cores,
+            in0_is_sharded ? ttnn::experimental::ccl::FusedOpSignalerMode::SINGLE : ttnn::experimental::ccl::FusedOpSignalerMode::MULTI);
     }
 
     auto mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id = tt_metal::CreateKernel(
@@ -639,10 +640,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
             mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
 
+            if (fuse_op) {
+                fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
+            }
+
             if (i < num_cores_with_work) {
-                if (fuse_op) {
-                    fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
-                }
 
                 tt_metal::SetRuntimeArgs(
                     program,
@@ -1545,7 +1547,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;  // bias; doesn't matter if bias=nullptr
     if (bias.has_value()) {
         auto& c = bias.value();
-        TT_FATAL(c.storage_type() == StorageType::DEVICE);
+        TT_FATAL(c.storage_type() == StorageType::DEVICE, "Error");
         TT_FATAL(a.device() == c.device(), "Operands to matmul need to be on the same device!");
         TT_FATAL(c.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
 
@@ -1560,16 +1562,16 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     tt_metal::Buffer* in1_buffer = b.buffer();
-    TT_FATAL(in0_buffer->size() % in0_single_tile_size == 0);
-    TT_FATAL(in1_buffer->size() % in1_single_tile_size == 0);
+    TT_FATAL(in0_buffer->size() % in0_single_tile_size == 0, "Error");
+    TT_FATAL(in1_buffer->size() % in1_single_tile_size == 0, "Error");
 
     TT_FATAL(
-        ashape[-1] == bshape[-2] &&
+        ashape[-1] == bshape[-2],
         "Dimension K (A.shape[-1] and B.shape[-2]) must match for A and B in bmm_op");  // A.K == B.K
-    TT_FATAL(ashape[-2] % TILE_HEIGHT == 0);
-    TT_FATAL(ashape[-1] % TILE_WIDTH == 0);
-    TT_FATAL(bshape[-2] % TILE_HEIGHT == 0);
-    TT_FATAL(bshape[-1] % TILE_WIDTH == 0);
+    TT_FATAL(ashape[-2] % TILE_HEIGHT == 0, "Error");
+    TT_FATAL(ashape[-1] % TILE_WIDTH == 0, "Error");
+    TT_FATAL(bshape[-2] % TILE_HEIGHT == 0, "Error");
+    TT_FATAL(bshape[-1] % TILE_WIDTH == 0, "Error");
 
     MathFidelity math_fidelity;
     bool math_approx_mode;
@@ -1592,14 +1594,14 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
                 fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
                 packer_l1_acc = compute_kernel_config.packer_l1_acc;
             } else {
-                TT_FATAL("arch not supported");
+                TT_THROW("arch not supported");
             }
         },
         compute_kernel_config);
 
     if (fp32_dest_acc_en) {
         TT_FATAL(
-            out_subblock_h * out_subblock_w <= 4 &&
+            out_subblock_h * out_subblock_w <= 4,
             "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
     }
 
@@ -1617,7 +1619,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
         Mt = B * Mt;
         B = 1;
     }
-    TT_FATAL(Kt % in0_block_w == 0);
+    TT_FATAL(Kt % in0_block_w == 0, "Error");
 
     // This should allocate a DRAM buffer on the device
     uint32_t num_cores_x = compute_with_storage_grid_size.x;

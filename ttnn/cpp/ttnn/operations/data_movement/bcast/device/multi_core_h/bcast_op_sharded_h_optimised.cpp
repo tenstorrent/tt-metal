@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cpp/ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -64,7 +64,7 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(const Tensor &a, const
         Ht = shard_spec.shape[0] / TILE_HEIGHT;
         TT_ASSERT((shard_spec.shape[0] % (bN * TILE_HEIGHT) == 0), "Shard height per batch must be divisible by TILE_HEIGHT {} {} {} ", shard_spec.shape[0], bN, TILE_HEIGHT);
     } else{
-        TT_FATAL(false, "Unsupported memory layout");
+        TT_THROW("Unsupported memory layout");
     }
 
     TT_ASSERT((shard_spec.shape[0] % TILE_HEIGHT == 0) && (shard_spec.shape[0] % TILE_WIDTH == 0), "Shard shapes must be multiple of TILE_HEIGHT ");
@@ -204,7 +204,7 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(const Tensor &a, const
             Wt = shard_spec.shape[1] / TILE_WIDTH;
             Ht = shard_spec.shape[0] / TILE_HEIGHT;
         } else{
-            TT_FATAL(false, "Unsupported memory layout");
+            TT_THROW("Unsupported memory layout");
         }
         uint32_t ncores_y = ncores / ncores_x;
         uint32_t Ht_per_b1 = 0; // Ht per batch

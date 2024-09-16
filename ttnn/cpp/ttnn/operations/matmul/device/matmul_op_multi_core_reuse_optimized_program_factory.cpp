@@ -6,7 +6,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
@@ -133,7 +133,7 @@ operation::ProgramWithCallbacks create_program(
             core_group_1,
             core_group_2,
             num_blocks_per_core_group_1,
-            num_blocks_per_core_group_2) = tt_metal::split_work_to_cores(core_range, num_output_blocks_total);
+            num_blocks_per_core_group_2) = tt::tt_metal::split_work_to_cores(core_range, num_output_blocks_total);
         num_blocks_per_core_group_1 *= batch_scale_factor;
         num_blocks_per_core_group_2 *= batch_scale_factor;
     }
@@ -512,14 +512,14 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
                 fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
                 packer_l1_acc = compute_kernel_config.packer_l1_acc;
             } else {
-                TT_FATAL("arch not supported");
+                TT_THROW("arch not supported");
             }
         },
         compute_kernel_config);
 
     if (fp32_dest_acc_en) {
         TT_FATAL(
-            out_subblock_h * out_subblock_w <= 4 &&
+            out_subblock_h * out_subblock_w <= 4,
             "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
     }
 

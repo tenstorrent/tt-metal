@@ -6,7 +6,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "nlp_kv_cache_load_slice_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
 
 namespace ttnn::operations::experimental::transformer {

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "nlp_create_qkv_heads_decode_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 #include "tt_metal/host_api.hpp"
 
@@ -19,28 +19,29 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format");
-    TT_FATAL(input_tensor.get_layout() == Layout::TILE);
+    TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
 
     // input
     TT_FATAL(input_shape[3] % TILE_WIDTH == 0, "Unsupported input shape");  // head_dim must be multiple of TILE_WIDTH
     TT_FATAL(input_shape[2] == 32, "Unsupported input shape");  // 32 users
     TT_FATAL(input_shape[1] == 1, "Unsupported input shape");
     TT_FATAL(input_shape[0] == 1, "Unsupported input shape");
-    TT_FATAL(input_tensor.is_sharded(), "Input must be sharded");
-    TT_FATAL(input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_legacy_shape()[-1]);
-    TT_FATAL(input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR);
-    // we either put everything in one shard or split it into minimum tile width accross as many cores as possible
-    TT_FATAL(input_tensor.shard_spec().value().shape[1] == (this->num_q_heads + this->num_kv_heads * 2) * this->head_dim || input_tensor.shard_spec().value().shape[1] == 32);
+    const auto QKV_memcfg = input_tensor.memory_config();
+    if (input_tensor.is_sharded()) {
+        TT_FATAL(QKV_memcfg.memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Error");
+        TT_FATAL(input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_legacy_shape()[-1], "Error");
+        TT_FATAL(input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR, "Error");
+    }
     auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
 
     // output
-    TT_FATAL(this->output_mem_config.is_sharded() && this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+    TT_FATAL(this->output_mem_config.is_sharded() && this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
     uint32_t num_cores = core_grid.x * core_grid.y;
     // Support maximum 32 heads for now
-    TT_FATAL(this->num_q_heads <= 32);
+    TT_FATAL(this->num_q_heads <= 32, "Error");
     // 1 User Per Core Max and 32 users for now
     TT_FATAL(num_cores >= 32, "Need at least 32 cores for decode");
-    TT_FATAL(this->num_q_heads >= this->num_kv_heads);
+    TT_FATAL(this->num_q_heads >= this->num_kv_heads, "Error");
 }
 
 std::vector<tt::tt_metal::LegacyShape> NLPCreateHeadsDecodeDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
@@ -53,11 +54,11 @@ std::vector<tt::tt_metal::LegacyShape> NLPCreateHeadsDecodeDeviceOperation::comp
     auto head_dim = this->head_dim;
 
     // pad up to nearest multiple of TILE_HEIGHT for num_q_heads and num_kv_heads
-    auto num_q_heads_padded = (this->num_q_heads / TILE_HEIGHT + 1) * TILE_HEIGHT;
-    auto num_kv_heads_padded = (this->num_kv_heads / TILE_HEIGHT + 1) * TILE_HEIGHT;
+    auto num_q_heads_padded = ((this->num_q_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
+    auto num_kv_heads_padded = ((this->num_kv_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
 
-    const tt::tt_metal::LegacyShape q_output_shape = {input_shape[0], batch, num_q_heads_padded, head_dim};
-    const tt::tt_metal::LegacyShape v_output_shape = {input_shape[0], batch, num_kv_heads_padded, head_dim};
+    const tt::tt_metal::LegacyShape q_output_shape = tt::tt_metal::LegacyShape({input_shape[0], batch, this->num_q_heads, head_dim}, {input_shape[0], batch, num_q_heads_padded, head_dim});
+    const tt::tt_metal::LegacyShape v_output_shape = tt::tt_metal::LegacyShape({input_shape[0], batch, this->num_kv_heads, head_dim}, {input_shape[0], batch, num_kv_heads_padded, head_dim});
     const tt::tt_metal::LegacyShape k_output_shape = v_output_shape;
     return {q_output_shape, k_output_shape, v_output_shape};
 
@@ -71,8 +72,8 @@ std::vector<Tensor> NLPCreateHeadsDecodeDeviceOperation::create_output_tensors(c
     const auto& q_output_shape = output_shapes[0];
 
     auto batch = q_output_shape[1];
-    auto num_q_heads_padded = (this->num_q_heads / TILE_HEIGHT + 1) * TILE_HEIGHT;
-    auto num_kv_heads_padded = (this->num_kv_heads / TILE_HEIGHT + 1) * TILE_HEIGHT;
+    auto num_q_heads_padded = ((this->num_q_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
+    auto num_kv_heads_padded = ((this->num_q_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
     auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
     auto q_shard_grid = num_cores_to_corerange_set(batch, core_grid, true);
     ShardSpec q_shard_spec{q_shard_grid, {num_q_heads_padded, this->head_dim}};
