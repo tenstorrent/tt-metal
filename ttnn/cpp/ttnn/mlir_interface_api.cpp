@@ -14,35 +14,6 @@
 namespace ttnn::mlir_interface
 {
 
-int add(int a, int b) {
-    return a + b;
-}
-
-int subtract(int a, int b) {
-    return a - b;
-}
-
-// check if layout is dram interleaved or l1 sharded, returns false otherwise
-bool dummy_check(const std::string& tensor_memory_layout_str, const std::string& buffer_type_str) {
-    auto tensor_memory_layout = ttnn::str_wrapper::to_tensor_memory_layout(tensor_memory_layout_str);
-    auto buffer_type = ttnn::str_wrapper::to_buffer_type(buffer_type_str);
-    if (!tensor_memory_layout.has_value() || !buffer_type.has_value()) {
-        return false;
-    }
-
-    if (tensor_memory_layout.value() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED && buffer_type.value() == tt::tt_metal::BufferType::DRAM) {
-        return true;
-    } else if (tensor_memory_layout.value() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED && buffer_type.value() == tt::tt_metal::BufferType::L1) {
-        return true;
-    } else if (tensor_memory_layout.value() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED && buffer_type.value() == tt::tt_metal::BufferType::L1) {
-        return true;
-    } else if (tensor_memory_layout.value() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED && buffer_type.value() == tt::tt_metal::BufferType::L1) {
-        return true;
-    }
-
-    return false;
-}
-
 bool does_binary_op_support_input_output_constraints(
     const std::vector<uint32_t>& _shape_a,
     const memory_config_tuple& _memory_config_a,
