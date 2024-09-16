@@ -27,20 +27,6 @@ jobs:
               timeout: 40
             },
             {
-              name: "Common models N300 WH B0",
-              arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N300", "in-service"],
-              cmd: tests/scripts/single_card/nightly/run_common_models.sh,
-              timeout: 40,
-            },
-            {
-              name: "Common models N150 WH BO",
-              arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N150", "in-service"],
-              cmd: tests/scripts/single_card/nightly/run_common_models.sh,
-              timeout: 40,
-            },
-            {
               name: "GS ttnn nightly",
               arch: grayskull,
               runs-on: ["cloud-virtual-machine", "E150", "in-service"],
@@ -69,39 +55,25 @@ jobs:
               timeout: 40
             },
             {
-              name: "N300 WH-only models",
-              arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N300", "in-service"],
-              cmd: tests/scripts/single_card/nightly/run_wh_b0_only.sh,
-              timeout: 100
-            },
-            {
-              name: "N150 WH-only models",
-              arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N150", "in-service"],
-              cmd: tests/scripts/single_card/nightly/run_wh_b0_only.sh,
-              timeout: 100
-            },
-            {
               name: "API tests GS",
               arch: grayskull,
               runs-on: ["cloud-virtual-machine", "E150", "in-service"],
               cmd: ./tests/scripts/run_tests.sh --tt-arch grayskull --pipeline-type frequent_api --dispatch-mode fast,
-              timeout: 40
+              timeout: 10
             },
             {
               name: "API tests N300 WH B0",
               arch: wormhole_b0,
               runs-on: ["cloud-virtual-machine", "N300", "in-service"],
               cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast,
-              timeout: 40
+              timeout: 10
             },
             {
               name: "API tests N150 WH B0",
               arch: wormhole_b0,
               runs-on: ["cloud-virtual-machine", "N150", "in-service"],
               cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast,
-              timeout: 40
+              timeout: 10
             },
             {
               name: "[Unstable] N150 models",
@@ -120,7 +92,6 @@ jobs:
           ]
     name: FD ${{ matrix.test-group.name }} ${{ matrix.test-group.arch }}
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
@@ -149,6 +120,55 @@ jobs:
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ${{ matrix.test-group.cmd }}
+      - uses: ./.github/actions/upload-artifact-with-job-uuid
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"
+  nightly-wh-models:
+    needs: build-artifact
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        card: [N150, N300]
+        model: [common_models, functional_unet, llama31_8b, mamba, mistral7b, mistral7b_eth, resnet50]
+    name: Nightly ${{ matrix.card }} ${{ matrix.model }}
+    env:
+      ARCH_NAME: wormhole_b0
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    runs-on: ["cloud-virtual-machine", "in-service", "${{ matrix.card }}"]
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: ./.github/actions/retry-command
+        with:
+          timeout-seconds: 100
+          max-retries: 10
+          backoff-seconds: 60
+          command: ./.github/scripts/cloud_utils/mount_weka.sh
+      - name: Set up dyanmic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - name: Set up WH_ARCH_YAML for eth-enabled models
+        if: ${{ matrix.model != 'mistral7b' }}
+        run: |
+          echo "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_wormhole_b0
+      - name: Extract files
+        run: tar -xvf ttm_wormhole_b0.tar
+      - uses: ./.github/actions/install-python-deps
+      - name: Run frequent reg tests scripts
+        timeout-minutes: 30
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          pytest -n auto tests/nightly/single_card/${{ matrix.model }}
       - uses: ./.github/actions/upload-artifact-with-job-uuid
         if: ${{ !cancelled() }}
         with:
