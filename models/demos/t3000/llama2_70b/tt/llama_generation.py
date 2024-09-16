@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import torch
 import ttnn
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
@@ -40,7 +41,6 @@ class TtLlamaModelForGeneration:
             llama_version=self.llama_version,
             max_batch_size=self.max_batch_size,
             max_context_len=self.max_kv_context_len,
-            batch=self.max_batch_size,
             seq_len=1,
         )
         self.model_config = model_config
@@ -116,21 +116,15 @@ class TtLlamaModelForGeneration:
             return self.prefill_forward(tokens, start_pos, page_table=page_table, kv_cache=kv_cache)
 
     def capture_trace(self, tokens: torch.Tensor, start_pos: int):
-        tt_inp, start_pos, rot_mat, attn_mask, cache_idxs_tt = self.tt_model.prepare_inputs(tokens, start_pos)
+        tt_inp, start_pos, rot_mat, cache_idxs_tt = self.tt_model.prepare_inputs(tokens, start_pos, mode="decode")
 
         # Compile model
-        tt_inp = ttnn.to_device(tt_inp, self.mesh_device, memory_config=self.model_config["DRAM_MEMCFG"])
+        tt_inp = ttnn.to_device(tt_inp, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         tt_inp_emb = self.tt_model.tt_embd(tt_inp)
         tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
         rot_mat = ttnn.to_device(rot_mat, self.mesh_device, memory_config=self.model_config["ROT_MAT_MM_IN1_MEMCFG"])
-        cache_idxs_tt = ttnn.to_device(cache_idxs_tt, self.mesh_device, memory_config=self.model_config["DRAM_MEMCFG"])
-        tt_logits = self.tt_model(
-            tt_inp_emb,
-            rot_mat,
-            start_pos,
-            attn_mask,
-            cache_idxs=cache_idxs_tt,
-        )
+        cache_idxs_tt = ttnn.to_device(cache_idxs_tt, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_logits = self.tt_model(tt_inp_emb, rot_mat, start_pos, cache_idxs=cache_idxs_tt, mode="decode")
 
         # Capture trace
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
@@ -138,13 +132,7 @@ class TtLlamaModelForGeneration:
         # Run TT model
         tt_inp_emb = self.tt_model.tt_embd(tt_inp)
         tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
-        tt_logits = self.tt_model(
-            tt_inp_emb,
-            rot_mat,
-            start_pos,
-            attn_mask,
-            cache_idxs=cache_idxs_tt,
-        )
+        tt_logits = self.tt_model(tt_inp_emb, rot_mat, start_pos, cache_idxs=cache_idxs_tt, mode="decode")
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
@@ -157,7 +145,6 @@ class TtLlamaModelForGeneration:
     def decode_forward_trace(
         self, tokens: torch.Tensor, start_pos: int, trace_id, tt_inp, rot_mat, cache_idxs_tt, tt_logits
     ):
-        self._update_model_config("decode", tokens.shape[0], 1)
         batch = tokens.shape[0]
 
         # Update preallocated tensors
@@ -165,9 +152,8 @@ class TtLlamaModelForGeneration:
             updated_tt_inp,
             start_pos,
             updated_rot_mat,
-            updated_attn_mask,
             updated_cache_idxs_tt,
-        ) = self.tt_model.prepare_inputs(tokens, start_pos)
+        ) = self.tt_model.prepare_inputs(tokens, start_pos, mode="decode")
         ttnn.copy_host_to_device_tensor(updated_tt_inp, tt_inp)
         ttnn.copy_host_to_device_tensor(updated_rot_mat, rot_mat)
         ttnn.copy_host_to_device_tensor(updated_cache_idxs_tt, cache_idxs_tt)
@@ -184,14 +170,13 @@ class TtLlamaModelForGeneration:
         return logits
 
     def decode_forward(self, tokens: torch.Tensor, start_pos: int, page_table=None, kv_cache=None):
-        self._update_model_config("decode", tokens.shape[0], 1)
         batch = tokens.shape[0]
-        tt_inp, start_pos, rot_mat, attn_mask, cache_idxs_tt = self.tt_model.prepare_inputs(tokens, start_pos)
-        tt_inp = ttnn.to_device(tt_inp, self.mesh_device, memory_config=self.model_config["DRAM_MEMCFG"])
+        tt_inp, start_pos, rot_mat, cache_idxs_tt = self.tt_model.prepare_inputs(tokens, start_pos, mode="decode")
+        tt_inp = ttnn.to_device(tt_inp, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         tt_inp_emb = self.tt_model.tt_embd(tt_inp)
         tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
         rot_mat = ttnn.to_device(rot_mat, self.mesh_device, memory_config=self.model_config["ROT_MAT_MM_IN1_MEMCFG"])
-        cache_idxs_tt = ttnn.to_device(cache_idxs_tt, self.mesh_device, memory_config=self.model_config["DRAM_MEMCFG"])
+        cache_idxs_tt = ttnn.to_device(cache_idxs_tt, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         if isinstance(page_table, torch.Tensor):
             # Support vLLM tensor page_table input
@@ -207,15 +192,14 @@ class TtLlamaModelForGeneration:
             tt_inp_emb,
             rot_mat,
             start_pos,
-            attn_mask,
             cache_idxs=cache_idxs_tt,
             page_table=page_table,
             kv_cache=kv_cache,
+            mode="decode",
         )
 
         # del tt_inp_emb
         # del rot_mat
-        # del attn_mask
 
         logits = self._process_logits(tt_logits)
 
@@ -231,12 +215,9 @@ class TtLlamaModelForGeneration:
         batch, seq_len = tokens.shape
         assert batch == 1
         assert start_pos == 0, "start_pos must be 0 for prefill_forward_single_user"
-        assert seq_len in [128, 2048, 8 * 1024], f"Only prefill up to 128 or 2048 tokens is supported, got {seq_len}"
 
-        self._update_model_config("prefill", batch, seq_len)
-
-        tt_inp_emb, start_pos, rot_mat, attn_mask, _ = self.tt_model.prepare_inputs(
-            tokens, start_pos=start_pos, valid_seq_len=seq_len
+        tt_inp_emb, start_pos, rot_mat, _ = self.tt_model.prepare_inputs(
+            tokens, start_pos=start_pos, valid_seq_len=seq_len, mode="prefill"
         )
 
         if isinstance(page_table, torch.Tensor):
@@ -254,16 +235,15 @@ class TtLlamaModelForGeneration:
             tt_inp_emb,
             rot_mat,
             start_pos,
-            attn_mask,
             user_id=user_id,
             last_token_idx=last_token_idx,
             page_table=page_table,
             kv_cache=kv_cache,
+            mode="prefill",
         )
 
         del tt_inp_emb
         del rot_mat
-        del attn_mask
 
         logits = self._process_logits(tt_logits)
         logits = logits.squeeze(1)
@@ -272,16 +252,16 @@ class TtLlamaModelForGeneration:
 
     def prefill_forward(self, tokens: torch.Tensor, start_pos: int, page_table=None, kv_cache=None):
         batch, seq_len = tokens.shape
-        assert seq_len <= 8 * 1024, f"Only prefill up to 2048 tokens is supported, got {seq_len}"
-
-        prefill_seq_len = 128 if seq_len <= 128 else 2048 if seq_len <= 2048 else 8 * 1024
-        self._update_model_config("prefill", batch, prefill_seq_len)
-
-        batch, seq_len = tokens.shape
         last_token_idx = seq_len - 1
-        output_logits = torch.zeros(batch, seq_len, self.params.vocab_size)
+
+        prefill_seq_len = get_padded_prefill_len(seq_len)
+        output_logits = torch.zeros(batch, 1, self.params.vocab_size)
         # pad tokens to 128 or 2048
         prefill_ids = torch.cat([tokens, torch.zeros(batch, prefill_seq_len - seq_len).long()], dim=-1)
+        if page_table:
+            block_size = get_block_size(kv_cache)
+            num_padding_blocks = num_blocks_in_seq(prefill_seq_len, block_size) - num_blocks_in_seq(seq_len, block_size)
+            page_table = torch.cat([page_table, torch.zeros(batch, num_padding_blocks, dtype=torch.int32)], dim=-1)
 
         for user_id in range(batch):
             logger.info(f"Filling kv cache for user {user_id + 1}")
@@ -295,7 +275,6 @@ class TtLlamaModelForGeneration:
                 kv_cache=kv_cache,
             )
 
-            # output_logits[user_id] = logits[:, :seq_len, :]
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
             output_logits[user_id] = logits[:, last_token_idx % 32 : last_token_idx % 32 + 1, :]
 
@@ -309,14 +288,19 @@ class TtLlamaModelForGeneration:
         )
         return logits[..., : self.params.vocab_size].float()
 
-    def _update_model_config(self, mode, batch, seq_len):
-        if self.tt_model.model_config["LLM_MODE"] != mode:
-            logger.info(f"Changing mode to {mode}")
-            model_config = get_model_config(
-                llama_version=self.llama_version,
-                max_batch_size=self.max_batch_size,
-                max_context_len=self.max_kv_context_len,
-                batch=batch,
-                seq_len=seq_len,
-            )
-            self.tt_model.set_model_config(model_config)
+
+def get_padded_prefill_len(seq_len):
+    # Llama supports power of 2 lengths that are greater than 32
+    return max(32, nearest_pow_2(seq_len))
+
+
+def get_block_size(kv_cache):
+    return kv_cache.shape[2]
+
+
+def num_blocks_in_seq(seq_len, block_size):
+    return math.ceil(seq_len / block_size)
+
+
+def nearest_pow_2(x):
+    return 2 ** math.ceil(math.log2(x))

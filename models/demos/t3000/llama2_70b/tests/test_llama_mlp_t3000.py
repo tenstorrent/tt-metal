@@ -16,7 +16,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import setup_llama_env, check
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    ((32, 1, 0.9994), (1, 128, 0.9996), (1, 2048, 0.9996), (1, 8192, 0.9996)),
+    ((32, 1, 0.9994), (1, 128, 0.998), (1, 2048, 0.998), (1, 8192, 0.998)),
     ids=("decode", "prefill_128", "prefill_2k", "prefill_8k"),
 )
 @pytest.mark.parametrize(

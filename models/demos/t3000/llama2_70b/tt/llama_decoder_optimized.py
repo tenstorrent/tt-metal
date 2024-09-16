@@ -105,7 +105,7 @@ class TtLlamaDecoder_optimized:
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
-            memory_config=self.model_config["DRAM_MEMCFG"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             cache_file_name=self.cache_path / attn_norm_str,
         )
@@ -116,7 +116,7 @@ class TtLlamaDecoder_optimized:
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
-            memory_config=self.model_config["DRAM_MEMCFG"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=2),
             cache_file_name=self.cache_path / attn_norm_sharded_str,
         )
@@ -127,7 +127,7 @@ class TtLlamaDecoder_optimized:
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
-            memory_config=self.model_config["DRAM_MEMCFG"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             cache_file_name=self.cache_path / ffn_norm_str,
         )
@@ -138,7 +138,7 @@ class TtLlamaDecoder_optimized:
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
-            memory_config=self.model_config["DRAM_MEMCFG"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=2),
             cache_file_name=self.cache_path / ffn_norm_sharded_str,
         )
@@ -149,29 +149,24 @@ class TtLlamaDecoder_optimized:
         xs: List[ttnn.Tensor],
         rot_mats: List[ttnn.Tensor],
         start_pos: int,
-        attn_masks: List[ttnn.Tensor],
         user_id: int = 0,
         cache_idxs=None,
         page_table=None,
         kv_cache=None,
+        mode="decode",
     ) -> ttnn.Tensor:
-        if self.model_config["LLM_MODE"] == "prefill":
-            return self.prefill_forward(
-                xs, rot_mats, start_pos, attn_masks, user_id, page_table=page_table, kv_cache=kv_cache
-            )
-        elif self.model_config["LLM_MODE"] == "decode":
-            return self.decode_forward(
-                xs, rot_mats, start_pos, attn_masks, cache_idxs, page_table=page_table, kv_cache=kv_cache
-            )
+        if mode == "prefill":
+            return self.prefill_forward(xs, rot_mats, start_pos, user_id, page_table=page_table, kv_cache=kv_cache)
+        elif mode == "decode":
+            return self.decode_forward(xs, rot_mats, start_pos, cache_idxs, page_table=page_table, kv_cache=kv_cache)
         else:
-            raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
+            raise ValueError(f"Unknown llm_mode: {mode}")
 
     def decode_forward(
         self,
         xs: List[ttnn.Tensor],
         rot_mats: List[ttnn.Tensor],
         start_pos: int,
-        attn_masks: List[ttnn.Tensor],
         cache_idxs,
         page_table=None,
         kv_cache=None,
@@ -181,7 +176,7 @@ class TtLlamaDecoder_optimized:
             xs,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"],
         )
 
         # In-place RMSNorm
@@ -189,8 +184,8 @@ class TtLlamaDecoder_optimized:
             xs_replicated,
             epsilon=self.norm_eps,
             weight=self.attn_norm,
-            program_config=self.model_config["LN_ATTN_PROGCFG"],
-            memory_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
+            program_config=self.model_config["LN_F_PROGCFG"],
+            memory_config=self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"],
             compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"],
         )
         # attn_norm_replicated is sharded
@@ -200,10 +195,10 @@ class TtLlamaDecoder_optimized:
             attn_norm_replicated,
             rot_mats,
             start_pos,
-            attn_masks,
             cache_idxs=cache_idxs,
             page_table=page_table,
             kv_cache=kv_cache,
+            mode="decode",
         )
 
         ### Fractured residual add
@@ -212,7 +207,7 @@ class TtLlamaDecoder_optimized:
         output = ttnn.add(
             output,
             attn_outs,
-            memory_config=self.model_config["ATTN_ADD_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["RESIDUAL_ADD_OUTPUT_MEMCFG"],
         )
         attn_outs.deallocate(True)
 
@@ -220,7 +215,7 @@ class TtLlamaDecoder_optimized:
             output,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"],
         )
 
         # In-place RMSNorm
@@ -228,19 +223,19 @@ class TtLlamaDecoder_optimized:
             attn_resid_replicated,
             epsilon=self.norm_eps,
             weight=self.ffn_norm,
-            program_config=self.model_config["LN_MLP_PROGCFG"],
-            memory_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"],
+            program_config=self.model_config["LN_F_PROGCFG"],
+            memory_config=self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"],
             compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"],
         )
         # ffn_norm_replicated is sharded
 
-        ffn_out = self.mlp(ffn_norm_replicated)
+        ffn_out = self.mlp(ffn_norm_replicated, mode="decode")
 
         ### residual in place
         output = ttnn.add(
             output,
             ffn_out,
-            memory_config=self.model_config["MLP_ADD_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["RESIDUAL_ADD_OUTPUT_MEMCFG"],
         )
         ffn_out.deallocate(True)
 
@@ -257,7 +252,7 @@ class TtLlamaDecoder_optimized:
             tt_stats,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=self.model_config["DRAM_MEMCFG"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         # Run distributed rmsnorm part 2
@@ -278,7 +273,6 @@ class TtLlamaDecoder_optimized:
         xs: List[ttnn.Tensor],
         rot_mats: List[ttnn.Tensor],
         start_pos: int,
-        attn_masks: List[ttnn.Tensor],
         user_id: int = 0,
         page_table=None,
         kv_cache=None,
@@ -296,12 +290,18 @@ class TtLlamaDecoder_optimized:
             attn_norm_interleaved,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=self.model_config["DRAM_MEMCFG"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         # attn_outs is fractured
         attn_outs = self.attention(
-            attn_norm_interleaved, rot_mats, start_pos, attn_masks, user_id, page_table=page_table, kv_cache=kv_cache
+            attn_norm_interleaved,
+            rot_mats,
+            start_pos,
+            user_id=user_id,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            mode="prefill",
         )
 
         attn_norm_interleaved.deallocate(True)
@@ -316,10 +316,10 @@ class TtLlamaDecoder_optimized:
             ffn_norm_interleaved,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=self.model_config["DRAM_MEMCFG"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        ffn_out = self.mlp(ffn_norm_interleaved)
+        ffn_out = self.mlp(ffn_norm_interleaved, mode="prefill")
 
         ### residual add
         output = ttnn.add(output, ffn_out)

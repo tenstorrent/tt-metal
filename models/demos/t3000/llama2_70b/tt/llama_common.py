@@ -176,7 +176,6 @@ def setup_llama_env(llama_version="llama3", batch=32, seq_len=1, n_devices=8, ma
 
     model_config = get_model_config(
         llama_version=llama_version,
-        batch=batch,
         seq_len=seq_len,
         num_devices=n_devices,
         max_batch_size=max_batch_size,
