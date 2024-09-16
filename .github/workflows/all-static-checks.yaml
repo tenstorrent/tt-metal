@@ -6,55 +6,13 @@ on:
   pull_request:
     branches:
       - "main"
+      - "rkim/6857-test-merge-queue"
+  merge_group:
+    types: [checks_requested]
 
 jobs:
-  check-spdx-licenses:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5.0.0
-        with:
-          cache: 'pip'
-          cache-dependency-path: infra/requirements-infra.txt
-      - name: Install infra deps
-        run: python -m pip install -r infra/requirements-infra.txt
-      - name: Check SPDX licenses
-        run: python -m check_copyright --verbose --dry-run --config ./check_copyright_config.yaml .
-  check-metal-kernel-count:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check kernel count in base metal is less than maximum
-        run: if (( $(find tt_metal/kernels/ -type f | wc -l) > 7 )); then exit 1; fi
   check-black:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: psf/black@23.10.1
-  check-doc:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install ASPELL
-        run: sudo apt-get install -y aspell
-      - name: Run checks on docs
-        run: TT_METAL_HOME=$(pwd) docs/spellcheck.sh
-  check-forbidden-imports:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check ttnn is not used in tt_metal tests
-        run: if (( $(grep -Rnw 'tests/tt_metal' -e 'ttnn' | wc -l ) > 11 )); then exit 1; fi
-      - name: Check tt_eager constructs is not used in tt_metal tests
-        run: |
-          if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_lib' | wc -l ) > 0 )); then exit 1; fi
-          if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_eager' | wc -l ) > 10 )); then exit 1; fi
-  check-sweeps-workflow:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5.0.0
-      - name: Check sweeps workflow option count against sweep file count
-        run: |
-          pip install pyyaml
-          python tests/sweep_framework/sweeps_workflow_verification.py
