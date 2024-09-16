@@ -22,6 +22,7 @@
 #include "ttnn/graph/graph_operation_queries.hpp"
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
+#include "ttnn/operations/common/l1_interface_common.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -31,9 +32,11 @@
 #include "ttnn/operations/eltwise/unary/unary_l1_interface.hpp"
 #include "ttnn/operations/matmul/device/matmul_types.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/matmul/matmul_l1_interface.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
 #include "ttnn/operations/normalization/softmax/softmax_l1_interface.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
@@ -109,6 +112,10 @@ void compare_l1_tensor_allocations(
     }
 }
 
+OperandShapeTestParam select_larger_input(const OperandShapeTestParam& a, const OperandShapeTestParam& b) {
+    return a.shape.volume() >= b.shape.volume() ? a : b;
+}
+
 class EltwiseUnaryOpInterfaceTestFixture : public TTNNFixtureWithDevice,
                                            public testing::WithParamInterface<OperandShapeTestParam> {};
 
@@ -116,12 +123,236 @@ class EltwiseBinaryOpInterfaceTestFixture
     : public TTNNFixtureWithDevice,
       public testing::WithParamInterface<std::tuple<OperandShapeTestParam, OperandShapeTestParam>> {};
 
-OperandShapeTestParam select_larger_input(const OperandShapeTestParam& a, const OperandShapeTestParam& b) {
-    return a.shape.volume() >= b.shape.volume() ? a : b;
-}
-
 class SoftmaxOpInterfaceTestFixture : public TTNNFixtureWithDevice,
                                       public testing::WithParamInterface<std::tuple<OperandShapeTestParam, int>> {};
+
+class MatmulOpInterfaceTestFixture
+    : public TTNNFixtureWithDevice,
+      public testing::WithParamInterface<
+          std::tuple<OperandShapeTestParam, OperandShapeTestParam, ttnn::operations::matmul::MatmulProgramConfig>> {};
+
+TEST_P(MatmulOpInterfaceTestFixture, MlirInterfaceTest) {
+    auto param_combination = GetParam();
+    auto input_a = std::get<0>(param_combination);
+    auto input_b = std::get<1>(param_combination);
+    auto program_config = std::get<2>(param_combination);
+
+    // pad input shapes (this isn't happening automagically)
+    input_a.shape = pad_shape_to_tile(input_a.shape);
+    input_b.shape = pad_shape_to_tile(input_b.shape);
+    std::cout << "OP = matmul(" << input_a.shape << ", " << input_b.shape << ")" << std::endl;
+
+    // TODO: Test constraints
+
+    // Run the test
+    {
+        auto input_tensor_a =
+            ttnn::zeros(input_a.shape, input_a.data_type, input_a.layout, this->getDevice(), input_a.memory_config);
+        auto input_tensor_b =
+            ttnn::zeros(input_b.shape, input_b.data_type, input_b.layout, this->getDevice(), input_b.memory_config);
+
+        auto call = [&] {
+            const auto output_tensor = ttnn::matmul(
+                input_tensor_a,
+                input_tensor_b,
+                false /* transpose_a */,
+                false /* transpose_b */,
+                std::nullopt /* memory_config */,
+                std::nullopt /* dtype */,
+                program_config);
+
+            return output_tensor;
+        };
+
+        // // get graph trace for ground truth
+        auto json_trace = graph::query_trace(call);
+        // tt::log_info("Trace: {}", json_trace.dump(4));
+
+        // L1 interface calls and checks against graph trace
+        {
+            const auto shape_a = input_a.shape.value;
+            const auto shape_b = input_b.shape.value;
+
+            auto l1_input_a = std::make_tuple(input_a.shape, input_a.data_type, input_a.layout, input_a.memory_config);
+            auto l1_input_b = std::make_tuple(input_b.shape, input_b.data_type, input_b.layout, input_b.memory_config);
+
+            // If tt-mlir doesn't specify output memory config, the default is dram interleaved
+            auto l1_output = std::make_tuple(
+                ttnn::Shape(tt::tt_metal::Array4D{shape_a[0], shape_a[1], shape_a[-2], shape_b[-1]}),
+                input_a.data_type,
+                tt::tt_metal::Layout::TILE,
+                ttnn::DRAM_MEMORY_CONFIG);
+
+            auto l1_usage = MatmulOpL1UsageFactory::Make(l1_input_a, l1_input_a, l1_output, program_config);
+
+            compare_l1_circular_buffer_allocations(l1_usage->get_circular_buffer_l1_allocations_per_core(), json_trace);
+            compare_l1_tensor_allocations(l1_usage->get_tensor_l1_allocations_per_core(), json_trace);
+        }
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MlirInterfaceTests_REUSE_MCAST_1D_IN0,  // Prefix for the instantiated test suite
+    MatmulOpInterfaceTestFixture,           // Test suite name
+    ::testing::Combine(
+        ::testing::Values(
+            OperandShapeTestParam{
+                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 64, 2048}),
+                .memory_config = ttnn::L1_MEMORY_CONFIG,
+            },
+            OperandShapeTestParam{
+                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 64, 2048}),
+                .memory_config =
+                    {.memory_layout = tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
+                     .buffer_type = tt::tt_metal::BufferType::L1,
+                     .shard_spec =
+                         tt::tt_metal::ShardSpec{
+                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 3}}}},
+                             {64, 64},
+                             ShardOrientation::ROW_MAJOR}},
+            }),
+
+        ::testing::Values(OperandShapeTestParam{
+            .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 2048, 1024}),
+            .memory_config = ttnn::L1_MEMORY_CONFIG,
+        }),
+
+        ::testing::Values(ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig{
+            .compute_with_storage_grid_size = CoreCoord(8, 4),
+            .in0_block_w = 2,
+            .out_subblock_h = 1,
+            .out_subblock_w = 1,
+            .per_core_M = 2,
+            .per_core_N = 1,
+            .fuse_batch = true,
+            .fused_activation = std::nullopt,
+            .mcast_in0 = true}))
+
+);
+
+INSTANTIATE_TEST_SUITE_P(
+    MlirInterfaceTests_REUSE_MCAST_1D_IN1,  // Prefix for the instantiated test suite
+    MatmulOpInterfaceTestFixture,           // Test suite name
+    ::testing::Combine(
+        ::testing::Values(
+            OperandShapeTestParam{
+                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 4096, 64}),
+                .memory_config = ttnn::DRAM_MEMORY_CONFIG,
+            },
+            OperandShapeTestParam{
+                .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 4096, 64}),
+                .memory_config =
+                    {.memory_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+                     .buffer_type = tt::tt_metal::BufferType::L1,
+                     .shard_spec =
+                         tt::tt_metal::ShardSpec{
+                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 3}}}},
+                             {128, 64},
+                             ShardOrientation::ROW_MAJOR}},
+            }),
+
+        ::testing::Values(OperandShapeTestParam{
+            .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 64, 256}),
+            .memory_config = ttnn::DRAM_MEMORY_CONFIG,
+        }),
+
+        ::testing::Values(ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig{
+            .compute_with_storage_grid_size = CoreCoord(8, 4),
+            .in0_block_w = 2,
+            .out_subblock_h = 1,
+            .out_subblock_w = 1,
+            .per_core_M = 4,
+            .per_core_N = 8,
+            .fuse_batch = true,
+            .fused_activation = std::nullopt,
+            .mcast_in0 = false}))
+
+);
+
+INSTANTIATE_TEST_SUITE_P(
+    MlirInterfaceTests_REUSE_MCAST_2D,  // Prefix for the instantiated test suite
+    MatmulOpInterfaceTestFixture,       // Test suite name
+    ::testing::Combine(
+        ::testing::Values(OperandShapeTestParam{
+            .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 4 * 32, 8 * 32}),
+            .memory_config = ttnn::L1_MEMORY_CONFIG,
+        }),
+
+        ::testing::Values(OperandShapeTestParam{
+            .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 8 * 32, 4 * 32}),
+            .memory_config = ttnn::L1_MEMORY_CONFIG,
+        }),
+
+        ::testing::Values(ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
+            .compute_with_storage_grid_size = CoreCoord(2, 2),
+            .in0_block_w = 4,
+            .out_subblock_h = 2,
+            .out_subblock_w = 2,
+            .per_core_M = 2,
+            .per_core_N = 4,
+            .transpose_mcast = false,
+            .fused_activation = std::nullopt}))
+
+);
+
+INSTANTIATE_TEST_SUITE_P(
+    MlirInterfaceTests_REUSE_MCAST_2D_BATCHED,  // Prefix for the instantiated test suite
+    MatmulOpInterfaceTestFixture,               // Test suite name
+    ::testing::Combine(
+        ::testing::Values(OperandShapeTestParam{
+            .shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 4 * 32, 8 * 32}),
+            .memory_config = ttnn::L1_MEMORY_CONFIG,
+        }),
+
+        ::testing::Values(OperandShapeTestParam{
+            .shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 8 * 32, 4 * 32}),
+            .memory_config = ttnn::L1_MEMORY_CONFIG,
+        }),
+
+        ::testing::Values(ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
+            .compute_with_storage_grid_size = CoreCoord(4, 4),
+            .in0_block_w = 4,
+            .out_subblock_h = 3,
+            .out_subblock_w = 1,
+            .per_core_M = 3,
+            .per_core_N = 1,
+            .transpose_mcast = false,
+            .fused_activation = std::nullopt}))
+
+);
+
+INSTANTIATE_TEST_SUITE_P(
+    MlirInterfaceTests_REUSE_MCAST_2D_BLOCK_SHARDED,  // Prefix for the instantiated test suite
+    MatmulOpInterfaceTestFixture,                     // Test suite name
+    ::testing::Combine(
+        ::testing::Values(OperandShapeTestParam{
+            .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 1600, 256}),
+            .memory_config =
+                {.memory_layout = tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
+                 .buffer_type = tt::tt_metal::BufferType::L1,
+                 .shard_spec =
+                     tt::tt_metal::ShardSpec{
+                         CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 4}}}},
+                         {320, 32},
+                         ShardOrientation::ROW_MAJOR}},
+        }),
+
+        ::testing::Values(OperandShapeTestParam{
+            .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 256, 1024}),
+            .memory_config = ttnn::L1_MEMORY_CONFIG,
+        }),
+
+        ::testing::Values(ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
+            .compute_with_storage_grid_size = CoreCoord(8, 8),
+            .in0_block_w = 1,
+            .out_subblock_h = 1,
+            .out_subblock_w = 4,
+            .per_core_M = 10,
+            .per_core_N = 4,
+            .transpose_mcast = false,
+            .fused_activation = std::nullopt}))
+
+);
 
 TEST_P(SoftmaxOpInterfaceTestFixture, MlirInterfaceTest) {
     auto param_combination = GetParam();
