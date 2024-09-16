@@ -370,7 +370,8 @@ def get_rotation_mat_prefill(rot_mat, start_pos, seqlen, batch):
 
 
 def get_rotation_mat(rot_mat, start_pos, seqlen, batch):
-    # position_ids = torch.ones(seqlen, batch, dtype=torch.long) * start_pos
+    if isinstance(start_pos, int):
+        start_pos = torch.ones(seqlen, batch, dtype=torch.long) * start_pos
     position_ids = start_pos.view(seqlen, batch)
     rot_emb = gather_rotary_emb(rot_mat, position_ids)
     return rot_emb
