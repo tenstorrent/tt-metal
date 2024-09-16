@@ -619,6 +619,8 @@ function(add_ttnn_sublibrary SUBLIBRARY_NAME)
     target_compile_options(${SUBLIBRARY_NAME} PRIVATE -MP -Wno-int-to-pointer-cast -fno-var-tracking)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_compile_definitions(${SUBLIBRARY_NAME} PRIVATE DISABLE_NAMESPACE_STATIC_ASSERT)
+    else()
+        target_precompile_headers(${SUBLIBRARY_NAME} PRIVATE ${TTNN_PRECOMPILED_HEADERS})
     endif()
     install(TARGETS ${SUBLIBRARY_NAME}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
