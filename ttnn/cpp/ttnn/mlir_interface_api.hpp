@@ -9,12 +9,6 @@
 
 namespace ttnn::mlir_interface
 {
-    int add(int a, int b);
-    int subtract(int a, int b);
-
-    // check if layout is dram interleaved or l1 sharded, returns false otherwise
-    bool dummy_check(const std::string& tensor_memory_layout_str, const std::string& buffer_type_str);
-
     // shard_spec_tuple = core_range_set, shard_shape, shard_orientation, halo
     using shard_spec_tuple = std::tuple<std::vector<std::array<uint32_t, 4>>, std::array<uint32_t, 2>, std::string, bool>;
     // memory_config_typle = tensor_memory_layout, buffer_type, shard_spec_tuple
