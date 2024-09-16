@@ -227,8 +227,12 @@ void kernel_main() {
                                     noc_async_write_multicast(l1_write_addr_in1, in1_multicast_data_addr, in1_mcast_sender_size_bytes, in1_mcast_num_cores);
                                 }
 
-                                // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
+                                // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc even though cmd bufs are different
                                 // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
+#ifdef ARCH_BLACKHOLE
+                                // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and may not be sent in order they are issued
+                                noc_async_writes_flushed();
+#endif
 
                                 // We should also multicast VALID flag to destinations for receiver semaphore
                                 noc_semaphore_set_multicast(in1_mcast_receiver_semaphore_addr, in1_mcast_receiver_semaphore_noc_addr, in1_mcast_num_cores);

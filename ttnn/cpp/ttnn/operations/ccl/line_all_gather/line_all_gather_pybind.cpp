@@ -25,14 +25,18 @@ void bind_line_all_gather(pybind11::module& module, const ccl_operation_t& opera
                const ttnn::Tensor& input_tensor,
                const uint32_t dim,
                const uint32_t num_links,
-               const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(input_tensor, dim, num_links, memory_config);
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<size_t> num_workers,
+               const std::optional<size_t> num_buffers_per_channel) -> ttnn::Tensor {
+                return self(input_tensor, dim, num_links, memory_config, num_workers, num_buffers_per_channel);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
             py::kw_only(),
             py::arg("num_links") = 1,
-            py::arg("memory_config") = std::nullopt},
+            py::arg("memory_config") = std::nullopt,
+            py::arg("num_workers") = std::nullopt,
+            py::arg("num_buffers_per_channel") = std::nullopt},
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
@@ -40,8 +44,10 @@ void bind_line_all_gather(pybind11::module& module, const ccl_operation_t& opera
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
                const uint32_t num_links,
-               const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(input_tensor, dim, cluster_axis, mesh_device, num_links, memory_config);
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<size_t> num_workers,
+               const std::optional<size_t> num_buffers_per_channel) -> ttnn::Tensor {
+                return self(input_tensor, dim, cluster_axis, mesh_device, num_links, memory_config, num_workers, num_buffers_per_channel);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
@@ -49,7 +55,9 @@ void bind_line_all_gather(pybind11::module& module, const ccl_operation_t& opera
             py::arg("mesh_device"),
             py::kw_only(),
             py::arg("num_links") = 1,
-            py::arg("memory_config") = std::nullopt});
+            py::arg("memory_config") = std::nullopt,
+            py::arg("num_workers") = std::nullopt,
+            py::arg("num_buffers_per_channel") = std::nullopt});
 }
 
 }  // namespace detail
