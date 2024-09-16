@@ -26,7 +26,7 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
 
     TT_FATAL(a.get_layout() == Layout::TILE, "Error");
     TT_FATAL(a.get_dtype() == DataType::FLOAT32 or a.get_dtype() == DataType::BFLOAT16 or a.get_dtype() == DataType::BFLOAT8_B, "Error");
-    TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
+    TT_FATAL(a.storage_type() == StorageType::DEVICE || a.storage_type() == StorageType::MULTI_DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
 
     if (b.has_value()) {
@@ -73,11 +73,14 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
         TT_FATAL(a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED, "Error");
         TT_FATAL(this->output_mem_config.is_sharded() && this->output_mem_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED, "Error");
     }
+    if (this->distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER || this->distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
+        TT_FATAL(a.get_legacy_shape()[-2] == TILE_HEIGHT, "Only activations with batch size = 32 are supported");
+    }
     if (this->distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
-        TT_FATAL(stats.has_value(), "Error");
+        TT_FATAL(stats.has_value(), "Post all gather layernorm requires stats");
         TT_FATAL(stats.value().get_layout() == Layout::TILE, "Only tile layout is supported for stats");
         TT_FATAL(stats.value().get_dtype() == DataType::BFLOAT16, "Only bfloat16 is supported for stats");
-        TT_FATAL(stats.value().storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
+        TT_FATAL(stats.value().storage_type() == StorageType::DEVICE || stats.value().storage_type() == StorageType::MULTI_DEVICE, "Operands to layernorm need to be on device!");
         TT_FATAL(stats.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         if(this->norm_type == LayerNormType::LAYERNORM) {
             TT_FATAL(stats.value().get_legacy_shape()[-1] % (2 * TILE_WIDTH) == 0, "Stats is expected to have E(x) and E(x^2) for each device stacked interleaved in the last dimension");
