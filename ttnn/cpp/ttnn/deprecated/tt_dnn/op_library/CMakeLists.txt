@@ -12,11 +12,7 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_nll_loss/moreh_nll_loss_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_nll_loss/moreh_nll_loss_step1/moreh_nll_loss_step1.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_nll_loss/moreh_nll_loss_step2/moreh_nll_loss_step2.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_nll_loss_backward/moreh_nll_loss_backward_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_nll_loss_backward/moreh_nll_loss_backward/moreh_nll_loss_backward.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_nll_loss_unreduced/moreh_nll_loss_unreduced_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_nll_loss_unreduced_backward/moreh_nll_loss_unreduced_backward_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_nll_loss_unreduced_backward/moreh_nll_loss_unreduced_backward.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax/moreh_softmax_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax/softmax_w_small/softmax_w_small.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax/softmax_h_small/softmax_h_small.cpp
@@ -39,12 +35,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum/moreh_sum.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum_backward/moreh_sum_backward_impl/moreh_sum_backward_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum_backward/moreh_sum_backward_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_mean/moreh_mean_h/moreh_mean_h.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_mean/moreh_mean_w/moreh_mean_w.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_mean/moreh_mean_nc/moreh_mean_nc.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_mean/moreh_mean_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_mean_backward/moreh_mean_backward.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_mean_backward/moreh_mean_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_bmm/moreh_bmm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_bmm_backward/moreh_bmm_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_linear/moreh_linear_op.cpp

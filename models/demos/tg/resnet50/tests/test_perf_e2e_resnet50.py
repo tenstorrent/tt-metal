@@ -13,7 +13,7 @@ from models.utility_functions import run_for_wormhole_b0
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    ((16, True, 0.0400, 60),),
+    ((16, True, 0.0365, 60),),
     indirect=["enable_async_mode"],
 )
 @pytest.mark.parametrize(
@@ -48,7 +48,7 @@ def test_perf(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 1500000}], indirect=True)
 @pytest.mark.parametrize(
     "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    ((16, True, 0.0110, 60),),
+    ((16, True, 0.0081, 60),),
     indirect=["enable_async_mode"],
 )
 @pytest.mark.parametrize(
