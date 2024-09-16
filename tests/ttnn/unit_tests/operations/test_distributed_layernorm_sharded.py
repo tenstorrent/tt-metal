@@ -15,9 +15,6 @@ from models.utility_functions import (
 
 from models.utility_functions import tt2torch_tensor, get_devices_for_t3000, skip_for_grayskull
 
-# create test for layer_norm for sharded input tensor [32, 2048]  and weight and bias tensors [2048]
-# sharded on 32 cores
-
 
 def rms_norm(x, gamma, eps):
     return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * gamma
@@ -27,6 +24,7 @@ def layer_norm(x, gamma, eps):
     return (x - x.mean(-1, keepdim=True)) * torch.rsqrt(x.var(-1, keepdim=True) + eps) * gamma
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
 @pytest.mark.parametrize("seed", [0, 2000, 50000])  # Test across 5 different seeds
 @pytest.mark.parametrize("eps", [1e-6])
@@ -181,6 +179,7 @@ def run_pre_allgather_layernorm(
         assert pcc_out2 >= min_pcc_Ex2, f"PCC of E(x^2) test failed: {pcc_out2} (threshold: {min_pcc_Ex2})"
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
 @pytest.mark.parametrize("seed", [0, 1234])
 @pytest.mark.parametrize(("min_pcc_Ex", "min_pcc_Ex2"), ([0.9997, 0.989],))
@@ -354,6 +353,7 @@ def run_post_allgather_layernorm(
         assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("is_rmsnorm", [True, False])  # Layernorm not supported for now
 @pytest.mark.parametrize("seed", [0, 1234])  # Test across 5 different seeds
 @pytest.mark.parametrize("eps", [1e-6])
@@ -412,6 +412,7 @@ def test_post_allgather_layernorm(
     )
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("is_rmsnorm", [True, False])  # Layernorm not supported for now
 @pytest.mark.parametrize("seed", [0])  # Test across 5 different seeds
 @pytest.mark.parametrize("eps", [1e-6])
