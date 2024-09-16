@@ -227,14 +227,7 @@ class TtLlamaModel_galaxy:
 
             xs = ttnn.to_memory_config(xs, memory_config=ACT_MEMCFG)
 
-            if isinstance(start_pos, int):
-                cache_idxs = torch.tensor([start_pos for _ in range(batch // self.cluster_shape[0])], dtype=torch.int64)
-            else:
-                raise ValueError("start_pos must be an int, different start_pos for each user not supported yet")
-                cache_idxs = start_pos
-
-            # TODO : Create different rot_mat for each user_groups in the cluster
-            rot_mat = get_rotation_mat(self.rot_emb, cache_idxs, seq_len, batch // self.cluster_shape[0])
+            rot_mat = get_rotation_mat(self.rot_emb, start_pos, seq_len, batch // self.cluster_shape[0])
             assert rot_mat.size() == (1, batch // self.cluster_shape[0], self.head_dim, self.head_dim)
 
             shard_spec_n_cores_grid = ttnn.CoreRangeSet({num_to_corerange(batch // 4)})
