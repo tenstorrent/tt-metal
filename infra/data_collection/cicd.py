@@ -18,7 +18,7 @@ from infra.data_collection import pydantic_models
 def create_cicd_json_for_data_analysis(
         github_runner_environment,
         github_pipeline_json_filename,
-    github_jobs_json_filename,
+        github_jobs_json_filename,
     cicd_json_filename=None,
 ):
     with open(github_pipeline_json_filename) as github_pipeline_json_file:
