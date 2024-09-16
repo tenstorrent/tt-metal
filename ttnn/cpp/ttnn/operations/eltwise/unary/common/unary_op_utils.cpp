@@ -235,7 +235,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             float scale = params[2];
             uint32_t uprob = static_cast<uint32_t>((double)INT_MAX * prob); // kernel requirement, please read it in the kernel comments
             op_init_and_name = {
-                fmt::format("dropout_tile_init({}u);", (uint32_t)param0),
+                // DO NOT ADD seed support till runtime args support will be added.
+                // Current approach doesn't work with dropout unary op because we will compile a new file for each new seed
+                "",//fmt::format("dropout_tile_init({}u);", (uint32_t)param0),
+
                 fmt::format("dropout_tile({}, {}u, {}u);", idst, uprob, Converter::to_hex(scale))
             };
             break;
