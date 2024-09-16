@@ -244,8 +244,6 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
         num_edm_buffers_per_channel = user_defined_num_buffers_per_channel.value();
     }
 
-    // Issue #10978: CCLs need to be tagged as having multi-device dependencies, when running on Galaxy.
-    program.capture_multi_device_dependencies();
     const auto& device = input_tensor.device();
 
     /* All gather fusion */
