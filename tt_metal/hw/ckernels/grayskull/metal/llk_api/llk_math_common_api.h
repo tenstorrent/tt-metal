@@ -18,8 +18,8 @@
 /*************************************************************************
  * LLK MATH COMMON
  *************************************************************************/
-template <bool untilize_en = false>
-inline void llk_math_hw_configure_disaggregated() { /*Unused for GS*/ }
+template <bool untilize_en = false, bool skip_inputs = false>
+inline void llk_math_hw_configure_disaggregated(const std::uint32_t srca_operand, const std::uint32_t srcb_operand) { /*Unused for GS*/ }
 
 inline void llk_math_wait_for_dest_available() {
     WAYPOINT("MWDW");

@@ -36,6 +36,7 @@ void MAIN {
             tile_regs_acquire();
             #if defined FP32_DEST_ACC_EN
                 unpack_reconfig_data_format(cb_in0, cb_add);
+                math_reconfig_data_format(cb_in0, cb_add);
             #endif
             add_tiles_init(cb_in0, cb_add);
             add_tiles(cb_in0, cb_add, first_tile, first_tile, dst0);

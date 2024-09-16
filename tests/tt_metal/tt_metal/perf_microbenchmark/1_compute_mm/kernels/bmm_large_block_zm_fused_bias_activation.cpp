@@ -107,6 +107,7 @@ void MAIN {
                             add_bcast_rows_init_short();
                             // reconfigure unpacker df for src B
                             unpack_reconfig_data_format(mm_bias_intermediate_cb_id, bias_cb_id);
+                            math_reconfig_data_format(mm_bias_intermediate_cb_id, bias_cb_id);
                             // reconfigure packer df for out
                             pack_reconfig_data_format(out_cb_id);
                             acquire_dst();
@@ -122,6 +123,7 @@ void MAIN {
                             mm_init_short();
                             // reconfigure unpacker df for src B
                             unpack_reconfig_data_format(in1_cb_id, in0_cb_id);
+                            math_reconfig_data_format(in1_cb_id, in0_cb_id);
                         #endif
 
                         // sfpu activation

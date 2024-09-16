@@ -60,6 +60,7 @@ void MAIN {
 
             // untilize tile and write to CB::c_intermed1
             unpack_reconfig_data_format_srca(cb_in1, cb_intermed0);
+            math_reconfig_data_format_srca(cb_in1, cb_intermed0);
             cb_wait_front(cb_intermed0, onetile);
             untilize_init_short(cb_intermed0);
             cb_reserve_back(cb_intermed1, onetile);
@@ -70,6 +71,7 @@ void MAIN {
             untilize_uninit(cb_intermed0);
 
             unpack_reconfig_data_format_srca(cb_intermed0, cb_in1);
+            math_reconfig_data_format_srca(cb_intermed0, cb_in1);
             mm_init_short(cb_in0, cb_in1, transpose_hw);
         }
         cb_pop_front(cb_in0, Kt);

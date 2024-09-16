@@ -315,6 +315,7 @@ void MAIN {
 #endif
 
         unpack_reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
+        math_reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
         add_bcast_rows_init_short();
         // reconfigure unpacker df for src B
         cb_wait_front(bias_cb_id, in1_per_core_w);
@@ -378,6 +379,7 @@ void MAIN {
             #endif // PACK_RELU
             #ifndef FUSE_BIAS
             unpack_reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
+            math_reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
             #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                 PACK((  pack_reconfig_data_format(out_cb_id) ));
             #endif
@@ -404,9 +406,11 @@ void MAIN {
 #ifdef FUSE_BIAS
             // reconfigure unpacker df for src A and src B
             unpack_reconfig_data_format(mm_partials_cb_id, in1_cb_id, bias_cb_id, in0_cb_id);
+            math_reconfig_data_format(mm_partials_cb_id, in1_cb_id, bias_cb_id, in0_cb_id);
 #else
             // reconfigure unpacker df for src A
             unpack_reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
+            math_reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
 #endif
             if (untilize_out) {
                 pack_untilize_uninit(mm_partials_cb_id);

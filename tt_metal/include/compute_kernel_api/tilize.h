@@ -26,7 +26,7 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb = 16)
 {
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE, false/*is_int_en*/, true/*tilize en*/>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb) ));
     MATH(( llk_math_pack_sync_init<DST_ACCUM_MODE>() ));
-    MATH(( llk_math_hw_configure_disaggregated() ));
+    MATH(( llk_math_hw_configure_disaggregated(icb, icb) ));
 
     PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE, ReluType::NO_RELU, 0, true/*tilize en*/>(ocb) ));
     PACK(( llk_pack_init<false, false, true/*tilize en*/>(ocb) ));
@@ -111,6 +111,7 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
     UNPACK(( llk_unpack_reconfig_data_format_srca(old_icb, new_icb) ));
+    MATH(( llk_math_reconfig_data_format_srca(old_icb, new_icb) ));
     UNPACK(( llk_unpack_tilize_init(new_icb, block) ));
 
     #ifdef ARCH_BLACKHOLE
@@ -195,6 +196,7 @@ ALWI void tilize_uninit(uint32_t icb, uint32_t ocb = 16)
 ALWI void tilize_uninit_with_dt(uint32_t old_icb = 0, uint32_t new_icb = 1, uint32_t ocb = 16) {
     UNPACK(( llk_unpack_tilize_uninit(old_icb) ));
     UNPACK(( llk_unpack_reconfig_data_format_srca(old_icb, new_icb) ));
+    MATH(( llk_math_reconfig_data_format_srca(old_icb, new_icb) ));
     #ifdef ARCH_BLACKHOLE
     PACK(( llk_pack_init(ocb) ));
     #endif

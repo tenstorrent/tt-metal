@@ -105,6 +105,7 @@ void MAIN {
     // pre-add x + y
     #ifdef FUSE_PRE_ADD
     unpack_reconfig_data_format_srcb(cb_in0, cb_in1);
+    math_reconfig_data_format_srcb(cb_in0, cb_in1);
     add_tiles_init();
     cb_reserve_back(cb_in, num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
@@ -128,13 +129,16 @@ void MAIN {
     cb_push_back(cb_in, num_tiles_per_block);
     #ifndef RMSNORM
     unpack_reconfig_data_format(cb_in0, cb_in, cb_in1, cb_scaler);
+    math_reconfig_data_format(cb_in0, cb_in, cb_in1, cb_scaler);
     #else
     unpack_reconfig_data_format(cb_in0, cb_in, cb_in1, cb_in);
+    math_reconfig_data_format(cb_in0, cb_in, cb_in1, cb_in);
     #endif
     cb_wait_front(cb_in, num_tiles_per_block);
     #else
     #ifndef RMSNORM
     unpack_reconfig_data_format_srcb(cb_in0, cb_scaler);
+    math_reconfig_data_format_srcb(cb_in0, cb_scaler);
     #endif // RMSNORM
     #endif // FUSE_PRE_ADD
 
@@ -159,6 +163,7 @@ void MAIN {
     cb_push_back(cb_ex_partial, block_h);
 
     unpack_reconfig_data_format_srca(cb_in, cb_ex_external);
+    math_reconfig_data_format_srca(cb_in, cb_ex_external);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr(is_allgather_worker) {
@@ -186,9 +191,11 @@ void MAIN {
     // x - E[x]
     if constexpr (FLOAT32_DTYPE) {
         unpack_reconfig_data_format(cb_in, cb_ex_global);
+        math_reconfig_data_format(cb_in, cb_ex_global);
     }
     index_h_offset = 0;
     unpack_reconfig_data_format_srca(cb_ex_external, cb_in);
+    math_reconfig_data_format_srca(cb_ex_external, cb_in);
     sub_bcast_cols_init_short();
     cb_reserve_back(cb_xmm, num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
@@ -214,6 +221,7 @@ void MAIN {
     cb_push_back(cb_xmm, num_tiles_per_block);
     #ifndef FUSE_PRE_ADD
     unpack_reconfig_data_format_srca(cb_in, cb_xmm);
+    math_reconfig_data_format_srca(cb_in, cb_xmm);
     #endif
     cb_wait_front(cb_xmm, num_tiles_per_block);
     #endif
@@ -244,9 +252,11 @@ void MAIN {
 
     #if defined RMSNORM and not defined FUSED_PRE_ADD
     unpack_reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
+    math_reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
     #else
     if constexpr (FLOAT32_DTYPE) {
         unpack_reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
+        math_reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
     }
     #endif
 
@@ -329,12 +339,15 @@ void MAIN {
     #if defined RMSNORM and not defined FUSE_PRE_ADD
     if constexpr (FLOAT32_DTYPE) {
         unpack_reconfig_data_format(cb_xmm, cb_ex_global);
+        math_reconfig_data_format(cb_xmm, cb_ex_global);
     } else {
         unpack_reconfig_data_format_srca(cb_ex2, cb_xmm);
+        math_reconfig_data_format_srca(cb_ex2, cb_xmm);
     }
     #else
     if constexpr (FLOAT32_DTYPE) {
         unpack_reconfig_data_format(cb_xmm, cb_ex_global);
+        math_reconfig_data_format(cb_xmm, cb_ex_global);
     }
     #endif
     mul_bcast_cols_init_short();
@@ -369,6 +382,7 @@ void MAIN {
 
     if constexpr(do_gamma) {
         unpack_reconfig_data_format(cb_im, cb_gamma);
+        math_reconfig_data_format(cb_im, cb_gamma);
         if constexpr(do_beta == 0) {
             pack_reconfig_data_format(cb_out);
         }
@@ -401,6 +415,7 @@ void MAIN {
 
     if constexpr(do_beta) {
         unpack_reconfig_data_format(cb_fusion, cb_beta);
+        math_reconfig_data_format(cb_fusion, cb_beta);
         pack_reconfig_data_format(cb_out);
         add_bcast_rows_init_short();
         cb_wait_front(cb_beta, block_w);

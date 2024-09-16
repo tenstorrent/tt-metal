@@ -47,6 +47,7 @@ void MAIN {
                     tile_regs_acquire();
                     #if defined FP32_DEST_ACC_EN
                         unpack_reconfig_data_format_srca(cb_in0);
+                        math_reconfig_data_format_srca(cb_in0);
                     #endif
                     copy_tile_to_dst_init_short(cb_in0);
                     copy_tile(cb_in0, 0, dst0);
@@ -54,6 +55,7 @@ void MAIN {
                     if (do_mask_h && last_row) {
                         #if defined FP32_DEST_ACC_EN
                             unpack_reconfig_data_format_srca(cb_mask_h_w);
+                            math_reconfig_data_format_srca(cb_mask_h_w);
                         #endif
                         copy_tile_to_dst_init_short(cb_mask_h_w);
                         copy_tile(cb_mask_h_w, 0, dst1);
@@ -64,6 +66,7 @@ void MAIN {
                     if (do_mask_w && last_col) {
                         #if defined FP32_DEST_ACC_EN
                             unpack_reconfig_data_format_srca(cb_mask_h_w);
+                            math_reconfig_data_format_srca(cb_mask_h_w);
                         #endif
                         copy_tile_to_dst_init_short(cb_mask_h_w);
                         copy_tile(cb_mask_h_w, 1, dst1);
@@ -87,6 +90,7 @@ void MAIN {
                     cb_wait_front(cb_intermed1, onetile);
                     #if defined FP32_DEST_ACC_EN
                         unpack_reconfig_data_format_srca(cb_intermed1);
+                        math_reconfig_data_format_srca(cb_intermed1);
                     #endif
                     copy_tile_to_dst_init_short(cb_intermed1);
                     copy_tile(cb_intermed1, 0, 0);
@@ -99,6 +103,7 @@ void MAIN {
                 auto cb_reduce = (do_mask) ? (cb_intermed0) : (cb_in0);
                 #if defined FP32_DEST_ACC_EN
                     unpack_reconfig_data_format(cb_reduce, cb_scaler);
+                    math_reconfig_data_format(cb_reduce, cb_scaler);
                 #endif
                 reduce_init_delta<false>();
                 reduce_tile((do_mask) ? (cb_intermed0) : (cb_in0), cb_scaler, 0, 0, 0);

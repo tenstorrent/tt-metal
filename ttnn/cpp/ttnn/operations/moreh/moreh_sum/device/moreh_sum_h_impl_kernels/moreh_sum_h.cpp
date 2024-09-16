@@ -47,6 +47,7 @@ void MAIN {
 
                     #if defined FP32_DEST_ACC_EN
                         unpack_reconfig_data_format(cb_input, cb_scaler);
+                        math_reconfig_data_format(cb_input, cb_scaler);
                     #endif
                     reduce_init_delta<false>();
                     reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
@@ -70,6 +71,7 @@ void MAIN {
                 cb_wait_front(cb_input, onetile);
                 #if defined FP32_DEST_ACC_EN
                     unpack_reconfig_data_format_srca(cb_input);
+                    math_reconfig_data_format_srca(cb_input);
                 #endif
                 copy_tile_to_dst_init_short(cb_input);
                 copy_tile(cb_input, 0, reduce_dst_idx);
@@ -96,6 +98,7 @@ void MAIN {
             if (!is_h_single_tile) {
                 #if defined FP32_DEST_ACC_EN
                     unpack_reconfig_data_format_srca(cb_accum_dst);
+                    math_reconfig_data_format_srca(cb_accum_dst);
                 #endif
                 cb_wait_front(cb_accum_dst, onetile);
                 copy_tile_to_dst_init_short(cb_accum_dst);
@@ -104,6 +107,7 @@ void MAIN {
 
             #if defined FP32_DEST_ACC_EN
                 unpack_reconfig_data_format(cb_input, cb_scaler);
+                math_reconfig_data_format(cb_input, cb_scaler);
             #endif
             reduce_init_delta<false>();
             reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);

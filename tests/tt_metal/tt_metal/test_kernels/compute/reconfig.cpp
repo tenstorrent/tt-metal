@@ -7,6 +7,7 @@
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/pack.h"
+#include "compute_kernel_api/math.h"
 #include "compute_kernel_api/unpack.h"
 
 #define START_IN_TILE_ID              (0)
@@ -57,19 +58,25 @@ void MAIN {
 #if (SPLIT_SRC_RECONFIG == 1)
         // Indices for old_operand, new_operand
         unpack_reconfig_data_format_srca(cb_in0, cb_in1);
+        math_reconfig_data_format_srca(cb_in0, cb_in1);
         unpack_reconfig_data_format_srcb(cb_in1, cb_in0);
+        math_reconfig_data_format_srcb(cb_in1, cb_in0);
 #elif (SPLIT_SRC_RECONFIG == 0)
         // Indices for old_A, new_A, old_B, new_B
         unpack_reconfig_data_format(cb_in0, cb_in1, cb_in1, cb_in0);
+        math_reconfig_data_format(cb_in0, cb_in1, cb_in1, cb_in0);
 #endif // SPLIT_SRC_RECONFIG
 #elif (EXPLICIT_RECONFIG == 0)
 #if (SPLIT_SRC_RECONFIG == 1)
         // Indices for new_operand
         unpack_reconfig_data_format_srca(cb_in1);
+        math_reconfig_data_format_srca(cb_in1);
         unpack_reconfig_data_format_srcb(cb_in0);
+        math_reconfig_data_format_srcb(cb_in0);
 #elif (SPLIT_SRC_RECONFIG == 0)
         // Indices for new_A, new_B
         unpack_reconfig_data_format(cb_in1, cb_in0);
+        math_reconfig_data_format(cb_in1, cb_in0);
 #endif // SPLIT_SRC_RECONFIG
 #endif // EXPLICIT_RECONFIG
 

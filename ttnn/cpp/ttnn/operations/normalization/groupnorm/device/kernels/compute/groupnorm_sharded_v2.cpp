@@ -170,6 +170,7 @@ void MAIN {
             // mask input
             index_h_offset = index_b_offset + index_g_offset;
             unpack_reconfig_data_format_srcb(cb_in0, cb_input_mask);
+            math_reconfig_data_format_srcb(cb_in0, cb_input_mask);
             mul_tiles_init();
             cb_reserve_back(cb_x, block_hw);
             cb_wait_front(cb_input_mask, block_w);
@@ -198,6 +199,7 @@ void MAIN {
             }
             cb_push_back(cb_x, block_hw);
             unpack_reconfig_data_format_srcb(cb_input_mask, cb_scaler);
+            math_reconfig_data_format_srcb(cb_input_mask, cb_scaler);
 
             // Partial-E[x]
             index_h_offset = 0;
@@ -265,6 +267,7 @@ void MAIN {
 
             // zero out the garbage values by mult mask again
             unpack_reconfig_data_format_srcb(cb_ex_global, cb_input_mask);
+            math_reconfig_data_format_srcb(cb_ex_global, cb_input_mask);
             mul_tiles_init();
             cb_reserve_back(cb_x, block_hw);
             cb_wait_front(cb_xmm, block_hw);
@@ -290,6 +293,7 @@ void MAIN {
             cb_pop_front(cb_input_mask, block_w);
             cb_push_back(cb_x, block_hw);
             unpack_reconfig_data_format_srcb(cb_input_mask, cb_x);
+            math_reconfig_data_format_srcb(cb_input_mask, cb_x);
 
 
             // (x - E[x])^2

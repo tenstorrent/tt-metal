@@ -162,6 +162,7 @@ void mul_block_bcast_scalar_inplace() {
     constexpr uint32_t dst_tiles = MUL_BCAST_GRANULARITY;
     constexpr uint32_t granularity = num_tiles >> LOG2_MUL_BCAST_GRANULARITY;
     unpack_reconfig_data_format(in0_cb, in1_scalar_cb);
+    math_reconfig_data_format(in0_cb, in1_scalar_cb);
     mul_tiles_bcast_scalar_init_short();
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_scalar_cb, 1);
@@ -278,6 +279,7 @@ void matmul_blocks(const uint32_t& in0_cb, const uint32_t& in1_cb, const uint32_
     mm_block_init_short(in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     unpack_reconfig_data_format(in1_cb, in0_cb);
+    math_reconfig_data_format(in1_cb, in0_cb);
     cb_wait_front(in1_cb, K * N);
 
     uint32_t output_num_tiles = M * N;
@@ -421,10 +423,12 @@ void MAIN {
                     if (!(q_low_idx >= k_high_idx)) {
                         /* QK += MASK */
                         unpack_reconfig_data_format(cb_qk_im, cb_mask_in);
+                        math_reconfig_data_format(cb_qk_im, cb_mask_in);
                         add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
                     }
 
                     unpack_reconfig_data_format(cb_qk_im, cb_identity_scale_in);
+                    math_reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                     reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, cb_cur_max, Sq_chunk_t, Sk_chunk_t>();
 
                     if (k_chunk > 0) {
@@ -441,6 +445,7 @@ void MAIN {
                     /* OUT_IM = QK @ V_CHUNK */
                     matmul_blocks(cb_qk_im, cb_v_in, cb_out_im, Sq_chunk_t, DHt, Sk_chunk_t, out_num_blocks, out_in0_num_subblocks, out_in1_num_subblocks, out_in0_block_w, out_subblock_h, out_subblock_w, false /*transpose*/);
                     unpack_reconfig_data_format_srca(cb_out_im);
+                    math_reconfig_data_format_srca(cb_out_im);
                     cb_pop_front(cb_qk_im, qk_chunk_tiles);
 
                     /* OUT_ACC += OUT_IM */

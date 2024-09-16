@@ -21,8 +21,14 @@
 /*************************************************************************
  * LLK MATH COMMON
  *************************************************************************/
-template <bool untilize_en = false>
-inline void llk_math_hw_configure_disaggregated() { /*Unused for WHB0*/ }
+template <bool untilize_en = false, bool skip_inputs = false>
+inline void llk_math_hw_configure_disaggregated(const std::uint32_t srca_operand, const std::uint32_t srcb_operand) {
+    if constexpr (skip_inputs == false){
+        std::uint32_t srca_operand_id = get_operand_id(srca_operand);
+        std::uint32_t srcb_operand_id = get_operand_id(srcb_operand);
+        _llk_math_hw_configure_<untilize_en>(unpack_dst_format[srca_operand_id], unpack_dst_format[srcb_operand_id]);
+    }
+}
 
 inline void llk_math_wait_for_dest_available() {
     WAYPOINT("MWDW");

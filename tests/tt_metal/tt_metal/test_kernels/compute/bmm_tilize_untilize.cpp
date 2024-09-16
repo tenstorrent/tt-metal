@@ -204,6 +204,7 @@ void MAIN {
                                 release_dst();
                                 // reconfig unpacker df for src B
                                 // unpack_reconfig_data_format(out_for_bias_cb_id, bias_cb_id);
+                                // math_reconfig_data_format(out_for_bias_cb_id, bias_cb_id);
                                 // bcast add data from bias_cb_id
                                 cb_wait_front(bias_cb_id, bias_ntiles_w);
                                 cb_wait_front(out_for_bias_cb_id, out_subblock_num_tiles);
@@ -226,6 +227,7 @@ void MAIN {
                                 mm_init_short();
                                 // reconfig unpacker df for srcB
                                 // unpack_reconfig_data_format(in1_cb_id, in0_cb_id);
+                                // math_reconfig_data_format(in1_cb_id, in0_cb_id);
                             }
                         #endif
 
