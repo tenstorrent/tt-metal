@@ -59,7 +59,6 @@ void MAIN {
 
     constexpr uint32_t cb_in0 = tt::CB::c_in0;
     constexpr uint32_t cb_in1 = tt::CB::c_in1;
-    constexpr uint32_t cb_scaler = tt::CB::c_in2;
     constexpr uint32_t cb_eps = tt::CB::c_in3;
     constexpr uint32_t cb_scaler_global = tt::CB::c_in4;
     constexpr uint32_t cb_gamma = tt::CB::c_in5;
@@ -70,7 +69,6 @@ void MAIN {
     constexpr uint32_t cb_stats = tt::CB::c_in7; // E[(x-E[x])^2] global reduce
     constexpr uint32_t cb_stats_reduced = tt::CB::c_intermed4; // E[(x-E[x])^2] global reduce
     constexpr uint32_t cb_ex_global = tt::CB::dataflow7; // E[x] global reduce
-    constexpr uint32_t cb_ex2_global = tt::CB::dataflow6; // E[x^2] global reduce
     constexpr uint32_t cb_reciprocal = tt::CB::c_intermed3; // [E[x^2]-E[x]^2]+eps
     constexpr uint32_t cb_fusion = tt::CB::c_intermed1; // stream gamma/beta
     constexpr uint32_t cb_out = tt::CB::c_out0;
