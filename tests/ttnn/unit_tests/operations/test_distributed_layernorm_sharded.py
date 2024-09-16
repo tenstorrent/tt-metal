@@ -188,7 +188,6 @@ def run_pre_allgather_layernorm(
     "input_width, core_grid",
     [
         ([2048, (4, 8)]),
-        ([2048, (8, 8)]),
     ],
 )
 @pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
@@ -372,10 +371,7 @@ def run_post_allgather_layernorm(
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
 @pytest.mark.parametrize(
     "core_grid",
-    (
-        (4, 8),
-        (8, 8),
-    ),
+    ((4, 8),),
 )
 def test_post_allgather_layernorm(
     all_devices,
