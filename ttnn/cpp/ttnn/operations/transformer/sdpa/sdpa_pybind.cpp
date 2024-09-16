@@ -15,18 +15,34 @@ namespace ttnn::operations::transformer {
 void py_bind_sdpa(py::module &module) {
     auto doc =
         R"doc(
-        "Causal scaled dot product attention. This API mimicks the PyTorch API of the same name."
-        "The implementation is FlashAttention-2 and it currently only supports MQA with causal masking.\n"
+        Causal scaled dot product attention. This API mimicks the PyTorch API of the same name.
+        The implementation is FlashAttention-2 and it currently only supports MQA with causal masking."
 
-        "Q:      [b x nqh x s x dh]"
-        "K:      [b x 1   x s x dh]"
-        "V:      [b x 1   x s x dh]"
-        "mask:   [b x 1   x s x s ]"
-        "output: [b x nqh x s x dh]"
+        Mask must be a causal mask with 0s in the lower triangle and -inf in the upper triangle.
 
-        "Mask must be a causal mask with 0s in the lower triangle and -inf in the upper triangle."
+        Accepts a `SDPAProgramConfig` which specifies the grid size and chunk tiles in the Q and K sequence lengths. The op parallelizes over `b`, `nqh`, and Q's `s` dimension.
 
-        "Accepts a `SDPAProgramConfig` which specifies the grid size and chunk tiles in the Q and K sequence lengths. The op parallelizes over `b`, `nqh`, and Q's `s` dimension."
+        Args:
+            input_tensor_q (ttnn.Tensor): the input tensor.          [b x nqh x s x dh]
+            input_tensor_k (ttnn.Tensor): the input tensor.          [b x   1 x s x dh]
+            input_tensor_v (ttnn.Tensor): the input tensor.          [b x   1 x s x dh]
+            casual_mask (ttnn.Tensor, optional): Defaults to `None`. [b x   1 x s x  s]
+
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
+            is_casual (bool): Defaults to `true`.
+            scale (float, optional): Defaults to `None`.
+            program_config (SDPAProgramConfig, optional): Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+            valid_seq_len (int, optional): Defaults to `None`.
+
+
+        Returns:
+            ttnn.Tensor: the output tensor [b x nqh x s x dh].
+
+
         )doc";
 
     using OperationType = decltype(ttnn::transformer::scaled_dot_product_attention);

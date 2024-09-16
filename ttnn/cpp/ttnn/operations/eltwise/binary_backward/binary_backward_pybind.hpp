@@ -819,7 +819,7 @@ void py_module(py::module& module) {
         module,
         ttnn::addalpha_bw,
         "alpha", "Alpha value", 1.0f,
-        R"doc(Performs backward operations for addalpha on :attr:`input_tensor_b` , attr:`input_tensor_a`, attr:`alpha` with given attr:`grad_tensor`.)doc",
+        R"doc(Performs backward operations for addalpha on :attr:`input_tensor_b` , :attr:`input_tensor_a` and :attr:`alpha` with given attr:`grad_tensor`.)doc",
         R"doc(
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
@@ -897,7 +897,7 @@ void py_module(py::module& module) {
         module,
         ttnn::concat_bw,
         "dim", "Dimension to concatenate", 0,
-        R"doc(Performs backward operations for concat on :attr:`input_tensor_a` and :attr:`input_tensor_b` with given attr:`grad_tensor`.)doc",
+        R"doc(Performs backward operations for concat on :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
@@ -908,7 +908,7 @@ void py_module(py::module& module) {
     detail::bind_binary_backward_ops(
         module,
         ttnn::rsub_bw,
-        R"doc(Performs backward operations for subraction of :attr:`input_tensor_a` from :attr:`input_tensor_b` with given attr:`grad_tensor` (reversed order of subtraction operator).)doc",
+        R"doc(Performs backward operations for subraction of :attr:`input_tensor_a` from :attr:`input_tensor_b` with given :attr:`grad_tensor` (reversed order of subtraction operator).)doc",
         R"doc(
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |

@@ -801,44 +801,37 @@ void py_module(py::module& module) {
     detail::bind_binary_composite(
         module,
         ttnn::hypot,
-        R"doc(compute Hypot :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(compute Hypot :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_composite(
         module,
         ttnn::xlogy,
-        R"doc(Compute xlogy :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute xlogy :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_composite(
         module,
         ttnn::nextafter,
-        R"doc(Compute nextafter :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute nextafter :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_composite(
         module,
         ttnn::minimum,
-        R"doc(Compute minimum :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute minimum :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_composite(
         module,
         ttnn::maximum,
-        R"doc(Compute maximum :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute maximum :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_composite(
         module,
         ttnn::atan2,
-        R"doc(Compute atan2 :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute atan2 :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_composite(
         module,
         ttnn::logical_xor,
-        R"doc(Compute logical_xor :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute logical_xor :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_logical_inplace_operation(
         module,
@@ -848,8 +841,7 @@ void py_module(py::module& module) {
     detail::bind_binary_composite(
         module,
         ttnn::logical_xor_,
-        R"doc(Compute inplace logical XOR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute inplace logical XOR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_logical_inplace_operation(
         module,
@@ -869,8 +861,7 @@ void py_module(py::module& module) {
     detail::bind_binary_composite_with_rtol_atol(
         module,
         ttnn::isclose,
-        R"doc(Compute isclose :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute isclose :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_div(
         module,
@@ -891,20 +882,17 @@ void py_module(py::module& module) {
     detail::bind_binary_composite(
         module,
         ttnn::scatter,
-        R"doc(Compute scatter :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute scatter :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_composite(
         module,
         ttnn::outer,
-        R"doc(Compute outer :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute outer :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_polyval(
         module,
         ttnn::polyval,
-        R"doc(Compute polyval of all elements of :attr:`input_tensor_a` with coefficient :attr:`coeffs` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{coeffs}}_i)doc");
+        R"doc(Compute polyval of all elements of :attr:`input_tensor_a` with coefficient :attr:`coeffs` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_overload_operation(
         module,

@@ -15,15 +15,32 @@ namespace ttnn::operations::transformer {
 void py_bind_sdpa_gqa_decode(py::module &module) {
     auto doc =
         R"doc(
-        "A version of scaled dot product attention specifically for GQA decode."
+        A version of scaled dot product attention specifically for GQA decode.
 
-        "Q:      [1 x qh x b x dh]"
-        "K:      [b x kh x s x dh]"
-        "V:      [b x kh x s x dh]"
-        "cur_pos: list of integers of length b"
-        "output: [1 x b x qh x dh]"
 
-        "Accepts a `SDPAMultiCoreProgramConfig` which specifies the grid size and chunk tiles in the K/V/Mask sequence lengths (Q chunk tiles is not used). The op parallelizes over `b` and K/V/Mask's `s` dimension."
+        Accepts a `SDPAMultiCoreProgramConfig` which specifies the grid size and chunk tiles in the K/V/Mask sequence lengths (Q chunk tiles is not used). The op parallelizes over `b` and K/V/Mask's `s` dimension.
+
+
+        Args:
+            input_tensor_q (ttnn.Tensor): the input tensor [1 x qh x b x dh]
+            input_tensor_k (ttnn.Tensor): the input tensor [b x kh x s x dh]
+            input_tensor_v (ttnn.Tensor): the input tensor [b x kh x s x dh]
+            cur_pos (List of int): list of integers of length b.
+
+
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
+            scale (float, optional): Defaults to `None`.
+            program_config (SDPAProgramConfig, optional): Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+
+
+        Returns:
+            ttnn.Tensor: the output tensor [1 x b x qh x dh].
+
+
         )doc";
 
     using OperationType = decltype(ttnn::transformer::scaled_dot_product_attention_decode_gqa);

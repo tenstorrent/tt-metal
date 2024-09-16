@@ -77,11 +77,24 @@ class MaxPool2d:
     If `padding` is non-zero, then the input is implicitly padded with negative infinity on both sides for padding number of points.
     `dilation` controls the spacing between the kernel points.
 
-    Arguments:
-        * :attr: kernel_size (Union[int, Tuple[int, int]]): the size of the window to take a max over
-        * :attr: stride (Union[int, Tuple[int, int]]): the stride of the window. Default value is 1
-        * :attr: padding (Union[int, Tuple[int, int]]): Implicit negative infinity padding to be added on both sides
-        * :attr: dilation (Union[int, Tuple[int, int]]): a parameter that controls the stride of window elements
+    Args:
+        kernel_size (Union[int, Tuple[int, int]]): the size of the window to take a max over.
+        stride (Union[int, Tuple[int, int]]): the stride of the window. Defaults to `1`.
+        padding (Union[int, Tuple[int, int]]): Implicit negative infinity padding to be added on both sides. Defaults to `0`.
+        dilation (Union[int, Tuple[int, int]]): a parameter that controls the stride of window elements. Defaults to `1`.
+        dtype (ttnn.DataType, optional): Defaults to `None`.
+        device (ttnn.Device).
+        batch_size (int).
+        input_height (int).
+        input_width (int).
+        reader_patterns_cache (Dict).
+        parallel_config_override (Dict, optional): Defaults to `None`.
+        deallocate_activation (bool, optional): Defaults to `False`.
+        channels (int, optional): Defaults to `None`.
+        mesh_mapper (ttnn.TensorToMesh, optional): Defaults to `None`.
+
+    Returns:
+        ttnn.Tensor: the output tensor.
     """
 
     def __init__(

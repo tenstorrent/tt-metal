@@ -18,7 +18,7 @@ void py_bind_split_query_key_value_and_split_heads(pybind11::module& module) {
     ttnn::bind_registered_operation(
         module,
         ttnn::transformer::split_query_key_value_and_split_heads,
-        R"doc(split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, kv_input_tensor: Optional[ttnn.Tensor] = None, *, num_heads: int, num_kv_heads: Optional[int] = None, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]
+        R"doc(
 
             Splits :attr:`input_tensor` of shape ``[batch_size, sequence_size, 3 * hidden_size]`` into 3 tensors (Query, Key, Value) of shape ``[batch_size, sequence_size, hidden_size]``.
             Then, reshapes and permutes the output tensors, to make them ready for computing attention scores.
@@ -61,12 +61,18 @@ void py_bind_split_query_key_value_and_split_heads(pybind11::module& module) {
                 return query, key, value
 
             Args:
-                * :attr:`input_tensor`: Input Tensor for Query, Key and Value. If :attr:`kv_input_tensor` is not None, then :attr:`input_tensor` is only used for Query.
-                * :attr:`kv_input_tensor`: Input Tensor for Key and Value. If passed in, :attr:`input_tensor` has to be used only for Query.
-                * :attr:`num_heads`: num heads to split into
-                * :attr:`num_kv_heads`: num heads of Key and num heads of Value. If not passed in, then :attr:`num_kv_heads` is set to :attr:`num_heads`
-                * :attr:`transpose_key`: Whether to transpose the Key tensor on the last two dimensions
-                * :attr:`memory_config`: Memory Config of the output tensor
+                input_tensor (ttnn.Tensor): Input Tensor for Query, Key and Value. If :attr:`kv_input_tensor` is not None, then :attr:`input_tensor` is only used for Query.
+                kv_input_tensor (ttnn.Tensor): Input Tensor for Key and Value. If passed in, :attr:`input_tensor` has to be used only for Query. Defaults to `None`.
+
+            Keyword args:
+                num_heads (int): num heads to split into.
+                num_kv_heads (int, optional): num heads of Key and num heads of Value. If not passed in, then :attr:`num_kv_heads` is set to :attr:`num_heads`. Defaults to `None`.
+                transpose_key (bool): Whether to transpose the Key tensor on the last two dimensions. Defaults to `true`
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `DRAM_MEMORY_CONFIG`.
+
+            Returns:
+               Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: the output tensor.
+
         )doc",
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::transformer::split_query_key_value_and_split_heads) &self,
