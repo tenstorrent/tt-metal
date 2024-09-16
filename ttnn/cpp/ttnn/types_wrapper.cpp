@@ -18,11 +18,11 @@ namespace ttnn::str_wrapper
 // no MLIR equivalent for storage type
 std::optional<tt::tt_metal::StorageType> to_storage_type(const std::string& storage_type_str)
 {
-    if (storage_type_str == "OWNED") return tt::tt_metal::StorageType::OWNED;
-    if (storage_type_str == "DEVICE") return tt::tt_metal::StorageType::DEVICE;
-    if (storage_type_str == "BORROWED") return tt::tt_metal::StorageType::BORROWED;
-    if (storage_type_str == "MULTI_DEVICE") return tt::tt_metal::StorageType::MULTI_DEVICE;
-    if (storage_type_str == "MULTI_DEVICE_HOST") return tt::tt_metal::StorageType::MULTI_DEVICE_HOST;
+    if (storage_type_str == "owned") return tt::tt_metal::StorageType::OWNED;
+    if (storage_type_str == "device") return tt::tt_metal::StorageType::DEVICE;
+    if (storage_type_str == "borrowed") return tt::tt_metal::StorageType::BORROWED;
+    if (storage_type_str == "multi_device") return tt::tt_metal::StorageType::MULTI_DEVICE;
+    if (storage_type_str == "multi_device_host") return tt::tt_metal::StorageType::MULTI_DEVICE_HOST;
     return std::nullopt;
 }
 
@@ -96,8 +96,8 @@ std::optional<tt::tt_metal::BufferType> to_buffer_type(const std::string& buffer
 std::optional<tt::tt_metal::ShardOrientation> to_shard_orientation(const std::string& shard_str)
 {
     // no MLIR equivalent yet
-    if (shard_str == "ROW_MAJOR") return tt::tt_metal::ShardOrientation::ROW_MAJOR;
-    if (shard_str == "COL_MAJOR") return tt::tt_metal::ShardOrientation::COL_MAJOR;
+    if (shard_str == "row_major") return tt::tt_metal::ShardOrientation::ROW_MAJOR;
+    if (shard_str == "col_major") return tt::tt_metal::ShardOrientation::COL_MAJOR;
     return std::nullopt;
 }
 
