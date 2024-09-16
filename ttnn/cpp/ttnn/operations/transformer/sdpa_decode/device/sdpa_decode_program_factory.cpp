@@ -74,9 +74,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         // default share_cache to false
         share_cache = false;
     }
-    if (! share_cache.value()) {
-        TT_FATAL(B == Bkv, "Q and KV must have the same batch size if not sharing cache");
-    } else {
+    if (share_cache.value()) {
         TT_FATAL(B%Bkv == 0, "Batch dim in Q must be divisible by batch dim in KV if sharing cache");
     }
 
