@@ -264,19 +264,43 @@ struct ExecuteBackwardSub {
 };
 
 struct ExecuteBackwardDiv  {
-    static std::vector<Tensor> invoke(
+    static std::vector<std::optional<Tensor>> invoke(
+        uint8_t queue_id,
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         float scalar,
         string round_mode = "None",
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt);
 
-    static std::vector<Tensor> invoke(
+    static std::vector<std::optional<Tensor>> invoke(
+        uint8_t queue_id,
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         const Tensor &other_tensor_arg,
         string round_mode = "None",
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+        const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt,
+        std::optional<Tensor> other_grad = std::nullopt);
+
+    static std::vector<std::optional<Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float scalar,
+        string round_mode = "None",
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt);
+
+    static std::vector<std::optional<Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const Tensor &other_tensor_arg,
+        string round_mode = "None",
+        const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt,
+        std::optional<Tensor> other_grad = std::nullopt);
 
     static std::vector<ComplexTensor> invoke(
         const ComplexTensor &grad_tensor_arg,
@@ -452,7 +476,9 @@ constexpr auto sub_bw = ttnn::register_operation<
     "ttnn::sub_bw",
     operations::binary_backward::ExecuteBackwardSub>();
 
-constexpr auto div_bw = ttnn::register_operation<"ttnn::div_bw", operations::binary_backward::ExecuteBackwardDiv>();
+constexpr auto div_bw = ttnn::register_operation<
+    "ttnn::div_bw",
+    operations::binary_backward::ExecuteBackwardDiv>();
 
 constexpr auto remainder_bw = ttnn::register_operation<
     "ttnn::remainder_bw",
