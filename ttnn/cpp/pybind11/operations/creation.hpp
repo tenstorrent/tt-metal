@@ -164,14 +164,18 @@ void bind_full_like_operation_with_hard_coded_value(py::module& module, const cr
                const std::optional<DataType>& dtype,
                const std::optional<Layout>& layout,
                const std::optional<std::reference_wrapper<Device>>& device,
-               const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(tensor, dtype, layout, device, memory_config);
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<ttnn::Tensor> &optional_output_tensor,
+               uint8_t queue_id) -> ttnn::Tensor {
+                return self(queue_id, tensor, dtype, layout, device, memory_config, optional_output_tensor);
             },
             py::arg("tensor"),
             py::arg("dtype") = std::nullopt,
             py::arg("layout") = std::nullopt,
             py::arg("device") = std::nullopt,
-            py::arg("memory_config") = std::nullopt});
+            py::arg("memory_config") = std::nullopt,
+            py::arg("optional_tensor") = std::nullopt,
+            py::arg("queue_id") = ttnn::DefaultQueueId});
 }
 
 template <typename creation_operation_t>
