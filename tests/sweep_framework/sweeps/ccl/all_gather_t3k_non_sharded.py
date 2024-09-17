@@ -59,216 +59,77 @@ def generate_input_shapes(batch_sizes, Y, X):
 tile_input_shapes = generate_input_shapes(tile_batch_size, tile_Y, tile_X)
 row_input_shapes = generate_input_shapes(row_batch_size, row_Y, row_X)
 
-parameters = {
-    "all_gather_tile_non_sharded_dram_ring_bf16": {
-        "num_devices": [4, 8],
-        "num_links": [1, 2],
-        "input_shape": tile_input_shapes,
-        "dim": [0, 1, 2, 3],
-        "tensor_layout": [ttnn.TILE_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],
-        "mem_config": [
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ],
-        "all_gather_operation": ["line_all_gather"],
-        "num_iters": [1],
-    },
-    "all_gather_tile_non_sharded_dram_ring_bf8": {
-        "num_devices": [4, 8],
-        "num_links": [1, 2],
-        "input_shape": tile_input_shapes,
-        "dim": [0, 1, 2, 3],
-        "tensor_layout": [ttnn.TILE_LAYOUT],
-        "input_dtype": [ttnn.bfloat8_b],
-        "mem_config": [
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ],
-        "all_gather_operation": ["all_gather"],
-        "num_iters": [1],
-    },
-    "all_gather_tile_non_sharded_dram_line_bf16": {
-        "num_devices": [4, 8],
-        "num_links": [1, 2],
-        "input_shape": tile_input_shapes,
-        "dim": [0, 1, 2, 3],
-        "tensor_layout": [ttnn.TILE_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],
-        "mem_config": [
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ],
-        "all_gather_operation": ["line_all_gather"],
-        "num_iters": [1],
-    },
-    "all_gather_tile_non_sharded_dram_line_bf8": {
-        "num_devices": [4, 8],
-        "num_links": [1, 2],
-        "input_shape": tile_input_shapes,
-        "dim": [0, 1, 2, 3],
-        "tensor_layout": [ttnn.TILE_LAYOUT],
-        "input_dtype": [ttnn.bfloat8_b],
-        "mem_config": [
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ],
-        "all_gather_operation": ["line_all_gather"],
-        "num_iters": [1],
-    },
-    "all_gather_tile_non_sharded_l1_ring_bf16": {
-        "num_devices": [4, 8],
-        "num_links": [1, 2],
-        "input_shape": tile_input_shapes,
-        "dim": [0, 1, 2, 3],
-        "tensor_layout": [ttnn.TILE_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],
-        "mem_config": [
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
-        ],
-        "all_gather_operation": ["all_gather"],
-        "num_iters": [1],
-    },
-    "all_gather_tile_non_sharded_l1_ring_bf8": {
-        "num_devices": [4, 8],
-        "num_links": [1, 2],
-        "input_shape": tile_input_shapes,
-        "dim": [0, 1, 2, 3],
-        "tensor_layout": [ttnn.TILE_LAYOUT],
-        "input_dtype": [ttnn.bfloat8_b],
-        "mem_config": [
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
-        ],
-        "all_gather_operation": ["all_gather"],
-        "num_iters": [1],
-    },
-    "all_gather_tile_non_sharded_l1_line_bf16": {
-        "num_devices": [4, 8],
-        "num_links": [1, 2],
-        "input_shape": tile_input_shapes,
-        "dim": [0, 1, 2, 3],
-        "tensor_layout": [ttnn.TILE_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],
-        "mem_config": [
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
-        ],
-        "all_gather_operation": ["line_all_gather"],
-        "num_iters": [1],
-    },
-    "all_gather_tile_non_sharded_l1_line_bf8": {
-        "num_devices": [4, 8],
-        "num_links": [1, 2],
-        "input_shape": tile_input_shapes,
-        "dim": [0, 1, 2, 3],
-        "tensor_layout": [ttnn.TILE_LAYOUT],
-        "input_dtype": [ttnn.bfloat8_b],
-        "mem_config": [
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
-        ],
-        "all_gather_operation": ["line_all_gather"],
-        "num_iters": [1],
-    },
-    "all_gather_row_non_sharded_dram_ring_bf16": {
-        "num_devices": [4, 8],
-        "num_links": [1, 2],
-        "input_shape": row_input_shapes,
-        "dim": [0, 1, 2, 3],
-        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],
-        "mem_config": [
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ],
-        "all_gather_operation": ["all_gather"],
-        "num_iters": [1],
-    },
-    "all_gather_row_non_sharded_dram_ring_bf8": {
-        "num_devices": [4, 8],
-        "num_links": [1, 2],
-        "input_shape": row_input_shapes,
-        "dim": [0, 1, 2, 3],
-        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat8_b],
-        "mem_config": [
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ],
-        "all_gather_operation": ["all_gather"],
-        "num_iters": [1],
-    },
-    "all_gather_row_non_sharded_dram_line_bf16": {
-        "num_devices": [4, 8],
-        "num_links": [1, 2],
-        "input_shape": row_input_shapes,
-        "dim": [0, 1, 2, 3],
-        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],
-        "mem_config": [
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ],
-        "all_gather_operation": ["line_all_gather"],
-        "num_iters": [1],
-    },
-    "all_gather_row_non_sharded_dram_line_bf8": {
-        "num_devices": [4, 8],
-        "num_links": [1, 2],
-        "input_shape": row_input_shapes,
-        "dim": [0, 1, 2, 3],
-        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat8_b],
-        "mem_config": [
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ],
-        "all_gather_operation": ["line_all_gather"],
-        "num_iters": [1],
-    },
-    "all_gather_row_non_sharded_l1_ring_bf16": {
-        "num_devices": [4, 8],
-        "num_links": [1, 2],
-        "input_shape": row_input_shapes,
-        "dim": [0, 1, 2, 3],
-        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],
-        "mem_config": [
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
-        ],
-        "all_gather_operation": ["all_gather"],
-        "num_iters": [1],
-    },
-    "all_gather_row_non_sharded_l1_ring_bf8": {
-        "num_devices": [4, 8],
-        "num_links": [1, 2],
-        "input_shape": row_input_shapes,
-        "dim": [0, 1, 2, 3],
-        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat8_b],
-        "mem_config": [
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
-        ],
-        "all_gather_operation": ["all_gather"],
-        "num_iters": [1],
-    },
-    "all_gather_row_non_sharded_l1_line_bf16": {
-        "num_devices": [4, 8],
-        "num_links": [1, 2],
-        "input_shape": row_input_shapes,
-        "dim": [0, 1, 2, 3],
-        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],
-        "mem_config": [
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
-        ],
-        "all_gather_operation": ["line_all_gather"],
-        "num_iters": [1],
-    },
-    "all_gather_row_non_sharded_l1_line_bf8": {
-        "num_devices": [4, 8],
-        "num_links": [1, 2],
-        "input_shape": row_input_shapes,
-        "dim": [0, 1, 2, 3],
-        "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat8_b],
-        "mem_config": [
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
-        ],
-        "all_gather_operation": ["line_all_gather"],
-        "num_iters": [1],
-    },
+# Define the mapping for dtypes, orientations, and gather operations
+dtype_map = {"bf16": ttnn.bfloat16, "bf8": ttnn.bfloat8_b}
+
+orientation_map = {"row_major": ttnn.ShardOrientation.ROW_MAJOR, "col_major": ttnn.ShardOrientation.COL_MAJOR}
+
+gather_op_map = {"line": "line_all_gather", "ring": "all_gather"}
+
+tensor_layouts = {"row": ttnn.ROW_MAJOR_LAYOUT, "tile": ttnn.TILE_LAYOUT}
+
+buffer_types = {
+    "l1": ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+    "dram": ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
 }
+
+dims = [0, 1, 2, 3]
+num_devices = [4, 8]
+num_links = [1, 2]
+
+
+def generate_params(
+    dtype_str, orientation_str, gather_op_str, tensor_layout_key, buffer_key, dim, num_device, num_link
+):
+    dtype = dtype_map[dtype_str]
+    orientation = orientation_map[orientation_str]
+    gather_op = gather_op_map[gather_op_str]
+    tensor_layout_value = tensor_layouts[tensor_layout_key]
+    buffer_value = buffer_types[buffer_key]
+
+    if tensor_layout_key == "tile":
+        input_shape = tile_input_shapes
+    else:
+        input_shape = row_input_shapes
+
+    param_name = f"all_gather_non_sharded_{tensor_layout_key}_{buffer_key}_{gather_op_str}_{dtype_str}_{orientation_str}_dim{dim}_{num_device}devices_{num_link}links"
+    return {
+        "name": param_name,
+        "config": {
+            "num_devices": [num_device],
+            "num_links": [num_link],
+            "input_shape": input_shape,
+            "dim": [dim],
+            "tensor_layout": [tensor_layout_value],
+            "input_dtype": [dtype],
+            "mem_config": [buffer_value],
+            "all_gather_operation": [gather_op],
+            "num_iters": [1],
+        },
+    }
+
+
+parameters = {}
+
+for dtype_str in dtype_map.keys():
+    for orientation_str in orientation_map.keys():
+        for gather_op_str in gather_op_map.keys():
+            for tensor_layout_key in tensor_layouts:
+                for buffer_key in buffer_types:
+                    for dim in dims:
+                        for num_device in num_devices:
+                            for num_link in num_links:
+                                param = generate_params(
+                                    dtype_str,
+                                    orientation_str,
+                                    gather_op_str,
+                                    tensor_layout_key,
+                                    buffer_key,
+                                    dim,
+                                    num_device,
+                                    num_link,
+                                )
+                                parameters[param["name"]] = param["config"]
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
