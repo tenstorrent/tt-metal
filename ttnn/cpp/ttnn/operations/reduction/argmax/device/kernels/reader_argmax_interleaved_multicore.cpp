@@ -114,11 +114,10 @@ void kernel_main() {
 
     DPRINT << max_vals[0] << " " << max_vals[1] << ENDL();
 
-    // write max_vals to L1
-    const InterleavedAddrGen<dst_is_dram> s_out = {.bank_base_address = dst_addr, .page_size = intermed0_stick_size};
-    uint64_t dst_noc_addr = get_noc_addr(0, s_out);
+    // write max_vals to reducer core CB
+    uint64_t dst_cb_addr = get_noc_addr(final_cores_physical_x, final_cores_physical_y, intermed_addr);
 
-    noc_async_write(intermed_addr + (core_id%2)*4, dst_noc_addr + core_id*4, 4);
+    noc_async_write(intermed_addr + (core_id%2)*4, dst_cb_addr + core_id*4, 4);
     noc_async_write_barrier();
 
     // inc noc semaphore
@@ -137,23 +136,21 @@ void kernel_main() {
         uint32_t intermed_re_addr = get_write_ptr(cb_id_intermed0);
         volatile tt_l1_ptr uint32_t* max_vals_reduce = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(intermed_re_addr);
 
-                    // read max_vals_reduce from L1
-                    noc_async_read_page(0, s_out, intermed_re_addr);
-                    noc_async_read_barrier();
+        max_index = max_vals_reduce[0];
+        max_val = stick[max_index];
+        for(uint32_t i = 0; i < num_cores; i++) {
+            uint32_t index = max_vals_reduce[i];
+            DPRINT << "core"<< i<< ":"<<index << ENDL();
+            uint16_t val = index; //stick[index];
+            if(bfloat16_greater(val, max_val)) {
+                max_index = index;
+                max_val = val;
+            }
+        }
+        max_vals_final[0] = max_index;
 
-                    max_index = max_vals_reduce[0];
-                    max_val = stick[max_index];
-                    for(uint32_t i = 0; i < num_cores; i++) {
-                        uint32_t index = max_vals_reduce[i];
-                        DPRINT << "core"<< i<< ":"<<index << ENDL();
-                        uint16_t val = stick[index];
-                        if(bfloat16_greater(val, max_val)) {
-                            max_index = index;
-                            max_val = val;
-                        }
-                    }
-                    max_vals_final[0] = max_index;
-
+        const InterleavedAddrGen<dst_is_dram> s_out = {.bank_base_address = dst_addr, .page_size = out_stick_size};
+        uint64_t dst_noc_addr = get_noc_addr(0, s_out);
         noc_async_write(out_addr, dst_noc_addr, out_stick_size);
         noc_async_write_barrier();
     }
