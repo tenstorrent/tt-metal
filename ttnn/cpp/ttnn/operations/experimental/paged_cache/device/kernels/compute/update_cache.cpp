@@ -7,7 +7,6 @@
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tilize.h"
-#include "debug/dprint.h"  // required in all kernels using DPRINT
 
 
 namespace NAMESPACE {

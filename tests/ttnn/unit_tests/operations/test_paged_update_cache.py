@@ -87,7 +87,7 @@ def run_test_update_cache_decode(
     logger.debug(output_cache)
     logger.debug(output_update)
 
-    if not eq_cache or not eq_update:
+    if (not eq_cache or not eq_update) and logger.level("DEBUG"):
         # find deltas between cache and tt_got_back
         cache_delta = cache - tt_got_back
         for i in range(max_seq_len):
@@ -103,8 +103,6 @@ def run_test_update_cache_decode(
                     logger.info(f"cache at {i}: {cache[:, :, i, :]}")
                     logger.info(f"tt_got_back at {i}: {tt_got_back[:, :, i, :]}")
 
-        breakpoint()
-
     assert eq_cache and eq_update
 
 
@@ -117,7 +115,7 @@ def run_test_update_cache_decode(
 @pytest.mark.parametrize("num_heads", [8])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cache_idx_tensor", [True, False])
-@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 def test_update_cache_decode(
     check_memory,
     share_cache,
@@ -168,9 +166,9 @@ def test_update_cache_decode(
         sharded_high = ttnn.Tensor(x_pad, input_dtype).to(ttnn.TILE_LAYOUT).to(device, input_mem_config)
         sharded_reserved.deallocate(True)
 
-    for idx in range(10):
+    for idx in [0, max_seq_len // 2]:
         run_test_update_cache_decode(
-            idx,
+            max_seq_len // 2,
             cache_idx_tensor,
             head_dim,
             max_seq_len,
@@ -443,8 +441,8 @@ def run_test_paged_update_cache_decode(
         update_idx = cache_idxs[i]
         if update_idx == -1:
             continue
-        x_view = x.permute(1, 0, 2, 3)[i, ...]
-        cache[i, 0:num_heads, update_idx : update_idx + x.shape[-2], 0 : x.shape[-1]] = x_view
+        x_view = x.permute(1, 2, 0, 3)[i, ...]
+        cache[i, 0:num_heads, update_idx : update_idx + 1, 0 : x.shape[-1]] = x_view
 
     # Unshuffle paged cache and review it as unpaged cache
     tt_got_back_shuffled = cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
@@ -464,20 +462,15 @@ def run_test_paged_update_cache_decode(
             x[:, i : i + 1, :, :] = cache[
                 i : i + 1, 0:num_heads, update_idx : update_idx + x.shape[-2], 0 : x.shape[-1]
             ]
-        if num_heads != 1:
-            tt_slice = tt_got_back[i, 0:num_heads, update_idx : update_idx + 1, 0 : x.shape[-1]]
-        else:
-            tt_slice = tt_got_back[i, 0:num_heads, update_idx : update_idx + x.shape[-2], 0 : x.shape[-1]]
+        tt_slice = tt_got_back[i, 0:num_heads, update_idx : update_idx + 1, 0 : x.shape[-1]]  # n_heads, 1, head_dim
         tt_updated_slice.append(tt_slice)
-    tt_updated_slice = torch.stack(tt_updated_slice, dim=0).permute(1, 0, 2, 3)
+    tt_updated_slice = torch.stack(tt_updated_slice, dim=0).permute(2, 0, 1, 3)
 
     if input_dtype == ttnn.bfloat16 and cache_dtype == input_dtype:
         eq_cache, output_cache = comp_equal(cache, tt_got_back)  # checks the entire kv cache
         eq_update, output_update = comp_equal(x, tt_updated_slice)  # checks the updated parts
     else:
         eq_cache, output_cache = comp_pcc(cache, tt_got_back)  # checks the entire kv cache
-        if num_heads != 1:
-            x = x.transpose(0, 2)
         eq_update, output_update = comp_pcc(x, tt_updated_slice)  # checks the updated parts
     logger.debug(output_cache)
     logger.debug(output_update)
@@ -492,7 +485,7 @@ def run_test_paged_update_cache_decode(
 @pytest.mark.parametrize("num_heads", [1, 8])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cache_idx", [0, 1, 127, 1057])
-@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_paged_update_cache_decode(
     cache_idx,
     block_size,

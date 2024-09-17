@@ -31,8 +31,6 @@ void PagedUpdateCacheDeviceOperation::validate(const std::vector<Tensor>& input_
         const bool paged_cache = optional_input_tensors.at(1).has_value();
         uint32_t batch_size;
         if (!paged_cache) {
-            // TT_FATAL(cache_tensor.get_legacy_shape()[1] == 1, "Only supports 1 head now.");
-            //TT_FATAL(input_tensor.get_shape()[2] == cache_tensor.get_shape()[1], "Error");
             if (this->share_cache){
                 TT_FATAL(cache_tensor.get_legacy_shape()[0] == 1, "Error");
             }
@@ -40,6 +38,7 @@ void PagedUpdateCacheDeviceOperation::validate(const std::vector<Tensor>& input_
                 TT_FATAL(input_tensor.get_legacy_shape()[1] == cache_tensor.get_legacy_shape()[0], "Error");
             }
         } else {
+            TT_FATAL(!this->share_cache, "share_cache not supported with paged cache");
             TT_FATAL(optional_input_tensors.at(0).has_value(), "Paged cache requires update_idxs tensor");
             // TODO: How to validate page_table and paged_cache?
             auto page_table = optional_input_tensors.at(1).value();
