@@ -374,7 +374,7 @@ class TtLlamaAttention_optimized:
         if seq_len >= max_mm_seq_len:
             if seq_len % max_mm_seq_len != 0:
                 raise ValueError(f"seq_len {seq_len} must be divisible by {max_mm_seq_len}")
-            batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
+            batch_dim = seq_len // max_mm_seq_len  # Find the division factor
             xs = ttnn.reshape(xs, (1, batch_dim, seq_len // batch_dim, -1))
             pc_qkv = self.model_config["PREFILL_FUSED_QKV_MM_PROGCFG"]
         elif seq_len == 128:
@@ -491,7 +491,7 @@ class TtLlamaAttention_optimized:
         if seq_len >= max_mm_seq_len:
             if seq_len % max_mm_seq_len != 0:
                 raise ValueError(f"seq_len {seq_len} must be divisible by {max_mm_seq_len}")
-            batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
+            batch_dim = seq_len // max_mm_seq_len  # Find the division factor
             attn_output = ttnn.reshape(attn_output, (1, batch_dim, seq_len // batch_dim, -1))
             pc_dense_out = self.model_config["PREFILL_SELFOUT_MM_PROGCFG"]
         elif seq_len == 128:

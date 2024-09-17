@@ -423,7 +423,7 @@ class TtLlamaModel_optimized:
             if seq_len >= max_mm_seq_len:
                 if seq_len % max_mm_seq_len != 0:
                     raise ValueError(f"Sequence length {seq_len} is not divisible by {max_mm_seq_len}")
-                batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
+                batch_dim = seq_len // max_mm_seq_len  # Find the division factor
                 norm_out_replicated = ttnn.reshape(norm_out_replicated, (1, batch_dim, seq_len // batch_dim, -1))
                 pc_lm_head = (
                     self.model_config["PREFILL_LLAMA3_LM_HEAD_MM_PROGCFG"]
