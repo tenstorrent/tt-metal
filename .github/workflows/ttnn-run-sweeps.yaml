@@ -13,9 +13,10 @@ on:
           - add
           - line_all_gather
           - logical_and_
-          - logical_or_
-          - relu
-          - gelu          
+          - eltwise.logical_or_
+          - eltwise.relu
+          - eltwise.gelu
+          - eltwise.cos                 
           - eltwise.subtract.subtract_interleaved
           - eltwise.subalpha.subalpha_interleaved
           - eltwise.rsub.rsub_interleaved
