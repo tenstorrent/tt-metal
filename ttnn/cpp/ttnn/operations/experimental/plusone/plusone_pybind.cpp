@@ -13,8 +13,9 @@ void bind_experimental_plusone_operation(py::module& module) {
     auto doc =
         R"doc(plus_one(input_tensor: ttnn.Tensor) -> ttnn.Tensor
 
-            Returns input tensor elementes increased by 1.
-            Input tensor must have UINT32 data type and ROW_MAJOR layout.
+            Returns input tensor elements increased by 1.
+            Input tensor must have UINT32 data type, ROW_MAJOR layout, and 1-D shape.
+            This op only gives decent performace for small tensors (upto 100 elements).
 
             Equivalent pytorch code:
 
@@ -23,7 +24,7 @@ void bind_experimental_plusone_operation(py::module& module) {
                 return torch.add(input_tensor, 1)
 
             Args:
-                * :attr:`input_tensor`: Input Tensor for plusone.
+                * :attr:`input_tensor`: Input Tensor for plusone. 
 
         )doc";
 
