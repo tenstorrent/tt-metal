@@ -11,7 +11,7 @@ std::vector<OpConstraint> EltwiseOpConstraintsBuilder::build_constraints() {
     }
     std::vector<Layout> tile_layouts_b = {Layout::ROW_MAJOR, Layout::TILE};
     if (tile_layout_b.has_value()) {
-        tile_layouts_a = {tile_layout_b.value()};
+        tile_layouts_b = {tile_layout_b.value()};
     }
     std::vector<Layout> tile_layouts_o = {Layout::ROW_MAJOR, Layout::TILE};
     if (tile_layout_o.has_value()) {
@@ -124,7 +124,17 @@ std::unique_ptr<EltwiseOpConstraintsBuilder> EltwiseOpConstraintsFactory::Make(
     const tt::tt_metal::MemoryConfig& memory_config_a,
     const ttnn::Shape& input_shape_b,
     const tt::tt_metal::MemoryConfig& memory_config_b,
-    const tt::tt_metal::MemoryConfig& memory_config_o) {
+    const tt::tt_metal::MemoryConfig& memory_config_o,
+    const CoreCoord& chip_grid) {
+    if (!OpConstraintsFactory::can_fit_op_on_chip(memory_config_a, chip_grid)) {
+        return nullptr;
+    }
+    if (!OpConstraintsFactory::can_fit_op_on_chip(memory_config_b, chip_grid)) {
+        return nullptr;
+    }
+    if (!OpConstraintsFactory::can_fit_op_on_chip(memory_config_o, chip_grid)) {
+        return nullptr;
+    }
     auto eltwise_op_type =
         GetEltwiseOpType(input_shape_a, memory_config_a, input_shape_b, memory_config_b, memory_config_o);
     switch (eltwise_op_type) {

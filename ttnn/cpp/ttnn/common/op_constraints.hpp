@@ -117,12 +117,7 @@ class OpConstraintsBuilder {
 
 class OpConstraintsFactory {
    public:
-    static const uint32_t Volume(const ttnn::Shape& shape) {
-        auto rank = shape.rank();
-        auto volume = 1;
-        for (auto index = 0; index < rank; index++) {
-            volume *= shape.operator[](index);
-        }
-        return volume;
-    }
+    static const uint32_t Volume(const ttnn::Shape& shape);
+
+    static bool can_fit_op_on_chip(const MemoryConfig& memory_config, const CoreCoord& chip_grid);
 };

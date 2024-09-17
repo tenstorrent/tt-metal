@@ -119,7 +119,14 @@ std::unique_ptr<UnaryOpConstraintsBuilder> UnaryOpConstraintsFactory::Make(
     const ttnn::Shape& input_shape_a,
     const tt::tt_metal::MemoryConfig& memory_config_a,
     const ttnn::Shape& input_shape_o,
-    const tt::tt_metal::MemoryConfig& memory_config_o) {
+    const tt::tt_metal::MemoryConfig& memory_config_o,
+    const CoreCoord& chip_grid) {
+    if (!OpConstraintsFactory::can_fit_op_on_chip(memory_config_a, chip_grid)) {
+        return nullptr;
+    }
+    if (!OpConstraintsFactory::can_fit_op_on_chip(memory_config_o, chip_grid)) {
+        return nullptr;
+    }
     auto Unary_op_type = GetUnaryOpType(_op_type, arch, input_shape_a, memory_config_a, memory_config_o);
     switch (Unary_op_type) {
         case UnaryOpTypes::Unary:

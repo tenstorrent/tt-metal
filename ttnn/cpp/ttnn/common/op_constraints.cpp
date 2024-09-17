@@ -213,3 +213,25 @@ bool OpConstraintsBuilder::can_allocate_sharded_buffer(
     }
     return true;
 }
+
+bool OpConstraintsFactory::can_fit_op_on_chip(const MemoryConfig& memory_config, const CoreCoord& chip_grid) {
+    if (!memory_config.is_sharded()) {
+        return true;
+    }
+
+    uint32_t num_compute_banks = chip_grid.x * chip_grid.y;
+    uint32_t sharding_num_cores = memory_config.shard_spec.value().grid.num_cores();
+    if (num_compute_banks < sharding_num_cores) {
+        return false;
+    }
+    return true;
+}
+
+const uint32_t OpConstraintsFactory::Volume(const ttnn::Shape& shape) {
+    auto rank = shape.rank();
+    auto volume = 1;
+    for (auto index = 0; index < rank; index++) {
+        volume *= shape.operator[](index);
+    }
+    return volume;
+}
