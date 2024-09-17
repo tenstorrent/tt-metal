@@ -7,6 +7,7 @@
 #include "compute_kernel_api/common.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
+#include "llk_math_transpose_dest_api.h"
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_A_api.h"
@@ -76,6 +77,15 @@ ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst)
     MATH(( llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(idst) ));
 }
 
+ALWI void transpose_wh_dest_init_short()
+{
+    MATH(( llk_math_transpose_dest_init() ));
+}
 
+ALWI void transpose_wh_dest(uint32_t idst)
+{
+    UNPACK(( llk_unpack_set_srcb_dummy_valid() ));
+    MATH(( llk_math_transpose_dest(idst) ));
+}
 
 } // namespace ckernel

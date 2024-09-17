@@ -21,21 +21,27 @@ struct CumsumConfig {
     int N;
     int Wt;
     int Ht;
+    bool rowwise;
 };
 
-std::vector<tt::test_utils::df::bfloat16> gold_cumsum(std::vector<tt::test_utils::df::bfloat16>& src, const std::vector<uint32_t> &shape) {
+std::vector<tt::test_utils::df::bfloat16> gold_cumsum(std::vector<tt::test_utils::df::bfloat16>& src, const std::vector<uint32_t> &shape, bool rowwise) {
     int N = shape.at(0);
     int W = shape.at(1);
     int H = shape.at(2);
 
     std::vector<tt::test_utils::df::bfloat16> golden(N * W * H);
 
+    int dim_a = rowwise ? H : W;
+    int dim_b = rowwise ? W : H;
+    int j_mul = rowwise ? 1 : W;
+    int k_mul = rowwise ? W : 1;
+
     for (int i = 0; i < N; i++) {
-        for (int k = 0; k < W; k++) {
+        for (int k = 0; k < dim_a; k++) {
             float res = 0;
-            for (int j = 0; j < H; j++) {
-                res += src[i * H * W + j * W + k].to_float();
-                golden[i * (H * W) + j * W + k] = res;
+            for (int j = 0; j < dim_b; j++) {
+                res += src[i * W * H + j * j_mul + k * k_mul].to_float();
+                golden[i * W * H + j * j_mul + k * k_mul] = res;
             }
         }
     }
@@ -78,15 +84,30 @@ void run_single_core_cumsum(tt_metal::Device* device, const CumsumConfig& test_c
         .set_page_size(16, single_tile_size);
     auto l1_dst_cb = tt_metal::CreateCircularBuffer(program, core, l1_dst_cb_config);
 
+    string reader_kernel_name, writer_kernel_name;
+    std::map<string, string> defines = {};
+    std::vector<uint32_t> compile_args = {};
+
+    if(test_config.rowwise) {
+        reader_kernel_name = "tt_metal/kernels/dataflow/reader_unary.cpp";
+        writer_kernel_name = "tt_metal/kernels/dataflow/writer_unary.cpp";
+        compile_args = {test_config.Wt, test_config.Ht, test_config.N};
+        defines["ROWWISE"] = "1";
+    } else {
+        reader_kernel_name = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh.cpp";
+        writer_kernel_name = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_transpose_wh.cpp";
+        compile_args = {test_config.Ht, test_config.Wt, test_config.N};
+    }
+
     auto reader_kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh.cpp",
+        reader_kernel_name,
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto writer_kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_transpose_wh.cpp",
+        writer_kernel_name,
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
@@ -94,7 +115,7 @@ void run_single_core_cumsum(tt_metal::Device* device, const CumsumConfig& test_c
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/cumsum.cpp",
         core,
-        tt_metal::ComputeConfig{.compile_args = {test_config.Ht, test_config.Wt, test_config.N}, .defines = {}});
+        tt_metal::ComputeConfig{.compile_args = compile_args, .defines = defines});
 
     tt_metal::SetRuntimeArgs(
         program,
@@ -104,11 +125,11 @@ void run_single_core_cumsum(tt_metal::Device* device, const CumsumConfig& test_c
             (uint32_t)dram_buffer_src_addr,
             (uint32_t)src_dram_noc_xy.x,
             (uint32_t)src_dram_noc_xy.y,
-            (uint32_t)test_config.N * test_config.Ht * test_config.Wt, // Unused
-            (uint32_t)test_config.N,
-            (uint32_t)test_config.Ht,
-            (uint32_t)test_config.Wt,
-            (uint32_t)test_config.Ht * test_config.Wt
+            (uint32_t)test_config.N * test_config.Ht * test_config.Wt, // Used for non transposing kernel
+            (uint32_t)test_config.N,                                   // Used for transposing kernel
+            (uint32_t)test_config.Ht,                                  // Used for transposing kernel
+            (uint32_t)test_config.Wt,                                  // Used for transposing kernel
+            (uint32_t)test_config.Ht * test_config.Wt                  // Used for transposing kernel
         });
 
     tt_metal::SetRuntimeArgs(
@@ -119,11 +140,11 @@ void run_single_core_cumsum(tt_metal::Device* device, const CumsumConfig& test_c
             (uint32_t)dram_buffer_dst_addr,
             (uint32_t)dst_dram_noc_xy.x,
             (uint32_t)dst_dram_noc_xy.y,
-            (uint32_t)test_config.N * test_config.Ht * test_config.Wt, // Unused
-            (uint32_t)test_config.N,
-            (uint32_t)test_config.Ht,
-            (uint32_t)test_config.Wt,
-            (uint32_t)test_config.Ht * test_config.Wt
+            (uint32_t)test_config.N * test_config.Ht * test_config.Wt, // Used for non transposing kernel
+            (uint32_t)test_config.N,                                   // Used for transposing kernel
+            (uint32_t)test_config.Ht,                                  // Used for transposing kernel
+            (uint32_t)test_config.Wt,                                  // Used for transposing kernel
+            (uint32_t)test_config.Ht * test_config.Wt                  // Used for transposing kernel
         });
 
     std::vector<tt::test_utils::df::bfloat16> input = generate_uniform_random_vector<tt::test_utils::df::bfloat16>(
@@ -132,7 +153,7 @@ void run_single_core_cumsum(tt_metal::Device* device, const CumsumConfig& test_c
         dram_buffer_size / tt::test_utils::df::bfloat16::SIZEOF,
         std::chrono::system_clock::now().time_since_epoch().count());
 
-    std::vector<tt::test_utils::df::bfloat16> golden = gold_cumsum(input, {test_config.N, W, H});
+    std::vector<tt::test_utils::df::bfloat16> golden = gold_cumsum(input, {test_config.N, W, H}, test_config.rowwise);
     auto golden_packed = pack_vector<uint32_t, tt::test_utils::df::bfloat16>(golden);
 
     auto input_packed = pack_vector<uint32_t, tt::test_utils::df::bfloat16>(input);
@@ -158,7 +179,7 @@ void run_single_core_cumsum(tt_metal::Device* device, const CumsumConfig& test_c
 }
 }
 
-TEST_F(DeviceFixture, ComputeCumsum) {
+TEST_F(DeviceFixture, ComputeCumsumColumnwise) {
     auto arch = this->arch_;
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP(); // Not implemented for GRAYSKULL
@@ -171,7 +192,30 @@ TEST_F(DeviceFixture, ComputeCumsum) {
                 {
                     .N = i,
                     .Wt = j,
-                    .Ht = k
+                    .Ht = k,
+                    .rowwise = false
+                };
+                unit_tests::compute::cumsum::run_single_core_cumsum(this->devices_.at(0), test_config);
+            }
+        }
+    }
+}
+
+TEST_F(DeviceFixture, ComputeCumsumRowwise) {
+    auto arch = this->arch_;
+    if (arch == tt::ARCH::GRAYSKULL) {
+        GTEST_SKIP(); // Not implemented for GRAYSKULL
+    }
+
+    for (int i = 1; i <= 3; i++) {
+        for (int j = 1; j <= 3; j++) {
+            for (int k = 1; k <= 3; k++) {
+                unit_tests::compute::cumsum::CumsumConfig test_config =
+                {
+                    .N = i,
+                    .Wt = j,
+                    .Ht = k,
+                    .rowwise = true
                 };
                 unit_tests::compute::cumsum::run_single_core_cumsum(this->devices_.at(0), test_config);
             }
