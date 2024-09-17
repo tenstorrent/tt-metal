@@ -87,12 +87,10 @@ static map<CoreType, set<CoreCoord>> get_all_physical_printable_cores(Device *de
 static map<CoreType, set<CoreCoord>> get_dispatch_physical_printable_cores(Device* device) {
     map<CoreType, set<CoreCoord>> physical_printable_dispatch_cores;
     unsigned num_cqs = tt::llrt::OptionsG.get_num_hw_cqs();
-    for (unsigned int id = 0; id < tt::Cluster::instance().number_of_user_devices(); id++) {
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(id);
-        for (auto logical_core : tt::get_logical_dispatch_cores(id, num_cqs, dispatch_core_type)) {
-            CoreCoord physical_core = device->physical_core_from_logical_core(logical_core, dispatch_core_type);
-            physical_printable_dispatch_cores[dispatch_core_type].insert(physical_core);
-        }
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+    for (auto logical_core : tt::get_logical_dispatch_cores(device->id(), num_cqs, dispatch_core_type)) {
+        CoreCoord physical_core = device->physical_core_from_logical_core(logical_core, dispatch_core_type);
+        physical_printable_dispatch_cores[dispatch_core_type].insert(physical_core);
     }
     return physical_printable_dispatch_cores;
 }
