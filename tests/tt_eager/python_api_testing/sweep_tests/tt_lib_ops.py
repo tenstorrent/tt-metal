@@ -1134,9 +1134,10 @@ def tril(x, *args, device, dtype, layout, input_mem_config, output_mem_config, *
 def empty(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t1 = ttnn.empty(
         x.shape,
-        layout=layout[0],
-        device=device if input_mem_config[0] is not None else None,
-        memory_config=output_mem_config,
+        dtype,
+        layout[0],
+        device if input_mem_config[0] is not None else None,
+        output_mem_config,
     )
 
     return tt2torch_tensor(t1)

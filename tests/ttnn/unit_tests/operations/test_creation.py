@@ -281,6 +281,30 @@ def test_arange(device, start, end, step):
 @pytest.mark.parametrize(
     "input_shapes",
     [
+        [1, 1, 32, 32],
+        [1, 1, 320, 384],
+        [1, 3, 320, 384],
+        [2, 640, 64, 64],
+        [2, 1280, 64, 64],
+    ],
+)
+def test_empty(device, input_shapes):
+    torch_input_tensor = torch.ones((input_shapes), dtype=torch.bfloat16)
+    torch_output_tensor = torch.empty(torch_input_tensor.shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT)
+    input_tensor = ttnn.to_device(input_tensor, device)
+    output_tensor = ttnn.empty(input_shapes, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert list(torch_output_tensor.shape) == list(output_tensor.shape)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
         [2, 1, 4, 4],  # 256x256
         [2, 1280, 8, 8],
         [2, 640, 16, 16],
@@ -289,13 +313,13 @@ def test_arange(device, start, end, step):
         [2, 1280, 16, 16],
     ],
 )
-def test_empty(device, input_shapes):
-    torch_input_tensor = torch.rand((input_shapes), dtype=torch.bfloat16)
+def test_empty_like(device, input_shapes):
+    torch_input_tensor = torch.ones((input_shapes), dtype=torch.bfloat16)
     torch_output_tensor = torch.empty(torch_input_tensor.shape, dtype=torch.bfloat16)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT)
     input_tensor = ttnn.to_device(input_tensor, device)
-    output_tensor = ttnn.empty(input_tensor.shape, device=device)
+    output_tensor = ttnn.empty_like(input_tensor, layout=ttnn.TILE_LAYOUT)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
