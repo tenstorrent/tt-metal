@@ -56,7 +56,7 @@ MorehDotOperation::shape_return_value_t MorehDotOperation::compute_output_shapes
     auto padding = output_shape.padding();
     output_shape[3] = tt::constants::TILE_WIDTH;
     padding[3] = Padding::PadDimension{0, 31};
-    return ttnn::Shape{tt::tt_metal::Shape(output_shape, padding)};
+    return ttnn::Shape{tt::tt_metal::LegacyShape(output_shape, padding)};
 }
 
 

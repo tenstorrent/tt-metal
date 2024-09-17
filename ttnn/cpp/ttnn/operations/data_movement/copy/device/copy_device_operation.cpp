@@ -44,7 +44,7 @@ void CopyDeviceOperation::validate_with_output_tensors(const std::vector<Tensor>
     TT_FATAL(out_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Copy does not currently support sharding");
 }
 
-std::vector<tt::tt_metal::Shape> CopyDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> CopyDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     if (input_tensors.size() == 2) {
         return {input_tensors[1].get_legacy_shape()};
     } else {

@@ -42,7 +42,7 @@ void py_module(py::module& module) {
         });
 
     auto PyShape = static_cast<py::class_<ttnn::Shape>>(module.attr("Shape"));
-    PyShape.def(py::init<tt::tt_metal::Shape>())
+    PyShape.def(py::init<tt::tt_metal::LegacyShape>())
         .def_property_readonly("value", [](const Shape& self) { return self.value; })
         .def("__len__", [](const Shape& self) { return self.rank(); })
         .def("__getitem__", [](const Shape& self, std::int64_t index) { return self[index]; })

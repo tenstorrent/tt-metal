@@ -14,7 +14,7 @@ using tt::tt_metal::Device;
 using tt::tt_metal::Layout;
 using tt::tt_metal::Tensor;
 using tt::tt_metal::OwnedStorage;
-using tt::tt_metal::Shape;
+using tt::tt_metal::LegacyShape;
 
 template <typename BinaryFunction>
 Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
@@ -31,7 +31,7 @@ Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b)
 }
 
 template <auto HostFunction, typename DeviceFunction, typename... Args>
-bool run_test(const Shape& shape, const DeviceFunction& device_function, Device* device, Args... args) {
+bool run_test(const tt::tt_metal::LegacyShape& shape, const DeviceFunction& device_function, Device* device, Args... args) {
     auto input_tensor_a = tt::numpy::random::random(shape, DataType::BFLOAT16);
     auto input_tensor_b = tt::numpy::random::random(shape, DataType::BFLOAT16);
 
@@ -51,51 +51,51 @@ int main() {
 
 
     {
-        Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+        tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
         auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
         TT_FATAL(allclose, "Error");
     }
 
     {
-        Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+        tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
         auto allclose = run_test<host_function<std::minus<float>>>(shape, ttnn::subtract, device);
         TT_FATAL(allclose, "Error");
     }
 
     {
-        Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+        tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
         auto allclose = run_test<host_function<std::multiplies<float>>>(shape, ttnn::multiply, device, 1e-2f, 1e-3f);
         TT_FATAL(allclose, "Error");
     }
 
     auto run_binary_ops = [&] {
         {
-            Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+            tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
             auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
             TT_FATAL(allclose, "Error");
         }
 
         {
-            Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+            tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
             auto allclose = run_test<host_function<std::minus<float>>>(shape, ttnn::subtract, device);
             TT_FATAL(allclose, "Error");
         }
 
         {
-            Shape shape = {1, 1, tt::constants::TILE_HEIGHT * 2, tt::constants::TILE_WIDTH * 2};
+            tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT * 2, tt::constants::TILE_WIDTH * 2};
             auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
             TT_FATAL(allclose, "Error");
         }
 
         {
-            Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+            tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
             auto allclose =
                 run_test<host_function<std::multiplies<float>>>(shape, ttnn::multiply, device, 1e-2f, 1e-3f);
             TT_FATAL(allclose, "Error");
         }
 
         {
-            Shape shape = {1, 1, tt::constants::TILE_HEIGHT * 4, tt::constants::TILE_WIDTH * 4};
+            tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT * 4, tt::constants::TILE_WIDTH * 4};
             auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
             TT_FATAL(allclose, "Error");
         }

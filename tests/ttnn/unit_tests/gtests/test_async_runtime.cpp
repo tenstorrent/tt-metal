@@ -31,7 +31,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     uint32_t io_cq = 1; // Data reads and writes done through CQ0
     uint32_t workload_dispatch_cq = 0; // Workload dispatched through CQ1
 
-    ttnn::Shape input_shape = ttnn::Shape(Shape({1, 1, 1024, 1024}));
+    ttnn::Shape input_shape = ttnn::Shape(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}));
     auto host_data = std::shared_ptr<bfloat16 []>(new bfloat16[input_buf_size_datums]);
     auto readback_data = std::shared_ptr<bfloat16 []>(new bfloat16[output_buf_size_datums]);
 
@@ -105,7 +105,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
     std::vector<uint32_t> inputs = {4, 9, 16, 25, 36, 64};
     uint32_t io_cq = 1;
     uint32_t workload_dispatch_cq = 0;
-    ttnn::Shape shape = ttnn::Shape(Shape({1, 1, 1024, 1024}));
+    ttnn::Shape shape = ttnn::Shape(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}));
 
     auto host_data = std::shared_ptr<bfloat16 []>(new bfloat16[buf_size_datums]);
     auto readback_data = std::shared_ptr<bfloat16 []>(new bfloat16[buf_size_datums]);
@@ -158,7 +158,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeBufferDestructor) {
 
     uint32_t buf_size_datums = 1024 * 1024;
     uint32_t datum_size_bytes = 2;
-    ttnn::Shape shape = ttnn::Shape(Shape({1, 1, 1024, 1024}));
+    ttnn::Shape shape = ttnn::Shape(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}));
     // Inside the loop, initialize a buffer with limited lifetime.
     // This will asynchronously allocate the buffer, wait for the allocation to complete (address to be assigned to the buffer), destroy the buffer (which will asynchronously
     // deallocate the buffer) in a loop

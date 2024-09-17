@@ -13,14 +13,14 @@ struct ExecuteUntilizeWithUnpadding {
     static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor &input_tensor,
-        const tt::tt_metal::Shape &output_tensor_end,
+        const tt::tt_metal::LegacyShape &output_tensor_end,
         const std::optional<MemoryConfig> &memory_config,
         bool use_multicore = false,
         bool use_pack_untilize = true);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor &input_tensor,
-        const tt::tt_metal::Shape &output_tensor_end,
+        const tt::tt_metal::LegacyShape &output_tensor_end,
         const std::optional<MemoryConfig> &memory_config,
         bool use_multicore = false,
         bool use_pack_untilize = true);
