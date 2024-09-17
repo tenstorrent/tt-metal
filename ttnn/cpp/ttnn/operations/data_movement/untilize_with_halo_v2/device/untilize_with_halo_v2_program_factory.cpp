@@ -49,7 +49,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     auto output_shard_shape = output_tensor.shard_spec().value().shape;
     TT_ASSERT(input_shard_shape[1] == output_shard_shape[1]);
     uint32_t input_nhw_height = input_shape[0] * input_shape[1] * input_shape[2];
-    uint32_t remapped_input_shard_shape_for_output_grid = input_nhw_height / ncores_nhw;
+    uint32_t remapped_input_shard_shape_for_output_grid = std::ceil((float) input_nhw_height / ncores_nhw);
     uint32_t ntiles_per_block = tt::div_up(input_shard_shape[1], TILE_WIDTH);
     uint32_t input_nblocks_per_core = tt::div_up(remapped_input_shard_shape_for_output_grid, TILE_HEIGHT);
     uint32_t input_npages = ntiles_per_block * input_nblocks_per_core;
@@ -74,11 +74,11 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t out_cb_id = tt::CB::c_out1;
 
     // input CB (sharded)
+    log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", src_cb_id, input_npages, in_page_size);
     auto src_cb_config = CircularBufferConfig(input_npages * in_page_size, {{src_cb_id, in_df}})
                              .set_page_size(src_cb_id, in_page_size)
                              .set_globally_allocated_address(*src_buffer);
     auto src_cb = CreateCircularBuffer(program, all_cores, src_cb_config);
-    log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", src_cb_id, input_npages, in_page_size);
 
     uint32_t input_to_writer_cb_id = src_cb_id;
     if (!skip_untilize) {
@@ -86,29 +86,29 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
         // output of untilize from compute kernel goes into this CB
         uint32_t output_ntiles = ntiles_per_block * input_nblocks_per_core;
+        log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", untilize_out_cb_id, output_ntiles, out_tile_size);
         auto untilize_out_cb_config =
             CircularBufferConfig(output_ntiles * out_tile_size, {{untilize_out_cb_id, out_df}})
                 .set_page_size(untilize_out_cb_id, out_tile_size);
         auto untilize_out_cb = CreateCircularBuffer(program, all_cores, untilize_out_cb_config);
-        log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", untilize_out_cb_id, output_ntiles, out_tile_size);
     }
 
     // output shard, after inserting halo and padding, goes into this CB as input to next op.
     uint32_t out_cb_pagesize = out_stick_nbytes;
     uint32_t out_cb_npages = max_out_nsticks_per_core;
+    log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", out_cb_id, out_cb_npages, out_cb_pagesize);
     auto out_cb_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, out_df}})
                              .set_page_size(out_cb_id, out_cb_pagesize)
                              .set_globally_allocated_address(*dst_buffer);
     auto out_cb = CreateCircularBuffer(program, all_cores, out_cb_config);
-    log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", out_cb_id, out_cb_npages, out_cb_pagesize);
 
     // CB for pad val buffer (stick sized)
     uint32_t pad_cb_pagesize = out_stick_nbytes;
     uint32_t pad_cb_npages = 1;
+    log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", pad_cb_id, pad_cb_npages, pad_cb_pagesize);
     auto pad_cb_config = CircularBufferConfig(pad_cb_pagesize * pad_cb_npages, {{pad_cb_id, out_df}})
                              .set_page_size(pad_cb_id, pad_cb_pagesize);
     auto pad_cb = CreateCircularBuffer(program, all_cores, pad_cb_config);
-    log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", pad_cb_id, pad_cb_npages, pad_cb_pagesize);
 
     // Additional CBs for sharded data kernel configs
     uint32_t padding_config_cb_id = tt::CB::c_in2;
