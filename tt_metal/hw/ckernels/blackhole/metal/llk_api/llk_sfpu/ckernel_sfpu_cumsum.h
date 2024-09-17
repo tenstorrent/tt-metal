@@ -15,8 +15,7 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE /*unused*/, int ITERATIONS = 8 /*unused*/>
-inline void calculate_cumsum(bool first)
-{
+inline void calculate_cumsum(bool first) {
     _calculate_cumsum_<false, 1>(first); // There is only non APPROXIMATE implementation and one iteration
 }
 
