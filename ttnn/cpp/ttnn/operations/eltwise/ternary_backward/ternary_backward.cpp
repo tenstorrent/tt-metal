@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ternary_backward_op.hpp"
-
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -18,7 +16,7 @@
 
 namespace ttnn::operations::ternary_backward {
 
-std::vector<Tensor> _addcmul_bw(
+std::vector<Tensor> AddcmulBackwardOperation::invoke(
     const Tensor& grad,
     const Tensor& input,
     const Tensor& tensor1,
@@ -34,7 +32,7 @@ std::vector<Tensor> _addcmul_bw(
     return grad_tensor;
 }
 
-std::vector<Tensor> _addcdiv_bw(
+std::vector<Tensor> AddcdivBackwardOperation::invoke(
     const Tensor& grad,
     const Tensor& input,
     const Tensor& tensor1,
@@ -63,13 +61,13 @@ std::vector<Tensor> _addcdiv_bw(
     return grad_tensor;
 }
 
-std::vector<OptionalTensor> _where_bw(
+std::vector<OptionalTensor> WhereBackwardOperation::invoke(
     uint8_t queue_id,
     const Tensor& grad,
     const Tensor& condition,
     const Tensor& input,
     const Tensor& other,
-    const MemoryConfig& output_mem_config,
+    const std::optional<MemoryConfig>& output_mem_config,
     const std::vector<bool>& are_required_outputs,
     OptionalTensor input_grad,
     OptionalTensor other_grad) {
@@ -98,7 +96,7 @@ std::vector<OptionalTensor> _where_bw(
 }
 
 // lerp(input, end, weight) = self: grad * (1 - weight), end: grad * weight
-std::vector<Tensor> ExecuteTernaryBackwardLerp::invoke(
+std::vector<Tensor> LerpBackwardOperation::invoke(
     const Tensor& grad, const Tensor& input, const Tensor& end, const Tensor& weight, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result_1 = ttnn::multiply(grad, ttnn::subtract(ttnn::operations::creation::full_like(weight, 1.0), weight, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
@@ -110,7 +108,7 @@ std::vector<Tensor> ExecuteTernaryBackwardLerp::invoke(
     return grad_tensor;
 }
 
-std::vector<Tensor> ExecuteTernaryBackwardLerp::invoke(
+std::vector<Tensor> LerpBackwardOperation::invoke(
     const Tensor& grad, const Tensor& input, const Tensor& end, float weight, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     float sub_scalar = 1.0f - weight;
