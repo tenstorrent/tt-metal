@@ -333,7 +333,7 @@ namespace ttnn::tuple_wrapper {
             });
     }
 
-    std::optional<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig> to_program_config(const mlir_interface::matmul_multicore_reuse_config_tuple& program_config_tuple) {
+    std::optional<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig> to_matmul_program_config(const mlir_interface::matmul_multicore_reuse_config_tuple& program_config_tuple) {
         return to_program_config(
             std::get<0>(program_config_tuple),
             std::get<1>(program_config_tuple),
@@ -344,7 +344,7 @@ namespace ttnn::tuple_wrapper {
     }
 
     // MatmulMultiCoreReuseMultiCastProgramConfig wrapper
-    std::optional<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> to_multicast_program_config(
+    std::optional<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> to_multicast_matmul_program_config(
         const std::array<uint32_t, 2>& compute_with_storage_grid_size,
         const size_t in0_block_w,
         const size_t out_subblock_h,
@@ -367,9 +367,9 @@ namespace ttnn::tuple_wrapper {
         });
     }
 
-    std::optional<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> to_multicast_program_config(const mlir_interface::matmul_multicore_reuse_config_tuple &program_config_tuple, bool transpose_mcast, bool fuse_batch)
+    std::optional<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> to_multicast_matmul_program_config(const mlir_interface::matmul_multicore_reuse_config_tuple &program_config_tuple, bool transpose_mcast, bool fuse_batch)
     {
-        return to_multicast_program_config(
+        return to_multicast_matmul_program_config(
             std::get<0>(program_config_tuple),
             std::get<1>(program_config_tuple),
             std::get<2>(program_config_tuple),
@@ -381,7 +381,7 @@ namespace ttnn::tuple_wrapper {
     }
 
     // MatmulMultiCoreReuseMultiCast1DProgramConfig wrapper
-    std::optional<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig> to_multicast_1d_program_config(
+    std::optional<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig> to_multicast_1d_matmul_program_config(
         const std::array<uint32_t, 2>& compute_with_storage_grid_size,
         const size_t in0_block_w,
         const size_t out_subblock_h,
@@ -402,9 +402,9 @@ namespace ttnn::tuple_wrapper {
                 mcast_in0
             });
         }
-    std::optional<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig> to_multicast_1d_program_config(const mlir_interface::matmul_multicore_reuse_config_tuple &program_config_tuple, bool fuse_batch, bool mcast_in0)
+    std::optional<ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig> to_multicast_1d_matmul_program_config(const mlir_interface::matmul_multicore_reuse_config_tuple &program_config_tuple, bool fuse_batch, bool mcast_in0)
     {
-        return to_multicast_1d_program_config(
+        return to_multicast_1d_matmul_program_config(
             std::get<0>(program_config_tuple),
             std::get<1>(program_config_tuple),
             std::get<2>(program_config_tuple),

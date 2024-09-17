@@ -215,7 +215,7 @@ bool does_matmul_multicore_reuse_multicast_support_input_output_constraints(
         return false;
     }
 
-    auto matmul_config = ttnn::tuple_wrapper::to_multicast_program_config(_matmul_config, transpose_mcast, fuse_batch);
+    auto matmul_config = ttnn::tuple_wrapper::to_multicast_matmul_program_config(_matmul_config, transpose_mcast, fuse_batch);
 
     auto builder = MatmulOpConstraintsFactory::Make(ttnn::Shape(shape_a), memory_config_a.value(), ttnn::Shape(shape_b), memory_config_b.value(), memory_config_o.value(), matmul_config.value());
     if (builder) {
@@ -275,7 +275,7 @@ bool does_matmul_multicore_reuse_multicast_1d_op_support_input_output_constraint
         return false;
     }
 
-    auto matmul_config = ttnn::tuple_wrapper::to_multicast_1d_program_config(_matmul_config, fuse_batch, mcast_in0);
+    auto matmul_config = ttnn::tuple_wrapper::to_multicast_1d_matmul_program_config(_matmul_config, fuse_batch, mcast_in0);
 
     auto builder = MatmulOpConstraintsFactory::Make(ttnn::Shape(shape_a), memory_config_a.value(), ttnn::Shape(shape_b), memory_config_b.value(), memory_config_o.value(), matmul_config.value());
     if (builder) {
