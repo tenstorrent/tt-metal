@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <tuple>
 
 #include "common/constants.hpp"
@@ -32,12 +33,17 @@ int find_max_divisor(uint32_t val, uint32_t start_max_div) {
     return result;
 }
 
-std::unique_ptr<SoftmaxOpL1Usage> SoftmaxOpL1UsageFactory::Make(const L1InterfaceOperandParams& input, int dim_arg) {
-    return std::make_unique<SoftmaxOpL1Usage>(input, dim_arg);
+std::unique_ptr<SoftmaxOpL1Usage> SoftmaxOpL1UsageFactory::Make(
+    const L1InterfaceOperandParams& input, int dim_arg, const std::optional<L1InterfaceOperandParams>& output) {
+    return std::make_unique<SoftmaxOpL1Usage>(input, dim_arg, output);
 };
 
-SoftmaxOpL1Usage::SoftmaxOpL1Usage(const L1InterfaceOperandParams& input, int dim_arg) :
-    input(input), output(get_softmax_output(input)), dim_arg(dim_arg), block_size(calculate_block_size_impl(input)) {}
+SoftmaxOpL1Usage::SoftmaxOpL1Usage(
+    const L1InterfaceOperandParams& input, int dim_arg, const std::optional<L1InterfaceOperandParams>& output) :
+    input(input),
+    output(output.value_or(get_softmax_output(input))),
+    dim_arg(dim_arg),
+    block_size(calculate_block_size_impl(input)) {}
 
 bool SoftmaxOpL1Usage::should_tilize_input() const {
     return std::get<tt::tt_metal::Layout>(input) != tt::tt_metal::Layout::TILE;
