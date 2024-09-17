@@ -108,12 +108,14 @@ class TtLlamaModelForGeneration:
             configuration=configuration, state_dict=state_dict, model_args=model_args, tt_args=tt_args, vllm=True
         )
 
-    def forward(self, tokens: torch.Tensor, start_pos: int, page_table=None, kv_cache=None):
+    def forward(self, tokens: torch.Tensor, start_pos: int, page_table=None, kv_cache=None, prompt_lens=None):
         _, seq_len = tokens.shape
         if seq_len == 1:
             return self.decode_forward(tokens, start_pos, page_table=page_table, kv_cache=kv_cache)
         else:
-            return self.prefill_forward(tokens, start_pos, page_table=page_table, kv_cache=kv_cache)
+            return self.prefill_forward(
+                tokens, start_pos, page_table=page_table, kv_cache=kv_cache, prompt_lens=prompt_lens
+            )
 
     def capture_trace(self, tokens: torch.Tensor, start_pos: int):
         tt_inp, start_pos, rot_mat, cache_idxs_tt = self.tt_model.prepare_inputs(tokens, start_pos, mode="decode")
@@ -250,38 +252,48 @@ class TtLlamaModelForGeneration:
         del tt_logits
         return logits
 
-    def prefill_forward(self, tokens: torch.Tensor, start_pos: int, page_table=None, kv_cache=None):
-        batch, seq_len = tokens.shape
-        last_token_idx = seq_len - 1
-
-        prefill_seq_len = get_padded_prefill_len(seq_len)
+    def prefill_forward(self, tokens: torch.Tensor, start_pos: int, page_table=None, kv_cache=None, prompt_lens=None):
+        batch, batch_seq_len = tokens.shape
         output_logits = torch.zeros(batch, 1, self.params.vocab_size)
-        # pad tokens to 128 or 2048
-        prefill_ids = torch.cat([tokens, torch.zeros(batch, prefill_seq_len - seq_len).long()], dim=-1)
+        prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
+
         if page_table is not None:
             assert isinstance(
                 page_table, torch.Tensor
             ), "page_table must be a torch.Tensor when passing into prefill_forward"
-            block_size = get_block_size(kv_cache)
-            num_padding_blocks = num_blocks_in_seq(prefill_seq_len, block_size) - num_blocks_in_seq(seq_len, block_size)
-            page_table = torch.cat([page_table, torch.zeros(batch, num_padding_blocks, dtype=torch.int32)], dim=-1)
 
         for user_id in range(batch):
+            seq_len = prompt_lens[user_id]
+            last_token_idx = seq_len - 1
+
+            prefill_seq_len = get_padded_prefill_len(seq_len)
+            prefill_ids = torch.cat(
+                [tokens[user_id : user_id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
+            )
+            if page_table is not None:
+                block_size = get_block_size(kv_cache)
+                num_padding_blocks = num_blocks_in_seq(prefill_seq_len, block_size) - num_blocks_in_seq(
+                    seq_len, block_size
+                )
+                page_table_user = torch.cat(
+                    [page_table, torch.zeros(batch, num_padding_blocks, dtype=torch.int32)], dim=-1
+                )
+
             logger.info(f"Filling kv cache for user {user_id + 1}")
 
             logits = self.prefill_forward_single_user(
-                prefill_ids[user_id : user_id + 1],
+                prefill_ids,
                 start_pos,
                 user_id,
                 last_token_idx=last_token_idx,
-                page_table=page_table,
+                page_table=page_table_user if page_table is not None else None,
                 kv_cache=kv_cache,
             )
 
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
             output_logits[user_id] = logits[:, last_token_idx % 32 : last_token_idx % 32 + 1, :]
 
-        logger.info(f"Finished prefill for all users up to {seq_len} tokens, Starting decode...")
+        logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
 
         return output_logits
 
