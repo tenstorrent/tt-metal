@@ -129,7 +129,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
-    bool preserve_fp32_precision) {
+    vector<PreserveFP32Target> preserve_fp32_precision) {
     std::vector<KernelHandle> compute_kernel_ids{};
     KernelHandle compute_kernel_id{};
     for (auto arg : args) {
@@ -155,7 +155,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
-    bool preserve_fp32_precision) {
+    vector<PreserveFP32Target> preserve_fp32_precision) {
     KernelHandle compute_kernel_id{0};
     if (arg.num_tile_per_core_group > 0) {
         compute_kernel_id = CreateKernel(

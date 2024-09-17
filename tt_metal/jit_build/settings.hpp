@@ -27,7 +27,7 @@ class JitBuildOptions {
 
     // We can keep for future WH support, otherwise not used in GS
     bool fp32_dest_acc_en;
-    bool preserve_fp32_precision;
+    std::vector<PreserveFP32Target> preserve_fp32_precision;
 
     // BRISC config
     std::string brisc_kernel_file_name;

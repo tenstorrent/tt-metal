@@ -38,3 +38,10 @@ struct std::hash<MathFidelity>
         return static_cast<std::size_t>(obj);
     }
 };
+
+enum class PreserveFP32Target : uint8_t
+{
+    SRCA_B        = 0,
+    DEST          = 1,
+    Disabled      = 0xff,
+};

@@ -230,13 +230,26 @@ bool is_all_fp32_formats(const DataFormat data_format[NUM_OPERANDS]) {
     return true;
 }
 
-std::vector<DataFormat> get_unpack_dst_formats(DataFormat input_formats[NUM_OPERANDS], DataFormat param_formats[NUM_OPERANDS], DataFormat intermed_formats[NUM_OPERANDS], DataFormat output_formats[NUM_OPERANDS], DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, bool preserve_fp32_precision, bool int_fpu_en) {
+std::vector<DataFormat> get_unpack_dst_formats(
+    DataFormat input_formats[NUM_OPERANDS],
+    DataFormat param_formats[NUM_OPERANDS],
+    DataFormat intermed_formats[NUM_OPERANDS],
+    DataFormat output_formats[NUM_OPERANDS],
+    DataFormat unpack_conditional_dst_format,
+    bool fp32_dest_acc_en,
+    std::vector<PreserveFP32Target> preserve_fp32_precision,
+    bool int_fpu_en)
+{
+    if (!preserve_fp32_precision.empty()) {
+        TT_FATAL(preserve_fp32_precision.size() == NUM_CIRCULAR_BUFFERS, "preserve_fp32_precision vector must have 32 elements");
+    }
+
     DataFormat pack_format = get_pack_data_format(output_formats, intermed_formats);
     ExpPrecision input_precision = get_data_exp_precision(input_formats);
 
     std::vector<DataFormat> unpack_dst_format;
 
-    const bool en_unpack_tf32 = !preserve_fp32_precision && fp32_dest_acc_en && (tt::is_all_fp32_formats(input_formats) || (input_precision == ExpPrecision::B));
+    const bool en_unpack_tf32 = fp32_dest_acc_en && (tt::is_all_fp32_formats(input_formats) || (input_precision == ExpPrecision::B));
     DataFormat unpack_cond_dst_format = en_unpack_tf32 ? DataFormat::Tf32 : unpack_conditional_dst_format;
     for (int i=0 ; i<NUM_OPERANDS ; i++) {
         DataFormat src_format = input_formats[i];
@@ -250,14 +263,29 @@ std::vector<DataFormat> get_unpack_dst_formats(DataFormat input_formats[NUM_OPER
         } else if (int_fpu_en) {
             unpack_dst_format.push_back(src_format);
         } else {
-            unpack_dst_format.push_back(get_single_unpack_dst_format(input_formats[i], pack_format, unpack_cond_dst_format));
+            if (!preserve_fp32_precision.empty() && en_unpack_tf32 && preserve_fp32_precision[i] != PreserveFP32Target::Disabled) {
+                TT_FATAL(preserve_fp32_precision[i] == PreserveFP32Target::DEST, "preserve_fp32_precision is only available when unpack target is DEST register");
+                unpack_dst_format.push_back(get_single_unpack_dst_format(input_formats[i], pack_format, DataFormat::Float32));
+            } else {
+                unpack_dst_format.push_back(get_single_unpack_dst_format(input_formats[i], pack_format, unpack_cond_dst_format));
+            }
         }
     }
     for (int i=0 ; i<NUM_OPERANDS ; i++) {
-        unpack_dst_format.push_back(get_single_unpack_dst_format(param_formats[i], pack_format, unpack_cond_dst_format));
+        if (!preserve_fp32_precision.empty() && en_unpack_tf32 && preserve_fp32_precision[NUM_OPERANDS+i] != PreserveFP32Target::Disabled) {
+            TT_FATAL(preserve_fp32_precision[NUM_OPERANDS+i] == PreserveFP32Target::DEST, "preserve_fp32_precision is only available when unpack target is DEST register");
+            unpack_dst_format.push_back(get_single_unpack_dst_format(param_formats[i], pack_format, DataFormat::Float32));
+        } else {
+            unpack_dst_format.push_back(get_single_unpack_dst_format(param_formats[i], pack_format, unpack_cond_dst_format));
+        }
     }
     for (int i=0 ; i<NUM_OPERANDS ; i++) {
-        unpack_dst_format.push_back(get_single_unpack_dst_format(intermed_formats[i], pack_format, unpack_cond_dst_format));
+        if (!preserve_fp32_precision.empty() && en_unpack_tf32 && preserve_fp32_precision[3*NUM_OPERANDS+i] != PreserveFP32Target::Disabled) {
+            TT_FATAL(preserve_fp32_precision[3*NUM_OPERANDS+i] == PreserveFP32Target::DEST, "preserve_fp32_precision is only available when unpack target is DEST register");
+            unpack_dst_format.push_back(get_single_unpack_dst_format(intermed_formats[i], pack_format, DataFormat::Float32));
+        } else {
+            unpack_dst_format.push_back(get_single_unpack_dst_format(intermed_formats[i], pack_format, unpack_cond_dst_format));
+        }
     }
     return unpack_dst_format;
 }

@@ -14,8 +14,7 @@ namespace tt::tt_metal
 
     JitBuildOptions::JitBuildOptions(const JitBuildEnv& env) :
       build_env(env),
-      fp32_dest_acc_en(false),
-      preserve_fp32_precision(false) {}
+      fp32_dest_acc_en(false) {}
 
     void JitBuildOptions::set_name(const string& n)
     {

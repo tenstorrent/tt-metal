@@ -178,7 +178,7 @@ static std::string create_formats_array_string(std::string array_type, std::stri
 }
 
 static std::pair<std::vector<DataFormat>, std::vector<DataFormat>>
-generate_unpack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, bool preserve_fp32_precision) {
+generate_unpack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, std::vector<PreserveFP32Target> preserve_fp32_precision) {
 
     vector<DataFormat> src_formats = tt::get_unpack_src_formats(
         desc.input_buf_dataformat_arr, desc.param_buf_dataformat_arr, desc.intermediate_buf_dataformat_arr);
@@ -299,12 +299,8 @@ static void generate_data_format_descriptors(JitBuildOptions& options, const tt:
             (pack_exp_prec == ExpPrecision::A) ? DataFormat::Float16 : DataFormat::Float16_b;
     }
 
-    if ((tt::is_all_fp32_formats(desc.input_buf_dataformat_arr) || options.preserve_fp32_precision) && options.fp32_dest_acc_en){
-        if (options.preserve_fp32_precision) {
-            unpack_conditional_dst_format = DataFormat::Float32;
-        } else {
-            unpack_conditional_dst_format = DataFormat::Tf32;
-        }
+    if (tt::is_all_fp32_formats(desc.input_buf_dataformat_arr) && options.fp32_dest_acc_en) {
+        unpack_conditional_dst_format = DataFormat::Tf32;
     }
 
     tt::check_valid_in_out_data_formats(
