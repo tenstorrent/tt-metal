@@ -125,7 +125,6 @@ class TtLlamaMLP(torch.nn.Module):
             compute_kernel_config=compute_kernel_config,  # TODO update to LOFI
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             dtype=ttnn.bfloat16,
-            activation="silu" if not pc_1 else None,
             program_config=pc_1,
             # memory_config=ttnn.L1_MEMORY_CONFIG if seq_len <= 32 else ttnn.DRAM_MEMORY_CONFIG,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if seq_len <= 32 else ttnn.DRAM_MEMORY_CONFIG,
@@ -144,7 +143,13 @@ class TtLlamaMLP(torch.nn.Module):
 
         x.deallocate(True)
 
-        w2_in = ttnn.multiply(w1_out, w3_out)
+        w2_in = ttnn.multiply(
+            w1_out,
+            w3_out,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            input_tensor_a_activation=ttnn.UnaryOpType.SILU,
+            dtype=ttnn.bfloat8_b,
+        )
 
         w3_out.deallocate(True)
         w1_out.deallocate(True)
