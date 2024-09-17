@@ -10,4 +10,7 @@ using namespace tt::constants;
 operation::ProgramWithCallbacks argmax_single_core(
     const Tensor &input, const Tensor &output, const std::optional<uint32_t> dim);
 
+operation::ProgramWithCallbacks argmax_multi_core(
+    const Tensor &input, const Tensor &output, const std::optional<uint32_t> dim);
+
 }
