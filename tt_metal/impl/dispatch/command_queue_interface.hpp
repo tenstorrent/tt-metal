@@ -31,8 +31,10 @@ struct dispatch_constants {
     dispatch_constants(const dispatch_constants &) = delete;
     dispatch_constants(dispatch_constants &&other) noexcept = delete;
 
-    static const dispatch_constants &get(const CoreType &core_type) {
-        static dispatch_constants inst = dispatch_constants(core_type);
+    static const dispatch_constants &get(const CoreType &core_type, const uint32_t num_hw_cqs = 0) {
+        static uint32_t hw_cqs = num_hw_cqs;
+        TT_FATAL(hw_cqs > 0);
+        static dispatch_constants inst = dispatch_constants(core_type, hw_cqs);
         return inst;
     }
 
@@ -86,12 +88,12 @@ struct dispatch_constants {
     uint32_t mux_buffer_pages(uint8_t num_hw_cqs = 1) const { return prefetch_d_buffer_pages_ / num_hw_cqs; }
 
    private:
-    dispatch_constants(const CoreType &core_type) {
+    dispatch_constants(const CoreType &core_type, const uint32_t num_hw_cqs) {
         TT_ASSERT(core_type == CoreType::WORKER or core_type == CoreType::ETH);
         // make this 2^N as required by the packetized stages
         uint32_t dispatch_buffer_block_size;
         if (core_type == CoreType::WORKER) {
-            prefetch_q_entries_ = 1534;
+            prefetch_q_entries_ = 1532 / num_hw_cqs;
             max_prefetch_command_size_ = 128 * 1024;
             cmddat_q_size_ = 256 * 1024;
             scratch_db_size_ = 128 * 1024;
@@ -411,9 +413,10 @@ class SystemMemoryManager {
             // Prefetch queue acts as the sync mechanism to ensure that issue queue has space to write, so issue queue
             // must be as large as the max amount of space the prefetch queue can specify Plus 1 to handle wrapping Plus
             // 1 to allow us to start writing to issue queue before we reserve space in the prefetch queue
+            std::cout<<"issue queue size = "<<this->get_issue_queue_size(cq_id)<<" Max pfc size = "<< dispatch_constants::get(core_type, num_hw_cqs).max_prefetch_command_size()<<std::endl;
             TT_FATAL(
-                dispatch_constants::get(core_type).max_prefetch_command_size() *
-                    (dispatch_constants::get(core_type).prefetch_q_entries() + 2) <=
+                dispatch_constants::get(core_type, num_hw_cqs).max_prefetch_command_size() *
+                    (dispatch_constants::get(core_type, num_hw_cqs).prefetch_q_entries() + 2) <=
                 this->get_issue_queue_size(cq_id),
                 "Issue queue for cq_id {} has size of {} which is too small",
                 cq_id,
@@ -422,7 +425,7 @@ class SystemMemoryManager {
             this->cq_to_last_completed_event.push_back(0);
             this->prefetch_q_dev_ptrs[cq_id] = dispatch_constants::PREFETCH_Q_BASE;
             this->prefetch_q_dev_fences[cq_id] =
-                dispatch_constants::PREFETCH_Q_BASE + dispatch_constants::get(core_type).prefetch_q_entries() *
+                dispatch_constants::PREFETCH_Q_BASE + dispatch_constants::get(core_type, num_hw_cqs).prefetch_q_entries() *
                                                           sizeof(dispatch_constants::prefetch_q_entry_type);
         }
         vector<std::mutex> temp_mutexes(num_hw_cqs);
@@ -700,7 +703,7 @@ class SystemMemoryManager {
         // Wrap FetchQ if possible
         CoreType core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
         uint32_t prefetch_q_base = DISPATCH_L1_UNRESERVED_BASE;
-        uint32_t prefetch_q_limit = prefetch_q_base + dispatch_constants::get(core_type).prefetch_q_entries() *
+        uint32_t prefetch_q_limit = prefetch_q_base + dispatch_constants::get(core_type, num_hw_cqs).prefetch_q_entries() *
                                                           sizeof(dispatch_constants::prefetch_q_entry_type);
         if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
             this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
@@ -711,7 +714,7 @@ class SystemMemoryManager {
     void fetch_queue_write(uint32_t command_size_B, const uint8_t cq_id, bool stall_prefetcher = false) {
         CoreType dispatch_core_type =
             dispatch_core_manager::instance().get_dispatch_core_type(this->device_id);
-        uint32_t max_command_size_B = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
+        uint32_t max_command_size_B = dispatch_constants::get(dispatch_core_type, num_hw_cqs).max_prefetch_command_size();
         TT_ASSERT(
             command_size_B <= max_command_size_B,
             "Generated prefetcher command of size {} B exceeds max command size {} B",

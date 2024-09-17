@@ -26,8 +26,10 @@ class MultiCommandQueueSingleDeviceFixture : public ::testing::Test {
         arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
         DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() != 1) {
-            tt::log_warning(tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
-            dispatch_core_type = DispatchCoreType::ETH;
+            if (!tt::tt_metal::IsGalaxyCluster()) {
+                tt::log_warning(tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
+                dispatch_core_type = DispatchCoreType::ETH;
+            }
         }
         device_ = tt::tt_metal::CreateDevice(0, num_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
     }

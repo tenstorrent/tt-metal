@@ -850,6 +850,10 @@ size_t GetNumAvailableDevices() {
     return tt::Cluster::instance().number_of_user_devices();
 }
 
+bool IsGalaxyCluster() {
+    return tt::Cluster::instance().is_galaxy_cluster();
+}
+
 size_t GetNumPCIeDevices() {
     return tt::Cluster::instance().number_of_pci_devices();
 }
