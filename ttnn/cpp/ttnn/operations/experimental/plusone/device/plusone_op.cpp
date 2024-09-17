@@ -19,7 +19,7 @@ void PlusOne::validate_with_output_tensors(
 
 }
 
-std::vector<tt::tt_metal::Shape> PlusOne::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> PlusOne::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     auto input_shape = input_tensors[0].get_legacy_shape();
     return {input_shape};
 }
