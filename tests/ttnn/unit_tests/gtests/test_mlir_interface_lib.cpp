@@ -26,7 +26,7 @@ TEST(MLIR_INTERFACE_API, binary_op_batch_broadcast)
 TEST(MLIR_INTERFACE_API, binary_op_width_sharded)
 {
   std::vector<uint32_t> shape = {1, 1, 32, 32 * 64 * 5};
-  ttnn::mlir_interface::shard_spec_tuple shard_spec = {{{0, 0, 8, 8}}, {32, 32 * 5}, "col_major", false};
+  ttnn::mlir_interface::shard_spec_tuple shard_spec = {{{0, 0, 7, 7}}, {32, 32 * 5}, "col_major", false};
   ttnn::mlir_interface::memory_config_tuple memory_config = {"width_sharded", "l1", shard_spec};
   std::string data_type = "bf16";
 
@@ -36,7 +36,7 @@ TEST(MLIR_INTERFACE_API, binary_op_width_sharded)
 TEST(MLIR_INTERFACE_API, binary_op_height_sharded)
 {
   std::vector<uint32_t> shape = {1, 64, 32 * 5, 32};
-  ttnn::mlir_interface::shard_spec_tuple shard_spec = {{{0, 0, 8, 8}}, {32 * 5, 32}, "col_major", false};
+  ttnn::mlir_interface::shard_spec_tuple shard_spec = {{{0, 0, 7, 7}}, {32 * 5, 32}, "col_major", false};
   ttnn::mlir_interface::memory_config_tuple memory_config = {"height_sharded", "l1", shard_spec};
   std::string data_type = "bf16";
 
@@ -57,7 +57,7 @@ TEST(MLIR_INTERFACE_API, unary_op)
 {
   std::vector<uint32_t> shape = {1, 1, 32, 32 * 5 * 64};
   ttnn::mlir_interface::memory_config_tuple l1_interleaved_memory_config = {"interleaved", "l1", std::nullopt};
-  ttnn::mlir_interface::shard_spec_tuple shard_spec = {{{0, 0, 8, 8}}, {32, 32 * 5}, "col_major", false};
+  ttnn::mlir_interface::shard_spec_tuple shard_spec = {{{0, 0, 7, 7}}, {32, 32 * 5}, "col_major", false};
   ttnn::mlir_interface::memory_config_tuple l1_sharded_memory_config = {"width_sharded", "l1", shard_spec};
   ttnn::mlir_interface::memory_config_tuple dram_interleaved_memory_config = {"interleaved", "dram", std::nullopt};
   std::string data_type = "bf16";
@@ -79,7 +79,7 @@ TEST(MLIR_INTERFACE_API, softmax_op)
 {
   std::vector<uint32_t> shape = {1, 1, 32, 32 * 5 * 64};
   ttnn::mlir_interface::memory_config_tuple l1_interleaved_memory_config = {"interleaved", "l1", std::nullopt};
-  ttnn::mlir_interface::shard_spec_tuple shard_spec = {{{0, 0, 8, 8}}, {32, 32 * 5}, "col_major", false};
+  ttnn::mlir_interface::shard_spec_tuple shard_spec = {{{0, 0, 7, 7}}, {32, 32 * 5}, "col_major", false};
   ttnn::mlir_interface::memory_config_tuple l1_sharded_memory_config = {"width_sharded", "l1", shard_spec};
   ttnn::mlir_interface::memory_config_tuple dram_interleaved_memory_config = {"interleaved", "dram", std::nullopt};
   std::string data_type = "bf16";
