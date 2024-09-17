@@ -50,6 +50,7 @@ class TtLlamaMLP(torch.nn.Module):
                 )
             }
         )
+
         # w1/w3: 4096 x 14336: width-sharded on 12 banks, 14340 over 12 banks.
         w1_w3_shard_shape = (
             4096,
@@ -61,7 +62,7 @@ class TtLlamaMLP(torch.nn.Module):
         )
         # w2: 14336 x 4096: width-sharded on 12 banks, 4096 over 12 banks.
         # TODO should dim 0 be expanded to 32k like in llama2?
-        w2_shard_shape = (14336 // 8, 4224 // 12)  # (11 shards)  padded cols to divide by 12 dram cores
+        w2_shard_shape = (14336, 4224 // 12)  # (11 shards)  padded cols to divide by 12 dram cores
         w2_shard_spec = ttnn.ShardSpec(weight_grid, w2_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
         w2_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
 
@@ -99,18 +100,18 @@ class TtLlamaMLP(torch.nn.Module):
         if mode == "decode":  # Sharded config
             pc_1 = self.model_config["DECODE_MLP_W1_PRG_CONFIG"]
             pc_2 = self.model_config["DECODE_MLP_W2_PRG_CONFIG"]
-            pc_3 = self.model_config["DECODE_MLP_W1_PRG_CONFIG"]
+            pc_3 = self.model_config["DECODE_MLP_W3_PRG_CONFIG"]
         else:  # Update the program configs based for prefill
             if seq_len >= 1024:  # Too big to compute. Set different program configs based on seqlen
                 # Reshape input to to fit on device and parallelize computation
                 x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
                 pc_1 = self.model_config["PREFILL_MLP_W1_PRG_CONFIG"]
                 pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"]
-                pc_3 = self.model_config["PREFILL_MLP_W1_PRG_CONFIG"]
+                pc_3 = self.model_config["PREFILL_MLP_W3_PRG_CONFIG"]
             else:
                 pc_1 = self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"](seq_len)
                 pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"](seq_len)
-                pc_3 = self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"](seq_len)
+                pc_3 = self.model_config["PREFILL_MLP_W3_PRG_CONFIG_128"](seq_len)
 
         # TODO Update the model itself to output sharded tensor to MLP
         x = ttnn.interleaved_to_sharded(
@@ -118,7 +119,6 @@ class TtLlamaMLP(torch.nn.Module):
             self.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"],
         )
 
-        breakpoint()
         w1_out = ttnn.linear(
             x,
             self.w1,
@@ -149,7 +149,6 @@ class TtLlamaMLP(torch.nn.Module):
         w3_out.deallocate(True)
         w1_out.deallocate(True)
 
-        breakpoint()
         # w2_in -> [32, 224] shard
         w2_out = ttnn.linear(
             w2_in,
@@ -163,6 +162,8 @@ class TtLlamaMLP(torch.nn.Module):
         )
 
         w2_in.deallocate(True)
+
+        w2_out = ttnn.sharded_to_interleaved(w2_out)
 
         if seq_len >= 2048:  # Reshape back to intended shape
             w2_out = ttnn.reshape(w2_out, [1, 1, seq_len, -1])
