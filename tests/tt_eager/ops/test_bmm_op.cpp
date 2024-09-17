@@ -41,9 +41,9 @@ int main(int argc, char **argv) {
         uint32_t Kt = 2;
         uint32_t Nt = 4;
         uint32_t B = 5;
-        Shape shapea = {B, 1, Mt*TILE_HEIGHT, Kt*TILE_WIDTH};
-        Shape shapeb = {B, 1, Kt*TILE_HEIGHT, Nt*TILE_WIDTH};
-        Shape shapeb1 = {1, 1, Kt*TILE_HEIGHT, Nt*TILE_WIDTH};
+        tt::tt_metal::LegacyShape shapea = {B, 1, Mt*TILE_HEIGHT, Kt*TILE_WIDTH};
+        tt::tt_metal::LegacyShape shapeb = {B, 1, Kt*TILE_HEIGHT, Nt*TILE_WIDTH};
+        tt::tt_metal::LegacyShape shapeb1 = {1, 1, Kt*TILE_HEIGHT, Nt*TILE_WIDTH};
 
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a = tt::numpy::random::random(shapea).to(Layout::TILE).to(device);

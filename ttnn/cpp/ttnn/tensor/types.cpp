@@ -104,51 +104,51 @@ bool operator==(const Padding& padding_a, const Padding& padding_b) {
 
 bool operator!=(const Padding& padding_a, const Padding& padding_b) { return not(padding_a == padding_b); }
 
-Shape::Shape(const std::initializer_list<uint32_t> dimensions) :
+LegacyShape::LegacyShape(const std::initializer_list<uint32_t> dimensions) :
     rank_(dimensions.size()), dimensions_{}, padding_(dimensions.size()) {
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
 }
-Shape::Shape(const std::vector<uint32_t>& dimensions) :
+LegacyShape::LegacyShape(const std::vector<uint32_t>& dimensions) :
     rank_(dimensions.size()), dimensions_{}, padding_(dimensions.size()) {
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
 }
 
-Shape::Shape(const std::initializer_list<uint32_t> dimensions, const Padding& padding) :
+LegacyShape::LegacyShape(const std::initializer_list<uint32_t> dimensions, const Padding& padding) :
     rank_(dimensions.size()), dimensions_{}, padding_(padding) {
     TT_ASSERT(this->padding_.rank_ == this->rank_);
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
 }
-Shape::Shape(const std::vector<uint32_t>& dimensions, const Padding& padding) :
+LegacyShape::LegacyShape(const std::vector<uint32_t>& dimensions, const Padding& padding) :
     rank_(dimensions.size()), dimensions_{}, padding_(padding) {
     TT_ASSERT(this->padding_.rank_ == this->rank_);
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
 }
 
-Shape::Shape(const Shape& other, const Padding& padding) :
+LegacyShape::LegacyShape(const LegacyShape& other, const Padding& padding) :
     dimensions_(other.dimensions_), rank_(other.rank_), padding_(padding) {
     TT_ASSERT(this->padding_.rank_ == this->rank_);
 }
 
-std::size_t Shape::rank() const { return this->rank_; }
-std::size_t Shape::size() const { return this->rank_; }
+std::size_t LegacyShape::rank() const { return this->rank_; }
+std::size_t LegacyShape::size() const { return this->rank_; }
 
-uint32_t& Shape::operator[](const std::int64_t index) {
+uint32_t& LegacyShape::operator[](const std::int64_t index) {
     auto normalized_index = this->get_normalized_index(index);
     return this->dimensions_[normalized_index];
 }
-const uint32_t Shape::operator[](const std::int64_t index) const {
+const uint32_t LegacyShape::operator[](const std::int64_t index) const {
     auto normalized_index = this->get_normalized_index(index);
     return this->dimensions_[normalized_index];
 }
 
-const uint32_t* Shape::begin() const { return this->dimensions_.data(); }
-const uint32_t* Shape::end() const { return this->dimensions_.data() + this->rank_; }
+const uint32_t* LegacyShape::begin() const { return this->dimensions_.data(); }
+const uint32_t* LegacyShape::end() const { return this->dimensions_.data() + this->rank_; }
 
-const Padding& Shape::padding() const {
+const Padding& LegacyShape::padding() const {
     return this->padding_;
 }
 
-const Shape Shape::without_padding() const {
+const LegacyShape LegacyShape::without_padding() const {
     auto padding = this->padding_;
     std::vector<std::uint32_t> shape_without_padding;
     for (auto index = 0; index < this->rank(); index++) {
@@ -157,10 +157,10 @@ const Shape Shape::without_padding() const {
         const auto new_dimension = dimension - (front_pad + back_pad);
         shape_without_padding.push_back(new_dimension);
     }
-    return Shape(shape_without_padding);
+    return LegacyShape(shape_without_padding);
 }
 
-const uint32_t Shape::get_normalized_index(std::int64_t index) const {
+const uint32_t LegacyShape::get_normalized_index(std::int64_t index) const {
     std::int64_t rank = static_cast<std::int64_t>(this->rank_);
     std::uint64_t normalized_index = index >= 0 ? index : rank + index;
     TT_FATAL(
@@ -184,7 +184,7 @@ bool operator==(const ShardTensor2D& lhs, const ShardTensor2D& rhs) {
     return lhs.shard_mesh == rhs.shard_mesh; // Equal if they have the same shard_mesh.
 }
 
-bool operator==(const Shape& shape_a, const Shape& shape_b) {
+bool operator==(const tt::tt_metal::LegacyShape& shape_a, const tt::tt_metal::LegacyShape& shape_b) {
     if (shape_a.rank() != shape_b.rank()) {
         return false;
     }
@@ -197,7 +197,7 @@ bool operator==(const Shape& shape_a, const Shape& shape_b) {
     return true;  // Ignore the padding when comparing shapes
 }
 
-bool operator!=(const Shape& shape_a, const Shape& shape_b) { return not(shape_a == shape_b); }
+bool operator!=(const tt::tt_metal::LegacyShape& shape_a, const tt::tt_metal::LegacyShape& shape_b) { return not(shape_a == shape_b); }
 
 bool MemoryConfig::is_sharded() const {
     switch (this->memory_layout) {

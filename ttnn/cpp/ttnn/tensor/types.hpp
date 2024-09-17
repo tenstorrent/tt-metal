@@ -162,40 +162,40 @@ typedef std::array<uint32_t, 6> Array6D;
 typedef std::array<uint32_t, 7> Array7D;
 typedef std::array<uint32_t, 8> Array8D;
 
-class Shape {
+class LegacyShape {
     std::size_t rank_;
     std::array<uint32_t, MAX_NUM_DIMENSIONS> dimensions_;
     Padding padding_;
 
    public:
-    Shape(const Shape &) = default;
-    Shape &operator=(const Shape &) = default;
-    Shape(Shape &&) = default;
-    Shape &operator=(Shape &&) = default;
-    ~Shape() = default;
+    LegacyShape(const LegacyShape &) = default;
+    LegacyShape &operator=(const LegacyShape &) = default;
+    LegacyShape(LegacyShape &&) = default;
+    LegacyShape &operator=(LegacyShape &&) = default;
+    ~LegacyShape() = default;
 
-    Shape(const std::initializer_list<uint32_t>);
-    Shape(const std::vector<uint32_t> &);
-    Shape(const std::initializer_list<uint32_t>, const Padding &);
-    Shape(const std::vector<uint32_t> &, const Padding &);
+    LegacyShape(const std::initializer_list<uint32_t>);
+    LegacyShape(const std::vector<uint32_t> &);
+    LegacyShape(const std::initializer_list<uint32_t>, const Padding &);
+    LegacyShape(const std::vector<uint32_t> &, const Padding &);
 
-    explicit Shape(const Shape &, const Padding &);
+    explicit LegacyShape(const LegacyShape &, const Padding &);
 
     template <std::size_t Rank>
-    Shape(const std::array<uint32_t, Rank> &shape) : rank_(Rank), dimensions_{}, padding_{Rank} {
+    LegacyShape(const std::array<uint32_t, Rank> &shape) : rank_(Rank), dimensions_{}, padding_{Rank} {
         for (auto index = 0; index < Rank; index++) {
             this->dimensions_[index] = shape[index];
         }
     }
 
-    Shape(const Array4D &shape) : rank_(4), dimensions_{}, padding_{4} {
+    LegacyShape(const Array4D &shape) : rank_(4), dimensions_{}, padding_{4} {
         for (auto index = 0; index < 4; index++) {
             this->dimensions_[index] = shape[index];
         }
     }
 
     template <std::size_t Rank>
-    explicit Shape(const std::array<uint32_t, Rank> &shape, const std::array<uint32_t, Rank> &shape_with_tile_padding) :
+    explicit LegacyShape(const std::array<uint32_t, Rank> &shape, const std::array<uint32_t, Rank> &shape_with_tile_padding) :
         rank_(Rank), dimensions_{}, padding_{Rank} {
         for (auto index = 0; index < Rank; index++) {
             auto padded_dimension = shape_with_tile_padding[index];
@@ -203,7 +203,7 @@ class Shape {
             this->padding_[index] = {.front = 0, .back = padded_dimension - shape[index]};
         }
     }
-    explicit Shape(const std::vector<uint32_t> &shape, const std::vector<uint32_t> &shape_with_tile_padding) :
+    explicit LegacyShape(const std::vector<uint32_t> &shape, const std::vector<uint32_t> &shape_with_tile_padding) :
         rank_(shape.size()), dimensions_{}, padding_{shape.size()} {
         TT_ASSERT(
             shape.size() == shape_with_tile_padding.size(),
@@ -225,7 +225,7 @@ class Shape {
     const uint32_t *end() const;
 
     const Padding &padding() const;
-    const Shape without_padding() const;
+    const LegacyShape without_padding() const;
 
     const uint32_t get_normalized_index(std::int64_t index) const;
 
@@ -233,7 +233,7 @@ class Shape {
     const auto attribute_values() const {
         return std::forward_as_tuple(this->rank_, this->dimensions_, this->padding_);
     }
-    friend std::ostream &operator<<(std::ostream &os, const Shape &shape);
+    friend std::ostream &operator<<(std::ostream &os, const LegacyShape &shape);
 
     Array4D to_array_4D() const {
         Array4D ret_array;
@@ -244,7 +244,7 @@ class Shape {
     }
 };
 
-inline std::ostream &operator<<(std::ostream &os, const Shape &shape) {
+inline std::ostream &operator<<(std::ostream &os, const tt::tt_metal::LegacyShape &shape) {
     const auto shape_without_padding = shape.without_padding();
     const auto &padding = shape.padding();
     os << "Shape([";
@@ -261,8 +261,8 @@ inline std::ostream &operator<<(std::ostream &os, const Shape &shape) {
     return os;
 }
 
-bool operator==(const Shape &, const Shape &);
-bool operator!=(const Shape &, const Shape &);
+bool operator==(const tt::tt_metal::LegacyShape &, const tt::tt_metal::LegacyShape &);
+bool operator!=(const tt::tt_metal::LegacyShape &, const tt::tt_metal::LegacyShape &);
 
 struct MemoryConfig {
     TensorMemoryLayout memory_layout = TensorMemoryLayout::INTERLEAVED;  // Interleave the data across multiple banks
@@ -406,7 +406,7 @@ struct BorrowedStorage {
 struct MultiDeviceHostStorage {
     DistributedTensorConfig strategy;
     std::vector<OwnedBuffer> buffers;
-    std::vector<Shape> shapes;
+    std::vector<LegacyShape> shapes;
     mutable std::mutex mtx;
 
     friend void swap(MultiDeviceHostStorage &first, MultiDeviceHostStorage &second) {
@@ -421,7 +421,7 @@ struct MultiDeviceHostStorage {
 
     MultiDeviceHostStorage() = default;
     MultiDeviceHostStorage(
-        DistributedTensorConfig strategy_, std::vector<OwnedBuffer> buffers_, std::vector<Shape> shapes_) :
+        DistributedTensorConfig strategy_, std::vector<OwnedBuffer> buffers_, std::vector<LegacyShape> shapes_) :
         strategy(strategy_), buffers(buffers_), shapes(shapes_) {}
     MultiDeviceHostStorage(MultiDeviceHostStorage &&other) { swap(*this, other); }
     // unfotunately we need to have this code written manually.
@@ -452,7 +452,7 @@ struct MultiDeviceHostStorage {
 
     // Helper Functions - Getters and setters to get/modify storage attributes. These are needed to
     // preinitialize empty tensor handles and use/populate them in the worker threads.
-    void insert_buffer_and_shape_for_device(int buffer_index, const OwnedBuffer &buffer, const Shape shape) {
+    void insert_buffer_and_shape_for_device(int buffer_index, const OwnedBuffer &buffer, const LegacyShape shape) {
         std::lock_guard<std::mutex> lock(mtx);
         buffers[buffer_index] = buffer;
         shapes[buffer_index] = shape;
@@ -470,7 +470,7 @@ struct MultiDeviceHostStorage {
         return buffers[buffer_index];
     }
 
-    Shape get_tensor_shape(int shape_index) const {
+    LegacyShape get_tensor_shape(int shape_index) const {
         std::lock_guard<std::mutex> lock(mtx);
         TT_ASSERT(shape_index < shapes.size(), "Buffer not found for device {}", shape_index);
         return shapes[shape_index];
@@ -496,7 +496,7 @@ struct MultiDeviceStorage {
     DistributedTensorConfig strategy;
     std::vector<int> ordered_device_ids;
     std::unordered_map<int, DeviceBuffer> buffers;
-    std::unordered_map<int, Shape> shapes;
+    std::unordered_map<int, LegacyShape> shapes;
     mutable std::mutex buffer_mtx;
     mutable std::mutex shape_mtx;
     MultiDeviceStorage() = default;
@@ -514,7 +514,7 @@ struct MultiDeviceStorage {
         DistributedTensorConfig strategy_,
         std::vector<int> ordered_device_ids_,
         std::unordered_map<int, DeviceBuffer> buffers_,
-        std::unordered_map<int, Shape> shapes_) :
+        std::unordered_map<int, LegacyShape> shapes_) :
         strategy(std::move(strategy_)),
         ordered_device_ids(std::move(ordered_device_ids_)),
         buffers(std::move(buffers_)),
@@ -569,7 +569,7 @@ struct MultiDeviceStorage {
     // Helper Functions - Getters and setters to get/modify storage attributes. These are needed to
     // preinitialize empty tensor handles and use/populate them in the worker threads.
 
-    inline void insert_buffer_and_shape_for_device(Device *device, const DeviceBuffer buffer, const Shape shape) {
+    inline void insert_buffer_and_shape_for_device(Device *device, const DeviceBuffer buffer, const LegacyShape shape) {
         std::scoped_lock lock(buffer_mtx, shape_mtx);
         TT_ASSERT(
             device == buffer->device(),
@@ -603,7 +603,7 @@ struct MultiDeviceStorage {
         return buffers.at(device_id);
     }
 
-    inline Shape get_tensor_shape_for_device(Device *device) const {
+    inline LegacyShape get_tensor_shape_for_device(Device *device) const {
         std::lock_guard<std::mutex> lock(shape_mtx);
         TT_ASSERT(
             shapes.find(device->id()) != shapes.end(), "Shape not found for device {}", device->id());
@@ -652,48 +652,47 @@ namespace types {
 
 namespace detail {
 template <std::size_t Rank>
-static tt::tt_metal::Shape compute_ttl_shape(
+static tt::tt_metal::LegacyShape compute_ttl_shape(
     const std::array<uint32_t, Rank> &shape, const std::array<std::array<uint32_t, 2>, Rank> &padding) {
     auto ttl_shape = std::array<uint32_t, Rank>{};
     for (auto index = 0; index < Rank; index++) {
         ttl_shape[index] = shape[index] + padding[index][0] + padding[index][1];
     }
-    return tt::tt_metal::Shape{
-        tt::tt_metal::Shape{ttl_shape}, tt::tt_metal::Padding{padding, tt::tt_metal::Padding::PadValue::Any}};
+    return tt::tt_metal::LegacyShape{ttl_shape, tt::tt_metal::Padding{padding, tt::tt_metal::Padding::PadValue::Any}};
 }
 
 }  // namespace detail
 
 struct Shape {
-    // ttnn::Shape is a wrapper around tt::tt_metal::Shape
+    // ttnn::Shape is a wrapper around tt::tt_metal::LegacyShape
     // It is used to flip the default value of operator[] to return the shape without padding
-    tt::tt_metal::Shape value;
+    tt::tt_metal::LegacyShape value;
 
-    explicit Shape(const tt::tt_metal::Shape &shape) : value{shape} {}
+    explicit Shape(const tt::tt_metal::LegacyShape &shape) : value{shape} {}
 
     template <std::size_t Rank>
     explicit Shape(const std::array<uint32_t, Rank> &shape) : value{shape} {}
 
     template <std::size_t Rank>
     explicit Shape(const std::array<uint32_t, Rank> &shape, const std::array<uint32_t, Rank> &shape_with_tile_padding) :
-        value{tt::tt_metal::Shape{shape, shape_with_tile_padding}} {}
+        value{tt::tt_metal::LegacyShape{shape, shape_with_tile_padding}} {}
 
     template <std::size_t Rank>
     explicit Shape(
         const std::array<uint32_t, Rank> &shape, const std::array<std::array<uint32_t, 2>, Rank> &tile_padding) :
         value{detail::compute_ttl_shape(shape, tile_padding)} {}
 
-    explicit Shape(const std::vector<uint32_t> &shape) : value{tt::tt_metal::Shape{shape}} {}
+    explicit Shape(const std::vector<uint32_t> &shape) : value{tt::tt_metal::LegacyShape{shape}} {}
 
     explicit Shape(const std::vector<uint32_t> &shape, const std::vector<uint32_t> &shape_with_tile_padding) :
-        value{tt::tt_metal::Shape{shape, shape_with_tile_padding}} {}
+        value{tt::tt_metal::LegacyShape{shape, shape_with_tile_padding}} {}
 
     const auto rank() const { return this->value.rank(); }
 
     const auto size() const { return this->rank(); }
 
     Shape with_tile_padding() const {
-        return Shape{tt::tt_metal::Shape{this->value, tt::tt_metal::Padding{this->value.rank()}}};
+        return Shape{tt::tt_metal::LegacyShape{this->value, tt::tt_metal::Padding{this->value.rank()}}};
     }
 
     bool has_tile_padding() const {
@@ -713,7 +712,7 @@ struct Shape {
     bool operator==(const Shape &other) const {
         const auto &shape_a = this->value;
         const auto &shape_b = other.value;
-        // tt::tt_metal::Shape comparison doesn't take padding into account
+        // tt::tt_metal::LegacyShape comparison doesn't take padding into account
         return (shape_a == shape_b and shape_a.without_padding() == shape_b.without_padding());
     }
 

@@ -35,7 +35,7 @@ std::vector<Tensor> MorehCumSum::create_output_tensors(const std::vector<Tensor>
     return {};
 }
 
-std::vector<Shape> MorehCumSum::compute_output_shapes(const std::vector<Tensor>& inputs) const {
+std::vector<tt::tt_metal::LegacyShape> MorehCumSum::compute_output_shapes(const std::vector<Tensor>& inputs) const {
     // Inplace
     return {};
 }

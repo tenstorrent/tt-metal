@@ -19,7 +19,7 @@
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using tt::tt_metal::Shape;
+using tt::tt_metal::LegacyShape;
 using ttnn::operations::unary::UnaryWithParam;
 
 namespace {
@@ -1259,14 +1259,14 @@ void Matmul::validate(
         chosen_program_config);
 }
 
-std::vector<Shape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    const Shape& input_shape_a = input_tensors.at(0).get_legacy_shape();
-    const Shape& input_shape_b = input_tensors.at(1).get_legacy_shape();
+std::vector<tt::tt_metal::LegacyShape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    const tt::tt_metal::LegacyShape& input_shape_a = input_tensors.at(0).get_legacy_shape();
+    const tt::tt_metal::LegacyShape& input_shape_b = input_tensors.at(1).get_legacy_shape();
     const uint32_t a_rank = input_shape_a.rank();
     const uint32_t b_rank = input_shape_b.rank();
     const uint32_t out_rank = std::max(a_rank, b_rank);
     const uint32_t rank_difference = out_rank - a_rank;
-    Shape output_shape = (b_rank > a_rank) ? input_shape_b : input_shape_a;
+    tt::tt_metal::LegacyShape output_shape = (b_rank > a_rank) ? input_shape_b : input_shape_a;
     auto dimensions_pads = std::vector<Padding::PadDimension>();
 
     for (auto index = 0; index < rank_difference; index++) {
@@ -1281,7 +1281,7 @@ std::vector<Shape> Matmul::compute_output_shapes(const std::vector<Tensor>& inpu
     output_shape[-1] = input_shape_b[-1];
     dimensions_pads.push_back(input_shape_b.padding()[b_rank - 1]);
     const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-    return {Shape(output_shape, padding)};
+    return {tt::tt_metal::LegacyShape(output_shape, padding)};
 }
 
 std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {

@@ -479,7 +479,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, row_major ? NCH : num_tensor_tiles);
 
-    tt::tt_metal::Shape output_shape = output.get_legacy_shape();
+    tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
 
     tt::tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -977,7 +977,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor &a,
     tt::log_debug("all_cores: {}", all_cores);
     tt::log_debug("num_cores: {}", num_cores);
 
-    tt::tt_metal::Shape output_shape = output.get_legacy_shape();
+    tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
 
     tt::tt_metal::Buffer *dst_buffer = output.buffer();
 
@@ -1580,7 +1580,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
     uint32_t num_cores = all_cores.num_cores();
     uint32_t num_tiles_per_shard = shard_spec.numel() / TILE_HW;
 
-    tt::tt_metal::Shape output_shape = output.get_legacy_shape();
+    tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
 
     tt::tt_metal::Buffer *dst_buffer = output.buffer();
 
@@ -1795,7 +1795,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor 
     tt::log_debug("all_cores: {}", all_cores);
     tt::log_debug("num_cores: {}", num_cores);
 
-    tt::tt_metal::Shape output_shape = output.get_legacy_shape();
+    tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
 
     // sharded cb
     uint32_t src0_cb_index = tt::CB::c_in0;

@@ -46,10 +46,10 @@ namespace numpy {
 
 template <typename DataType>
 struct ndarray {
-    Shape shape;
+    tt::tt_metal::LegacyShape shape;
     void* data;
 
-    ndarray(Shape shape) : shape(shape), data(malloc(tt::tt_metal::compute_volume(shape) * sizeof(DataType))) {}
+    ndarray(tt::tt_metal::LegacyShape shape) : shape(shape), data(malloc(tt::tt_metal::compute_volume(shape) * sizeof(DataType))) {}
     ~ndarray() { free(data); }
 
     std::size_t size() const { return tt::tt_metal::compute_volume(shape); }
@@ -61,7 +61,7 @@ void test_raw_host_memory_pointer() {
     using tt::tt_metal::BorrowedStorage;
     using tt::tt_metal::DataType;
     using tt::tt_metal::OwnedStorage;
-    using tt::tt_metal::Shape;
+    using tt::tt_metal::LegacyShape;
     using tt::tt_metal::Tensor;
     using namespace tt::tt_metal::borrowed_buffer;
     using namespace tt::tt_metal::owned_buffer;
@@ -69,7 +69,7 @@ void test_raw_host_memory_pointer() {
     int device_id = 0;
     tt::tt_metal::Device* device = tt::tt_metal::CreateDevice(device_id);
 
-    Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+    tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
 
     // Host tensor to print the output
     Tensor tensor_for_printing = Tensor(

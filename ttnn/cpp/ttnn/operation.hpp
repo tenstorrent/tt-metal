@@ -395,7 +395,7 @@ struct DeviceOperation final {
             this->type_erased_storage, input_tensors, optional_input_tensors, optional_output_tensors);
     }
 
-    inline const std::vector<Shape> compute_output_shapes(const Tensors& input_tensors) const {
+    inline const std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const Tensors& input_tensors) const {
         return this->compute_output_shapes_impl_(this->type_erased_storage, input_tensors);
     }
 
@@ -544,7 +544,7 @@ struct DeviceOperation final {
                 }
             }},
         compute_output_shapes_impl_{
-            [](const storage_t& storage, const Tensors& input_tensors) -> const std::vector<Shape> {
+            [](const storage_t& storage, const Tensors& input_tensors) -> const std::vector<tt::tt_metal::LegacyShape> {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
                 return operation.compute_output_shapes(input_tensors);
             }},
@@ -753,7 +753,7 @@ struct DeviceOperation final {
         const Tensors&,
         const std::vector<std::optional<const Tensor>>&,
         const OptionalTensors&);
-    const std::vector<Shape> (*compute_output_shapes_impl_)(const storage_t& value, const Tensors&);
+    const std::vector<tt::tt_metal::LegacyShape> (*compute_output_shapes_impl_)(const storage_t& value, const Tensors&);
     const OutputTensors (*create_output_tensors_impl_)(const storage_t& value, const Tensors&, const OptionalTensors&);
 
     CacheableProgram<OutputTensors> (*create_program_impl_)(

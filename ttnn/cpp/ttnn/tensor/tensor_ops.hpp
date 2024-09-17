@@ -29,16 +29,16 @@ Tensor tensor_cpu_sharded(const Tensor& input_tensor);
 
 void tensor_print(const Tensor& input_tensor);
 
-Tensor tensor_pad(const Tensor& input_tensor, const Shape& output_tensor_shape, const Shape& input_tensor_start, float pad_value);
+Tensor tensor_pad(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& output_tensor_shape, const tt::tt_metal::LegacyShape& input_tensor_start, float pad_value);
 
-Tensor tensor_unpad(const Tensor& input_tensor, const Shape& output_tensor_start, const Shape& output_tensor_end);
+Tensor tensor_unpad(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end);
 
 Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value);
 
-Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const Shape& output_tensor_shape);
+Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& output_tensor_shape);
 
 Tensor tensor_reshape(const Tensor& input_tensor, int N, int C, int H, int W);
 
-Tensor tensor_reshape(const Tensor& input_tensor, const Shape& new_shape);
+Tensor tensor_reshape(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& new_shape);
 
 }

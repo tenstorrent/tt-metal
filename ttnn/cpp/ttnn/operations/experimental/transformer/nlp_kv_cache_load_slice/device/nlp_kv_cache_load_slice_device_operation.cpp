@@ -23,7 +23,7 @@ void NlpKVCacheLoadSliceDeviceOperation::validate(const std::vector<Tensor> &inp
         TT_FATAL(this->output_tensor_start[i] <= this->output_tensor_end[i], "Error");
     }
 
-    tt::tt_metal::Shape output_tensor_shape = this->compute_output_shapes(input_tensors)[0];
+    tt::tt_metal::LegacyShape output_tensor_shape = this->compute_output_shapes(input_tensors)[0];
     auto num_dims = input_tensor_a.get_legacy_shape().rank();
     TT_FATAL(num_dims == 4, "Input tensor must be 4D");
     const auto input_shape = input_tensor_a.get_legacy_shape();
@@ -41,14 +41,14 @@ void NlpKVCacheLoadSliceDeviceOperation::validate(const std::vector<Tensor> &inp
                 (this->output_tensor_start[-1] % TILE_WIDTH == 0),
             "Can only unpad tilized tensor with full tiles");
 }
-std::vector<tt::tt_metal::Shape> NlpKVCacheLoadSliceDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> NlpKVCacheLoadSliceDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     std::vector<uint32_t> out_shape;
     auto rank = input_tensors[0].get_legacy_shape().rank();
     out_shape.reserve(rank);
     for (uint32_t i = 0; i < rank; i++) {
         out_shape.push_back(this->output_tensor_end[i] - this->output_tensor_start[i] + 1);
     }
-    tt::tt_metal::Shape output_tensor_shape(out_shape);
+    tt::tt_metal::LegacyShape output_tensor_shape(out_shape);
     return {output_tensor_shape};
 }
 std::vector<Tensor> NlpKVCacheLoadSliceDeviceOperation::create_output_tensors(const std::vector<Tensor> &input_tensors) const {

@@ -28,7 +28,7 @@ void IndexedFill::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Index Fill does not currently support sharding");
 }
 
-std::vector<tt::tt_metal::Shape> IndexedFill::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> IndexedFill::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(1);
     return {input_tensor.get_legacy_shape()};
 }

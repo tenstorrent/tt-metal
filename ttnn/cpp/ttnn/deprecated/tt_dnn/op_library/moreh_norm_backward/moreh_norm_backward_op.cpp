@@ -40,7 +40,7 @@ void MorehNormBackward::validate_with_output_tensors(
     check_tensor(input_grad, "moreh_norm_backward", "input_grad");
 }
 
-std::vector<Shape> MorehNormBackward::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehNormBackward::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     return {input_tensors.at(0).get_legacy_shape()};
 }
 

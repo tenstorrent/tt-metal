@@ -72,7 +72,7 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
 }
 
 
-std::vector<tt::tt_metal::Shape> Transpose::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> Transpose::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto out_shape = input_tensor.get_legacy_shape();
     auto padding = out_shape.padding();
@@ -102,7 +102,7 @@ std::vector<tt::tt_metal::Shape> Transpose::compute_output_shapes(const std::vec
             std::swap(padding[1], padding[3]);
             break;
     }
-    return {tt::tt_metal::Shape(out_shape, padding)};
+    return {tt::tt_metal::LegacyShape(out_shape, padding)};
 }
 
 

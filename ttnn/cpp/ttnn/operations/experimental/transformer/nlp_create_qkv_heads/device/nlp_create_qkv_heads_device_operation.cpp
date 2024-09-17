@@ -87,10 +87,10 @@ NlpCreateHeadsDeviceOperation::shape_return_value_t NlpCreateHeadsDeviceOperatio
         head_dim = (head_dim / TILE_WIDTH + 1) * TILE_WIDTH;
     }
 
-    const tt::tt_metal::Shape q_output_shape = {input_shape[0], operation_attributes.num_q_heads, sequence_length, head_dim};
-    const tt::tt_metal::Shape v_output_shape = {input_shape[0], operation_attributes.num_kv_heads, sequence_length, head_dim};
-    const tt::tt_metal::Shape k_output_shape = operation_attributes.transpose_k_heads
-                                     ? (tt::tt_metal::Shape){input_shape[0], operation_attributes.num_kv_heads, head_dim, sequence_length}
+    const tt::tt_metal::LegacyShape q_output_shape = {input_shape[0], operation_attributes.num_q_heads, sequence_length, head_dim};
+    const tt::tt_metal::LegacyShape v_output_shape = {input_shape[0], operation_attributes.num_kv_heads, sequence_length, head_dim};
+    const tt::tt_metal::LegacyShape k_output_shape = operation_attributes.transpose_k_heads
+                                     ? (tt::tt_metal::LegacyShape){input_shape[0], operation_attributes.num_kv_heads, head_dim, sequence_length}
                                      : v_output_shape;
     return {ttnn::Shape(q_output_shape), ttnn::Shape(k_output_shape), ttnn::Shape(v_output_shape)};
 

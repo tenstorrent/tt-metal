@@ -39,7 +39,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
-    const Shape& ashape,
+    const ttnn::Shape& ashape,
     std::optional<const Tensor> bias,
     const std::optional<const Tensor> conv_reader_indices,
     sliding_window::SlidingWindowConfig sliding_window_config,
@@ -211,7 +211,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
             "Out_block_h must be divisible by out_subblock_h!");
     }
 
-    Shape ashape_with_channels_padded(std::vector<uint32_t>{ashape[0], ashape[1], ashape[2], input_channels_padded});
+    ttnn::Shape ashape_with_channels_padded(std::vector<uint32_t>{ashape[0], ashape[1], ashape[2], input_channels_padded});
 
     uint32_t conv_act_size_h = ashape_with_channels_padded[1];
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];

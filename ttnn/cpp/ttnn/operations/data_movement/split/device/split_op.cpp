@@ -33,13 +33,13 @@ void SplitDeviceOperation::validate(const std::vector<Tensor> &input_tensors) co
 }
 
 
-std::vector<tt::tt_metal::Shape> SplitDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> SplitDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto &input_tensor = input_tensors.at(0);
     auto input_shape_array = input_tensor.get_legacy_shape().to_array_4D();
     auto output_shape_array = input_shape_array;
     output_shape_array[this->dim] /= this->num_splits;
-    tt::tt_metal::Shape output_shape(output_shape_array);
-    std::vector<tt::tt_metal::Shape> output_shape_vector(this->num_splits, output_shape);
+    tt::tt_metal::LegacyShape output_shape(output_shape_array);
+    std::vector<tt::tt_metal::LegacyShape> output_shape_vector(this->num_splits, output_shape);
     return output_shape_vector;
 }
 

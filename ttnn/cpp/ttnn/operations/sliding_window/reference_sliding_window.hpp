@@ -14,7 +14,7 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-using tt::tt_metal::Shape;
+using tt::tt_metal::LegacyShape;
 using tt::tt_metal::Tensor;
 
 namespace ttnn::operations::sliding_window {

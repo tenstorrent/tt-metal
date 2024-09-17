@@ -88,7 +88,7 @@ void MorehNllLossUnreducedBackward::validate_with_output_tensors(
     }
 }
 
-std::vector<Shape> MorehNllLossUnreducedBackward::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehNllLossUnreducedBackward::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     // To calculate the output shape, we need the channel_size. However, the required tensors, target and output_grad,
     // do not contain the channel_size information.
     TT_THROW("moreh_nll_loss_unreduced_backward not support create output tensors.");

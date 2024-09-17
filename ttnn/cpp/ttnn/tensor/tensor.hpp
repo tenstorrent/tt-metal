@@ -119,7 +119,7 @@ struct Tensor {
         deallocate_through_destructor(false) {}
 
     Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout);
-    Tensor(const Storage storage, const Shape shape, DataType dtype, Layout layout);
+    Tensor(const Storage storage, const tt::tt_metal::LegacyShape shape, DataType dtype, Layout layout);
 
     // Constructor to initialize unpopulated tensor with workers and storage specified. Use this when creating tensor
     // handles in async mode.
@@ -175,7 +175,7 @@ struct Tensor {
                 std::get<MultiDeviceHostStorage>(this->tensor_attributes->storage).buffers =
                     std::vector<OwnedBuffer>(num_buffers, OwnedBuffer());
                 std::get<MultiDeviceHostStorage>(this->tensor_attributes->storage).shapes =
-                    std::vector<Shape>(num_buffers, this->tensor_attributes->shape.value);
+                    std::vector<tt::tt_metal::LegacyShape>(num_buffers, this->tensor_attributes->shape.value);
             }
             this->tensor_attributes->num_shards_to_be_populated = num_buffers;
         }
@@ -260,17 +260,17 @@ struct Tensor {
 
     Tensor to(Layout target_layout, MeshDevice *mesh_device) const;
 
-    Tensor pad(const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value) const;
+    Tensor pad(const tt::tt_metal::LegacyShape &output_tensor_shape, const tt::tt_metal::LegacyShape &input_tensor_start, float pad_value) const;
 
     Tensor cpu(bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId) const;
 
     Tensor cpu_sharded() const;
 
-    Tensor unpad(const Shape &output_tensor_start, const Shape &output_tensor_end) const;
+    Tensor unpad(const tt::tt_metal::LegacyShape &output_tensor_start, const tt::tt_metal::LegacyShape &output_tensor_end) const;
 
     Tensor pad_to_tile(float pad_value) const;
 
-    Tensor unpad_from_tile(const Shape &output_tensor_shape) const;
+    Tensor unpad_from_tile(const tt::tt_metal::LegacyShape &output_tensor_shape) const;
 
     const std::string write_to_string() const;
     void print() const;
@@ -282,14 +282,14 @@ struct Tensor {
     //                                  Low Level APIs
     // ======================================================================================
     Tensor reshape(int N, int C, int H, int W) const;
-    Tensor reshape(const tt::tt_metal::Shape &new_shape) const;
+    Tensor reshape(const tt::tt_metal::LegacyShape &new_shape) const;
 
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
     const Storage &get_storage() const;
     // [[deprecated("Use get_shape() instead.")]]
-    const Shape &get_legacy_shape() const;
+    const tt::tt_metal::LegacyShape &get_legacy_shape() const;
     const ttnn::Shape &get_shape() const;
     const DataType &get_dtype() const;
     const Layout &get_layout() const;
@@ -298,7 +298,7 @@ struct Tensor {
     // Non-Blocking Getters. Query attributes directly, without waiting for worker completion
     // ======================================================================================
     inline const Storage &storage() const { return this->tensor_attributes->storage; };
-    inline const Shape &legacy_shape() const { return this->tensor_attributes->shape.value; };
+    inline const tt::tt_metal::LegacyShape &legacy_shape() const { return this->tensor_attributes->shape.value; };
     inline const ttnn::Shape &shape() const { return this->tensor_attributes->shape; };
     inline const DataType &dtype() const { return this->tensor_attributes->dtype; };
     inline const Layout &layout() const { return this->tensor_attributes->layout; };
@@ -314,7 +314,7 @@ struct Tensor {
     //                                      Extra Helper Functions
     // ======================================================================================
     StorageType storage_type() const;
-    const Shape strides() const;
+    const tt::tt_metal::LegacyShape strides() const;
     uint32_t volume() const;
     uint32_t intended_volume() const;
 
@@ -392,7 +392,7 @@ struct Tensor {
 };
 
 Tensor create_device_tensor(
-    const Shape &shape,
+    const tt::tt_metal::LegacyShape &shape,
     DataType dtype,
     Layout layout,
     Device *device,

@@ -34,7 +34,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        Shape shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+        tt::tt_metal::LegacyShape shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a = tt::numpy::random::random(shape).to(Layout::TILE).to(device);
 

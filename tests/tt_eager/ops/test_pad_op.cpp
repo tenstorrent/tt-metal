@@ -32,8 +32,9 @@ void test_operation_infrastructure() {
     auto output_tensor = ttnn::pad(input_tensor, padded_shape, tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
 
     auto output_shape = output_tensor.get_legacy_shape();
-    TT_FATAL(output_shape == tt::tt_metal::Shape(padded_shape), "Error");
-    TT_FATAL(output_shape.without_padding() == tt::tt_metal::Shape(input_shape), "Error");
+
+    TT_FATAL(output_shape == tt::tt_metal::LegacyShape(padded_shape), "Error");
+    TT_FATAL(output_shape.without_padding() == tt::tt_metal::LegacyShape(input_shape), "Error");
 }
 
 int main(int argc, char** argv) {

@@ -12,14 +12,14 @@
 namespace ttnn::operations::data_movement {
 
 struct Pad {
-    const tt::tt_metal::Shape output_tensor_shape;
-    const tt::tt_metal::Shape input_tensor_start;
+    const tt::tt_metal::LegacyShape output_tensor_shape;
+    const tt::tt_metal::LegacyShape input_tensor_start;
     const float pad_value;
     const MemoryConfig output_mem_config;
     const bool use_multicore;
 
     void validate_with_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-    std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;

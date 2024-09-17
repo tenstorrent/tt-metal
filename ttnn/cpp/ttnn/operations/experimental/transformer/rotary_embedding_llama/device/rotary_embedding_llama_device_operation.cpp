@@ -56,7 +56,7 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
 
 }
 
-std::vector<Shape> RotaryEmbeddingLlama::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> RotaryEmbeddingLlama::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto shape = input_tensor.get_legacy_shape();
     return {shape};

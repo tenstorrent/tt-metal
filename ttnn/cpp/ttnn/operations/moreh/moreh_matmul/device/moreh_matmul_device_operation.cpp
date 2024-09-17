@@ -146,12 +146,12 @@ MorehMatmulOperation::shape_return_value_t compute_output_shapes(
     output_dim[output_rank - 2] = h;
     output_dim[output_rank - 1] = w;
 
-    tt::tt_metal::Shape output_shape{output_dim};
+    tt::tt_metal::LegacyShape output_shape{output_dim};
     auto padding = output_shape.padding();
     // padding for t logmatrix dims
     padding[output_rank - 2] = Padding::PadDimension{0, h - h_wo_padding};
     padding[output_rank - 1] = Padding::PadDimension{0, w - w_wo_padding};
-    return Shape({tt::tt_metal::Shape(output_shape, padding)});
+    return Shape({tt::tt_metal::LegacyShape(output_shape, padding)});
 }
 MorehMatmulOperation::tensor_return_value_t MorehMatmulOperation::create_output_tensors(
     const MorehMatmulOperation::operation_attributes_t &operation_attributes,
@@ -214,12 +214,12 @@ MorehMatmulOperation::shape_return_value_t MorehMatmulOperation::compute_output_
     output_dim[output_rank - 2] = h;
     output_dim[output_rank - 1] = w;
 
-    tt::tt_metal::Shape output_shape{output_dim};
+    tt::tt_metal::LegacyShape output_shape{output_dim};
     auto padding = output_shape.padding();
     // padding for t logmatrix dims
     padding[output_rank - 2] = Padding::PadDimension{0, h - h_wo_padding};
     padding[output_rank - 1] = Padding::PadDimension{0, w - w_wo_padding};
-    return Shape({tt::tt_metal::Shape(output_shape, padding)});
+    return Shape({tt::tt_metal::LegacyShape(output_shape, padding)});
 }
 
 std::tuple<MorehMatmulOperation::operation_attributes_t, MorehMatmulOperation::tensor_args_t>

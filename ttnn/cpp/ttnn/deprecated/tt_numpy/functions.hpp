@@ -24,7 +24,6 @@ using tt_metal::Device;
 using tt_metal::Layout;
 using tt_metal::MemoryConfig;
 using tt_metal::OwnedStorage;
-using tt_metal::Shape;
 using tt_metal::StorageType;
 using tt_metal::Tensor;
 namespace detail {
@@ -51,7 +50,7 @@ constexpr static DataType get_data_type() {
 template <typename T>
 static Tensor full(
     uint8_t queue_id,
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     T value,
     const Layout layout = Layout::ROW_MAJOR,
     Device* device = nullptr,
@@ -108,7 +107,7 @@ static Tensor full(
 template <typename T>
 static Tensor full_impl(
     uint8_t queue_id,
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     const T value,
     const DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
@@ -139,7 +138,7 @@ static Tensor full_impl(
 
 template <typename T>
 static Tensor full(
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     const T value,
     const DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
@@ -150,7 +149,7 @@ static Tensor full(
 }
 
 static Tensor zeros(
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     const DataType data_type = DataType::BFLOAT16,
     const Layout layout = Layout::ROW_MAJOR,
     Device* device = nullptr,
@@ -160,7 +159,7 @@ static Tensor zeros(
 }
 
 static Tensor ones(
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     const DataType data_type = DataType::BFLOAT16,
     const Layout layout = Layout::ROW_MAJOR,
     Device* device = nullptr,
@@ -253,7 +252,7 @@ static Tensor arange(
 
 template <typename T, bool IS_UPPER>
 static Tensor index_trilu(
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     const int32_t diag,
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
@@ -292,7 +291,7 @@ static Tensor index_trilu(
 
 template <typename T>
 static Tensor index_width(
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
     Device* device = nullptr,
@@ -328,7 +327,7 @@ static Tensor index_width(
 
 template <typename T>
 static Tensor index_height(
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
     Device* device = nullptr,
@@ -364,7 +363,7 @@ static Tensor index_height(
 
 template <typename T>
 static Tensor index_all(
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
     Device* device = nullptr,
@@ -399,8 +398,8 @@ static Tensor index_all(
 
 template <typename T>
 static Tensor mask_padded_input(
-    const Shape& padded_shape,
-    const Shape& unpadded_shape,
+    const tt::tt_metal::LegacyShape& padded_shape,
+    const tt::tt_metal::LegacyShape& unpadded_shape,
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
     Device* device = nullptr,
@@ -441,7 +440,7 @@ static Tensor fill_first_val_into_tensor(
     Device* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    const Shape& s_a = input_tensor.get_legacy_shape();
+    const tt::tt_metal::LegacyShape& s_a = input_tensor.get_legacy_shape();
     auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(s_a));  // ouput
     auto device_buffer = input_tensor.device_buffer();
     uint32_t size_in_bytes = device_buffer->size();
@@ -455,7 +454,7 @@ static Tensor fill_first_val_into_tensor(
         tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(device_buffer, data_vec);
     }
     auto input_buffer = owned_buffer::create<T>(std::move(data_vec));
-    const Shape input_tensor_strides = input_tensor.strides();
+    const tt::tt_metal::LegacyShape input_tensor_strides = input_tensor.strides();
     for (uint32_t i = 0; i < tt_metal::compute_volume(s_a); i++) {
         owned_buffer[i] = input_buffer[0];
     }
@@ -474,7 +473,7 @@ static Tensor prod_result_computation_GS(
     Device* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    const Shape& s_a = input_tensor.get_legacy_shape();
+    const tt::tt_metal::LegacyShape& s_a = input_tensor.get_legacy_shape();
     auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(s_a));  // ouput
     auto device_buffer = input_tensor.device_buffer();
     uint32_t size_in_bytes = device_buffer->size();
@@ -488,7 +487,7 @@ static Tensor prod_result_computation_GS(
         tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(device_buffer, data_vec);
     }
     auto input_buffer = owned_buffer::create<T>(std::move(data_vec));
-    const Shape input_tensor_strides = input_tensor.strides();
+    const tt::tt_metal::LegacyShape input_tensor_strides = input_tensor.strides();
     auto result = static_cast<T>(1.0f);
     for (uint32_t i = s_a[0] - 1; i < s_a[0]; i++) {
         for (int32_t j = s_a[1] - 1; j < s_a[1]; j++) {
@@ -523,7 +522,7 @@ static Tensor prod_result_computation_WH_B0(
     Device* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    const Shape& s_a = input_tensor.get_legacy_shape();
+    const tt::tt_metal::LegacyShape& s_a = input_tensor.get_legacy_shape();
     auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(s_a));  // ouput
     auto device_buffer = input_tensor.device_buffer();
     uint32_t size_in_bytes = device_buffer->size();
@@ -537,7 +536,7 @@ static Tensor prod_result_computation_WH_B0(
         tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(device_buffer, data_vec);
     }
     auto input_buffer = owned_buffer::create<T>(std::move(data_vec));
-    const Shape input_tensor_strides = input_tensor.strides();
+    const tt::tt_metal::LegacyShape input_tensor_strides = input_tensor.strides();
     auto result = static_cast<T>(1.0f);
     // need to access the last 4 rows and alternating columns of index 17 ,19, 21, 23, 25, 27, 29, 31
     for (uint32_t i = s_a[0] - 1; i < s_a[0]; i++) {
@@ -570,7 +569,7 @@ static Tensor prod_result_computation_WH_B0(
 
 template <typename T>
 static Tensor index_channel(
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
     Device* device = nullptr,
@@ -606,7 +605,7 @@ static Tensor index_channel(
 
 template <typename T>
 static Tensor index_batch(
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
     Device* device = nullptr,
@@ -642,7 +641,7 @@ static Tensor index_batch(
 template <typename T>
 static Tensor manual_insertion(
     const Tensor& input_tensor,
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
     Device* device = nullptr,
@@ -673,7 +672,7 @@ static Tensor manual_insertion(
 
 template <typename T>
 static Tensor index_tril(
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     const int32_t diag,
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
@@ -685,7 +684,7 @@ static Tensor index_tril(
 
 template <typename T>
 static Tensor index_triu(
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     const int32_t diag,
     DataType data_type,
     const Layout layout = Layout::ROW_MAJOR,
@@ -702,7 +701,7 @@ inline auto RANDOM_GENERATOR = std::mt19937(0);
 static void seed(std::size_t seed) { RANDOM_GENERATOR = std::mt19937(seed); }
 
 template <typename T>
-static Tensor uniform(T low, T high, const Shape& shape, const Layout layout = Layout::ROW_MAJOR) {
+static Tensor uniform(T low, T high, const tt::tt_metal::LegacyShape& shape, const Layout layout = Layout::ROW_MAJOR) {
     constexpr DataType data_type = detail::get_data_type<T>();
 
     auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
@@ -729,7 +728,7 @@ static Tensor uniform(T low, T high, const Shape& shape, const Layout layout = L
 }
 
 static Tensor random(
-    const Shape& shape, const DataType data_type = DataType::BFLOAT16, const Layout layout = Layout::ROW_MAJOR) {
+    const tt::tt_metal::LegacyShape& shape, const DataType data_type = DataType::BFLOAT16, const Layout layout = Layout::ROW_MAJOR) {
     switch (data_type) {
         case DataType::UINT8: return uniform(uint8_t(0), uint8_t(1), shape, layout);
         case DataType::UINT16: return uniform(uint16_t(0), uint16_t(1), shape, layout);

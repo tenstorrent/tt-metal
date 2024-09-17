@@ -22,7 +22,7 @@ void RotateHalf::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "RotateHalf does not currently support sharding");
 }
 
-std::vector<tt::tt_metal::Shape> RotateHalf::compute_output_shapes(
+std::vector<tt::tt_metal::LegacyShape> RotateHalf::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     return {input_tensor.get_legacy_shape()};

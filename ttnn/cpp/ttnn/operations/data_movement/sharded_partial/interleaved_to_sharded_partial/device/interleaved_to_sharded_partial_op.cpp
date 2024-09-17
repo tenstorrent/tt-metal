@@ -32,9 +32,9 @@ void InterleavedToShardedPartialDeviceOperation::validate(const std::vector<Tens
 }
 
 
-std::vector<tt::tt_metal::Shape> InterleavedToShardedPartialDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> InterleavedToShardedPartialDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    tt::tt_metal::Shape shape = input_tensor.get_legacy_shape();
+    tt::tt_metal::LegacyShape shape = input_tensor.get_legacy_shape();
 
     uint32_t total_height = input_tensor.volume() / shape[-1];
     uint32_t new_height = total_height / this->num_slices;

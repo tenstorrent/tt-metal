@@ -81,7 +81,7 @@ void tensor_mem_config_module_types(py::module& m_tensor) {
         Class defining core coordinate
     )doc");
 
-    py::class_<tt::tt_metal::Shape>(m_tensor, "Shape", R"doc(
+    py::class_<tt::tt_metal::LegacyShape>(m_tensor, "Shape", R"doc(
         Class defining tensor shape
     )doc");
 
@@ -116,7 +116,7 @@ void tensor_mem_config_module_types(py::module& m_tensor) {
 }
 
 void tensor_mem_config_module(py::module& m_tensor) {
-    using tt::tt_metal::Shape;
+    using tt::tt_metal::LegacyShape;
 
     auto py_core_coord = static_cast<py::class_<CoreCoord>>(m_tensor.attr("CoreCoord"));
     py_core_coord.def(py::init<std::size_t, std::size_t>())
@@ -128,29 +128,29 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def_readonly("y", &CoreCoord::y);
     py::implicitly_convertible<std::tuple<std::size_t, std::size_t>, CoreCoord>();
 
-    auto py_shape = static_cast<py::class_<tt::tt_metal::Shape>>(m_tensor.attr("Shape"));
+    auto py_shape = static_cast<py::class_<tt::tt_metal::LegacyShape>>(m_tensor.attr("Shape"));
     py_shape.def(py::init<std::array<uint32_t, 4>>())
         .def(
             py::init(
                 [](const std::vector<uint32_t>& shape,
-                   const std::optional<std::vector<uint32_t>>& padded_shape) -> tt::tt_metal::Shape {
+                   const std::optional<std::vector<uint32_t>>& padded_shape) -> tt::tt_metal::LegacyShape {
                     if (padded_shape.has_value()) {
-                        return tt::tt_metal::Shape{shape, padded_shape.value()};
+                        return tt::tt_metal::LegacyShape{shape, padded_shape.value()};
                     } else {
-                        return tt::tt_metal::Shape{shape};
+                        return tt::tt_metal::LegacyShape{shape};
                     }
                 }),
             py::arg("shape"),
             py::arg("padded_shape") = std::nullopt)
-        .def("__len__", [](const Shape& self) { return self.rank(); })
-        .def("__eq__", [](const Shape& self, const Shape& other) { return self == other; })
-        .def("__eq__", [](const Shape& self, const std::vector<uint32_t>& other) { return self == Shape{other}; })
-        .def("__eq__", [](const Shape& self, const std::array<uint32_t, 4>& other) { return self == Shape{other}; })
-        .def("__eq__", [](const Shape& self, const py::none) { return false; })
-        .def("__getitem__", [](const Shape& self, const std::int64_t index) { return self[index]; })
+        .def("__len__", [](const LegacyShape& self) { return self.rank(); })
+        .def("__eq__", [](const LegacyShape& self, const LegacyShape& other) { return self == other; })
+        .def("__eq__", [](const LegacyShape& self, const std::vector<uint32_t>& other) { return self == LegacyShape{other}; })
+        .def("__eq__", [](const LegacyShape& self, const std::array<uint32_t, 4>& other) { return self == LegacyShape{other}; })
+        .def("__eq__", [](const LegacyShape& self, const py::none) { return false; })
+        .def("__getitem__", [](const LegacyShape& self, const std::int64_t index) { return self[index]; })
         .def(
             "__getitem__",
-            [](const Shape& self, const py::slice slice) {
+            [](const LegacyShape& self, const py::slice slice) {
                 size_t start = 0, stop = 0, step = 0, slicelength = 0;
                 if (!slice.compute(self.rank(), &start, &stop, &step, &slicelength)) {
                     throw std::runtime_error("Invalid slice");
@@ -160,16 +160,16 @@ void tensor_mem_config_module(py::module& m_tensor) {
                 for (auto index = start; index < stop; index += step) {
                     output.push_back(self[index]);
                 }
-                return Shape{output};
+                return LegacyShape{output};
             })
         .def(
             "__iter__",
-            [](const tt::tt_metal::Shape& self) { return py::make_iterator(self.begin(), self.end()); },
+            [](const tt::tt_metal::LegacyShape& self) { return py::make_iterator(self.begin(), self.end()); },
             py::keep_alive<0, 1>())
-        .def("__repr__", [](const Shape& self) { return fmt::format("{}", self); })
-        .def("without_padding", [](const tt::tt_metal::Shape& self) -> tt::tt_metal::Shape { return self.without_padding(); });
+        .def("__repr__", [](const tt::tt_metal::LegacyShape& self) { return fmt::format("{}", self); })
+        .def("without_padding", [](const tt::tt_metal::LegacyShape& self) -> tt::tt_metal::LegacyShape { return self.without_padding(); });
 
-    py::implicitly_convertible<std::vector<uint32_t>, Shape>();
+    py::implicitly_convertible<std::vector<uint32_t>, LegacyShape>();
 
     auto pyMemoryConfig = static_cast<py::class_<MemoryConfig>>(m_tensor.attr("MemoryConfig"));
     pyMemoryConfig

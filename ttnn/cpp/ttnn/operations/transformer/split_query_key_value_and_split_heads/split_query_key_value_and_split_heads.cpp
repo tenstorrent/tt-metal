@@ -29,27 +29,27 @@ std::tuple<Tensor, Tensor, Tensor> reshape_outputs_of_split_query_key_value_and_
 
     query = ttnn::reshape(
         query,
-        ttnn::Shape(tt::tt_metal::Shape(
+        ttnn::Shape(tt::tt_metal::LegacyShape(
             std::array{batch_size, num_heads, sequence_size, head_size},
             std::array{batch_size, num_heads, sequence_size_padded, head_size_padded})));
 
     if (transpose_key) {
         key = ttnn::reshape(
             key,
-            ttnn::Shape(tt::tt_metal::Shape(
+            ttnn::Shape(tt::tt_metal::LegacyShape(
                 std::array{batch_size, num_kv_heads, head_size, sequence_size},
                 std::array{batch_size, num_kv_heads, head_size_padded, sequence_size_padded})));
     } else {
         key = ttnn::reshape(
             key,
-            ttnn::Shape(tt::tt_metal::Shape(
+            ttnn::Shape(tt::tt_metal::LegacyShape(
                 std::array{batch_size, num_kv_heads, sequence_size, head_size},
                 std::array{batch_size, num_kv_heads, sequence_size_padded, head_size_padded})));
     }
 
     value = ttnn::reshape(
         value,
-        ttnn::Shape(tt::tt_metal::Shape(
+        ttnn::Shape(tt::tt_metal::LegacyShape(
             std::array{batch_size, num_kv_heads, sequence_size, head_size},
             std::array{batch_size, num_kv_heads, sequence_size_padded, head_size_padded})));
     return {query, key, value};

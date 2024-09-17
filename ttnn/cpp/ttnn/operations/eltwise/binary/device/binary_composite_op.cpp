@@ -326,9 +326,9 @@ Tensor _scatter(const Tensor& input_a, const Tensor& input_b, const std::optiona
  *   by running reshape.
  */
 Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    const tt::tt_metal::Shape s_a = input_a.get_legacy_shape();
-    const tt::tt_metal::Shape s_b = input_b.get_legacy_shape();
-    auto num_ones = [](const tt::tt_metal::Shape& s) -> uint32_t {
+    const tt::tt_metal::LegacyShape s_a = input_a.get_legacy_shape();
+    const tt::tt_metal::LegacyShape s_b = input_b.get_legacy_shape();
+    auto num_ones = [](const tt::tt_metal::LegacyShape& s) -> uint32_t {
         uint32_t num1s = 0;
         for (uint32_t idx = 0; idx < 4; idx++) num1s += (uint32_t)(s[idx] == 1);
         return num1s;

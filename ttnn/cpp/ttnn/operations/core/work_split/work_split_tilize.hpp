@@ -176,7 +176,7 @@ struct FullRep {
 };
 
 inline std::vector<std::vector<BlockRep>> distribute_work(
-    const tt::tt_metal::Shape& unpadded, const Padding& padding, uint32_t num_cores, uint32_t blocks_per_core, bool has_cliff, uint32_t nblocks_per_core_cliff) {
+    const tt::tt_metal::LegacyShape& unpadded, const Padding& padding, uint32_t num_cores, uint32_t blocks_per_core, bool has_cliff, uint32_t nblocks_per_core_cliff) {
     auto input_w = unpadded.rank() >= 4 ? unpadded[-4] : 1;
     auto input_z = unpadded.rank() >= 3 ? unpadded[-3] : 1;
     auto input_y = unpadded.rank() >= 2 ? unpadded[-2] : 1;

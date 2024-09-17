@@ -68,7 +68,7 @@ void GroupNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
         TT_FATAL(input_mask.value().get_legacy_shape()[3] % TILE_WIDTH == 0, "Error");
     }
 }
-std::vector<tt::tt_metal::Shape> GroupNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> GroupNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     return {input_tensor.get_legacy_shape()};
 }

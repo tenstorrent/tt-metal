@@ -71,7 +71,7 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
     }
 }
 
-std::vector<tt::tt_metal::Shape> UntilizeWithUnpadding::compute_output_shapes(
+std::vector<tt::tt_metal::LegacyShape> UntilizeWithUnpadding::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     std::vector<uint32_t> out_shape;
     auto rank = input_tensors[0].get_legacy_shape().rank();
@@ -79,7 +79,7 @@ std::vector<tt::tt_metal::Shape> UntilizeWithUnpadding::compute_output_shapes(
     for (uint32_t i = 0; i < rank; i++) {
         out_shape.push_back(this->output_tensor_end[i] + 1);
     }
-    tt::tt_metal::Shape output_tensor_shape(out_shape);
+    tt::tt_metal::LegacyShape output_tensor_shape(out_shape);
     return {output_tensor_shape};
 }
 

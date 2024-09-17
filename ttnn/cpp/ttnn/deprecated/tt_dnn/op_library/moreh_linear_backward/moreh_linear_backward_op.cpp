@@ -42,7 +42,7 @@ void MorehBiasAddBackward::validate_with_output_tensors(
     }
 }
 
-std::vector<Shape> MorehBiasAddBackward::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehBiasAddBackward::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     return {input_tensors.at(1).get_legacy_shape()};
 }
 

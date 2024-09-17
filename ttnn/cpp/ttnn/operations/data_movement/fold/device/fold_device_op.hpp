@@ -76,7 +76,7 @@ struct Fold {
         const ttnn::Tensor& input_tensor,
         uint32_t stride_h,
         uint32_t stride_w,
-        const std::optional<const tt::tt_metal::Shape>& output_shape,
+        const std::optional<const tt::tt_metal::LegacyShape>& output_shape,
         uint32_t pad_c,
         uint32_t pad_h,
         uint32_t pad_w);

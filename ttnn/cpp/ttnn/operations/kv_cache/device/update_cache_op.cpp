@@ -65,7 +65,7 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
     }
 }
 
-std::vector<tt::tt_metal::Shape> UpdateCache::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> UpdateCache::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     // Do nothing because it's an in-place operation
     return {};
 }

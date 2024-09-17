@@ -42,7 +42,7 @@ void PrefixScan::validate(const std::vector<Tensor>& input_tensors) const {
         "Expected h tensor to be row major orientation");
 }
 
-std::vector<tt::tt_metal::Shape> PrefixScan::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> PrefixScan::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& a = input_tensors.at(0);
     return {a.get_legacy_shape()};
 }

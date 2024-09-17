@@ -46,13 +46,13 @@ void MorehDot::validate(const std::vector<Tensor>& input_tensors) const {
         "Operands to matmul need to be allocated in buffers on device!");
 }
 
-std::vector<Shape> MorehDot::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehDot::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto output_shape = input_tensor.get_legacy_shape();
     auto padding = output_shape.padding();
     output_shape[3] = TILE_WIDTH;
     padding[3] = Padding::PadDimension{0, 31};
-    return {Shape(output_shape, padding)};
+    return {tt::tt_metal::LegacyShape(output_shape, padding)};
 }
 
 std::vector<Tensor> MorehDot::create_output_tensors(const std::vector<Tensor>& input_tensors) const {

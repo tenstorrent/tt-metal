@@ -44,8 +44,8 @@ void Pad::validate_with_output_tensors(
     }
 }
 
-std::vector<tt::tt_metal::Shape> Pad::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    return {tt::tt_metal::Shape(this->output_tensor_shape)};
+std::vector<tt::tt_metal::LegacyShape> Pad::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    return {tt::tt_metal::LegacyShape(this->output_tensor_shape)};
 }
 
 std::vector<Tensor> Pad::create_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {

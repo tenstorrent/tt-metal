@@ -157,7 +157,7 @@ std::vector<Tensor> _clamp_bw( const Tensor& grad, const Tensor& input, std::opt
 
 std::vector<Tensor> _rdiv_bw( const Tensor& grad, const Tensor& input, float scalar, string round_mode = "None", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
-std::vector<Tensor> _repeat_bw(const Tensor& grad, const Tensor& input, const tt::tt_metal::Shape& shape, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<Tensor> _repeat_bw(const Tensor& grad, const Tensor& input, const tt::tt_metal::LegacyShape& shape, const std::optional<MemoryConfig>& output_mem_config);
 
 std::vector<Tensor> _prod_bw( const Tensor& grad, const Tensor& input, bool all_dimensions = true, int64_t dim = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config);
@@ -609,7 +609,7 @@ struct OpHandler<UnaryBackwardOpType::RDIV_BW> {
 
 template <>
 struct OpHandler<UnaryBackwardOpType::REPEAT_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const tt::tt_metal::Shape& shape, const std::optional<MemoryConfig>& output_mem_config ) {
+    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const tt::tt_metal::LegacyShape& shape, const std::optional<MemoryConfig>& output_mem_config ) {
         return _repeat_bw(grad, input, shape, output_mem_config);
     }
 };

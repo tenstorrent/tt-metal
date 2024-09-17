@@ -709,7 +709,7 @@ void bind_unary_backward_shape(
             [](const unary_backward_operation_t& self,
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
-               const tt::tt_metal::Shape& parameter_a,
+               const tt::tt_metal::LegacyShape& parameter_a,
                const std::optional<MemoryConfig>& memory_config) {
                 return self(grad_tensor, input_tensor, parameter_a, memory_config);
             },

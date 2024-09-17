@@ -45,14 +45,14 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
     }
 }
 
-std::vector<tt::tt_metal::Shape> Embeddings::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> Embeddings::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto &input_tensor = input_tensors.at(0);
     const auto &weight_tensor = input_tensors.at(1);
     auto num_output_embeddings = input_tensor.get_legacy_shape()[3];
     auto batch_num = input_tensor.get_legacy_shape()[0];
     auto num_embedding_dims = weight_tensor.get_legacy_shape()[3];
 
-    tt::tt_metal::Shape output_shape({batch_num, 1, num_output_embeddings, num_embedding_dims});
+    tt::tt_metal::LegacyShape output_shape({batch_num, 1, num_output_embeddings, num_embedding_dims});
     return {output_shape};
 }
 

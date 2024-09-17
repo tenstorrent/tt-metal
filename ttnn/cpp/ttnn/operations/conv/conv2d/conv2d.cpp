@@ -199,7 +199,7 @@ uint32_t get_num_cores_channels_from_parallel_config(const ParallelConfig& pconf
 }
 
 MemoryConfig create_sharded_memory_config_from_parallel_config(
-    const Shape& tensor_shape, ParallelConfig& parallel_config, uint32_t tile_size) {
+    const ttnn::Shape& tensor_shape, ParallelConfig& parallel_config, uint32_t tile_size) {
 
     log_debug(tt::LogOp, "create_sharded_memory_config_from_parallel_config: tensor_shape: {}, parallel_config: {}, tile_size: {}", tensor_shape, parallel_config, tile_size);
     // tensor_shape is [N, H, W, C]
@@ -411,14 +411,14 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
             tt::round_up(tensor_width, conv_config.input_channels_alignment);
         TT_ASSERT(input_tensor_width_snapped_to_channels_alignment >= tensor_width);
 
-        auto input_padded_shape = Shape(std::array<uint32_t, 4>{
+        auto input_padded_shape = ttnn::Shape(std::array<uint32_t, 4>{
             1,
             1,
             input_tensor_height_snapped_to_tile,
             input_tensor_width_snapped_to_channels_alignment});  // TODO: resolve ttnn::types::Shape and
-                                                                 // tt::tt_metal::Shape issue to clean up next line
+                                                                 // tt::tt_metal::LegacyShape issue to clean up next line
         auto input_tensor_sharded_memory_config = create_sharded_memory_config_from_parallel_config(
-            Shape(std::array<uint32_t, 4>{
+            ttnn::Shape(std::array<uint32_t, 4>{
                 input_padded_shape[0], input_padded_shape[1], input_padded_shape[2], input_padded_shape[3]}),
             parallel_config,
             32);
@@ -452,7 +452,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool> shard_or_reshard_tensor_if_requir
             // reshape to [1, 1, N*H*W, C]
             input_tensor = ttnn::operations::core::reshape(
                 input_tensor,
-                Shape(std::array<uint32_t, 4>{
+                ttnn::Shape(std::array<uint32_t, 4>{
                     1,
                     1,
                     input_tensor.get_shape()[0] * input_tensor.get_shape()[1] * input_tensor.get_shape()[2],
@@ -555,7 +555,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t in_channels = weights_shape[1];
     uint32_t window_h = weights_shape[2];
     uint32_t window_w = weights_shape[3];
-    tt::tt_metal::Shape weights_channels_padded_shape = tt::tt_metal::Shape(std::array<uint32_t, 4>(
+    tt::tt_metal::LegacyShape weights_channels_padded_shape = tt::tt_metal::LegacyShape(std::array<uint32_t, 4>(
         {tt::round_up(out_channels, 32), tt::round_up(in_channels, input_channels_alignment), window_h, window_w}));
 
     if (weights_bias_dtype == DataType::BFLOAT8_B) {
@@ -586,7 +586,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         bias_tensor_ = bias_tensor.value();
         auto bias_shape = bias_tensor_.get_shape();
         TT_ASSERT(bias_shape[3] == out_channels && bias_shape[0] == 1 && bias_shape[1] == 1 && bias_shape[2] == 1);
-        tt::tt_metal::Shape bias_channels_padded_shape = tt::tt_metal::Shape(
+        tt::tt_metal::LegacyShape bias_channels_padded_shape = tt::tt_metal::LegacyShape(
             std::array<uint32_t, 4>({1, 1, 32, tt::round_up(out_channels, weight_block_w_ntiles * 32)}));
         bias_tensor_ = ttnn::pad(bias_tensor_, bias_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
         bias_tensor_ = ttnn::to_layout(
@@ -670,7 +670,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         conv_config.deallocate_activation = true;
     }
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
-        Shape(std::array<uint32_t, 4>{1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, 32)}),
+        ttnn::Shape(std::array<uint32_t, 4>{1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, 32)}),
         parallel_config,
         32);
     auto opt_conv_op_parallel_config = determine_conv_op_parallel_config_from_conv_output_mem_config(

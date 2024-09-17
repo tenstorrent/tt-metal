@@ -17,8 +17,8 @@ namespace primary {
 
 using namespace tt_metal;
 
-void get_tensor_dim(std::vector<uint32_t> &dim, const Shape& shape);
-std::vector<int64_t> find_reduce_dim(const Shape& a_shape, const Shape& b_shape);
+void get_tensor_dim(std::vector<uint32_t> &dim, const tt::tt_metal::LegacyShape& shape);
+std::vector<int64_t> find_reduce_dim(const tt::tt_metal::LegacyShape& a_shape, const tt::tt_metal::LegacyShape& b_shape);
 bool is_same_batch_dim(const Tensor &tensor_a, const Tensor &tensor_b);
 
 operation::ProgramWithCallbacks moreh_matmul_multi_core(
@@ -39,7 +39,7 @@ struct MorehMatmul {
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         const std::vector<std::optional<Tensor>> &output_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     operation::ProgramWithCallbacks create_program(

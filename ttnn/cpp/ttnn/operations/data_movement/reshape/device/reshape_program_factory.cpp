@@ -26,7 +26,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::Device *device = a.device();
 
-    tt::tt_metal::Shape output_shape = output.get_legacy_shape();
+    tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
 
     tt::tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -111,7 +111,7 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::Device *device = a.device();
-    tt::tt_metal::Shape output_shape = output.get_legacy_shape();
+    tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
     tt::tt_metal::Buffer *src0_buffer = a.buffer();
     tt::tt_metal::Buffer *dst_buffer = output.buffer();
 
@@ -365,7 +365,7 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor &a, Tensor& o
 
     tt::tt_metal::Device *device = a.device();
 
-    tt::tt_metal::Shape output_shape = output.get_legacy_shape();
+    tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
     tt::tt_metal::Buffer *src0_buffer = a.buffer();
     tt::tt_metal::Buffer *dst_buffer = output.buffer();
 
