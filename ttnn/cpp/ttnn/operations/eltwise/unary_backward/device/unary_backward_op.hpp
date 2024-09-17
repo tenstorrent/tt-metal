@@ -13,7 +13,6 @@
 namespace ttnn::operations::unary_backward {
 
 enum class UnaryBackwardOpType {
-    CLAMP_BW,
     HARDTANH_BW,
     THRESHOLD_BW,
     SOFTPLUS_BW,
@@ -153,8 +152,6 @@ std::vector<Tensor> _elu_bw( const Tensor& grad, const Tensor& input, float alph
 std::vector<Tensor> _celu_bw( const Tensor& grad, const Tensor& input, float aplha = 1.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 std::vector<Tensor> _logiteps_bw( const Tensor& grad, const Tensor& input, float eps = 0.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
-std::vector<Tensor> _clamp_bw( const Tensor& grad, const Tensor& input, std::optional<float> min = std::nullopt, std::optional<float> max = std::nullopt, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-
 std::vector<Tensor> _rdiv_bw( const Tensor& grad, const Tensor& input, float scalar, string round_mode = "None", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 std::vector<Tensor> _repeat_bw(const Tensor& grad, const Tensor& input, const tt::tt_metal::LegacyShape& shape, const std::optional<MemoryConfig>& output_mem_config);
@@ -165,13 +162,6 @@ Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_
 // OpHandler struct template
 template <UnaryBackwardOpType OpType>
 struct OpHandler;
-
-template <>
-struct OpHandler<UnaryBackwardOpType::CLAMP_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, std::optional<float> min, std::optional<float> max, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _clamp_bw(grad, input, min, max, output_mem_config);
-    }
-};
 
 template <>
 struct OpHandler<UnaryBackwardOpType::HARDTANH_BW> {
