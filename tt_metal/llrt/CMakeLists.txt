@@ -9,13 +9,13 @@ set(LLRT_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/hal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/grayskull/gs_hal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/wormhole/wh_hal.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/wormhole/wh_hal_tensix_mem_map.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/wormhole/wh_hal_active_eth_mem_map.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/wormhole/wh_hal_idle_eth_mem_map.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/wormhole/wh_hal_tensix.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/wormhole/wh_hal_active_eth.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/wormhole/wh_hal_idle_eth.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/blackhole/bh_hal.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/blackhole/bh_hal_tensix_mem_map.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/blackhole/bh_hal_active_eth_mem_map.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/blackhole/bh_hal_idle_eth_mem_map.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/blackhole/bh_hal_tensix.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/blackhole/bh_hal_active_eth.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/blackhole/bh_hal_idle_eth.cpp)
 
 add_library(llrt OBJECT ${LLRT_SRC})
 target_link_libraries(llrt PUBLIC common)
