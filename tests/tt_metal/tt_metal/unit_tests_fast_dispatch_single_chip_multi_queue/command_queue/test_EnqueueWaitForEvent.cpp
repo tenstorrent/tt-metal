@@ -29,6 +29,46 @@ void FinishAllCqs(vector<std::reference_wrapper<CommandQueue>>& cqs) {
 namespace basic_tests {
 
 // Simplest test to record Event per CQ and wait from host, and verify populated Event struct is correct (many events, wrap issue queue)
+TEST_F(MultiCommandQueueMultiDeviceFixture, TestEventsEventSynchronizeSanity) {
+    for (Device *device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
+        vector<std::reference_wrapper<CommandQueue>> cqs = {device->command_queue(0), device->command_queue(1)};
+        vector<uint32_t> cmds_issued_per_cq = {0, 0};
+
+        TT_ASSERT(cqs.size() == 2);
+        const int num_cmds_per_cq = 1;
+
+        auto start = std::chrono::system_clock::now();
+        std::unordered_map<uint, std::vector<std::shared_ptr<Event>>> sync_events;
+        const size_t num_events = 10;
+
+        for (size_t j = 0; j < num_events; j++) {
+            for (uint i = 0; i < cqs.size(); i++) {
+                log_debug(tt::LogTest, "j : {} Recording and Host Syncing on event for CQ ID: {}", j, cqs[i].get().id());
+                auto event = sync_events[i].emplace_back(std::make_shared<Event>());
+                EnqueueRecordEvent(cqs[i], event);
+                EventSynchronize(event);
+                // Can check events fields after prev sync w/ async CQ.
+                EXPECT_EQ(event->cq_id, cqs[i].get().id());
+                EXPECT_EQ(event->event_id, cmds_issued_per_cq[i] + 1);
+                cmds_issued_per_cq[i] += num_cmds_per_cq;
+            }
+        }
+
+        // Sync on earlier events again per CQ just to show it works.
+        for (uint i = 0; i < cqs.size(); i++) {
+            for (size_t j = 0; j < num_events; j++) {
+                EventSynchronize(sync_events.at(i)[j]);
+            }
+        }
+
+        local_test_functions::FinishAllCqs(cqs);
+        std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
+        tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+    }
+}
+
+// Simplest test to record Event per CQ and wait from host, and verify populated Event struct is correct (many events, wrap issue queue)
 TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEventSynchronizeSanity) {
     vector<std::reference_wrapper<CommandQueue>> cqs = {this->device_->command_queue(0), this->device_->command_queue(1)};
     vector<uint32_t> cmds_issued_per_cq = {0, 0};
