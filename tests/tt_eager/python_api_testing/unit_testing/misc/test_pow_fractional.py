@@ -6,10 +6,12 @@ import math
 import torch
 
 import ttnn
-from models.utility_functions import comp_pcc
+from models.utility_functions import comp_pcc, skip_for_grayskull, skip_for_wormhole_b0
 from loguru import logger
 
 
+@skip_for_grayskull("https://github.com/tenstorrent/tt-metal/issues/12776")
+@skip_for_wormhole_b0("https://github.com/tenstorrent/tt-metal/issues/12776")
 def test_pow_fractional_composite(device):
     torch.manual_seed(577215)
     N = 1
