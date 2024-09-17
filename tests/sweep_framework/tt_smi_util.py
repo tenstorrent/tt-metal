@@ -5,6 +5,7 @@
 import os
 import shutil
 import subprocess
+from sweeps_logger import sweeps_logger as logger
 
 GRAYSKULL_ARGS = ["-tr", "all"]
 WORMHOLE_ARGS = ["-wr", "all"]
@@ -16,7 +17,7 @@ def run_tt_smi(arch: str):
     if RESET_OVERRIDE is not None:
         smi_process = subprocess.run(RESET_OVERRIDE, shell=True)
         if smi_process.returncode == 0:
-            print("SWEEPS: TT-SMI Reset Complete Successfully")
+            logger.info("TT-SMI Reset Complete Successfully")
             return
         else:
             raise Exception(f"SWEEPS: TT-SMI Reset Failed with Exit Code: {smi_process.returncode}")
@@ -49,7 +50,7 @@ def run_tt_smi(arch: str):
                 args = ["-r", "0"]
             smi_process = subprocess.run([executable, *args])
             if smi_process.returncode == 0:
-                print("SWEEPS: TT-SMI Reset Complete Successfully")
+                logger.info("TT-SMI Reset Complete Successfully")
                 return
             else:
                 raise Exception(f"SWEEPS: TT-SMI Reset Failed with Exit Code: {smi_process.returncode}")
