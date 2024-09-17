@@ -9,6 +9,8 @@ run_tg_tests() {
   ./build/test/ttnn/galaxy_unit_tests_ttnn
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_galaxy --gtest_filter="GalaxyFixture.*:TGFixture.*"
   ./build/test/tt_metal/unit_tests_galaxy --gtest_filter="GalaxyFixture.*:TGFixture.*"
+  TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_fast_dispatch_single_chip_multi_queue --gtest_filter="MultiCommandQueueMultiDeviceFixture.*"
+
 }
 
 main() {
