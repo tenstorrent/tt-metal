@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import ttnn
 import torch
 import torch.nn as nn
@@ -31,6 +32,7 @@ class TtTransformer(nn.Module):
         self.device = device
         self.dtype = dtype
         self.model_config = args.get_model_config()
+        self.grid_size = self.args.max_grid_size
         assert self.vocab_size > 0
 
         self.layers = torch.nn.ModuleList(
@@ -53,7 +55,7 @@ class TtTransformer(nn.Module):
             dim=args.dim,
             state_dict=state_dict,
             layer_num=None,
-            weight_cache_path=weight_cache_path,
+            weight_cache_path=None if args.dummy_weights else weight_cache_path,
             weight_dtype=dtype,
             weight_key="norm",
         )
@@ -64,7 +66,7 @@ class TtTransformer(nn.Module):
             layout=ttnn.TILE_LAYOUT,
             dtype=dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=weight_cache_path / "output.weight",
+            cache_file_name=None if args.dummy_weights else weight_cache_path / "output.weight",
         )
 
     def forward(
@@ -82,6 +84,7 @@ class TtTransformer(nn.Module):
         if mode == "prefill":
             return x
         x = self.norm(x)
+
         output = ttnn.linear(
             x,
             self.output_weight,

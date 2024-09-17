@@ -150,7 +150,7 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
             log_debug(LogOp, "Act CB: {}, npages: {}, pagesize: {}", act_cb, num_cb0_tiles, act_tile_size);
         }
     } else {
-        TT_FATAL(false, "Input must be sharded!");
+        TT_THROW("Input must be sharded!");
     }
 
     CircularBufferConfig cb_weight_config =
@@ -291,7 +291,7 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
                                                     .set_page_size(act_cb, act_tile_size);
         auto cb_act = tt_metal::CreateCircularBuffer(program, core, cb_act_config);
     } else {
-        TT_FATAL(false, "Input must be sharded!");
+        TT_THROW("Input must be sharded!");
     }
 
     CircularBufferConfig cb_weight_config =
@@ -404,7 +404,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
                 fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
                 packer_l1_acc = compute_kernel_config.packer_l1_acc;
             } else {
-                TT_FATAL("arch not supported");
+                TT_THROW("arch not supported");
             }
         },
         compute_kernel_config);
@@ -526,7 +526,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
     uint32_t pad_h = (uint32_t)sliding_window_config.pad_hw.first;
     uint32_t pad_w = (uint32_t)sliding_window_config.pad_hw.second;
-
+    uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
+    uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
+    
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] =
         optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(
@@ -550,8 +552,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             TT_THROW("Bias is not supported for depthwise conv1d");
         }
         // Tensor bias is of shape {output_channels}
-        TT_FATAL(bias.has_value());
-        TT_FATAL(bias.value().buffer() != nullptr);
+        TT_FATAL(bias.has_value(), "Error");
+        TT_FATAL(bias.value().buffer() != nullptr, "Error");
         auto bias_shape_without_padding = bias.value().get_legacy_shape().without_padding();
         TT_FATAL(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
     }
@@ -568,7 +570,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     // Device compatibility checks
     TT_FATAL(
-        a.storage_type() == StorageType::DEVICE && b.storage_type() == StorageType::DEVICE &&
+        a.storage_type() == StorageType::DEVICE && b.storage_type() == StorageType::DEVICE,
         "Operands to large matmul need to be on device!");
     TT_FATAL(a.device() == b.device(), "Operands to conv need to be on the same device!");
     TT_FATAL(
@@ -618,7 +620,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     TT_FATAL(
         (act_block_w_datums == round_up(conv_act_size_c * filter_w, TILE_WIDTH)) ||
-        ((act_block_w_datums <= conv_act_size_c) && (conv_act_size_c % act_block_w_datums == 0)));
+        ((act_block_w_datums <= conv_act_size_c) && (conv_act_size_c % act_block_w_datums == 0)), "Error");
 
     // weight block info
     uint32_t weight_block_w_datums = weight_matrix_width / num_blocks_weight_w;
@@ -730,6 +732,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         log_debug(LogOp, "weight_block_w_ntiles: {}", weight_block_w_ntiles);
         log_debug(LogOp, "out_subblock_h_ntiles_padded: {}", out_subblock_h_ntiles_padded);
         log_debug(LogOp, "out_subblock_w_ntiles: {}", out_subblock_w_ntiles);
+        log_debug(LogOp, "filter_h: {}", filter_h);
+        log_debug(LogOp, "filter_w: {}", filter_w);
+        log_debug(LogOp, "dilation_h: {}", dilation_h);
+        log_debug(LogOp, "dilation_w: {}", dilation_w);
     }
 
     // For debug
@@ -833,9 +839,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t num_blocks_out_h_per_core = (per_core_out_matrix_height_ntiles + out_block_h_ntiles-1) / out_block_h_ntiles;
     bool act_height_sliced = per_core_out_matrix_height_ntiles < act_matrix_height_ntiles;
     if (not act_height_sliced) {
-        TT_FATAL(num_blocks_act_h_per_core == num_blocks_act_h);
-        TT_FATAL(num_blocks_out_h_per_core == num_blocks_out_h);
-        TT_FATAL(num_cores_x == 1);
+        TT_FATAL(num_blocks_act_h_per_core == num_blocks_act_h, "Error");
+        TT_FATAL(num_blocks_out_h_per_core == num_blocks_out_h, "Error");
+        TT_FATAL(num_cores_x == 1, "Error");
     }
     uint32_t act_block_h_datums_last_block = (per_core_out_matrix_height_ntiles - (num_blocks_act_h_per_core - 1) * act_block_h_ntiles) * TILE_HEIGHT;
 
@@ -843,28 +849,28 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     log_debug(LogOp, "num_blocks_act_h_per_core: {}", num_blocks_act_h_per_core);
     log_debug(LogOp, "num_blocks_out_h_per_core: {}", num_blocks_out_h_per_core);
 
-    TT_FATAL(act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0);
+    TT_FATAL(act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0, "Error");
     uint32_t total_active_num_cores_per_weight_slice = act_matrix_height_ntiles / per_core_out_matrix_height_ntiles;
-    TT_FATAL(total_active_num_cores_per_weight_slice <= total_num_cores_per_weight_slice);
+    TT_FATAL(total_active_num_cores_per_weight_slice <= total_num_cores_per_weight_slice, "Error");
     uint32_t total_noop_cores = total_num_cores_per_weight_slice - total_active_num_cores_per_weight_slice;
     uint32_t total_active_num_cores = total_active_num_cores_per_weight_slice * num_weight_slices_width;
     if (weight_width_sliced) {
-        TT_FATAL(total_noop_cores == 0);
-        TT_FATAL(total_active_num_cores == total_num_cores);
+        TT_FATAL(total_noop_cores == 0, "Error");
+        TT_FATAL(total_active_num_cores == total_num_cores, "Error");
     }
 
     if (has_bias) {
-        TT_FATAL(bias_ntiles % num_weight_slices_width == 0);
-        TT_FATAL(bias_ntiles == weight_matrix_width_ntiles);
+        TT_FATAL(bias_ntiles % num_weight_slices_width == 0, "Error");
+        TT_FATAL(bias_ntiles == weight_matrix_width_ntiles, "Error");
     }
     uint32_t bias_ntiles_per_core = bias_ntiles / num_weight_slices_width;
 
     CoreRange all_cores(CoreCoord(0, 0), CoreCoord(num_cores_x - 1, num_cores_y - 1));
-    TT_FATAL(total_active_num_cores >= num_cores_x);
+    TT_FATAL(total_active_num_cores >= num_cores_x, "Error");
     uint32_t num_active_cores_x = num_cores_x;
     uint32_t num_active_cores_y_with_full_x = total_active_num_cores / num_cores_x;
     uint32_t num_active_cores_x_last_y = total_active_num_cores % num_cores_x;
-    TT_FATAL((num_active_cores_x * num_active_cores_y_with_full_x) + num_active_cores_x_last_y == total_active_num_cores);
+    TT_FATAL((num_active_cores_x * num_active_cores_y_with_full_x) + num_active_cores_x_last_y == total_active_num_cores, "Error");
 
     std::set<CoreRange> all_active_cores_set;
     all_active_cores_set.insert(
@@ -1109,7 +1115,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         }
         else if (is_conv1d and is_depthwise_conv) {
             // 1D Depthwise Conv
-            TT_FATAL(act_block_w_datums == round_up(conv_act_size_c * filter_w, TILE_WIDTH));
+            TT_FATAL(act_block_w_datums == round_up(conv_act_size_c * filter_w, TILE_WIDTH), "Error");
             TT_FATAL(split_reader == false, "Split reader not supported for this conv yet!");
 
             compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/compute_depthwise_conv1d.cpp";
@@ -1122,7 +1128,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
         } else {
             // 1D conv
-            TT_FATAL(act_block_w_datums == round_up(conv_act_size_c * filter_w, TILE_WIDTH));
+            TT_FATAL(act_block_w_datums == round_up(conv_act_size_c * filter_w, TILE_WIDTH), "Error");
 
             reader_kernel =
                 "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_padded_with_halo_3x3_weights_v2.cpp";
@@ -1158,7 +1164,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
                 .set_page_size(cb_for_l1_array, 32 * 2);
         auto cb_for_l1_array_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_l1_array_config);
     } else {
-        TT_FATAL(false, "Sharded input not supported for this conv yet!");
+        TT_THROW("Sharded input not supported for this conv yet!");
     }
 
     if (read_window_in_inner_loop) {
@@ -1176,6 +1182,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         (uint32_t)(src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
         (uint32_t)stride_h,
         (uint32_t)stride_w,
+        (uint32_t)dilation_h,
+        (uint32_t)dilation_w,
         (uint32_t)conv_act_size_w,
         (uint32_t)conv_output_size_w,  // conv_output_w_last_index
         (uint32_t)conv_act_c_read_bytes,
@@ -1391,7 +1399,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
             bool reader_is_noc_0 = reader_noc == NOC::NOC_0;
 
-            TT_FATAL(!reader_is_noc_0);
+            TT_FATAL(!reader_is_noc_0, "Error");
 
             if (transpose_mcast) {
                 CoreCoord bottom_core = {(std::size_t)core_x_i, (std::size_t)num_cores_y - 1};
@@ -1528,7 +1536,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             } else {
                 CoreCoord top_core = {(std::size_t)core_x_i, 0};
                 auto top_core_physical = device->worker_core_from_logical_core(top_core);
-                TT_FATAL(writer_mcast_noc == NOC::NOC_0);
+                TT_FATAL(writer_mcast_noc == NOC::NOC_0, "Error");
                 if (core_y_i == 0) {
                     // sender
                     if (writer_mcast_noc == NOC::NOC_0) {
@@ -1538,7 +1546,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
                         writer_rt_args.push_back(bottom_right_core_physical.y);       // weights_mcast_dest_noc_end_y
                     } else {
                         // TODO: ...
-                        TT_FATAL(false, "TODO: Writer on NOC 1 not supported yet!");
+                        TT_THROW("TODO: Writer on NOC 1 not supported yet!");
                         // writer_rt_args.push_back(bottom_right_core_physical.x); // weights_mcast_dest_noc_start_x
                         // writer_rt_args.push_back(right_core_physical.y); // weights_mcast_dest_noc_start_y
                         // writer_rt_args.push_back(top_left_core_plus_one_physical.x); // weights_mcast_dest_noc_end_x
@@ -1616,7 +1624,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             // Reader config indices is an optional static sharded tensor, so no need to update address
-            TT_FATAL(output_tensors.size() == 1);
+            TT_FATAL(output_tensors.size() == 1, "Error");
 
             auto src_buffer_a = input_tensors.at(0).buffer();
             auto src_buffer_b = input_tensors.at(1).buffer();
@@ -1625,7 +1633,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             std::optional<tt_metal::Buffer*> src_buffer_c = std::nullopt;
             if (has_bias) {
                 src_buffer_c = optional_input_tensors.at(0).value().buffer();
-                TT_FATAL(src_buffer_c.value() != nullptr);
+                TT_FATAL(src_buffer_c.value() != nullptr, "Error");
             }
 
             auto dst_buffer = output_tensors.at(0).buffer();

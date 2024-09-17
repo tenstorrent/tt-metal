@@ -1,6 +1,5 @@
-
-#/bin/bash
-# set -eo pipefail
+#!/bin/bash
+set -eo pipefail
 
 run_t3000_ethernet_tests() {
   # Record the start time

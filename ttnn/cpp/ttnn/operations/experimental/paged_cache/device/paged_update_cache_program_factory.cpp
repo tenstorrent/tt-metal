@@ -26,7 +26,7 @@ bool enable_fp32_dest(const tt_metal::Device * device, const ttnn::DeviceCompute
             TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
             fp32_dest_acc_en = input_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
         } else {
-            TT_FATAL("arch not supported");
+            TT_THROW("arch not supported");
         }
 
     }, compute_kernel_config);

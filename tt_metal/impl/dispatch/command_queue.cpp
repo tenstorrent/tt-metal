@@ -466,7 +466,11 @@ void generate_runtime_args_cmds(
         max_runtime_args_len, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, no_stride);
     uint32_t offset_idx = 0;
     if (no_stride) {
-        TT_FATAL(max_packed_cmds >= num_packed_cmds_in_seq);
+        TT_FATAL(
+            max_packed_cmds >= num_packed_cmds_in_seq,
+            "num_packed_cmds_in_seq {} cannot exceed max_packed_cmds {} when no_stride is true",
+            num_packed_cmds_in_seq,
+            max_packed_cmds);
     }
     while (num_packed_cmds_in_seq != 0) {
         // Generate the device command
@@ -2867,9 +2871,7 @@ void FinishImpl(CommandQueue& cq) { cq.hw_command_queue().finish(); }
 
 void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
     detail::DispatchStateCheck(true);
-    TT_FATAL(
-        cq.device()->get_trace(trace_id) != nullptr,
-        "Trace instance " + std::to_string(trace_id) + " must exist on device");
+    TT_FATAL(cq.device()->get_trace(trace_id) != nullptr, "Trace instance {} must exist on device", trace_id);
     cq.run_command(
         CommandInterface{.type = EnqueueCommandType::ENQUEUE_TRACE, .blocking = blocking, .trace_id = trace_id});
 }

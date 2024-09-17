@@ -19,14 +19,12 @@ enum class UnaryBackwardOpType {
     SOFTPLUS_BW,
     DIV_BW,
     RDIV_BW,
-    ASSIGN_BW,
     MULTIGAMMALN_BW,
     ADD_BW,
     EQ_BW,
     GT_BW,
     LT_BW,
     LGAMMA_BW,
-    FILL_BW,
     HARDSIGMOID_BW,
     COS_BW,
     ACOSH_BW,
@@ -41,7 +39,6 @@ enum class UnaryBackwardOpType {
     I0_BW,
     TAN_BW,
     SIGMOID_BW,
-    RSQRT_BW,
     RELU_BW,
     LOGIT_BW,
     HARDSHRINK_BW,
@@ -82,7 +79,6 @@ enum class UnaryBackwardOpType {
     ERF_BW,
     DEG2RAD_BW,
     POLYGAMMA_BW,
-    GELU_BW,
     REPEAT_BW,
     PROD_BW,
 };
@@ -99,7 +95,6 @@ std::vector<Tensor> _fill_zero_bw( const Tensor& grad, const Tensor& input, cons
 std::vector<Tensor> _i0_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _tan_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _sigmoid_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _rsqrt_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _reciprocal_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _ceil_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _softsign_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
@@ -134,10 +129,8 @@ std::vector<Tensor> _lt_bw( const Tensor& grad, const Tensor& input, float other
 std::vector<Tensor> _sub_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _gt_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config);
 
-std::vector<Tensor> _assign_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _multigammaln_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _lgamma_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _fill_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _hardsigmoid_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _cos_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _acosh_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
@@ -163,8 +156,6 @@ std::vector<Tensor> _logiteps_bw( const Tensor& grad, const Tensor& input, float
 std::vector<Tensor> _clamp_bw( const Tensor& grad, const Tensor& input, std::optional<float> min = std::nullopt, std::optional<float> max = std::nullopt, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 std::vector<Tensor> _rdiv_bw( const Tensor& grad, const Tensor& input, float scalar, string round_mode = "None", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-
-std::vector<Tensor> _gelu_bw( const Tensor& grad, const Tensor& input, string approximate = "none", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 std::vector<Tensor> _repeat_bw(const Tensor& grad, const Tensor& input, const tt::tt_metal::Shape& shape, const std::optional<MemoryConfig>& output_mem_config);
 
@@ -242,13 +233,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::SIGMOID_BW> {
     static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
         return _sigmoid_bw(grad, input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::RSQRT_BW> {
-    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-        return _rsqrt_bw(grad, input, output_mem_config);
     }
 };
 
@@ -533,13 +517,6 @@ struct OpHandler<UnaryBackwardOpType::GT_BW> {
 };
 
 template <>
-struct OpHandler<UnaryBackwardOpType::ASSIGN_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _assign_bw(grad, input, output_mem_config);
-    }
-};
-
-template <>
 struct OpHandler<UnaryBackwardOpType::MULTIGAMMALN_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
         return _multigammaln_bw(grad, input, output_mem_config);
@@ -550,13 +527,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::LGAMMA_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
         return _lgamma_bw(grad, input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::FILL_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _fill_bw(grad, input, output_mem_config);
     }
 };
 
@@ -634,13 +604,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::RDIV_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, string round_mode, const std::optional<MemoryConfig>& output_mem_config ) {
         return _rdiv_bw(grad, input, scalar, round_mode, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::GELU_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, string approximate, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _gelu_bw(grad, input, approximate, output_mem_config);
     }
 };
 

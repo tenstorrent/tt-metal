@@ -244,7 +244,7 @@ std::optional<DeviceAddr> FreeList::allocate(DeviceAddr size_bytes, bool bottom_
 }
 
 std::optional<DeviceAddr> FreeList::allocate_at_address(DeviceAddr absolute_start_address, DeviceAddr size_bytes) {
-    TT_ASSERT(absolute_start_address % this->alignment_ == 0, "Requested address " + std::to_string(absolute_start_address) + " should be " + std::to_string(this->alignment_) + "B aligned");
+    TT_ASSERT(absolute_start_address % this->alignment_ == 0, "Requested address {} should be {} B aligned", absolute_start_address, this->alignment_);
     auto start_address = absolute_start_address - this->offset_bytes_;
     boost::local_shared_ptr<FreeList::Block> curr_block = this->free_block_head_;
     DeviceAddr alloc_size = size_bytes < this->min_allocation_size_ ? this->min_allocation_size_ : size_bytes;

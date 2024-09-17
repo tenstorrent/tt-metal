@@ -7,8 +7,13 @@
 void kernel_main() {
     DeviceZoneScopedMainN("SYNC-MAIN");
     volatile tt_reg_ptr uint32_t *p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t *> (RISCV_DEBUG_REG_WALL_CLOCK_L);
-    volatile tt_l1_ptr uint32_t *profiler_control_buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_CONTROL);
-    volatile tt_l1_ptr uint32_t *briscBuffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_BR + kernel_profiler::CUSTOM_MARKERS * sizeof(uint32_t));
+
+    volatile tt_l1_ptr uint32_t *profiler_control_buffer =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(((mailboxes_t *)MEM_MAILBOX_BASE)->profiler.control_vector);
+
+    constexpr uint32_t briscIndex = 0;
+    volatile tt_l1_ptr uint32_t *briscBuffer =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t *>(&((mailboxes_t *)MEM_MAILBOX_BASE)->profiler.buffer[briscIndex][kernel_profiler::CUSTOM_MARKERS]);
 
     uint32_t syncTimeBufferIndex = 0;
 

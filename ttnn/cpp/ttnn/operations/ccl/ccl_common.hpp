@@ -255,7 +255,7 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
 
     [[deprecated("deprecated code path for reduce scatter. Use nerw get_worker_slice API instead")]]
     virtual void increment(uint32_t num_pages) override {
-        TT_FATAL(false, "deprecated code path for ");
+        TT_THROW("deprecated code path for ");
     }
 
    public:
@@ -266,7 +266,7 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
     }
 
     void create_worker_slice_shape_for_row_major_layout(tt_xy_pair const& tensor_slice_shape, uint32_t num_workers) {
-        TT_FATAL("Row major interleaved not supported by Reduce Scatter");
+        TT_THROW("Row major interleaved not supported by Reduce Scatter");
     }
 
     // Static methods

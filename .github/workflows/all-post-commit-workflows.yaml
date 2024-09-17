@@ -19,7 +19,23 @@ jobs:
     secrets: inherit
   build-wheels:
     needs: build-artifact
-    uses: ./.github/workflows/eager-package-main.yaml
+    strategy:
+      matrix:
+        # Since pre-compiled builds only run on 20.04, we can only test on 20.04 for now
+        # The full 22.04 flow can be tested without precompiled
+        os: [ubuntu-20.04]
+        arch: [grayskull, wormhole_b0]
+    uses: ./.github/workflows/_build-wheels-impl.yaml
+    with:
+      os: ${{ matrix.os }}
+      arch: ${{ matrix.arch }}
+      from-precompiled: true
+    secrets: inherit
+  test-wheels:
+    needs: build-wheels
+    uses: ./.github/workflows/_test-wheels-impl.yaml
+    with:
+      from-precompiled: true
     secrets: inherit
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml

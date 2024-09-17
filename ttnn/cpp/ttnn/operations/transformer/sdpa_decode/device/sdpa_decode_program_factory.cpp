@@ -101,7 +101,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
         } else {
-            TT_FATAL("arch not supported");
+            TT_THROW("arch not supported");
         }
 
     }, compute_kernel_config);
@@ -122,7 +122,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores_available = grid_size.x * grid_size.y;
 
-    TT_FATAL(num_cores_available <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
+    TT_FATAL(num_cores_available <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y, "Error");
 
     // balance the number of cores to use based on batch
     uint32_t num_cores_per_batch = num_cores_available / B;
@@ -229,15 +229,15 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     // Find log2 of stats_granularity using std
     const uint32_t log2_stats_granularity = std::log2(stats_granularity);
     // Assert that this is a power of 2
-    TT_FATAL(stats_granularity == (1 << log2_stats_granularity));
+    TT_FATAL(stats_granularity == (1 << log2_stats_granularity), "Error");
 
     const uint32_t sub_exp_granularity = std::min(Sk_chunk_t, dst_size);
     const uint32_t log2_sub_exp_granularity = std::log2(sub_exp_granularity);
-    TT_FATAL(sub_exp_granularity == (1 << log2_sub_exp_granularity));
+    TT_FATAL(sub_exp_granularity == (1 << log2_sub_exp_granularity), "Error");
 
     const uint32_t mul_bcast_granularity = std::min(PNHt * Sk_chunk_t, dst_size);
     const uint32_t log2_mul_bcast_granularity = std::log2(mul_bcast_granularity);
-    TT_FATAL(mul_bcast_granularity == (1 << log2_mul_bcast_granularity));
+    TT_FATAL(mul_bcast_granularity == (1 << log2_mul_bcast_granularity), "Error");
 
     const uint32_t dht_granularity = std::min(DHt, dst_size);
     const uint32_t log2_dht_granularity = std::log2(dht_granularity);

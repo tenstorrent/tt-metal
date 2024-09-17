@@ -23,8 +23,8 @@ using namespace tt;
 
 std::string get_latest_kernel_binary_path(uint32_t mask, const std::shared_ptr<Kernel> kernel) {
     auto root_dir = jit_build_get_kernel_compile_outpath(mask);
-    TT_FATAL(kernel != nullptr);
-    TT_FATAL(std::filesystem::exists(root_dir + kernel->name()));
+    TT_FATAL(kernel != nullptr, "Error");
+    TT_FATAL(std::filesystem::exists(root_dir + kernel->name()), "Error");
 
     std::filesystem::path kernel_path{root_dir + kernel->name()};
     std::filesystem::file_time_type ftime = std::filesystem::last_write_time(*kernel_path.begin());
@@ -36,7 +36,7 @@ std::string get_latest_kernel_binary_path(uint32_t mask, const std::shared_ptr<K
             latest_hash = dir_entry.path().filename().string();
         }
     }
-    TT_FATAL(not latest_hash.empty());
+    TT_FATAL(not latest_hash.empty(), "Error");
     return kernel->name() + "/" + latest_hash;
 }
 
@@ -140,7 +140,8 @@ int main(int argc, char **argv) {
             const KernelGroup* kernel_group = program.kernels_on_core(core, programmable_core_index);
             TT_FATAL(
                 kernel_group != nullptr && kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].has_value() and
-                kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value() and kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value());
+                kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value() and kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value(),
+                "Error");
             auto compute_kernel = tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
             auto riscv0_kernel = tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
             auto riscv1_kernel = tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
@@ -182,9 +183,9 @@ int main(int argc, char **argv) {
                         auto compute_kernel = tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
                         auto riscv0_kernel = tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
                         auto riscv1_kernel = tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
-                        TT_FATAL(compute_kernel->binaries(mask) == compute_binaries.at(mask));
-                        TT_FATAL(riscv0_kernel->binaries(mask) == brisc_binaries.at(mask));
-                        TT_FATAL(riscv1_kernel->binaries(mask) == ncrisc_binaries.at(mask));
+                        TT_FATAL(compute_kernel->binaries(mask) == compute_binaries.at(mask), "Error");
+                        TT_FATAL(riscv0_kernel->binaries(mask) == brisc_binaries.at(mask), "Error");
+                        TT_FATAL(riscv1_kernel->binaries(mask) == ncrisc_binaries.at(mask), "Error");
 
                         std::string brisc_hex_path = device->build_kernel_target_path(
                             JitBuildProcessorType::DATA_MOVEMENT,
@@ -211,8 +212,7 @@ int main(int argc, char **argv) {
                             ll_api::memory trisc_binary = llrt::get_risc_binary(trisc_hex_path);
                             TT_FATAL(
                                 trisc_binary == compute_binaries.at(mask).at(trisc_id),
-                                "Expected saved TRISC binary for " + trisc_id_str +
-                                    " to be the same as binary in persistent cache");
+                                "Expected saved TRISC binary for {} to be the same as binary in persistent cache", trisc_id_str);
                         }
                     }
                 });
@@ -239,7 +239,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

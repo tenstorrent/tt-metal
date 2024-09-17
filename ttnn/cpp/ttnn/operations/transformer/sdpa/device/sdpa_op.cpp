@@ -18,7 +18,7 @@ void ScaledDotProductAttention::validate(
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device");
         TT_FATAL(input_tensor.buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device");
         TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to SDPA must be tilized");
-        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B);
+        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B, "Error");
     }
 
     const auto& mask_option = optional_input_tensors.at(0);
@@ -70,15 +70,15 @@ void ScaledDotProductAttention::validate(
 
         // Input 0 must be sharded by height. All other inputs must be in DRAM.
         const auto Q_memcfg = input_tensors.at(0).memory_config();
-        TT_FATAL(input_tensors.at(0).is_sharded() == true);
-        TT_FATAL(Q_memcfg.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        TT_FATAL(input_tensors.at(0).is_sharded() == true, "Error");
+        TT_FATAL(Q_memcfg.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
 
         for (std::size_t i = 1; i < input_tensors.size(); i++) {
-            TT_FATAL(input_tensors.at(i).buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM);
+            TT_FATAL(input_tensors.at(i).buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "Error");
         }
         // Output memconfig must be height sharded, same as input
-        TT_FATAL(this->output_mem_config.is_sharded());
-        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        TT_FATAL(this->output_mem_config.is_sharded(), "Error");
+        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
 
         // Assert we are in decode mode if not causal
         // Q: [1, B, NH, D]
@@ -88,27 +88,27 @@ void ScaledDotProductAttention::validate(
 
         // Batch must match
         const auto B = q_shape[1];
-        TT_FATAL(k_shape[1] == B);
-        TT_FATAL(v_shape[1] == B);
-        TT_FATAL(mask_shape[1] == B);
+        TT_FATAL(k_shape[1] == B, "Error");
+        TT_FATAL(v_shape[1] == B, "Error");
+        TT_FATAL(mask_shape[1] == B, "Error");
         TT_FATAL(Q_memcfg.shard_spec.value().grid.num_cores() == B, "Q must be height sharded by batch ");
 
         // NKV must be 1 if we are running in this decode mode
-        TT_FATAL(q_shape[0] == 1);
-        TT_FATAL(k_shape[0] == 1);
-        TT_FATAL(v_shape[0] == 1);
-        TT_FATAL(mask_shape[0] == 1);
+        TT_FATAL(q_shape[0] == 1, "Error");
+        TT_FATAL(k_shape[0] == 1, "Error");
+        TT_FATAL(v_shape[0] == 1, "Error");
+        TT_FATAL(mask_shape[0] == 1, "Error");
 
         // Check sequence lengths
-        TT_FATAL(k_shape[-2] == v_shape[-2]);
+        TT_FATAL(k_shape[-2] == v_shape[-2], "Error");
 
         // Check hidden size
         const auto D = q_shape[-1];
-        TT_FATAL(k_shape[-1] == D);
-        TT_FATAL(v_shape[-1] == D);
+        TT_FATAL(k_shape[-1] == D, "Error");
+        TT_FATAL(v_shape[-1] == D, "Error");
 
         // Check NH
-        TT_FATAL(q_shape[2] == mask_shape[2]);
+        TT_FATAL(q_shape[2] == mask_shape[2], "Error");
 
         // Check valid seqlen
         TT_FATAL(valid_seq_len.has_value(), "Non-causal SDPA must set valid_seq_len");
@@ -120,8 +120,8 @@ void ScaledDotProductAttention::validate(
         auto q_chunk_size = program_config->q_chunk_size;
         auto k_chunk_size = program_config->k_chunk_size;
 
-        TT_FATAL(q_shape[-2] % q_chunk_size == 0);
-        TT_FATAL(k_shape[-2] % k_chunk_size == 0);
+        TT_FATAL(q_shape[-2] % q_chunk_size == 0, "Error");
+        TT_FATAL(k_shape[-2] % k_chunk_size == 0, "Error");
 
         if (!this->is_causal) {
             TT_FATAL(q_chunk_size == q_shape[-2], "Non-causal SDPA must have q_chunk_size == q_shape[-2]");
@@ -130,7 +130,7 @@ void ScaledDotProductAttention::validate(
         }
     } else {
         if (!this->is_causal) {
-            TT_FATAL(false, "Non-causal SDPA must use multi-core program config");
+            TT_THROW("Non-causal SDPA must use multi-core program config");
         }
     }
 }

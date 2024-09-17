@@ -34,9 +34,9 @@ int main () {
     Shape resnet18_shape = {1, 1, 7 * 7, 2048};
     auto result = run_avg_pool_2d_resnet(resnet18_shape, device);
 
-    TT_FATAL(result.get_legacy_shape() == Shape({1, 1, tt::constants::TILE_HEIGHT, 2048}));
-    TT_FATAL(result.get_legacy_shape().without_padding() == Shape({1, 1, 1, 2048}));
+    TT_FATAL(result.get_legacy_shape() == Shape({1, 1, tt::constants::TILE_HEIGHT, 2048}), "Incorrect shape {}.", result.get_legacy_shape());
+    TT_FATAL(result.get_legacy_shape().without_padding() == Shape({1, 1, 1, 2048}), "Incorrect shape {}.", result.get_legacy_shape().without_padding());
 
-    TT_FATAL(tt::tt_metal::CloseDevice(device));
+    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
     return 0;
 }

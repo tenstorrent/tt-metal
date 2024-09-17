@@ -41,16 +41,6 @@ void kernel_main() {
     tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_y)));
 
 
-    MatmulOpReceiver fused_op_receiver;
-    if constexpr (fuse_op) {
-        fused_op_receiver = MatmulOpReceiver(
-            true, /* wait_for_op_signal */
-            rt_args_idx,
-            num_blocks,
-            in0_block_w /* tiles_per_block (in the same dimension as tensor slice) */
-        );
-    }
-
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in2 = 2;  // Sharded cb
 
@@ -124,6 +114,16 @@ void kernel_main() {
         local_read_addr = get_read_ptr(cb_id_in2);
     }
 
+    MatmulOpReceiver fused_op_receiver;
+    if constexpr (fuse_op) {
+        fused_op_receiver = MatmulOpReceiver(
+            sender_id < num_remote_senders, /* wait_for_op_signal */
+            rt_args_idx,
+            num_blocks,
+            in0_block_w /* tiles_per_block (in the same dimension as tensor slice) */
+        );
+    }
+
     for (uint32_t b = 0; b < batch; ++b) {
         for (uint32_t block = 0; block < num_blocks; ++block) {
             uint32_t block_id = block / num_blocks_per_shard;
@@ -180,29 +180,28 @@ void kernel_main() {
 
                 if constexpr (core_in_in0_receiver_mcast_grid) {
                     // Mcast from/to same CB
-                    if constexpr (extract_shard_sub_blocks) {
+                    // Skip if there are no other cores since this core already has the data.
+                    // Note: noc_async_write_multicast[_loopback_src] may hang if called with 0 cores.
+                    if constexpr (in0_mcast_num_cores > 1) {
+                        if constexpr (extract_shard_sub_blocks) {
                         // multicast to every core in receiver grid EXCLUDING myself
-                        // Skip if there are no other cores since this core already has the data.
-                        // Note: noc_async_write_multicast would hang if called with 0 cores.
-                        if constexpr (in0_mcast_num_cores > 1) {
                             noc_async_write_multicast(
                                 local_read_addr,
                                 in0_multicast_data_addr,
                                 in0_block_size_bytes,
                                 in0_mcast_num_cores - 1);
                         }
-                    }
-                    // Mcast from different CB to another CB
-                    else {
-                        // multicast to every core in receiver grid
-                        // will be a no-op if there is only one core that is the sender and receiver.
-                        noc_async_write_multicast_loopback_src(
-                            local_read_addr,
-                            in0_multicast_data_addr,
-                            in0_block_size_bytes,
-                            in0_mcast_num_cores,
-                            true,
-                            true);
+                        // Mcast from different CB to another CB
+                        else {
+                            // multicast to every core in receiver grid
+                            noc_async_write_multicast_loopback_src(
+                                    local_read_addr,
+                                    in0_multicast_data_addr,
+                                    in0_block_size_bytes,
+                                    in0_mcast_num_cores,
+                                    true,
+                                    true);
+                        }
                     }
 
                     // We should also multicast the flag to destinations

@@ -32,7 +32,7 @@ void MorehSoftmax::validate_with_output_tensors(
 
     TT_ASSERT(
         this->dim >= 0 && this->dim < rank,
-        fmt::format("dim {} should be less than output tensor rank {}", this->dim, rank));
+        "dim {} should be less than output tensor rank {}", this->dim, rank);
 
     if (output_tensors.empty() || !output_tensors.at(0).has_value()) {
         // If the user decided to not use any optional output tensors, then this would be empty or would be a nullptr.
@@ -108,23 +108,23 @@ MorehSoftmaxOpParallelizationStrategy MorehSoftmax::get_parallelization_strategy
         TT_ASSERT(
             this->strategy == MorehSoftmaxOpParallelizationStrategy::SMALL_H ||
                 this->strategy == MorehSoftmaxOpParallelizationStrategy::LARGE_H,
-            fmt::format("Invalid parallelization strategy. {} is not for dim H", this->strategy));
+            "Invalid parallelization strategy. {} is not for dim H", this->strategy);
 
         if (this->strategy == MorehSoftmaxOpParallelizationStrategy::SMALL_H) {
             TT_ASSERT(
                 is_moreh_softmax_h_small_available(input, this->compute_kernel_config),
-                fmt::format("not enough circular buffer memory for {}", this->strategy));
+                "not enough circular buffer memory for {}", this->strategy);
         }
     } else if (rank - 1 == this->dim) {
         TT_ASSERT(
             this->strategy == MorehSoftmaxOpParallelizationStrategy::SMALL_W ||
                 this->strategy == MorehSoftmaxOpParallelizationStrategy::LARGE_W,
-            fmt::format("Invalid parallelization strategy. {} is not for dim W", this->strategy));
+            "Invalid parallelization strategy. {} is not for dim W", this->strategy);
 
         if (this->strategy == MorehSoftmaxOpParallelizationStrategy::SMALL_W) {
             TT_ASSERT(
                 is_moreh_softmax_w_small_available(input, this->compute_kernel_config),
-                fmt::format("not enough circular buffer memory for {}", this->strategy));
+                "not enough circular buffer memory for {}", this->strategy);
         }
     } else {
         TT_ASSERT(

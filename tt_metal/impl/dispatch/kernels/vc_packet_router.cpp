@@ -264,9 +264,11 @@ void kernel_main() {
 
         output_queues[curr_input].prev_words_in_flight_check_flush();
 
-        all_outputs_finished = true;
-        for (uint32_t i = 0; i < router_lanes; i++) {
-            all_outputs_finished &= output_queues[i].is_remote_finished();
+        if ((iter & 0xFF) == 0) {
+            all_outputs_finished = true;
+            for (uint32_t i = 0; i < router_lanes; i++) {
+                all_outputs_finished &= output_queues[i].is_remote_finished();
+            }
         }
 
         curr_input++;

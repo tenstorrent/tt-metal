@@ -98,7 +98,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     tt::tt_metal::Buffer *in0_buffer = input_tensor.buffer();
 
     // Output buffers
-    TT_FATAL(output_tensors.size() == num_chunks);
+    TT_FATAL(output_tensors.size() == num_chunks, "Error");
     tt::tt_metal::Tensor &out0 = output_tensors[0];
     tt::tt_metal::Tensor &out1 = output_tensors[1];
 

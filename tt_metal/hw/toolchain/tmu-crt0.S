@@ -5,13 +5,15 @@
 _start:
 
 CRT_START:
-  # Initialize global pointer
-  .option push
-  .option norelax
-1:auipc gp, %pcrel_hi(__global_pointer$)
-  addi  gp, gp, %pcrel_lo(1b)
+.option push
+.option norelax
+	// Initialize global pointer,
+	// Use an absolute reloc, so text placement is irrelevant.
+	lui gp,%hi(__global_pointer$)
+	addi gp,gp,%lo(__global_pointer$)
+.option pop
 
-/* set stack pointer */
+  /* set stack pointer */
   la sp, __stack_top
 
   # Clear the bss segment
@@ -26,7 +28,6 @@ CRT_START:
   jalr    a0
   addi    s2, s2, 4
 2:bne     s2, s3, 1b
-  .option pop
 
   /* Pass in the tensix coordinates as argv[0][0] through argv[0][3].
      argc = 1, envp = NULL. In memory, we'll have
@@ -49,14 +50,3 @@ CRT_START:
   call    main
   tail    exit
   .size  _start, .-_start
-
-  .global _init
-  .type   _init, @function
-  .global _fini
-  .type   _fini, @function
-_init:
-_fini:
-  # These don't have to do anything since we use init_array/fini_array.
-  ret
-  .size  _init, .-_init
-  .size  _fini, .-_fini
