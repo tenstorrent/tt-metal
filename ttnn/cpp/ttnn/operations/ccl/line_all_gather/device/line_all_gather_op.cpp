@@ -50,10 +50,10 @@ void LineAllGather::validate(const std::vector<Tensor> &input_tensors) const {
     }
 }
 
-std::vector<tt::tt_metal::Shape> LineAllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> LineAllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     auto shape = input_tensors[0].get_legacy_shape();
     shape[this->dim] *= this->ring_size;
-    return std::vector<tt::tt_metal::Shape>(input_tensors.size(), shape);
+    return std::vector<tt::tt_metal::LegacyShape>(input_tensors.size(), shape);
 }
 
 std::vector<Tensor> LineAllGather::create_output_tensors(const std::vector<Tensor> &input_tensors) const {

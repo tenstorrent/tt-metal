@@ -100,7 +100,7 @@ struct OldInfraDeviceOperation {
         const operation::OptionalTensors optional_output_tensors;
     };
 
-    using shape_return_value_t = std::vector<tt::tt_metal::Shape>;
+    using shape_return_value_t = std::vector<tt::tt_metal::LegacyShape>;
 
     using tensor_return_value_t = OutputTensors;
 

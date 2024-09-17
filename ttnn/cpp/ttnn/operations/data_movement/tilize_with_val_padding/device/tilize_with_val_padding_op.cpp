@@ -44,7 +44,7 @@ void TilizeWithValPadding::validate(const std::vector<Tensor>& input_tensors) co
     }
 }
 
-std::vector<tt::tt_metal::Shape> TilizeWithValPadding::compute_output_shapes(
+std::vector<tt::tt_metal::LegacyShape> TilizeWithValPadding::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     auto input_shape = input_tensors.at(0).get_legacy_shape();
     auto dimensions_pads = std::vector<Padding::PadDimension>();
@@ -53,7 +53,7 @@ std::vector<tt::tt_metal::Shape> TilizeWithValPadding::compute_output_shapes(
         dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = back});
     }
     const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-    return {tt::tt_metal::Shape(this->output_tensor_shape, padding)};
+    return {tt::tt_metal::LegacyShape(this->output_tensor_shape, padding)};
 }
 
 std::vector<Tensor> TilizeWithValPadding::create_output_tensors(

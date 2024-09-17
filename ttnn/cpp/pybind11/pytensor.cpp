@@ -419,7 +419,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
         tt_shards.push_back(detail::convert_python_tensor_to_tt_tensor(shard, data_type, false));
     }
     std::vector<OwnedBuffer> host_owned_buffers;
-    std::vector<tt::tt_metal::Shape> host_owned_shapes;
+    std::vector<tt::tt_metal::LegacyShape> host_owned_shapes;
     for (const auto &shard : tt_shards) {
         TT_ASSERT(std::holds_alternative<OwnedStorage>(shard.get_storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(shard.get_storage()));
         host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
@@ -646,7 +646,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
 } // namespace detail
 
 void pytensor_module_types(py::module &m_tensor) {
-    using tt::tt_metal::Shape;
+    using tt::tt_metal::LegacyShape;
     // Tensor constructors that accept device and .to(device) function use keep alive call policy to communicate that Device needs to outlive Tensor.
     // This is because when tensors on device are destroyed they need to deallocate their buffers via device.
     // keep_alive increases the ref count of the Device object being passed into the constructor and .to() function.
@@ -1588,7 +1588,7 @@ void pytensor_module(py::module &m_tensor) {
             )doc")
         .def(
             "reshape",
-            [](Tensor &self, const tt::tt_metal::Shape &shape) -> Tensor { return self.reshape(shape); },
+            [](Tensor &self, const tt::tt_metal::LegacyShape &shape) -> Tensor { return self.reshape(shape); },
             R"doc(
                 Reshapes TT tensor
 

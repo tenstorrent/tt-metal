@@ -137,7 +137,7 @@ MorehGetItemOperation::shape_return_value_t MorehGetItemOperation::compute_outpu
         }
 
         const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-        output_shape = Shape(tt::tt_metal::Shape(output_size_vec, padding));
+        output_shape = Shape(tt::tt_metal::LegacyShape(output_size_vec, padding));
 
     } else {
         // compute output shape

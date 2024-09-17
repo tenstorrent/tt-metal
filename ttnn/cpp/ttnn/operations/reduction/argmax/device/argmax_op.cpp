@@ -41,22 +41,22 @@ void ArgMax::validate_with_output_tensors(
     }
 }
 
-std::vector<tt::tt_metal::Shape> ArgMax::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> ArgMax::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     auto input_shape = input_tensors[0].get_legacy_shape();
     if (this->dim.has_value()) {
         // TODO: There seems to be an underflow issue with directly modifying last two dims
         if (this->dim.value() == -1 or this->dim.value() == 3) {
-            tt::tt_metal::Shape output_shape({input_shape[0], input_shape[1], input_shape[2], 1});
+            tt::tt_metal::LegacyShape output_shape({input_shape[0], input_shape[1], input_shape[2], 1});
             return {output_shape};
         } else if (this->dim.value() == -2 or this->dim.value() == 2) {
-            tt::tt_metal::Shape output_shape({input_shape[0], input_shape[1], 1, input_shape[3]});
+            tt::tt_metal::LegacyShape output_shape({input_shape[0], input_shape[1], 1, input_shape[3]});
             return {output_shape};
         } else {
             input_shape[this->dim.value()] = 1;
             return {input_shape};
         }
     } else {
-        tt::tt_metal::Shape output_shape({1, 1, 1, 1});
+        tt::tt_metal::LegacyShape output_shape({1, 1, 1, 1});
         return {output_shape};
     }
 }

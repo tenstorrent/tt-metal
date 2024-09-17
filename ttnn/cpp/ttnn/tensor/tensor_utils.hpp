@@ -33,9 +33,9 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(Tensor conv_weight_tensor, u
 // Converts convolution weights to depthwise layout with broadcasted weights
 Tensor convert_conv_weight_tensor_to_depthwise_layout(Tensor conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype);
 
-const Shape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volume);
+const tt::tt_metal::LegacyShape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volume);
 
-const Shape infer_dims_for_reshape_RM(int N, int C, int H, int W, uint32_t old_volume);
+const tt::tt_metal::LegacyShape infer_dims_for_reshape_RM(int N, int C, int H, int W, uint32_t old_volume);
 
 template <typename T>
 static std::size_t compute_volume(const T& shape) {
@@ -46,7 +46,7 @@ static std::size_t compute_volume(const T& shape) {
     return volume;
 }
 
-static std::vector<uint32_t> compute_strides(const Shape& shape) {
+static std::vector<uint32_t> compute_strides(const tt::tt_metal::LegacyShape& shape) {
     if (shape.rank() == 0)
         return {};
 

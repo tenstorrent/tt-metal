@@ -51,14 +51,14 @@ Tensor AutoFormat::move_tensor_to_device_and_pad(const Tensor& input, Device *de
         (device_shape[-2] % TILE_HEIGHT != 0 ? (device_shape[-2] / TILE_HEIGHT + 1) * TILE_HEIGHT : device_shape[-2]),
         (device_shape[-1] % TILE_WIDTH != 0 ? (device_shape[-1] / TILE_WIDTH + 1) * TILE_WIDTH : device_shape[-1])
         };
-    const auto new_shape = tt::tt_metal::Shape(new_intended_shape, new_device_shape);
+    const auto new_shape = tt::tt_metal::LegacyShape(new_intended_shape, new_device_shape);
     return AutoFormat::format_input_tensor(input, device, new_shape, 0.0, target_layout, target_mem_config);
 }
 
 Tensor AutoFormat::format_input_tensor(
     const Tensor& input,
     Device* device,
-    const tt::tt_metal::Shape& padded_shape,
+    const tt::tt_metal::LegacyShape& padded_shape,
     float pad_value,
     Layout target_layout,
     std::optional<MemoryConfig> target_mem_config) {
@@ -122,7 +122,7 @@ Tensor AutoFormat::format_input_tensor(
 
 Tensor AutoFormat::format_output_tensor(
     const Tensor& output,
-    const tt::tt_metal::Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     Device* device,
     Layout target_layout,
     std::optional<MemoryConfig> target_mem_config) {

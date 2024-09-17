@@ -75,14 +75,14 @@ void MorehSum::validate_with_output_tensors(
     }
 }
 
-std::vector<Shape> MorehSum::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehSum::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input = input_tensors.at(0);
     const auto& input_shape = input.get_legacy_shape();
     const auto input_rank = input_shape.rank();
     const bool is_tile_dim = (this->dim == input_rank - 1 || this->dim == input_rank - 2);
     log_debug(LogOp, "{}:{} dim {}, keep_batch_dim {}", __func__, __LINE__, this->dim, this->keep_batch_dim);
 
-    Shape output_shape = input_shape;
+    tt::tt_metal::LegacyShape output_shape = input_shape;
     if (this->keep_batch_dim) {
         auto shape = input_shape;
         auto padding = shape.padding();
@@ -96,7 +96,7 @@ std::vector<Shape> MorehSum::compute_output_shapes(const std::vector<Tensor>& in
             shape[this->dim] = 1;
         }
 
-        output_shape = Shape(shape, padding);
+        output_shape = tt::tt_metal::LegacyShape(shape, padding);
     } else {
         std::vector<uint32_t> shape;
         std::vector<Padding::PadDimension> pad_dimensions;
@@ -116,7 +116,7 @@ std::vector<Shape> MorehSum::compute_output_shapes(const std::vector<Tensor>& in
         }
 
         auto padding = Padding(pad_dimensions, input_padding.pad_value());
-        output_shape = Shape(shape, padding);
+        output_shape = tt::tt_metal::LegacyShape(shape, padding);
     }
 
     log_debug(LogOp, "{}:{} output_shape {}", __func__, __LINE__, output_shape);
