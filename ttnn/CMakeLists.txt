@@ -450,3 +450,74 @@ set_target_properties(ttnn PROPERTIES
     CXX_VISIBILITY_PRESET "default"
     ADDITIONAL_CLEAN_FILES "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_ttnn.so;${PROJECT_SOURCE_DIR}/ttnn/ttnn.egg-info"
 )
+
+# mlir interface library settings
+set(MLIR_INTERFACE_LIB ttnn_mlir_interface)
+
+set(MLIR_INTERFACE_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/mlir_interface_api.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/types_wrapper.cpp
+
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/common/op_constraints.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/binary/binary_constraints.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/eltwise/unary/unary_constraints.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/matmul/matmul_constraints.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/softmax/softmax_constraints.cpp
+
+    # ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/types.cpp                     # Shape
+    # ${CMAKE_CURRENT_SOURCE_DIR}/../tt_metal/impl/buffers/buffer.cpp         # Buffer
+    # ${CMAKE_CURRENT_SOURCE_DIR}/../tt_metal/tt_metal.cpp                   # tt::tt_metal::detail::AllocateBuffer
+    # ${CMAKE_CURRENT_SOURCE_DIR}/../tt_metal/impl/allocator/allocator.cpp   # tt::tt_metal::Device::logical_core_from_bank_id
+    # ${CMAKE_CURRENT_SOURCE_DIR}/../tt_metal/impl/device/device.cpp              # tt::tt_metal::Device::dram_channel_from_bank_id
+    # ${CMAKE_CURRENT_SOURCE_DIR}/../tt_metal/llrt/tt_cluster.cpp      # tt::Cluster::instance()
+    # ${CMAKE_CURRENT_SOURCE_DIR}/../tt_metal/llrt/llrt.cpp               # tt::llrt::write_hex_vec_to_core
+    # ${CMAKE_CURRENT_SOURCE_DIR}/../tt_metal/impl/device/device_pool.cpp # tt::DevicePool::_ins
+    # ${CMAKE_CURRENT_SOURCE_DIR}/../tt_metal/impl/program/program.cpp # tt::tt_metal::Program::compile
+    # this list is too long, linking ttnn.so for now
+)
+
+# message(STATUS "CMAKE_CXX_COMPILER_ID = ${CMAKE_CXX_COMPILER_ID}")
+
+add_library(${MLIR_INTERFACE_LIB} STATIC ${MLIR_INTERFACE_SOURCES})
+
+target_compile_options(${MLIR_INTERFACE_LIB}  PUBLIC -MP -Wno-int-to-pointer-cast -fno-var-tracking)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_definitions(${MLIR_INTERFACE_LIB}  PUBLIC DISABLE_NAMESPACE_STATIC_ASSERT)
+endif()
+
+set(MLIR_INTERFACE_PUBLIC_HEADER
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/mlir_interface_api.hpp
+)
+
+# if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+#     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++")
+#     target_link_libraries(${MLIR_INTERFACE_LIB} PUBLIC c++abi)
+# endif()
+
+
+# target_include_directories(${MLIR_INTERFACE_LIB} PRIVATE
+#     ${PROJECT_SOURCE_DIR}/
+#     ${PROJECT_SOURCE_DIR}/ttnn/cpp/
+#     ${PROJECT_SOURCE_DIR}/tt_metal
+#     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt
+#     ${UMD_HOME}
+# )
+
+# link everything (temporary to get going)
+
+target_include_directories(${MLIR_INTERFACE_LIB} PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
+target_link_libraries(${MLIR_INTERFACE_LIB} PUBLIC ${TTNN_PUBLIC_LINK_LIBRARIES})
+target_link_directories(${MLIR_INTERFACE_LIB} PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
+target_precompile_headers(${MLIR_INTERFACE_LIB} PRIVATE ${TTNN_PRECOMPILED_HEADERS})
+
+
+set_target_properties(${MLIR_INTERFACE_LIB} PROPERTIES
+    OUTPUT_NAME "${MLIR_INTERFACE_LIB}"
+    PREFIX ""
+    SUFFIX ".a"
+    # BUILD_RPATH "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
+    INSTALL_RPATH "${PROJECT_BINARY_DIR}/lib"
+    CXX_VISIBILITY_PRESET "default"
+    PUBLIC_HEADER "${MLIR_INTERFACE_PUBLIC_HEADER}"
+)
+# end of mlir
