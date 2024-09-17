@@ -258,7 +258,10 @@ class TtLlamaModelForGeneration:
         output_logits = torch.zeros(batch, 1, self.params.vocab_size)
         # pad tokens to 128 or 2048
         prefill_ids = torch.cat([tokens, torch.zeros(batch, prefill_seq_len - seq_len).long()], dim=-1)
-        if page_table:
+        if page_table is not None:
+            assert isinstance(
+                page_table, torch.Tensor
+            ), "page_table must be a torch.Tensor when passing into prefill_forward"
             block_size = get_block_size(kv_cache)
             num_padding_blocks = num_blocks_in_seq(prefill_seq_len, block_size) - num_blocks_in_seq(seq_len, block_size)
             page_table = torch.cat([page_table, torch.zeros(batch, num_padding_blocks, dtype=torch.int32)], dim=-1)
@@ -295,7 +298,7 @@ def get_padded_prefill_len(seq_len):
 
 
 def get_block_size(kv_cache):
-    return kv_cache.shape[2]
+    return kv_cache[0][0].shape[2]
 
 
 def num_blocks_in_seq(seq_len, block_size):
