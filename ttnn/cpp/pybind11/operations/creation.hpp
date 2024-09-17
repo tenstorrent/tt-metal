@@ -204,21 +204,76 @@ void bind_arange_operation(py::module& module, const creation_operation_t& opera
             py::arg("dtype") = ttnn::bfloat16,
             py::arg("device") = std::nullopt,
             py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG});
-}  // namespace creation
+}
+
+void bind_empty_operation(py::module& module) {
+    auto doc = fmt::format(
+        R"doc({0}(shape: List[int], dtype: ttnn.DataType, layout: ttnn.Layout, device: ttnn.Device, memory_config: ttnn.MemoryConfig)doc",
+        ttnn::empty.base_name());
+
+    using EmptyType = decltype(ttnn::empty);
+    bind_registered_operation(
+        module,
+        ttnn::empty,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const EmptyType& self,
+               const std::vector<uint32_t>& shape,
+               const DataType& dtype,
+               const Layout& layout,
+               Device* device,
+               const MemoryConfig& memory_config) -> ttnn::Tensor {
+                return self(ttnn::Shape{tt::tt_metal::LegacyShape{shape}}, dtype, layout, device, memory_config);
+            },
+            py::arg("shape"),
+            py::arg("dtype") = DataType::BFLOAT16,
+            py::arg("layout") = Layout::ROW_MAJOR,
+            py::arg("device") = nullptr,
+            py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG});
+}
+
+void bind_empty_like_operation(py::module& module) {
+    auto doc = fmt::format(
+        R"doc({0}(tensor: ttnn.Tensor, dtype: Optional[ttnn.DataType] = None, layout: Optional[ttnn.Layout] = None, device: Optional[ttnn.Device] = None, memory_config: Optional[ttnn.MemoryConfig] = None)doc",
+        ttnn::empty_like.base_name());
+
+    using EmptyLikeType = decltype(ttnn::empty_like);
+    bind_registered_operation(
+        module,
+        ttnn::empty_like,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const EmptyLikeType& self,
+               const ttnn::Tensor& reference,
+               const std::optional<DataType>& dtype,
+               const std::optional<Layout>& layout,
+               const std::optional<std::reference_wrapper<Device>>& device,
+               const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
+                return self(reference, dtype, layout, device, memory_config);
+            },
+            py::arg("tensor"),
+            py::kw_only(),
+            py::arg("dtype") = DataType::BFLOAT16,
+            py::arg("layout") = Layout::ROW_MAJOR,
+            py::arg("device") = std::nullopt,
+            py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG});
+}
+
 }  // namespace detail
 
 void py_module(py::module& module) {
     detail::bind_full_operation(module, ttnn::full);
     detail::bind_full_operation_with_hard_coded_value(module, ttnn::zeros);
     detail::bind_full_operation_with_hard_coded_value(module, ttnn::ones);
-    detail::bind_full_operation_with_hard_coded_value(module, ttnn::empty);
 
     detail::bind_full_like_operation(module, ttnn::full_like);
     detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::zeros_like);
     detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::ones_like);
-    detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::empty_like);
 
     detail::bind_arange_operation(module, ttnn::arange);
+
+    detail::bind_empty_operation(module);
+    detail::bind_empty_like_operation(module);
 }
 
 }  // namespace creation

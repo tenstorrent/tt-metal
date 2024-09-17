@@ -43,7 +43,7 @@ def run(
         torch_input_tensor, dtype=input_dtype, device=device, memory_config=input_memory_config, layout=layout
     )
 
-    output_tensor = ttnn.empty(input_tensor.shape, device=device, memory_config=output_memory_config)
+    output_tensor = ttnn.empty(input_shape, input_dtype, layout, device, output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
     if torch_output_tensor.shape != output_tensor.shape:

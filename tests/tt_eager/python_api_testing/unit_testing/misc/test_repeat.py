@@ -155,5 +155,5 @@ def test_repeat_with_program_cache(
     function_level_defaults,
 ):
     run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, output_mem_config)
-    tmp = ttnn.empty([1, 256, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    tmp = ttnn.zeros([1, 256, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
     run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, output_mem_config)
