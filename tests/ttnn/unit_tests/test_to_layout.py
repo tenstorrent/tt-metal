@@ -62,7 +62,7 @@ def test_to_layout_2D(device, height, width, on_device, from_layout, to_layout, 
 
 @pytest.mark.parametrize(
     "shape",
-    [(1, 1, 32, 128 * 1024), (1, 1, 128, 5120)],
+    [(1, 1, 32, 128 * 1024), (1, 1, 128, 5120), (1, 1, 512, 5120), (1, 1, 128, 128 * 1024)],
 )
 @pytest.mark.parametrize("on_device", [True])
 @pytest.mark.parametrize("from_layout", [ttnn.TILE_LAYOUT])
