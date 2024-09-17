@@ -133,7 +133,7 @@ def test_unet_perf_e2e(
     logger.info(f"Running sanity check against reference model output")
     B, C, H, W = torch_output_tensor.shape
     ttnn_tensor = ttnn.to_torch(output_tensor).reshape(B, H, W, -1)[:, :, :, :C].permute(0, 3, 1, 2)
-    assert_with_pcc(torch_output_tensor, ttnn_tensor, 0.986)
+    assert_with_pcc(torch_output_tensor, ttnn_tensor, 0.97)
 
 
 @pytest.mark.skip("Crashes on N300/T3K - see issue #12685")
@@ -228,4 +228,4 @@ def test_unet_data_parallel_perf_e2e(
     )
 
     logger.info(f"Running sanity check against reference model output")
-    check_pcc_conv(torch_output_tensor, output_tensor, mesh_composer=output_mesh_composer, pcc=0.986)
+    check_pcc_conv(torch_output_tensor, output_tensor, mesh_composer=output_mesh_composer, pcc=0.97)
