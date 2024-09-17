@@ -12,6 +12,7 @@ inputs:
   docker_username:
     description: docker login username
     required: true
+    default: ${{ github.actor }}
   docker_password:
     description: docker login password
     required: true
@@ -25,6 +26,11 @@ inputs:
     default: |
       -v /dev/hugepages-1G:/dev/hugepages-1G
       --device /dev/tenstorrent
+  install_wheel:
+    description: "Install the wheel that contains all of the Python environment. The artifact needs to be present."
+    type: boolean
+    required: false
+    default: false
 runs:
   using: "composite"
   steps:
@@ -32,6 +38,11 @@ runs:
       uses: ./.github/actions/generate-docker-tag
       with:
         image: ${{ inputs.docker_os_arch }}
+    - name: Set 
+      shell: bash
+      run: |
+        echo "RUNNER_UID=$(id -u)" >> $GITHUB_ENV
+        echo "RUNNER_GID=$(id -g)" >> $GITHUB_ENV
     - name: Docker login
       uses: docker/login-action@v3
       with:
@@ -49,16 +60,28 @@ runs:
         password: ${{ inputs.docker_password }}
         registry: ghcr.io
         image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
-        # The most important option below is `--rm`. The machines will fill up with containers.
+        # The most important option below is `--rm`. Otherwise, the machines will fill up with undeleted containers.
+        # The mounting of /etc/passwd, /etc/shadow, and /etc/bashrc is required in order for the correct file permissions
+        # for newly created files.
+        # Passing HOME variable is necessary to avoid Python lib installation into /home/ubuntu/.local folder which 
+        # may not be writable by the RUNNER_UID user.
         options: |
+          -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
           --rm
-          -v ${{ github.workspace }}:/github_workspace:ro
+          -v /etc/passwd:/etc/passwd:ro
+          -v /etc/shadow:/etc/shadow:ro
+          -v /etc/bashrc:/etc/bashrc:ro
+          -v ${{ github.workspace }}:${{ github.workspace }}
           --net=host
           ${{ inputs.docker_opts }}
           -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
-          -e PYTHONPATH=/usr/app
+          -e PYTHONPATH=${{ github.workspace }}
+          -e HOME=${{ github.workspace }}
           ${{ inputs.device }}
+          -w ${{ github.workspace }}
         run: |
-          cp -r /github_workspace/* /usr/app/
-          cd /usr/app/
+          if [ ${{ inputs.install_wheel }} ]; then
+            WHEEL_FILENAME=$(ls -1 *.whl)
+            pip3 install $WHEEL_FILENAME
+          fi
           ${{ inputs.run_args }}
