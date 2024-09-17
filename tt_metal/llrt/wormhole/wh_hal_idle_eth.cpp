@@ -49,7 +49,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
     mem_map_sizes[hv(HalMemAddrType::KERNEL_CONFIG)] = L1_KERNEL_CONFIG_SIZE; // TODO: this is wrong, need idle eth specific value
     mem_map_sizes[hv(HalMemAddrType::UNRESERVED)] = MEM_ETH_SIZE - ERISC_L1_UNRESERVED_BASE;
 
-    return {HalProgrammableCoreType::IDLE_ETH, CoreType::ETH, num_proc_per_idle_eth_core, mem_map_bases, mem_map_sizes};
+    return {HalProgrammableCoreType::IDLE_ETH, CoreType::ETH, num_proc_per_idle_eth_core, mem_map_bases, mem_map_sizes, false};
 }
 
 }  // namespace tt_metal
