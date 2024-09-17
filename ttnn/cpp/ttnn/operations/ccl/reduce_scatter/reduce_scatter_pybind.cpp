@@ -52,7 +52,7 @@ void py_bind_reduce_scatter(pybind11::module& module) {
     detail::bind_reduce_scatter(
         module,
         ttnn::reduce_scatter,
-        R"doc(reduce_scatter(input_tensor: std::vector<ttnn.Tensor>, scatter_dim: int, math_op: ReduceType, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None, num_workers: int = 8, num_buffers_per_channel: int = 2) -> std::vector<ttnn.Tensor>
+        R"doc(reduce_scatter(input_tensor: std::vector<ttnn.Tensor>, scatter_dim: int, math_op: ReduceType, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None, num_workers: int = None, num_buffers_per_channel: int = None) -> std::vector<ttnn.Tensor>
 
         Performs an reduce_scatter operation on multi-device :attr:`input_tensor` across all devices.
 

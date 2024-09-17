@@ -752,7 +752,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         input_tensor_n_elems_per_slice / (tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT);
 
     TT_ASSERT(input_tensor_num_units_per_tensor_slice > 0);
-    uint32_t max_num_workers = std::min<std::size_t>(user_defined_num_workers.value_or(input_tensor_num_units_per_tensor_slice), input_tensor_num_units_per_tensor_slice);
+    uint32_t max_num_workers = std::min<std::size_t>(user_defined_num_workers.value_or(8), input_tensor_num_units_per_tensor_slice);
     bool enable_bidirectional = true;
     std::size_t num_edm_channels = decide_number_of_edm_channels(op_config, max_num_workers, enable_bidirectional);
     log_trace(tt::LogOp, "num_edm_channels: {}", num_edm_channels);
