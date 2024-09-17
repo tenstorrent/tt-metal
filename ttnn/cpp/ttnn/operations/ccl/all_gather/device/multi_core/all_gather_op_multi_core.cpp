@@ -269,14 +269,14 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
 
     uint32_t input_page_size = input_tensor_config->get_page_size();
     uint32_t output_page_size = output_tensor_config->get_page_size();
-    auto const& [input_pages_per_shard_y, input_pages_per_shard_x] = is_sharded ? input_tensor.buffer()->shard_spec().shape_in_pages() : std::array<uint32_t, 2>{0,0};
-    auto const& [output_pages_per_shard_y, output_pages_per_shard_x] = is_sharded ? output_tensor.buffer()->shard_spec().shape_in_pages() : std::array<uint32_t, 2>{0,0};
+    auto const& [input_pages_per_shard_y, input_pages_per_shard_x] = is_sharded ? input_tensor.buffer()->shard_parameters().shape_in_pages() : std::array<uint32_t, 2>{0,0};
+    auto const& [output_pages_per_shard_y, output_pages_per_shard_x] = is_sharded ? output_tensor.buffer()->shard_parameters().shape_in_pages() : std::array<uint32_t, 2>{0,0};
     if (is_sharded) {
         TT_ASSERT(input_pages_per_shard_y > 0 && input_pages_per_shard_x > 0);
         TT_ASSERT(output_pages_per_shard_y > 0 && output_pages_per_shard_x > 0);
         log_trace(tt::LogOp, "input_buffer->page_size: {}", input_page_size);
-        log_trace(tt::LogOp, "input_buffer->shard_spec().tensor2d_shape[0]: {}", input_buffer->shard_spec().tensor2d_shape[0]);
-        log_trace(tt::LogOp, "input_buffer->shard_spec().tensor2d_shape[1]: {}", input_buffer->shard_spec().tensor2d_shape[1]);
+        log_trace(tt::LogOp, "input_buffer->shard_parameters().tensor2d_shape[0]: {}", input_buffer->shard_parameters().tensor2d_shape()[0]);
+        log_trace(tt::LogOp, "input_buffer->shard_parameters().tensor2d_shape[1]: {}", input_buffer->shard_parameters().tensor2d_shape()[1]);
     }
     const uint32_t max_buffer_per_chunk = tt::round_down(all_gather_config.get_eth_buffer_size(), input_page_size);
     const uint32_t max_pages_per_chunk = max_buffer_per_chunk / input_page_size;

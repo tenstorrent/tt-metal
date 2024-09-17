@@ -12,15 +12,15 @@
 #include "common/core_coord.h"
 #include "common/tt_backend_api_types.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include "llrt/hal.hpp"
 #include "tt_metal/common/base.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/impl/allocator/allocator_types.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
-#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h" // For CoreType
+#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"  // For CoreType
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
-#include "llrt/hal.hpp"
 
 namespace tt {
 
@@ -40,7 +40,7 @@ struct ShardSpec {
     /* The individual cores the shard grid is mapped to */
     CoreRangeSet grid;
 
-    /* Canonical tensor shape where the depth dimensions ([:-2] are folded along y) */
+    /* Shape of a shard where the depth dimensions ([:-2] are folded along y) */
     std::array<uint32_t, 2> shape;
 
     /* The sequence order of the grid cores that the shards are layed out onto. */
@@ -68,45 +68,55 @@ struct ShardSpec {
 bool operator==(const ShardSpec &spec_a, const ShardSpec &spec_b);
 bool operator!=(const ShardSpec &spec_a, const ShardSpec &spec_b);
 
-struct ShardSpecBuffer {
-    ShardSpec tensor_shard_spec;
-    std::array<uint32_t, 2> page_shape;
-    std::array<uint32_t, 2> tensor2d_shape;
+class ShardSpecBuffer {
+   public:
     ShardSpecBuffer(
         const CoreRangeSet &core_sets_,
         const std::array<uint32_t, 2> &shard_shape_,
-        const ShardOrientation &shard_orientation_,
-        const bool &halo_,
+        const ShardOrientation shard_orientation_,
+        const bool halo_,
+        const TensorMemoryLayout layout,
         const std::array<uint32_t, 2> &page_shape,
-        const std::array<uint32_t, 2> &tensor2d_shape) :
-        tensor_shard_spec(core_sets_, shard_shape_, shard_orientation_, halo_) {
-        this->page_shape = page_shape;
-        this->tensor2d_shape = tensor2d_shape;
-    }
+        const std::array<uint32_t, 2> &tensor2d_shape,
+        const uint32_t tensor_width_size);
     ShardSpecBuffer(
         const ShardSpec &shard_spec,
+        const TensorMemoryLayout layout,
         const std::array<uint32_t, 2> &page_shape,
-        const std::array<uint32_t, 2> &tensor2d_shape) :
-        tensor_shard_spec(shard_spec) {
-        this->page_shape = page_shape;
-        this->tensor2d_shape = tensor2d_shape;
-    }
-    CoreRangeSet grid() const { return tensor_shard_spec.grid; }
-    std::array<uint32_t, 2> shape() const { return tensor_shard_spec.shape; }
-    ShardOrientation orientation() const { return tensor_shard_spec.orientation; }
-    bool halo() const { return tensor_shard_spec.halo; }
-    void set_shard_spec(const ShardSpec& shard_spec) { tensor_shard_spec = shard_spec; };
+        const std::array<uint32_t, 2> &tensor2d_shape,
+        const uint32_t tensor_width_size);
 
-    /* Shape in pages of the full tensor, not per core */
-    std::array<uint32_t, 2> shape_in_pages() const {
-        auto width_in_pages = tensor_shard_spec.shape[0] / page_shape[0];
-        auto height_in_pages = tensor_shard_spec.shape[1] / page_shape[1];
-        return {width_in_pages, height_in_pages};
+    void validate_shard_spec_buffer() const;
+
+    const ShardSpec& shard_spec() const;
+    const CoreRangeSet& grid() const;
+    const std::array<uint32_t, 2>& shape() const;
+    ShardOrientation orientation() const;
+    bool halo() const;
+    const std::array<uint32_t, 2>& page_shape() const;
+    const std::array<uint32_t, 2>& tensor2d_shape() const;
+    uint32_t tensor_width_size() const;
+    TensorMemoryLayout layout() const;
+
+    /* Shape in pages of a shard */
+    std::array<uint32_t, 2> shape_in_pages() const;
+    uint32_t num_pages() const;
+    std::array<uint32_t, 2> tensor2d_page_shape() const;
+    DeviceAddr size() const;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("shard_spec", "layout", "page_shape", "tensor2d_shape", "tensor_width_size");
+    constexpr auto attribute_values() const {
+        return std::forward_as_tuple(
+            this->shard_spec_, this->layout_, this->page_shape_, this->tensor2d_shape_, this->tensor_width_size_);
     }
-    DeviceAddr size() const {
-        auto shape_in_pages_ = this->shape_in_pages();
-        return shape_in_pages_[0] * shape_in_pages_[1];
-    }
+
+   private:
+    ShardSpec shard_spec_;
+    TensorMemoryLayout layout_;
+    std::array<uint32_t, 2> page_shape_;
+    std::array<uint32_t, 2> tensor2d_shape_;
+    uint32_t tensor_width_size_;
 };
 
 struct BufferConfig {
@@ -136,13 +146,14 @@ bool is_sharded(const TensorMemoryLayout &layout);
 
 struct BufferPageMapping {
     std::vector<CoreCoord> all_cores_;
-    std::vector<uint32_t> core_bank_indices_;
+    std::vector<uint32_t> core_unpadded_page_size_;
     std::vector<std::vector<uint32_t>> core_host_page_indices_;
     std::vector<uint32_t> dev_page_to_core_mapping_;
 
     // some dev pages don't have mapping to host (in case of padding)
     std::vector<std::optional<uint32_t>> dev_page_to_host_page_mapping_;
     std::vector<uint32_t> host_page_to_dev_page_mapping_;
+    std::vector<uint32_t> host_page_to_host_offset_;
     std::unordered_map<CoreCoord, uint32_t> core_to_core_id_;
     std::vector<uint32_t> host_page_to_local_shard_page_mapping_;
     std::vector<std::array<uint32_t, 2>> core_shard_shape_;
@@ -164,7 +175,7 @@ class Buffer {
         DeviceAddr page_size,
         const BufferType buffer_type,
         const TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        const std::optional<ShardSpecBuffer>& shard_parameter = std::nullopt,
+        const std::optional<ShardSpecBuffer> &shard_parameter = std::nullopt,
         const std::optional<bool> bottom_up = std::nullopt,
         bool allocate = true);
 
@@ -179,7 +190,10 @@ class Buffer {
 
     DeviceAddr size() const { return static_cast<DeviceAddr>(size_); }
 
-    void set_size(DeviceAddr size) { size_ = size; this->buffer_page_mapping_ = nullptr; }
+    void set_size(DeviceAddr size) {
+        size_ = size;
+        this->buffer_page_mapping_ = nullptr;
+    }
     // Returns address of buffer in the first bank
     uint32_t address() const { return static_cast<uint32_t>(address_); }
 
@@ -199,20 +213,17 @@ class Buffer {
         if (!is_sharded(this->buffer_layout_)) {
             return this->num_pages();
         } else {
-            return this->shard_spec().size() * this->num_cores();
+            return this->shard_parameters().num_pages() * this->num_cores();
         }
     }
 
     BufferType buffer_type() const { return buffer_type_; }
     CoreType core_type() const {
         switch (this->buffer_type_) {
-            case BufferType::DRAM:
-                return CoreType::DRAM;
+            case BufferType::DRAM: return CoreType::DRAM;
             case BufferType::L1:
-            case BufferType::L1_SMALL:
-                return CoreType::WORKER;
-            default:
-                TT_THROW("Unknown CoreType for buffer");
+            case BufferType::L1_SMALL: return CoreType::WORKER;
+            default: TT_THROW("Unknown CoreType for buffer");
         }
     }
 
@@ -235,7 +246,7 @@ class Buffer {
 
     uint32_t alignment() const { return ALLOCATOR_ALIGNMENT; }
 
-    DeviceAddr aligned_page_size() const { return align(page_size_, this->alignment());}
+    DeviceAddr aligned_page_size() const { return align(page_size_, this->alignment()); }
 
     DeviceAddr aligned_size() const { return this->num_dev_pages() * this->aligned_page_size(); }
 
@@ -244,14 +255,14 @@ class Buffer {
 
     DeviceAddr sharded_page_address(uint32_t bank_id, uint32_t page_index) const;
 
-    ShardSpecBuffer shard_spec() const {
+    const ShardSpecBuffer &shard_parameters() const {
         TT_ASSERT(is_sharded(this->buffer_layout_), "Buffer not sharded");
         TT_ASSERT(shard_parameters_.has_value());
         return this->shard_parameters_.value();
     }
 
-    void set_shard_spec(const ShardSpecBuffer& shard_spec) {
-        this->shard_parameters_ = shard_spec;
+    void set_shard_parameters(const ShardSpecBuffer &shard_spec_buffer) {
+        this->shard_parameters_ = shard_spec_buffer;
         this->buffer_page_mapping_ = nullptr;
     }
 
@@ -259,11 +270,11 @@ class Buffer {
         if (!is_sharded(this->buffer_layout_))
             return 1;
         else {
-            return this->shard_spec().tensor_shard_spec.grid.num_cores();
+            return this->shard_parameters().grid().num_cores();
         }
     }
 
-    const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
+    const std::shared_ptr<const BufferPageMapping> &get_buffer_page_mapping();
 
    private:
     virtual void allocate();
@@ -282,6 +293,7 @@ class Buffer {
     std::optional<ShardSpecBuffer> shard_parameters_;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
     bool allocate_ = true;
+
    protected:
     std::optional<bool> bottom_up_;
 };

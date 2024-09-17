@@ -103,8 +103,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t in0_shard_width_in_tiles = 0;
     uint32_t in0_shard_height_in_tiles = 0;
     if (in0_is_sharded) {
-        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / TILE_WIDTH;
-        in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / TILE_HEIGHT;
+        in0_shard_width_in_tiles = in0_buffer->shard_parameters().shape()[1] / TILE_WIDTH;
+        in0_shard_height_in_tiles = in0_buffer->shard_parameters().shape()[0] / TILE_HEIGHT;
         in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
     }
 
@@ -144,7 +144,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     // Only used for in0 block sharded
     std::optional<CoreRange> in0_mcast_cores_without_work_and_not_in_receiver_grid;
     if (in0_block_sharded) {
-        CoreCoord in0_shard_grid = in0_buffer->shard_spec().grid().bounding_box().grid_size();
+        CoreCoord in0_shard_grid = in0_buffer->shard_parameters().grid().bounding_box().grid_size();
         // in0 shard grid already accounts for transpose_mcast
         // ie. If transpose_mcast, in0 width is along y
         in0_sender_num_cores_along_width = transpose_mcast ? in0_shard_grid.y : in0_shard_grid.x;

@@ -398,9 +398,9 @@ Tensor tensor_reshape(const Tensor& input_tensor, const tt::tt_metal::LegacyShap
                     } else {
                         DeviceStorage device_storage = std::get<T>(tensor.get_storage());
                         DeviceBuffer device_buffer = device_storage.get_buffer();
-                        ShardSpecBuffer shard_spec_buffer = device_buffer->shard_spec();
+                        const auto& original_shard_spec_buffer = device_buffer->shard_parameters();
 
-                        auto shard_spec = shard_spec_buffer.tensor_shard_spec;
+                        auto shard_spec = original_shard_spec_buffer.shard_spec();
                         auto shard_shape = shard_spec.shape;
 
                         uint32_t mul_div = new_shape[-1] > shard_shape[1] ?
@@ -409,11 +409,17 @@ Tensor tensor_reshape(const Tensor& input_tensor, const tt::tt_metal::LegacyShap
                         shard_spec.shape[0] = new_shape[-1] > shard_shape[1] ? shard_shape[0] / mul_div : shard_shape[0] * mul_div;
                         shard_spec.shape[1] = new_shape[-1];
 
-                        shard_spec_buffer.page_shape = {1, new_shape[-1]};
-                        shard_spec_buffer.tensor2d_shape = {shard_spec.shape[0], 1};
-                        shard_spec_buffer.set_shard_spec(shard_spec);
+                        uint32_t new_height = tt::tt_metal::compute_volume(new_shape) / new_shape[-1];
 
-                        device_buffer->set_shard_spec(shard_spec_buffer);
+                        ShardSpecBuffer shard_spec_buffer(
+                            shard_spec,
+                            original_shard_spec_buffer.layout(),
+                            {1, new_shape[-1]},
+                            {new_height, new_shape[-1]},
+                            new_shape[-1] * tensor.element_size()
+                        );
+
+                        device_buffer->set_shard_parameters(shard_spec_buffer);
                         device_storage.insert_buffer(device_buffer);
 
                         return Tensor(device_storage, new_shape, tensor.get_dtype(), tensor.get_layout());

@@ -43,7 +43,11 @@ uint32_t element_size_bytes(DataType dtype) {
     }
 }
 
-uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const tt::tt_metal::LegacyShape& shape) {
+uint32_t get_tile_size(DataType dtype) {
+    return tt_metal::detail::TileSize(tt_metal::datatype_to_dataformat_converter(dtype));
+}
+
+uint32_t get_page_size(DataType dtype, Layout layout, const tt::tt_metal::LegacyShape& shape) {
     uint32_t W = shape[-1];
     uint32_t page_size = 0;
     switch (layout) {
@@ -53,34 +57,9 @@ uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes,
         } break;
         case Layout::TILE: {
             // TODO: Update to be generic for data type (issue 462)
-            switch (dtype) {
-                case DataType::BFLOAT16: {
-                    // Float is converted to bfloat16 before being written to device
-                    uint32_t size_of_element = element_size_bytes(DataType::BFLOAT16);
-                    page_size = constants::TILE_HW * size_of_element;
-                } break;
-                case DataType::FLOAT32: {
-                    uint32_t size_of_element = element_size_bytes(DataType::FLOAT32);
-                    page_size = constants::TILE_HW * size_of_element;
-                } break;
-                case DataType::UINT32:
-                case DataType::INT32:
-                case DataType::UINT16:
-                case DataType::UINT8:{
-                    uint32_t size_of_element = element_size_bytes(dtype);
-                    page_size = constants::TILE_HW * size_of_element;
-                } break;
-                case DataType::BFLOAT4_B: {
-                    page_size = constants::BFLOAT4_B_TILE_HW;
-                } break;
-                case DataType::BFLOAT8_B: {
-                    page_size = constants::BFLOAT8_B_TILE_HW;
-                } break;
-                default: TT_ASSERT(false && "Unsupported data type!");
-            }
-            TT_ASSERT(total_size_bytes % page_size == 0);
+            page_size = get_tile_size(dtype);
         } break;
-        default: TT_ASSERT(false && "Unsupported layout to write to device");
+        default: TT_THROW("Unsupported layout to write to device");
     }
     TT_ASSERT(page_size != 0);
     return page_size;
@@ -180,7 +159,7 @@ DeviceBuffer allocate_interleaved_buffer_on_device(
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config) {
-    uint32_t page_size = get_page_size(data_type, layout, buffer_size_bytes, shape);
+    uint32_t page_size = get_page_size(data_type, layout, shape);
     return std::make_shared<Buffer>(device, buffer_size_bytes, page_size, memory_config.buffer_type);
 }
 
@@ -198,8 +177,8 @@ DeviceBuffer allocate_sharded_buffer_on_device(
     const ShardSpecBuffer& shard_params,
     const MemoryConfig& memory_config) {
     validate_sharded_buffer_allocation(shape, layout, data_type, shard_params, memory_config);
-    const auto& page_shape = shard_params.page_shape;
-    uint32_t page_size = get_page_size(data_type, layout, buffer_size_bytes, page_shape);
+    const auto& page_shape = shard_params.page_shape();
+    uint32_t page_size = get_page_size(data_type, layout, page_shape);
 
     return std::make_shared<Buffer>(
         device, buffer_size_bytes, page_size, memory_config.buffer_type, memory_config.memory_layout, shard_params);
@@ -646,7 +625,7 @@ Tensor to_host_helper(const Tensor& tensor, bool blocking = true, uint8_t cq_id 
     auto device_buffer = tensor.device_buffer();
     auto device = tensor.device();
     TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
-    uint32_t size_in_bytes = device_buffer->size();
+    uint32_t size_in_bytes = tensor.is_sharded() ? device_buffer->shard_parameters().size() : device_buffer->size();
     vector<T> data_vec;
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
@@ -789,7 +768,14 @@ DeviceBuffer initialize_data_on_device(
     std::optional<std::reference_wrapper<CommandQueue>> queue = std::nullopt) {
     ZoneScoped;
     TT_ASSERT(device != nullptr);
-    auto packed_size_in_bytes = packed_buffer_size_bytes<T>(data_to_write.size());
+    size_t packed_size_in_bytes;
+    if (shard_spec.has_value()) {
+        const auto& tensor2d_page_shape = shard_spec->tensor2d_page_shape();
+        const auto& page_shape = shard_spec->page_shape();
+        packed_size_in_bytes = tensor2d_page_shape[0] * tensor2d_page_shape[1] * tensor_impl::get_page_size(data_type, layout, page_shape);
+    } else {
+        packed_size_in_bytes = packed_buffer_size_bytes<T>(data_to_write.size());
+    }
 
     auto device_buffer =
         allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config, shard_spec);
@@ -877,8 +863,9 @@ Tensor to_device(
             other_dims *= shape[i];
         }
 
-        std::array<uint32_t, 2> tensor2d_size = {other_dims / page_shape[0], width / page_shape[1]};
-        shard_spec_buffer_opt = ShardSpecBuffer(memory_config.shard_spec.value(), page_shape, tensor2d_size);
+        std::array<uint32_t, 2> tensor2d_shape = {other_dims, width};
+        uint32_t tensor_width_size = layout == Layout::ROW_MAJOR ? width * tensor.element_size() : width / page_shape[1] * get_tile_size(data_type);
+        shard_spec_buffer_opt = ShardSpecBuffer(memory_config.shard_spec.value(), memory_config.memory_layout, page_shape, tensor2d_shape, tensor_width_size);
     }
 
     auto device_buffer = tensor_impl::to_device_buffer<T>(
@@ -1337,7 +1324,7 @@ Tensor unpad<bfloat4_b>(const Tensor& tensor, const tt::tt_metal::LegacyShape& o
 template <typename T>
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id) {
     auto buffer = tensor.buffer();
-    auto buffer_shard_shape = buffer->shard_spec().shape();
+    auto buffer_shard_shape = buffer->shard_parameters().shape();
     std::array<uint32_t, 4> shard_shape_array = {1, 1, buffer_shard_shape[0], buffer_shard_shape[1]};
     tt::tt_metal::LegacyShape shard_shape(shard_shape_array);
     std::vector<uint32_t> device_data;

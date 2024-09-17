@@ -36,6 +36,19 @@ struct L1Config {
 
     bool sharded = true;
     ShardSpecBuffer shard_spec() const{
+        std::array<uint32_t, 2> tensor_shape;
+        uint32_t tensor_width_size;
+        if (buffer_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+            tensor_shape = {num_cores_height * num_cores_width * num_tiles_per_core_height * tt::constants::TILE_HEIGHT,
+                            num_tiles_per_core_width * tt::constants::TILE_WIDTH};
+            tensor_width_size = num_tiles_per_core_width * page_size_bytes;
+        } else if (buffer_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+            tensor_shape = {num_tiles_per_core_height * tt::constants::TILE_HEIGHT,
+                            num_cores_height * num_cores_width * num_tiles_per_core_width * tt::constants::TILE_WIDTH};
+            tensor_width_size = num_cores_height * num_cores_width * num_tiles_per_core_width * page_size_bytes;
+        } else {
+            TT_THROW("Unsupported buffer layout");
+        }
         return ShardSpecBuffer(
                         CoreRangeSet(std::set<CoreRange>(
                             { CoreRange(CoreCoord(0,0), CoreCoord(0, num_cores_height*num_cores_width - 1))}
@@ -44,9 +57,10 @@ struct L1Config {
                             (uint32_t)num_tiles_per_core_width * tt::constants::TILE_WIDTH},
                         ShardOrientation::ROW_MAJOR,
                         false,
+                        buffer_layout,
                         {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-                        {1* num_cores_height * num_tiles_per_core_height * num_cores_height,
-                            num_tiles_per_core_width * num_cores_width});
+                        tensor_shape,
+                        tensor_width_size);
     }
 };
 

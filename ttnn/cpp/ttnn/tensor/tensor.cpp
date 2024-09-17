@@ -460,8 +460,8 @@ bool Tensor::is_allocated() const {
 std::vector<uint32_t> Tensor::host_page_ordering() {
     const auto& buffer_page_mapping = *this->buffer()->get_buffer_page_mapping();
     auto cores = buffer_page_mapping.all_cores_;
-    auto shard_size = buffer()->shard_spec().size();
-    auto num_pages = cores.size() * shard_size;
+    auto shard_num_pages = buffer()->shard_parameters().num_pages();
+    auto num_pages = cores.size() * shard_num_pages;
 
     std::vector<uint32_t> ret_vec;
     ret_vec.reserve(num_pages);
@@ -518,10 +518,11 @@ Tensor create_device_tensor(
 
         auto element_size = tensor_impl::element_size_bytes(data_type);
         auto page_shape = tensor_impl::get_sharded_page_shape(layout, data_type, shard_spec.shape);
-        std::array<uint32_t, 2> tensor2d_size = {other_dims / page_shape[0], width / page_shape[1]};
-        ShardSpecBuffer shard_spec_buffer(shard_spec, page_shape, tensor2d_size);
-        size_t packed_size_in_bytes =
-            tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
+        std::array<uint32_t, 2> tensor2d_shape = {other_dims, width};
+        uint32_t tensor_width_size = layout == Layout::ROW_MAJOR ? width * element_size : width / TILE_WIDTH * tensor_impl::get_tile_size(data_type);
+        ShardSpecBuffer shard_spec_buffer(shard_spec, memory_config.memory_layout, page_shape, tensor2d_shape, tensor_width_size);
+        const auto& tensor2d_page_shape = shard_spec_buffer.tensor2d_page_shape();
+        size_t packed_size_in_bytes = tensor2d_page_shape[0] * tensor2d_page_shape[1] * tensor_impl::get_page_size(data_type, layout, page_shape);
         auto device_buffer = tensor_impl::allocate_buffer_on_device(
             packed_size_in_bytes, device, shape, data_type, layout, memory_config, shard_spec_buffer);
 

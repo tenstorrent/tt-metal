@@ -246,7 +246,8 @@ void validate_sharded_buffer_allocation(
 //                           Data reader, writer, and initializers
 // ======================================================================================
 
-uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const tt::tt_metal::LegacyShape& shape);
+uint32_t get_tile_size(DataType dtype);
+uint32_t get_page_size(DataType dtype, Layout layout, const tt::tt_metal::LegacyShape& shape);
 
 DeviceBuffer allocate_buffer_on_device(
     size_t buffer_size_bytes,

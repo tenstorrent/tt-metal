@@ -18,7 +18,7 @@ DeviceBuffer allocate_interleaved_buffer_on_device(
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config) {
-    uint32_t page_size = tt::tt_metal::tensor_impl::get_page_size(data_type, layout, buffer_size_bytes, shape.value);
+    uint32_t page_size = tt::tt_metal::tensor_impl::get_page_size(data_type, layout, shape.value);
     return std::make_shared<Buffer>(device, buffer_size_bytes, page_size, memory_config.buffer_type);
 }
 
@@ -37,11 +37,13 @@ DeviceBuffer allocate_sharded_buffer_on_device(
     const MemoryConfig& memory_config) {
     tt::tt_metal::tensor_impl::validate_sharded_buffer_allocation(
         shape.value, layout, data_type, shard_params, memory_config);
-    const auto& page_shape = shard_params.page_shape;
+    const auto& page_shape = shard_params.page_shape();
     uint32_t size_of_element = tt::tt_metal::tensor_impl::element_size_bytes(data_type);
-    uint32_t page_size = page_shape[0] * page_shape[1] * size_of_element;
+    uint32_t page_size;
     if (layout == Layout::TILE) {
-        page_size = tt::tt_metal::tensor_impl::get_page_size(data_type, layout, buffer_size_bytes, shape.value);
+        page_size = tt::tt_metal::tensor_impl::get_page_size(data_type, layout, shape.value);
+    } else {
+        page_size = page_shape[0] * page_shape[1] * size_of_element;
     }
 
     return std::make_shared<Buffer>(

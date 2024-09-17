@@ -1659,8 +1659,10 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
                 {Mt * tt::constants::TILE_HEIGHT, Nt * tt::constants::TILE_WIDTH},
                 ShardOrientation::ROW_MAJOR,
                 false,
+                TensorMemoryLayout::HEIGHT_SHARDED,
                 {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-                {Mt, Nt});
+                {Mt, Nt},
+                Nt * page_size_bytes);
 
     log_debug("size_bytes: {}", size_bytes);
     log_debug("page_size_bytes: {}", page_size_bytes);
@@ -1691,8 +1693,10 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb_fp8(
                 {Mt * tt::constants::TILE_HEIGHT, Nt * tt::constants::TILE_WIDTH},
                 ShardOrientation::ROW_MAJOR,
                 false,
+                TensorMemoryLayout::HEIGHT_SHARDED,
                 {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-                {Mt, Nt});
+                {Mt, Nt},
+                Nt * page_size_bytes);
 
     log_debug("size_bytes: {}", size_bytes);
     log_debug("page_size_bytes: {}", page_size_bytes);
