@@ -575,6 +575,20 @@ std::vector<std::optional<Tensor>> ExecuteBackwardLT::invoke(
     return result;
 }
 
+std::vector<std::optional<Tensor>> ExecuteBackwardLT::invoke(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+    return ExecuteBackwardLT::invoke(ttnn::DefaultQueueId, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
+}
+
+std::vector<std::optional<Tensor>> ExecuteBackwardLT::invoke(
+    const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> input_grad) {
+    return ExecuteBackwardLT::invoke(ttnn::DefaultQueueId, grad, input, other, output_mem_config, input_grad);
+}
+
 
 std::vector<Tensor> _gt_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     return _binary_comp_bw(grad, input, other, output_mem_config);

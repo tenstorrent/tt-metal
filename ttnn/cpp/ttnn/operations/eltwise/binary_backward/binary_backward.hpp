@@ -162,6 +162,22 @@ struct ExecuteBackwardLT {
         float other,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
+
+    static std::vector<std::optional<Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const Tensor &other_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        std::optional<Tensor> input_grad = std::nullopt,
+        std::optional<Tensor> other_grad = std::nullopt);
+
+    static std::vector<std::optional<Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float other,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt);
 };
 
 struct ExecuteBackwardAdd {
