@@ -39,5 +39,8 @@ struct address_map {
 
   static constexpr std::int32_t ERISC_L1_UNRESERVED_SIZE = 0;
   static constexpr std::int32_t ERISC_L1_TUNNEL_BUFFER_SIZE = 0;
+
+  static constexpr std::uint32_t RETRAIN_COUNT_ADDR = 0x1EDC;
+  static constexpr std::uint32_t RETRAIN_FORCE_ADDR = 0x1EFC;
 };
 }  // namespace llk

@@ -85,5 +85,7 @@ struct address_map {
                                                                    // at RISC_LOCAL_MEM_BASE address
 
   static constexpr std::uint32_t FW_VERSION_ADDR = 0x210;
+  static constexpr std::uint32_t RETRAIN_COUNT_ADDR = 0x1EDC; // Not implemented for BH yet!
+  static constexpr std::uint32_t RETRAIN_FORCE_ADDR = 0x1EFC;
 };
 }  // namespace eth_l1_mem
