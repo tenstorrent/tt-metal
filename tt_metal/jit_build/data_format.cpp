@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "data_format.hpp"
+#include "hostdevcommon/common_runtime_address_map.h"
 #include <unordered_map>
 #include <set>
 namespace tt {

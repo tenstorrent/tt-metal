@@ -156,7 +156,7 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
     };
 
     // set preserve_fp32_precision to the same value as fp32_dest_acc_en
-    bool preserve_fp32_precision = fp32_dest_acc_en;
+    vector<PreserveFP32Target> preserve_fp32_precision(NUM_CIRCULAR_BUFFERS, PreserveFP32Target::Disabled);
     auto reduce_compute_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_name,

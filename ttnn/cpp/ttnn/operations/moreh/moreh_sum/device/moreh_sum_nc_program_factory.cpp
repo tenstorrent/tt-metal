@@ -106,7 +106,7 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
     // set preserve_fp32_precision to the same value as fp32_dest_acc_en
-    bool preserve_fp32_precision = fp32_dest_acc_en;
+    vector<PreserveFP32Target> preserve_fp32_precision(NUM_CIRCULAR_BUFFERS, PreserveFP32Target::Disabled);
     auto compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/moreh_sum_nc.cpp";
     if (device->arch() == tt::ARCH::GRAYSKULL) {

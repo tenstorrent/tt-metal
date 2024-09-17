@@ -369,10 +369,10 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
         compute_args_group_1.push_back(static_cast<uint32_t>(is_scalar_bias));
     }
 
-    bool preserve_fp32_precision = false;
+    vector<PreserveFP32Target> preserve_fp32_precision(NUM_CIRCULAR_BUFFERS, PreserveFP32Target::Disabled);
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
-        preserve_fp32_precision = true;
+        // set appropriate indices 'i' of preserve_fp32_precision[i] to PreserveFP32Target::DEST
     }
 
     const auto compute_kernel_1_id = tt::operations::primary::CreateComputeKernel(
