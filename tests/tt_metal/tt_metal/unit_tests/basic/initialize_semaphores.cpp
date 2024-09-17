@@ -71,6 +71,8 @@ void create_and_read_max_num_semaphores(
         ASSERT_TRUE(semaphore_id == i);
     }
 
+    program.finalize();
+
     ASSERT_TRUE(tt_metal::detail::ConfigureDeviceWithProgram(device, program));
 
     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {

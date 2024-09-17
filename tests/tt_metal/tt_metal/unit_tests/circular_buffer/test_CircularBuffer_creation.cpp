@@ -20,18 +20,20 @@ bool test_cb_config_written_to_core(Program &program, Device *device, const Core
     detail::ConfigureDeviceWithProgram(device, program);
 
     vector<uint32_t> cb_config_vector;
-    uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (const auto cb: program.circular_buffers()) {
         for (const CoreRange &core_range : cb->core_ranges().ranges()) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
+                    uint32_t cb_config_buffer_size = program.get_cb_size(device, core_coord, CoreType::WORKER);
+
                     tt::tt_metal::detail::ReadFromDeviceL1(
                         device, core_coord, program.get_sem_base_addr(device, core_coord, CoreType::WORKER), cb_config_buffer_size, cb_config_vector);
 
                     for (const auto &[buffer_index, golden_cb_config] : cb_config_per_buffer_index) {
                         auto base_index = UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index;
+                        fprintf(stderr, "testing %d\n", buffer_index);
                         pass &= (golden_cb_config.at(0) == cb_config_vector.at(base_index));    // address
                         pass &= (golden_cb_config.at(1) == cb_config_vector.at(base_index + 1)); // size
                         pass &= (golden_cb_config.at(2) == cb_config_vector.at(base_index + 2)); // num pages
@@ -71,6 +73,8 @@ TEST_F(DeviceFixture, TestCreateCircularBufferAtValidIndices) {
         .set_page_size(16, cb_config.page_size)
         .set_page_size(24, cb_config.page_size);
     auto cb = CreateCircularBuffer(program, cr_set, config);
+
+    program.finalize();
 
     for (unsigned int id = 0; id < num_devices_; id++) {
         EXPECT_TRUE(test_cb_config_written_to_core(program, this->devices_.at(id), cr_set, golden_cb_config));
