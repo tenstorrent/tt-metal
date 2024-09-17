@@ -3,29 +3,39 @@
 .type   _start, @function
 
 _start:
-.option push
-.option norelax
+	// Use explicit lui/addi pairs here to generate absolute
+	// addresses, these will get relaxed to gp-relative
+	// computations where possible.
+
+	.option push
+	.option norelax
 	// Initialize global pointer,
-	// Use an absolute reloc, so text placement is irrelevant.
 	lui gp,%hi(__global_pointer$)
 	addi gp,gp,%lo(__global_pointer$)
-.option pop
+	.option pop
 
-  /* set stack pointer */
-  la sp, __stack_top
+	// set stack pointer
+	lui	sp, %hi(__stack_top)
+	addi	sp, sp, %lo(__stack_top)
 
-  # Clear the bss segment
-  la      a0, __ldm_bss_start
-  la      a1, __ldm_bss_end
-  call    wzerorange
+	// Clear bss
+	lui	a0, %hi(__ldm_bss_start)
+	addi	a0, a0, %lo(__ldm_bss_start)
+	lui	a1, %hi(__ldm_bss_end)
+	addi	a1, a1, %lo(__ldm_bss_end)
+	call    wzerorange
 
-  la      s2, __init_array_start
-  la      s3, __init_array_end
-  j       2f
-1:lw      a0, 0(s2)
-  jalr    a0
-  addi    s2, s2, 4
-2:bne     s2, s3, 1b
+	// Run global initializers
+	lui	s2, %hi(__init_array_start)
+	addi	s2, s2, %lo(__init_array_start)
+	lui	s3, %hi(__init_array_end)
+	addi	s3, s3, %lo(__init_array_end)
+	beq	s2, s3, 2f
+1:	lw      a0, 0(s2)
+	jalr    a0
+	addi  	s2, s2, 4
+	bne	s2, s3, 1b
+2:
 
   /* Pass in the tensix coordinates as argv[0][0] through argv[0][3].
      argc = 1, envp = NULL. In memory, we'll have
