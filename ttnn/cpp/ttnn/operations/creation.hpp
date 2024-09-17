@@ -180,12 +180,24 @@ struct FullLikeWith {
     static constexpr auto fill_value = FillValue.invoke();
 
     static ttnn::Tensor invoke(
+        uint8_t queue_id,
         const ttnn::Tensor& tensor,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
         const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return full_like(tensor, fill_value, dtype, layout, device, memory_config);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
+        return full_like_impl(queue_id, tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
+    }
+
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& tensor,
+        const std::optional<DataType>& dtype = std::nullopt,
+        const std::optional<Layout>& layout = std::nullopt,
+        const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
+        return full_like_impl(ttnn::DefaultQueueId, tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
     }
 };
 
