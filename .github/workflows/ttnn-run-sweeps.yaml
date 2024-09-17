@@ -151,7 +151,7 @@ jobs:
       ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
-    timeout-minutes: 30
+    timeout-minutes: 720
     runs-on: [build, in-service]
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
