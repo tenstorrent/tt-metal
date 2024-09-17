@@ -93,13 +93,13 @@ std::unique_ptr<MatmulOpConstraintsBuilder> MatmulOpConstraintsFactory::Make(
     tt::tt_metal::MemoryConfig& memory_config_o,
     const ttnn::operations::matmul::MatmulProgramConfig& program_config,
     const CoreCoord& chip_grid) {
-    if (!OpConstraintsFactory::Can_fit_op_on_chip(memory_config_a, chip_grid)) {
+    if (!OpConstraintsFactory::can_fit_op_on_chip(memory_config_a, chip_grid)) {
         return nullptr;
     }
-    if (!OpConstraintsFactory::Can_fit_op_on_chip(memory_config_b, chip_grid)) {
+    if (!OpConstraintsFactory::can_fit_op_on_chip(memory_config_b, chip_grid)) {
         return nullptr;
     }
-    if (!OpConstraintsFactory::Can_fit_op_on_chip(memory_config_o, chip_grid)) {
+    if (!OpConstraintsFactory::can_fit_op_on_chip(memory_config_o, chip_grid)) {
         return nullptr;
     }
     auto matmul_op_type = GetMatmulOpType(

@@ -214,7 +214,7 @@ bool OpConstraintsBuilder::can_allocate_sharded_buffer(
     return true;
 }
 
-bool OpConstraintsFactory::Can_fit_op_on_chip(const MemoryConfig& memory_config, const CoreCoord& chip_grid) {
+bool OpConstraintsFactory::can_fit_op_on_chip(const MemoryConfig& memory_config, const CoreCoord& chip_grid) {
     if (!memory_config.is_sharded()) {
         return true;
     }

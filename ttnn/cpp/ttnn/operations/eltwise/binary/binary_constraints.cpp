@@ -126,13 +126,13 @@ std::unique_ptr<EltwiseOpConstraintsBuilder> EltwiseOpConstraintsFactory::Make(
     const tt::tt_metal::MemoryConfig& memory_config_b,
     const tt::tt_metal::MemoryConfig& memory_config_o,
     const CoreCoord& chip_grid) {
-    if (!OpConstraintsFactory::Can_fit_op_on_chip(memory_config_a, chip_grid)) {
+    if (!OpConstraintsFactory::can_fit_op_on_chip(memory_config_a, chip_grid)) {
         return nullptr;
     }
-    if (!OpConstraintsFactory::Can_fit_op_on_chip(memory_config_b, chip_grid)) {
+    if (!OpConstraintsFactory::can_fit_op_on_chip(memory_config_b, chip_grid)) {
         return nullptr;
     }
-    if (!OpConstraintsFactory::Can_fit_op_on_chip(memory_config_o, chip_grid)) {
+    if (!OpConstraintsFactory::can_fit_op_on_chip(memory_config_o, chip_grid)) {
         return nullptr;
     }
     auto eltwise_op_type =

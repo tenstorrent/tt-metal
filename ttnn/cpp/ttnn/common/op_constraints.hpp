@@ -119,5 +119,5 @@ class OpConstraintsFactory {
    public:
     static const uint32_t Volume(const ttnn::Shape& shape);
 
-    static bool Can_fit_op_on_chip(const MemoryConfig& memory_config, const CoreCoord& chip_grid);
+    static bool can_fit_op_on_chip(const MemoryConfig& memory_config, const CoreCoord& chip_grid);
 };
