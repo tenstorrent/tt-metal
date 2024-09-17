@@ -173,7 +173,7 @@ static Tensor reduce_impl(
     }
 
     if (reshape) {
-        output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{tt::tt_metal::Shape{output_shape, padded_output_shape}});
+        output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{tt::tt_metal::LegacyShape{output_shape, padded_output_shape}});
     }
 
     return output_tensor;

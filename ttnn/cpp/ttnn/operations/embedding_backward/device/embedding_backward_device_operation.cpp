@@ -68,12 +68,12 @@ void EmbeddingBackward::validate(const std::vector<Tensor> &input_tensors) const
         "Number of rows in gradient tensor must be equal to number of indices in index tensor");
 }
 
-std::vector<tt::tt_metal::Shape> EmbeddingBackward::compute_output_shapes(
+std::vector<tt::tt_metal::LegacyShape> EmbeddingBackward::compute_output_shapes(
     const std::vector<Tensor> &input_tensors) const {
     const auto &grad_tensor = input_tensors.at(1);
     auto embedding_dim = grad_tensor.get_legacy_shape()[-1];
 
-    tt::tt_metal::Shape output_shape({1, 1, this->num_embeddings, embedding_dim});
+    tt::tt_metal::LegacyShape output_shape({1, 1, this->num_embeddings, embedding_dim});
     return {output_shape};
 }
 

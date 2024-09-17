@@ -163,7 +163,7 @@ struct ExecuteUnaryBackwardShape {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
-        const tt::tt_metal::Shape &parameter_a,
+        const tt::tt_metal::LegacyShape &parameter_a,
         const std::optional<MemoryConfig> &memory_config = std::nullopt) {
         auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
         return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, parameter_a, output_memory_config);

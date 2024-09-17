@@ -16,8 +16,8 @@ namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
                                                      Tensor &output,
-                                                     const tt::tt_metal::Shape &output_tensor_shape,
-                                                     const tt::tt_metal::Shape &input_tensor_start,
+                                                     const tt::tt_metal::LegacyShape &output_tensor_shape,
+                                                     const tt::tt_metal::LegacyShape &input_tensor_start,
                                                      const float pad_value) {
     Program program{};
 
@@ -388,7 +388,7 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Sh
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const tt::tt_metal::Shape &output_tensor_shape, const tt::tt_metal::Shape &input_tensor_start, const float pad_value) {
+operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const tt::tt_metal::LegacyShape &output_tensor_shape, const tt::tt_metal::LegacyShape &input_tensor_start, const float pad_value) {
 
     tt::tt_metal::Program program{};
 
@@ -637,8 +637,8 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, CoreRangeSet, CoreRangeSet, uint
 
 operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
                                                                 Tensor &output,
-                                                                const tt::tt_metal::Shape &output_tensor_shape,
-                                                                const tt::tt_metal::Shape &input_tensor_start,
+                                                                const tt::tt_metal::LegacyShape &output_tensor_shape,
+                                                                const tt::tt_metal::LegacyShape &input_tensor_start,
                                                                 const float pad_value) {
     Program program{};
 
@@ -871,7 +871,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
 
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runtime_args_rm(const Tensor &input_tensor,
                                                                                         Tensor &output_tensor,
-                                                                                        const tt::tt_metal::Shape &input_tensor_start,
+                                                                                        const tt::tt_metal::LegacyShape &input_tensor_start,
                                                                                         uint32_t num_cores_total,
                                                                                         uint32_t num_cores,
                                                                                         uint32_t num_cores_y,
@@ -974,8 +974,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
 
 operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(const Tensor &a,
                                                                 Tensor &output,
-                                                                const tt::tt_metal::Shape &output_tensor_shape,
-                                                                const tt::tt_metal::Shape &input_tensor_start,
+                                                                const tt::tt_metal::LegacyShape &output_tensor_shape,
+                                                                const tt::tt_metal::LegacyShape &input_tensor_start,
                                                                 const float pad_value) {
     Program program{};
 
@@ -1160,7 +1160,7 @@ inline std::vector<std::vector<uint32_t>> group_contiguous_and_repeated_values(s
 inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_pad_runtime_args_rm_sharded(
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    const tt::tt_metal::Shape &input_tensor_start,
+    const tt::tt_metal::LegacyShape &input_tensor_start,
     uint32_t num_cores_padded,
     bool row_major,
     uint32_t num_cores_x_padded,
@@ -1320,8 +1320,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
 operation::ProgramWithCallbacks pad_rm_sharded(const Tensor &a,
                                                                 Tensor &output,
-                                                                const tt::tt_metal::Shape &output_tensor_shape,
-                                                                const tt::tt_metal::Shape &input_tensor_start,
+                                                                const tt::tt_metal::LegacyShape &output_tensor_shape,
+                                                                const tt::tt_metal::LegacyShape &input_tensor_start,
                                                                 const float pad_value) {
     Program program{};
 

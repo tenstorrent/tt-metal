@@ -524,7 +524,7 @@ Tensor _threshold(const Tensor& input_tensor, float threshold, float value, cons
 
 std::vector<Tensor> split_tensor_for_glu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> t_split;
-    Shape inshape(input_a.get_legacy_shape());
+    tt::tt_metal::LegacyShape inshape(input_a.get_legacy_shape());
     TT_FATAL(((inshape[dim] / 2) % tt::constants::TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
     std::vector<uint32_t> s_a = {0, 0, 0, 0};
     std::vector<uint32_t> e_a = {input_a.get_legacy_shape()[0] - 1, inshape[1] - 1, inshape[2] - 1, inshape[3] / 2 - 1};

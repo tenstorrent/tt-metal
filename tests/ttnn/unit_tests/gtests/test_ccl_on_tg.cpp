@@ -72,7 +72,7 @@ TEST(TGTests, TestAllGatherDeadlock) {
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,
         .shard_spec = std::nullopt};
-    ttnn::Shape shape = ttnn::Shape(Shape({1, 1, 32, 16384}));
+    ttnn::Shape shape = ttnn::Shape(tt::tt_metal::LegacyShape({1, 1, 32, 16384}));
     uint32_t buf_size_datums = 32 * 16384;
     uint32_t datum_size_bytes = 2;
     auto host_data = std::shared_ptr<bfloat16 []>(new bfloat16[buf_size_datums]);
@@ -110,7 +110,7 @@ TEST(TGTests, TestAllGatherDeadlock) {
                 uint32_t receiver_device_id = device_ids[(dev_idx) + 1 % num_devices_in_tunnel];
                 uint32_t sender_device_id = device_ids[(dev_idx + num_devices_in_tunnel - 1) % num_devices_in_tunnel];
                 auto all_gather_op = ttnn::LineAllGather{
-                                        3, 2, num_devices_in_tunnel, dev_idx, receiver_device_id, sender_device_id, input_tensor.memory_config(), ttnn::all_gather_op::Topology::Linear};
+                                        3, 2, num_devices_in_tunnel, dev_idx, std::nullopt, std::nullopt, receiver_device_id, sender_device_id, input_tensor.memory_config(), ttnn::all_gather_op::Topology::Linear};
                 // Send CCL to this device. All CCLs will complete simultaneously.
                 output_tensors.push_back(async_detail::run_operation(0, all_gather_op, {input_tensor}).at(0));
                 // Expose deadlock: After the CCL is sent to the first device in the tunnel, send enough data to it to backpressure prefetch_h. This will block the
@@ -123,7 +123,7 @@ TEST(TGTests, TestAllGatherDeadlock) {
             }
             // Readback data and verify correctness.
             for (auto& tensor : output_tensors) {
-                ASSERT_EQ(tensor.get_shape(), ttnn::Shape(Shape({1, 1, 32, static_cast<uint32_t>(16384 * device_ids.size())})));
+                ASSERT_EQ(tensor.get_shape(), ttnn::Shape(tt::tt_metal::LegacyShape({1, 1, 32, static_cast<uint32_t>(16384 * device_ids.size())})));
                 ttnn::read_buffer(0, tensor, {readback_data});
                 for (int j = 0; j < device_ids.size() * 32 * 16384; j++) {
                     ASSERT_EQ(readback_data[j].to_float(), 1);
@@ -178,7 +178,7 @@ TEST(TGTests, TestReduceScatterDeadlock) {
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,
         .shard_spec = std::nullopt};
-    ttnn::Shape shape = ttnn::Shape(Shape({1, 2, 256, static_cast<uint32_t>(256 * ring_devices.size())}));
+    ttnn::Shape shape = ttnn::Shape(tt::tt_metal::LegacyShape({1, 2, 256, static_cast<uint32_t>(256 * ring_devices.size())}));
     uint32_t buf_size_datums = 2 * 256 * 256 * 20;
     uint32_t datum_size_bytes = 2;
     // Output of reduce scatter is input_numel / num_devices_used_in_scatter_op
@@ -234,7 +234,7 @@ TEST(TGTests, TestReduceScatterDeadlock) {
         }
         // Readback data and verify correctness.
         for (auto& tensor : output_tensors) {
-            ASSERT_EQ(tensor.get_shape(), ttnn::Shape(Shape({1, 2, 256, 256})));
+            ASSERT_EQ(tensor.get_shape(), ttnn::Shape(tt::tt_metal::LegacyShape({1, 2, 256, 256})));
             ttnn::read_buffer(0, tensor, {readback_data});
             for (int j = 0; j < 512 * 256; j++) {
                 ASSERT_EQ(readback_data[j].to_float(), 20);

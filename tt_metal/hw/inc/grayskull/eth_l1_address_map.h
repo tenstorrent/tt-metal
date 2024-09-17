@@ -39,7 +39,5 @@ struct address_map {
 
   static constexpr std::int32_t ERISC_L1_UNRESERVED_SIZE = 0;
   static constexpr std::int32_t ERISC_L1_TUNNEL_BUFFER_SIZE = 0;
-  static constexpr std::uint32_t PROFILER_L1_BUFFER_ER = 0;
-  static constexpr std::uint32_t PROFILER_L1_BUFFER_CONTROL = 0;
 };
 }  // namespace llk

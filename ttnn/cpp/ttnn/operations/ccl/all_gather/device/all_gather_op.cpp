@@ -18,6 +18,8 @@ AllGather create_all_gather_struct(
     const uint32_t dim,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
+    const std::optional<size_t> user_defined_num_workers,
+    const std::optional<size_t> user_defined_num_buffers_per_channel,
     const std::vector<Device*>& devices
 ) {
     uint32_t num_devices = devices.size();
@@ -36,7 +38,7 @@ AllGather create_all_gather_struct(
     }
 
     return ttnn::AllGather{
-        dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config())};
+        dim, num_links, num_devices, device_index, user_defined_num_workers, user_defined_num_buffers_per_channel, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config())};
 }
 
 
@@ -55,7 +57,7 @@ AllGatherBidirectionalMode AllGatherConfig::choose_bidirectional_mode(Tensor con
     return AllGatherBidirectionalMode::FULL_TENSOR;
 }
 
-AllGatherConfig::AllGatherConfig(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim, uint32_t ring_size, uint32_t num_links, all_gather_op::Topology topology, std::size_t num_edm_buffers_per_channel, bool fuse_op) :
+AllGatherConfig::AllGatherConfig(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim, uint32_t ring_size, uint32_t num_links, all_gather_op::Topology topology, std::size_t num_edm_buffers_per_channel, bool fuse_op, const std::optional<size_t> user_defined_num_workers) :
     num_links(num_links),
     semaphore_size(32),
     ring_size(ring_size),
@@ -93,7 +95,11 @@ AllGatherConfig::AllGatherConfig(Tensor const& input_tensor, Tensor const& outpu
     constexpr uint32_t total_l1_buffer_space = eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
     this->is_sharded = input_tensor.is_sharded();
-    this->num_eth_buffers = (this->enable_bidirectional ? 8 /*1*/ : (topology != all_gather_op::Topology::Linear ? 8 : 4));
+    if (user_defined_num_workers.has_value()) {
+        this->num_eth_buffers = user_defined_num_workers.value() / num_duplicate_directions;
+    } else {
+        this->num_eth_buffers = (this->enable_bidirectional ? 8 /*1*/ : (topology != all_gather_op::Topology::Linear ? 8 : 4));
+    }
 
     if (bidirectional_mode == AllGatherBidirectionalMode::FULL_TENSOR) {
         this->num_eth_buffers = std::min(this->num_eth_buffers, eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS / num_duplicate_directions);
@@ -151,10 +157,10 @@ void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
     }
 }
 
-std::vector<tt::tt_metal::Shape> AllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> AllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     auto shape = input_tensors[0].get_legacy_shape();
     shape[this->dim] *= this->ring_size;
-    return std::vector<tt::tt_metal::Shape>(input_tensors.size(), shape);
+    return std::vector<tt::tt_metal::LegacyShape>(input_tensors.size(), shape);
 }
 
 std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
@@ -173,21 +179,21 @@ std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor> &
 }
 
 operation::ProgramWithCallbacks AllGather::create_program(const std::vector<Tensor> & input_tensors, std::vector<Tensor> &output_tensors) const {
-    return all_gather_multi_core_with_workers(input_tensors[0], output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->receiver_device_id, this->sender_device_id, this->topology);
+    return all_gather_multi_core_with_workers(input_tensors[0], output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->receiver_device_id, this->sender_device_id, this->topology, this->user_defined_num_workers, this->user_defined_num_buffers_per_channel);
 }
 
 namespace operations {
 namespace ccl {
 
 Tensor all_gather(
-    const Tensor& input_tensor, const uint32_t dim, const uint32_t num_links, const std::optional<MemoryConfig>& memory_config) {
+    const Tensor& input_tensor, const uint32_t dim, const uint32_t num_links, const std::optional<MemoryConfig>& memory_config, const std::optional<size_t> user_defined_num_workers, const std::optional<size_t> user_defined_num_buffers_per_channel) {
 
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
 
     auto devices = input_tensor.get_workers();
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
-        [dim, num_links, memory_config, devices](
+        [dim, num_links, memory_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -195,7 +201,7 @@ Tensor all_gather(
             const auto& input_tensor = input_tensors.at(0);
 
             return operation::run(
-                create_all_gather_struct(input_tensor, dim, num_links, memory_config, devices),
+                create_all_gather_struct(input_tensor, dim, num_links, memory_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices),
                 {input_tensor});
         },
         {input_tensor},

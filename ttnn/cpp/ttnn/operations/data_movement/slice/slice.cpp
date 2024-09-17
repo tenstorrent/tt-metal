@@ -15,11 +15,11 @@ namespace ttnn::operations::data_movement {
 ttnn::Tensor SliceOperation::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
-    tt::tt_metal::Shape output_tensor_start,
-    tt::tt_metal::Shape output_tensor_end,
-    const std::optional<tt::tt_metal::Shape> step,
+    tt::tt_metal::LegacyShape output_tensor_start,
+    tt::tt_metal::LegacyShape output_tensor_end,
+    const std::optional<tt::tt_metal::LegacyShape> step,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    std::optional<tt::tt_metal::Shape> modified_step = step;
+    std::optional<tt::tt_metal::LegacyShape> modified_step = step;
     if (modified_step.has_value()) {
         if (std::all_of(modified_step->begin(), modified_step->end(), [](int32_t s) { return s == 1; })) {
             modified_step = std::nullopt;
@@ -27,7 +27,7 @@ ttnn::Tensor SliceOperation::invoke(
     }
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         TT_FATAL(!modified_step.has_value(), "Host tensor slice does not support strides");
-        tt::tt_metal::Shape output_tensor_shape = {
+        tt::tt_metal::LegacyShape output_tensor_shape = {
             output_tensor_end[0] - output_tensor_start[0] + 1,
             output_tensor_end[1] - output_tensor_start[1] + 1,
             output_tensor_end[2] - output_tensor_start[2] + 1,
@@ -67,7 +67,7 @@ ttnn::Tensor SliceOperation::invoke(
                 std::size_t unpad_val = input_tensor_shape[-2] - output_tensor_end[-2] - 1;
                 new_shape[-2] -= unpad_val;
                 new_pad[-2].back -= std::min(unpad_val, new_pad[-2].back);
-                auto padded_shape = ttnn::Shape(tt::tt_metal::Shape(new_shape, new_pad));
+                auto padded_shape = ttnn::Shape(tt::tt_metal::LegacyShape(new_shape, new_pad));
                 return Tensor(input_tensor.storage(), padded_shape, input_tensor.dtype(), input_tensor.layout());
             }
         }
@@ -81,9 +81,9 @@ ttnn::Tensor SliceOperation::invoke(
 
 ttnn::Tensor SliceOperation::invoke(
     const ttnn::Tensor& input_tensor,
-    tt::tt_metal::Shape output_tensor_start,
-    tt::tt_metal::Shape output_tensor_end,
-    const std::optional<tt::tt_metal::Shape> step,
+    tt::tt_metal::LegacyShape output_tensor_start,
+    tt::tt_metal::LegacyShape output_tensor_end,
+    const std::optional<tt::tt_metal::LegacyShape> step,
     const std::optional<MemoryConfig>& memory_config_arg) {
     return invoke(0, input_tensor, output_tensor_start, output_tensor_end, step, memory_config_arg);
 }
@@ -98,9 +98,9 @@ ttnn::Tensor SliceOperation::invoke(
     return invoke(
         queue_id,
         input_tensor,
-        tt::tt_metal::Shape(output_tensor_start),
-        tt::tt_metal::Shape(output_tensor_end),
-        step.has_value() ? std::optional<tt::tt_metal::Shape>(tt::tt_metal::Shape(step.value())) : std::nullopt,
+        tt::tt_metal::LegacyShape(output_tensor_start),
+        tt::tt_metal::LegacyShape(output_tensor_end),
+        step.has_value() ? std::optional<tt::tt_metal::LegacyShape>(tt::tt_metal::LegacyShape(step.value())) : std::nullopt,
         memory_config_arg);
 }
 
@@ -114,9 +114,9 @@ ttnn::Tensor SliceOperation::invoke(
     return invoke(
         queue_id,
         input_tensor,
-        tt::tt_metal::Shape(output_tensor_start),
-        tt::tt_metal::Shape(output_tensor_end),
-        step.has_value() ? std::optional<tt::tt_metal::Shape>(tt::tt_metal::Shape(step.value())) : std::nullopt,
+        tt::tt_metal::LegacyShape(output_tensor_start),
+        tt::tt_metal::LegacyShape(output_tensor_end),
+        step.has_value() ? std::optional<tt::tt_metal::LegacyShape>(tt::tt_metal::LegacyShape(step.value())) : std::nullopt,
         memory_config_arg);
 }
 

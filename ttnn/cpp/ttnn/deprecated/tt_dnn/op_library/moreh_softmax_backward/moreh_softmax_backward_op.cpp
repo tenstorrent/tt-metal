@@ -49,7 +49,7 @@ void MorehSoftmaxBackward::validate_with_output_tensors(
     TT_ASSERT(output_tensors.size() == 1, "Must have 1 output tensors");
 }
 
-std::vector<Shape> MorehSoftmaxBackward::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehSoftmaxBackward::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     return {input_tensors.at(0).get_legacy_shape()};
 }
 
