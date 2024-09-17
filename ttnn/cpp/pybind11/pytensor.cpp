@@ -1036,8 +1036,9 @@ void pytensor_module(py::module &m_tensor) {
         )doc")
         .def(
             "cpu",
-            [](const Tensor &self, bool blocking) { return self.cpu(blocking); },
+            [](const Tensor &self, bool blocking, uint8_t cq_id) { return self.cpu(blocking, cq_id); },
             py::arg("blocking") = true,
+            py::arg("cq_id") = ttnn::DefaultQueueId,
             R"doc(
             Move TT Tensor from TT accelerator device to host device.
 
