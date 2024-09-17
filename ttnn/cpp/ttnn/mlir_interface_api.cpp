@@ -52,7 +52,7 @@ bool does_binary_op_support_input_output_constraints(
         return false;
     }
 
-    auto builder = EltwiseOpConstraintsFactory::Make(ttnn::Shape(shape_a), memory_config_a.value(), ttnn::Shape(shape_b), memory_config_b.value(), memory_config_o.value());
+    auto builder = EltwiseOpConstraintsFactory::Make(ttnn::Shape(shape_a), memory_config_a.value(), ttnn::Shape(shape_b), memory_config_b.value(), memory_config_o.value(), CoreCoord{8,8});
     if (builder) {
         const auto op_constraints =
             (*builder)
@@ -106,7 +106,7 @@ bool does_unary_op_support_input_output_constraints(
     // ignoring is_supported_arch for now.
     // because it's GS specific, and we dont care about GS today.
 
-    auto builder = ttnn::operations::unary::UnaryOpConstraintsFactory::Make(op_type.value(), tt::ARCH::WORMHOLE_B0, ttnn::Shape(shape_a), memory_config_a.value(), ttnn::Shape(shape_o), memory_config_o.value());
+    auto builder = ttnn::operations::unary::UnaryOpConstraintsFactory::Make(op_type.value(), tt::ARCH::WORMHOLE_B0, ttnn::Shape(shape_a), memory_config_a.value(), ttnn::Shape(shape_o), memory_config_o.value(), CoreCoord{8,8});
     if (builder)
     {
         const auto op_constraints =
@@ -154,7 +154,7 @@ bool does_softmax_op_support_input_output_constraints(
         return false;
     }
 
-    auto builder = SoftmaxOpConstraintsFactory::Make(ttnn::Shape(shape_a), memory_config_a.value(), ttnn::Shape(shape_o), memory_config_o.value());
+    auto builder = SoftmaxOpConstraintsFactory::Make(ttnn::Shape(shape_a), memory_config_a.value(), ttnn::Shape(shape_o), memory_config_o.value(), CoreCoord{8,8});
     if (builder)
     {
         const auto op_constraints =
@@ -217,7 +217,7 @@ bool does_matmul_multicore_reuse_multicast_support_input_output_constraints(
 
     auto matmul_config = ttnn::tuple_wrapper::to_multicast_matmul_program_config(_matmul_config, transpose_mcast, fuse_batch);
 
-    auto builder = MatmulOpConstraintsFactory::Make(ttnn::Shape(shape_a), memory_config_a.value(), ttnn::Shape(shape_b), memory_config_b.value(), memory_config_o.value(), matmul_config.value());
+    auto builder = MatmulOpConstraintsFactory::Make(ttnn::Shape(shape_a), memory_config_a.value(), ttnn::Shape(shape_b), memory_config_b.value(), memory_config_o.value(), matmul_config.value(), CoreCoord{8,8});
     if (builder) {
         const auto op_constraints =
             (*builder)
@@ -277,7 +277,7 @@ bool does_matmul_multicore_reuse_multicast_1d_op_support_input_output_constraint
 
     auto matmul_config = ttnn::tuple_wrapper::to_multicast_1d_matmul_program_config(_matmul_config, fuse_batch, mcast_in0);
 
-    auto builder = MatmulOpConstraintsFactory::Make(ttnn::Shape(shape_a), memory_config_a.value(), ttnn::Shape(shape_b), memory_config_b.value(), memory_config_o.value(), matmul_config.value());
+    auto builder = MatmulOpConstraintsFactory::Make(ttnn::Shape(shape_a), memory_config_a.value(), ttnn::Shape(shape_b), memory_config_b.value(), memory_config_o.value(), matmul_config.value(), CoreCoord{8,8});
     if (builder) {
         const auto op_constraints =
             (*builder)
