@@ -79,14 +79,16 @@ struct ExecuteDiv
         const Tensor& input_tensor_b,
         bool accurate_mode = false,
         const std::string& round_mode = "None",
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
         const Tensor& input_tensor,
         float value,
         bool accurate_mode = false,
         const std::string& round_mode = "None",
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
         uint8_t queue_id,

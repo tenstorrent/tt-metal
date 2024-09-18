@@ -351,7 +351,6 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
                 * :attr:`input_tensor_a`
                 * :attr:`input_tensor_b` (ttnn.Tensor or Number)
                 * :attr:`accurate_mode`: ``false`` if input_tensor_b is non-zero, else ``true``.
-                * :attr:`round_mode` (Default: None)
 
             Keyword Args:
                 * :attr:`accurate_mode`: ``false`` if input_tensor_b is non-zero, else ``true`` (Only if the input tensor is not ComplexTensor)

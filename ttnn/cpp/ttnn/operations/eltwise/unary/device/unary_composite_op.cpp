@@ -367,15 +367,16 @@ Tensor _swish(const Tensor& a, const std::optional<MemoryConfig>& output_mem_con
 
 Tensor ExecuteTrunc::invoke(uint8_t queue_id, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
     auto arch = input.device()->arch();
+    output_tensor = output_tensor.value_or(ttnn::empty_like(input));
     TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Op is not supported on Grayskull");
-    Tensor floor_res = ttnn::floor(queue_id, input, output_mem_config, output_tensor);
+    Tensor floor_res = ttnn::floor(queue_id, input, output_mem_config);
     ttnn::where(queue_id, ttnn::ne(queue_id, input, floor_res), ttnn::add(queue_id, floor_res, 1.0f, std::nullopt, output_mem_config), floor_res, output_mem_config, output_tensor);
     ttnn::where(queue_id, ttnn::gtz(queue_id, input, output_mem_config), floor_res, output_tensor.value(), output_mem_config, output_tensor);
     return output_tensor.value();
 }
 
-Tensor ExecuteTrunc::invoke(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-    return ExecuteTrunc::invoke(DefaultQueueId, input, output_mem_config);
+Tensor ExecuteTrunc::invoke(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
+    return ExecuteTrunc::invoke(DefaultQueueId, input, output_mem_config, output_tensor);
 }
 
 // Function variance of whole tensor.

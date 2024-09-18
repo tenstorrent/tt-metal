@@ -71,7 +71,8 @@ struct ExecuteTrunc {
 
     static Tensor invoke(
         const Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 
 //OpHandler_float : get_function_type_float
