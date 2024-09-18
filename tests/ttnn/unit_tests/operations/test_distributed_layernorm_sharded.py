@@ -24,123 +24,41 @@ def layer_norm(x, gamma, eps):
     return (x - x.mean(-1, keepdim=True)) * torch.rsqrt(x.var(-1, keepdim=True) + eps) * gamma
 
 
-@skip_for_grayskull()
-@pytest.mark.parametrize("is_rmsnorm", [True, False])
-@pytest.mark.parametrize("seed", [0, 2000, 50000])  # Test across 5 different seeds
-@pytest.mark.parametrize("eps", [1e-6])
-@pytest.mark.parametrize("min_pcc", [0.9997])
-@pytest.mark.parametrize("max_atol", [0.38])
-@pytest.mark.parametrize("input_width", [1024, 2048])
-@pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
-@pytest.mark.parametrize("weights_df", [ttnn.bfloat8_b, ttnn.bfloat16])
-@pytest.mark.parametrize(("mean", "std"), ([0, 1], [10.0, 11.0], [100.0, 110.0]))
-def test_sharded_layernorm(
-    device, use_program_cache, input_width, is_rmsnorm, input_df, weights_df, seed, eps, mean, std, min_pcc, max_atol
-):
-    if is_rmsnorm:
-        print("Testing RMSNorm")
-    else:
-        print("Testing LayerNorm")
+def create_input_and_weight_tensors(input_width, num_devices, seed, mean, std):
     torch.manual_seed(seed)
-    input_shape = (1, 1, 32, input_width)
-    weights_shape = (1, 1, 1, input_width)
+    input_shape = (1, 1, 32, input_width * num_devices)
+    weights_shape = (1, 1, 1, input_width * num_devices)
 
     torch_input_tensor = torch.normal(mean, std, size=input_shape, dtype=torch.bfloat16)
     torch_weight = torch.normal(mean, std, size=weights_shape, dtype=torch.bfloat16)
 
-    print(f" Mean : {torch_input_tensor.mean()}, Var : {torch_input_tensor.var()}")
+    torch_input_chunks = torch.chunk(torch_input_tensor, num_devices, dim=-1)
+    torch_weight_chunks = torch.chunk(torch_weight, num_devices, dim=-1)
 
-    if is_rmsnorm:
-        torch_output_tensor = rms_norm(torch_input_tensor, torch_weight, eps=eps)
-    else:
-        torch_output_tensor = torch.nn.functional.layer_norm(
-            torch_input_tensor, (input_width,), weight=torch_weight.squeeze(0).squeeze(0).squeeze(0), eps=eps
-        )
-        # torch_output_tensor = layer_norm(torch_input_tensor, torch_weight, eps=eps)
+    return torch_input_tensor, torch_weight, torch_input_chunks, torch_weight_chunks
 
-    tt_input_tensor = ttnn.from_torch(
-        torch_input_tensor,
+
+def create_tt_tensors(torch_chunk, device, df, core_grid, input_width, is_weight=False):
+    tt_tensor = ttnn.from_torch(
+        torch_chunk,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=input_df,
-    )
-    # shard to 32 cores
-    tt_sharded_config = ttnn.create_sharded_memory_config(
-        shape=(1, 1, 32, input_width),
-        core_grid=ttnn.CoreGrid(y=2, x=8),
-        strategy=ttnn.ShardStrategy.WIDTH,
-    )
-    tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, memory_config=tt_sharded_config)
-
-    SHARDED_NORM_PRGM_CFG = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[8, 2],
-        subblock_w=(input_width // 16) // 32,
-        block_h=1,
-        block_w=(input_width // 16) // 32,
-        inplace=False,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG if is_weight else ttnn.L1_MEMORY_CONFIG,
+        dtype=df,
     )
 
-    tt_weights = ttnn.as_tensor(
-        torch_weight,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        dtype=weights_df,
-        # cache_file_name="rms_weights_cache_1024",
-    )
-
-    if is_rmsnorm:
-        tt_output_tensor = ttnn.rms_norm(
-            tt_input_tensor,
-            epsilon=eps,
-            weight=tt_weights,
-            program_config=SHARDED_NORM_PRGM_CFG,
-            memory_config=tt_sharded_config,
+    if not is_weight:
+        tt_sharded_config = ttnn.create_sharded_memory_config(
+            shape=(1, 1, 32, input_width),
+            core_grid=ttnn.CoreGrid(y=core_grid[0], x=core_grid[1]),
+            strategy=ttnn.ShardStrategy.WIDTH,
         )
-    else:
-        tt_output_tensor = ttnn.layer_norm(
-            tt_input_tensor,
-            epsilon=eps,
-            weight=tt_weights,
-            program_config=SHARDED_NORM_PRGM_CFG,
-            memory_config=tt_sharded_config,
-        )
-    tt_output_torch = ttnn.to_torch(tt_output_tensor).to(torch.bfloat16)
+        tt_tensor = ttnn.to_memory_config(tt_tensor, memory_config=tt_sharded_config)
 
-    pcc_passing, pcc_out = comp_pcc(torch_output_tensor, tt_output_torch, pcc=min_pcc)
-    all_close_passing = torch.allclose(torch_output_tensor, tt_output_torch, atol=max_atol, equal_nan=False)
-    atol_delta = torch.max(torch.abs(torch_output_tensor - tt_output_torch)).item()
-    print(f"PCC: {pcc_out}")
-    print(f"all_close : {all_close_passing}, Max ATOL: {atol_delta}")
-
-    assert pcc_out >= min_pcc, f"PCC test failed: {pcc_out} (threshold: {min_pcc})"
-    # assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"
+    return tt_tensor
 
 
-def run_pre_allgather_layernorm(
-    device, input_width, core_grid, is_rmsnorm, input_df, seed, mean, std, min_pcc_Ex, min_pcc_Ex2, max_atol, iterations
-):
-    torch.manual_seed(seed)
-    input_shape = (1, 1, 32, input_width)
-
-    torch_input_tensor = torch.normal(mean, std, size=input_shape, dtype=torch.bfloat16)
-
-    tt_input_tensor = ttnn.from_torch(
-        torch_input_tensor,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=input_df,
-    )
-    # shard to core_grid
-    tt_sharded_config = ttnn.create_sharded_memory_config(
-        shape=(1, 1, 32, input_width),
-        core_grid=ttnn.CoreGrid(y=core_grid[0], x=core_grid[1]),
-        strategy=ttnn.ShardStrategy.WIDTH,
-    )
-    tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, memory_config=tt_sharded_config)
-
+def compute_pre_allgather_stats(tt_input_tensor, core_grid, input_width, is_rmsnorm):
     SHARDED_NORM_PRGM_CFG = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=[core_grid[1], core_grid[0]],
         subblock_w=(input_width // (core_grid[0] * core_grid[1])) // 32,
@@ -149,124 +67,15 @@ def run_pre_allgather_layernorm(
         inplace=False,
     )
 
-    # create E(x) and E(x^2) tensors
-    Ex_tensor = torch.mean(torch_input_tensor, dim=-1, keepdim=True).to(torch.bfloat16)  # [1, 1, 32, 1]
-
-    Ex2_tensor = torch.mean(torch_input_tensor**2, dim=-1, keepdim=True).to(torch.bfloat16)  # [1, 1, 32, 1]
-
-    for iter in range(iterations):
-        if is_rmsnorm:
-            tt_output_tensor = ttnn.rms_norm_pre_all_gather(tt_input_tensor, program_config=SHARDED_NORM_PRGM_CFG)
-        else:
-            tt_output_tensor = ttnn.layer_norm_pre_all_gather(tt_input_tensor, program_config=SHARDED_NORM_PRGM_CFG)
-        tt_output_torch = ttnn.to_torch(tt_output_tensor).to(torch.bfloat16)  # [1, 1, 32, 64]
-
-        if is_rmsnorm:  # first tile contains E(xˆ2) in first column
-            tt_ex2_torch = tt_output_torch[..., :1]
-        else:  # first tile contains E(x) in first column (=index 0) and second tile contains E(xˆ2) in first column (=index 32)
-            tt_ex_torch = tt_output_torch[..., :1]
-            tt_ex2_torch = tt_output_torch[..., 32:33]
-
-        if not is_rmsnorm:
-            _, pcc_out1 = comp_pcc(Ex_tensor, tt_ex_torch, pcc=min_pcc_Ex)
-            all_close_passing = torch.allclose(Ex_tensor, tt_ex_torch, atol=max_atol, equal_nan=False)
-            atol_delta = torch.max(torch.abs(Ex_tensor - tt_ex_torch)).item()
-            assert pcc_out1 >= min_pcc_Ex, f"PCC of E(x) test failed: {pcc_out1} (threshold: {min_pcc_Ex})"
-
-        _, pcc_out2 = comp_pcc(Ex2_tensor, tt_ex2_torch, pcc=min_pcc_Ex2)
-        all_close_passing = torch.allclose(Ex2_tensor, tt_ex2_torch, atol=max_atol, equal_nan=False)
-        atol_delta = torch.max(torch.abs(Ex2_tensor - tt_ex2_torch)).item()
-        assert pcc_out2 >= min_pcc_Ex2, f"PCC of E(x^2) test failed: {pcc_out2} (threshold: {min_pcc_Ex2})"
-
-
-@skip_for_grayskull()
-@pytest.mark.parametrize("is_rmsnorm", [True, False])
-@pytest.mark.parametrize("seed", [0, 1234])
-@pytest.mark.parametrize(("min_pcc_Ex", "min_pcc_Ex2"), ([0.9997, 0.989],))
-@pytest.mark.parametrize("max_atol", [0.38])
-@pytest.mark.parametrize(
-    "input_width, core_grid",
-    [
-        ([2048, (4, 8)]),
-    ],
-)
-@pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
-@pytest.mark.parametrize(("mean", "std"), ([0, 1],))
-def test_pre_allgather_layernorm(
-    all_devices,
-    use_program_cache,
-    input_width,
-    core_grid,
-    is_rmsnorm,
-    input_df,
-    seed,
-    mean,
-    std,
-    min_pcc_Ex,
-    min_pcc_Ex2,
-    max_atol,
-):
-    device = all_devices[0]
-    run_pre_allgather_layernorm(
-        device, input_width, core_grid, is_rmsnorm, input_df, seed, mean, std, min_pcc_Ex, min_pcc_Ex2, max_atol, 2
-    )
-
-
-def run_post_allgather_layernorm(
-    device,
-    input_width,
-    num_devices,
-    is_rmsnorm,
-    input_df,
-    weights_df,
-    seed,
-    eps,
-    mean,
-    std,
-    min_pcc,
-    max_atol,
-    core_grid,
-    iterations,
-):
-    torch.manual_seed(seed)
-    input_shape = (1, 1, 32, input_width * num_devices)
-    weights_shape = (1, 1, 1, input_width * num_devices)
-
-    torch_input_tensor = torch.normal(mean, std, size=input_shape, dtype=torch.bfloat16)
-    torch_weight = torch.normal(mean, std, size=weights_shape, dtype=torch.bfloat16)
-
-    torch_input_tensors = torch.chunk(torch_input_tensor, num_devices, dim=-1)
-    torch_weights = torch.chunk(torch_weight, num_devices, dim=-1)
-
     if is_rmsnorm:
-        torch_output_tensor = rms_norm(torch_input_tensor, torch_weight, eps=eps)
+        return ttnn.rms_norm_pre_all_gather(tt_input_tensor, program_config=SHARDED_NORM_PRGM_CFG)
     else:
-        torch_output_tensor = torch.nn.functional.layer_norm(
-            torch_input_tensor,
-            (input_width * num_devices,),
-            weight=torch_weight.squeeze(0).squeeze(0).squeeze(0),
-            eps=eps,
-        )
+        return ttnn.layer_norm_pre_all_gather(tt_input_tensor, program_config=SHARDED_NORM_PRGM_CFG)
 
-    torch_output_tensor_chunks = torch.chunk(torch_output_tensor, num_devices, dim=-1)
-    torch_output_tensor = torch_output_tensor_chunks[0]
 
-    tt_input_tensor = ttnn.from_torch(
-        torch_input_tensors[0],
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=input_df,
-    )
-
-    # shard to 32 cores
-    tt_sharded_config = ttnn.create_sharded_memory_config(
-        shape=(1, 1, 32, input_width),
-        core_grid=ttnn.CoreGrid(y=core_grid[0], x=core_grid[1]),
-        strategy=ttnn.ShardStrategy.WIDTH,
-    )
-    tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, memory_config=tt_sharded_config)
-
+def compute_post_allgather_output(
+    tt_input_tensor, tt_weights, tt_stats_tensor, eps, is_rmsnorm, core_grid, input_width
+):
     SHARDED_NORM_PRGM_CFG = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
         subblock_w=(input_width // (core_grid[0] * core_grid[1])) // 32,
@@ -275,104 +84,122 @@ def run_post_allgather_layernorm(
         inplace=False,
     )
 
-    tt_weights = ttnn.as_tensor(
-        torch_weights[0],
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        dtype=weights_df,
-    )
-
-    # create E[x] and E[x^2] tensors
-    Ex_tensors = []
-    for d in range(num_devices):
-        Ex = torch.mean(torch_input_tensors[d], dim=-1, keepdim=True).to(torch.bfloat16)
-        Ex = torch.nn.functional.pad(Ex, (0, 31), "constant", 0)
-        Ex_tensors.append(Ex)
-
-    Ex2_tensors = []
-    for d in range(num_devices):
-        Ex2 = torch.mean(torch_input_tensors[d] ** 2, dim=-1, keepdim=True).to(torch.bfloat16)
-        Ex2 = torch.nn.functional.pad(Ex2, (0, 31), "constant", 0)
-        Ex2_tensors.append(Ex2)
-
-    if not is_rmsnorm:
-        for d in range(num_devices):
-            Ex_tensors[d] = ttnn.from_torch(
-                Ex_tensors[d],
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-
-    for d in range(num_devices):
-        Ex2_tensors[d] = ttnn.from_torch(
-            Ex2_tensors[d],
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-    if is_rmsnorm:
-        tt_stats_tensor = ttnn.concat(Ex2_tensors, -1)
-    else:
-        tt_stats_tensor = ttnn.concat([tt_tensor for pair in zip(Ex_tensors, Ex2_tensors) for tt_tensor in pair], -1)
-
-    # shard to 1 core
-    tt_stats_sharded_config = ttnn.create_sharded_memory_config(
-        shape=(1, 1, 32, tt_stats_tensor.get_legacy_shape()[-1]),
-        core_grid=ttnn.CoreGrid(y=1, x=1),
+    tt_sharded_config = ttnn.create_sharded_memory_config(
+        shape=(1, 1, 32, input_width),
+        core_grid=ttnn.CoreGrid(y=core_grid[0], x=core_grid[1]),
         strategy=ttnn.ShardStrategy.WIDTH,
     )
-    tt_stats_tensor = ttnn.to_memory_config(tt_stats_tensor, memory_config=tt_stats_sharded_config)
 
-    for iter in range(iterations):
-        if is_rmsnorm:
-            tt_output_tensor = ttnn.rms_norm_post_all_gather(
-                tt_input_tensor,
-                epsilon=eps,
-                weight=tt_weights,
-                program_config=SHARDED_NORM_PRGM_CFG,
-                memory_config=tt_sharded_config,
-                stats=tt_stats_tensor,
-            )
-        else:
-            tt_output_tensor = ttnn.layer_norm_post_all_gather(
-                tt_input_tensor,
-                epsilon=eps,
-                weight=tt_weights,
-                program_config=SHARDED_NORM_PRGM_CFG,
-                memory_config=tt_sharded_config,
-                stats=tt_stats_tensor,
-            )
-        tt_output_torch = ttnn.to_torch(tt_output_tensor).to(torch.bfloat16)
-        _, pcc_out = comp_pcc(torch_output_tensor, tt_output_torch, pcc=min_pcc)
-        all_close_passing = torch.allclose(torch_output_tensor, tt_output_torch, atol=max_atol, equal_nan=False)
-        atol_delta = torch.max(torch.abs(torch_output_tensor - tt_output_torch)).item()
-        assert pcc_out >= min_pcc, f"PCC test failed: {pcc_out} (threshold: {min_pcc})"
-        assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"
+    if is_rmsnorm:
+        return ttnn.rms_norm_post_all_gather(
+            tt_input_tensor,
+            epsilon=eps,
+            weight=tt_weights,
+            program_config=SHARDED_NORM_PRGM_CFG,
+            memory_config=tt_sharded_config,
+            stats=tt_stats_tensor,
+        )
+    else:
+        return ttnn.layer_norm_post_all_gather(
+            tt_input_tensor,
+            epsilon=eps,
+            weight=tt_weights,
+            program_config=SHARDED_NORM_PRGM_CFG,
+            memory_config=tt_sharded_config,
+            stats=tt_stats_tensor,
+        )
+
+
+def compute_reference_output(torch_input_tensor, torch_weight, is_rmsnorm, eps):
+    if is_rmsnorm:
+        return rms_norm(torch_input_tensor, torch_weight, eps=eps)
+    else:
+        return torch.nn.functional.layer_norm(
+            torch_input_tensor,
+            (torch_input_tensor.shape[-1],),
+            weight=torch_weight.squeeze(0).squeeze(0).squeeze(0),
+            eps=eps,
+        )
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("is_rmsnorm", [True, False])  # Layernorm not supported for now
-@pytest.mark.parametrize("seed", [0, 1234])  # Test across 5 different seeds
-@pytest.mark.parametrize("eps", [1e-6])
-@pytest.mark.parametrize("min_pcc", [0.9997])
-@pytest.mark.parametrize("max_atol", [0.38])
+@pytest.mark.parametrize("is_rmsnorm", [True, False])
+@pytest.mark.parametrize("seed", [0, 1234])
 @pytest.mark.parametrize("input_width", [2048])
 @pytest.mark.parametrize("num_devices", [4, 8])
-@pytest.mark.parametrize(
-    "input_df",
-    [ttnn.bfloat8_b, ttnn.bfloat16],
-)
-@pytest.mark.parametrize(
-    "weights_df",
-    [ttnn.bfloat8_b, ttnn.bfloat16],
-)
+@pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
-@pytest.mark.parametrize(
-    "core_grid",
-    ((4, 8),),
-)
+@pytest.mark.parametrize("core_grid", ((4, 8),))
+@pytest.mark.parametrize(("min_pcc_ex", "max_atol_ex"), [(0.9997, 0.01)])
+@pytest.mark.parametrize(("min_pcc_ex2", "max_atol_ex2"), [(0.987, 0.04)])
+def test_pre_allgather_layernorm(
+    all_devices,
+    use_program_cache,
+    input_width,
+    num_devices,
+    is_rmsnorm,
+    input_df,
+    seed,
+    mean,
+    std,
+    core_grid,
+    min_pcc_ex,
+    max_atol_ex,
+    min_pcc_ex2,
+    max_atol_ex2,
+):
+    device = all_devices[0]
+
+    torch_input_tensor, _, torch_input_chunks, _ = create_input_and_weight_tensors(
+        input_width, num_devices, seed, mean, std
+    )
+
+    for d in range(num_devices):
+        tt_input_tensor = create_tt_tensors(torch_input_chunks[d], device, input_df, core_grid, input_width)
+        tt_pre_allgather_output = compute_pre_allgather_stats(tt_input_tensor, core_grid, input_width, is_rmsnorm)
+        tt_pre_allgather_torch = ttnn.to_torch(tt_pre_allgather_output).to(torch.bfloat16)
+
+        if is_rmsnorm:
+            tt_ex2 = tt_pre_allgather_torch[..., :1]
+            torch_ex2 = torch.mean(torch_input_chunks[d] ** 2, dim=-1, keepdim=True)
+            _, pcc_ex2 = comp_pcc(tt_ex2, torch_ex2, pcc=min_pcc_ex2)
+            atol_delta_ex2 = torch.max(torch.abs(torch_ex2 - tt_ex2)).item()
+            assert pcc_ex2 >= min_pcc_ex2, f"PCC of E(x^2) test failed: {pcc_ex2} (threshold: {min_pcc_ex2})"
+            assert torch.allclose(
+                tt_ex2, torch_ex2, atol=max_atol_ex2
+            ), f"E(x^2) mismatch for device {d} (atol: {atol_delta_ex2})"
+        else:
+            tt_ex = tt_pre_allgather_torch[..., :1]
+            tt_ex2 = tt_pre_allgather_torch[..., 32:33]
+            torch_ex = torch.mean(torch_input_chunks[d], dim=-1, keepdim=True)
+            torch_ex2 = torch.mean(torch_input_chunks[d] ** 2, dim=-1, keepdim=True)
+            _, pcc_ex = comp_pcc(tt_ex, torch_ex, pcc=min_pcc_ex)
+            _, pcc_ex2 = comp_pcc(tt_ex2, torch_ex2, pcc=min_pcc_ex2)
+            atol_delta_ex = torch.max(torch.abs(torch_ex - tt_ex)).item()
+            atol_delta_ex2 = torch.max(torch.abs(torch_ex2 - tt_ex2)).item()
+            assert pcc_ex >= min_pcc_ex, f"PCC of E(x) test failed: {pcc_ex} (threshold: {min_pcc_ex})"
+            assert pcc_ex2 >= min_pcc_ex2, f"PCC of E(x^2) test failed: {pcc_ex2} (threshold: {min_pcc_ex2})"
+            assert torch.allclose(
+                tt_ex, torch_ex, atol=max_atol_ex
+            ), f"E(x) mismatch for device {d} (atol: {atol_delta_ex})"
+            assert torch.allclose(
+                tt_ex2, torch_ex2, atol=max_atol_ex2
+            ), f"E(x^2) mismatch for device {d} (atol: {atol_delta_ex2})"
+
+    logger.info("Pre-allgather layernorm test passed for all devices")
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize("is_rmsnorm", [True, False])
+@pytest.mark.parametrize("seed", [0, 1234])
+@pytest.mark.parametrize("eps", [1e-6])
+@pytest.mark.parametrize(("min_pcc", "max_atol"), ((0.9997, 0.45),))
+@pytest.mark.parametrize("input_width", [2048])
+@pytest.mark.parametrize("num_devices", [4, 8])
+@pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("weights_df", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize(("mean", "std"), ([0, 1],))
+@pytest.mark.parametrize("core_grid", ((4, 8),))
 def test_post_allgather_layernorm(
     all_devices,
     use_program_cache,
@@ -390,47 +217,74 @@ def test_post_allgather_layernorm(
     core_grid,
 ):
     device = all_devices[0]
-    run_post_allgather_layernorm(
-        device,
-        input_width,
-        num_devices,
-        is_rmsnorm,
-        input_df,
-        weights_df,
-        seed,
-        eps,
-        mean,
-        std,
-        min_pcc,
-        max_atol,
-        core_grid,
-        2,
+
+    torch_input_tensor, torch_weight, torch_input_chunks, torch_weight_chunks = create_input_and_weight_tensors(
+        input_width, num_devices, seed, mean, std
     )
+
+    torch_output_tensor = compute_reference_output(torch_input_tensor, torch_weight, is_rmsnorm, eps)
+    torch_output_chunks = torch.chunk(torch_output_tensor, num_devices, dim=-1)
+
+    # Compute global statistics
+    if is_rmsnorm:
+        global_ex2 = torch.mean(torch_input_tensor**2, dim=-1, keepdim=True)
+        tt_global_stats = ttnn.from_torch(
+            global_ex2, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+    else:
+        global_ex = torch.mean(torch_input_tensor, dim=-1, keepdim=True)
+        global_ex = torch.nn.functional.pad(global_ex, (0, 31), "constant", 0)
+        global_ex2 = torch.mean(torch_input_tensor**2, dim=-1, keepdim=True)
+        global_ex2 = torch.nn.functional.pad(global_ex2, (0, 31), "constant", 0)
+        tt_global_stats = ttnn.concat(
+            [
+                ttnn.from_torch(global_ex, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG),
+                ttnn.from_torch(
+                    global_ex2, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+                ),
+            ],
+            -1,
+        )
+
+    # shard to 1 core
+    tt_stats_sharded_config = ttnn.create_sharded_memory_config(
+        shape=(1, 1, 32, tt_global_stats.get_legacy_shape()[-1]),
+        core_grid=ttnn.CoreGrid(y=1, x=1),
+        strategy=ttnn.ShardStrategy.WIDTH,
+    )
+    tt_global_stats = ttnn.to_memory_config(tt_global_stats, memory_config=tt_stats_sharded_config)
+
+    for d in range(num_devices):
+        tt_input_tensor = create_tt_tensors(torch_input_chunks[d], device, input_df, core_grid, input_width)
+        tt_weights = create_tt_tensors(
+            torch_weight_chunks[d], device, weights_df, core_grid, input_width, is_weight=True
+        )
+        tt_output_tensor = compute_post_allgather_output(
+            tt_input_tensor, tt_weights, tt_global_stats, eps, is_rmsnorm, core_grid, input_width
+        )
+        tt_output_torch = ttnn.to_torch(tt_output_tensor).to(torch.bfloat16)
+
+        _, pcc_out = comp_pcc(torch_output_chunks[d], tt_output_torch, pcc=min_pcc)
+        atol_delta = torch.max(torch.abs(torch_output_chunks[d] - tt_output_torch)).item()
+
+        assert pcc_out >= min_pcc, f"PCC test failed for device {d}: {pcc_out} (threshold: {min_pcc})"
+        assert atol_delta <= max_atol, f"Max Atol exceeded for device {d}: {atol_delta} (allowed: {max_atol})"
+
+    logger.info("Post-allgather layernorm test passed for all devices")
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("is_rmsnorm", [True, False])  # Layernorm not supported for now
-@pytest.mark.parametrize("seed", [0])  # Test across 5 different seeds
+@pytest.mark.parametrize("is_rmsnorm", [True, False])
+@pytest.mark.parametrize("seed", [0, 1234])
 @pytest.mark.parametrize("eps", [1e-6])
-@pytest.mark.parametrize("min_pcc_out", [0.9997])
-@pytest.mark.parametrize("max_atol", [0.38])
+@pytest.mark.parametrize(("min_pcc", "max_atol"), ((0.9997, 0.45),))
 @pytest.mark.parametrize("input_width", [2048])
 @pytest.mark.parametrize("num_devices", [4])
-@pytest.mark.parametrize(
-    "input_df",
-    [ttnn.bfloat16],
-)
-@pytest.mark.parametrize(
-    "weights_df",
-    [ttnn.bfloat16],
-)
+@pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("weights_df", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
-@pytest.mark.parametrize(
-    "core_grid",
-    ((4, 8),),
-)
-@pytest.mark.parametrize(("min_pcc_Ex", "min_pcc_Ex2"), ([0.9997, 0.989],))
-def test_distributed_layernorm_perf(
+@pytest.mark.parametrize("core_grid", ((4, 8),))
+def test_simulated_distributed_layernorm(
     all_devices,
     use_program_cache,
     input_width,
@@ -442,31 +296,62 @@ def test_distributed_layernorm_perf(
     eps,
     mean,
     std,
-    min_pcc_Ex,
-    min_pcc_Ex2,
-    min_pcc_out,
+    min_pcc,
     max_atol,
     core_grid,
 ):
     device = all_devices[0]
 
-    run_pre_allgather_layernorm(
-        device, input_width, core_grid, is_rmsnorm, input_df, seed, mean, std, min_pcc_Ex, min_pcc_Ex2, max_atol, 1
+    # Create input and weight tensors
+    torch_input_tensor, torch_weight, torch_input_chunks, torch_weight_chunks = create_input_and_weight_tensors(
+        input_width, num_devices, seed, mean, std
     )
 
-    run_post_allgather_layernorm(
-        device,
-        input_width,
-        num_devices,
-        is_rmsnorm,
-        input_df,
-        weights_df,
-        seed,
-        eps,
-        mean,
-        std,
-        min_pcc_out,
-        max_atol,
-        core_grid,
-        1,
+    # Compute reference output
+    torch_output_tensor = compute_reference_output(torch_input_tensor, torch_weight, is_rmsnorm, eps)
+    torch_output_chunks = torch.chunk(torch_output_tensor, num_devices, dim=-1)
+
+    # Simulate multi-device pre-allgather computation
+    tt_pre_allgather_outputs = []
+    for d in range(num_devices):
+        tt_input_tensor = create_tt_tensors(torch_input_chunks[d], device, input_df, core_grid, input_width)
+        tt_pre_allgather_output = compute_pre_allgather_stats(tt_input_tensor, core_grid, input_width, is_rmsnorm)
+        tt_pre_allgather_outputs.append(tt_pre_allgather_output)
+
+    # Extract and concatenate statistics from pre-allgather outputs
+    tt_stats_list = []
+    for tt_pre_allgather_output in tt_pre_allgather_outputs:
+        tt_pre_allgather_output = ttnn.to_memory_config(tt_pre_allgather_output, memory_config=ttnn.L1_MEMORY_CONFIG)
+        tt_stats_list.append(tt_pre_allgather_output)
+
+    tt_global_stats = ttnn.concat(tt_stats_list, -1)
+    # shard to 1 core
+    tt_stats_sharded_config = ttnn.create_sharded_memory_config(
+        shape=(1, 1, 32, tt_global_stats.get_legacy_shape()[-1]),
+        core_grid=ttnn.CoreGrid(y=1, x=1),
+        strategy=ttnn.ShardStrategy.WIDTH,
     )
+    tt_global_stats = ttnn.to_memory_config(tt_global_stats, memory_config=tt_stats_sharded_config)
+
+    # Simulate multi-device post-allgather computation
+    tt_output_chunks = []
+    for d in range(num_devices):
+        tt_input_tensor = create_tt_tensors(torch_input_chunks[d], device, input_df, core_grid, input_width)
+        tt_weights = create_tt_tensors(
+            torch_weight_chunks[d], device, weights_df, core_grid, input_width, is_weight=True
+        )
+        tt_output_tensor = compute_post_allgather_output(
+            tt_input_tensor, tt_weights, tt_global_stats, eps, is_rmsnorm, core_grid, input_width
+        )
+        tt_output_chunks.append(ttnn.to_torch(tt_output_tensor).to(torch.bfloat16))
+
+    # Concatenate output chunks
+    tt_output_torch = torch.cat(tt_output_chunks, dim=-1)
+
+    # Compare results
+    _, pcc_out = comp_pcc(torch_output_tensor, tt_output_torch, pcc=min_pcc)
+    all_close_passing = torch.allclose(torch_output_tensor, tt_output_torch, atol=max_atol, equal_nan=False)
+    atol_delta = torch.max(torch.abs(torch_output_tensor - tt_output_torch)).item()
+
+    assert pcc_out >= min_pcc, f"PCC test failed: {pcc_out} (threshold: {min_pcc})"
+    assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"

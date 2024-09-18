@@ -78,6 +78,7 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
     }
     if (this->distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
         TT_FATAL(stats.has_value(), "Post all gather layernorm requires stats");
+        TT_FATAL(stats.value().is_sharded(), "Stats must be sharded");
         TT_FATAL(stats.value().get_layout() == Layout::TILE, "Only tile layout is supported for stats");
         TT_FATAL(stats.value().get_dtype() == DataType::BFLOAT16, "Only bfloat16 is supported for stats");
         TT_FATAL(stats.value().storage_type() == StorageType::DEVICE || stats.value().storage_type() == StorageType::MULTI_DEVICE, "Operands to layernorm need to be on device!");
@@ -160,9 +161,7 @@ std::vector<tt::tt_metal::LegacyShape> LayerNorm::compute_output_shapes(const st
         auto padding = output_shape.padding();
         uint32_t num_tiles_w = this->norm_type == LayerNormType::LAYERNORM ? 2 : 1;
         output_shape[3] = num_tiles_w * TILE_WIDTH;
-        padding[3] = Padding::PadDimension{0, 31};
-
-        return {tt::tt_metal::Shape(output_shape, padding)};
+        return {tt::tt_metal::LegacyShape(output_shape, padding)};
     }
     else
     {
