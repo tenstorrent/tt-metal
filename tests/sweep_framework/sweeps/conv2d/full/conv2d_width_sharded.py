@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Optional, Tuple, List
+import os
 import itertools
 import random
 import torch
@@ -31,7 +32,7 @@ def get_height_sharded_specs(
 
 
 # Create test vectors for following 9 Params
-# Kernels
+# Kernels [2, 3, 5, 7]
 # Input Channels [[3, 4, 16], [17, 25, 33], [40, 48, 64], [80, 96, 100], [160, 512, 640]]
 # Output Channels [3, 4, 16, 40, 64, 96, 100, 150, 512, 1024]
 # Transpose_mcast
@@ -60,7 +61,7 @@ parameters = {
         "height_sharded_specs": list(
             get_height_sharded_specs(
                 [2],  # batch_sizes
-                [64],  # activation size
+                [32],  # activation size
                 [2, 3, 5, 7],  # kernel sizes
                 [1],  # stride sizes
                 [1],  # padding sizes
@@ -104,12 +105,12 @@ def mesh_device_fixture():
     device = ttnn.CreateDevice(device_id=device_id, l1_small_size=32768)
     ttnn.SetDefaultDevice(device)
 
+    ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
     device_name = "Unknown"
-    if ttnn.is_grayskull(device):
+    if ARCH_NAME == "grayskull":
         device_name = "grayskull"
-    elif ttnn.is_wormhole_b0(device):
+    elif ARCH_NAME == "wormhole_b0":
         device_name = "wormhole_b0"
-
     yield device, device_name
 
     ttnn.synchronize_device(device)
