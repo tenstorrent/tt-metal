@@ -16,6 +16,9 @@ on:
           - eltwise.subtract.subtract_interleaved
           - eltwise.subalpha.subalpha_interleaved
           - eltwise.rsub.rsub_interleaved
+          - eltwise.frac.frac_interleaved
+          - eltwise.ceil.ceil_interleaved
+          - eltwise.trunc.trunc_interleaved
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
           - matmul.full.matmul_default_interleaved
