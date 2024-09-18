@@ -25,7 +25,11 @@ void UpSample::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Input tensor data type should be BFLOAT16");
     if (input_tensor_a.memory_config().is_sharded()) {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == output_mem_config_.memory_layout, "Input tensor memory layout should be same as output tensor memory layout");
-        TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Input tensor memory layout should be HEIGHT or BLOCK sharded");
+        if(mode_ == "nearest")
+            TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Input tensor memory layout should be HEIGHT or BLOCK sharded");
+        else if(mode_ == "bilinear")
+            TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Input tensor memory layout should be HEIGHT sharded");
+        TT_FATAL(mode_ == "bilinear" || mode_ == "nearest", "Upsample only supports bilinear or nearest mode");
         TT_FATAL(input_tensor_a.buffer()->buffer_type() == tt::tt_metal::BufferType::L1, "Input buffer should be sharded in L1");
     }
 }

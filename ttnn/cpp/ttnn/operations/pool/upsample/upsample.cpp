@@ -17,6 +17,9 @@ ttnn::Tensor ExecuteUpSample::invoke(const ttnn::Tensor& input_tensor,
         MemoryConfig mem_config = output_mem_config.value_or(input_tensor.memory_config());
         ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(
             ttnn::init_device_compute_kernel_config(input_tensor.device()->arch(), std::nullopt, MathFidelity::HiFi4));
+        if(mode.empty()) {
+            mode = "nearest";
+        }
         int scale_h = 1;
         int scale_w = 1;
         std::visit(

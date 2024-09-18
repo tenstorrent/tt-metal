@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -175,10 +175,25 @@ operation::ProgramWithCallbacks bilinear_multi_core(const Tensor &input, Tensor&
     log_debug(LogOp, "input_nsticks_per_core: {}, output_nsticks_per_core: {}", input_nsticks_per_core, output_nsticks_per_core);
 
     // Kernels
+    //computation needed for the bilinear kernel. Passing them as an argument.
+    float scale_h_inv = 1.0f / (float)scale_factor_h;
+    float scale_w_inv = 1.0f / (float)scale_factor_w;
+    float y_index = (float)(0.5f) * (float)scale_h_inv + 0.5f;
+    float x_index_compute = (float)(0.5f) * (float)scale_w_inv - 0.5f;
+
+    uint32_t scale_h_inv_u32 = *reinterpret_cast<uint32_t*>(&scale_h_inv);
+    uint32_t scale_w_inv_u32 = *reinterpret_cast<uint32_t*>(&scale_w_inv);
+    uint32_t y_index_u32 = *reinterpret_cast<uint32_t*>(&y_index);
+    uint32_t x_index_compute_u32 = *reinterpret_cast<uint32_t*>(&x_index_compute);
+
     std::vector<uint32_t> reader_compile_time_args = {
         in_cb_id,
         out_cb_id,
         false,
+        scale_h_inv_u32,
+        scale_w_inv_u32,
+        y_index_u32,
+        x_index_compute_u32,
     };
 
     string writer_kernel_fname, reader_kernel_fname, compute_kernel_fname;
