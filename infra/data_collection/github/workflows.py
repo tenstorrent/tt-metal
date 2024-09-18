@@ -87,13 +87,20 @@ def get_github_job_id_to_test_reports(workflow_outputs_dir, workflow_run_id: int
 def get_pydantic_test_from_pytest_testcase(testcase, default_timestamp=datetime.now()):
     skipped = junit_xml_utils.get_pytest_testcase_is_skipped(testcase)
     failed = junit_xml_utils.get_pytest_testcase_is_failed(testcase)
-    success = not failed
+    error = junit_xml_utils.get_pytest_testcase_is_error(testcase)
+    success = not (failed or error)
 
     error_message = None
+
+    # Error is a scarier thing than failure because it means there's an infra error, expose that first
     if failed:
         error_message = junit_xml_utils.get_pytest_failure_message(testcase)
 
-    if not skipped:
+    if error:
+        error_message = junit_xml_utils.get_pytest_error_message(testcase)
+
+    # Error at the beginning of a test can prevent pytest from recording timestamps at all
+    if not (skipped or error):
         properties = junit_xml_utils.get_pytest_testcase_properties(testcase)
         test_start_ts = datetime.strptime(properties["start_timestamp"], "%Y-%m-%dT%H:%M:%S")
         test_end_ts = datetime.strptime(properties["end_timestamp"], "%Y-%m-%dT%H:%M:%S")

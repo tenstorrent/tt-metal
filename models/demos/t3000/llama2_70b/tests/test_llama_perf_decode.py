@@ -7,6 +7,7 @@ from loguru import logger
 import torch
 import ttnn
 from ttnn import ConcatMeshToTensor
+import time
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 
@@ -97,91 +98,9 @@ def calculate_decode_times(profiler, generation_length):
     return times, times[f"decode_time_{generation_length}"]
 
 
-def run_inference(tt_model, tokenizer, tokens, mesh_device, configuration, total_len, input_text_mask):
-    start_pos = 0
-    prev_pos = 0
-    for cur_pos in range(start_pos + 1, total_len):
-        logger.info(f"Generating token: {cur_pos}")
-
-        tt_inp_emb, prev_pos, rot_mat, attn_mask, cache_idxs = tt_model.prepare_inputs(
-            tokens[:, prev_pos:cur_pos], prev_pos
-        )
-        tt_inp_emb = ttnn.to_device(tt_inp_emb, mesh_device, memory_config=tt_model.model_config["DRAM_MEMCFG"])
-        tt_inp_emb = tt_model.tt_embd(tt_inp_emb)
-        tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, tt_model.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
-
-        rot_mat = ttnn.to_device(rot_mat, mesh_device, memory_config=tt_model.model_config["ROT_MAT_MM_IN1_MEMCFG"])
-        cache_idxs = ttnn.to_device(cache_idxs, mesh_device, memory_config=tt_model.model_config["DRAM_MEMCFG"])
-
-        logger.info("Compiling model")
-        tt_logits = tt_model(
-            tt_inp_emb,
-            rot_mat,
-            prev_pos,
-            attn_mask,
-            cache_idxs=cache_idxs,
-        )
-
-        # del tt_inp_emb
-        # del rot_mat
-        # del attn_mask
-        tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # logits = ttnn.to_torch(tt_logits, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=3))
-        tt_logits_tensors = ttnn.get_device_tensors(tt_logits)
-        logits_rm = ttnn.to_layout(tt_logits_tensors[0], ttnn.ROW_MAJOR_LAYOUT)
-        # logits_rm = ttnn.untilize(tt_logits_tensors[0], use_multicore=True)
-        logits = ttnn.to_torch(logits_rm)
-
-        # logits = logits[..., : configuration.vocab_size].float()  # [1, batch, vocab_size]
-        # del tt_logits
-
-        logger.info("Capturing trace")
-        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        tt_logits = tt_model(
-            tt_inp_emb,
-            rot_mat,
-            prev_pos,
-            attn_mask,
-        )
-        tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        tt_logits_tensors = ttnn.get_device_tensors(tt_logits)
-        logits_rm = ttnn.to_layout(tt_logits_tensors[0], ttnn.ROW_MAJOR_LAYOUT)
-        # logits = ttnn.to_torch(logits_rm)
-        # logits_rm = ttnn.untilize(tt_logits_tensors[0], use_multicore=True)
-        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-
-        logger.info("Starting Trace perf test...")
-
-        import time
-
-        num_iters = 100
-        times = []
-        for i in range(num_iters):
-            x1 = time.time()
-            ttnn.execute_trace(mesh_device, trace_id, blocking=False)
-            # logits = ttnn.to_torch(
-            # tt_logits, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=3)
-            # )
-            logits = ttnn.to_torch(logits_rm)
-
-            x2 = time.time()
-
-            times.append(x2 - x1)
-        logger.info(
-            f"Ran Trace for {num_iters} iterations. Avg Trace execution time: {sum(times[1:]) / len(times[1:])} seconds."
-        )
-        print(times)
-        ttnn.release_trace(mesh_device, trace_id)
-        breakpoint()
-
-        next_token = torch.argmax(logits, dim=-1)
-        next_token = next_token.reshape(-1)
-        break
-        tokens, eos_reached, prev_pos = prepare_next_input(tokenizer, tokens, input_text_mask, cur_pos, next_token)
-
-
 def run_test_LlamaModel_end_to_end(
     mesh_device,
+    llama_version,
     batch,
     seq_len,
     model_config,
@@ -245,19 +164,61 @@ def run_test_LlamaModel_end_to_end(
 
     del state_dict
 
-    logger.info("Running 1st run decode stage with compile...")
+    ##### Prepare Inputs #####
+    prev_pos = total_len - 1
+    tt_inp_emb, prev_pos, rot_mat, attn_mask, cache_idxs = tt_model.prepare_inputs(
+        tokens[:, prev_pos:total_len], prev_pos
+    )
+    tt_inp_emb = ttnn.to_device(tt_inp_emb, mesh_device, memory_config=tt_model.model_config["DRAM_MEMCFG"])
+    tt_inp_emb = tt_model.tt_embd(tt_inp_emb)
+    tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, tt_model.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
 
-    profiler.start(f"end_to_end_inference_with_compile")
-    run_inference(tt_model, tokenizer, tokens, mesh_device, configuration, total_len, input_text_mask)
-    profiler.end(f"end_to_end_inference_with_compile")
+    rot_mat = ttnn.to_device(rot_mat, mesh_device, memory_config=tt_model.model_config["ROT_MAT_MM_IN1_MEMCFG"])
+    cache_idxs = ttnn.to_device(cache_idxs, mesh_device, memory_config=tt_model.model_config["DRAM_MEMCFG"])
+
+    ##### Compile Model #####
+    logger.info("Compiling model")
+    profiler.start(f"compile_time")
+    tt_logits = tt_model(
+        tt_inp_emb,
+        rot_mat,
+        prev_pos,
+        attn_mask,
+        cache_idxs=cache_idxs,
+    )
+    tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    tt_logits_tensors = ttnn.get_device_tensors(tt_logits)
+    logits_rm = ttnn.to_layout(tt_logits_tensors[0], ttnn.ROW_MAJOR_LAYOUT)
+    logits = ttnn.to_torch(logits_rm)
+    profiler.end(f"compile_time")
     profiler.print()
-    compile_and_loop_time = profiler.get("end_to_end_inference_with_compile")
-    compile_iter_time = compile_and_loop_time / total_len
+    compile_iter_time = profiler.get("compile_time")
     logger.info(f"decode with compile time, single iter latency: {compile_iter_time}")
 
+    ##### Capture Trace #####
+    logger.info("Capturing trace")
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    tt_logits = tt_model(
+        tt_inp_emb,
+        rot_mat,
+        prev_pos,
+        attn_mask,
+        cache_idxs=cache_idxs,
+    )
+    tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    tt_logits_tensors = ttnn.get_device_tensors(tt_logits)
+    logits_rm = ttnn.to_layout(tt_logits_tensors[0], ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+
+    ##### Execute Trace #####
+    logger.info("Executing trace")
     profiler.start(f"end_to_end_inference")
-    run_inference(tt_model, tokenizer, tokens, mesh_device, configuration, total_len, input_text_mask)
+    for i in range(total_len):
+        ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+        logits = ttnn.to_torch(logits_rm)
     profiler.end(f"end_to_end_inference")
+    ttnn.release_trace(mesh_device, trace_id)
+
     profiler.print()
     loop_time = profiler.get("end_to_end_inference")
     iter_time = loop_time / total_len
@@ -266,7 +227,7 @@ def run_test_LlamaModel_end_to_end(
     comment = f"num_layers={n_layers}L_n_devices={n_devices}"
 
     prep_perf_report(
-        model_name=f"llama2_70b_{comment}",
+        model_name=f"{llama_version}_70b_{comment}",
         batch_size=batch,
         inference_and_compile_time=compile_iter_time,
         inference_time=iter_time,
@@ -292,7 +253,7 @@ def run_test_LlamaModel_end_to_end(
 @pytest.mark.parametrize(
     "llama_version",
     (
-        ("llama2"),
+        # ("llama2"),
         ("llama3"),
     ),
 )
@@ -341,6 +302,7 @@ def test_Llama_perf_host(
 
     run_test_LlamaModel_end_to_end(
         t3k_mesh_device,
+        llama_version,
         batch,
         seq_len,
         model_config,

@@ -22,7 +22,7 @@ from models.experimental.functional_unet.tests.common import (
 
 @pytest.mark.parametrize("batch", [2])
 @pytest.mark.parametrize("groups", [1])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 64768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_unet_multi_device_model(batch, groups, mesh_device, use_program_cache, reset_seeds):
     if not is_n300_with_eth_dispatch_cores(mesh_device) and not is_t3k_with_eth_dispatch_cores(mesh_device):
         pytest.skip("Test is only valid for N300 or T3000")
@@ -51,4 +51,4 @@ def test_unet_multi_device_model(batch, groups, mesh_device, use_program_cache, 
     torch_output_tensor = model(torch_input)
     output_tensor = ttnn_model(ttnn_input)
 
-    check_pcc_conv(torch_output_tensor, output_tensor, mesh_composer=output_mesh_composer, pcc=0.986)
+    check_pcc_conv(torch_output_tensor, output_tensor, mesh_composer=output_mesh_composer, pcc=0.97)

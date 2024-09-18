@@ -71,9 +71,9 @@ void kernel_main() {
     }
     else {
         constexpr uint32_t cb_index_id = tt::CB::dataflow0;
-        const InterleavedPow2AddrGen<true> addrg = {
+        const InterleavedAddrGen<true> addrg = {
                 .bank_base_address = pos_addr,
-                .log_base_2_of_page_size = log_base_2_of_page_size
+                .page_size = index_stick_size_B
             };
 
         cb_reserve_back(cb_index_id, 1);
@@ -89,9 +89,9 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* page_table_ptr;
     if constexpr (is_paged_attention) {
         constexpr uint32_t cb_id_page_table = tt::CB::dataflow1;
-        const InterleavedPow2AddrGen<true> page_table_gen = {
+        const InterleavedAddrGen<true> page_table_gen = {
             .bank_base_address = page_table_addr,
-            .log_base_2_of_page_size = log2_page_table_page_size
+            .page_size = page_table_page_size
         };
         cb_reserve_back(cb_id_page_table, 1);
         uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);

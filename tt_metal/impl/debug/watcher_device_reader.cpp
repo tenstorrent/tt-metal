@@ -16,8 +16,7 @@
 #include "watcher_device_reader.hpp"
 
 using std::string;
-
-namespace tt::watcher {
+namespace { // Helper functions
 
 // Helper function to get string rep of riscv type
 static const char *get_riscv_name(const CoreCoord &core, uint32_t type) {
@@ -93,6 +92,49 @@ static string get_noc_target_str(Device *device, CoreDescriptor &core, int noc, 
 
     out += fmt::format("[addr=0x{:08x},len={}]", NOC_LOCAL_ADDR(san->noc_addr), san->len);
     return out;
+}
+} // anonymous namespace
+
+namespace tt::watcher {
+
+WatcherDeviceReader::WatcherDeviceReader(
+    FILE *f, Device *device, vector<string> &kernel_names, void (*set_watcher_exception_message)(const string &)) :
+    f(f), device(device), kernel_names(kernel_names), set_watcher_exception_message(set_watcher_exception_message) {
+    // On init, read out eth link retraining register so that we can see if retraining has occurred. WH only for now.
+    if (device->arch() == ARCH::WORMHOLE_B0 && tt::llrt::OptionsG.get_watcher_enabled()) {
+        vector<uint32_t> read_data;
+        for (const CoreCoord &eth_core : device->get_active_ethernet_cores()) {
+            CoreCoord phys_core = device->ethernet_core_from_logical_core(eth_core);
+            read_data = tt::llrt::read_hex_vec_from_core(
+                device->id(), phys_core, eth_l1_mem::address_map::RETRAIN_COUNT_ADDR, sizeof(uint32_t));
+            logical_core_to_eth_link_retraining_count[eth_core] = read_data[0];
+        }
+    }
+}
+
+WatcherDeviceReader::~WatcherDeviceReader() {
+    // On close, read out eth link retraining register so that we can see if retraining has occurred.
+    if (device->arch() == ARCH::WORMHOLE_B0 && tt::llrt::OptionsG.get_watcher_enabled()) {
+        vector<uint32_t> read_data;
+        for (const CoreCoord &eth_core : device->get_active_ethernet_cores()) {
+            CoreCoord phys_core = device->ethernet_core_from_logical_core(eth_core);
+            read_data = tt::llrt::read_hex_vec_from_core(
+                device->id(), phys_core, eth_l1_mem::address_map::RETRAIN_COUNT_ADDR, sizeof(uint32_t));
+            uint32_t num_events = read_data[0] - logical_core_to_eth_link_retraining_count[eth_core];
+            if (num_events > 0) {
+                log_warning(
+                    "Device {} physical ethernet core {}: Watcher detected {} link retraining events.",
+                    device->id(),
+                    phys_core,
+                    num_events);
+            }
+            fprintf(
+                f,
+                "%s\n",
+                fmt::format("\tDevice {} Ethernet Core {} retraining events: {}", device->id(), phys_core, num_events)
+                    .c_str());
+    }
+    }
 }
 
 void WatcherDeviceReader::Dump(FILE *file) {
