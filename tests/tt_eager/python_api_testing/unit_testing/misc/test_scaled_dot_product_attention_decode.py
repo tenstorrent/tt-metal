@@ -205,8 +205,8 @@ def run_test_sdpa_decode_multi_pos(
 
     height_sharded_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
-    K = fa_rand(nkv, b, s, d)
-    V = fa_rand(nkv, b, s, d)
+    K = fa_rand(b, nkv, s, d)
+    V = fa_rand(b, nkv, s, d)
 
     tt_K = ttnn.as_tensor(K, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
     tt_V = ttnn.as_tensor(V, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
@@ -232,10 +232,10 @@ def run_test_sdpa_decode_multi_pos(
         logger.info(f"Using padded layer length: {padded_layer_len}")
         logger.info(f"Using padded num heads: {padded_num_heads}")
 
-        attn_mask = torch.zeros((1, b, padded_num_heads, padded_layer_len))
+        attn_mask = torch.zeros((b, padded_num_heads, 1, padded_layer_len))
         for i in range(b):
             start_idx = start_indices[i]
-            attn_mask[:, i, :, start_idx + 1 :] = torch.finfo(torch.float32).min
+            attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
 
         Q = fa_rand(1, b, padded_num_heads, d)
 
@@ -276,9 +276,15 @@ def run_test_sdpa_decode_multi_pos(
         tt_back = tt_back[:, :, :nh, :]
 
         Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
-        K_slice = K[:, :, :padded_layer_len, :].permute(1, 0, 2, 3)  # nh, b, S, d
-        V_slice = V[:, :, :padded_layer_len, :].permute(1, 0, 2, 3)  # nh, b, S, d
-        attn_mask_slice = attn_mask[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, S
+        K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
+        K_slice = torch.cat(
+            [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+        )  # b, nh, d, S
+        V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
+        V_slice = torch.cat(
+            [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+        )  # b, nh, d, S
+        attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
 
         expect = torch.nn.functional.scaled_dot_product_attention(
             Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
@@ -338,8 +344,8 @@ def run_test_sdpa_decode_single_iter(
 
     height_sharded_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
-    K = fa_rand(nkv, b, s, d)
-    V = fa_rand(nkv, b, s, d)
+    K = fa_rand(b, nkv, s, d)
+    V = fa_rand(b, nkv, s, d)
 
     tt_K = ttnn.as_tensor(K, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
     tt_V = ttnn.as_tensor(V, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
@@ -363,10 +369,10 @@ def run_test_sdpa_decode_single_iter(
     logger.debug(f"Using padded layer length: {padded_layer_len}")
     logger.debug(f"Using padded num heads: {padded_num_heads}")
 
-    attn_mask = torch.zeros((1, b, padded_num_heads, padded_layer_len))
+    attn_mask = torch.zeros((b, padded_num_heads, 1, padded_layer_len))
     for i in range(b):
         start_idx = start_indices[i]
-        attn_mask[:, i, :, start_idx + 1 :] = torch.finfo(torch.float32).min
+        attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
 
     Q = fa_rand(1, b, padded_num_heads, d)
 
@@ -405,9 +411,15 @@ def run_test_sdpa_decode_single_iter(
     tt_back = tt_back[:, :, :nh, :]
 
     Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
-    K_slice = K[:, :, :padded_layer_len, :].permute(1, 0, 2, 3)  # nh, b, S, d
-    V_slice = V[:, :, :padded_layer_len, :].permute(1, 0, 2, 3)  # nh, b, S, d
-    attn_mask_slice = attn_mask[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, S
+    K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
+    K_slice = torch.cat(
+        [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+    )  # b, nh, d, S
+    V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
+    V_slice = torch.cat(
+        [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+    )  # b, nh, d, S
+    attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
     expect = torch.nn.functional.scaled_dot_product_attention(
         Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
     )  # b, nh, 1, d
