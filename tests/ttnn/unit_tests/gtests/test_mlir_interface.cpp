@@ -102,14 +102,31 @@ void compare_l1_circular_buffer_allocations(
 void compare_l1_tensor_allocations(
     const std::vector<std::tuple<uint32_t, uint32_t>>& usage_estimator_result, const nlohmann::json& json_trace) {
     auto graph_l1_buffer_allocations = graph::extract_l1_buffer_allocations(json_trace);  // total
-    EXPECT_EQ(usage_estimator_result.size(), graph_l1_buffer_allocations.size());
-    for (int i = 0; i < graph_l1_buffer_allocations.size(); i++) {
-        std::cout << "DBG l1[" << i << "]" << std::get<0>(usage_estimator_result[i])
+    EXPECT_GE(usage_estimator_result.size(), graph_l1_buffer_allocations.size());
+    int l = 0, r = 0;
+    const auto read_graph_capture_buffer = [&](int idx) {
+        return idx >= graph_l1_buffer_allocations.size() ? 0 : graph_l1_buffer_allocations[idx];
+    };
+
+    // Skip comparing dram allocated buffers which graph capture doesn't report.
+    while (l < usage_estimator_result.size()) {
+        if (std::get<0>(usage_estimator_result[l]) == 0) {
+            l++;
+            continue;
+        }
+
+        std::cout << "DBG l1[" << l << "]" << std::get<0>(usage_estimator_result[l])
                   << std::endl;  // << " " << graph_l1_buffer_allocations[i] << std::endl;
         EXPECT_EQ(
-            std::get<0>(usage_estimator_result[i]) * std::get<1>(usage_estimator_result[i]),
-            graph_l1_buffer_allocations[i]);
+            std::get<0>(usage_estimator_result[l]) * std::get<1>(usage_estimator_result[l]),
+            read_graph_capture_buffer(r));
+        l++;
+        r++;
     }
+
+    // Make sure we compared all the elements in the two arrays.
+    EXPECT_EQ(l, usage_estimator_result.size());
+    EXPECT_GE(r, graph_l1_buffer_allocations.size());
 }
 
 OperandShapeTestParam select_larger_input(const OperandShapeTestParam& a, const OperandShapeTestParam& b) {

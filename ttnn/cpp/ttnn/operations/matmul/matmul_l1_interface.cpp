@@ -74,11 +74,9 @@ std::vector<std::tuple<uint32_t, uint32_t>> MatmulMultiCoreReuseMultiCastOpL1Usa
     const {
     std::vector<std::tuple<uint32_t, uint32_t>> sizes;
 
-    if (!std::get<tt::tt_metal::MemoryConfig>(output).is_dram()) {
-        sizes.emplace_back(std::make_tuple(
-            calculate_tensor_l1_allocation_size_per_core(output),
-            get_num_of_cores(std::get<tt::tt_metal::MemoryConfig>(output).shard_spec)));
-    }
+    sizes.emplace_back(std::make_tuple(
+        calculate_tensor_l1_allocation_size_per_core(output),
+        get_num_of_cores(std::get<tt::tt_metal::MemoryConfig>(output).shard_spec)));
 
     return sizes;
 }
@@ -175,11 +173,9 @@ std::vector<std::tuple<uint32_t, uint32_t>>
 MatmulMultiCoreReuseMultiCast1DOpL1Usage::get_tensor_l1_allocations_per_core() const {
     std::vector<std::tuple<uint32_t, uint32_t>> sizes;
 
-    if (!std::get<tt::tt_metal::MemoryConfig>(output).is_dram()) {
-        sizes.emplace_back(std::make_tuple(
-            calculate_tensor_l1_allocation_size_per_core(output),
-            get_num_of_cores(std::get<tt::tt_metal::MemoryConfig>(output).shard_spec)));
-    }
+    sizes.emplace_back(std::make_tuple(
+        calculate_tensor_l1_allocation_size_per_core(output),
+        get_num_of_cores(std::get<tt::tt_metal::MemoryConfig>(output).shard_spec)));
 
     return sizes;
 }
