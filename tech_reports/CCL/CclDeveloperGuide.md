@@ -89,14 +89,14 @@ The fourth level is the Erisc datamover which encapsulates many common pieces of
 Finally, higher level operations are implemented.
 
 ## CCL Orchestration
-At the TT-NN layer, orchestration APIs exist to perform higher level collective and multichip operations. For example, a user can specify that they wish to run independent all-gather operations along all the rows or columns of a mesh that their multichip tensor is distributed across. 
+At the TT-NN layer, orchestration APIs exist to perform higher level collective and multichip operations. For example, a user can specify that they wish to run independent all-gather operations along all the rows or columns of a mesh that their multichip tensor is distributed across. The ["Programming Mesh of Devices with TT-NN"](../Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md) provides further details.
 
 # Multichip Topologies and Connectivity {#multichip-topologies-and-connectivity}
 
 Starting with the Wormhole architecture, Tenstorrent offers multi-chip functionality where two or more Wormhole chips can be connected together. Tenstorrent’s scaleout strategy enables Wormhole and later chips to communicate directly with each other,  
 It doesn’t require:
 
-1)  a host CPU as an intermediary   
+1) a host CPU as an intermediary   
 2) or a switch (such as NVSwitch)  
 3) or a network card (such as Infiniband NIC)  
    
@@ -105,7 +105,7 @@ Currently, device chips are connected directly to each other via a number of Eth
 
 # Ethernet core and ERISCs {#ethernet-core-and-eriscs}
 
-To achieve Ethernet scale-out capabilities, the Wormhole architecture adds a new core type. Like worker cores, DRAM, PCIe, ARC, and routing cores that are present in Grayskull, the new core type (called an Ethernet core), is also accessed as a NoC endpoint. Every Wormhole part contains 16 total Ethernet cores on the NoC. Depending on the particular part, all 16 Ethernet cores may be connected to active links. This provides a large space for cluster topology design. The ["Programming Mesh of Devices with TT-NN"](../Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md) provides further details.
+To achieve Ethernet scale-out capabilities, the Wormhole architecture adds a new core type. Like worker cores, DRAM, PCIe, ARC, and routing cores that are present in Grayskull, the new core type (called an Ethernet core), is also accessed as a NoC endpoint. Every Wormhole part contains 16 total Ethernet cores on the NoC. Depending on the particular part, all 16 Ethernet cores may be connected to active links. This provides a large space for cluster topology design.
 
 ## Ethernet Core Type: Ethernet
 
