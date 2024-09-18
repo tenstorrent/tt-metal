@@ -120,7 +120,7 @@ def should_skip_model_load():
     return skip_model_load
 
 
-def setup_llama_env(llama_version="llama3", batch=32, seq_len=1, n_devices=8, max_batch_size=32, max_context_len=4096):
+def setup_llama_env(llama_version="llama3", seq_len=1, n_devices=8, max_batch_size=32, max_context_len=4096):
     if os.getenv("CI") == "true":
         if llama_version == "llama3":
             ckpt_dir = "/mnt/MLPerf/tt_dnn-models/llama-3/llama-3-70b-repacked/"

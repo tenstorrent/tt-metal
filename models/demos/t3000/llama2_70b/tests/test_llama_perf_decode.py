@@ -323,7 +323,6 @@ def test_Llama_perf_host(
 
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,
-        batch=batch,
         seq_len=seq_len,
     )
 

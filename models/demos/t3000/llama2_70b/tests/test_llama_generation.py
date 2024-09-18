@@ -144,7 +144,7 @@ def test_LlamaModel_inference(
         llama_version=llama_version,
     )
 
-    if t3k_mesh_device.get_num_devices() < n_devices and not emulated:
+    if t3k_mesh_device.get_num_devices() < n_devices:
         pytest.skip(f"Requires at {n_devices} devices to run")
 
     compute_grid_size = t3k_mesh_device.get_device(0).compute_with_storage_grid_size()
