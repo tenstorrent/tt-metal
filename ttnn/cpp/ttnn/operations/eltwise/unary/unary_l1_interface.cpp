@@ -40,9 +40,9 @@ std::unique_ptr<UnaryOpL1Usage> UnaryOpL1UsageFactory::Make(
     const auto input_memory_config = std::get<tt::tt_metal::MemoryConfig>(input);
 
     if (input_memory_config.is_sharded()) {
-        return std::make_unique<ShardedUnaryOpL1Usage>(input, output);
+        return std::make_unique<ShardedUnaryOpL1Usage>(input, output.value_or(input));
     } else {
-        return std::make_unique<InterleavedUnaryOpL1Usage>(input, output);
+        return std::make_unique<InterleavedUnaryOpL1Usage>(input, output.value_or(input));
     }
 };
 
@@ -50,8 +50,8 @@ UnaryOpL1Usage::UnaryOpL1Usage(const L1InterfaceOperandParams& input, const L1In
     input(input), output(output) {}
 
 InterleavedUnaryOpL1Usage::InterleavedUnaryOpL1Usage(
-    const L1InterfaceOperandParams& input, const std::optional<L1InterfaceOperandParams>& output) :
-    UnaryOpL1Usage(input, output.has_value() ? output.value() : input) {}
+    const L1InterfaceOperandParams& input, const L1InterfaceOperandParams& output) :
+    UnaryOpL1Usage(input, output) {}
 
 std::vector<std::tuple<uint32_t, uint32_t>>
 InterleavedUnaryOpL1Usage::InterleavedUnaryOpL1Usage::get_circular_buffer_l1_allocations_per_core() const {
@@ -64,8 +64,8 @@ InterleavedUnaryOpL1Usage::InterleavedUnaryOpL1Usage::get_tensor_l1_allocations_
 }
 
 ShardedUnaryOpL1Usage::ShardedUnaryOpL1Usage(
-    const L1InterfaceOperandParams& input, const std::optional<L1InterfaceOperandParams>& output) :
-    UnaryOpL1Usage(input, output.has_value() ? output.value() : input) {}
+    const L1InterfaceOperandParams& input, const L1InterfaceOperandParams& output) :
+    UnaryOpL1Usage(input, output) {}
 
 std::vector<std::tuple<uint32_t, uint32_t>>
 ShardedUnaryOpL1Usage::ShardedUnaryOpL1Usage::get_circular_buffer_l1_allocations_per_core() const {

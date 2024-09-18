@@ -14,7 +14,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 
-MatmulOPL1Usage::MatmulOPL1Usage(
+MatmulOpL1Usage::MatmulOpL1Usage(
     const L1InterfaceOperandParams& input_a,
     const L1InterfaceOperandParams& input_b,
     const L1InterfaceOperandParams& output) :
@@ -25,7 +25,7 @@ MatmulMultiCoreReuseMultiCastOpL1Usage::MatmulMultiCoreReuseMultiCastOpL1Usage(
     const L1InterfaceOperandParams& input_b,
     const L1InterfaceOperandParams& output,
     const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig& program_config) :
-    MatmulOPL1Usage(input_a, input_b, output), program_config(program_config) {}
+    MatmulOpL1Usage(input_a, input_b, output), program_config(program_config) {}
 
 std::vector<std::tuple<uint32_t, uint32_t>>
 MatmulMultiCoreReuseMultiCastOpL1Usage::get_circular_buffer_l1_allocations_per_core() const {
@@ -86,7 +86,7 @@ MatmulMultiCoreReuseMultiCast1DOpL1Usage::MatmulMultiCoreReuseMultiCast1DOpL1Usa
     const L1InterfaceOperandParams& input_b,
     const L1InterfaceOperandParams& output,
     const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config) :
-    MatmulOPL1Usage(input_a, input_b, output), program_config(program_config) {}
+    MatmulOpL1Usage(input_a, input_b, output), program_config(program_config) {}
 
 std::vector<std::tuple<uint32_t, uint32_t>>
 MatmulMultiCoreReuseMultiCast1DOpL1Usage::get_circular_buffer_l1_allocations_per_core() const {
@@ -180,12 +180,12 @@ MatmulMultiCoreReuseMultiCast1DOpL1Usage::get_tensor_l1_allocations_per_core() c
     return sizes;
 }
 
-std::unique_ptr<MatmulOPL1Usage> MatmulOpL1UsageFactory::Make(
+std::unique_ptr<MatmulOpL1Usage> MatmulOpL1UsageFactory::Make(
     const L1InterfaceOperandParams& input_a,
     const L1InterfaceOperandParams& input_b,
     const L1InterfaceOperandParams& output,
     const ttnn::operations::matmul::MatmulProgramConfig& program_config) {
-    std::unique_ptr<MatmulOPL1Usage> l1_usage = nullptr;
+    std::unique_ptr<MatmulOpL1Usage> l1_usage = nullptr;
     std::visit(
         [&](const auto& program_config) {
             using T = std::decay_t<decltype(program_config)>;

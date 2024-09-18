@@ -8,6 +8,7 @@
 #include "tensor/types.hpp"                            // DataType, Lauout, StorageType
 #include "tt_metal/impl/buffers/buffer.hpp"            // BufferType
 #include "tt_metal/impl/buffers/buffer_constants.hpp"  // TensorMemoryLayout, ShardOrientation
+#include "ttnn/mlir_l1_interface.hpp"
 #include "ttnn/operations/common/l1_interface_common.hpp"
 #include "ttnn/operations/eltwise/binary/binary_constraints.hpp"
 #include "ttnn/operations/eltwise/binary/binary_l1_interface.hpp"
@@ -22,6 +23,7 @@
 
 namespace ttnn::mlir_interface {
 
+// ============= OP constraints API ==============
 bool does_binary_op_support_input_output_constraints(
     const std::vector<uint32_t>& _shape_a,
     const memory_config_tuple& _memory_config_a,
@@ -310,6 +312,8 @@ bool does_matmul_multicore_reuse_multicast_1d_op_support_input_output_constraint
     return true;
 }
 
+// ============= L1 interface API ==============
+
 static std::optional<L1InterfaceOperandParams> get_l1_interface_operand_params(
     const std::vector<uint32_t>& _shape,
     const std::string& _data_type,
@@ -373,7 +377,8 @@ static std::unique_ptr<EltwiseOpL1Usage> get_binary_l1_usage_estimator(
         return nullptr;
     }
 
-    return EltwiseOpL1UsageFactory::Make(l1_input_a.value(), l1_input_b.value(), l1_output.value());
+    return OpL1UsageAbstractFactory::Make()->get_eltwise_op_l1_usage(
+        l1_input_a.value(), l1_input_b.value(), l1_output.value());
 }
 
 std::unique_ptr<UnaryOpL1Usage> get_unary_l1_usage_estimator(
@@ -395,7 +400,7 @@ std::unique_ptr<UnaryOpL1Usage> get_unary_l1_usage_estimator(
         return nullptr;
     }
 
-    return UnaryOpL1UsageFactory::Make(l1_input_a.value(), l1_output);
+    return OpL1UsageAbstractFactory::Make()->get_unary_op_l1_usage(l1_input_a.value(), l1_output);
 }
 
 static std::unique_ptr<SoftmaxOpL1Usage> get_softmax_l1_usage_estimator(
@@ -418,10 +423,10 @@ static std::unique_ptr<SoftmaxOpL1Usage> get_softmax_l1_usage_estimator(
         return nullptr;
     }
 
-    return SoftmaxOpL1UsageFactory::Make(l1_input_a.value(), dim_arg, l1_output);
+    return OpL1UsageAbstractFactory::Make()->get_softmax_op_l1_usage(l1_input_a.value(), dim_arg, l1_output);
 }
 
-static std::unique_ptr<MatmulOPL1Usage> get_matmul_l1_usage_estimator(
+static std::unique_ptr<MatmulOpL1Usage> get_matmul_l1_usage_estimator(
     const std::vector<uint32_t>& _shape_a,
     const memory_config_tuple& _memory_config_a,
     const std::string& _data_type_a,
@@ -450,7 +455,8 @@ static std::unique_ptr<MatmulOPL1Usage> get_matmul_l1_usage_estimator(
         return nullptr;
     }
 
-    return MatmulOpL1UsageFactory::Make(l1_input_a.value(), l1_input_b.value(), l1_output.value(), matmul_config);
+    return OpL1UsageAbstractFactory::Make()->get_matmul_op_l1_usage(
+        l1_input_a.value(), l1_input_b.value(), l1_output.value(), matmul_config);
 }
 
 static std::optional<std::vector<uint32_t>> get_matmul_circular_buffers_l1_allocations_helper(
