@@ -272,25 +272,32 @@ inline void _llk_pack_reduce_mask_config_() {
 }
 
 inline void _llk_pack_reduce_mask_clear_() {
-    // By default, all packers are set to use TILE_ROW_SET_MAPPING_0 and
-    // mask is configured to pass through all the datums
-    pck_edge_offset_u pack_edge_offset = {.val = 0};
-    pack_edge_offset.f.mask = 0xffff;
-
-    // Initialize TMP registers with values we need to write in CFG registers
-    TTI_SETDMAREG(0, LOWER_HALFWORD(pack_edge_offset.val), 0, LO_16(p_gpr_pack::TMP0));
-    TTI_SETDMAREG(0, UPPER_HALFWORD(pack_edge_offset.val), 0, HI_16(p_gpr_pack::TMP0));
-
     // Wait for packer to finish to avoid breaking its current configuration
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
 
+    // By default, all packers are set to use TILE_ROW_SET_MAPPING_0 and
+    // mask is configured to pass through all the datums
     // Clear out packer configuration for reduce
-    TTI_WRCFG(p_gpr_pack::TMP0,  p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32);
-    TTI_WRCFG(p_gpr_pack::TMP0,  p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC1_mask_ADDR32);
+    TT_RMWCIB0(0xff, 0xff, PCK_EDGE_OFFSET_SEC0_mask_ADDR32);
+    TT_RMWCIB1(0xff, 0xff, PCK_EDGE_OFFSET_SEC0_mask_ADDR32);
+    TT_RMWCIB2(0xff, 0x00, PCK_EDGE_OFFSET_SEC0_mask_ADDR32);
+    TT_RMWCIB3(0xff, 0x00, PCK_EDGE_OFFSET_SEC0_mask_ADDR32);
+
+    TT_RMWCIB0(0xff, 0xff, PCK_EDGE_OFFSET_SEC1_mask_ADDR32);
+    TT_RMWCIB1(0xff, 0xff, PCK_EDGE_OFFSET_SEC1_mask_ADDR32);
+    TT_RMWCIB2(0xff, 0x00, PCK_EDGE_OFFSET_SEC1_mask_ADDR32);
+    TT_RMWCIB3(0xff, 0x00, PCK_EDGE_OFFSET_SEC1_mask_ADDR32);
 
     // All mappings point to PCK_EDGE_OFFSET_SEC0_mask_ADDR32
-    TTI_WRCFG(p_gpr::ZERO,  p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32);
-    TTI_WRCFG(p_gpr::ZERO,  p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32);
+    TT_RMWCIB0(0xff, 0x00, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32);
+    TT_RMWCIB1(0xff, 0x00, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32);
+    TT_RMWCIB2(0xff, 0x00, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32);
+    TT_RMWCIB3(0xff, 0x00, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32);
+
+    TT_RMWCIB0(0xff, 0x00, TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32);
+    TT_RMWCIB1(0xff, 0x00, TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32);
+    TT_RMWCIB2(0xff, 0x00, TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32);
+    TT_RMWCIB3(0xff, 0x00, TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32);
 
     TTI_NOP; TTI_NOP;
 }
