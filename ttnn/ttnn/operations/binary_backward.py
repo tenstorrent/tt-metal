@@ -70,6 +70,14 @@ def _golden_function_backward_overload(torch_op, grad_tensor, input_tensor_a, in
     return golden_tensor
 
 
+ttnn.attach_golden_function(
+    ttnn.lt_bw,
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_comparison_ops(
+        torch.lt, grad, a, b, *args, **kwargs
+    ),
+)
+
+
 def _golden_function_backward_with_dim(
     torch_op, grad_tensor, input_tensor_a, input_tensor_b, dimension=None, *args, **kwargs
 ):
