@@ -71,9 +71,9 @@ ttnn::Tensor ExecuteScaledDotProductAttentionGQADecode::invoke(
         ttnn::to_layout(input_tensor_q_gqa, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
 
     auto input_tensor_k_gqa =
-        ttnn::reshape(input_tensor_k, ttnn::Shape{std::array<uint32_t, 4>{1, Bkv * NKH, k_shape[2], D}});
+        ttnn::reshape(input_tensor_k, ttnn::Shape{std::array<uint32_t, 4>{Bkv * NKH, 1, k_shape[2], D}});
     auto input_tensor_v_gqa =
-        ttnn::reshape(input_tensor_v, ttnn::Shape{std::array<uint32_t, 4>{1, Bkv * NKH, k_shape[2], D}});
+        ttnn::reshape(input_tensor_v, ttnn::Shape{std::array<uint32_t, 4>{Bkv * NKH, 1, k_shape[2], D}});
 
     uint32_t k_chunk_size;
     // since we can't get the max cur_pos value from the tensor, we default to 512

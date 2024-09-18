@@ -23,9 +23,9 @@ void py_bind_sdpa_decode(py::module &module) {
 
 
         Args:
-            input_tensor_q (ttnn.Tensor): the input tensor [1 x b x pnh x dh]
-            input_tensor_k (ttnn.Tensor): the input tensor [1 x b x   s x dh]
-            input_tensor_v (ttnn.Tensor): the input tensor [1 x b x   s x dh]
+            input_tensor_q (ttnn.Tensor): the input tensor [1 x b x nh x dh]
+            input_tensor_k (ttnn.Tensor): the input tensor [b x nkv x   s x dh]
+            input_tensor_v (ttnn.Tensor): the input tensor [b x nkv x   s x dh]
             cur_pos (List of int): list of integers of length b.
 
 
