@@ -39,6 +39,9 @@ run_python_model_tests_wormhole_b0() {
     # Unet Shallow
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
 
+    # Mamba
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/demos/wormhole/mamba/tests/test_residual_block.py -k "pretrained_weight_false"
+
     # Llama 3.1 8B single-layer dummy weights tight PCC check
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/llama31_8b/tests/test_llama_model.py -k "quick"
 }

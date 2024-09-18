@@ -4,7 +4,6 @@
 
 import torch
 import pytest
-import random
 import ttnn
 from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc
 from models.utility_functions import skip_for_grayskull, is_wormhole_b0, is_blackhole
@@ -685,7 +684,7 @@ def test_unary_swiglu_ttnn(input_shapes, dim, device):
 )
 @pytest.mark.parametrize(
     "param",
-    {random.randint(1, 100) for _ in range(5)},
+    {0.45, 7.7, 36.89, 58.4, 97.2},
 )
 def test_unary_hardshrink(input_shapes, param, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
@@ -708,7 +707,7 @@ def test_unary_hardshrink(input_shapes, param, device):
 )
 @pytest.mark.parametrize(
     "param",
-    {random.randint(1, 100) for _ in range(5)},
+    {0.45, 7.7, 36.89, 58.4, 89.9},
 )
 def test_unary_softshrink(input_shapes, param, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
@@ -732,7 +731,7 @@ def test_unary_softshrink(input_shapes, param, device):
 )
 @pytest.mark.parametrize(
     "param",
-    {random.uniform(-1e6, 1e6) for _ in range(5)},
+    {-1e4, -98.5, -43.7, -8.5, 0.45, 7.7, 58.4, 89.9, 1e5},
 )
 def test_unary_logit(input_shapes, param, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, 0, 1, device)
@@ -754,7 +753,7 @@ def test_unary_logit(input_shapes, param, device):
 )
 @pytest.mark.parametrize(
     "param",
-    {random.uniform(1, 100) for _ in range(5)},
+    {-98.5, -43.7, -8.5, 0.45, 7.7, 58.4, 89.9},
 )
 def test_unary_celu(input_shapes, param, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
@@ -777,7 +776,7 @@ def test_unary_celu(input_shapes, param, device):
 )
 @pytest.mark.parametrize(
     "param",
-    {random.uniform(0, 100) for _ in range(5)},
+    {-98.5, -43.7, -8.5, 0.45, 7.7, 58.4, 89.9},
 )
 @pytest.mark.parametrize("round_mode", ["None", "trunc", "floor"])
 def test_unary_rdiv(input_shapes, param, round_mode, device):

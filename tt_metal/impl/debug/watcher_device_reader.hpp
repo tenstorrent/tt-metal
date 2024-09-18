@@ -24,14 +24,8 @@ typedef struct {
 class WatcherDeviceReader {
     public:
      WatcherDeviceReader(
-         FILE *f,
-         Device *device,
-         vector<string> &kernel_names,
-         void (* set_watcher_exception_message)(const string &)) :
-         f(f),
-         device(device),
-         kernel_names(kernel_names),
-         set_watcher_exception_message(set_watcher_exception_message) {}
+         FILE *f, Device *device, vector<string> &kernel_names, void (*set_watcher_exception_message)(const string &));
+     ~WatcherDeviceReader();
      void Dump(FILE *file = nullptr);
 
     private:
@@ -62,6 +56,7 @@ class WatcherDeviceReader {
     std::set<std::pair<CoreCoord, riscv_id_t>> paused_cores;
     std::map<riscv_id_t, stack_usage_info_t> highest_stack_usage;
     std::map<int, bool> used_kernel_names;
+    std::map<CoreCoord, uint32_t> logical_core_to_eth_link_retraining_count;
 };
 
 }  // namespace tt::watcher
