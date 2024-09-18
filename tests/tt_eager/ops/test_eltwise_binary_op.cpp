@@ -7,7 +7,7 @@
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 
 using tt::tt_metal::DataType;
 using tt::tt_metal::Device;

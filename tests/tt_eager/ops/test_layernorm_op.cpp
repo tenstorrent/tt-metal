@@ -5,7 +5,7 @@
 #include "tt_metal/host_api.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/normalization/layernorm/layernorm.hpp"
-#include <ttnn/operations/functions.hpp>
+#include <ttnn/operations/numpy/functions.hpp>
 
 #include <algorithm>
 #include <functional>

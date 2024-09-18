@@ -10,7 +10,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 
 using tt::tt_metal::DataType;
 using tt::tt_metal::Device;

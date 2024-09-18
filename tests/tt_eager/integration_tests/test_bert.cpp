@@ -10,7 +10,7 @@
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/normalization/layernorm/layernorm.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"

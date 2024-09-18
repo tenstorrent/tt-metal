@@ -16,7 +16,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"

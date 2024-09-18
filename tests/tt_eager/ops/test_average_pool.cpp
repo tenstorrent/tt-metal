@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/pool/avgpool/avg_pool.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-#include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 #include "common/constants.hpp"

@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <functional>
 #include <random>
-#include <ttnn/operations/functions.hpp>
+#include <ttnn/operations/numpy/functions.hpp>
 
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"

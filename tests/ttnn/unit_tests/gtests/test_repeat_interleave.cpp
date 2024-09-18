@@ -9,7 +9,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/operations/data_movement/repeat_interleave/repeat_interleave.hpp"
-#include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 #include "tt_metal/common/logger.hpp"
 
 #include "ttnn_test_fixtures.hpp"

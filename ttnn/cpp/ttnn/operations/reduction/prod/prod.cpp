@@ -10,7 +10,7 @@
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
-#include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/common/constants.hpp"
 

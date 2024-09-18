@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"

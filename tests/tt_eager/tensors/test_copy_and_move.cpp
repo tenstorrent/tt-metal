@@ -13,7 +13,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 
 using namespace tt;
 using namespace tt_metal;
