@@ -11,7 +11,7 @@ namespace ttnn::operations::moreh::moreh_sum {
 Tensor MorehSum::invoke(
     const Tensor& input,
     std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
-    const bool keep_batch_dim,
+    const bool keepdim,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
@@ -20,13 +20,12 @@ Tensor MorehSum::invoke(
 
     auto temp_input = input;
     for (uint32_t i = dims.size() - 1; i > 0; i--) {
-        log_debug(tt::LogOp, "{}:{} dim {} keep_batch_dim {}", __func__, __LINE__, dims[i], keep_batch_dim);
-        auto temp_output = ttnn::prim::moreh_sum(
-            temp_input, dims[i], keep_batch_dim, std::nullopt, output_mem_config, compute_kernel_config);
+        log_debug(tt::LogOp, "{}:{} dim {} keepdim {}", __func__, __LINE__, dims[i], keepdim);
+        auto temp_output =
+            ttnn::prim::moreh_sum(temp_input, dims[i], keepdim, std::nullopt, output_mem_config, compute_kernel_config);
         temp_input = temp_output;
     }
-    log_debug(tt::LogOp, "{}:{} dim {} keep_batch_dim {}", __func__, __LINE__, dims.front(), keep_batch_dim);
-    return ttnn::prim::moreh_sum(
-        temp_input, dims.front(), keep_batch_dim, output, output_mem_config, compute_kernel_config);
+    log_debug(tt::LogOp, "{}:{} dim {} keepdim {}", __func__, __LINE__, dims.front(), keepdim);
+    return ttnn::prim::moreh_sum(temp_input, dims.front(), keepdim, output, output_mem_config, compute_kernel_config);
 }
 }  // namespace ttnn::operations::moreh::moreh_sum

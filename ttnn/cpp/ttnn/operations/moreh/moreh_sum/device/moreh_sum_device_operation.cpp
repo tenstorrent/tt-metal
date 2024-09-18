@@ -48,7 +48,7 @@ void validate_tensors(
 
     if (output.has_value()) {
         tt::operations::primary::validate_output_with_keepdim(
-            input, output.value(), operation_attributes.dim, operation_attributes.keep_batch_dim);
+            input, output.value(), operation_attributes.dim, operation_attributes.keepdim);
     }
 }
 
@@ -70,14 +70,14 @@ MorehSumOperation::shape_return_value_t MorehSumOperation::compute_output_shapes
     const bool is_tile_dim = (operation_attributes.dim == input_rank - 1 || operation_attributes.dim == input_rank - 2);
     log_debug(
         tt::LogOp,
-        "{}:{} dim {}, keep_batch_dim {}",
+        "{}:{} dim {}, keepdim {}",
         __func__,
         __LINE__,
         operation_attributes.dim,
-        operation_attributes.keep_batch_dim);
+        operation_attributes.keepdim);
 
     ttnn::Shape output_shape = input_shape;
-    if (operation_attributes.keep_batch_dim) {
+    if (operation_attributes.keepdim) {
         auto shape = input_shape.value;
         auto padding = shape.padding();
 
@@ -136,12 +136,10 @@ MorehSumOperation::tensor_return_value_t MorehSumOperation::create_output_tensor
 std::tuple<MorehSumOperation::operation_attributes_t, MorehSumOperation::tensor_args_t> MorehSumOperation::invoke(
     const Tensor& input,
     const int64_t dim,
-    const bool keep_batch_dim,
+    const bool keepdim,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        {dim, keep_batch_dim, output_mem_config.value_or(input.memory_config()), compute_kernel_config},
-        {input, output}};
+    return {{dim, keepdim, output_mem_config.value_or(input.memory_config()), compute_kernel_config}, {input, output}};
 }
 }  // namespace ttnn::operations::moreh::moreh_sum
