@@ -61,13 +61,9 @@ uint32_t SoftmaxOpL1Usage::calculate_block_size_impl(const L1InterfaceOperandPar
     return block_size;
 }
 
-uint32_t SoftmaxOpL1Usage::get_input_cb_size() const {
-    return is_sharded(input) ? c_cb_shares_space_with_sharded_operand : 2 * block_size * get_tile_size(input);
-}
+uint32_t SoftmaxOpL1Usage::get_input_cb_size() const { return 2 * block_size * get_tile_size(input); }
 
-uint32_t SoftmaxOpL1Usage::get_output_cb_size() const {
-    return is_sharded(output) ? c_cb_shares_space_with_sharded_operand : 2 * block_size * get_tile_size(output);
-}
+uint32_t SoftmaxOpL1Usage::get_output_cb_size() const { return 2 * block_size * get_tile_size(output); }
 
 std::vector<uint32_t> SoftmaxOpL1Usage::get_intermediate_cb_sizes() const {
     uint32_t im1_t = 1;  // 1/sum(exp(x))

@@ -49,7 +49,8 @@ MatmulMultiCoreReuseMultiCastOpL1Usage::get_circular_buffer_l1_allocations_per_c
                                : input_cb_size_multiplier * program_config.per_core_M * program_config.in0_block_w *
                                      get_tile_size(input_a);
 
-    uint32_t in1_CB_size = is_sharded(input_b) && !std::get<tt::tt_metal::MemoryConfig>(input_b).is_dram()
+    uint32_t in1_CB_size = has_layout(input_b, tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) &&
+                                   !std::get<tt::tt_metal::MemoryConfig>(input_b).is_dram()
                                ? c_cb_shares_space_with_sharded_operand
                                : input_cb_size_multiplier * program_config.per_core_N * program_config.in0_block_w *
                                      get_tile_size(input_b);
@@ -147,13 +148,11 @@ MatmulMultiCoreReuseMultiCast1DOpL1Usage::get_circular_buffer_l1_allocations_per
     uint32_t in0_CB_tiles = is_sharded(input_a)
                                 ? num_blocks * program_config.per_core_M * program_config.in0_block_w * B
                                 : input_cb_size_multiplier * program_config.per_core_M * program_config.in0_block_w;
-    uint32_t in0_CB_size = is_sharded(input_a) && extract_shard_sub_blocks ? c_cb_shares_space_with_sharded_operand
-                                                                           : in0_CB_tiles * get_tile_size(input_a);
+    uint32_t in0_CB_size = is_sharded(input_a) && !extract_shard_sub_blocks ? c_cb_shares_space_with_sharded_operand
+                                                                            : in0_CB_tiles * get_tile_size(input_a);
 
-    uint32_t in1_CB_size = is_sharded(input_b) && !std::get<tt::tt_metal::MemoryConfig>(input_b).is_dram()
-                               ? c_cb_shares_space_with_sharded_operand
-                               : input_cb_size_multiplier * program_config.per_core_N * program_config.in0_block_w *
-                                     get_tile_size(input_b);
+    uint32_t in1_CB_size =
+        input_cb_size_multiplier * program_config.per_core_N * program_config.in0_block_w * get_tile_size(input_b);
 
     uint32_t out_CB_size = is_sharded(output)
                                ? c_cb_shares_space_with_sharded_operand

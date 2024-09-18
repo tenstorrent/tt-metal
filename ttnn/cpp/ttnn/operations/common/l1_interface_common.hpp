@@ -26,7 +26,7 @@ struct Shape;
 }
 }  // namespace ttnn
 
-constexpr static uint32_t c_cb_shares_space_with_sharded_operand = std::numeric_limits<uint32_t>::max();
+constexpr static uint32_t c_cb_shares_space_with_sharded_operand = (uint32_t)0;
 
 using L1InterfaceOperandParams =
     std::tuple<ttnn::types::Shape, tt::tt_metal::DataType, tt::tt_metal::Layout, tt::tt_metal::MemoryConfig>;
