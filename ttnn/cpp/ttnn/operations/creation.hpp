@@ -70,7 +70,7 @@ inline ttnn::Tensor full_impl(
     DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_dtype() : dtype.value_or(ttnn::bfloat16);
     tt::tt_metal::LegacyShape shape_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_legacy_shape() : shape.value;
     MemoryConfig mem_cfg = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
-    return tt::numpy::full_impl(
+    return numpy::full_impl(
         queue_id,
         shape_value,
         fill_value,
@@ -346,15 +346,15 @@ struct Arange {
         Device* device = device_arg.has_value() ? &(device_arg.value().get()) : nullptr;
         switch (dtype) {
             case ttnn::bfloat16:
-                return tt::numpy::arange<::bfloat16>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
+                return numpy::arange<::bfloat16>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
             case ttnn::float32:
-                return tt::numpy::arange<float>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
+                return numpy::arange<float>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
             case ttnn::uint16:
-                return tt::numpy::arange<uint16_t>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
+                return numpy::arange<uint16_t>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
             case ttnn::uint32:
-                return tt::numpy::arange<uint32_t>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
+                return numpy::arange<uint32_t>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
             case ttnn::int32:
-                return tt::numpy::arange<int32_t>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
+                return numpy::arange<int32_t>(start, stop, step, ttnn::ROW_MAJOR_LAYOUT, device, memory_config);
             default: TT_THROW("Unsupported dtype");
         }
     }

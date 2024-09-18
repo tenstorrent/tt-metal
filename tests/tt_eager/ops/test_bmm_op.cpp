@@ -46,9 +46,9 @@ int main(int argc, char **argv) {
         tt::tt_metal::LegacyShape shapeb1 = {1, 1, Kt*TILE_HEIGHT, Nt*TILE_WIDTH};
 
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = tt::numpy::random::random(shapea).to(Layout::TILE).to(device);
-        Tensor b = tt::numpy::zeros(shapeb, DataType::BFLOAT16).to(Layout::TILE).to(device);
-        Tensor b1 = tt::numpy::zeros(shapeb1, DataType::BFLOAT16).to(Layout::TILE).to(device);
+        Tensor a = ttnn::numpy::random::random(shapea).to(Layout::TILE).to(device);
+        Tensor b = ttnn::numpy::zeros(shapeb, DataType::BFLOAT16).to(Layout::TILE).to(device);
+        Tensor b1 = ttnn::numpy::zeros(shapeb1, DataType::BFLOAT16).to(Layout::TILE).to(device);
 
         Tensor mm = ttnn::operations::matmul::matmul(a, b, /*bias=*/std::nullopt,
                 ttnn::operations::matmul::Matmul{/*program_config=*/std::nullopt, /*bcast_batch=*/std::nullopt,operation::DEFAULT_OUTPUT_MEMORY_CONFIG, /*output_dtype=*/std::nullopt, /*compute_kernel_config=*/std::nullopt, /*untilize_out=*/false, /*user_core_coord=*/std::nullopt, /*user_fused_activation=*/std::nullopt, /*user_run_batched=*/true}).cpu();

@@ -607,14 +607,14 @@ Tensor _swiglu(
 
 // tril : select lower triangular region of input matrix
 Tensor _tril(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>&  output_mem_config) {
-    Tensor index_l = tt::numpy::index_tril<::bfloat16>(
+    Tensor index_l = numpy::index_tril<::bfloat16>(
         input_a.get_legacy_shape(), diag, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_mem_config.value());
     return ttnn::multiply(input_a, index_l, std::nullopt, output_mem_config);
 }
 
 // triu : select upper triangular region of input matrix
 Tensor _triu(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>&  output_mem_config) {
-    Tensor index_u = tt::numpy::index_triu<::bfloat16>(
+    Tensor index_u = numpy::index_triu<::bfloat16>(
         input_a.get_legacy_shape(), diag, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_mem_config.value());
     return ttnn::multiply(input_a, index_u, std::nullopt, output_mem_config);
 }

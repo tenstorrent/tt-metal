@@ -22,7 +22,7 @@ bool test_single_tile_single_dram_bank_loopback(Device *device) {
     bool pass = true;
     tt::tt_metal::LegacyShape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
 
-    Tensor host_a = tt::numpy::random::random(single_tile_shape).to(Layout::TILE);
+    Tensor host_a = ttnn::numpy::random::random(single_tile_shape).to(Layout::TILE);
     Tensor device_a = host_a.to(device);
     Tensor loopbacked_a = device_a.cpu();
     auto host_a_data = owned_buffer::get_as<bfloat16>(host_a);
@@ -36,7 +36,7 @@ bool test_multi_tile_multi_dram_bank_loopback(Device *device) {
     bool pass = true;
     tt::tt_metal::LegacyShape multi_tile_shape = {1, 1, 4*TILE_HEIGHT, 3*TILE_WIDTH};
 
-    Tensor host_a = tt::numpy::random::random(multi_tile_shape).to(Layout::TILE);
+    Tensor host_a = ttnn::numpy::random::random(multi_tile_shape).to(Layout::TILE);
     Tensor device_a = host_a.to(device);
     Tensor loopbacked_a = device_a.cpu();
     auto host_a_data = owned_buffer::get_as<bfloat16>(host_a);

@@ -124,7 +124,7 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
     auto [floored_p_minus_one, decimal_minus_one, p_minus_one_is_negative] =
         get_floored_p_and_decimal_and_p_is_negative(p - 1.0f);
 
-    TT_ASSERT(tt::numpy::detail::nearly_equal(decimal_minus_one, decimal));
+    TT_ASSERT(ttnn::numpy::detail::nearly_equal(decimal_minus_one, decimal));
 
     for (auto i = 0; i < input_grad_rank; ++i) {
         log_debug(LogOp, "need_bcast_dim [{}] = {}", i, need_bcast_dim[i]);
