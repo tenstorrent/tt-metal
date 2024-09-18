@@ -1006,6 +1006,10 @@ void Matmul::validate(
     TT_FATAL(optional_input_tensors.size() == 1, "Error");
     const auto& optional_bias = optional_input_tensors.at(0);
     if (optional_bias.has_value()) {
+        TT_FATAL(
+            (optional_bias->get_tile().get_tile_shape()[0] == input_tensor_a.get_tile().get_tile_shape()[0] &&
+            optional_bias->get_tile().get_tile_shape()[1] == input_tensor_b.get_tile().get_tile_shape()[1]),
+            "Input tile dims must have inner dim equal to 32 due to llk constraints");
         const auto& bias = optional_bias.value();
         TT_FATAL(bias.get_layout() == Layout::TILE, "Unsupported input layout");
         const auto& bias_shape = bias.get_shape();

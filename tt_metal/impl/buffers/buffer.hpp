@@ -84,7 +84,7 @@ struct Tile {
     const std::array<uint32_t, 2> get_tile_shape() const { return tile_shape; }
     const std::array<uint32_t, 2> get_face_shape() const { return face_shape; }
 
-    const uint32_t get_tile_size(const DataFormat& format) {
+    const uint32_t get_tile_size(const DataFormat& format) const {
         switch (format) {
             case DataFormat::Bfp2:
             case DataFormat::Bfp2_b: return (tile_hw / 4) + (16 * num_faces);

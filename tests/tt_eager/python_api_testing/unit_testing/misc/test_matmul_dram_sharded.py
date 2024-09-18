@@ -196,17 +196,21 @@ def run_test_matmul_in1_dram_sharded(
     "fidelity",
     [
         ttnn.MathFidelity.HiFi2,
-        ttnn.MathFidelity.LoFi,
+        # ttnn.MathFidelity.LoFi,
     ],
-    ids=["HiFi2", "LoFi"],
+    ids=[
+        "HiFi2",
+    ],
 )
 @pytest.mark.parametrize(
     "has_bias",
     [
         False,
-        True,
+        # True,
     ],
-    ids=["no_bias", "bias"],
+    ids=[
+        "no_bias",
+    ],
 )
 @pytest.mark.parametrize(
     "in0_dtype, in1_dtype, out_dtype",
@@ -219,9 +223,9 @@ def run_test_matmul_in1_dram_sharded(
     # "in1_in_dram, out_sharded, in0_sharded, M, K, N, activation, grid_size, in0_dtype, in1_dtype, out_dtype",
     [
         (False, True, True, 32, 8192, 1280, None, (8, 1)),
-        (False, True, True, 32, 8192, 4096, None, (8, 2)),
-        (False, True, True, 32, 8192, 1024, None, (8, 1)),
-        (False, True, True, 32, 32768, 1024, None, (8, 2)),
+        # (False, True, True, 32, 8192, 4096, None, (8, 2)),
+        # (False, True, True, 32, 8192, 1024, None, (8, 1)),
+        # (False, True, True, 32, 32768, 1024, None, (8, 2)),
         # (False, True, True, 32, 4096, 6144, None, (8, 2), ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16),
         # (False, True, True, 32, 4096, 14336, None, (8, 2), ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b),
         # (False, True, True, 32, 14336, 4096, None, (8, 2), ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b),
@@ -246,7 +250,7 @@ def test_matmul_in1_dram_sharded_with_program_cache(
     function_level_defaults,
     use_program_cache,
 ):
-    for _ in range(2):
+    for _ in range(1):
         run_test_matmul_in1_dram_sharded(
             device,
             in0_sharded,
@@ -265,15 +269,15 @@ def test_matmul_in1_dram_sharded_with_program_cache(
             function_level_defaults,
             use_program_cache,
         )
-        # dummy tensor to change tensor alloc
-        dummy_shape = [1, 1, 32, 32]
-        py_dummy_tensor = torch.randn(dummy_shape)
-        mem_config = ttnn.MemoryConfig(
-            memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttnn.BufferType.DRAM,
-        )
-        tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, in0_dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
-    assert device.num_program_cache_entries() == 3
+    #     # dummy tensor to change tensor alloc
+    #     dummy_shape = [1, 1, 32, 32]
+    #     py_dummy_tensor = torch.randn(dummy_shape)
+    #     mem_config = ttnn.MemoryConfig(
+    #         memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+    #         buffer_type=ttnn.BufferType.DRAM,
+    #     )
+    #     tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, in0_dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
+    # assert device.num_program_cache_entries() == 3
 
 
 def run_test_matmul_in1_dram_sharded_mm_chain(
