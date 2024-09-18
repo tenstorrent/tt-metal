@@ -32,10 +32,10 @@ void PagedUpdateCacheDeviceOperation::validate(const std::vector<Tensor>& input_
         uint32_t batch_size;
         if (!paged_cache) {
             if (this->share_cache){
-                TT_FATAL(cache_tensor.get_legacy_shape()[0] == 1, "Error");
+                TT_FATAL(cache_tensor.get_legacy_shape()[0] == 1, "Share cache feature expects cache tensor to have batch of 1");
             }
             else {
-                TT_FATAL(input_tensor.get_legacy_shape()[1] == cache_tensor.get_legacy_shape()[0], "Error");
+                TT_FATAL(input_tensor.get_legacy_shape()[1] == cache_tensor.get_legacy_shape()[0], "Expect batch in input tensor match the batch in cache tensor");
             }
         } else {
             TT_FATAL(!this->share_cache, "share_cache not supported with paged cache");
