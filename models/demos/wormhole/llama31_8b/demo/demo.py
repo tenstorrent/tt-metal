@@ -105,7 +105,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
 
     generation_start_pos = 0
-    max_generated_tokens = 120
+    max_generated_tokens = 5
     users_decoding = True
 
     # Preprocess initial prompt inputs
