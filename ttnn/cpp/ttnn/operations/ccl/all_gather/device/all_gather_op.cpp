@@ -20,7 +20,8 @@ AllGather create_all_gather_struct(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
-    const std::vector<Device*>& devices
+    const std::vector<Device*>& devices,
+    const all_gather_op::Topology topology
 ) {
     uint32_t num_devices = devices.size();
 
@@ -38,7 +39,7 @@ AllGather create_all_gather_struct(
     }
 
     return ttnn::AllGather{
-        dim, num_links, num_devices, device_index, user_defined_num_workers, user_defined_num_buffers_per_channel, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config())};
+        dim, num_links, num_devices, device_index, user_defined_num_workers, user_defined_num_buffers_per_channel, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config()), topology};
 }
 
 
