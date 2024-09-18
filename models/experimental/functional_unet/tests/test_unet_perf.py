@@ -29,19 +29,13 @@ from models.utility_functions import (
 )
 
 
-def synchronize_devices(device):
-    devices = device.get_devices()
-    for device in devices:
-        ttnn.synchronize_device(device)
-
-
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, groups, expected_device_perf_fps",
-    ((2, 1, 639.0),),
+    ((2, 1, 650.0),),
 )
-def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: float, reset_seeds):
+def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: float):
     command = f"pytest models/experimental/functional_unet/tests/test_unet_model.py::test_unet_model[device_params0-{groups}-{batch}]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
@@ -136,7 +130,6 @@ def test_unet_perf_e2e(
     assert_with_pcc(torch_output_tensor, ttnn_tensor, 0.97)
 
 
-@pytest.mark.skip("Crashes on N300/T3K - see issue #12685")
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
@@ -200,12 +193,10 @@ def test_unet_data_parallel_perf_e2e(
     for idx in range(iterations):
         profiler.start("inference_time")
         profiler.start(f"inference_time_{idx}")
-        logger.info(f"running iter {idx}")
-        output_tensor = ttnn.from_device(ttnn_model(ttnn_input), blocking=True)
-        logger.info(f"done running iter {idx}")
+        output_tensor = ttnn.from_device(ttnn_model(ttnn_input), blocking=False)
         profiler.end(f"inference_time_{idx}")
         profiler.end("inference_time")
-    synchronize_devices(mesh_device)
+    ttnn.synchronize_devices(mesh_device)
 
     mean_inference_time = profiler.get("inference_time")
     inference_time = profiler.get(f"inference_time_{iterations - 1}")
