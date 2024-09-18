@@ -9,7 +9,7 @@
 #include "prod_op_all.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "tt_metal/common/constants.hpp"
-#include <ttnn/deprecated/tt_numpy/functions.hpp>
+#include <ttnn/operations/functions.hpp>
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 

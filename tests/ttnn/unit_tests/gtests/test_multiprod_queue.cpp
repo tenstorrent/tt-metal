@@ -9,7 +9,7 @@
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 #include "common/bfloat16.hpp"
 #include "ttnn/async_runtime.hpp"
-#include "tt_numpy/functions.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "tt_metal/impl/event/event.hpp"
 #include <cmath>
 #include <thread>

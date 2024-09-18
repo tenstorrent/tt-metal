@@ -11,7 +11,7 @@
 #include "ttnn/operations/sliding_window/reference_sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/deprecated/tt_numpy/functions.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/types.hpp"
 
 using tt::tt_metal::LegacyShape;

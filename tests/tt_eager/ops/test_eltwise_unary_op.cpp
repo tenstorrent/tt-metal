@@ -13,7 +13,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operation.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_numpy/functions.hpp"
+#include "ttnn/operations/functions.hpp"
 
 using tt::tt_metal::DataType;
 using tt::tt_metal::Device;

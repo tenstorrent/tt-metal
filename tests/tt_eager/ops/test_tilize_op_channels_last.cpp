@@ -12,7 +12,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_numpy/functions.hpp"
+#include "ttnn/operations/functions.hpp"
 
 using namespace tt;
 using namespace tt_metal;

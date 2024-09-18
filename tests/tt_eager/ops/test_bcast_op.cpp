@@ -7,7 +7,7 @@
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "common/constants.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
-#include <tt_numpy/functions.hpp>
+#include <ttnn/operations/functions.hpp>
 
 #include <algorithm>
 #include <functional>

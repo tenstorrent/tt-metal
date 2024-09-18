@@ -6,7 +6,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "common/constants.hpp"
-#include "tt_numpy/functions.hpp"
+#include "ttnn/operations/functions.hpp"
 
 #include <algorithm>
 #include <functional>

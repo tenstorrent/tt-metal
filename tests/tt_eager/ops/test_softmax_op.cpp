@@ -5,7 +5,7 @@
 #include "tt_metal/host_api.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
-#include "ttnn/deprecated/tt_numpy/functions.hpp"
+#include "ttnn/operations/functions.hpp"
 
 #include <algorithm>
 #include <functional>

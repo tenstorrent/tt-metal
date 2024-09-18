@@ -14,7 +14,7 @@
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_norm_backward/moreh_norm_backward_op.hpp"
 #include "tt_metal/common/work_split.hpp"
-#include "ttnn/deprecated/tt_numpy/functions.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 

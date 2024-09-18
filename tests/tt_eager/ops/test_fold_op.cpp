@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <functional>
 #include <random>
-#include <tt_numpy/functions.hpp>
+#include <ttnn/operations/functions.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/fold/fold.hpp"

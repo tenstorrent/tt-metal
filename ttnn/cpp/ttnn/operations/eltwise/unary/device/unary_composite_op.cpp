@@ -12,7 +12,7 @@
 #include "tt_metal/common/bfloat16.hpp"
 #include "ttnn/operations/data_movement/reshape/reshape.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "ttnn/deprecated/tt_numpy/functions.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
