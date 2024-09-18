@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,12 +9,18 @@
 
 // Fill given four values into the memory starting at the given address.
 // WARNING: Use with caution as there's no memory protection. Make sure size is within limits
-ALWI bool fill_four_val(uint32_t begin_addr, uint16_t val, uint16_t val1, uint16_t val2, uint16_t val3) {
+ALWI void fill_four_val(uint32_t begin_addr, uint16_t val, uint16_t val1, uint16_t val2, uint16_t val3) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
 
     ptr[0] = (val | (val1 << 16));
     ptr[1] = (val2 | (val3 << 16));
-    return true;
+}
+
+ALWI float uint32_to_float(uint32_t f)
+{
+    float ret;
+    std::memcpy(&ret, &f, sizeof(float));
+    return ret;
 }
 
 
@@ -34,24 +40,23 @@ void kernel_main() {
 
     constexpr uint32_t in_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t out_cb_id = tt::CB::c_in1;
-    constexpr uint32_t is_reader = get_compile_time_arg_val(2);
+    //constexpr uint32_t is_reader = get_compile_time_arg_val(2);
+    constexpr uint32_t scale_h_inv_comp = get_compile_time_arg_val(3);
+    constexpr uint32_t scale_w_inv_comp = get_compile_time_arg_val(4);
+    constexpr uint32_t y_index_comp = get_compile_time_arg_val(5);
+    constexpr uint32_t x_index_compute_comp = get_compile_time_arg_val(6);
 
-    uint32_t in_image_row_nbytes = in_w * stick_nbytes;
-    uint32_t out_image_row_nbytes = out_w * stick_nbytes;
-    uint32_t reader_image_rows_per_core = (in_image_rows_per_core + is_reader) / 2;
-    uint32_t writer_image_rows_per_core = in_image_rows_per_core / 2;
-    uint32_t image_row_begin = is_reader ? 0 : reader_image_rows_per_core;
-    uint32_t image_row_end = is_reader ? reader_image_rows_per_core : in_image_rows_per_core;
-    uint32_t l1_read_addr = get_read_ptr(in_cb_id); //+ image_row_begin * in_image_row_nbytes;
+    uint32_t l1_read_addr = get_read_ptr(in_cb_id);
     constexpr uint32_t in_scalar_cb_id = tt::CB::c_in4;
 
     // assuming shard begins with a new row. TODO: generalize?
-    float scale_h_inv = 1.0f / scale_h;
-    float scale_w_inv = 1.0f / scale_w;
+    float scale_h_inv = uint32_to_float(scale_h_inv_comp);
+    float scale_w_inv =  uint32_to_float(scale_w_inv_comp);
     float x, y, x_index, y_index, dx, dy;
-    y_index = (float)(0.5f) * (float)scale_h_inv + 0.5f;
+    y_index = uint32_to_float(y_index_comp);
+    float x_index_compute = uint32_to_float(x_index_compute_comp);
     for (uint32_t image_row = 0 ; image_row < in_image_rows_per_core * scale_h; ++image_row){
-        x_index = (float)(0.5f) * (float)scale_w_inv -0.5f;
+        x_index = x_index_compute;
         for(uint32_t j=0; j < in_w * scale_w; j++){
             cb_reserve_back(out_cb_id, 4);
             cb_reserve_back(in_scalar_cb_id, 1);
@@ -64,7 +69,7 @@ void kernel_main() {
             uint32_t x1 = int(x);
             uint32_t y1 = int(y);
             uint32_t x2 = min(x1 + 1, in_w-1);
-            uint32_t y2 = y1 + 1; //, in_image_rows_per_core - 1);
+            uint32_t y2 = y1 + 1;
             if(is_last_row){
                 y2 = min(y2, in_image_rows_per_core); //if last row, y2 should be in_image_rows_per_core
             }
