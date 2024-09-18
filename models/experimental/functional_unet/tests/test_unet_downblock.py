@@ -30,7 +30,16 @@ from models.experimental.functional_unet.tests.common import (
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_unet_downblock(batch, groups, block_name, input_channels, input_height, input_width, device, reset_seeds):
+def test_unet_downblock(
+    batch,
+    groups,
+    block_name,
+    input_channels,
+    input_height,
+    input_width,
+    device,
+    reset_seeds,
+):
     torch_input, ttnn_input = create_unet_input_tensors(device, batch, groups, pad_input=False)
     model = unet_shallow_torch.UNet.from_random_weights(groups=1)
 
@@ -65,9 +74,10 @@ def test_unet_downblock(batch, groups, block_name, input_channels, input_height,
         ("downblock4", 32, 132, 20),
     ],
 )
+@pytest.mark.parametrize("enable_async_mode", (False,), indirect=True)  # Enable when #12685 is resolved
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_unet_downblock_multi_device(
-    batch, groups, block_name, input_channels, input_height, input_width, mesh_device, reset_seeds
+    batch, groups, block_name, input_channels, input_height, input_width, mesh_device, reset_seeds, enable_async_mode
 ):
     if not is_n300_with_eth_dispatch_cores(mesh_device):
         pytest.skip("Test is only valid for N300")

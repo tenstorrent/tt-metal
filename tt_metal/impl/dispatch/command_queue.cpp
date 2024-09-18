@@ -466,7 +466,11 @@ void generate_runtime_args_cmds(
         max_runtime_args_len, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, no_stride);
     uint32_t offset_idx = 0;
     if (no_stride) {
-        TT_FATAL(max_packed_cmds >= num_packed_cmds_in_seq);
+        TT_FATAL(
+            max_packed_cmds >= num_packed_cmds_in_seq,
+            "num_packed_cmds_in_seq {} cannot exceed max_packed_cmds {} when no_stride is true",
+            num_packed_cmds_in_seq,
+            max_packed_cmds);
     }
     while (num_packed_cmds_in_seq != 0) {
         // Generate the device command
@@ -2138,27 +2142,6 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         expected_workers_completed);
     this->enqueue_command(command, blocking);
 
-    if (program.has_multi_device_dependencies() and not this->device->is_mmio_capable() and
-        tt::Cluster::instance().is_galaxy_cluster() and not this->tid.has_value()) {
-        // Issue #19078 - Temporary workaround to avoid deadlocks on Galaxy, until Ethernet Routing Fabric supports VCs:
-        // For programs that require syncs between devices (ex: CCLs), it must be ensured that all devices in a tunnel
-        // receive the full set of program commands. Due to demux being a shared resource (it has a single input queue)
-        // and cannot toggle its output queue id, until a txn is completed (prefetch_d corresponding to the current
-        // packet is unblocked), it is possible that all devices do not get the program commands and enter a deadlock
-        // (dispatch_d gets blocked waiting for the multi-device program to complete, causing prefetch_d to
-        // backpressure, as its picked up other commands -> demux has CCL program commands for other devices in its
-        // queue, but is blocked sending a downstream command to the backpressured prefetch_d). To resolve this,
-        // prefetch_h for all devices involved in the multi-device program will stall sending commands, until dispatch_d
-        // has notified prefetch_h that workers have completed execution (all chips got the program commands, and there
-        // is no further scope of a deadlock).
-        // This pipeline flush does not need to be issued when using trace, since prefetch_h will stall sending pages to
-        // prefetch_d until it has been notified of trace completion (due to cmddat_q reuse). Additionally, events can
-        // currently not be traced, thus this is skipped during trace capture.
-        std::shared_ptr<Event> event = std::make_shared<Event>();
-        this->enqueue_record_event(event);
-        this->enqueue_wait_for_event(event);
-    }
-
 #ifdef DEBUG
     if (tt::llrt::OptionsG.get_validate_kernel_binaries()) {
         TT_FATAL(!this->manager.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
@@ -2639,7 +2622,8 @@ void EnqueueAllocateBufferImpl(AllocBufferMetadata alloc_md) {
             alloc_md.bottom_up,
             std::nullopt);
     }
-    buffer->set_address(static_cast<uint64_t>(allocated_addr));
+    TT_ASSERT(allocated_addr <= std::numeric_limits<uint32_t>::max());
+    buffer->set_address(static_cast<DeviceAddr>(allocated_addr));
 }
 
 void EnqueueAllocateBuffer(CommandQueue& cq, Buffer* buffer, bool bottom_up, bool blocking) {
@@ -2866,9 +2850,7 @@ void FinishImpl(CommandQueue& cq) { cq.hw_command_queue().finish(); }
 
 void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
     detail::DispatchStateCheck(true);
-    TT_FATAL(
-        cq.device()->get_trace(trace_id) != nullptr,
-        "Trace instance " + std::to_string(trace_id) + " must exist on device");
+    TT_FATAL(cq.device()->get_trace(trace_id) != nullptr, "Trace instance {} must exist on device", trace_id);
     cq.run_command(
         CommandInterface{.type = EnqueueCommandType::ENQUEUE_TRACE, .blocking = blocking, .trace_id = trace_id});
 }

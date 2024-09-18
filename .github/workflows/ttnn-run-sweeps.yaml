@@ -13,6 +13,9 @@ on:
           - add
           - line_all_gather
           - logical_and_
+          - eltwise.frac.frac_interleaved
+          - eltwise.ceil.ceil_interleaved
+          - eltwise.trunc.trunc_interleaved
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
           - matmul.full.matmul_default_interleaved
@@ -27,6 +30,10 @@ on:
           - data_movement.concat.concat_interleaved_n_tensors
           - data_movement.concat.concat_interleaved
           - data_movement.concat.concat_sharded
+          - data_movement.slice.slice_pytorch2_rm
+          - data_movement.slice.slice_pytorch2_tiled
+          - data_movement.permute.permute_pytorch2_rm
+          - data_movement.permute.permute_pytorch2_tiled
   schedule:
     - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 

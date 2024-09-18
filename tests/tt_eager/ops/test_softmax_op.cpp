@@ -15,7 +15,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 using namespace constants;
 
-void run_softmax(Device* device, Shape shape) {
+void run_softmax(Device* device, tt::tt_metal::LegacyShape shape) {
     Tensor input_tensor = tt::numpy::random::random(shape).to(Layout::TILE).to(device);
     Tensor device_output_tensor = ttnn::softmax_in_place(input_tensor);
     Tensor output_tensor = device_output_tensor.cpu();
@@ -44,7 +44,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

@@ -39,7 +39,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        Shape shape = {1, 32, 61, 32};
+        tt::tt_metal::LegacyShape shape = {1, 32, 61, 32};
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a = tt::numpy::arange<bfloat16>(0, tt_metal::compute_volume(shape), 1).reshape(shape).to(device);
         Tensor b = ttnn::tilize_with_zero_padding(a);
@@ -63,7 +63,7 @@ int main(int argc, char **argv) {
         for(uint32_t i = 0; i < result_vec.size() ; i++) {
             if(result_vec[i] != golden_vec[i]) {
                 if(num_errors < 10)
-                    log_error(LogTest, "Error at i={} result={} golden={}", i, result_vec[i], golden_vec[i]);
+                    log_error(LogTest, "Error at i={} result={} golden={}", i, result_vec[i].to_float(), golden_vec[i].to_float());
                 num_errors++;
             }
         }
@@ -84,7 +84,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

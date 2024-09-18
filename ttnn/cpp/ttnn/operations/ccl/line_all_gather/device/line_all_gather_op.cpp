@@ -16,7 +16,7 @@
 namespace ttnn {
 
 void LineAllGather::validate(const std::vector<Tensor> &input_tensors) const {
-    TT_FATAL(input_tensors.size() == 1);
+    TT_FATAL(input_tensors.size() == 1, "Error");
     const auto& input_tensor = input_tensors[0];
     const auto& layout = input_tensors[0].get_layout();
     const auto& dtype = input_tensors[0].get_dtype();
@@ -28,9 +28,9 @@ void LineAllGather::validate(const std::vector<Tensor> &input_tensors) const {
     // TODO: Validate ring
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr , "Operands to all_gather need to be allocated in buffers on device!");
-    TT_FATAL(this->num_links > 0);
+    TT_FATAL(this->num_links > 0, "Error");
     TT_FATAL(this->num_links <= input_tensor.device()->compute_with_storage_grid_size().y, "Worker cores used by links are parallelizaed over rows");
-    TT_FATAL(this->receiver_device_id.has_value() || this->sender_device_id.has_value());
+    TT_FATAL(this->receiver_device_id.has_value() || this->sender_device_id.has_value(), "Error");
     if (this->receiver_device_id == this->sender_device_id) {
         TT_FATAL(input_tensor.device()->get_ethernet_sockets(this->receiver_device_id.value()).size() >= 2 * this->num_links, "2 Device all gather requires at least 2 eth connections per link");
     } else {
@@ -40,7 +40,8 @@ void LineAllGather::validate(const std::vector<Tensor> &input_tensors) const {
 
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
         input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+        "Unsupported memory layout {}.", input_tensor.memory_config().memory_layout);
 
     // Sharding Config checks
     bool input_sharded = input_tensor.is_sharded();
@@ -49,10 +50,10 @@ void LineAllGather::validate(const std::vector<Tensor> &input_tensors) const {
     }
 }
 
-std::vector<tt::tt_metal::Shape> LineAllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> LineAllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     auto shape = input_tensors[0].get_legacy_shape();
     shape[this->dim] *= this->ring_size;
-    return std::vector<tt::tt_metal::Shape>(input_tensors.size(), shape);
+    return std::vector<tt::tt_metal::LegacyShape>(input_tensors.size(), shape);
 }
 
 std::vector<Tensor> LineAllGather::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
@@ -71,21 +72,21 @@ std::vector<Tensor> LineAllGather::create_output_tensors(const std::vector<Tenso
 }
 
 operation::ProgramWithCallbacks LineAllGather::create_program(const std::vector<Tensor> & input_tensors, std::vector<Tensor> &output_tensors) const {
-    return all_gather_multi_core_with_workers(input_tensors[0], output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->receiver_device_id, this->sender_device_id, this->topology);
+    return all_gather_multi_core_with_workers(input_tensors[0], output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->receiver_device_id, this->sender_device_id, this->topology, this->user_defined_num_workers, this->user_defined_num_buffers_per_channel);
 }
 
 namespace operations {
 namespace ccl {
 
 Tensor line_all_gather(
-    const Tensor& input_tensor, const uint32_t dim, const uint32_t num_links, const std::optional<MemoryConfig>& memory_config) {
+    const Tensor& input_tensor, const uint32_t dim, const uint32_t num_links, const std::optional<MemoryConfig>& memory_config, const std::optional<size_t> user_defined_num_workers, const std::optional<size_t> user_defined_num_buffers_per_channel) {
 
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
 
     auto devices = input_tensor.get_workers();
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
-        [dim, num_links, memory_config, devices](
+        [dim, num_links, memory_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -114,7 +115,7 @@ Tensor line_all_gather(
 
             return operation::run(
                 ttnn::LineAllGather{
-                    dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config()), ttnn::all_gather_op::Topology::Linear},
+                    dim, num_links, num_devices, device_index, user_defined_num_workers, user_defined_num_buffers_per_channel, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config()), ttnn::all_gather_op::Topology::Linear},
                 {input_tensor});
         },
         {input_tensor},
@@ -128,7 +129,9 @@ Tensor line_all_gather(
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const uint32_t num_links,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<size_t> user_defined_num_workers,
+    const std::optional<size_t> user_defined_num_buffers_per_channel) {
 
     const auto mesh_view = mesh_device.get_view();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view->num_rows() : mesh_view->num_cols();
@@ -136,7 +139,7 @@ Tensor line_all_gather(
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
 
     operation::launch_op(
-        [dim, num_links, memory_config, mesh_view, cluster_axis, num_devices](
+        [dim, num_links, memory_config, mesh_view, cluster_axis, user_defined_num_workers, user_defined_num_buffers_per_channel, num_devices](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -164,7 +167,7 @@ Tensor line_all_gather(
 
             return operation::run(
                 ttnn::LineAllGather{
-                    dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_device_tensor.memory_config()), ttnn::all_gather_op::Topology::Linear},
+                    dim, num_links, num_devices, device_index, user_defined_num_workers, user_defined_num_buffers_per_channel, receiver_device_id, sender_device_id, memory_config.value_or(input_device_tensor.memory_config()), ttnn::all_gather_op::Topology::Linear},
                 {input_device_tensor});
         },
         {input_tensor},

@@ -19,7 +19,7 @@ namespace detail {
 
     static Tensor manual_insertion(
         const Tensor& input_tensor,
-        const tt::tt_metal::Shape& shape,
+        const tt::tt_metal::LegacyShape& shape,
         Device* device,
         const MemoryConfig& output_mem_config
         ) {
@@ -59,7 +59,7 @@ ttnn::Tensor ReshapeOperation::invoke(
     using namespace tt::constants;
     auto output_mem_config = memory_config_arg.value_or(input_tensor.memory_config());
     // No-op (Will do a tensor copy)
-    tt::tt_metal::Shape output_shape = tt::tt_metal::infer_dims_for_reshape(N, C, H, W, input_tensor.volume());
+    tt::tt_metal::LegacyShape output_shape = tt::tt_metal::infer_dims_for_reshape(N, C, H, W, input_tensor.volume());
     if (
         ((input_tensor.get_layout() == Layout::TILE or input_tensor.get_layout() == Layout::ROW_MAJOR) && output_shape[3] == input_tensor.get_legacy_shape()[3])
     ) {
@@ -78,7 +78,7 @@ ttnn::Tensor ReshapeOperation::invoke(
         || output_shape[-1] % TILE_WIDTH != 0
         || input_tensor.get_legacy_shape()[-1] % TILE_WIDTH != 0
         || (input_tensor.volume() / input_tensor.get_legacy_shape()[-1]) % TILE_HEIGHT != 0)) {
-        TT_FATAL(input_tensor.get_dtype()==DataType::BFLOAT16);
+        TT_FATAL(input_tensor.get_dtype()==DataType::BFLOAT16, "Error");
 
         return detail::manual_insertion((tt::tt_metal::Tensor)input_tensor, output_shape, input_tensor.device(), output_mem_config);
     }

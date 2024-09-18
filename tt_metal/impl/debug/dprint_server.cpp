@@ -87,12 +87,10 @@ static map<CoreType, set<CoreCoord>> get_all_physical_printable_cores(Device *de
 static map<CoreType, set<CoreCoord>> get_dispatch_physical_printable_cores(Device* device) {
     map<CoreType, set<CoreCoord>> physical_printable_dispatch_cores;
     unsigned num_cqs = tt::llrt::OptionsG.get_num_hw_cqs();
-    for (unsigned int id = 0; id < tt::Cluster::instance().number_of_user_devices(); id++) {
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(id);
-        for (auto logical_core : tt::get_logical_dispatch_cores(id, num_cqs, dispatch_core_type)) {
-            CoreCoord physical_core = device->physical_core_from_logical_core(logical_core, dispatch_core_type);
-            physical_printable_dispatch_cores[dispatch_core_type].insert(physical_core);
-        }
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+    for (auto logical_core : tt::get_logical_dispatch_cores(device->id(), num_cqs, dispatch_core_type)) {
+        CoreCoord physical_core = device->physical_core_from_logical_core(logical_core, dispatch_core_type);
+        physical_printable_dispatch_cores[dispatch_core_type].insert(physical_core);
     }
     return physical_printable_dispatch_cores;
 }
@@ -384,7 +382,7 @@ DebugPrintServerContext::~DebugPrintServerContext() {
     // Wait for the thread to end, with a timeout
     auto future = std::async(std::launch::async, &std::thread::join, print_server_thread_);
     if (future.wait_for(std::chrono::seconds(2)) == std::future_status::timeout) {
-        TT_FATAL(false && "Timed out waiting on debug print thread to terminate.");
+        TT_THROW("Timed out waiting on debug print thread to terminate.");
     }
     delete print_server_thread_;
     print_server_thread_ = nullptr;
@@ -680,7 +678,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                 stream << error_str << flush;
                 log_warning(tt::LogMetal, "Debug Print Server encountered an error: {}", error_str);
                 raise_wait_lock_.unlock();
-                TT_THROW(error_str);
+                TT_THROW("{}", error_str);
                 server_killed_due_to_hang_ = true;
             }
 
@@ -884,7 +882,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     }
                 break;
                 default:
-                    TT_FATAL("Unexpected debug print type code" && false);
+                    TT_THROW("Unexpected debug print type code");
             }
 
             // TODO(AP): this is slow but leaving here for now for debugging the debug prints themselves
@@ -1048,7 +1046,7 @@ void DprintServerAwait() {
             DebugPrintServerContext::inst
         );
         if (future.wait_for(std::chrono::seconds(1)) == std::future_status::timeout) {
-            TT_FATAL(false && "Timed out waiting on debug print server to read data.");
+            TT_THROW("Timed out waiting on debug print server to read data.");
         }
     }
 }

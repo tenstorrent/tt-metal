@@ -150,7 +150,7 @@ void kernel_main() {
 
     if (fuse_op) {
         // Synchronize and signal that the local tensor slice is available
-        op_signaler.synchronize_workers_and_signal_op();
+        op_signaler.synchronize_workers_and_signal_op(input_start_ring_idx);
     }
 
     // num_transfers = num_devices - 1

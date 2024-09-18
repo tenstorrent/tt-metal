@@ -30,7 +30,7 @@ static ttnn::Tensor pad_impl(
             return input_tensor;
         }
         else {
-            return input_tensor.pad(tt::tt_metal::Shape(output_padded_shape), tt::tt_metal::Shape(input_tensor_start), value);
+            return input_tensor.pad(tt::tt_metal::LegacyShape(output_padded_shape), tt::tt_metal::LegacyShape(input_tensor_start), value);
         }
     }
     // on device
@@ -38,13 +38,11 @@ static ttnn::Tensor pad_impl(
         const auto input_tensor_shape = input_tensor.get_shape();
         const auto rank = input_tensor_shape.rank();
 
-        if (rank != 4) {
-            TT_FATAL("Tensor rank is not 4");
-        }
+        TT_FATAL(rank == 4, "Tensor rank is not 4");
 
         auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
         auto output_tensor = operation::run(
-            Pad{tt::tt_metal::Shape(output_padded_shape), tt::tt_metal::Shape(input_tensor_start), value, memory_config, use_multicore},
+            Pad{tt::tt_metal::LegacyShape(output_padded_shape), tt::tt_metal::LegacyShape(input_tensor_start), value, memory_config, use_multicore},
             {input_tensor}, {}, {}, queue_id).front();
 
         return output_tensor;
@@ -135,7 +133,7 @@ ttnn::Tensor ExecutePad::invoke(
             case 6: output_tensor = pad_impl<tt::tt_metal::Array6D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
             case 7: output_tensor = pad_impl<tt::tt_metal::Array7D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
             case 8: output_tensor = pad_impl<tt::tt_metal::Array8D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
-            default: TT_FATAL("Unsupported tensor rank");
+            default: TT_THROW("Unsupported tensor rank of {}. Needs to be between 1 and 8 inclusively.", original_rank);
         }
     }
     else {
@@ -151,7 +149,7 @@ ttnn::Tensor ExecutePad::invoke(
         };
         remove_first_elements(shape, rank_diff);
         remove_first_elements(padded_shape, rank_diff);
-        auto squeezedShape = ttnn::Shape(tt::tt_metal::Shape(shape, padded_shape));
+        auto squeezedShape = ttnn::Shape(tt::tt_metal::LegacyShape(shape, padded_shape));
         output_tensor = ttnn::reshape(output_tensor, squeezedShape);
     }
 

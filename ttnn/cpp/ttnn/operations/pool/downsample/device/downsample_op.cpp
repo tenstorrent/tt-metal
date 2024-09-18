@@ -20,16 +20,18 @@ void Downsample::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to downsample need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Can only downsample tile major data");
 
-    TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
-    TT_FATAL(input_tensor_a.memory_config().is_sharded());
+    TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
+    TT_FATAL(input_tensor_a.memory_config().is_sharded(), "Error");
     TT_FATAL(
         input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-        input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
+        input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
+        "Unsupported memory layout {}.",
+        input_tensor_a.memory_config().memory_layout);
 }
 
 
 
-std::vector<tt::tt_metal::Shape> Downsample::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> Downsample::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_ASSERT(input_tensor_a.get_legacy_shape()[0] == 1 && input_tensor_a.get_legacy_shape()[1] == 1);
     uint32_t input_height = input_tensor_a.get_legacy_shape()[2];
@@ -41,7 +43,7 @@ std::vector<tt::tt_metal::Shape> Downsample::compute_output_shapes(const std::ve
     uint32_t output_width = input_tensor_a.get_legacy_shape()[3];
     auto output_padding =
         Padding({{0, 0}, {0, 0}, {0, (output_height - output_height_unpadded)}, {0, 0}}, Padding::PadValue::Any);
-    auto output_tensor_shape = tt::tt_metal::Shape({1, 1, output_height, output_width}, output_padding);
+    auto output_tensor_shape = tt::tt_metal::LegacyShape({1, 1, output_height, output_width}, output_padding);
     log_debug(tt::LogOp, "Downsample output shape: {}", output_tensor_shape);
     return {output_tensor_shape};
 }

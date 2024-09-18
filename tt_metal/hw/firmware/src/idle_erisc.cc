@@ -19,13 +19,12 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "dev_msgs.h"
 #include "risc_attribs.h"
-#include "noc_addr_ranges_gen.h"
 #include "generated_bank_to_noc_coord_mapping.h"
 #include "circular_buffer.h"
 #include "dataflow_api.h"
 #include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 
-#include "debug/status.h"
+#include "debug/waypoint.h"
 #include "debug/dprint.h"
 #include "debug/stack_usage.h"
 
@@ -93,7 +92,7 @@ void flush_icache() {
 int main() {
     conditionally_disable_l1_cache();
     DIRTY_STACK_MEMORY();
-    DEBUG_STATUS("I");
+    WAYPOINT("I");
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
     uint32_t *local_mem_ptr = (uint32_t *)__ldm_data_start;
     uint32_t *l1_data_ptr = (uint32_t *)MEM_IERISC_INIT_LOCAL_L1_BASE;
@@ -113,12 +112,12 @@ int main() {
 
         init_sync_registers();
         // Wait...
-        DEBUG_STATUS("GW");
+        WAYPOINT("GW");
         while (mailboxes->launch.go.run != RUN_MSG_GO)
         {
             RISC_POST_HEARTBEAT(heartbeat);
         };
-        DEBUG_STATUS("GD");
+        WAYPOINT("GD");
 
         {
             DeviceZoneScopedMainN("ERISC-IDLE-FW");
@@ -134,10 +133,10 @@ int main() {
             flush_icache();
 
             // Run the ERISC kernel
-            DEBUG_STATUS("R");
+            WAYPOINT("R");
             kernel_init();
             RECORD_STACK_USAGE();
-            DEBUG_STATUS("D");
+            WAYPOINT("D");
 
             mailboxes->launch.go.run = RUN_MSG_DONE;
 

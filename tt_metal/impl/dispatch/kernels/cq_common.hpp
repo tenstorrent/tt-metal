@@ -114,9 +114,9 @@ FORCE_INLINE
 void cq_noc_async_write_with_state(uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
 
     if constexpr (wait) {
-        DEBUG_STATUS("NSSW");
+        WAYPOINT("NSSW");
         while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF));
-        DEBUG_STATUS("NSSD");
+        WAYPOINT("NSSD");
     }
 
     if constexpr (flags & CQ_NOC_FLAG_SRC) {
@@ -170,12 +170,12 @@ template<enum CQNocFlags flags, bool mcast = false, bool linked = false>
 FORCE_INLINE
 void cq_noc_async_write_init_state(uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0) {
 
-    DEBUG_STATUS("NSIW");
+    WAYPOINT("NSIW");
     uint32_t heartbeat = 0;
     while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF)) {
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
     }
-    DEBUG_STATUS("NSID");
+    WAYPOINT("NSID");
 
     constexpr bool multicast_path_reserve = true;
     constexpr bool posted = false;
@@ -199,9 +199,9 @@ FORCE_INLINE
 void cq_noc_inline_dw_write_with_state(uint64_t dst_addr, uint32_t val = 0, uint8_t be = 0xF) {
 
     if constexpr (wait) {
-        DEBUG_STATUS("NISW");
+        WAYPOINT("NISW");
         while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_REG_CMD_BUF));
-        DEBUG_STATUS("NISD");
+        WAYPOINT("NISD");
     }
 
     if constexpr (flags & CQ_NOC_INLINE_FLAG_VAL) {
@@ -234,12 +234,12 @@ template<enum CQNocInlineFlags flags>
 FORCE_INLINE
 void cq_noc_inline_dw_write_init_state(uint64_t dst_addr, uint32_t val = 0, uint8_t be = 0xF) {
 
-    DEBUG_STATUS("NIIW");
+    WAYPOINT("NIIW");
     uint32_t heartbeat = 0;
     while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_REG_CMD_BUF)) {
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
     }
-    DEBUG_STATUS("NIID");
+    WAYPOINT("NIID");
 
     constexpr bool static_vc_alloc = true;
     constexpr bool mcast = false;
@@ -261,11 +261,16 @@ FORCE_INLINE
 void cb_wait_all_pages(uint32_t n) {
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
-    DEBUG_STATUS("TAPW");
+
+    // Downstream component sets the MSB as a terminate bit
+    // Mask that off to avoid a race between the sem count and terminate
+    n &= 0x7fffffff;
+
+    WAYPOINT("TAPW");
     do {
         invalidate_l1_cache();
-    } while ((*sem_addr) != n);
-    DEBUG_STATUS("TAPD");
+    } while ((*sem_addr & 0x7fffffff) != n); // mask off terminate bit
+    WAYPOINT("TAPD");
 }
 
 template<uint32_t noc_xy, uint32_t sem_id>
@@ -277,7 +282,7 @@ void cb_acquire_pages(uint32_t n) {
     // Ensure last sem_inc has landed
     noc_async_atomic_barrier();
 
-    DEBUG_STATUS("DAPW");
+    WAYPOINT("DAPW");
     // Use a wrapping compare here to compare distance
     // Required for trace which steals downstream credits and may make the value negative
     uint32_t heartbeat = 0;
@@ -285,7 +290,7 @@ void cb_acquire_pages(uint32_t n) {
         invalidate_l1_cache();
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
     } while (wrap_gt(n, *sem_addr));
-    DEBUG_STATUS("DAPD");
+    WAYPOINT("DAPD");
     noc_semaphore_inc(get_noc_addr_helper(noc_xy, (uint32_t)sem_addr), -n);
 }
 
@@ -308,13 +313,13 @@ uint32_t cb_acquire_pages(uint32_t cb_fence,
     static uint32_t upstream_count = 0;
 
     if (local_count == upstream_count) {
-        DEBUG_STATUS("UAPW");
+        WAYPOINT("UAPW");
         uint32_t heartbeat = 0;
         do {
             invalidate_l1_cache();
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, 0);
         } while ((upstream_count = *sem_addr) == local_count);
-        DEBUG_STATUS("UAPD");
+        WAYPOINT("UAPD");
     }
 
     // Set a fence to limit how much is processed at once
@@ -337,11 +342,11 @@ void cb_block_release_pages(uint32_t& block_noc_writes_to_clear) {
     // This is because the first call means we don't have a previous block to release
     static bool prev_block = false;
     if (prev_block) {
-        DEBUG_STATUS("CBRW");
+        WAYPOINT("CBRW");
         uint32_t sem_addr = get_semaphore<fd_core_type>(sem_id);
         while(!wrap_ge(NOC_STATUS_READ_REG(noc_index, NIU_MST_NONPOSTED_WR_REQ_SENT), block_noc_writes_to_clear));
         noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), cb_pages_per_block, noc_idx);
-        DEBUG_STATUS("CBRD");
+        WAYPOINT("CBRD");
     } else {
         prev_block = true;
     }

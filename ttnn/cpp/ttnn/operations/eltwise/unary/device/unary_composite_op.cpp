@@ -367,7 +367,7 @@ Tensor _swish(const Tensor& a, const std::optional<MemoryConfig>& output_mem_con
 
 Tensor _trunc(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     auto arch = input.device()->arch();
-    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
+    TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Op is not supported on Grayskull");
     Tensor floor_res = ttnn::floor(input, output_mem_config);
     Tensor trunc_res = ttnn::where(ttnn::ne(input, floor_res), ttnn::add(floor_res, 1.0f, std::nullopt, output_mem_config), floor_res);
     Tensor result = ttnn::where(ttnn::gtz(input, output_mem_config), floor_res, trunc_res);
@@ -524,7 +524,7 @@ Tensor _threshold(const Tensor& input_tensor, float threshold, float value, cons
 
 std::vector<Tensor> split_tensor_for_glu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> t_split;
-    Shape inshape(input_a.get_legacy_shape());
+    tt::tt_metal::LegacyShape inshape(input_a.get_legacy_shape());
     TT_FATAL(((inshape[dim] / 2) % tt::constants::TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
     std::vector<uint32_t> s_a = {0, 0, 0, 0};
     std::vector<uint32_t> e_a = {input_a.get_legacy_shape()[0] - 1, inshape[1] - 1, inshape[2] - 1, inshape[3] / 2 - 1};
@@ -532,8 +532,8 @@ std::vector<Tensor> split_tensor_for_glu(const Tensor& input_a, int32_t dim, con
     std::vector<uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
     std::vector<uint32_t> e_b = {inshape[0] - 1, inshape[1] - 1, inshape[2] - 1, inshape[3] - 1};
 
-    Tensor t_a = ttnn::slice(0, input_a, s_a, e_a, output_mem_config);
-    Tensor t_b = ttnn::slice(0, input_a, s_b, e_b, output_mem_config);
+    Tensor t_a = ttnn::slice(0, input_a, s_a, e_a, std::nullopt, output_mem_config);
+    Tensor t_b = ttnn::slice(0, input_a, s_b, e_b, std::nullopt, output_mem_config);
 
     t_split.emplace_back(t_a);
     t_split.emplace_back(t_b);

@@ -106,7 +106,7 @@ class Logger {
     }
 
     template <typename... Args>
-    void log_level_type(Level level, LogType type, char const* fmt, Args&&... args) {
+    void log_level_type(Level level, LogType type, fmt::format_string<Args...> fmt, Args&&... args) {
         if (static_cast<std::underlying_type_t<Level>>(level) < static_cast<std::underlying_type_t<Level>>(min_level))
             return;
 
@@ -120,11 +120,7 @@ class Logger {
                 level_names[static_cast<std::underlying_type_t<Level>>(level)]);
             std::string type_str = fmt::format(fmt::fg(fmt::color::green), "{:>23}", type_names[type]);
             fmt::print(*fd, "{} | {} | ", type_str, level_str);
-#if FMT_VERSION < 100000
             fmt::print(*fd, fmt, std::forward<Args>(args)...);
-#else
-            fmt::print(*fd, fmt::runtime(fmt), std::forward<Args>(args)...);
-#endif
             *fd << std::endl;
         }
     }
@@ -183,17 +179,18 @@ class Logger {
 
 #ifdef DEBUG
 template <typename... Args>
-static void log_debug(LogType type, char const* fmt, Args&&... args) {
+static void log_debug(LogType type, fmt::format_string<Args...> fmt, Args&&... args) {
     Logger::get().log_level_type(Logger::Level::Debug, type, fmt, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-static void log_debug(char const* fmt, Args&&... args) {
+static void log_debug(fmt::format_string<Args...> fmt, Args&&... args) {
     log_debug(LogAlways, fmt, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-static void log_trace_(LogType type, std::string const& src_info, char const* fmt, Args&&... args) {
+static void log_trace_(
+    LogType type, std::string const& src_info, fmt::format_string<std::string const&, Args...> fmt, Args&&... args) {
     Logger::get().log_level_type(Logger::Level::Trace, type, fmt, src_info, std::forward<Args>(args)...);
 }
 
@@ -201,56 +198,64 @@ static void log_trace_(LogType type, std::string const& src_info, char const* fm
     log_trace_(log_type, fmt::format(fmt::fg(fmt::color::green), "{}:{}", __FILE__, __LINE__), "{} - " __VA_ARGS__)
 #else
 template <typename... Args>
-static void log_debug(LogType type, char const* fmt, Args&&... args) {}
+static void log_debug(LogType type, fmt::format_string<Args...> fmt, Args&&... args) {}
 template <typename... Args>
-static void log_debug(char const* fmt, Args&&... args) {}
+static void log_debug(fmt::format_string<Args...> fmt, Args&&... args) {}
 #define log_trace(...) ((void)0)
 #endif
 
 template <typename... Args>
-static void log(Logger::Level log_level, LogType type, char const* fmt, Args&&... args) {
+static void log(Logger::Level log_level, LogType type, fmt::format_string<Args...> fmt, Args&&... args) {
     Logger::get().log_level_type(log_level, type, fmt, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-static void log_info(LogType type, char const* fmt, Args&&... args) {
+static void log_info(LogType type, fmt::format_string<Args...> fmt, Args&&... args) {
     Logger::get().log_level_type(Logger::Level::Info, type, fmt, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-static void log_info(char const* fmt, Args&&... args) {
+static void log_info(fmt::format_string<Args...> fmt, Args&&... args) {
     log_info(LogAlways, fmt, std::forward<Args>(args)...);
 }
 
+static void log_info(char const* str) { log_info(LogAlways, "{}", str); }
+
 template <typename... Args>
-static void log_warning(LogType type, char const* fmt, Args&&... args) {
+static void log_warning(LogType type, fmt::format_string<Args...> fmt, Args&&... args) {
     Logger::get().log_level_type(Logger::Level::Warning, type, fmt, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-static void log_warning(char const* fmt, Args&&... args) {
+static void log_warning(fmt::format_string<Args...> fmt, Args&&... args) {
     log_warning(LogAlways, fmt, std::forward<Args>(args)...);
 }
 
+static void log_warning(char const* str) { log_warning(LogAlways, "{}", str); }
+
 template <typename... Args>
-static void log_error(LogType type, char const* fmt, Args&&... args) {
+static void log_error(LogType type, fmt::format_string<Args...> fmt, Args&&... args) {
     Logger::get().log_level_type(Logger::Level::Error, type, fmt, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-static void log_error(char const* fmt, Args&&... args) {
+static void log_error(fmt::format_string<Args...> fmt, Args&&... args) {
     log_error(LogAlways, fmt, std::forward<Args>(args)...);
 }
 
+static void log_error(char const* str) { log_error(LogAlways, "{}", str); }
+
 template <typename... Args>
-static void log_fatal(LogType type, char const* fmt, Args&&... args) {
+static void log_fatal(LogType type, fmt::format_string<Args...> fmt, Args&&... args) {
     Logger::get().log_level_type(Logger::Level::Fatal, type, fmt, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-static void log_fatal(char const* fmt, Args&&... args) {
+static void log_fatal(fmt::format_string<Args...> fmt, Args&&... args) {
     log_fatal(LogAlways, fmt, std::forward<Args>(args)...);
 }
+
+static void log_fatal(char const* str) { log_fatal(LogAlways, "{}", str); }
 
 #undef LOGGER_TYPES
 

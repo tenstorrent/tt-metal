@@ -22,14 +22,13 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "dev_msgs.h"
 #include "risc_attribs.h"
-#include "noc_addr_ranges_gen.h"
 #include "generated_bank_to_noc_coord_mapping.h"
 #include "circular_buffer.h"
 #include "dataflow_api.h"
 #include "dev_mem_map.h"
 #include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 
-#include "debug/status.h"
+#include "debug/waypoint.h"
 #include "debug/dprint.h"
 #include "debug/stack_usage.h"
 // clang-format on
@@ -289,9 +288,9 @@ inline void deassert_ncrisc_trisc() {
 
 inline __attribute__((always_inline)) void wait_for_ncrisc_to_halt() {
 #ifdef NCRISC_HAS_IRAM
-    DEBUG_STATUS("INW");
+    WAYPOINT("INW");
     while (mailboxes->slave_sync.ncrisc != RUN_SYNC_MSG_DONE);
-    DEBUG_STATUS("IND");
+    WAYPOINT("IND");
 #endif
 }
 
@@ -304,9 +303,9 @@ inline __attribute__((always_inline)) void reset_ncrisc_with_iram() {
 inline void set_ncrisc_kernel_resume_deassert_address() {
 #ifdef NCRISC_HAS_IRAM
     volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
-    DEBUG_STATUS("INW");
+    WAYPOINT("INW");
     while (mailboxes->ncrisc_halt.resume_addr == 0);
-    DEBUG_STATUS("IND");
+    WAYPOINT("IND");
     cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = mailboxes->ncrisc_halt.resume_addr;
 #endif
 }
@@ -329,15 +328,15 @@ inline void finish_ncrisc_copy_and_run(dispatch_core_processor_masks enables) {
 }
 
 inline void wait_ncrisc_trisc() {
-    DEBUG_STATUS("NTW");
+    WAYPOINT("NTW");
     while (mailboxes->slave_sync.all != RUN_SYNC_MSG_ALL_SLAVES_DONE);
-    DEBUG_STATUS("NTD");
+    WAYPOINT("NTD");
 }
 
 int main() {
     conditionally_disable_l1_cache();
     DIRTY_STACK_MEMORY();
-    DEBUG_STATUS("I");
+    WAYPOINT("I");
 
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
     l1_to_local_mem_copy((uint*)__ldm_data_start, (uint tt_l1_ptr*)MEM_BRISC_INIT_LOCAL_L1_BASE, num_words);
@@ -363,9 +362,9 @@ int main() {
         init_sync_registers();
         reset_ncrisc_with_iram();
 
-        DEBUG_STATUS("GW");
+        WAYPOINT("GW");
         while (mailboxes->launch.go.run != RUN_MSG_GO);
-        DEBUG_STATUS("GD");
+        WAYPOINT("GD");
 
         {
             DeviceZoneScopedMainN("BRISC-FW");
@@ -391,7 +390,7 @@ int main() {
             finish_ncrisc_copy_and_run(enables);
 
             // Run the BRISC kernel
-            DEBUG_STATUS("R");
+            WAYPOINT("R");
             if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
                 setup_cb_read_write_interfaces(cb_l1_base, num_cbs_to_early_init, mailboxes->launch.kernel_config.max_cb_index, true, true, false);
                 kernel_init();
@@ -400,7 +399,7 @@ int main() {
                 // This was not initialized in kernel_init
                 noc_local_state_init(noc_index);
             }
-            DEBUG_STATUS("D");
+            WAYPOINT("D");
 
             wait_ncrisc_trisc();
 

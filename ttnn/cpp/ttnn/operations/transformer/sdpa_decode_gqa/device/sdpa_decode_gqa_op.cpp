@@ -23,30 +23,30 @@ void ScaledDotProductAttentionGQADecode::validate(const std::vector<Tensor>& inp
 
     // All other inputs must be in DRAM.
     for (std::size_t i = 0; i < input_tensors.size(); i++) {
-        TT_FATAL(input_tensors.at(i).buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM);
+        TT_FATAL(input_tensors.at(i).buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "Error");
     }
 
     // Check dtype
     for (std::size_t i = 1; i < input_tensors.size(); i++) {
-        TT_FATAL(input_tensors.at(i).get_dtype() == DataType::BFLOAT8_B);
+        TT_FATAL(input_tensors.at(i).get_dtype() == DataType::BFLOAT8_B, "Error");
     }
-    TT_FATAL(input_tensors.at(0).get_dtype() == DataType::BFLOAT16);
+    TT_FATAL(input_tensors.at(0).get_dtype() == DataType::BFLOAT16, "Error");
 
     // Check sequence lengths
-    TT_FATAL(k_shape[-2] == v_shape[-2]);
+    TT_FATAL(k_shape[-2] == v_shape[-2], "Error");
 
     // Check hidden size
     const auto D = q_shape[-1];
-    TT_FATAL(k_shape[-1] == D);
-    TT_FATAL(v_shape[-1] == D);
+    TT_FATAL(k_shape[-1] == D, "Error");
+    TT_FATAL(v_shape[-1] == D, "Error");
 
     // Check num_heads
-    TT_FATAL(k_shape[1] == v_shape[1]);
-    TT_FATAL(q_shape[1] % k_shape[1] == 0);
-    TT_FATAL(q_shape[1] <= 32);
+    TT_FATAL(k_shape[1] == v_shape[1], "Error");
+    TT_FATAL(q_shape[1] % k_shape[1] == 0, "Error");
+    TT_FATAL(q_shape[1] <= 32, "Error");
 
     // Check batch size
-    TT_FATAL(k_shape[0] == v_shape[0]);
+    TT_FATAL(k_shape[0] == v_shape[0], "Error");
 
     // Check valid seqlen
     for (int i = 0; i < this->cur_pos.size(); i++) {
@@ -66,7 +66,7 @@ void ScaledDotProductAttentionGQADecode::validate(const std::vector<Tensor>& inp
         this->compute_kernel_config);
 }
 
-std::vector<tt::tt_metal::Shape> ScaledDotProductAttentionGQADecode::compute_output_shapes(
+std::vector<tt::tt_metal::LegacyShape> ScaledDotProductAttentionGQADecode::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     auto tt_q_shape = input_tensors.at(0).get_legacy_shape();
     auto tt_k_shape = input_tensors.at(1).get_legacy_shape();
@@ -114,6 +114,7 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionGQADecode::create_progr
         input_tensor_q,
         input_tensor_k,
         input_tensor_v,
+        std::nullopt,
         std::nullopt,
         output_tensor,
         this->cur_pos,

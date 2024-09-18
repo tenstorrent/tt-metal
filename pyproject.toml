@@ -15,12 +15,12 @@ authors = [
 ]
 dependencies = [
   "pyyaml>=5.4",
-  "numpy>=1.24.4",
+  "numpy>=1.24.4,<2",
   "loguru==0.6.0",
   "toolz==0.12.0",
   "matplotlib==3.7.1",
   "Pillow==10.3.0",
-  "jupyterlab==4.2.1",
+  "jupyterlab==4.2.5",
   "ipywidgets==8.1.1",
 
   # extra index required https://download.pytorch.org/whl/cpu

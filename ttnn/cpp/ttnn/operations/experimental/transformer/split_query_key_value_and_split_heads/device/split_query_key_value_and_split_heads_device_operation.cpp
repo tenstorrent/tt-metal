@@ -13,7 +13,7 @@ void SplitFusedQKVAndSplitHeadsDeviceOperation::validate_with_output_tensors(con
     const auto& input_tensor = input_tensors.at(0);
     const auto batch_size = input_tensor.get_legacy_shape()[0];
     // TODO: See issue #1744
-    TT_FATAL((input_tensor.get_legacy_shape() == tt::tt_metal::Shape({batch_size, 1, 384, 3072})), "Unsupported input shape");
+    TT_FATAL((input_tensor.get_legacy_shape() == tt::tt_metal::LegacyShape({batch_size, 1, 384, 3072})), "Unsupported input shape");
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
@@ -27,9 +27,9 @@ void SplitFusedQKVAndSplitHeadsDeviceOperation::validate_with_output_tensors(con
         auto bbox = input_tensor.shard_spec().value().grid.bounding_box();
         TT_FATAL(
             (bbox.end_coord.x < this->compute_with_storage_grid_size.x &&
-             bbox.end_coord.y < this->compute_with_storage_grid_size.y));
-        TT_FATAL(input_tensor.shard_spec().value().grid.ranges().size() == 1);
-        TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
+             bbox.end_coord.y < this->compute_with_storage_grid_size.y), "Error");
+        TT_FATAL(input_tensor.shard_spec().value().grid.ranges().size() == 1, "Error");
+        TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Error");
     }
 
     if (!output_tensors.empty()) {
@@ -38,7 +38,7 @@ void SplitFusedQKVAndSplitHeadsDeviceOperation::validate_with_output_tensors(con
     }
 }
 
-std::vector<tt::tt_metal::Shape> SplitFusedQKVAndSplitHeadsDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> SplitFusedQKVAndSplitHeadsDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto batch_size = input_tensor.get_legacy_shape()[0];
     uint32_t num_heads = this->num_heads;
@@ -46,9 +46,9 @@ std::vector<tt::tt_metal::Shape> SplitFusedQKVAndSplitHeadsDeviceOperation::comp
     uint32_t M = input_tensor.get_legacy_shape()[2];                                    // 384
     uint32_t K = input_tensor.get_legacy_shape()[-1] / num_output_tensors / num_heads;  // 64
     return {
-        tt::tt_metal::Shape{batch_size, this->num_heads, M, K},
-        tt::tt_metal::Shape{batch_size, this->num_heads, K, M},
-        tt::tt_metal::Shape{batch_size, this->num_heads, M, K}};
+        tt::tt_metal::LegacyShape{batch_size, this->num_heads, M, K},
+        tt::tt_metal::LegacyShape{batch_size, this->num_heads, K, M},
+        tt::tt_metal::LegacyShape{batch_size, this->num_heads, M, K}};
 }
 
 std::vector<Tensor> SplitFusedQKVAndSplitHeadsDeviceOperation::create_output_tensors(
@@ -82,15 +82,15 @@ std::vector<Tensor> SplitFusedQKVAndSplitHeadsDeviceOperation::create_output_ten
         auto mem_config_k = this->output_mem_config;
         mem_config_k.shard_spec = shard_spec_k;
         auto out_tensor_q = create_device_tensor(
-            tt::tt_metal::Shape{batch, num_heads, M, K},
+            tt::tt_metal::LegacyShape{batch, num_heads, M, K},
             input_tensor.get_dtype(),
             Layout::TILE,
             input_tensor.device(),
             mem_config_qv);
         auto out_tensor_k = create_device_tensor(
-            tt::tt_metal::Shape{batch, num_heads, K, M}, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_k);
+            tt::tt_metal::LegacyShape{batch, num_heads, K, M}, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config_k);
         auto out_tensor_v = create_device_tensor(
-            tt::tt_metal::Shape{batch, num_heads, M, K},
+            tt::tt_metal::LegacyShape{batch, num_heads, M, K},
             input_tensor.get_dtype(),
             Layout::TILE,
             input_tensor.device(),

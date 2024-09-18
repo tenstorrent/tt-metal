@@ -24,9 +24,9 @@ bool SlidingWindowConfig::has_parallel_config() const {
     * Calculate the window op output shape, excludes the channel dimension since this config is independent of the depth.
     */
 Shape SlidingWindowConfig::get_output_shape() const {
-    uint32_t output_h = (input_hw.first + 2 * pad_hw.first - dilation_hw.first * window_hw.first) / stride_hw.first + 1;
-    uint32_t output_w = (input_hw.second + 2 * pad_hw.second - dilation_hw.second * window_hw.second) / stride_hw.second + 1;
-    log_debug(tt::LogOp, "output_size: {} {} {}", batch_size, output_h, output_w);
+    uint32_t output_h = (input_hw.first + 2 * pad_hw.first - window_hw.first - (dilation_hw.first - 1) * (window_hw.first - 1 )) / stride_hw.first + 1;
+    uint32_t output_w = (input_hw.second + 2 * pad_hw.second - window_hw.second - (dilation_hw.second - 1) * (window_hw.second - 1 )) / stride_hw.second + 1;
+    log_debug(tt::LogOp, "SlidingWindowConfig::output_size: {} {} {}", batch_size, output_h, output_w);
     return Shape( std::vector<uint32_t>{batch_size, output_h, output_w, 0});
 }
 
@@ -85,11 +85,15 @@ std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(c
     uint32_t output_shard_h = config.get_output_shard_y(config.snap_to_tile);
     uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second;
     uint32_t max_index = op_trace_metadata.size();
-    uint32_t halo_with_pad_len = (config.window_hw.first - 1) * padded_input_w + config.window_hw.second - 1;
+
+    uint32_t dilated_window_h = config.window_hw.first + (config.dilation_hw.first - 1) * (config.window_hw.first - 1 );
+    uint32_t dilated_window_w = config.window_hw.second + (config.dilation_hw.second - 1) * (config.window_hw.second - 1 );
+    uint32_t halo_with_pad_len = (dilated_window_h - 1) * padded_input_w + dilated_window_w - 1;
+
     uint32_t output_index_start = 0;
     for (uint32_t core = 0; core < num_cores; ++ core) {
         uint32_t output_index_end = std::min(output_index_start + output_shard_h, max_index) - 1;
-        uint32_t input_index_start = op_trace_metadata[output_index_start];
+        uint32_t input_index_start = op_trace_metadata[std::min(output_index_start, max_index - 1)];
         uint32_t input_index_end = op_trace_metadata[output_index_end] + halo_with_pad_len;
         if (input_index_start == 0 and output_index_start != 0) {
             input_index_start = op_trace_metadata[output_index_end] + 1;
@@ -368,7 +372,6 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(const std::
             // this core has no output
             continue;
         }
-        // TT_ASSERT(output_shard_start < op_trace_metadata.size());
         TT_ASSERT(input_shard_start == op_trace_metadata[output_shard_start]);
         std::vector<uint16_t> local_top_left_indices;
         for(size_t i = output_shard_start; i < output_shard_end + 1; i++) {
@@ -379,7 +382,7 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(const std::
     if (pad_tile) {
         // Pad indices to tile-multiple
         for(size_t i = 0; i < sharded_input_top_left_indices.size(); i++) {
-            uint32_t extend_with_zeroes = sharded_input_top_left_indices[i].size() % 32;
+            uint32_t extend_with_zeroes = (32 - sharded_input_top_left_indices[i].size() % 32) % 32;
             if (extend_with_zeroes > 0) {
                 std::vector<uint16_t> extend_v(extend_with_zeroes, 0);
                 sharded_input_top_left_indices[i].insert(sharded_input_top_left_indices[i].end(), extend_v.begin(), extend_v.end());

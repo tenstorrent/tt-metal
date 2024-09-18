@@ -20,7 +20,7 @@ using namespace constants;
 
 bool test_single_tile_single_dram_bank_loopback(Device *device) {
     bool pass = true;
-    Shape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+    tt::tt_metal::LegacyShape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
 
     Tensor host_a = tt::numpy::random::random(single_tile_shape).to(Layout::TILE);
     Tensor device_a = host_a.to(device);
@@ -34,7 +34,7 @@ bool test_single_tile_single_dram_bank_loopback(Device *device) {
 
 bool test_multi_tile_multi_dram_bank_loopback(Device *device) {
     bool pass = true;
-    Shape multi_tile_shape = {1, 1, 4*TILE_HEIGHT, 3*TILE_WIDTH};
+    tt::tt_metal::LegacyShape multi_tile_shape = {1, 1, 4*TILE_HEIGHT, 3*TILE_WIDTH};
 
     Tensor host_a = tt::numpy::random::random(multi_tile_shape).to(Layout::TILE);
     Tensor device_a = host_a.to(device);
@@ -78,7 +78,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

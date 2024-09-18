@@ -161,25 +161,25 @@ std::vector<DataType> unpack_uint32_vec(std::vector<uint32_t>& data_to_unpack) {
 uint32_t element_size_bytes(DataType dtype);
 
 template <typename T>
-constexpr inline uint32_t packed_buffer_size_bytes(uint32_t volume_unpacked_data) {
+constexpr inline size_t packed_buffer_size_bytes(size_t volume_unpacked_data) {
     auto num_type_in_u32 = sizeof(uint32_t) / sizeof(T);
     return (volume_unpacked_data / num_type_in_u32) * sizeof(uint32_t);
 }
 
 // Specialization for float because it gets converted to bfloat16 before being packed
 template <>
-constexpr inline uint32_t packed_buffer_size_bytes<float>(uint32_t volume_unpacked_data) {
+constexpr inline size_t packed_buffer_size_bytes<float>(size_t volume_unpacked_data) {
     auto num_type_in_u32 = sizeof(uint32_t) / sizeof(float);
     return (volume_unpacked_data / num_type_in_u32) * sizeof(uint32_t);
 }
 
 template <>
-constexpr inline uint32_t packed_buffer_size_bytes<bfloat8_b>(uint32_t volume_unpacked_data) {
+constexpr inline size_t packed_buffer_size_bytes<bfloat8_b>(size_t volume_unpacked_data) {
     return packed_buffer_size_bytes<uint32_t>(volume_unpacked_data);
 }
 
 template <>
-constexpr inline uint32_t packed_buffer_size_bytes<bfloat4_b>(uint32_t volume_unpacked_data) {
+constexpr inline size_t packed_buffer_size_bytes<bfloat4_b>(size_t volume_unpacked_data) {
     return packed_buffer_size_bytes<uint32_t>(volume_unpacked_data);
 }
 
@@ -187,7 +187,7 @@ constexpr inline uint32_t packed_buffer_size_bytes<bfloat4_b>(uint32_t volume_un
 //                                  Layout converters
 // ======================================================================================
 namespace detail {
-static std::vector<uint32_t> to_4D_shape(const Shape& shape) {
+static std::vector<uint32_t> to_4D_shape(const tt::tt_metal::LegacyShape& shape) {
     if (shape.rank() == 1) {
         return {1, 1, 1, shape[-1]};
     } else if (shape.rank() == 2) {
@@ -201,7 +201,7 @@ static std::vector<uint32_t> to_4D_shape(const Shape& shape) {
     }
 }
 
-static std::vector<uint32_t> to_vector(const Shape& shape) {
+static std::vector<uint32_t> to_vector(const tt::tt_metal::LegacyShape& shape) {
     std::vector<uint32_t> shape_vec;
     for (int i = 0; i < shape.rank(); i++) {
         shape_vec.push_back(shape[i]);
@@ -212,7 +212,7 @@ static std::vector<uint32_t> to_vector(const Shape& shape) {
 }  // namespace detail
 
 template <typename T, template <typename> typename BufferType>
-inline std::vector<T> convert_layout_row_major_to_tile(const Shape& shape, const BufferType<T>& data_to_convert) {
+inline std::vector<T> convert_layout_row_major_to_tile(const tt::tt_metal::LegacyShape& shape, const BufferType<T>& data_to_convert) {
     TT_FATAL(
         (shape[-2] % tt::constants::TILE_HEIGHT == 0 && shape[-1] % tt::constants::TILE_WIDTH == 0),
         "Unsupported shape for tensor conversion");
@@ -221,7 +221,7 @@ inline std::vector<T> convert_layout_row_major_to_tile(const Shape& shape, const
 }
 
 template <typename T, template <typename> typename BufferType>
-inline std::vector<T> convert_layout_tile_to_row_major(const Shape& shape, const BufferType<T>& data_to_convert) {
+inline std::vector<T> convert_layout_tile_to_row_major(const tt::tt_metal::LegacyShape& shape, const BufferType<T>& data_to_convert) {
     return convert_layout(
         data_to_convert, detail::to_vector(shape), TensorLayout::TILED32_4FACES, TensorLayout::LIN_ROW_MAJOR);
 }
@@ -229,9 +229,9 @@ inline std::vector<T> convert_layout_tile_to_row_major(const Shape& shape, const
 // ======================================================================================
 //                                      Validators
 // ======================================================================================
-void validate_on_device_dtype_and_layout(Device* device, const Shape& shape, DataType dtype, Layout layout);
+void validate_on_device_dtype_and_layout(Device* device, const tt::tt_metal::LegacyShape& shape, DataType dtype, Layout layout);
 void validate_sharded_buffer_allocation(
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     Layout layout,
     DataType data_type,
     const ShardSpecBuffer& shard_params,
@@ -246,12 +246,12 @@ void validate_sharded_buffer_allocation(
 //                           Data reader, writer, and initializers
 // ======================================================================================
 
-uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const Shape& shape);
+uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const tt::tt_metal::LegacyShape& shape);
 
 DeviceBuffer allocate_buffer_on_device(
-    uint32_t buffer_size_bytes,
+    size_t buffer_size_bytes,
     Device* device,
-    const Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
@@ -297,10 +297,10 @@ Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout);
 //                                  .pad() and .unpad()
 // ======================================================================================
 template <typename T>
-Tensor pad(const Tensor& tensor, const Shape& output_shape, const Shape& input_tensor_start, float pad_value);
+Tensor pad(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_shape, const tt::tt_metal::LegacyShape& input_tensor_start, float pad_value);
 
 template <typename T>
-Tensor unpad(const Tensor& tensor, const Shape& output_tensor_start, const Shape& output_tensor_end);
+Tensor unpad(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end);
 
 // ======================================================================================
 //                                         Print

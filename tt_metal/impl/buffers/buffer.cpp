@@ -23,8 +23,8 @@ bool is_sharded(const TensorMemoryLayout &layout) {
 }
 
 void validate_buffer_size_and_page_size(
-    uint64_t size,
-    uint64_t page_size,
+    DeviceAddr size,
+    DeviceAddr page_size,
     const BufferType &buffer_type,
     const TensorMemoryLayout &buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters) {
@@ -115,8 +115,8 @@ inline std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uin
 
 Buffer::Buffer(
     Device *device,
-    uint64_t size,
-    uint64_t page_size,
+    DeviceAddr size,
+    DeviceAddr page_size,
     const BufferType buffer_type,
     const TensorMemoryLayout buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters,
@@ -131,7 +131,7 @@ Buffer::Buffer(
     bottom_up_(bottom_up),
     buffer_page_mapping_(nullptr),
     allocate_(allocate) {
-    TT_FATAL(this->device_ != nullptr and this->device_->allocator_ != nullptr);
+    TT_FATAL(this->device_ != nullptr and this->device_->allocator_ != nullptr, "Device and allocator need to not be null.");
     validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
     if (allocate) {
         this->allocate();
@@ -305,7 +305,7 @@ CoreCoord Buffer::noc_coordinates(uint32_t bank_id) const {
 
 CoreCoord Buffer::noc_coordinates() const { return this->noc_coordinates(0); }
 
-uint64_t Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
+DeviceAddr Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
     auto num_banks = this->device_->num_banks(this->buffer_type_);
     TT_ASSERT(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
     int pages_offset_within_bank = (int)page_index / num_banks;
@@ -313,15 +313,15 @@ uint64_t Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
     return translate_page_address(offset, bank_id);
 }
 
-uint64_t Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) const {
+DeviceAddr Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) const {
     TT_ASSERT(is_sharded(this->buffer_layout()));
     int pages_offset_within_bank = page_index % shard_spec().size();
     auto offset = (round_up(this->page_size_, this->alignment()) * pages_offset_within_bank);
     return translate_page_address(offset, bank_id);
 }
 
-uint64_t Buffer::translate_page_address(uint64_t offset, uint32_t bank_id) const {
-    uint64_t base_page_address = this->address_ + this->device_->bank_offset(this->buffer_type_, bank_id);
+DeviceAddr Buffer::translate_page_address(uint64_t offset, uint32_t bank_id) const {
+    DeviceAddr base_page_address = this->address_ + this->device_->bank_offset(this->buffer_type_, bank_id);
     return base_page_address + offset;
 }
 

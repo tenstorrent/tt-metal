@@ -29,27 +29,27 @@ std::tuple<Tensor, Tensor, Tensor> reshape_outputs_of_split_query_key_value_and_
 
     query = ttnn::reshape(
         query,
-        ttnn::Shape(tt::tt_metal::Shape(
+        ttnn::Shape(tt::tt_metal::LegacyShape(
             std::array{batch_size, num_heads, sequence_size, head_size},
             std::array{batch_size, num_heads, sequence_size_padded, head_size_padded})));
 
     if (transpose_key) {
         key = ttnn::reshape(
             key,
-            ttnn::Shape(tt::tt_metal::Shape(
+            ttnn::Shape(tt::tt_metal::LegacyShape(
                 std::array{batch_size, num_kv_heads, head_size, sequence_size},
                 std::array{batch_size, num_kv_heads, head_size_padded, sequence_size_padded})));
     } else {
         key = ttnn::reshape(
             key,
-            ttnn::Shape(tt::tt_metal::Shape(
+            ttnn::Shape(tt::tt_metal::LegacyShape(
                 std::array{batch_size, num_kv_heads, sequence_size, head_size},
                 std::array{batch_size, num_kv_heads, sequence_size_padded, head_size_padded})));
     }
 
     value = ttnn::reshape(
         value,
-        ttnn::Shape(tt::tt_metal::Shape(
+        ttnn::Shape(tt::tt_metal::LegacyShape(
             std::array{batch_size, num_kv_heads, sequence_size, head_size},
             std::array{batch_size, num_kv_heads, sequence_size_padded, head_size_padded})));
     return {query, key, value};
@@ -66,14 +66,14 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
 
     const auto input_shape = input_tensor.get_shape();
     TT_FATAL(input_shape.rank() == 3,
-            fmt::format("Invalid input tensor: expected 3 dimensions, but found {}.", input_shape.rank()));
+            "Invalid input tensor: expected 3 dimensions, but found {}.", input_shape.rank());
 
     TT_FATAL(input_tensor.get_layout() == tt::tt_metal::Layout::TILE,
-            fmt::format("Invalid layout: input tensor must use TILE_LAYOUT, but found {}.", static_cast<int>(input_tensor.get_layout())));
+            "Invalid layout: input tensor must use TILE_LAYOUT, but found {}.", static_cast<int>(input_tensor.get_layout()));
 
     TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE ||
             input_tensor.storage_type() == tt::tt_metal::StorageType::MULTI_DEVICE,
-            fmt::format("Invalid storage type: input tensor must be on a device, but found {}.", static_cast<int>(input_tensor.storage_type())));
+            "Invalid storage type: input tensor must be on a device, but found {}.", static_cast<int>(input_tensor.storage_type()));
 
 
     const uint32_t sequence_size = input_shape[1];
@@ -89,12 +89,12 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
         auto padded_head_size = qkv_heads_times_head_dim_padded / (num_heads + (num_kv_heads.value() * 2));
 
         TT_FATAL(head_size % TILE_SIZE == 0,
-                fmt::format("Invalid head size: {} is not a multiple of tile size {}. Update the preceding matmul to include padding in the weights.",
-                            head_size, TILE_SIZE));
+                "Invalid head size: {} is not a multiple of tile size {}. Update the preceding matmul to include padding in the weights.",
+                            head_size, TILE_SIZE);
 
         TT_FATAL(padded_head_size == head_size,
-                fmt::format("Invalid padding: Head size {} should not have additional tile padding, but padded size is {}.",
-                            head_size, padded_head_size));
+                "Invalid padding: Head size {} should not have additional tile padding, but padded size is {}.",
+                            head_size, padded_head_size);
 
 
         const auto input_4d = input_tensor.reshape(
@@ -112,16 +112,16 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
     if (input_tensor_kv.has_value()) {
         const auto input_shape_kv = input_tensor_kv.value().get_shape();
         TT_FATAL(input_shape_kv[0] == input_shape[0],
-         fmt::format("Dimension mismatch: KV tensor batch dimension ({}) must match Q tensor batch dimension ({}).",
-                     input_shape_kv[0], input_shape[0]));
+         "Dimension mismatch: KV tensor batch dimension ({}) must match Q tensor batch dimension ({}).",
+                     input_shape_kv[0], input_shape[0]);
 
         TT_FATAL(input_shape_kv[1] == input_shape[1],
-                fmt::format("Dimension mismatch: KV tensor sequence length ({}) must match Q tensor sequence length ({}).",
-                            input_shape_kv[1], input_shape[1]));
+                "Dimension mismatch: KV tensor sequence length ({}) must match Q tensor sequence length ({}).",
+                            input_shape_kv[1], input_shape[1]);
 
         TT_FATAL(input_shape_kv[2] == 2 * input_shape[2],
-                fmt::format("Dimension mismatch: KV tensor hidden size ({}) must be twice the Q tensor hidden size ({}).",
-                            input_shape_kv[2], 2 * input_shape[2]));
+                "Dimension mismatch: KV tensor hidden size ({}) must be twice the Q tensor hidden size ({}).",
+                            input_shape_kv[2], 2 * input_shape[2]);
 
         hidden_dim = input_shape[2];
         hidden_dim_padded = input_shape.with_tile_padding()[2];
@@ -133,12 +133,12 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
     uint32_t head_size = hidden_dim / num_heads;
     uint32_t padded_head_size = hidden_dim_padded / num_heads;
     TT_FATAL(head_size % tt::constants::TILE_WIDTH == 0,
-            fmt::format("Invalid head size: {}. The head size must be a multiple of the tile width ({}). Please adjust the dimensions accordingly.",
-                        head_size, tt::constants::TILE_WIDTH));
+            "Invalid head size: {}. The head size must be a multiple of the tile width ({}). Please adjust the dimensions accordingly.",
+                        head_size, tt::constants::TILE_WIDTH);
 
     TT_FATAL(padded_head_size == head_size,
-            fmt::format("Padding error: Head size {} should not include additional tile padding, but padded head size was found to be {}. Ensure that no extra padding is applied.",
-                        head_size, padded_head_size));
+            "Padding error: Head size {} should not include additional tile padding, but padded head size was found to be {}. Ensure that no extra padding is applied.",
+                        head_size, padded_head_size);
 
 
     if (input_tensor.is_sharded()) {

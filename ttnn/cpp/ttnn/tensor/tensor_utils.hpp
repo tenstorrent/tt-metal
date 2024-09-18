@@ -33,20 +33,20 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(Tensor conv_weight_tensor, u
 // Converts convolution weights to depthwise layout with broadcasted weights
 Tensor convert_conv_weight_tensor_to_depthwise_layout(Tensor conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype);
 
-const Shape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volume);
+const tt::tt_metal::LegacyShape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volume);
 
-const Shape infer_dims_for_reshape_RM(int N, int C, int H, int W, uint32_t old_volume);
+const tt::tt_metal::LegacyShape infer_dims_for_reshape_RM(int N, int C, int H, int W, uint32_t old_volume);
 
 template <typename T>
 static std::size_t compute_volume(const T& shape) {
-    auto volume = 1;
+    size_t volume = 1;
     for (auto index = 0; index < shape.size(); index++) {
         volume *= shape[index];
     }
     return volume;
 }
 
-static std::vector<uint32_t> compute_strides(const Shape& shape) {
+static std::vector<uint32_t> compute_strides(const tt::tt_metal::LegacyShape& shape) {
     if (shape.rank() == 0)
         return {};
 
@@ -75,7 +75,7 @@ static int compute_flat_indices(const vector<int>& indices, const vector<std::ui
 
 template <typename T>
 static std::size_t compute_buffer_size(const T& shape, DataType data_type) {
-    const auto volume = compute_volume(shape);
+    const size_t volume = compute_volume(shape);
     if (data_type == DataType::BFLOAT8_B) {
         TT_ASSERT(volume % constants::TILE_HW == 0);
         const auto bfloat8_b_volume = volume / constants::TILE_HW * constants::BFLOAT8_B_TILE_HW;

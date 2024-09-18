@@ -20,7 +20,7 @@ void UpSample::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to copy need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to copy need to be allocated in buffers on device!");
-    // TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+    // TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
     TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Input tensor layout should be ROW_MAJOR");
     TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Input tensor data type should be BFLOAT16");
     if (input_tensor_a.memory_config().is_sharded()) {
@@ -30,7 +30,7 @@ void UpSample::validate(const std::vector<Tensor> &input_tensors) const {
     }
 }
 
-std::vector<Shape> UpSample::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> UpSample::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     // NOTE1: data is packed in { N, H , W, C }
     // NOTE2: Mapping it into in 2D format should be {N*H*W, C}
     // NOTE3: Assuming output data type is same as input
@@ -42,7 +42,7 @@ std::vector<Shape> UpSample::compute_output_shapes(const std::vector<Tensor> &in
     uint32_t out_w = input_shape[2] * scale_factor_w_;
     uint32_t out_c = input_shape[3];
     const auto out_dims = std::vector<uint32_t>({ out_n, out_h, out_w, out_c }); //in the NHWC format
-    auto out_shape = Shape{out_dims};
+    auto out_shape = tt::tt_metal::LegacyShape{out_dims};
 
     return {out_shape};
 }
@@ -79,10 +79,10 @@ std::vector<Tensor> UpSample::create_output_tensors(const std::vector<Tensor> &i
                 log_debug(LogOp, "output_shard_shape: {}", output_shard_shape);
                 return {create_device_tensor(output_shape, input.get_dtype(), input.get_layout(), input.device(), mem_config)};
             } else {
-                TT_FATAL(false, "input memory config is not HEIGHT or BLOCK sharded");
+                TT_THROW("input memory config is not HEIGHT or BLOCK sharded");
             }
         } else {
-            TT_FATAL(false, "Output memory config is sharded but input memory config is not sharded");
+            TT_THROW("Output memory config is sharded but input memory config is not sharded");
         }
     } else {
         return operation::generic_create_output_tensors(*this, inputs, input.get_dtype(), input.get_layout(), output_mem_config_);

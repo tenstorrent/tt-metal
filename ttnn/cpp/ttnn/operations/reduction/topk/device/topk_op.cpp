@@ -28,13 +28,13 @@ namespace ttnn::operations::reduction {
 void TopK::validate_with_output_tensors(
     const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
     auto input_shape = input_tensors.at(0).get_legacy_shape();
-    TT_FATAL(input_shape.rank() == 4, fmt::format("Input shape must be 4D, got {}", input_shape.rank()));
-    TT_FATAL(this->k == 32, fmt::format("K must be equal to 32, pad with -infinity if necessary to get 32, got {}", this->k));
-    TT_FATAL(this->dim == -1 || this->dim == 3, fmt::format("Only the last dim is supported right now, got {}", this->dim));
+    TT_FATAL(input_shape.rank() == 4, "Input shape must be 4D, got {}", input_shape.rank());
+    TT_FATAL(this->k == 32, "K must be equal to 32, pad with -infinity if necessary to get 32, got {}", this->k);
+    TT_FATAL(this->dim == -1 || this->dim == 3, "Only the last dim is supported right now, got {}", this->dim);
 
-    TT_FATAL(input_shape[-1] >= 64, fmt::format("Input shape inner dim {} must be a multiple of 64, pad with -infinity if necessary", input_shape[-1]));
-    TT_FATAL((input_shape[-1] & (input_shape[-1] - 1)) == 0, fmt::format("Input shape inner dim {} must be a power of 2, pad with -infinity if necessary", input_shape[-1]));
-    TT_FATAL((input_shape[0] * input_shape[1] * input_shape[2]) % 32 == 0, fmt::format("Input height (combined input_shape[0-3]) {} must be a multiple of 32", input_shape[0] * input_shape[1] * input_shape[2]));
+    TT_FATAL(input_shape[-1] >= 64, "Input shape inner dim {} must be a multiple of 64, pad with -infinity if necessary", input_shape[-1]);
+    TT_FATAL((input_shape[-1] & (input_shape[-1] - 1)) == 0, "Input shape inner dim {} must be a power of 2, pad with -infinity if necessary", input_shape[-1]);
+    TT_FATAL((input_shape[0] * input_shape[1] * input_shape[2]) % 32 == 0, "Input height (combined input_shape[0-3]) {} must be a multiple of 32", input_shape[0] * input_shape[1] * input_shape[2]);
 
     TT_FATAL(this->output_mem_config.is_sharded() == false, "Sharded implementation not supported yet");
     TT_FATAL(input_tensors.at(0).get_layout() == Layout::TILE, "The input must be in tiled format");
@@ -51,7 +51,7 @@ void TopK::validate_with_output_tensors(
     }
 }
 
-std::vector<tt::tt_metal::Shape> TopK::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> TopK::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto input_shape = input_tensor.get_legacy_shape();
     return {{input_shape[0], input_shape[1], input_shape[2], this->k}, {input_shape[0], input_shape[1], input_shape[2], this->k}};

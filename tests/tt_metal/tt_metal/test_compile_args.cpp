@@ -91,7 +91,7 @@ int main(int argc, char **argv) {
                     } else if (line.find("ARG_0=1,ARG_1=5,ARG_2=0,ARG_3=124") != std::string::npos) {
                         num_found++;
                     } else {
-                        TT_FATAL(false, "Expected kernel_args.csv to contain the compile args for test_compile_args");
+                        TT_THROW("Expected kernel_args.csv to contain the compile args for test_compile_args");
                     }
                 }
             }
@@ -114,7 +114,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

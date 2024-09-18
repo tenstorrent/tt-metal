@@ -51,14 +51,14 @@ Tensor AutoFormat::move_tensor_to_device_and_pad(const Tensor& input, Device *de
         (device_shape[-2] % TILE_HEIGHT != 0 ? (device_shape[-2] / TILE_HEIGHT + 1) * TILE_HEIGHT : device_shape[-2]),
         (device_shape[-1] % TILE_WIDTH != 0 ? (device_shape[-1] / TILE_WIDTH + 1) * TILE_WIDTH : device_shape[-1])
         };
-    const auto new_shape = tt::tt_metal::Shape(new_intended_shape, new_device_shape);
+    const auto new_shape = tt::tt_metal::LegacyShape(new_intended_shape, new_device_shape);
     return AutoFormat::format_input_tensor(input, device, new_shape, 0.0, target_layout, target_mem_config);
 }
 
 Tensor AutoFormat::format_input_tensor(
     const Tensor& input,
     Device* device,
-    const tt::tt_metal::Shape& padded_shape,
+    const tt::tt_metal::LegacyShape& padded_shape,
     float pad_value,
     Layout target_layout,
     std::optional<MemoryConfig> target_mem_config) {
@@ -122,7 +122,7 @@ Tensor AutoFormat::format_input_tensor(
 
 Tensor AutoFormat::format_output_tensor(
     const Tensor& output,
-    const tt::tt_metal::Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     Device* device,
     Layout target_layout,
     std::optional<MemoryConfig> target_mem_config) {
@@ -163,6 +163,7 @@ Tensor AutoFormat::format_output_tensor(
                     formatted_output,
                     std::vector<uint32_t>({0, 0, 0, 0}),
                     std::vector<uint32_t>({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),
+                    std::nullopt,
                     mem_config);
                 return formatted_output;
                 // Output is tile but shape cannot be tile. We leave in RM
@@ -189,6 +190,7 @@ Tensor AutoFormat::format_output_tensor(
                     formatted_output,
                     std::vector<uint32_t>({0, 0, 0, 0}),
                     std::vector<uint32_t>({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),
+                    std::nullopt,
                     mem_config);
                 formatted_output = ttnn::tilize(formatted_output, mem_config);
                 return formatted_output;
@@ -206,7 +208,7 @@ Tensor AutoFormat::format_output_tensor(
             convert_layout = formatted_output.get_layout() != target_layout;
         }
         formatted_output =
-            ttnn::slice(formatted_output, tt::tt_metal::Array4D({0, 0, 0, 0}), tt::tt_metal::Array4D({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}));
+            ttnn::slice(formatted_output, tt::tt_metal::Array4D({0, 0, 0, 0}), tt::tt_metal::Array4D({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}), std::nullopt, std::nullopt);
     }
 
     if (convert_layout) {

@@ -24,18 +24,16 @@ namespace kernel_profiler{
 
     enum ControlBuffer
     {
-        HOST_BUFFER_END_INDEX_BR,
+        HOST_BUFFER_END_INDEX_BR_ER,
         HOST_BUFFER_END_INDEX_NC,
         HOST_BUFFER_END_INDEX_T0,
         HOST_BUFFER_END_INDEX_T1,
         HOST_BUFFER_END_INDEX_T2,
-        HOST_BUFFER_END_INDEX_ER,
-        DEVICE_BUFFER_END_INDEX_BR,
+        DEVICE_BUFFER_END_INDEX_BR_ER,
         DEVICE_BUFFER_END_INDEX_NC,
         DEVICE_BUFFER_END_INDEX_T0,
         DEVICE_BUFFER_END_INDEX_T1,
         DEVICE_BUFFER_END_INDEX_T2,
-        DEVICE_BUFFER_END_INDEX_ER,
         FW_RESET_H,
         FW_RESET_L,
         DRAM_PROFILER_ADDRESS,
@@ -47,6 +45,15 @@ namespace kernel_profiler{
         PROFILER_DONE,
     };
 
-
+    // TODO: use data types in profile_msg_t rather than addresses/sizes
+    constexpr static std::uint32_t PROFILER_L1_CONTROL_VECTOR_SIZE = 32;
+    constexpr static std::uint32_t PROFILER_L1_CONTROL_BUFFER_SIZE = PROFILER_L1_CONTROL_VECTOR_SIZE * sizeof(uint32_t);
+    constexpr static std::uint32_t PROFILER_L1_MARKER_UINT32_SIZE = 2;
+    constexpr static std::uint32_t PROFILER_L1_PROGRAM_ID_COUNT = 2;
+    constexpr static std::uint32_t PROFILER_L1_GUARANTEED_MARKER_COUNT = 4;
+    constexpr static std::uint32_t PROFILER_L1_OPTIONAL_MARKER_COUNT = 250;
+    constexpr static std::uint32_t PROFILER_L1_OP_MIN_OPTIONAL_MARKER_COUNT = 2;
+    constexpr static std::uint32_t PROFILER_L1_VECTOR_SIZE = (PROFILER_L1_OPTIONAL_MARKER_COUNT + PROFILER_L1_GUARANTEED_MARKER_COUNT + PROFILER_L1_PROGRAM_ID_COUNT) * PROFILER_L1_MARKER_UINT32_SIZE;
+    constexpr static std::uint32_t PROFILER_L1_BUFFER_SIZE = PROFILER_L1_VECTOR_SIZE * sizeof(uint32_t);
 
 }

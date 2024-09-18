@@ -38,13 +38,13 @@ void TilizeWithValPadding::validate(const std::vector<Tensor>& input_tensors) co
         TT_FATAL(this->output_mem_config.memory_layout == input_tensor_a.memory_config().memory_layout, "Output tensor must have the same memory layout as input tensor");
         for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
             if (i != input_shape.rank() - 2) {
-                TT_FATAL(input_shape[i] == this->output_tensor_shape[i]);
+                TT_FATAL(input_shape[i] == this->output_tensor_shape[i], "Error");
             }
         }
     }
 }
 
-std::vector<tt::tt_metal::Shape> TilizeWithValPadding::compute_output_shapes(
+std::vector<tt::tt_metal::LegacyShape> TilizeWithValPadding::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     auto input_shape = input_tensors.at(0).get_legacy_shape();
     auto dimensions_pads = std::vector<Padding::PadDimension>();
@@ -53,7 +53,7 @@ std::vector<tt::tt_metal::Shape> TilizeWithValPadding::compute_output_shapes(
         dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = back});
     }
     const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-    return {tt::tt_metal::Shape(this->output_tensor_shape, padding)};
+    return {tt::tt_metal::LegacyShape(this->output_tensor_shape, padding)};
 }
 
 std::vector<Tensor> TilizeWithValPadding::create_output_tensors(

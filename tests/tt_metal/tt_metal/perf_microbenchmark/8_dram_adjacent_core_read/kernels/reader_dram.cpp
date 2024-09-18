@@ -18,10 +18,10 @@ void noc_async_read_tile_dram_sharded(uint32_t src_addr, uint32_t dest_addr, uin
     src_addr_ += bank_to_dram_offset[bank_id];
     src_noc_xy = dram_bank_to_noc_xy[noc_index][bank_id];
 
-    DEBUG_STATUS("NRTW");
+    WAYPOINT("NRTW");
     DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc_index, get_noc_addr_helper(src_noc_xy, src_addr_), dest_addr, page_size);
     while (!noc_cmd_buf_ready(noc_index, NCRISC_RD_CMD_BUF));
-    DEBUG_STATUS("NRTD");
+    WAYPOINT("NRTD");
 
     if constexpr(use_vc) {
         uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc);

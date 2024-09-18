@@ -26,7 +26,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::Device *device = a.device();
 
-    tt::tt_metal::Shape output_shape = output.get_legacy_shape();
+    tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
 
     tt::tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -111,7 +111,7 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::Device *device = a.device();
-    tt::tt_metal::Shape output_shape = output.get_legacy_shape();
+    tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
     tt::tt_metal::Buffer *src0_buffer = a.buffer();
     tt::tt_metal::Buffer *dst_buffer = output.buffer();
 
@@ -359,13 +359,13 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
 
 operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor &a, Tensor& output, int N, int C, int H, int W) {
 
-    TT_FATAL(a.get_dtype() == output.get_dtype());
+    TT_FATAL(a.get_dtype() == output.get_dtype(), "Error");
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::tt_metal::Device *device = a.device();
 
-    tt::tt_metal::Shape output_shape = output.get_legacy_shape();
+    tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
     tt::tt_metal::Buffer *src0_buffer = a.buffer();
     tt::tt_metal::Buffer *dst_buffer = output.buffer();
 
@@ -378,9 +378,9 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor &a, Tensor& o
     uint32_t new_stick_size = output_shape[3] * output.element_size();
 
     if (old_stick_size > new_stick_size) {
-        TT_FATAL(old_stick_size % new_stick_size == 0);
+        TT_FATAL(old_stick_size % new_stick_size == 0, "Error");
     } else {
-        TT_FATAL(new_stick_size % old_stick_size == 0);
+        TT_FATAL(new_stick_size % old_stick_size == 0, "Error");
     }
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();

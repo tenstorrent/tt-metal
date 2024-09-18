@@ -36,6 +36,7 @@ void ArgMax::validate_with_output_tensors(
     if (this->dim.has_value()) {
         const uint32_t input_rank = input_tensor_a.get_legacy_shape().rank();
         const uint32_t normalized_dim = dim.value() < 0 ? dim.value() + input_rank : dim.value();
+
         // TODO: Add support for normalized_dim = 0, 1, 2
         TT_FATAL(normalized_dim == (input_rank - 1), "Only argmax on last dim is supported!");
     }
@@ -46,7 +47,7 @@ void ArgMax::validate_with_output_tensors(
 
 }
 
-std::vector<tt::tt_metal::Shape> ArgMax::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> ArgMax::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     auto input_shape = input_tensors[0].get_legacy_shape();
     if (this->dim.has_value()) {
         tt::tt_metal::LegacyShape output_shape({input_shape[0], input_shape[1], 1, input_shape[2]});

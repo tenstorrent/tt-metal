@@ -21,15 +21,15 @@ Tensor dispatch_ops_to_device(Device* dev, Tensor input_tensor, uint8_t cq_id) {
     using ttnn::operations::unary::UnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
 
-    Tensor output_tensor = ttnn::mul_sfpu(cq_id, input_tensor);
+    Tensor output_tensor = ttnn::mul_sfpu(cq_id, input_tensor, 2);
     for (int i = 0; i < 3; i++) {
         output_tensor = ttnn::neg(cq_id, output_tensor);
         output_tensor = ttnn::neg(cq_id, output_tensor);
         output_tensor = ttnn::mul_sfpu(cq_id, output_tensor, 2);
     }
-    output_tensor = ttnn::neg(cq_id, input_tensor);
-    output_tensor = ttnn::mul_sfpu(cq_id, input_tensor, 2);
-    output_tensor = ttnn::add_sfpu(cq_id, input_tensor, 500);
+    output_tensor = ttnn::neg(cq_id, output_tensor);
+    output_tensor = ttnn::mul_sfpu(cq_id, output_tensor, 2);
+    output_tensor = ttnn::add_sfpu(cq_id, output_tensor, 500);
     return output_tensor;
 }
 
@@ -44,7 +44,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
         .buffer_type = BufferType::DRAM,
         .shard_spec = std::nullopt};
 
-    ttnn::Shape shape = ttnn::Shape(Shape({1, 3, 2048, 2048}));
+    ttnn::Shape shape = ttnn::Shape(tt::tt_metal::LegacyShape({1, 3, 2048, 2048}));
     uint32_t buf_size_datums = 2048 * 2048 * 3;
     uint32_t datum_size_bytes = 2;
     auto host_data = std::shared_ptr<bfloat16 []>(new bfloat16[buf_size_datums]);
@@ -94,7 +94,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
         .buffer_type = BufferType::DRAM,
         .shard_spec = std::nullopt};
 
-    ttnn::Shape shape = ttnn::Shape(Shape({1, 3, 2048, 2048}));
+    ttnn::Shape shape = ttnn::Shape(tt::tt_metal::LegacyShape({1, 3, 2048, 2048}));
     uint32_t buf_size_datums = 2048 * 2048 * 3;
     uint32_t datum_size_bytes = 2;
     auto host_data = std::shared_ptr<bfloat16 []>(new bfloat16[buf_size_datums]);
@@ -145,7 +145,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
         .buffer_type = BufferType::DRAM,
         .shard_spec = std::nullopt};
 
-    ttnn::Shape shape = ttnn::Shape(Shape({1, 3, 2048, 2048}));
+    ttnn::Shape shape = ttnn::Shape(tt::tt_metal::LegacyShape({1, 3, 2048, 2048}));
     uint32_t buf_size_datums = 2048 * 2048 * 3;
     uint32_t datum_size_bytes = 2;
     auto host_data = std::shared_ptr<bfloat16 []>(new bfloat16[buf_size_datums]);

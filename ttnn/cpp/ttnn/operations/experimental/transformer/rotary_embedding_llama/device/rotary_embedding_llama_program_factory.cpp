@@ -63,7 +63,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
             math_fidelity = compute_kernel_config.math_fidelity;
             fp32_dest_acc_en = input_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
         } else {
-            TT_FATAL("arch not supported");
+            TT_THROW("arch not supported");
         }
 
     }, compute_kernel_config);
@@ -93,15 +93,25 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
 
     num_rows_per_core = num_rows_per_core_group_1; // Will always find equal split
     uint32_t num_sin_cos_rows_per_core = std::max((uint32_t) 1, (uint32_t) (Ht / num_cores));
+    uint32_t num_cos_sin_tiles = 2 * Wt * num_sin_cos_rows_per_core;
+
+    uint32_t input_cb_num_tiles = num_sin_cos_rows_per_core * num_input_tiles;
+
+    const bool use_reload_impl = num_rows_per_core > 8;
+    if (use_reload_impl) {
+        // Do reload implementation of kernel to reduce buffer sizes
+        // Only size CBs to double buffer Wt tiles for all inputs
+        input_cb_num_tiles = num_input_tiles;
+        num_cos_sin_tiles = num_input_tiles;
+    }
+
 
     uint32_t input_cb_index = CB::c_in0;
     tt_metal::CircularBufferConfig cb_input_config =
         tt_metal::CircularBufferConfig(
-            num_sin_cos_rows_per_core * num_input_tiles * input_single_tile_size, {{input_cb_index, input_cb_data_format}})
+            input_cb_num_tiles * input_single_tile_size, {{input_cb_index, input_cb_data_format}})
             .set_page_size(input_cb_index, input_single_tile_size);
     auto cb_input = tt_metal::CreateCircularBuffer(program, all_cores, cb_input_config);
-
-    uint32_t num_cos_sin_tiles = 2 * Wt * num_sin_cos_rows_per_core;
 
     uint32_t cos_cb_index = CB::c_in1;
     tt_metal::CircularBufferConfig cb_cos_config =
@@ -116,10 +126,10 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     auto cb_sin = tt_metal::CreateCircularBuffer(program, all_cores, cb_sin_config);
 
     uint32_t trans_mat_cb_index = CB::c_in3;
-    // We only take one tile of trans_mat, doubled buffered
-    uint32_t num_trans_mat_tiles = 2;
+    // We only take one tile of trans_mat
+    uint32_t num_trans_mat_tiles = 1;
     tt_metal::CircularBufferConfig cb_trans_mat_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * trans_mat_single_tile_size, {{trans_mat_cb_index, trans_mat_cb_data_format}})
+        tt_metal::CircularBufferConfig(num_trans_mat_tiles * trans_mat_single_tile_size, {{trans_mat_cb_index, trans_mat_cb_data_format}})
             .set_page_size(trans_mat_cb_index, trans_mat_single_tile_size);
     auto cb_trans_mat = tt_metal::CreateCircularBuffer(program, all_cores, cb_trans_mat_config);
 
@@ -153,6 +163,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     std::map<string, string> kernel_defines;
+    kernel_defines["RELOAD_IMPL"] = use_reload_impl ? "1" : "0";
 
     auto src_buffer = input.buffer();
     auto cos_buffer = cos.buffer();

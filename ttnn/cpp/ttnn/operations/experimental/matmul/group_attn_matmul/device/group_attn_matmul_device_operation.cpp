@@ -14,7 +14,7 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
     // intermediate: [q_heads, batch, batch, kv_len]
     // output: [q_len, q_heads, batch, kv_len]
 
-    TT_FATAL(input_tensors.size() == 2);
+    TT_FATAL(input_tensors.size() == 2, "Error");
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     TT_FATAL(
@@ -45,7 +45,7 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
     // Any sharded memory configs must be HEIGHT_SHARDED and have the same orientation
     ShardOrientation shard_orientation = this->row_major ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR;
     if (input_tensor_a.is_sharded()) {
-        TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
         TT_FATAL(
             input_tensor_a.shard_spec().value().orientation == shard_orientation,
             "Any sharded memory configs must have the same shard orientation as one another!");
@@ -53,26 +53,26 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
             input_tensor_a.shard_spec().value().num_cores() == ashape[1],
             "Q heads must be sharded on number of q heads!");
         auto shard_shape = input_tensor_a.shard_spec().value().shape;
-        TT_FATAL(shard_shape[0] == ashape[2]);
-        TT_FATAL(shard_shape[1] == ashape[3]);
+        TT_FATAL(shard_shape[0] == ashape[2], "Error");
+        TT_FATAL(shard_shape[1] == ashape[3], "Error");
     }
     if (input_tensor_b.is_sharded()) {
-        TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
         TT_FATAL(
             input_tensor_b.shard_spec().value().orientation == shard_orientation,
             "Any sharded memory configs must have the same shard orientation as one another!");
         TT_FATAL(input_tensor_b.shard_spec().value().num_cores() == bshape[0], "KV heads must be sharded on batch!");
         auto shard_shape = input_tensor_b.shard_spec().value().shape;
-        TT_FATAL(shard_shape[0] == bshape[1] * bshape[2]);
-        TT_FATAL(shard_shape[1] == bshape[3]);
+        TT_FATAL(shard_shape[0] == bshape[1] * bshape[2], "Error");
+        TT_FATAL(shard_shape[1] == bshape[3], "Error");
     }
     if (this->output_mem_config.is_sharded()) {
-        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
 
         // If user passes in output_mem_config with shard_spec, assert that it is the same as the one calculated in
         // GroupAttnMatmulDeviceOperation::create_output_tensors
         if (this->output_mem_config.shard_spec.has_value()) {
-            const tt::tt_metal::Shape output_shape = this->compute_output_shapes(input_tensors).at(0);
+            const tt::tt_metal::LegacyShape output_shape = this->compute_output_shapes(input_tensors).at(0);
             const uint32_t num_cores = output_shape[1];
             CoreRangeSet all_cores =
                 num_cores_to_corerange_set(num_cores, this->compute_with_storage_grid_size, this->row_major);
@@ -85,8 +85,8 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
             TT_FATAL(
                 this->output_mem_config.shard_spec.value().orientation == shard_orientation,
                 "Any sharded memory configs must have the same shard orientation as one another!");
-            TT_FATAL(shard_shape[0] == output_shape[2]);
-            TT_FATAL(shard_shape[1] == output_shape[3]);
+            TT_FATAL(shard_shape[0] == output_shape[2], "Error");
+            TT_FATAL(shard_shape[1] == output_shape[3], "Error");
         }
     }
 
@@ -102,22 +102,22 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
     if (read_from_kv_cache) {
         if (this->transpose_hw.value()) {
             TT_FATAL(
-                ashape[3] == bshape[3] &&
+                ashape[3] == bshape[3],
                 "For pre-attention matmul, dimension K for B is in B.shape[3], so A.shape[3] must match B.shape[3]");  // A.K == B.K
         } else {
             TT_FATAL(
-                ashape[3] == this->num_tokens &&
+                ashape[3] == this->num_tokens,
                 "For post-attention matmul, dimension K (A.shape[3]) is the kv_seq_len in this case and must match the "
                 "length of the cache we read");  // A.K == B.K
         }
     } else {
         TT_FATAL(
-            ashape[3] == bshape[2] &&
+            ashape[3] == bshape[2],
             "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in attn_matmul op");  // A.K == B.K
     }
 }
 
-std::vector<tt::tt_metal::Shape> GroupAttnMatmulDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> GroupAttnMatmulDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     // input_a: [q_len, q_heads, batch, head_dim]
     // input_b: [batch, kv_heads, head_dim, kv_len]
     // intermediate: [q_heads, batch, batch, kv_len]
@@ -132,7 +132,7 @@ std::vector<tt::tt_metal::Shape> GroupAttnMatmulDeviceOperation::compute_output_
         N = this->num_tokens.value();
     }
 
-    return {tt::tt_metal::Shape{1, ashape[1], ashape[2], N}};
+    return {tt::tt_metal::LegacyShape{1, ashape[1], ashape[2], N}};
 }
 
 std::vector<Tensor> GroupAttnMatmulDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
@@ -143,7 +143,7 @@ std::vector<Tensor> GroupAttnMatmulDeviceOperation::create_output_tensors(const 
         if (this->output_mem_config.shard_spec.has_value()) {
             output_mem_config.shard_spec = this->output_mem_config.shard_spec.value();
         } else {
-            const tt::tt_metal::Shape output_shape = this->compute_output_shapes(input_tensors).at(0);
+            const tt::tt_metal::LegacyShape output_shape = this->compute_output_shapes(input_tensors).at(0);
             const uint32_t num_cores = output_shape[1];
             CoreRangeSet all_cores =
                 num_cores_to_corerange_set(num_cores, this->compute_with_storage_grid_size, this->row_major);
@@ -198,8 +198,8 @@ const operation::Hash GroupAttnMatmulDeviceOperation::compute_program_hash(const
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
 
-    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor_a.storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensor_a.storage()),__FILE__, __LINE__));
-    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor_b.storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensor_b.storage()),__FILE__, __LINE__));
+    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor_a.storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(input_tensor_a.storage()));
+    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor_b.storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(input_tensor_b.storage()));
 
     return operation::hash_operation<GroupAttnMatmulDeviceOperation>(
         this->transpose_hw,

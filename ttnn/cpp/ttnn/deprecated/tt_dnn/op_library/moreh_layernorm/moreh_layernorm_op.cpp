@@ -37,12 +37,12 @@ inline uint32_t find_divisor_with_max_block_size(uint32_t val, uint32_t max_bloc
 }
 
 inline void check_tensor(const Tensor& tensor, const std::string& op_name) {
-    TT_ASSERT(tensor.get_layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
-    TT_ASSERT(tensor.get_dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
+    TT_ASSERT(tensor.get_layout() == Layout::TILE, "{} only supports tiled layout.", op_name);
+    TT_ASSERT(tensor.get_dtype() == DataType::BFLOAT16, "{} only supports bfloat16.", op_name);
     TT_ASSERT(
-        tensor.storage_type() == StorageType::DEVICE, fmt::format("Operands to {} need to be on device!", op_name));
+        tensor.storage_type() == StorageType::DEVICE, "Operands to {} need to be on device!", op_name);
     TT_ASSERT(
-        tensor.buffer() != nullptr, fmt::format("Operands to {} need to be allocated in buffers on device!", op_name));
+        tensor.buffer() != nullptr, "Operands to {} need to be allocated in buffers on device!", op_name);
 }
 }  // namespace
 
@@ -405,11 +405,11 @@ void MorehLayerNorm::validate_with_output_tensors(
     }
 }
 
-std::vector<Shape> MorehLayerNorm::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehLayerNorm::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     auto input = input_tensors.at(0);
 
     // compute mean_rstd_shape
-    Shape input_shape = input.get_legacy_shape();
+    tt::tt_metal::LegacyShape input_shape = input.get_legacy_shape();
     auto input_shape_without_padding = input_shape.without_padding();
     auto input_rank = input_shape.rank();
     auto output_rank = input_rank - normalized_dims;
@@ -437,7 +437,7 @@ std::vector<Shape> MorehLayerNorm::compute_output_shapes(const std::vector<Tenso
     }
 
     const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-    auto mean_rstd_output_shape = Shape(output_size_vec, padding);
+    auto mean_rstd_output_shape = tt::tt_metal::LegacyShape(output_size_vec, padding);
 
     return {input_shape, mean_rstd_output_shape, mean_rstd_output_shape};
 }
@@ -456,7 +456,7 @@ std::vector<Tensor> MorehLayerNorm::create_output_tensors(
     if (output_tensors.at(0).has_value()) {
         result.push_back(output_tensors.at(0).value());
     } else {
-        TT_FATAL(false, "Create output tensor is not supported yet. Fix this after the #9552 issue is addressed.");
+        TT_THROW("Create output tensor is not supported yet. Fix this after the #9552 issue is addressed.");
         result.push_back(create_device_tensor(output_shapes.at(0), dtype, layout, device, this->memory_config));
     }
 

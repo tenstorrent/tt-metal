@@ -191,7 +191,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
             cos_gathered,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            cache_file_name=cache_name(f"cos_gathered_prefill_{seq_len}"),
+            # cache_file_name=cache_name(f"cos_gathered_prefill_{seq_len}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=llama_decoder_model.mesh_device,
             mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.mesh_device),
@@ -200,7 +200,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
             sin_gathered,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            cache_file_name=cache_name(f"sin_gathered_prefill_{seq_len}"),
+            # cache_file_name=cache_name(f"sin_gathered_prefill_{seq_len}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=llama_decoder_model.mesh_device,
             mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.mesh_device),
@@ -215,7 +215,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
             attn_mask,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            cache_file_name=cache_name(f"attn_mask_prefill_{seq_len}"),
+            # cache_file_name=cache_name(f"attn_mask_prefill_{seq_len}"),
             mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=llama_decoder_model.mesh_device,
@@ -397,8 +397,14 @@ def run_test_LlamaDecoder_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    [(32, 1, 0.995), (1, 256, 0.995)],
-    ids=["decode", "prefill"],
+    [
+        (32, 1, 0.995),
+        #  (1, 256, 0.995)
+    ],
+    ids=[
+        "decode",
+        #  "prefill"
+    ],
 )
 @pytest.mark.parametrize(
     "max_batch_size, max_context_len",

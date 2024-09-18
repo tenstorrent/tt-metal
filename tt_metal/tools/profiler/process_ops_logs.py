@@ -231,7 +231,9 @@ def append_device_data(ops, deviceLogFolder):
     return deviceOps
 
 
-def get_device_data_generate_report(deviceLogFolder, outputFolder, date, nameAppend):
+def get_device_data_generate_report(
+    deviceLogFolder, outputFolder, date, nameAppend, export_csv=True, cleanup_device_log=False
+):
     deviceTimesLog = os.path.join(deviceLogFolder, PROFILER_DEVICE_SIDE_LOG)
     devicePreOpTime = {}
     deviceOps = {}
@@ -254,11 +256,12 @@ def get_device_data_generate_report(deviceLogFolder, outputFolder, date, nameApp
         name += f"_{dateStr}"
         outFolder = os.path.join(outFolder, dateStr)
 
-    allOpsCSVPath = os.path.join(outFolder, f"{name}.csv")
-    logger.info(f"Copying runtime artifacts")
-    os.system(f"rm -rf {outFolder}; mkdir -p {outFolder}")
-    if os.path.isfile(f"{PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG}"):
-        os.system(f"cp {PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
+    if export_csv:
+        allOpsCSVPath = os.path.join(outFolder, f"{name}.csv")
+        logger.info(f"Copying runtime artifacts")
+        os.system(f"rm -rf {outFolder}; mkdir -p {outFolder}")
+        if os.path.isfile(f"{PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG}"):
+            os.system(f"cp {PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
 
     if os.path.isfile(deviceTimesLog):
         logger.info(f"Getting device only ops data")
@@ -309,21 +312,25 @@ def get_device_data_generate_report(deviceLogFolder, outputFolder, date, nameApp
                         devicePreOpTime[device] = analysisData[0]["end_cycle"]
                 rowDicts.append(rowDict)
 
-        with open(allOpsCSVPath, "w") as allOpsCSV:
-            allHeaders = []
-            for header in OPS_CSV_HEADER:
-                if header in rowDicts[-1].keys():
-                    allHeaders.append(header)
-            writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders)
-            writer.writeheader()
-            for rowDict in rowDicts:
-                for field, fieldData in rowDict.items():
-                    rowDict[field] = str(fieldData).replace(",", ";")
-                writer.writerow(rowDict)
-        logger.info(f"Device only OPs csv generated at: {allOpsCSVPath}")
+        if export_csv:
+            with open(allOpsCSVPath, "w") as allOpsCSV:
+                allHeaders = []
+                for header in OPS_CSV_HEADER:
+                    if header in rowDicts[-1].keys():
+                        allHeaders.append(header)
+                writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders)
+                writer.writeheader()
+                for rowDict in rowDicts:
+                    for field, fieldData in rowDict.items():
+                        rowDict[field] = str(fieldData).replace(",", ";")
+                    writer.writerow(rowDict)
+            logger.info(f"Device only OPs csv generated at: {allOpsCSVPath}")
+
+        if cleanup_device_log:
+            os.remove(deviceTimesLog)
     else:
         logger.info("No device logs found")
-    return deviceOps
+    return rowDicts
 
 
 def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
