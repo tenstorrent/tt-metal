@@ -5,10 +5,9 @@
 from typing import Optional, Tuple
 
 import torch
-from tests.sweep_framework.permutations import *
 import random
 import ttnn
-from tests.sweep_framework.sweeps.utils import gen_shapes
+from tests.sweep_framework.utils import gen_shapes
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
