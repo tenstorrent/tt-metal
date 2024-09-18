@@ -28,7 +28,7 @@
 
 namespace ttnn::operations::unary_backward {
 
-std::vector<Tensor> _clamp_bw(
+std::vector<Tensor> ExecuteUnaryBackwardClamp::invoke(
     const Tensor& grad, const Tensor& input, std::optional<float> min, std::optional<float> max, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed

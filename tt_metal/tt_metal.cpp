@@ -727,7 +727,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
             // TODO: add support for CB for ethernet cores
             if (core_type == CoreType::WORKER) {
                 // CircularBufferConfigVec -- common across all kernels, so written once to the core
-                std::vector<uint32_t> circular_buffer_config_vec(NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG, 0);
+                std::vector<uint32_t> circular_buffer_config_vec(program.get_program_config(index).cb_size / sizeof(uint32_t));
 
                 auto cbs_on_core = program.circular_buffers_on_core(logical_core);
                 for (auto circular_buffer : cbs_on_core) {

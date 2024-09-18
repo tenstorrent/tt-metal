@@ -37,6 +37,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
     mem_map_bases[hv(HalMemAddrType::PROFILER)] = GET_IERISC_MAILBOX_ADDRESS_HOST(profiler);
     mem_map_bases[hv(HalMemAddrType::KERNEL_CONFIG)] = IDLE_ERISC_L1_KERNEL_CONFIG_BASE;
     mem_map_bases[hv(HalMemAddrType::UNRESERVED)] = ERISC_L1_UNRESERVED_BASE;
+    mem_map_bases[hv(HalMemAddrType::CORE_INFO)] = GET_IERISC_MAILBOX_ADDRESS_HOST(core_info);
 
     std::vector<uint32_t> mem_map_sizes;
     mem_map_sizes.resize(hv(HalMemAddrType::COUNT));
@@ -48,7 +49,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
     mem_map_sizes[hv(HalMemAddrType::KERNEL_CONFIG)] = L1_KERNEL_CONFIG_SIZE; // TODO: this is wrong, need idle eth specific value
     mem_map_sizes[hv(HalMemAddrType::UNRESERVED)] = MEM_ETH_SIZE - ERISC_L1_UNRESERVED_BASE;
 
-    return {HalProgrammableCoreType::IDLE_ETH, CoreType::ETH, num_proc_per_idle_eth_core, mem_map_bases, mem_map_sizes};
+    return {HalProgrammableCoreType::IDLE_ETH, CoreType::ETH, num_proc_per_idle_eth_core, mem_map_bases, mem_map_sizes, false};
 }
 
 }  // namespace tt_metal

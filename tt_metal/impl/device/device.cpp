@@ -398,7 +398,61 @@ void Device::initialize_and_launch_firmware() {
     launch_msg_t launch_msg;
     std::memset(&launch_msg, 0, sizeof(launch_msg_t));
     launch_msg.kernel_config.mode = DISPATCH_MODE_HOST,
-    launch_msg.go.run = RUN_MSG_INIT,
+    launch_msg.go.run = RUN_MSG_INIT;
+
+    // Populate core info, which will be written to device
+    vector<uint32_t> core_info_vec(sizeof(core_info_msg_t) / sizeof(uint32_t));
+    core_info_msg_t *core_info = (core_info_msg_t *) core_info_vec.data();
+
+    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(this->id());
+    uint64_t pcie_chan_base_addr = tt::Cluster::instance().get_pcie_base_addr_from_device(this->id());
+    uint32_t num_host_channels = tt::Cluster::instance().get_num_host_channels(this->id());
+    uint64_t pcie_chan_end_addr = pcie_chan_base_addr;
+    for (int pcie_chan = 0; pcie_chan < num_host_channels; pcie_chan++) {
+        pcie_chan_end_addr += tt::Cluster::instance().get_host_channel_size(this->id(), pcie_chan);
+    }
+    core_info->noc_pcie_addr_base = pcie_chan_base_addr;
+    core_info->noc_pcie_addr_end = pcie_chan_end_addr;
+    core_info->noc_dram_addr_base = 0;
+    core_info->noc_dram_addr_end = soc_d.dram_core_size;
+
+    const std::vector<CoreCoord> &pcie_cores = soc_d.get_pcie_cores();
+    const std::vector<CoreCoord> &dram_cores = soc_d.get_dram_cores();
+    const std::vector<CoreCoord> &eth_cores = soc_d.get_physical_ethernet_cores();
+    TT_ASSERT(
+        pcie_cores.size() + dram_cores.size() + eth_cores.size() <= MAX_NON_WORKER_CORES,
+        "Detected more pcie/dram/eth cores than fit in the device mailbox.");
+    for (int idx = 0; idx < MAX_NON_WORKER_CORES; idx++) {
+        core_info->non_worker_cores[idx] = {CORE_COORD_INVALID, CORE_COORD_INVALID, AddressableCoreType::UNKNOWN};
+    }
+    int non_worker_cores_idx = 0;
+    for (const CoreCoord &core : pcie_cores) {
+        core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::PCIE};
+    }
+    for (const CoreCoord &core : dram_cores) {
+        core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::DRAM};
+    }
+    for (const CoreCoord &core : eth_cores) {
+        core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::ETH};
+    }
+
+    // Determine which noc-coords are harvested
+    // TODO(PGK/Almeet): fix this w/ new UMD
+    vector<uint32_t> harvested_rows;
+    uint32_t harvested_noc_rows = tt::Cluster::instance().get_harvested_rows(this->id());
+    for (uint32_t y = 0; y < soc_d.grid_size.y; y++) {
+        bool row_harvested = (harvested_noc_rows >> y) & 0x1;
+        if (row_harvested) {
+            harvested_rows.push_back(y);
+        }
+    }
+    TT_ASSERT(harvested_rows.size() <= MAX_HARVESTED_ROWS, "Detected more harvested rows than fit in mailbox.");
+    for (int idx = 0; idx < MAX_HARVESTED_ROWS; idx++) {
+        core_info->harvested_y[idx] = (idx < harvested_rows.size()) ? harvested_rows[idx] : CORE_COORD_INVALID;
+    }
+
+    core_info->noc_size_x = soc_d.grid_size.x;
+    core_info->noc_size_y = soc_d.grid_size.y;
 
     // Download to worker cores
     log_debug("Initializing firmware");
@@ -410,6 +464,9 @@ void Device::initialize_and_launch_firmware() {
             CoreCoord logical_core(x, y);
             if (!this->storage_only_cores_.count(logical_core)) {
                 CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
+
+                tt::llrt::write_hex_vec_to_core(
+                    this->id(), worker_core, core_info_vec, this->get_dev_addr(worker_core, HalMemAddrType::CORE_INFO));
                 this->initialize_firmware(worker_core, &launch_msg);
                 not_done_cores.insert(worker_core);
             }
@@ -428,11 +485,15 @@ void Device::initialize_and_launch_firmware() {
     // Load erisc app base FW to eth cores
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
+        tt::llrt::write_hex_vec_to_core(
+            this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalMemAddrType::CORE_INFO));
         this->initialize_firmware(phys_eth_core, &launch_msg);
     }
 
     for (const auto &eth_core : this->get_inactive_ethernet_cores()) {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
+        tt::llrt::write_hex_vec_to_core(
+            this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalMemAddrType::CORE_INFO));
         this->initialize_firmware(phys_eth_core, &launch_msg);
         not_done_cores.insert(phys_eth_core);
     }
@@ -2516,40 +2577,6 @@ void Device::generate_device_headers(const std::string &path) const
         soc_d.profiler_ceiled_core_count_perf_dram_bank,
         soc_d.physical_routing_to_profiler_flat_id
     );
-
-    // Determine which noc-coords are harvested
-    // TODO(PGK/Almeet): fix this w/ new UMD
-    vector<uint32_t> harvested_rows;
-    uint32_t harvested_noc_rows = tt::Cluster::instance().get_harvested_rows(this->id());
-    for (uint32_t y = 0; y < soc_d.grid_size.y; y++) {
-        bool row_harvested = (harvested_noc_rows >> y) & 0x1;
-        if (row_harvested) {
-            harvested_rows.push_back(y);
-        }
-    }
-
-    // Create valid PCIe address ranges
-    // This implementation assumes contiguous ranges and aggregates the ranges into one bounds check
-    // TODO: consider checking multiple ranges to detect straddling transactions
-    uint64_t pcie_chan_base_addr = tt::Cluster::instance().get_pcie_base_addr_from_device(this->id());
-    uint32_t num_host_channels = tt::Cluster::instance().get_num_host_channels(this->id());
-    uint64_t pcie_chan_end_addr = pcie_chan_base_addr;
-    for (int pcie_chan = 0; pcie_chan < num_host_channels; pcie_chan++) {
-        pcie_chan_end_addr += tt::Cluster::instance().get_host_channel_size(this->id(), pcie_chan);
-    }
-
-    jit_build_genfiles_noc_addr_ranges_header(
-        path,
-        pcie_chan_base_addr,
-        pcie_chan_end_addr - pcie_chan_base_addr,
-        0,
-        soc_d.dram_core_size,
-        soc_d.get_pcie_cores(),
-        soc_d.get_dram_cores(),
-        soc_d.get_physical_ethernet_cores(),
-        soc_d.grid_size,
-        harvested_rows,
-        num_host_channels > 0);
 }
 
 }  // namespace tt_metal
