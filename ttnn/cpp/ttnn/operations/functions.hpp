@@ -40,7 +40,7 @@ constexpr static DataType get_data_type() {
         return DataType::UINT32;
     } else if constexpr (std::is_same_v<T, float>) {
         return DataType::FLOAT32;
-    } else if constexpr (std::is_same_v<T, bfloat16>) {
+    } else if constexpr (std::is_same_v<T, ::bfloat16>) {
         return DataType::BFLOAT16;
     } else {
         TT_THROW("Unsupported DataType!");
@@ -129,8 +129,8 @@ static Tensor full_impl(
             return detail::full<float>(queue_id, shape, float(value), layout, device, output_mem_config, optional_output_tensor);
         }
         case DataType::BFLOAT16: {
-            return detail::full<bfloat16>(
-                queue_id, shape, bfloat16(static_cast<float>(value)), layout, device, output_mem_config, optional_output_tensor);
+            return detail::full<::bfloat16>(
+                queue_id, shape, ::bfloat16(static_cast<float>(value)), layout, device, output_mem_config, optional_output_tensor);
         }
         default: TT_THROW("Unsupported DataType!");
     }
@@ -237,7 +237,7 @@ static Tensor arange(
 
     auto index = 0;
     for (auto value = start; value < stop; value += step) {
-        if constexpr (std::is_same_v<T, bfloat16>) {
+        if constexpr (std::is_same_v<T, ::bfloat16>) {
             owned_buffer[index++] = T(static_cast<float>(value));
         } else {
             owned_buffer[index++] = static_cast<T>(value);
@@ -273,7 +273,7 @@ static Tensor index_trilu(
         for (int32_t y = 0; y < shape[penultimate]; y++) {
             for (int32_t x = 0; x < shape[ultimate]; x++) {
                 int32_t value = (IS_UPPER) ? (x >= (y + diag)) : (y >= (x - diag));
-                if constexpr (std::is_same_v<T, bfloat16>) {
+                if constexpr (std::is_same_v<T, ::bfloat16>) {
                     owned_buffer[index + y * shape[ultimate] + x] = T(static_cast<float>(value));
                 } else {
                     owned_buffer[index + y * shape[ultimate] + x] = static_cast<T>(value);
@@ -716,11 +716,11 @@ static Tensor uniform(T low, T high, const tt::tt_metal::LegacyShape& shape, con
         for (auto index = 0; index < owned_buffer.size(); index++) {
             owned_buffer[index] = rand_value();
         }
-    } else if constexpr (std::is_same_v<T, bfloat16>) {
+    } else if constexpr (std::is_same_v<T, ::bfloat16>) {
         auto rand_value =
             std::bind(std::uniform_real_distribution<float>(low.to_float(), high.to_float()), RANDOM_GENERATOR);
         for (auto index = 0; index < owned_buffer.size(); index++) {
-            owned_buffer[index] = bfloat16(rand_value());
+            owned_buffer[index] = ::bfloat16(rand_value());
         }
     }
 
@@ -734,7 +734,7 @@ static Tensor random(
         case DataType::UINT16: return uniform(uint16_t(0), uint16_t(1), shape, layout);
         case DataType::UINT32: return uniform(0u, 1u, shape, layout);
         case DataType::FLOAT32: return uniform(0.0f, 1.0f, shape, layout);
-        case DataType::BFLOAT16: return uniform(bfloat16(0.0f), bfloat16(1.0f), shape, layout);
+        case DataType::BFLOAT16: return uniform(::bfloat16(0.0f), ::bfloat16(1.0f), shape, layout);
         default: TT_THROW("Unsupported DataType!");
     };
 }
@@ -753,7 +753,7 @@ static bool nearly_equal(float a, float b, float epsilon = 1e-5f, float abs_thre
 }
 
 template <typename... Args>
-static bool nearly_equal(bfloat16 a, bfloat16 b, Args... args) {
+static bool nearly_equal(::bfloat16 a, ::bfloat16 b, Args... args) {
     return nearly_equal(a.to_float(), b.to_float(), args...);
 }
 }  // namespace detail
