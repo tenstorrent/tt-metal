@@ -296,9 +296,18 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
     uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
     uint32_t max_tiles = (max_l1_size / (input_single_tile_size + output_single_tile_size));  // 2 CBs, double buffering each
+
+    // TODO : currently multi_core parallelization on column only works for single tile height tensors.
+    // Need to debug this to work on wide tensors that are higher than a single tile
     if (ntiles_per_block > max_tiles) {
         if(!src_sharded and !out_sharded) {
-            return untilize_multi_core_parallelize_column(a, output, use_pack_untilize, fp32_dest_acc_en);
+            uint32_t ntiles_height = ntiles / ntiles_per_block;
+            if(ntiles_height == 1) {
+                return untilize_multi_core_parallelize_column(a, output, use_pack_untilize, fp32_dest_acc_en);
+            }
+            else {
+                return untilize_single_core(a, output, use_pack_untilize, fp32_dest_acc_en);
+            }
         }
     }
     auto grid_size = device->compute_with_storage_grid_size();
