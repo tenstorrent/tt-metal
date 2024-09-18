@@ -115,8 +115,9 @@ namespace detail {
     }
 
 
-std::vector<Tensor> split_dim_two_chunks_tiled(
-    const Tensor &input_tensor, int dim /* = 3 */, const MemoryConfig &mem_config /* = default */) {
+std::vector<Tensor> split_dim_n_chunks_tiled(
+    const Tensor &input_tensor, int dim /* = 3 */, int num_splits, const MemoryConfig &mem_config /* = default */) {
+    TT_FATAL(num_splits == 2, "ttnn.split currently only supports split in 2 in tiled layout, but {} is passed", num_splits);
     if (dim == 3) {
         return split_last_dim_two_chunks_tiled(input_tensor, mem_config);
     }
@@ -145,8 +146,7 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
     if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
         return detail::split_dim_n_chunks_rm(input_tensor, dim, num_splits,  memory_config);
     } else {
-        TT_FATAL(num_splits == 2, "Currently only supporting split in 2");
-        return detail::split_dim_two_chunks_tiled(input_tensor, dim, memory_config);
+        return detail::split_dim_n_chunks_tiled(input_tensor, dim, num_splits, memory_config);
     }
 }
 
