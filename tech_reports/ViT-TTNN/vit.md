@@ -375,8 +375,8 @@ query_key_value = ttnn.linear(
 - Worth to mention that the implemented sharded blocks are arranged in `ROW_MAJOR` and `transpose_mcast=False`.
 - Based on the available core grid (in other devices), it may be optimum to transpose the block placement (i.e. Y|X vs X|Y) and the settings will be `COLUMN_MAJOR` and `transpose_mcast=True`
   
-![input](images/SH_RM_CM.png)
-![input](images/qkvlinear_CM.png)
+![input1](images/SH_RM_CM.png)
+![input2](images/qkvlinear_CM.png)
 
 #### 4.4.2 Splitting into Q-K-V
 The input embeddings are then split into **Query** (Q), **Key** (K), and **Value** (V) matrices. This is done by projecting the input embeddings into three separate matrices. Each matrix has a size of:
