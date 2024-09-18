@@ -33,7 +33,6 @@ class TtLlamaModelForGeneration:
             llama_version=self.llama_version,
             max_batch_size=self.max_batch_size,
             max_context_len=self.max_kv_context_len,
-            seq_len=1,
         )
 
         # TT model -------------------------------------------------------------

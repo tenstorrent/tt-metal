@@ -473,7 +473,6 @@ def test_LlamaAttention_inference(
 
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,
-        seq_len=seq_len,
         max_batch_size=max_batch_size,
         max_context_len=max_context_len,
     )

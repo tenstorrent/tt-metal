@@ -42,20 +42,17 @@ def pretty_print_model_config(model_config):
     return "\n".join(print_str)
 
 
-def get_model_config(llama_version="llama3", seq_len=1, num_devices=8, max_batch_size=32, max_context_len=4096):
-    assert num_devices == 8
+def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=4096, vllm=False):
     assert max_batch_size in (1, 16, 32)
-    assert seq_len % 32 == 0 or seq_len == 1, f"seq_len must be multiple of 32 or equal to 1, got {seq_len}"
-    assert seq_len <= max_context_len
 
-    # Supported values, TODO update for larger TT chips
-    if max_context_len == 8192:
-        assert max_batch_size == 16
-    elif max_context_len == 128 * 1024:
-        assert max_batch_size == 1
-    else:
-        assert max_batch_size == 32
-    assert seq_len <= max_context_len
+    # vLLM uses paged attention, so max_batch and max_context_len may go beyond the non-paged limits
+    if not vllm:
+        if max_context_len == 8192:
+            assert max_batch_size == 16
+        elif max_context_len == 128 * 1024:
+            assert max_batch_size == 1
+        else:
+            assert max_batch_size == 32
 
     L1_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
     WIDTH_SHARDED_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
@@ -66,7 +63,6 @@ def get_model_config(llama_version="llama3", seq_len=1, num_devices=8, max_batch
 
     # Set defaults for dtype and mem_config for all ops
     model_config = {
-        "NUM_DEVICES": num_devices,
         "MAX_GRID_SIZE": (8, 8),
         "ALL_GATHER_NUM_LINKS": 1,
         "MAX_BATCH_SIZE": max_batch_size,
