@@ -7,11 +7,9 @@ from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_test import (
     run_sweep_tests,
 )
 from tests.ttnn.python_api_testing.sweep_tests.op_map import op_map
-import pytest
 from loguru import logger
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_run_sweep(device, input_path, user_input):
     """
     Example for running sweep test:

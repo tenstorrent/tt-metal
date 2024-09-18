@@ -589,21 +589,6 @@ def shapes_and_datagen(
             ):
                 yield shapes, datagen_funcs, test_args
 
-        elif method == "ttnn-conv2d":
-            # TODO: fill this function for start-end type of args
-            assert len(shape) == 7
-
-            def _gen_tt_nn_conv2d_shapes(shape):
-                batch_size, input_channels, input_h, input_w, output_channels, kernel_h, kernel_w = shape
-                input_shape = [batch_size, input_channels, input_h, input_w]
-                weights_shape = [output_channels, input_channels, kernel_h, kernel_w]
-                return [input_shape, weights_shape]
-
-            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
-                start_shape, end_shape, interval, _gen_tt_nn_conv2d_shapes
-            ):
-                yield shapes, datagen_funcs, test_args
-
         elif method == "ttnn-layernorm":
             assert len(start_shape) == 2
             assert len(end_shape) == 2

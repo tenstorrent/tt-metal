@@ -13,10 +13,6 @@ op_map = {
         "tt_op": ttnn_ops.concat,
         "pytorch_op": pytorch_ops.concat,
     },
-    "ttnn-conv2d": {
-        "tt_op": ttnn_ops.conv2d,
-        "pytorch_op": ttnn_pytorch_ops.conv2d,
-    },
     "ttnn-stats-var_global": {
         "tt_op": ttnn_ops.var,
         "pytorch_op": ttnn_pytorch_ops.var_global,

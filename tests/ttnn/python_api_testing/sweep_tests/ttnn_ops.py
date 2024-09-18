@@ -1089,7 +1089,6 @@ def matmul(
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    print("executing matmul for ttnn")
 
     if xcoregrid != -1 and ycoregrid != -1:
         t2 = ttnn.matmul(
@@ -2942,99 +2941,6 @@ def preprocessing_model_conv_conv(
     output_tensor = run_conv_conv(ttnn_model, torch_input_tensor)
 
     return output_tensor
-
-
-def conv2d(
-    x,
-    y,
-    bias,
-    params_tensor,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    dtype = ttnn.float32
-    dilation = 1
-    debug = False
-    [output_channels, input_channels_, filter_height, filter_width] = y.shape
-    [batch_size, input_channels, input_height, input_width] = x.shape
-
-    # HACK: pass stride, padding and groups as shape of last tensor
-    params = params_tensor.shape
-    [stride_h, stride_w, pad_h, pad_w, groups] = [params[0], params[1], params[2], params[3], params[4]]
-
-    tt_weight_tensor = ttnn.from_torch(y, ttnn.float32 if dtype != ttnn.bfloat8_b else ttnn.float32)
-    tt_bias_tensor = None
-    if bias.shape[3] != 0:
-        tt_bias_tensor = ttnn.from_torch(bias, dtype if dtype != ttnn.bfloat8_b else ttnn.float32)
-
-    z = x
-    z = torch.permute(z, (0, 2, 3, 1))
-    tt_input_tensor = ttnn.from_torch(z, ttnn.bfloat16)
-
-    math_fidelity = ttnn.MathFidelity.HiFi4
-    use_1d_systolic_array = True
-    use_shallow_conv_variant = False
-    deallocate_activation = False
-    fp32_accum = False
-    packer_l1_acc = False
-
-    reader_patterns_cache = {}
-
-    conv_config = ttnn.Conv2dConfig(
-        dtype=dtype,
-        weights_dtype=dtype,
-        math_fidelity=math_fidelity,
-        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        if use_1d_systolic_array
-        else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        input_channels_alignment=(
-            16 if use_shallow_conv_variant or (input_channels == 16 and input_height == 115) else 32
-        ),
-        deallocate_activation=deallocate_activation,
-        fp32_dest_acc_enabled=fp32_accum,
-        packer_l1_accum_enabled=packer_l1_acc,
-        enable_act_double_buffer=False,
-        enable_split_reader=False,
-        enable_subblock_padding=False,
-    )
-
-    [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
-        input_tensor=tt_input_tensor,
-        weight_tensor=tt_weight_tensor,
-        in_channels=input_channels,
-        out_channels=output_channels,
-        device=device,
-        bias_tensor=tt_bias_tensor,
-        kernel_size=(filter_height, filter_width),
-        stride=(stride_h, stride_w),
-        padding=(pad_h, pad_w),
-        dilation=(dilation, dilation),
-        batch_size=batch_size,
-        input_height=input_height,
-        input_width=input_width,
-        conv_config=conv_config,
-        conv_op_cache=reader_patterns_cache,
-        debug=debug,
-        groups=groups,
-    )
-
-    tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
-    torch_output_tensor = ttnn.to_torch(tt_output_tensor)
-
-    # torch_output_tensor is in row major layout and NHWC shape
-    # NHWC to NCHW
-    torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, torch_output_tensor.shape[-1])
-    torch_output_tensor = torch_output_tensor[:, :, :, :output_channels]
-
-    torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
-    reader_patterns_cache.clear()
-
-    return torch_output_tensor
 
 
 def preprocessing_model_conv_relu_conv(
