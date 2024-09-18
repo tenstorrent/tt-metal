@@ -33,19 +33,14 @@ TIMEOUT = 60
 TILE_HEIGHT = 32
 TILE_WIDTH = 32
 
-height_shard_shapes = []
-width_shard_shapes = []
 block_shard_shapes = []
 
 tile_batch_size = [1, 2, 3, 7, 8, 57, 127, 128]
 row_batch_size = [1, 3, 96]
 
-width_shard_Y = [1, 2, 3, 8, 7, 40, 128, 512]
 height_shard_Y = [1, 2, 3, 4, 6, 7, 8, 16, 40, 31, 32, 33, 67]
 block_shard_Y = height_shard_Y
 
-width_shard_X = height_shard_Y
-height_shard_X = width_shard_Y
 block_shard_X = block_shard_Y
 
 
@@ -59,25 +54,11 @@ def generate_shard_input_shapes(batch_sizes, shard_Y, shard_X, x=1, y=1):
     return input_shapes
 
 
-tile_width_shard_input_shapes = generate_shard_input_shapes(
-    tile_batch_size, width_shard_Y, width_shard_X, x=TILE_HEIGHT, y=TILE_WIDTH
-)
-row_width_shard_input_shapes = generate_shard_input_shapes(row_batch_size, width_shard_Y, width_shard_X)
-tile_height_shard_input_shapes = generate_shard_input_shapes(
-    tile_batch_size, height_shard_Y, height_shard_X, x=TILE_HEIGHT, y=TILE_WIDTH
-)
-row_height_shard_input_shapes = generate_shard_input_shapes(row_batch_size, height_shard_Y, height_shard_X)
 tile_block_shard_input_shapes = generate_shard_input_shapes(
     tile_batch_size, block_shard_Y, block_shard_X, x=TILE_HEIGHT, y=TILE_WIDTH
 )
 row_block_shard_input_shapes = generate_shard_input_shapes(row_batch_size, block_shard_Y, block_shard_X)
 
-
-for height in range(32, 1024, 32):  # Increment by 32
-    height_shard_shapes.append([height, 32])
-
-for width in range(32, 1024, 32):  # Increment by 32
-    width_shard_shapes.append([32, width])
 
 for height in range(32, 128, 32):  # Increment by 32
     for width in range(32, 1024, 32):  # Increment by 32
@@ -107,23 +88,15 @@ gather_op_map = {"line": "line_all_gather", "ring": "all_gather"}
 tensor_layouts = {"row": ttnn.ROW_MAJOR_LAYOUT, "tile": ttnn.TILE_LAYOUT}
 
 tensor_mem_layouts = {
-    "width_sharded": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-    "height_sharded": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     "block_sharded": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
 }
 
 input_shape_map = {
-    (ttnn.TILE_LAYOUT, ttnn.TensorMemoryLayout.WIDTH_SHARDED): tile_width_shard_input_shapes,
-    (ttnn.ROW_MAJOR_LAYOUT, ttnn.TensorMemoryLayout.WIDTH_SHARDED): row_width_shard_input_shapes,
-    (ttnn.TILE_LAYOUT, ttnn.TensorMemoryLayout.HEIGHT_SHARDED): tile_height_shard_input_shapes,
-    (ttnn.ROW_MAJOR_LAYOUT, ttnn.TensorMemoryLayout.HEIGHT_SHARDED): row_height_shard_input_shapes,
     (ttnn.TILE_LAYOUT, ttnn.TensorMemoryLayout.BLOCK_SHARDED): tile_block_shard_input_shapes,
     (ttnn.ROW_MAJOR_LAYOUT, ttnn.TensorMemoryLayout.BLOCK_SHARDED): row_block_shard_input_shapes,
 }
 
 input_shard_shape_map = {
-    ttnn.TensorMemoryLayout.WIDTH_SHARDED: width_shard_shapes,
-    ttnn.TensorMemoryLayout.HEIGHT_SHARDED: height_shard_shapes,
     ttnn.TensorMemoryLayout.BLOCK_SHARDED: block_shard_shapes,
 }
 
@@ -142,8 +115,8 @@ def generate_params(
     tensor_mem_layout_value = tensor_mem_layouts[tensor_mem_layout_key]
 
     # Retrieve the appropriate input shape based on tensor layout and tensor memory layout
-    input_shape = input_shape_map.get((tensor_layout_value, tensor_mem_layout_value), tile_width_shard_input_shapes)
-    input_shard_shape = input_shard_shape_map.get(tensor_mem_layout_value, width_shard_shapes)
+    input_shape = input_shape_map.get((tensor_layout_value, tensor_mem_layout_value), tile_block_shard_input_shapes)
+    input_shard_shape = input_shard_shape_map.get(tensor_mem_layout_value, block_shard_shapes)
 
     param_name = f"all_gather_{tensor_layout_key}_{tensor_mem_layout_key}_{gather_op_str}_{dtype_str}_{orientation_str}_dim{dim}_{num_device}devices_{num_link}links"
     return {
@@ -173,17 +146,18 @@ for dtype_str in dtype_map.keys():
                     for dim in dims:
                         for num_device in num_devices:
                             for num_link in num_links:
-                                param = generate_params(
-                                    dtype_str,
-                                    orientation_str,
-                                    gather_op_str,
-                                    tensor_layout_key,
-                                    tensor_mem_layout_key,
-                                    dim,
-                                    num_device,
-                                    num_link,
-                                )
-                                parameters[param["name"]] = param["config"]
+                                if num_link != 2 and num_device != 8:  # Not for T3K devices
+                                    param = generate_params(
+                                        dtype_str,
+                                        orientation_str,
+                                        gather_op_str,
+                                        tensor_layout_key,
+                                        tensor_mem_layout_key,
+                                        dim,
+                                        num_device,
+                                        num_link,
+                                    )
+                                    parameters[param["name"]] = param["config"]
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
