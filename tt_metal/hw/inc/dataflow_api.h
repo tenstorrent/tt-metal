@@ -1311,9 +1311,10 @@ void noc_semaphore_set_multicast(
  * way of a synchronization mechanism. The same as *noc_async_write_multicast*
  * with preset size of 4 Bytes.
  *
- * With this API, you cannot send data only to the source node. That is, if
- * num_dests is 1 and the encoded destination nodes consist of the node
- * sending the data, then no data will be sent. The method call will be a no-op.
+ * Note: With this API, sending data only to the source node (when num_dests
+ * is 1) may result in unexpected behaviour. For some parameters, hangs have
+ * been observed. For other parameters, nothing happens. Consider using
+ * regular non multicast operations such as *noc_async_write* in this case.
  *
  * Return value: None
  *
