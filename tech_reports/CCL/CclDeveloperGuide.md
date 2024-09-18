@@ -80,13 +80,16 @@ The current stacks look like the following:
 
 The Ethernet subsystem, including the link and phy are at the lowest level.
 
-Above thise are APIs to direct write to Ethernet command queue registers, which can be used to initiate ethernet transactions and change message modes (raw vs packet for example).
+Above this are APIs to direct write to Ethernet command queue registers, which can be used to initiate ethernet transactions and change message modes (raw vs packet for example).
 
 The third level is the ethernet dataflow API which lets the user initiate writes over the ethernet link. These APIs are similar to the noc async APIs in that commands are issued to command buffers and dispatched at some later, unknown time.
 
 The fourth level is the Erisc datamover which encapsulates many common pieces of functionality that are required by multichip operations: startup/teardown synchronization, flow constrol, virtual channels, and multi-buffering.
 
 Finally, higher level operations are implemented.
+
+## CCL Orchestration
+At the TT-NN layer, orchestration APIs exist to perform higher level collective and multichip operations. For example, a user can specify that they wish to run independent all-gather operations along all the rows or columns of a mesh that their multichip tensor is distributed across. 
 
 # Multichip Topologies and Connectivity {#multichip-topologies-and-connectivity}
 
@@ -102,7 +105,7 @@ Currently, device chips are connected directly to each other via a number of Eth
 
 # Ethernet core and ERISCs {#ethernet-core-and-eriscs}
 
-To achieve Ethernet scale-out capabilities, the Wormhole architecture adds a new core type. Like worker cores, DRAM, PCIe, ARC, and routing cores that are present in Grayskull, the new core type (called an Ethernet core), is also accessed as a NoC endpoint. Every Wormhole part contains 16 total Ethernet cores on the NoC. Depending on the particular part, all 16 Ethernet cores may be connected to active links. This provides a large space for cluster topology design.
+To achieve Ethernet scale-out capabilities, the Wormhole architecture adds a new core type. Like worker cores, DRAM, PCIe, ARC, and routing cores that are present in Grayskull, the new core type (called an Ethernet core), is also accessed as a NoC endpoint. Every Wormhole part contains 16 total Ethernet cores on the NoC. Depending on the particular part, all 16 Ethernet cores may be connected to active links. This provides a large space for cluster topology design. The ["Programming Mesh of Devices with TT-NN"](../Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md) provides further details.
 
 ## Ethernet Core Type: Ethernet
 
