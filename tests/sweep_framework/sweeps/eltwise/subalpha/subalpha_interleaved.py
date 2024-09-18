@@ -30,8 +30,8 @@ parameters = {
         "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_b_layout": [ttnn.TILE_LAYOUT],
-        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
@@ -47,20 +47,12 @@ def run(
     input_b_dtype,
     input_a_layout,
     input_b_layout,
-    input_b_memory_config,
     input_a_memory_config,
+    input_b_memory_config,
     output_memory_config,
     *,
     device,
 ) -> list:
-    if (
-        input_a_dtype == ttnn.bfloat16
-        and input_b_dtype == ttnn.bfloat16
-        and input_a_memory_config == ttnn.DRAM_MEMORY_CONFIG
-        and input_b_memory_config == ttnn.DRAM_MEMORY_CONFIG
-        and output_memory_config == ttnn.DRAM_MEMORY_CONFIG
-    ):
-        print(input_shape)
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
@@ -96,7 +88,7 @@ def run(
         dtype=input_a_dtype,
         layout=input_a_layout,
         device=device,
-        memory_config=input_b_memory_config,
+        memory_config=input_a_memory_config,
     )
 
     input_tensor_b = ttnn.from_torch(
@@ -104,7 +96,7 @@ def run(
         dtype=input_b_dtype,
         layout=input_b_layout,
         device=device,
-        memory_config=input_a_memory_config,
+        memory_config=input_b_memory_config,
     )
 
     start_time = start_measuring_time()
