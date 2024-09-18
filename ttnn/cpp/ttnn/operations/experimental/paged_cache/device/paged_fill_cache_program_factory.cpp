@@ -47,8 +47,6 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(const Tensor& cache_
     uint32_t log2_page_table_stick_size_B = std::log2(page_table_stick_size_B);
     tt::DataFormat page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.get_dtype());
 
-    // TT_FATAL(1 << log2_page_table_stick_size_B == page_table_stick_size_B, "page_table_stick_size_B must be a power of 2");
-
     tt_metal::Device *device = input_tensor.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
