@@ -19,41 +19,142 @@ class Down4:
         self.conv3 = Conv(torch_model, "down4.conv3", [1, 20, 20, 512], (1, 1, 0, 0))
 
         self.res1_conv1 = Conv(
-            torch_model, "down4.resblock.module_list.0.0", [1, 20, 20, 256], (1, 1, 0, 0), deallocate=False
+            torch_model,
+            "down4.resblock.module_list.0.0",
+            [1, 20, 20, 256],
+            (1, 1, 0, 0),
+            height_sharding=False,
+            deallocate=False,
         )
-        self.res1_conv2 = Conv(torch_model, "down4.resblock.module_list.0.1", [1, 20, 20, 256], (1, 1, 1, 1))
+        self.res1_conv2 = Conv(
+            torch_model,
+            "down4.resblock.module_list.0.1",
+            [1, 20, 20, 256],
+            (1, 1, 1, 1),
+            height_sharding=False,
+        )
         self.res2_conv1 = Conv(
-            torch_model, "down4.resblock.module_list.1.0", [1, 20, 20, 256], (1, 1, 0, 0), deallocate=False
+            torch_model,
+            "down4.resblock.module_list.1.0",
+            [1, 20, 20, 256],
+            (1, 1, 0, 0),
+            deallocate=False,
+            height_sharding=False,
         )
-        self.res2_conv2 = Conv(torch_model, "down4.resblock.module_list.1.1", [1, 20, 20, 256], (1, 1, 1, 1))
+        self.res2_conv2 = Conv(
+            torch_model,
+            "down4.resblock.module_list.1.1",
+            [1, 20, 20, 256],
+            (1, 1, 1, 1),
+            height_sharding=False,
+        )
         self.res3_conv1 = Conv(
-            torch_model, "down4.resblock.module_list.2.0", [1, 20, 20, 256], (1, 1, 0, 0), deallocate=False
+            torch_model,
+            "down4.resblock.module_list.2.0",
+            [1, 20, 20, 256],
+            (1, 1, 0, 0),
+            deallocate=False,
+            height_sharding=False,
         )
-        self.res3_conv2 = Conv(torch_model, "down4.resblock.module_list.2.1", [1, 20, 20, 256], (1, 1, 1, 1))
+        self.res3_conv2 = Conv(
+            torch_model,
+            "down4.resblock.module_list.2.1",
+            [1, 20, 20, 256],
+            (1, 1, 1, 1),
+            height_sharding=False,
+        )
         self.res4_conv1 = Conv(
-            torch_model, "down4.resblock.module_list.3.0", [1, 20, 20, 256], (1, 1, 0, 0), deallocate=False
+            torch_model,
+            "down4.resblock.module_list.3.0",
+            [1, 20, 20, 256],
+            (1, 1, 0, 0),
+            deallocate=False,
+            height_sharding=False,
         )
-        self.res4_conv2 = Conv(torch_model, "down4.resblock.module_list.3.1", [1, 20, 20, 256], (1, 1, 1, 1))
+        self.res4_conv2 = Conv(
+            torch_model,
+            "down4.resblock.module_list.3.1",
+            [1, 20, 20, 256],
+            (1, 1, 1, 1),
+            height_sharding=False,
+        )
         self.res5_conv1 = Conv(
-            torch_model, "down4.resblock.module_list.4.0", [1, 20, 20, 256], (1, 1, 0, 0), deallocate=False
+            torch_model,
+            "down4.resblock.module_list.4.0",
+            [1, 20, 20, 256],
+            (1, 1, 0, 0),
+            deallocate=False,
+            height_sharding=False,
         )
-        self.res5_conv2 = Conv(torch_model, "down4.resblock.module_list.4.1", [1, 20, 20, 256], (1, 1, 1, 1))
+        self.res5_conv2 = Conv(
+            torch_model,
+            "down4.resblock.module_list.4.1",
+            [1, 20, 20, 256],
+            (1, 1, 1, 1),
+            height_sharding=False,
+        )
         self.res6_conv1 = Conv(
-            torch_model, "down4.resblock.module_list.5.0", [1, 20, 20, 256], (1, 1, 0, 0), deallocate=False
+            torch_model,
+            "down4.resblock.module_list.5.0",
+            [1, 20, 20, 256],
+            (1, 1, 0, 0),
+            deallocate=False,
+            height_sharding=False,
         )
-        self.res6_conv2 = Conv(torch_model, "down4.resblock.module_list.5.1", [1, 20, 20, 256], (1, 1, 1, 1))
+        self.res6_conv2 = Conv(
+            torch_model,
+            "down4.resblock.module_list.5.1",
+            [1, 20, 20, 256],
+            (1, 1, 1, 1),
+            height_sharding=False,
+        )
         self.res7_conv1 = Conv(
-            torch_model, "down4.resblock.module_list.6.0", [1, 20, 20, 256], (1, 1, 0, 0), deallocate=False
+            torch_model,
+            "down4.resblock.module_list.6.0",
+            [1, 20, 20, 256],
+            (1, 1, 0, 0),
+            deallocate=False,
+            height_sharding=False,
         )
-        self.res7_conv2 = Conv(torch_model, "down4.resblock.module_list.6.1", [1, 20, 20, 256], (1, 1, 1, 1))
+        self.res7_conv2 = Conv(
+            torch_model,
+            "down4.resblock.module_list.6.1",
+            [1, 20, 20, 256],
+            (1, 1, 1, 1),
+            height_sharding=False,
+        )
         self.res8_conv1 = Conv(
-            torch_model, "down4.resblock.module_list.7.0", [1, 20, 20, 256], (1, 1, 0, 0), deallocate=False
+            torch_model,
+            "down4.resblock.module_list.7.0",
+            [1, 20, 20, 256],
+            (1, 1, 0, 0),
+            deallocate=False,
+            height_sharding=False,
         )
-        self.res8_conv2 = Conv(torch_model, "down4.resblock.module_list.7.1", [1, 20, 20, 256], (1, 1, 1, 1))
+        self.res8_conv2 = Conv(
+            torch_model,
+            "down4.resblock.module_list.7.1",
+            [1, 20, 20, 256],
+            (1, 1, 1, 1),
+            height_sharding=False,
+        )
 
-        self.conv4 = Conv(torch_model, "down4.conv4", [1, 20, 20, 256], (1, 1, 0, 0), deallocate=False)
+        self.conv4 = Conv(
+            torch_model,
+            "down4.conv4",
+            [1, 20, 20, 256],
+            (1, 1, 0, 0),
+            deallocate=False,
+            height_sharding=False,
+        )
 
-        self.conv5 = Conv(torch_model, "down4.conv5", [1, 20, 20, 512], (1, 1, 0, 0))
+        self.conv5 = Conv(
+            torch_model,
+            "down4.conv5",
+            [1, 20, 20, 512],
+            (1, 1, 0, 0),
+            height_sharding=False,
+        )
 
     def __call__(self, device, input_tensor):
         output_tensor_split = self.conv1(device, input_tensor)

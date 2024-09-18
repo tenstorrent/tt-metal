@@ -41,6 +41,7 @@ class Conv:
         height_sharding=True,
         activation="",
         fused_op=True,
+        width_sharding=False,
     ) -> None:
         if fused_op:
             self.weights, self.bias = fold_bn_to_conv_weights_bias(model, path)
@@ -56,9 +57,13 @@ class Conv:
         self.out_channels = self.weights.shape[0]
         self.act_block_h = act_block_h
         self.reshard = reshard
-        self.shard_layout = (
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
-        )
+
+        if width_sharding:
+            self.shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+        else:
+            self.shard_layout = (
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            )
         self.deallocate = deallocate
         self.activation = activation
 
@@ -74,6 +79,7 @@ class Conv:
             shard_layout=self.shard_layout,
             math_approx_mode_enabled=True,
             fp32_dest_acc_enabled=False,
+            act_block_w_div=1,
             packer_l1_accum_enabled=False,
             input_channels_alignment=16 if self.input_params[3] < 16 else 32,
             transpose_shards=False,
