@@ -126,8 +126,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto core_grid = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
-    uint32_t num_units = num_cores_x*num_cores_y*2;
-    //uint32_t num_cores = num_cores_x*num_cores_y;
+    uint32_t num_units = num_cores_x*num_cores_y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_units);
 
@@ -138,7 +137,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
     const uint32_t W = input_shape[3];
 
     uint32_t src0_cb_index = tt::CB::c_in0;
-    uint32_t num_input_units = W/num_units;
+    uint32_t num_input_units = W;
     uint32_t aligned_input_unit_size = round_up_to_mul32(num_input_units * input_unit_size);
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(aligned_input_unit_size, {{src0_cb_index, input_cb_data_format}})
@@ -153,6 +152,15 @@ operation::ProgramWithCallbacks argmax_multi_core(
             aligned_intermed0_unit_size, {{intermed0_cb_index, output_cb_data_format}})
             .set_page_size(intermed0_cb_index, aligned_intermed0_unit_size);  /// page size shouldn't matter here
     auto cb_intermed0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, intermed0_cb_config);
+
+    uint32_t intermed1_cb_index = tt::CB::dataflow0;
+    uint32_t num_intermed1_units = B*C*H;
+    uint32_t aligned_intermed1_unit_size = round_up_to_mul32(num_intermed1_units * input_unit_size);
+    tt::tt_metal::CircularBufferConfig intermed1_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            aligned_intermed1_unit_size, {{intermed1_cb_index, input_cb_data_format}})
+            .set_page_size(intermed1_cb_index, aligned_intermed1_unit_size);  /// page size shouldn't matter here
+    auto cb_intermed1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, intermed1_cb_config);
 
     uint32_t out0_cb_index = tt::CB::c_out0;
     uint32_t num_out0_units = B*C*H;
@@ -176,6 +184,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
     std::vector<uint32_t> reader_compile_time_args = {
         src0_cb_index,
         intermed0_cb_index,
+        intermed1_cb_index,
         out0_cb_index,
         src_is_dram,
         dst_is_dram,
@@ -186,7 +195,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
         C,
         H,
         W/num_units,
-        num_cores*2,
+        num_cores,
         semaphore_addr,
         final_cores_physical_x,
         final_cores_physical_y
@@ -197,12 +206,13 @@ operation::ProgramWithCallbacks argmax_multi_core(
         program,
         "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
-    tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(reader_compile_time_args, kernel_defines));
+        tt::tt_metal::DataMovementConfig{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::RISCV_1_default, .compile_args =reader_compile_time_args});
+
+        // tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
+        //     program,
+        //     "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
+        //     all_cores,
+        //     tt::tt_metal::DataMovementConfig{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
 
 
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
@@ -210,11 +220,13 @@ operation::ProgramWithCallbacks argmax_multi_core(
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord &core = cores.at(i);
 
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {src_buffer->address(), dst_buffer->address(), 2*i});
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, {src_buffer->address(), dst_buffer->address(), 2*i+1});
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {src_buffer->address(), dst_buffer->address(), i});
+
+        //tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {src_buffer->address(), dst_buffer->address(), 2*i+1});
+
     }
 
-    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, cores](
+    auto override_runtime_args_callback = [reader_kernel_id, cores](
                                               const Program &program,
                                               const std::vector<Buffer *> &input_buffers,
                                               const std::vector<Buffer *> &output_buffers) {
@@ -230,11 +242,11 @@ operation::ProgramWithCallbacks argmax_multi_core(
                 reader_runtime_args[2] = core_id;
                 core_id++;
 
-                auto &writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                writer_runtime_args[0] = src_buffer->address();
-                writer_runtime_args[1] = dst_buffer->address();
-                writer_runtime_args[2] = core_id;
-                core_id++;
+                // auto &writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                // writer_runtime_args[0] = src_buffer->address();
+                // writer_runtime_args[1] = dst_buffer->address();
+                // writer_runtime_args[2] = core_id;
+                // core_id++;
             }
         }
     };

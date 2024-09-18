@@ -76,7 +76,7 @@ operation::ProgramWithCallbacks ArgMax::create_program(
     const auto normalized_dim = dim.has_value()
     ? *dim + input_tensor.get_legacy_shape().rank() * (*dim < 0)
     : dim;
-    if (normalized_dim==3 && input_tensor.get_legacy_shape()[3]%128==0) {
+    if (use_multicore) {
         return detail::argmax_multi_core(input_tensor, output_tensor, normalized_dim);
     }
     return detail::argmax_single_core(input_tensor, output_tensor, normalized_dim);
