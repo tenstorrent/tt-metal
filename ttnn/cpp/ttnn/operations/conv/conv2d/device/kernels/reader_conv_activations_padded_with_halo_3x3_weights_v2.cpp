@@ -8,9 +8,6 @@
 
 #define DILATION_W get_compile_time_arg_val(4)
 void kernel_main() {
-    constexpr uint32_t LOCAL_PACKED_READER_INDICES_MAX_SIZE = 128;
-    uint32_t local_packed_reader_indices[LOCAL_PACKED_READER_INDICES_MAX_SIZE];
-
     constexpr bool act_in_dram                        = get_compile_time_arg_val(0)== 1;
     constexpr uint32_t stride_h                       = get_compile_time_arg_val(1);
     constexpr uint32_t stride_w                       = get_compile_time_arg_val(2);
@@ -31,12 +28,8 @@ void kernel_main() {
     constexpr uint32_t act_num_blocks_h               = get_compile_time_arg_val(16);
     constexpr uint32_t act_block_h_datums_last_block  = get_compile_time_arg_val(25);
 
-    uint32_t act_block_h_datums_read_last_block;
-    if (act_block_h_datums_last_block > act_block_h_datums) {
-        act_block_h_datums_read_last_block = act_block_h_datums / 2;
-    } else {
-        act_block_h_datums_read_last_block = act_block_h_datums_last_block / 2;
-    }
+    constexpr uint32_t act_block_h_datums_read_last_block =
+        act_block_h_datums_last_block > act_block_h_datums ? act_block_h_datums / 2 : act_block_h_datums_last_block / 2;
 
     uint32_t i = 0;
     uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
@@ -68,23 +61,14 @@ void kernel_main() {
         reader_offset += (dilation_h * conv_act_size_w_padded);
     }
 
-    #ifdef SPLIT_READER
     constexpr uint32_t act_block_h_datums_read = act_block_h_datums / 2; // Extra /2 because of packed uint16 reads
     constexpr uint32_t act_block_num_tiles_read = act_block_num_tiles;
-    #else
-    constexpr uint32_t act_block_h_datums_read = act_block_h_datums / 2; // packed uint16 reads
-    constexpr uint32_t act_block_num_tiles_read = act_block_num_tiles;
-    #endif
-
 
     // LOOP TO FILL READER INDICES
     constexpr uint32_t cb_reader_indices = tt::CB::c_in4;
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
 
     uint32_t reader_idx = 0;
-
-    // Copy packed reader indices to local memory for faster access
-    constexpr bool cache_packed_reader_indices = act_block_h_datums_read <= LOCAL_PACKED_READER_INDICES_MAX_SIZE;
 
     // TODO: need to make the read coalescing optimization cleaner
     // pass coalesce_window_inner_reads as a compile time arg and num_coalesced_reads so we can constexpr the if
@@ -109,13 +93,6 @@ void kernel_main() {
 
     uint32_t start_reader_idx = 0;
     for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {
-        #ifdef SPLIT_READER
-        if constexpr (cache_packed_reader_indices) {
-            for (uint32_t i = 0; i < act_block_h_datums_read; i++) {
-                local_packed_reader_indices[i] = packed_reader_indices_ptr[start_reader_idx+i];
-            }
-        }
-        #endif
         for (uint32_t outer = 0; outer < window_outer; outer++) {
             // Reset reader_idx to finish act_block_h_datums
             reader_idx = start_reader_idx;
@@ -128,11 +105,7 @@ void kernel_main() {
 
             for (uint32_t bhd = 0; bhd < act_block_h_datums_read_curr; bhd++) {
                 // local read from reader_index + reader_offset;
-                #ifdef SPLIT_READER
-                uint32_t two_reader_indices = cache_packed_reader_indices ? local_packed_reader_indices[bhd] : packed_reader_indices_ptr[reader_idx];
-                #else // no split reader
                 uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
-                #endif
                 uint32_t reader_idx_1 = two_reader_indices & 0xffff;
                 uint32_t reader_idx_2 = two_reader_indices >> 16;
 
