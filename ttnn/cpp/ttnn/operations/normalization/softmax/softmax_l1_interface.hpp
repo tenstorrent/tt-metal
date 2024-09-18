@@ -9,8 +9,8 @@ class SoftmaxOpL1Usage {
     SoftmaxOpL1Usage(
         const L1InterfaceOperandParams& input, int dim_arg, const std::optional<L1InterfaceOperandParams>& output);
 
-    std::vector<std::tuple<uint32_t, uint32_t>> get_circular_buffer_l1_allocations_per_core() const;
-    std::vector<std::tuple<uint32_t, uint32_t>> get_tensor_l1_allocations_per_core() const;
+    virtual std::vector<std::tuple<uint32_t, uint32_t>> get_circular_buffer_l1_allocations_per_core() const;
+    virtual std::vector<std::tuple<uint32_t, uint32_t>> get_tensor_l1_allocations_per_core() const;
 
    protected:
     bool should_tilize_input() const;

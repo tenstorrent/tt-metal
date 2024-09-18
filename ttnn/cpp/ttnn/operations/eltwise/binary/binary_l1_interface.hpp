@@ -5,7 +5,9 @@
 class EltwiseOpL1Usage {
    public:
     EltwiseOpL1Usage(
-        const L1InterfaceOperandParams& input_a, const L1InterfaceOperandParams& input_b, const L1InterfaceOperandParams& output);
+        const L1InterfaceOperandParams& input_a,
+        const L1InterfaceOperandParams& input_b,
+        const L1InterfaceOperandParams& output);
     virtual ~EltwiseOpL1Usage() = default;
 
     virtual std::vector<std::tuple<uint32_t, uint32_t>> get_circular_buffer_l1_allocations_per_core() const = 0;
@@ -26,7 +28,9 @@ class EltwiseOpL1Usage {
 class ElementWiseMultiCoreOpL1Usage : public EltwiseOpL1Usage {
    public:
     ElementWiseMultiCoreOpL1Usage(
-        const L1InterfaceOperandParams& input_a, const L1InterfaceOperandParams& input_b, const L1InterfaceOperandParams& output);
+        const L1InterfaceOperandParams& input_a,
+        const L1InterfaceOperandParams& input_b,
+        const L1InterfaceOperandParams& output);
     virtual ~ElementWiseMultiCoreOpL1Usage() = default;
 
     virtual std::vector<std::tuple<uint32_t, uint32_t>> get_circular_buffer_l1_allocations_per_core() const override;
@@ -36,7 +40,9 @@ class ElementWiseMultiCoreOpL1Usage : public EltwiseOpL1Usage {
 class BroadcastWidthMultiCoreOpL1Usage : public EltwiseOpL1Usage {
    public:
     BroadcastWidthMultiCoreOpL1Usage(
-        const L1InterfaceOperandParams& input_a, const L1InterfaceOperandParams& input_b, const L1InterfaceOperandParams& output);
+        const L1InterfaceOperandParams& input_a,
+        const L1InterfaceOperandParams& input_b,
+        const L1InterfaceOperandParams& output);
     virtual ~BroadcastWidthMultiCoreOpL1Usage() = default;
 
     virtual std::vector<std::tuple<uint32_t, uint32_t>> get_circular_buffer_l1_allocations_per_core() const override;
@@ -47,5 +53,7 @@ class EltwiseOpL1UsageFactory {
    public:
     EltwiseOpL1UsageFactory() = delete;
     static std::unique_ptr<EltwiseOpL1Usage> Make(
-        const L1InterfaceOperandParams& input_a, const L1InterfaceOperandParams& input_b, const L1InterfaceOperandParams& output);
+        const L1InterfaceOperandParams& input_a,
+        const L1InterfaceOperandParams& input_b,
+        const L1InterfaceOperandParams& output);
 };

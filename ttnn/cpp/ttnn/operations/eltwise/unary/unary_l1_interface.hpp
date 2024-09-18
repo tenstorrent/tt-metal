@@ -17,7 +17,7 @@ class UnaryOpL1Usage {
 
 class InterleavedUnaryOpL1Usage : public UnaryOpL1Usage {
    public:
-    InterleavedUnaryOpL1Usage(const L1InterfaceOperandParams& input, const std::optional<L1InterfaceOperandParams>& output);
+    InterleavedUnaryOpL1Usage(const L1InterfaceOperandParams& input, const L1InterfaceOperandParams& output);
     virtual ~InterleavedUnaryOpL1Usage() = default;
 
     virtual std::vector<std::tuple<uint32_t, uint32_t>> get_circular_buffer_l1_allocations_per_core() const override;
@@ -26,7 +26,7 @@ class InterleavedUnaryOpL1Usage : public UnaryOpL1Usage {
 
 class ShardedUnaryOpL1Usage : public UnaryOpL1Usage {
    public:
-    ShardedUnaryOpL1Usage(const L1InterfaceOperandParams& input, const std::optional<L1InterfaceOperandParams>& output);
+    ShardedUnaryOpL1Usage(const L1InterfaceOperandParams& input, const L1InterfaceOperandParams& output);
     virtual ~ShardedUnaryOpL1Usage() = default;
 
     virtual std::vector<std::tuple<uint32_t, uint32_t>> get_circular_buffer_l1_allocations_per_core() const override;
