@@ -192,6 +192,14 @@ class TtLlamaAttention_galaxy:
                 use_height_and_width_as_shard_shape=True,
             )
 
+            self.GATHER_USERS_MEMCFG = ttnn.create_sharded_memory_config(
+                shape=(32 * mesh_cols, 1024 // 32),
+                core_grid=ttnn.CoreGrid(y=4, x=8),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
         elif self.model_config["LLM_MODE"] == "prefill":
             self.COMPUTE_KERNEL_QKV = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -387,7 +395,7 @@ class TtLlamaAttention_galaxy:
         )
         xs.deallocate(True)
 
-        # TODO: Use sharded all reduce once, the PCC issue is fixed in this particular all reduce
+        # TODO: Use sharded all_reduce when PCC issue is fixed in this particular configuration
         # fused_query_key_value = tt_sharded_all_reduce(
         #     fused_query_key_value, self.mesh_device, cluster_axis=1, num_links=2, memory_config=self.QKV_OUT_GATHERED_MEMCFG
         # )
@@ -500,21 +508,23 @@ class TtLlamaAttention_galaxy:
             num_heads=self.n_local_heads,
         )
 
-        attn_output = tt_all_gather(
+        attn_output = tt_sharded_all_gather(
             attn_output,
             self.mesh_device,
             dim=2,
             cluster_axis=1,
             num_links=2,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            memory_config=self.GATHER_USERS_MEMCFG,
         )
+        attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
         # user_selection_matrix = [1, 1, 32, 128]
         # user_selection_matrix @ activation -> [1, 1, 32, 128] * [1, 1, 128, 2048] -> [1, 1, 32, 2048]
         attn_output = ttnn.matmul(
             self.user_selection_matrix,
             attn_output,
+            core_grid=ttnn.CoreGrid(y=4, x=8),
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
 
         attn_output = ttnn.matmul(
