@@ -15,7 +15,7 @@
 #include <ttnn/tensor/tensor_impl.hpp>
 #include "ttnn/cpp/ttnn/common/constants.hpp"
 
-namespace tt {
+namespace ttnn {
 
 namespace numpy {
 
@@ -780,4 +780,4 @@ static bool allclose(const Tensor& tensor_a, const Tensor& tensor_b, Args... arg
 }
 
 }  // namespace numpy
-}  // namespace tt
+}  // namespace ttnn
