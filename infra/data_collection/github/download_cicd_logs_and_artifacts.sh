@@ -27,13 +27,18 @@ download_artifacts() {
 download_logs_for_all_jobs() {
     local repo=$1
     local workflow_run_id=$2
-    local attempt_number=$3
+    local max_attempts=$3
 
+    echo "[info] downloading logs for job with id $job_id for all attempts up to $max_attempts"
+    for attempt_number in $(seq 1 $max_attempts); do
+        echo "[Info] Downloading for attempt $attempt_number"
 
-    gh api /repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number/jobs --paginate | jq '.jobs[].id' | while read -r job_id; do
-        echo "[Info] Download logs for job with ID $job_id"
-        gh api /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log
+        gh api /repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number/jobs --paginate | jq '.jobs[].id' | while read -r job_id; do
+            echo "[info] download logs for job with id $job_id, attempt number $attempt_number"
+            gh api /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log
+        done
     done
+
 }
 
 main() {
