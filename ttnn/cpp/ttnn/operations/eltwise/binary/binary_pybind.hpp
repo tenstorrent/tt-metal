@@ -345,18 +345,20 @@ void bind_div_like_ops(py::module& module, const binary_operation_t& operation, 
 template <typename binary_operation_t>
 void bind_div(py::module& module, const binary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc({0}(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, float], *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
 
             Args:
                 * :attr:`input_tensor_a`
                 * :attr:`input_tensor_b` (ttnn.Tensor or Number)
                 * :attr:`accurate_mode`: ``false`` if input_tensor_b is non-zero, else ``true``.
-                * :attr:`round_mode`
+                * :attr:`round_mode` (Default: None)
 
             Keyword Args:
                 * :attr:`accurate_mode`: ``false`` if input_tensor_b is non-zero, else ``true`` (Only if the input tensor is not ComplexTensor)
                 * :attr:`round_mode` : (Only if the input tensor is not ComplexTensor)
                 * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
+                * :attr:`queue_id` (Optional[uint8]): command queue id
 
             Example:
                 >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
@@ -377,15 +379,19 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
                const Tensor& input_tensor_b,
                bool accurate_mode,
                const std::string& round_mode,
-               const std::optional<MemoryConfig>& memory_config) {
-                    return self(input_tensor_a, input_tensor_b, accurate_mode, round_mode, memory_config);
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               uint8_t queue_id) -> ttnn::Tensor {
+                    return self(queue_id, input_tensor_a, input_tensor_b, accurate_mode, round_mode, memory_config, output_tensor);
                 },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::kw_only(),
             py::arg("accurate_mode") = false,
             py::arg("round_mode") = "None",
-            py::arg("memory_config") = std::nullopt},
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = ttnn::DefaultQueueId},
 
         ttnn::pybind_overload_t{
             [](const binary_operation_t& self,
@@ -393,15 +399,19 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
                float value,
                bool accurate_mode,
                const std::string& round_mode,
-               const std::optional<MemoryConfig>& memory_config) {
-                    return self(input_tensor_a, value, accurate_mode, round_mode, memory_config);
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               uint8_t queue_id) -> ttnn::Tensor {
+                    return self(queue_id, input_tensor_a, value, accurate_mode, round_mode, memory_config, output_tensor);
                 },
             py::arg("input_tensor_a"),
             py::arg("value"),
             py::kw_only(),
             py::arg("accurate_mode") = false,
             py::arg("round_mode") = "None",
-            py::arg("memory_config") = std::nullopt});
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = ttnn::DefaultQueueId});
 }
 
 template <typename binary_operation_t>
