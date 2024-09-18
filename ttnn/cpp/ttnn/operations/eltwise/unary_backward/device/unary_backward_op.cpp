@@ -733,7 +733,7 @@ std::vector<Tensor> _abs_bw(const Tensor& grad, const Tensor& input, const std::
 std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSilu::invoke(uint8_t queue_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result = {std::nullopt};
 
-    input_grad = input_grad.value_or(ttnn::zeros_like(input));
+    input_grad = input_grad.value_or(ttnn::empty_like(input));
     Tensor grad_sigmoid = ttnn::multiply(queue_id, grad, ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config);
     Tensor add_sub = ttnn::add(queue_id,
         ttnn::multiply(queue_id, ttnn::subtract(queue_id, ttnn::full_like(input, 1.0f) , ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config),
@@ -747,6 +747,10 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSilu::invoke(uint8_t queu
 
     result[0] = input_grad;
     return result;
+}
+
+std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSilu::invoke(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
+    return ExecuteUnaryBackwardSilu::invoke(grad, input, output_mem_config, input_grad);
 }
 
 // Selu
