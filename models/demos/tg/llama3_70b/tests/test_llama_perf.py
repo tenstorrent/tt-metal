@@ -54,18 +54,13 @@ def get_reference_model(
 
 
 def prepare_inputs_for_tt_model(
-    tt_model,
-    batch,
-    seq_len,
-    vocab_size,
-    generation_start_pos,
-    attn_mask=None,
+    tt_model, batch, seq_len, vocab_size, generation_start_pos, attn_mask=None, mode="decode"
 ):
     input_ids = torch.randint(0, vocab_size, (batch, seq_len))
     tt_input_ids = input_ids.clone()
     # Push inputs to device
     tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(
-        tt_input_ids, generation_start_pos + 1, attn_mask=attn_mask
+        tt_input_ids, generation_start_pos + 1, attn_mask=attn_mask, mode=mode
     )
 
     return tt_inp_emb, start_pos, rot_mat, attn_mask
@@ -109,27 +104,20 @@ def run_test_LlamaModel_end_to_end(
         read_cache=True,
     )
 
-    if model_config["LLM_MODE"] == "prefill":
+    mode = "decode" if seq_len == 1 else "prefill"
+
+    if mode == "prefill":
         generation_start_pos = 0
     else:
         # Decode mode not supported
-        raise ValueError(f"Unsupported LLM_MODE: {model_config['LLM_MODE']}")
+        raise ValueError(f"Unsupported LLM_MODE: {mode}")
 
     # Prepare inputs for TT model
     tt_inp_emb, start_pos, rot_mat, attn_mask = prepare_inputs_for_tt_model(
-        tt_model_single_layer,
-        batch,
-        seq_len,
-        configuration.vocab_size,
-        generation_start_pos,
+        tt_model_single_layer, batch, seq_len, configuration.vocab_size, generation_start_pos, mode=mode
     )
     # Forward pass of single layer model
-    tt_out = tt_model_single_layer(
-        tt_inp_emb,
-        rot_mat,
-        start_pos,
-        attn_mask,
-    )
+    tt_out = tt_model_single_layer(tt_inp_emb, rot_mat, start_pos, attn_mask, mode=mode)
     del tt_inp_emb, rot_mat, tt_out
 
     # Load TT model with n_layers
@@ -152,20 +140,10 @@ def run_test_LlamaModel_end_to_end(
         # Prepare inputs for TT model
         profiler.start(f"prefill_iteration_{iter_idx}")
         tt_inp_emb, start_pos, rot_mat, attn_mask = prepare_inputs_for_tt_model(
-            tt_model,
-            batch,
-            seq_len,
-            configuration.vocab_size,
-            generation_start_pos,
-            attn_mask=attn_mask,
+            tt_model, batch, seq_len, configuration.vocab_size, generation_start_pos, attn_mask=attn_mask, mode=mode
         )
         # Forward pass of TT model
-        tt_out = tt_model(
-            tt_inp_emb,
-            rot_mat,
-            start_pos,
-            attn_mask,
-        )
+        tt_out = tt_model(tt_inp_emb, rot_mat, start_pos, attn_mask, mode=mode)
         # Retrieve output from device
         tt_out_cpu = ttnn.to_torch(
             tt_out, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(1, 3), cluster_shape=cluster_shape)
