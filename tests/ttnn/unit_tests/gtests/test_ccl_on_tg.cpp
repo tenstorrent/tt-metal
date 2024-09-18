@@ -4,7 +4,6 @@
 
 #include "common/bfloat16.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/ccl/line_all_gather/device/line_all_gather_op.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
