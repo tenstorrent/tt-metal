@@ -29,7 +29,6 @@ class TtNeck:
             [1, 10, 10, 512],
             (1, 1, 1, 1),
             height_sharding=False,
-            reshard=True,
         )
         self.conv3 = Conv(
             torch_model,
@@ -45,7 +44,6 @@ class TtNeck:
             [1, 10, 10, 2048],
             (1, 1, 0, 0),
             height_sharding=False,
-            reshard=True,
         )
         self.conv5 = Conv(
             torch_model,
@@ -53,7 +51,6 @@ class TtNeck:
             [1, 10, 10, 512],
             (1, 1, 1, 1),
             height_sharding=False,
-            reshard=True,
         )
         self.conv6 = Conv(
             torch_model,
@@ -61,7 +58,6 @@ class TtNeck:
             [1, 10, 10, 1024],
             (1, 1, 0, 0),
             height_sharding=False,
-            reshard=True,
         )
         self.conv7 = Conv(
             torch_model,
@@ -69,7 +65,6 @@ class TtNeck:
             [1, 10, 10, 512],
             (1, 1, 0, 0),
             height_sharding=False,
-            reshard=True,
             deallocate=False,
         )
         self.conv7_2 = Conv(
@@ -78,7 +73,6 @@ class TtNeck:
             [1, 20, 20, 512],
             (1, 1, 0, 0),
             height_sharding=False,
-            reshard=True,
         )
         self.conv7_3 = Conv(
             torch_model,
@@ -86,14 +80,12 @@ class TtNeck:
             [1, 20, 20, 512],
             (1, 1, 0, 0),
             height_sharding=False,
-            reshard=True,
         )
         self.conv8 = Conv(
             torch_model,
             "neek.conv10",
             [1, 20, 20, 256],
             (1, 1, 1, 1),
-            reshard=True,
         )
         self.conv7_4 = Conv(
             torch_model,
@@ -101,7 +93,6 @@ class TtNeck:
             [1, 20, 20, 512],
             (1, 1, 0, 0),
             height_sharding=False,
-            reshard=True,
         )
         self.conv8_2 = Conv(
             torch_model,
@@ -116,7 +107,6 @@ class TtNeck:
             [1, 20, 20, 512],
             (1, 1, 0, 0),
             height_sharding=False,
-            reshard=True,
         )
 
         self.conv9 = Conv(
@@ -124,7 +114,6 @@ class TtNeck:
             "neek.conv14",
             [1, 20, 20, 256],
             (1, 1, 0, 0),
-            reshard=True,
             deallocate=False,
         )
         self.conv9_2 = Conv(
@@ -132,21 +121,18 @@ class TtNeck:
             "neek.conv15",
             [1, 40, 40, 256],
             (1, 1, 0, 0),
-            reshard=True,
         )
         self.conv9_3 = Conv(
             torch_model,
             "neek.conv16",
             [1, 40, 40, 256],
             (1, 1, 0, 0),
-            reshard=True,
         )
         self.conv10 = Conv(
             torch_model,
             "neek.conv17",
             [1, 40, 40, 128],
             (1, 1, 1, 1),
-            reshard=True,
         )
 
         self.conv9_4 = Conv(
@@ -154,21 +140,18 @@ class TtNeck:
             "neek.conv18",
             [1, 40, 40, 256],
             (1, 1, 0, 0),
-            reshard=True,
         )
         self.conv10_2 = Conv(
             torch_model,
             "neek.conv19",
             [1, 40, 40, 128],
             (1, 1, 1, 1),
-            reshard=True,
         )
         self.conv9_5 = Conv(
             torch_model,
             "neek.conv20",
             [1, 40, 40, 256],
             (1, 1, 0, 0),
-            reshard=True,
         )
 
     def __call__(self, device, input_tensor):
