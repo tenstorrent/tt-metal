@@ -21,8 +21,8 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "seq_len",
     (
-        # 4096,
-        # 1024, TODO: OOM L1; chunk?
+        # 4096, TODO: OOM L1
+        1024,
         512,
         128,
         32,
@@ -64,6 +64,9 @@ def test_llama_mlp_inference(device, seq_len, use_program_cache, reset_seeds):
     mode = "decode" if seq_len <= 32 else "prefill"
     tt_output = tt_model(tt_input, mode)
 
+    tt_input = ttnn.from_torch(
+        torch_input, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
+    )
     logger.info("Performance pass for Llama_MLP")
     tt_output = tt_model(tt_input, mode)
     tt_output_torch = ttnn.to_torch(tt_output)

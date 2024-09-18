@@ -114,10 +114,13 @@ class TtLlamaMLP(torch.nn.Module):
                 pc_3 = self.model_config["PREFILL_MLP_W3_PRG_CONFIG_128"](seq_len)
 
         # TODO Update the model itself to output sharded tensor to MLP
-        x = ttnn.interleaved_to_sharded(
-            x,
-            self.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"],
-        )
+        if mode == "decode":
+            old_x = x
+            x = ttnn.interleaved_to_sharded(
+                x,
+                self.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"],
+            )
+            old_x.deallocate(True)
 
         w1_out = ttnn.linear(
             x,
@@ -146,7 +149,7 @@ class TtLlamaMLP(torch.nn.Module):
         w2_in = ttnn.multiply(
             w1_out,
             w3_out,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if seq_len <= 32 else ttnn.DRAM_MEMORY_CONFIG,
             input_tensor_a_activation=ttnn.UnaryOpType.SILU,
             dtype=ttnn.bfloat8_b,
         )
@@ -168,7 +171,8 @@ class TtLlamaMLP(torch.nn.Module):
 
         w2_in.deallocate(True)
 
-        w2_out = ttnn.sharded_to_interleaved(w2_out)
+        if mode == "decode":
+            w2_out = ttnn.sharded_to_interleaved(w2_out)
 
         if seq_len >= 2048:  # Reshape back to intended shape
             w2_out = ttnn.reshape(w2_out, [1, 1, seq_len, -1])
