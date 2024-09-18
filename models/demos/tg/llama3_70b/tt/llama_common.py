@@ -52,3 +52,33 @@ def tt_all_gather(input_tensor, mesh_device, cluster_axis, dim, num_links=2, mem
     return ttnn.line_all_gather(
         input_tensor, dim, num_links=num_links, cluster_axis=cluster_axis, mesh_device=mesh_device
     )
+
+
+def tt_sharded_all_reduce(input_tensor, mesh_device, cluster_axis, dim=0, num_links=2, memory_config=None):
+    gathered_tensor = ttnn.line_all_gather(
+        input_tensor,
+        dim,
+        num_links=num_links,
+        cluster_axis=cluster_axis,
+        mesh_device=mesh_device,
+        memory_config=memory_config,
+    )
+    # Fast_reduce_nc does not support sharded memory configuration, convert to interleaved
+    gathered_tensor = ttnn.to_memory_config(gathered_tensor, ttnn.L1_MEMORY_CONFIG)
+    reduced_tensors = ttnn.experimental.fast_reduce_nc(
+        gathered_tensor, dims=[dim], output=None, compute_kernel_config=None
+    )
+    return reduced_tensors
+
+
+def tt_sharded_all_gather(input_tensor, mesh_device, cluster_axis, dim, num_links=2, memory_config=None):
+    # Ensure the input tensor is in the correct memory configuration
+
+    return ttnn.line_all_gather(
+        input_tensor,
+        dim,
+        num_links=num_links,
+        cluster_axis=cluster_axis,
+        mesh_device=mesh_device,
+        memory_config=memory_config,
+    )

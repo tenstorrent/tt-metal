@@ -17,6 +17,8 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 from models.demos.tg.llama3_70b.tt.llama_common import (
     tt_all_reduce,
     tt_all_gather,
+    tt_sharded_all_reduce,
+    tt_sharded_all_gather,
 )
 from models.demos.t3000.falcon40b.tt.model_utils import (
     matmul_2d_config_from_tensor_shapes as get_matmul_2d_config_from_tensor_shapes,
@@ -174,6 +176,30 @@ class TtLlamaAttention_galaxy:
             self.SDPA_HEIGHT_SHARDED_MEMCFG = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec
             )
+            mesh_rows, mesh_cols = 8, 4
+            self.QKV_OUT_GATHERED_MEMCFG = ttnn.create_sharded_memory_config(
+                shape=(32 * mesh_cols, 1280 // 40),
+                core_grid=ttnn.CoreGrid(y=5, x=8),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            self.SELF_OUT_GATHERED_MEMCFG = ttnn.create_sharded_memory_config(
+                shape=(32 * mesh_rows, 2048 // 32),
+                core_grid=ttnn.CoreGrid(y=4, x=8),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            self.GATHER_USERS_MEMCFG = ttnn.create_sharded_memory_config(
+                shape=(32 * mesh_cols, 1024 // 32),
+                core_grid=ttnn.CoreGrid(y=4, x=8),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
         elif self.model_config["LLM_MODE"] == "prefill":
             self.COMPUTE_KERNEL_QKV = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -369,6 +395,11 @@ class TtLlamaAttention_galaxy:
         )
         xs.deallocate(True)
 
+        # TODO: Use sharded all_reduce when PCC issue is fixed in this particular configuration
+        # fused_query_key_value = tt_sharded_all_reduce(
+        #     fused_query_key_value, self.mesh_device, cluster_axis=1, num_links=2, memory_config=self.QKV_OUT_GATHERED_MEMCFG
+        # )
+
         fused_query_key_value = tt_all_reduce(
             fused_query_key_value, self.mesh_device, cluster_axis=1, num_links=2, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
@@ -378,7 +409,7 @@ class TtLlamaAttention_galaxy:
             self.slice_mat,
             fused_query_key_value,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         # Reshape such that true unpadded batch is tracked in shape
@@ -477,21 +508,23 @@ class TtLlamaAttention_galaxy:
             num_heads=self.n_local_heads,
         )
 
-        attn_output = tt_all_gather(
+        attn_output = tt_sharded_all_gather(
             attn_output,
             self.mesh_device,
             dim=2,
             cluster_axis=1,
             num_links=2,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            memory_config=self.GATHER_USERS_MEMCFG,
         )
+        attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
         # user_selection_matrix = [1, 1, 32, 128]
         # user_selection_matrix @ activation -> [1, 1, 32, 128] * [1, 1, 128, 2048] -> [1, 1, 32, 2048]
         attn_output = ttnn.matmul(
             self.user_selection_matrix,
             attn_output,
+            core_grid=ttnn.CoreGrid(y=4, x=8),
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
 
         attn_output = ttnn.matmul(
@@ -503,12 +536,12 @@ class TtLlamaAttention_galaxy:
             compute_kernel_config=self.COMPUTE_KERNEL_SELFOUT,
         )
 
-        attn_output = tt_all_reduce(
+        attn_output = tt_sharded_all_reduce(
             attn_output,
             self.mesh_device,
             cluster_axis=0,
             num_links=2,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            memory_config=self.SELF_OUT_GATHERED_MEMCFG,
         )
 
         return attn_output
