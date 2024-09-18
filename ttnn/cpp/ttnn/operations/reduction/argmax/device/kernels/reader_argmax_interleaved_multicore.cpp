@@ -6,7 +6,7 @@
 
 #include "dataflow_api.h"
 
-#include "debug/dprint.h"
+//#include "debug/dprint.h"
 
 // Function to compare two bfloat16 values using integer arithmetic
 bool bfloat16_greater(uint16_t bf16_a, uint16_t bf16_b) {
