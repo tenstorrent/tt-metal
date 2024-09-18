@@ -52,7 +52,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     // Use k_shape for S and DH since Q might be different for decode
     uint32_t B = q_shape[1], PNH = q_shape[2], S = k_shape[2], DH = k_shape[3];
 
-    uint32_t num_kv_heads = 0;
+    uint32_t num_kv_heads = k_shape[1];
     uint32_t page_block_size_t = 0;
 
     if (is_paged_attention) {
@@ -60,10 +60,9 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         uint32_t max_blocks_per_seq = page_table_shape[1];
         uint32_t block_size = k_shape[2];
         S = max_blocks_per_seq * block_size;
-        num_kv_heads = k_shape[1];
         page_block_size_t = block_size / TILE_HEIGHT;
     }
-    uint32_t Bkv = k_shape[1];
+    uint32_t Bkv = k_shape[0];
     uint32_t St = S/TILE_HEIGHT;
     uint32_t DHt = DH/TILE_WIDTH;
     uint32_t PNHt = PNH/TILE_HEIGHT;

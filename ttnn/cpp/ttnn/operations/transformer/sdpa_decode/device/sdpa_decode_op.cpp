@@ -77,14 +77,14 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
 
         // Batch must match
         const auto B = q_shape[1];
-        TT_FATAL(k_shape[1] == B, "Error");
-        TT_FATAL(v_shape[1] == B, "Error");
+        TT_FATAL(k_shape[0] == B, "Error");
+        TT_FATAL(v_shape[0] == B, "Error");
         // TT_FATAL(Q_memcfg.shard_spec.value().grid.num_cores() == B, "Q must be height sharded by batch ");
 
         // NKV must be 1 if we are running in this decode mode
         TT_FATAL(q_shape[0] == 1, "Error");
-        TT_FATAL(k_shape[0] == 1, "Error");
-        TT_FATAL(v_shape[0] == 1, "Error");
+        TT_FATAL(k_shape[1] == 1, "Error");
+        TT_FATAL(v_shape[1] == 1, "Error");
 
         // Check sequence lengths
         TT_FATAL(k_shape[-2] == v_shape[-2], "Error");
