@@ -15,7 +15,7 @@ class Down4:
             torch_model = model.torch_model
         self.torch_model = torch_model
         self.conv1 = Conv(torch_model, "down4.conv1", [1, 40, 40, 256], (2, 2, 1, 1), reshard=True)
-        self.conv2 = Conv(torch_model, "down4.conv2", [1, 20, 20, 512], (1, 1, 0, 0), reshard=True, deallocate=False)
+        self.conv2 = Conv(torch_model, "down4.conv2", [1, 20, 20, 512], (1, 1, 0, 0), deallocate=False)
         self.conv3 = Conv(torch_model, "down4.conv3", [1, 20, 20, 512], (1, 1, 0, 0))
 
         self.res1_conv1 = Conv(
@@ -51,7 +51,7 @@ class Down4:
         )
         self.res8_conv2 = Conv(torch_model, "down4.resblock.module_list.7.1", [1, 20, 20, 256], (1, 1, 1, 1))
 
-        self.conv4 = Conv(torch_model, "down4.conv4", [1, 20, 20, 256], (1, 1, 0, 0), reshard=True, deallocate=False)
+        self.conv4 = Conv(torch_model, "down4.conv4", [1, 20, 20, 256], (1, 1, 0, 0), deallocate=False)
 
         self.conv5 = Conv(torch_model, "down4.conv5", [1, 20, 20, 512], (1, 1, 0, 0))
 
