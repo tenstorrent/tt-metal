@@ -531,10 +531,11 @@ class UNet:
         x = self.bnc(x)
         return self.bnc2(x)
 
-    def __call__(self, x):
+    def __call__(self, x, move_input_tensor_to_device=True):
         assert len(x.shape) == 4, f"Expected UNet input tensors to be rank 4 (was {len(x.shape)})"
 
-        x = ttnn.to_device(x, device=self.device, memory_config=self.input_sharded_memory_config)
+        if move_input_tensor_to_device:
+            x = ttnn.to_device(x, device=self.device, memory_config=self.input_sharded_memory_config)
 
         x, c1_residual = self.downblock1(x)
         x, c2_residual = self.downblock2(x)
