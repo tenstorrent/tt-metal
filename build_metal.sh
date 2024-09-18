@@ -61,6 +61,7 @@ show_help() {
     echo "  -m  Enable MemorySanitizer."
     echo "  -s  Enable ThreadSanitizer."
     echo "  -u  Enable UndefinedBehaviorSanitizer."
+    echo "  -p  Enable Tracy profiler."
 }
 
 # Parse CLI options
@@ -72,8 +73,9 @@ enable_msan="OFF"
 enable_tsan="OFF"
 enable_ubsan="OFF"
 build_type="Release"
+enable_profiler="OFF"
 
-while getopts "hectamsub:" opt; do
+while getopts "hectamsub:p" opt; do
     case ${opt} in
         h )
             show_help
@@ -103,6 +105,9 @@ while getopts "hectamsub:" opt; do
         b )
             build_type="$OPTARG"
             ;;
+        p )
+            enable_profiler="ON"
+            ;;
         \? )
             show_help
             exit 1
@@ -125,13 +130,7 @@ echo "Enable MemorySanitizer: $enable_msan"
 echo "Enable ThreadSanitizer: $enable_tsan"
 echo "Enable UndefinedBehaviorSanitizer: $enable_ubsan"
 
-# Create and link the build directory
-mkdir -p build_$build_type
-ln -nsf build_$build_type build
-
-# Prepare cmake arguments
-# -DCXX_INCLUDE_WHAT_YOU_USE=include-what-you-use
-cmake_args="-B build_$build_type -G Ninja -DCMAKE_BUILD_TYPE=$build_type -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands"
+build_dir="build_$build_type"
 
 if [ "$enable_ccache" = "ON" ]; then
     cmake_args="$cmake_args -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
@@ -157,10 +156,23 @@ if [ "$enable_ubsan" = "ON" ]; then
     cmake_args="$cmake_args -DENABLE_UBSAN=ON"
 fi
 
+if [ "$enable_profiler" = "ON" ]; then
+    cmake_args="$cmake_args -DENABLE_TRACY=ON"
+    build_dir="${build_dir}_tracy"
+fi
+
+# Create and link the build directory
+mkdir -p $build_dir
+ln -nsf $build_dir build
+
+# Prepare cmake arguments
+# -DCXX_INCLUDE_WHAT_YOU_USE=include-what-you-use
+cmake_args="-B $build_dir -G Ninja -DCMAKE_BUILD_TYPE=$build_type -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands"
+
 # Configure cmake
 cmake $cmake_args
 
 # Build libraries and cpp tests
 echo "Building libraries and cpp tests"
-cmake --build build_$build_type --target tests      # <- Can also just run `ninja tests -C build`
-cmake --build build_$build_type --target install    # <- This is a general cmake way, can also just run `ninja install -C build`
+cmake --build $build_dir --target tests      # <- Can also just run `ninja tests -C build`
+cmake --build $build_dir --target install    # <- This is a general cmake way, can also just run `ninja install -C build`
