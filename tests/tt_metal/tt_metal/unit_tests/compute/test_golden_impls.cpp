@@ -159,9 +159,6 @@ std::vector<uint16_t> gold_reduce_h(const std::vector<uint16_t> &src_vec, const 
             else
                 sum += bfloat16(src_vec[offs]).to_float();
         }
-        if (red_type == 1) {
-            sum /= shape[2];
-        }
         auto dest_offs = addr_dst.offs(n, c, 0, w);
         reduced[dest_offs] = bfloat16(sum*scaler).to_uint16();
     }
@@ -189,9 +186,6 @@ std::vector<uint16_t> gold_reduce_w(const vector<uint16_t> &src_vec, const std::
                 sum = fmaxf(bfloat16(src_vec[offs]).to_float(), sum);
             else
                 sum += bfloat16(src_vec[offs]).to_float();
-        }
-        if (red_type == 1) {
-            sum /= shape[3];
         }
         auto dest_offs = addr_dst.offs(n, c, h, 0);
         reduced[dest_offs] = bfloat16(sum*scaler).to_uint16();
@@ -222,9 +216,6 @@ std::vector<uint16_t> gold_reduce_hw(const std::vector<uint16_t> &src_vec, const
                 else
                     sum += bfloat16(src_vec[offs]).to_float();
             }
-        }
-        if (red_type == 1) {
-            sum /= (shape[2] * shape[3]);
         }
         auto dest_offs = addr_dst.offs(n, c, 0, 0);
         reduced[dest_offs] = bfloat16(sum*scaler).to_uint16();
