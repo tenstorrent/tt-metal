@@ -16,7 +16,8 @@ on:
           - eltwise.logical_or_
           - eltwise.relu
           - eltwise.gelu
-          - eltwise.cos                 
+          - eltwise.cos 
+          - eltwise.sin                          
           - eltwise.subtract.subtract_interleaved
           - eltwise.subalpha.subalpha_interleaved
           - eltwise.rsub.rsub_interleaved
