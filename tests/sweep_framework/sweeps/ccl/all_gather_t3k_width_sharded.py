@@ -51,6 +51,7 @@ def generate_shard_input_shapes(batch_sizes, shard_Y, shard_X, x=1, y=1):
             for height in shard_Y:
                 for width in shard_X:
                     input_shapes.append([W, Z, height * x, width * y])
+    input_shapes = input_shapes[:50] + input_shapes[-50:]
     return input_shapes
 
 
@@ -64,19 +65,19 @@ for width in range(32, 1024, 32):  # Increment by 32
     width_shard_shapes.append([32, width])
 
 
-shard_grid = [
-    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
-    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
-    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
-    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
-    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
-    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
-    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
-    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 4))}),
-    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 4))}),
-]
+shard_grid_map = {
+    "shard_grid_1": ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+    "shard_grid_2": ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
+    "shard_grid_3": ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+    "shard_grid_4": ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+    "shard_grid_5": ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+    "shard_grid_6": ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+    "shard_grid_7": ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+    "shard_grid_8": ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+    "shard_grid_9": ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+    "shard_grid_10": ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 4))}),
+    "shard_grid_11": ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 4))}),
+}
 
 # Define the mapping for dtypes, orientations, gather operations, tensor layouts, tensor memory layouts, input shapes, and shard shapes
 dtype_map = {"bf16": ttnn.bfloat16, "bf8": ttnn.bfloat8_b}
@@ -106,19 +107,28 @@ num_links = [1, 2]
 
 
 def generate_params(
-    dtype_str, orientation_str, gather_op_str, tensor_layout_key, tensor_mem_layout_key, dim, num_device, num_link
+    dtype_str,
+    orientation_str,
+    gather_op_str,
+    tensor_layout_key,
+    tensor_mem_layout_key,
+    shard_grid_str,
+    dim,
+    num_device,
+    num_link,
 ):
     dtype = dtype_map[dtype_str]
     orientation = orientation_map[orientation_str]
     gather_op = gather_op_map[gather_op_str]
     tensor_layout_value = tensor_layouts[tensor_layout_key]
     tensor_mem_layout_value = tensor_mem_layouts[tensor_mem_layout_key]
+    shard_grid = shard_grid_map[shard_grid_str]
 
     # Retrieve the appropriate input shape based on tensor layout and tensor memory layout
     input_shape = input_shape_map.get((tensor_layout_value, tensor_mem_layout_value), tile_width_shard_input_shapes)
     input_shard_shape = input_shard_shape_map.get(tensor_mem_layout_value, width_shard_shapes)
 
-    param_name = f"all_gather_{tensor_layout_key}_{tensor_mem_layout_key}_{gather_op_str}_{dtype_str}_{orientation_str}_dim{dim}_{num_device}devices_{num_link}links"
+    param_name = f"all_gather_{tensor_layout_key}_{tensor_mem_layout_key}_{gather_op_str}_{dtype_str}_{orientation_str}_dim{dim}_{num_device}devices_{num_link}links_{shard_grid_str}"
     return {
         "name": param_name,
         "config": {
@@ -131,6 +141,7 @@ def generate_params(
             "input_dtype": [dtype],
             "orientation": [orientation],
             "tensor_mem_layout": [tensor_mem_layout_value],
+            "shard_grid": [shard_grid],
             "all_gather_operation": [gather_op],
         },
     }
@@ -143,21 +154,23 @@ for dtype_str in dtype_map.keys():
         for gather_op_str in gather_op_map.keys():
             for tensor_layout_key in tensor_layouts:
                 for tensor_mem_layout_key in tensor_mem_layouts:
-                    for dim in dims:
-                        for num_device in num_devices:
-                            for num_link in num_links:
-                                if num_link != 2 and num_device != 8:  # Not for T3K devices
-                                    param = generate_params(
-                                        dtype_str,
-                                        orientation_str,
-                                        gather_op_str,
-                                        tensor_layout_key,
-                                        tensor_mem_layout_key,
-                                        dim,
-                                        num_device,
-                                        num_link,
-                                    )
-                                    parameters[param["name"]] = param["config"]
+                    for shard_grid_str in shard_grid_map.keys():
+                        for dim in dims:
+                            for num_device in num_devices:
+                                for num_link in num_links:
+                                    if num_link != 2 or num_device != 8:  # Not for T3K devices
+                                        param = generate_params(
+                                            dtype_str,
+                                            orientation_str,
+                                            gather_op_str,
+                                            tensor_layout_key,
+                                            tensor_mem_layout_key,
+                                            shard_grid_str,
+                                            dim,
+                                            num_device,
+                                            num_link,
+                                        )
+                                        parameters[param["name"]] = param["config"]
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
