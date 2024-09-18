@@ -77,6 +77,7 @@ class TtTransformer(LightweightModule):
         user_id=0,
         mode="decode",
         get_last_token=-1,
+        start_pos_ids_tensor=None,
     ):
         for i, layer in enumerate(self.layers):
             if mode == "decode":
@@ -91,7 +92,16 @@ class TtTransformer(LightweightModule):
                 else:
                     rot_mats = self.current_rot_mat
 
-            x = layer(x, start_pos_ids, attn_masks, rot_mats, transformation_mats, user_id, mode)
+            x = layer(
+                x,
+                start_pos_ids,
+                attn_masks,
+                rot_mats,
+                transformation_mats,
+                user_id,
+                mode,
+                start_pos_ids_tensor=start_pos_ids_tensor,
+            )
         if attn_masks is not None:
             attn_masks.deallocate(True)
 
@@ -136,6 +146,6 @@ class TtTransformer(LightweightModule):
                     core_grid=ttnn.CoreGrid(y=8, x=8),
                     dtype=ttnn.bfloat16,
                 )
-                prev_rot_mat.deallocate(True)
+                self.current_rot_mat = ttnn.copy(self.current_rot_mat, prev_rot_mat)
 
         return outputs

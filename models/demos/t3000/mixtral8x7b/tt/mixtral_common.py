@@ -179,10 +179,10 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, mesh_device):
     # input goes to L1
     xs_1SBH = ttnn.from_torch(
         x_1SBH,
-        device=mesh_device,
+        # device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        # memory_config=ttnn.L1_MEMORY_CONFIG,
         mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
 

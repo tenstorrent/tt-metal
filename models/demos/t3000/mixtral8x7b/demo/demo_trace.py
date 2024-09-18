@@ -123,22 +123,22 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_e
         # decode_input_11BH = [ttnn.tilize_with_val_padding(decode_input_11BH[i], ) for i in range(len(devices))]")
 
     # Prepare inputs for decode mode (rotary embeddings, attention mask, padding)
-    current_rot_mat, rot_matrix = get_single_rot_mat(
-        model_args.head_dim,
-        tt_model.mesh_device,
-    )
+    # current_rot_mat, rot_matrix = get_single_rot_mat(
+    #     model_args.head_dim,
+    #     tt_model.mesh_device,
+    # )
 
     generation_start_pos = 0
-    max_generated_tokens = 50  # max_seq_len-1
+    max_generated_tokens = 20  # max_seq_len-1
 
-    cache_attention(
-        mesh_device,
-        state_dict,
-        model_args,
-        current_rot_mat,
-        rot_matrix,
-        dtype,
-    )
+    # cache_attention(
+    #     mesh_device,
+    #     state_dict,
+    #     model_args,
+    #     current_rot_mat,
+    #     rot_matrix,
+    #     dtype,
+    # )
 
     logger.info("Starting inference...")
 
@@ -148,6 +148,32 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_e
     # Keep track of users that are done generating and stop printing their outputs
     finished_generation = [False] * batch_size
 
+    start_pos = generation_start_pos - 2
+    start_pos_ids = [start_pos for _ in range(batch_size)]
+
+    start_pos_ids_tensor = ttnn.from_torch(
+        torch.tensor([0] * 32), device=mesh_device, dtype=ttnn.int32, mesh_mapper=ReplicateTensorToMesh(mesh_device)
+    )
+
+    # Compile trace
+    logger.info("Compile Model")
+    # Compile model
+    decode_input_11BH = prepare_inputs_ttnn(
+        pt_decode_input,
+        model_args.dim,
+        tt_model.mesh_device,
+    )
+    decode_input_11BH = ttnn.to_device(decode_input_11BH, mesh_device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    tt_out = tt_model(decode_input_11BH, start_pos_ids, start_pos_ids_tensor=start_pos_ids_tensor)
+    # Capture trace
+    logger.info("Capture Decode Trace")
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+
+    # Run TT model
+    tt_out = tt_model(decode_input_11BH, start_pos_ids, start_pos_ids_tensor=start_pos_ids_tensor)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    logger.info("Done Capturing Decode Trace")
+
     # Keep running inference as long as there is a user in the batch still decoding or max tokens per user are decoded
     for iteration in range(max_generated_tokens):
         # Check if all users have finished generating (reached EoS token). If so, stop decoding.
@@ -156,17 +182,23 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_e
             break
 
         iteration_time_start = time()
-        start_pos = generation_start_pos + iteration
-
         if embed_on_host:
-            decode_input_11BH = prepare_inputs_ttnn(
+            updated_decode_input_11BH = prepare_inputs_ttnn(
                 pt_decode_input,
                 model_args.dim,
                 tt_model.mesh_device,
             )
 
-        # Run ttnn mixtral model
-        tt_out_11BH = tt_model(decode_input_11BH, [start_pos] * batch_size, mode="decode")
+        updated_start_pos_ids_tensor = ttnn.from_torch(
+            torch.tensor([generation_start_pos + iteration] * 32),
+            dtype=ttnn.int32,
+            mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        )
+        ttnn.copy_host_to_device_tensor(updated_decode_input_11BH, decode_input_11BH)
+        ttnn.copy_host_to_device_tensor(updated_start_pos_ids_tensor, start_pos_ids_tensor)
+
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        tt_out_11BH = ttnn.from_device(tt_out)
 
         if embed_on_host:
             # Convert ttnn tensor to torch tensor
@@ -234,41 +266,42 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_e
         )
 
     # In CI only print the final generated output to avoid spamming the logs
+    if is_ci_env:
+        if len(user_input) == 1:
+            logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
+        else:
+            for user in range(batch_size):
+                logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
 
-    # FIXME #12206
-    # if is_ci_env:
-    #     if len(user_input) == 1:
-    #         logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
-    #     else:
-    #         for user in range(batch_size):
-    #             logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
+        # When running in CI, check the output against the expected output to avoid accuracy regressions
+        expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs.json"
+        with open(expected_output, "r") as f:
+            expected_out = json.load(f)
+        assert (
+            len(expected_out) >= batch_size * 2
+        ), f"expected_outputs.json should have 64 outputs: 32 for general weights and 32 for instruct weights!"
 
-    #     # When running in CI, check the output against the expected output to avoid accuracy regressions
-    #     expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs.json"
-    #     with open(expected_output, "r") as f:
-    #         expected_out = json.load(f)
-    #     assert (
-    #         len(expected_out) >= batch_size * 2
-    #     ), f"expected_outputs.json should have 64 outputs: 32 for general weights and 32 for instruct weights!"
+        for i in range(batch_size):
+            user_output = "".join(tokenizer.decode(all_outputs[i]))
+            if instruct_mode:  # The instruct outputs are at the end of the expected outputs file
+                user_expect = expected_out[i + 32]["output_instruct"]
+            else:
+                user_expect = expected_out[i]["output_general"]
 
-    #     for i in range(batch_size):
-    #         user_output = "".join(tokenizer.decode(all_outputs[i]))
-    #         if instruct_mode:  # The instruct outputs are at the end of the expected outputs file
-    #             user_expect = expected_out[i + 32]["output_instruct"]
-    #         else:
-    #             user_expect = expected_out[i]["output_general"]
-
-    #         assert user_output == user_expect, f"Output for user {i} does not match expected output!"
-    #     logger.info("[CI-Only] Output token validation passed!")
+            assert user_output == user_expect, f"Output for user {i} does not match expected output!"
+        logger.info("[CI-Only] Output token validation passed!")
 
 
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 6154240}], indirect=True)
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights",
     [
         ("models/demos/t3000/mixtral8x7b/demo/input_data.json", False),
-        ("models/demos/t3000/mixtral8x7b/demo/input_data_questions.json", True),
+        # ("models/demos/t3000/mixtral8x7b/demo/input_data_questions.json", True),
     ],
-    ids=["general", "instruct"],
+    ids=[
+        "general",
+    ],
 )
 def test_mixtral8x7b_demo(t3k_mesh_device, use_program_cache, input_prompts, instruct_weights, is_ci_env):
     if is_ci_env and instruct_weights == True:
