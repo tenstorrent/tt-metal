@@ -23,7 +23,7 @@ Authors: Vishal Shenoy, Mohamed Bahnas
       - [4.4.4 Matmul with Value](#444-matmul-with-value)
       - [4.4.5 Concatenating Heads and Self-Output Linear OP](#445-concatenating-heads-and-self-output-linear-op)
     - [4.5 Add and Norm](#45-add-and-norm)
-    - [4.6 Feed-Forward](#46-feed-forward)
+    - [4.6 Feed-Forward Network](#46-feed-forward-network)
     - [4.7 Output](#47-output)
   - [5. To be added soon - High Resolution and Temporal Sharding](#5-to-be-added-soon---high-resolution-and-temporal-sharding)
   - [6. Conclusion](#6-conclusion)
@@ -392,27 +392,26 @@ query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(query
 #### 4.4.3 Attention Mechanism
 The attention mechanism begins by calculating the dot product between the Query and Key matrices. This result is then scaled by the size of the attention head to form the Attention Scores. These scores are passed through a Softmax operation, which normalizes them across the sequence length. **Height sharding** is applied during this process, where the sequence length is split across cores to parallelize the computation of the Attention Scores, making the operation more efficient.
 
-**Functional Code**:
-
-```python
-attention_scores = ttnn.matmul(query, key)
-attention_probs = ttnn.transformer.attention_softmax_(attention_scores, head_size=head_size)
-```
-
 **Optimized Code**:
 
 ```python
-attention_scores = ttnn.matmul(query, key, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, program_config=config.program_configs["query_by_key_matmul_program_config"])
+attention_scores = ttnn.matmul(query, key, 
+                    memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, 
+                    dtype=ttnn.bfloat8_b, 
+                    program_config=config.program_configs["query_by_key_matmul_program_config"])
 
-attention_probs = ttnn.transformer.attention_softmax_(attention_scores, attention_mask=attention_mask, head_size=head_size, program_config=config.program_configs["softmax_program_config"])
+attention_probs = ttnn.transformer.attention_softmax_(attention_scores, 
+                    attention_mask=attention_mask, 
+                    head_size=head_size, 
+                    program_config=config.program_configs["softmax_program_config"])
 ```
 
 **Sharding Config**:
 
-With 1D Height sharding, the block or shard size per each tensix core = [seqL, seqL].
-The block height (per_core_M)= input or output shape[0] / (core_grid.y* core_grid.x) = (b x head_count x seqL) /(core_grid.y * core_grid.x) , so each tensix row will be of height = seqL
-The input block width (in0_block_w) = head_size
-The output block width (per_core_N) = seqL
+- With 1D Height sharding, the block or shard size per each tensix core = [seqL, seqL].
+- The block height (per_core_M)= input or output shape[0] / (core_grid.y* core_grid.x) = (b x head_count x seqL) /(core_grid.y * core_grid.x) , so each tensix row will be of height = seqL
+- The input block width (in0_block_w) = head_size
+- The output block width (per_core_N) = seqL
 
 ```python
 "query_by_key_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
@@ -441,7 +440,10 @@ The normalized attention scores are then multiplied by the Value matrix to produ
 **Optimized Code**:
 
 ```python
-context_layer = ttnn.matmul(attention_probs, value, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, dtype=ttnn.bfloat8_b, program_config=config.program_configs["attention_probabilities_by_value_matmul_program_config"])
+context_layer = ttnn.matmul(attention_probs, value, 
+                        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, 
+                        dtype=ttnn.bfloat8_b, 
+                        program_config=config.program_configs["attention_probabilities_by_value_matmul_program_config"])
 ```
 
 **Sharding Config**:
@@ -554,7 +556,7 @@ layernorm_after_output = ttnn.layer_norm(
 
 ![addnorm](images/addnorm.png)
 
-### 4.6 Feed-Forward 
+### 4.6 Feed-Forward Network
 The output from the attention block is passed through a **Feed-Forward Network** (FFN). The FFN consists of two linear transformations with a GeLU activation function between them. The first linear layer expands the dimensionality of the embeddings, and the second linear layer projects it back to the original size. **Block sharding** is utilized in the FFN, where the computations are split across multiple blocks, allowing for parallel processing and improved efficiency during the linear transformations.
 
 **Optimized Code**:
