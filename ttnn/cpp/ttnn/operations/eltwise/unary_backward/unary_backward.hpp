@@ -120,17 +120,13 @@ struct ExecuteUnaryBackwardRsqrt {
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
-template <UnaryBackwardOpType unary_backward_op_type>
-struct ExecuteUnaryBackwardOptionalFloatParamsWithDefault {
+struct ExecuteUnaryBackwardClamp {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         std::optional<float> parameter_a,
         std::optional<float> parameter_b,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, parameter_a, parameter_b, output_memory_config);
-    }
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
 template <UnaryBackwardOpType unary_backward_op_type>
@@ -545,8 +541,7 @@ constexpr auto logiteps_bw = ttnn::register_operation<
 
 constexpr auto clamp_bw = ttnn::register_operation<
     "ttnn::clamp_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOptionalFloatParamsWithDefault<
-        operations::unary_backward::UnaryBackwardOpType::CLAMP_BW>>();
+    operations::unary_backward::ExecuteUnaryBackwardClamp>();
 
 constexpr auto softplus_bw = ttnn::register_operation<
     "ttnn::softplus_bw",

@@ -40,6 +40,7 @@ void Hal::initialize_gs() {
     mem_map_bases[hv(HalMemAddrType::PROFILER)] = GET_MAILBOX_ADDRESS_HOST(profiler);
     mem_map_bases[hv(HalMemAddrType::KERNEL_CONFIG)] = L1_KERNEL_CONFIG_BASE;
     mem_map_bases[hv(HalMemAddrType::UNRESERVED)] = L1_UNRESERVED_BASE;
+    mem_map_bases[hv(HalMemAddrType::CORE_INFO)] = GET_MAILBOX_ADDRESS_HOST(core_info);
 
     std::vector<uint32_t> mem_map_sizes;
     mem_map_sizes.resize(hv(HalMemAddrType::COUNT));
@@ -51,7 +52,7 @@ void Hal::initialize_gs() {
     mem_map_sizes[hv(HalMemAddrType::KERNEL_CONFIG)] = L1_KERNEL_CONFIG_SIZE;
     mem_map_sizes[hv(HalMemAddrType::UNRESERVED)] = MEM_L1_SIZE - L1_UNRESERVED_BASE;
 
-    this->core_info_.push_back({HalProgrammableCoreType::TENSIX, CoreType::WORKER, num_proc_per_tensix_core, mem_map_bases, mem_map_sizes});
+    this->core_info_.push_back({HalProgrammableCoreType::TENSIX, CoreType::WORKER, num_proc_per_tensix_core, mem_map_bases, mem_map_sizes, true});
 #endif
 }
 

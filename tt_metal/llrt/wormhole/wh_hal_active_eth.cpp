@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#if defined(ARCH_BLACKHOLE)
+#if defined(ARCH_WORMHOLE_B0)
 
-#define COMPILE_FOR_IDLE_ERISC
+#define COMPILE_FOR_ERISC
 
 #include "llrt/hal.hpp"
-#include "llrt/blackhole/bh_hal.hpp"
-#include "hw/inc/blackhole/dev_mem_map.h"
-#include "hw/inc/blackhole/eth_l1_address_map.h"
+#include "llrt/wormhole/wh_hal.hpp"
+#include "hw/inc/wormhole/dev_mem_map.h"
+#include "hw/inc/wormhole/eth_l1_address_map.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
 #include "hw/inc/dev_msgs.h"
@@ -27,7 +27,7 @@ static inline int hv (enum HalMemAddrType v) {
 
 HalCoreInfoType create_active_eth_mem_map() {
 
-    constexpr uint32_t num_proc_per_idle_eth_core = 1;
+    constexpr uint32_t num_proc_per_active_eth_core = 1;
 
     std::vector<DeviceAddr> mem_map_bases;
     mem_map_bases.resize(hv(HalMemAddrType::COUNT));
@@ -38,6 +38,7 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_bases[hv(HalMemAddrType::PROFILER)] = GET_ETH_MAILBOX_ADDRESS_HOST(profiler);
     mem_map_bases[hv(HalMemAddrType::KERNEL_CONFIG)] = eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE;
     mem_map_bases[hv(HalMemAddrType::UNRESERVED)] = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    mem_map_bases[hv(HalMemAddrType::CORE_INFO)] = GET_ETH_MAILBOX_ADDRESS_HOST(core_info);
 
     std::vector<uint32_t> mem_map_sizes;
     mem_map_sizes.resize(hv(HalMemAddrType::COUNT));
@@ -49,7 +50,7 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[hv(HalMemAddrType::KERNEL_CONFIG)] = eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_SIZE;
     mem_map_sizes[hv(HalMemAddrType::UNRESERVED)] = eth_l1_mem::address_map::MAX_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
-    return {HalProgrammableCoreType::IDLE_ETH, CoreType::ETH, num_proc_per_idle_eth_core, mem_map_bases, mem_map_sizes};
+    return {HalProgrammableCoreType::ACTIVE_ETH, CoreType::ETH, num_proc_per_active_eth_core, mem_map_bases, mem_map_sizes, false};
 }
 
 }  // namespace tt_metal

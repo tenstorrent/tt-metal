@@ -98,3 +98,84 @@ TEST_F(CommonFixture, TestSemaphoresTensixIdleEth) {
 
     test_sems_across_core_types(this, this->devices_, false);
 }
+
+// This test was written to cover issue #12738 (CBs for workers showing up on
+// active eth cores)
+TEST_F(CommonFixture, TestCBsAcrossWorkerEth) {
+
+    uint32_t intermediate_cb = 24;
+    uint32_t out_cb = 16;
+    std::map<uint8_t, tt::DataFormat> intermediate_and_out_data_format_spec = {
+        {intermediate_cb, tt::DataFormat::Float16_b},
+        {out_cb, tt::DataFormat::Float16_b}
+    };
+    uint32_t num_bytes_for_df = 2;
+    uint32_t single_tile_size = num_bytes_for_df * 1024;
+    uint32_t num_tiles = 2;
+    uint32_t cb_size = num_tiles * single_tile_size;
+
+    uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+
+    for (Device *device : devices_) {
+        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+        bool found_overlapping_core = false;
+        CoreCoord core_coord;
+        for (const auto &eth_core : device->get_active_ethernet_cores(true)) {
+            if (eth_core.x < worker_grid_size.x && eth_core.y < worker_grid_size.y) {
+                core_coord = eth_core;
+                found_overlapping_core = true;
+                break;
+            }
+        }
+
+        if (not found_overlapping_core) {
+            log_info(tt::LogTest, "No core overlaps worker and eth core ranges, skipping");
+            return;
+        }
+
+        Program program;
+        CircularBufferConfig cb_config = CircularBufferConfig(cb_size, intermediate_and_out_data_format_spec)
+            .set_page_size(intermediate_cb, single_tile_size)
+            .set_page_size(out_cb, single_tile_size);
+        auto cb = CreateCircularBuffer(program, core_coord, cb_config);
+
+        CreateKernel(
+            program, "tt_metal/kernels/dataflow/blank.cpp", core_coord,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+
+        CreateKernel(
+            program, "tt_metal/kernels/dataflow/blank.cpp", core_coord,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+        CreateKernel(
+            program, "tt_metal/kernels/dataflow/blank.cpp", core_coord,
+            EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = NOC::NOC_0});
+
+        this->RunProgram(device, program);
+
+        vector<uint32_t> cb_config_vector;
+
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            device, core_coord,
+            program.get_cb_base_addr(device, core_coord, CoreType::WORKER), cb_config_buffer_size, cb_config_vector);
+
+        // ETH core doesn't have CB
+        EXPECT_TRUE(program.get_cb_size(device, core_coord, CoreType::ETH) == 0);
+
+        uint32_t cb_addr = L1_UNRESERVED_BASE;
+        uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
+
+        bool addr_match_intermediate = cb_config_vector.at(intermediate_index) == ((cb_addr) >> 4);
+        bool size_match_intermediate = cb_config_vector.at(intermediate_index + 1) == (cb_size >> 4);
+        bool num_pages_match_intermediate = cb_config_vector.at(intermediate_index + 2) == num_tiles;
+        bool pass_intermediate = (addr_match_intermediate and size_match_intermediate and num_pages_match_intermediate);
+        EXPECT_TRUE(pass_intermediate);
+
+        uint32_t out_index = out_cb * sizeof(uint32_t);
+        bool addr_match_out = cb_config_vector.at(out_index) == ((cb_addr) >> 4);
+        bool size_match_out = cb_config_vector.at(out_index + 1) == (cb_size >> 4);
+        bool num_pages_match_out = cb_config_vector.at(out_index + 2) == num_tiles;
+        bool pass_out = (addr_match_out and size_match_out and num_pages_match_out);
+        EXPECT_TRUE(pass_out);
+    }
+}
