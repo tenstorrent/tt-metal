@@ -1313,7 +1313,7 @@ void noc_semaphore_set_multicast(
  *
  * Note: With this API, sending data only to the source node (when num_dests
  * is 1) may result in unexpected behaviour. For some parameters, hangs have
- * been observed. For other parameters, nothing happens. Consider using
+ * been observed. For some other parameters, nothing may happen. Consider using
  * regular non multicast operations such as *noc_async_write* in this case.
  *
  * Return value: None
