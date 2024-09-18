@@ -187,7 +187,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
     profiler.end("preprocess_prefill_inputs")
 
     generation_start_pos = prefill_seq_len
-    max_generated_tokens = 1
+    max_generated_tokens = 120
     users_decoding = True
 
     # pre-compute the rotational embedding matrix and send to device
@@ -311,7 +311,6 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
             # Device synchrozization ensures profiler is accurate in end-to-end timing
             ttnn.synchronize_device(device)
             profiler.end(f"inference_prefill", iteration=batch_idx)
-            ttnn.DumpDeviceProfiler(device)
             logger.info(f"Prefill finished [{prefill_seq_len} tokens]!")
 
         logger.info("Starting decode...")
@@ -333,9 +332,6 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
         trace_id = None
         device_tt_in = None
         device_tt_out = None
-
-        ttnn.DumpDeviceProfiler(device)
-        ttnn.synchronize_device(device)
 
         profiler.start(f"inference_decode", iteration=batch_idx)
 
@@ -374,18 +370,14 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
                     if iteration > 0 and embed_on_device:  # host-embedded for iteration 0
                         decode_input = tt_embd(pt_encoded_input)
                     intermediate_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
-                    intermediate_out = ttnn.untilize(
-                        intermediate_out, use_multicore=False
-                    )  # multi-core OOMs (https://github.com/tenstorrent/tt-metal/issues/9022)
+                    intermediate_out = ttnn.untilize(intermediate_out, use_multicore=True)
                     # ensure persistent device in/out buffers are in DRAM
                     device_tt_out = ttnn.to_memory_config(intermediate_out, ttnn.DRAM_MEMORY_CONFIG)
                     ttnn.deallocate(intermediate_out, force=True)
                     current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
                     if iteration > 1:
                         ttnn.end_trace_capture(device, trace_id)
-                        ttnn.DumpDeviceProfiler(device)
-                    else:
-                        ttnn.DumpDeviceProfiler(device)
+                        continue  # Capturing the trace doesn't actually execute the commands, so start trace execution from the same iteration
 
                     tt_out = device_tt_out
                 else:
