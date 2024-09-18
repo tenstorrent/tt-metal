@@ -84,7 +84,7 @@ class TtHead:
             "head.conv13",
             [1, 10, 10, 512],
             (1, 1, 1, 1),
-            height_sharding=False,
+            width_sharding=True,
         )
         self.conv14 = Conv(
             torch_model,
@@ -98,7 +98,7 @@ class TtHead:
             "head.conv15",
             [1, 10, 10, 512],
             (1, 1, 1, 1),
-            height_sharding=False,
+            width_sharding=True,
         )
         self.conv16 = Conv(
             torch_model,
@@ -112,7 +112,7 @@ class TtHead:
             "head.conv17",
             [1, 10, 10, 512],
             (1, 1, 1, 1),
-            height_sharding=False,
+            width_sharding=True,
         )
         self.conv18 = Conv(
             torch_model,
