@@ -167,7 +167,7 @@ ln -nsf $build_dir build
 
 # Prepare cmake arguments
 # -DCXX_INCLUDE_WHAT_YOU_USE=include-what-you-use
-cmake_args="-B $build_dir -G Ninja -DCMAKE_BUILD_TYPE=$build_type -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands"
+cmake_args="$cmake_args -B $build_dir -G Ninja -DCMAKE_BUILD_TYPE=$build_type -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands"
 
 # Configure cmake
 cmake $cmake_args
