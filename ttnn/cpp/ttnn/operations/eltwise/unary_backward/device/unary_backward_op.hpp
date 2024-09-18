@@ -14,7 +14,6 @@ namespace ttnn::operations::unary_backward {
 
 enum class UnaryBackwardOpType {
     HARDTANH_BW,
-    THRESHOLD_BW,
     SOFTPLUS_BW,
     DIV_BW,
     RDIV_BW,
@@ -79,8 +78,6 @@ enum class UnaryBackwardOpType {
     REPEAT_BW,
     PROD_BW,
 };
-
-std::vector<Tensor> _threshold_bw( const Tensor& grad, const Tensor& input, float threshold, float value, const std::optional<MemoryConfig>& output_mem_config);
 
 std::vector<Tensor> _acos_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _atan_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
@@ -163,13 +160,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::HARDTANH_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float min, float max, const std::optional<MemoryConfig>& output_mem_config ) {
         return _hardtanh_bw(grad, input, min, max, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::THRESHOLD_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float threshold, float value, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _threshold_bw(grad, input, threshold, value, output_mem_config);
     }
 };
 

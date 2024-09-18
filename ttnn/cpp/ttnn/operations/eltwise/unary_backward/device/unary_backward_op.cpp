@@ -68,7 +68,7 @@ std::vector<Tensor> _hardtanh_bw(
 
 // threshold
 // if input <= threshold = 0 else grad
-std::vector<Tensor> _threshold_bw(
+std::vector<Tensor> ExecuteUnaryBackwardThreshold::invoke(
     const Tensor& grad, const Tensor& input, float threshold, float value, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = ttnn::where(
