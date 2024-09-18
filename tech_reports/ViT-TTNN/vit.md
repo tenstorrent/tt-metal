@@ -15,7 +15,7 @@ Authors: Vishal Shenoy, Mohamed Bahnas
   - [4. ViT Encoder Layer TT-NN Deep Dive](#4-vit-encoder-layer-tt-nn-deep-dive)
     - [4.1 Input](#41-input)
     - [4.2 Sharding parametrization](#42-sharding-parametrization)
-    - [4.3 Layer Normalization (Laynorm)](#43-layer-normalization-laynorm)
+    - [4.3 Layer Normalization (Layernorm)](#43-layer-normalization-layernorm)
     - [4.4 Multi-Head Self-Attention](#44-multi-head-self-attention)
       - [4.4.1 Q,K,V Generation using the Fused Linear OP](#441-qkv-generation-using-the-fused-linear-op)
       - [4.4.2 Splitting into Q-K-V](#442-splitting-into-q-k-v)
@@ -266,8 +266,8 @@ Where:
 - `dim` is the embedding dimension.
 
 ### 4.2 Sharding parametrization 
-The input and output of each OP is either sharded or interleaved, and there is a sharding config for each OP. Optimally, the consequtive OPs will have the same sharding scheme, so the intemrediate results are stored in the local Tensix L1 to minimize the data movement between OPs.
-Here is the parameters used in the OP sharding scheme:
+The input and output of each OP is either sharded or interleaved, and there is a sharding config for each OP. Optimally, the consequtive OPs will have the same sharding scheme, so the intermediate results are stored in the local Tensix L1 to minimize the data movement between OPs.
+Here are the parameters used in the OP sharding scheme:
 ```python
     core_grid = ttnn.CoreGrid(y=batch_size, x=12)
     seqL_t = 224 // 32  # 7  ## sequence length
@@ -279,7 +279,7 @@ Here is the parameters used in the OP sharding scheme:
     class__x = (1152 // 32) // core_grid.x  # 3  ## classification dimension sharding
 ```
 
-### 4.3 Layer Normalization (Laynorm)
+### 4.3 Layer Normalization (Layernorm)
 After embedding the patches, Layer Normalization is applied to the input sequence. This ensures that the input embeddings are normalized before the attention mechanism, which improves the training stability of the model. The **block sharding** in the diagram illustrates how data is partitioned and distributed across multiple processing cores for parallel computation, enhancing efficiency during training.
 
 **Optimized Code**:
@@ -300,9 +300,9 @@ def vit_layernorm_before(config, hidden_states, *, parameters):
 
 **Sharding Config**:
 
-With 2D Block sharding, the block or shard size per each tensix core = [seqL, dim/core_grid.x].
-The block height = input or output shape[0] / core_grid.y = b x seqL / core_grid.y, so each tensix row will have b=1 of height = seqL
-The block width = input or output shape[1] / core_grid.x = dim / core_grid.x
+- With 2D Block sharding, the block or shard size per each tensix core = [seqL, dim/core_grid.x].
+- The block height = input or output shape[0] / core_grid.y = b x seqL / core_grid.y, so each tensix row will have b=1 of height = seqL
+- The block width = input or output shape[1] / core_grid.x = dim / core_grid.x
 
 ```python
 "layernorm_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -314,7 +314,7 @@ The block width = input or output shape[1] / core_grid.x = dim / core_grid.x
 )
 ```
 
-![input](images/laynorm.png)
+![input](images/layernorm.png)
 
 
 ### 4.4 Multi-Head Self-Attention
@@ -347,10 +347,10 @@ query_key_value = ttnn.linear(
 
 **Sharding Config**:
 
-With 2D Block sharding, the block or shard size per each tensix core = [seqL, 3*dim/core_grid.x].
-The block height (per_core_M)= input or output shape[0] / core_grid.y = b x seqL / core_grid.y, so each tensix row will have b=1 of height = seqL
-The input block width (in0_block_w) = input shape[1] / core_grid.x = dim / core_grid.x
-The output block width (per_core_N) = output shape[1] / core_grid.x = 3*dim / core_grid.x
+- With 2D Block sharding, the block or shard size per each tensix core = [seqL, 3*dim/core_grid.x].
+- The block height (per_core_M)= input or output shape[0] / core_grid.y = b x seqL / core_grid.y, so each tensix row will have b=1 of height = seqL
+- The input block width (in0_block_w) = input shape[1] / core_grid.x = dim / core_grid.x
+- The output block width (per_core_N) = output shape[1] / core_grid.x = 3*dim / core_grid.x
 
 ```python
 "query_key_value_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -438,12 +438,6 @@ The output block width (per_core_N) = seqL
 #### 4.4.4 Matmul with Value
 The normalized attention scores are then multiplied by the Value matrix to produce the attention output. This is the core of the self-attention mechanism, allowing the model to focus on different parts of the input sequence. **Height sharding** is used.
 
-**Functional Code**:
-
-```python
-context_layer = ttnn.matmul(attention_probs, value)
-```
-
 **Optimized Code**:
 
 ```python
@@ -452,10 +446,10 @@ context_layer = ttnn.matmul(attention_probs, value, memory_config=ttnn.L1_HEIGHT
 
 **Sharding Config**:
 
-With 1D Height sharding, the block or shard size per each tensix core = [seqL, head_size].
-The block height (per_core_M)= input or output shape[0] / (core_grid.y* core_grid.x) = (b x head_count x seqL) /(core_grid.y * core_grid.x) , so each tensix row will be of height = seqL
-The input block width (in0_block_w) = seqL
-The output block width (per_core_N) = head_size
+- With 1D Height sharding, the block or shard size per each tensix core = [seqL, head_size].
+- The block height (per_core_M)= input or output shape[0] / (core_grid.y* core_grid.x) = (b x head_count x seqL) /(core_grid.y * core_grid.x) , so each tensix row will be of height = seqL
+- The input block width (in0_block_w) = seqL
+- The output block width (per_core_N) = head_size
 
 ```python
 "attention_probabilities_by_value_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
@@ -500,10 +494,10 @@ This step aggregates the outputs from the different heads into a single vector r
 
 **Sharding Config**:
 
-With 2D Block sharding, the block or shard size per each tensix core = [seqL, dim/core_grid.x].
-The block height (per_core_M)= input or output shape[0] / core_grid.y = b x seqL / core_grid.y, so each tensix row will have b=1 of height = seqL
-The input block width (in0_block_w) = input shape[1] / core_grid.x = dim / core_grid.x
-The output block width (per_core_N) = output shape[1] / core_grid.x = dim / core_grid.x
+- With 2D Block sharding, the block or shard size per each tensix core = [seqL, dim/core_grid.x].
+- The block height (per_core_M)= input or output shape[0] / core_grid.y = b x seqL / core_grid.y, so each tensix row will have b=1 of height = seqL
+- The input block width (in0_block_w) = input shape[1] / core_grid.x = dim / core_grid.x
+- The output block width (per_core_N) = output shape[1] / core_grid.x = dim / core_grid.x
 
 ```python
     "self_output_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -624,16 +618,16 @@ def vit_feedforward(
 **Sharding Config**:
 
 For FF1:
-With 2D Block sharding, the block or shard size per each tensix core = [seqL, 4*dim/core_grid.x].
-The block height (per_core_M)= input or output shape[0] / core_grid.y = b x seqL / core_grid.y, so each tensix row will have b=1 of height = seqL
-The input block width (in0_block_w) = input shape[1] / core_grid.x = dim / core_grid.x
-The output block width (per_core_N) = output shape[1] / core_grid.x = 4*dim / core_grid.x
+- With 2D Block sharding, the block or shard size per each tensix core = [seqL, 4*dim/core_grid.x].
+- The block height (per_core_M)= input or output shape[0] / core_grid.y = b x seqL / core_grid.y, so each tensix row will have b=1 of height = seqL
+- The input block width (in0_block_w) = input shape[1] / core_grid.x = dim / core_grid.x
+- The output block width (per_core_N) = output shape[1] / core_grid.x = 4*dim / core_grid.x
 
 For FF2:
-With 2D Block sharding, the block or shard size per each tensix core = [seqL, dim/core_grid.x].
-The block height (per_core_M)= input or output shape[0] / core_grid.y = b x seqL / core_grid.y, so each tensix row will have b=1 of height = seqL
-The input block width (in0_block_w) = input shape[1] / core_grid.x = 4*dim / core_grid.x
-The output block width (per_core_N) = output shape[1] / core_grid.x = dim / core_grid.x
+- With 2D Block sharding, the block or shard size per each tensix core = [seqL, dim/core_grid.x].
+- The block height (per_core_M)= input or output shape[0] / core_grid.y = b x seqL / core_grid.y, so each tensix row will have b=1 of height = seqL
+- The input block width (in0_block_w) = input shape[1] / core_grid.x = 4*dim / core_grid.x
+- The output block width (per_core_N) = output shape[1] / core_grid.x = dim / core_grid.x
 
 ```python
     "ff1_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
