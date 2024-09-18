@@ -13,9 +13,9 @@ on:
           - add
           - line_all_gather
           - logical_and_
-          - eltwise.frac
-          - eltwise.ceil
-          - eltwise.trunc
+          - eltwise.frac.frac_interleaved
+          - eltwise.ceil.ceil_interleaved
+          - eltwise.trunc.trunc_interleaved
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
           - matmul.full.matmul_default_interleaved
