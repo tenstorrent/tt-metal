@@ -1322,6 +1322,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::acos);
     detail::bind_unary_operation(module, ttnn::asin);
     detail::bind_unary_operation(module, ttnn::atan);
+    detail::bind_unary_operation(module, ttnn::bitwise_not, "Input tensor needs to be in the range [-2147483647, 2147483647], INT32 dtype. Support provided only for Wormhole_B0.");
     detail::bind_unary_operation(module, ttnn::cos);
     detail::bind_unary_operation(module, ttnn::erfinv);
     detail::bind_unary_operation(module, ttnn::exp2,
@@ -1401,7 +1402,6 @@ void py_module(py::module& module) {
     detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_and, "value", "scalar value", "Input tensor needs to be positive, INT32 dtype. Support provided only for Wormhole_B0.");
     detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_or, "value", "scalar value", "Input tensor needs to be positive, INT32 dtype. Support provided only for Wormhole_B0.");
     detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_xor, "value", "scalar value", "Input tensor needs to be positive, INT32 dtype. Support provided only for Wormhole_B0.");
-    detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_not, "value", "scalar value", "Input tensor needs to be in the range [-2147483647, 2147483647], INT32 dtype. Support provided only for Wormhole_B0.");
 
 
     // Unary ops with dim parameter
