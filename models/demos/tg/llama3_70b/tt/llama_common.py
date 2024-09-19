@@ -52,3 +52,9 @@ def tt_all_gather(input_tensor, mesh_device, cluster_axis, dim, num_links=2, mem
     return ttnn.line_all_gather(
         input_tensor, dim, num_links=num_links, cluster_axis=cluster_axis, mesh_device=mesh_device
     )
+
+
+def upper_pad_sequence_length(length, padding_size):
+    if length % padding_size == 0:
+        return length  # No padding needed
+    return ((length + padding_size - 1) // padding_size) * padding_size

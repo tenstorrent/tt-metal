@@ -12,6 +12,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import BASE_URL, ConcatMesh2D
 from models.demos.t3000.llama2_70b.tt.model_config import (
     get_model_config,
 )
+from models.demos.tg.llama3_70b.tt.llama_common import upper_pad_sequence_length
 
 
 class TtLlamaModelForGeneration:
@@ -89,7 +90,7 @@ class TtLlamaModelForGeneration:
         batch, seq_len = tokens.shape
         assert batch == 1
         assert start_pos == 0, "start_pos must be 0 for prefill_forward_single_user"
-        assert seq_len in [128, 2048, 8 * 1024], f"Only prefill up to 128 or 2048 tokens is supported, got {seq_len}"
+        assert seq_len % 32 == 0, f"seq_len must be divisible by 32, got {seq_len}"
         print(f"prefill_forward_single_user: {seq_len}")
         self._update_model_config("prefill", batch, seq_len)
 
@@ -111,14 +112,16 @@ class TtLlamaModelForGeneration:
     def prefill_forward(self, tokens: torch.Tensor, start_pos: int):
         batch, seq_len = tokens.shape
         assert seq_len <= 8 * 1024, f"Only prefill up to 2048 tokens is supported, got {seq_len}"
+        prefill_seq_len = upper_pad_sequence_length(
+            seq_len, self.tt_model.model_config["PADDING_LENGTH"]
+        )  # Pad seq_len to nearest_32 multiple
 
-        prefill_seq_len = 128 if seq_len <= 128 else 2048 if seq_len <= 2048 else 8 * 1024
         self._update_model_config("prefill", batch, prefill_seq_len)
 
         batch, seq_len = tokens.shape
         last_token_idx = seq_len - 1
         output_logits = torch.zeros(batch, seq_len, self.params.vocab_size)
-        # pad tokens to 128 or 2048
+        # pad tokens to nearest 32 multiple
         prefill_ids = torch.cat([tokens, torch.zeros(batch, prefill_seq_len - seq_len).long()], dim=-1)
 
         for user_id in range(batch):
@@ -126,10 +129,8 @@ class TtLlamaModelForGeneration:
 
             logits = self.prefill_forward_single_user(prefill_ids[user_id : user_id + 1], start_pos, user_id)
 
-            # output_logits[user_id] = logits[:, :seq_len, :]
-            # Since we give unpadded_seq_len, only the tile containing the last token is returned
-            # output_logits[user_id] = logits[:, last_token_idx % 32 : last_token_idx % 32 + 1, :]
-            output_logits[user_id] = logits[:, :seq_len, :]
+            # Since we give padded_seq_len, we get only the last token
+            output_logits[user_id] = logits[:, last_token_idx % 32 : last_token_idx % 32 + 1, :]
         logger.info(f"Finished prefill for all users up to {seq_len} tokens, Starting decode...")
 
         return output_logits

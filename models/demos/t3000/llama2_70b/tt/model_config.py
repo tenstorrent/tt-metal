@@ -67,6 +67,7 @@ def get_model_config(
         "MAX_CONTEXT_LEN": max_context_len,
         "llama3-tg": MAX_SEQ_LEN_LLAMA3,
         "llama3.1-tg": MAX_SEQ_LEN_LLAMA3_1,
+        "PADDING_LENGTH": 32,
         "COMPUTE_KERNEL_CONFIG": ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=True,
