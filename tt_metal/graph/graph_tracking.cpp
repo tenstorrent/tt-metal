@@ -45,12 +45,12 @@ void GraphTracker::track_deallocate(Buffer* buffer) {
     }
 }
 
-void GraphTracker::track_allocate_cb(const CoreRangeSet &core_range_set, uint64_t addr, uint64_t size) {
+void GraphTracker::track_allocate_cb(const CoreRangeSet &core_range_set, uint64_t addr, uint64_t size, bool is_globally_allocated) {
     if (processors.empty()) {
         return;
     }
     for (auto& it : processors) {
-        it->track_allocate_cb(core_range_set, addr, size);
+        it->track_allocate_cb(core_range_set, addr, size, is_globally_allocated);
     }
 }
 

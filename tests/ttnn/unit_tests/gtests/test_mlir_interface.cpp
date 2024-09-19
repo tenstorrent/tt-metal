@@ -88,13 +88,6 @@ void compare_l1_circular_buffer_allocations(
         std::cout << "DBG cb[" << i << "] " << std::get<0>(usage_estimator_result[i]) << " "
                   << graph_circular_buffer_allocations[i] << std::endl;
 
-        // If the size of CB returned by the estimator is c_cb_shares_space_with_sharded_operand that means that the CB
-        // is sharing space with sharded operand, so we skip the comparison as the graph capture doesn't recognize this
-        // case.
-        if (std::get<0>(usage_estimator_result[i]) == c_cb_shares_space_with_sharded_operand) {
-            continue;
-        }
-
         EXPECT_EQ(std::get<0>(usage_estimator_result[i]), graph_circular_buffer_allocations[i]);
     }
 }

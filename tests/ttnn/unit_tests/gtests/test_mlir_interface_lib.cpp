@@ -3,22 +3,15 @@
 #include <cstddef>
 
 #include "mlir_interface_api.hpp"
-#include "mlir_l1_interface.hpp"
 
 static void compare_cb_allocations(
     const std::vector<uint32_t>& expected, const std::optional<std::vector<uint32_t>>& output) {
-    static const bool graph_capture_en = ttnn::mlir_interface::is_graph_capture_mode_enabled();
-
     EXPECT_TRUE(output.has_value());
     for (auto x : output.value()) {
         std::cout << "CB " << x << std::endl;
     }
     EXPECT_EQ(expected.size(), output.value().size());
     for (int i = 0; i < expected.size(); i++) {
-        // TODO: Graph capture currently doesn't recognize CBs which share space with the corresponding sharded operand.
-        if (expected[i] == 0 && graph_capture_en) {
-            continue;
-        }
         EXPECT_EQ(expected[i], output.value()[i]);
     }
 }
@@ -301,7 +294,7 @@ TEST(MLIR_INTERFACE_API, softmax_op) {
     EXPECT_TRUE(ttnn::mlir_interface::does_softmax_op_support_input_output_constraints(
         shape, l1_interleaved_memory_config, data_type, shape, l1_sharded_memory_config, data_type));
     compare_cb_allocations(
-        {32768, 0, 2048, 2048, 655360, 2048},
+        {32768, 32768, 2048, 2048, 655360, 2048},
         ttnn::mlir_interface::get_softmax_circular_buffers_l1_allocations(
             shape,
             l1_interleaved_memory_config,
@@ -316,7 +309,7 @@ TEST(MLIR_INTERFACE_API, softmax_op) {
     EXPECT_TRUE(ttnn::mlir_interface::does_softmax_op_support_input_output_constraints(
         shape, l1_sharded_memory_config, data_type, shape, l1_interleaved_memory_config, data_type));
     compare_cb_allocations(
-        {0, 32768, 2048, 2048, 655360, 2048},
+        {32768, 32768, 2048, 2048, 655360, 2048},
         ttnn::mlir_interface::get_softmax_circular_buffers_l1_allocations(
             shape,
             l1_sharded_memory_config,
@@ -331,7 +324,7 @@ TEST(MLIR_INTERFACE_API, softmax_op) {
     EXPECT_TRUE(ttnn::mlir_interface::does_softmax_op_support_input_output_constraints(
         shape, l1_sharded_memory_config, data_type, shape, l1_sharded_memory_config, data_type));
     compare_cb_allocations(
-        {0, 0, 2048, 2048, 655360, 2048},
+        {32768, 32768, 2048, 2048, 655360, 2048},
         ttnn::mlir_interface::get_softmax_circular_buffers_l1_allocations(
             shape,
             l1_sharded_memory_config,
@@ -361,7 +354,7 @@ TEST(MLIR_INTERFACE_API, softmax_op) {
     EXPECT_TRUE(ttnn::mlir_interface::does_softmax_op_support_input_output_constraints(
         shape, l1_sharded_memory_config, data_type, shape, dram_interleaved_memory_config, data_type));
     compare_cb_allocations(
-        {0, 32768, 2048, 2048, 655360, 2048},
+        {32768, 32768, 2048, 2048, 655360, 2048},
         ttnn::mlir_interface::get_softmax_circular_buffers_l1_allocations(
             shape,
             l1_sharded_memory_config,
@@ -376,7 +369,7 @@ TEST(MLIR_INTERFACE_API, softmax_op) {
     EXPECT_TRUE(ttnn::mlir_interface::does_softmax_op_support_input_output_constraints(
         shape, dram_interleaved_memory_config, data_type, shape, l1_sharded_memory_config, data_type));
     compare_cb_allocations(
-        {32768, 0, 2048, 2048, 655360, 2048},
+        {32768, 32768, 2048, 2048, 655360, 2048},
         ttnn::mlir_interface::get_softmax_circular_buffers_l1_allocations(
             shape,
             dram_interleaved_memory_config,

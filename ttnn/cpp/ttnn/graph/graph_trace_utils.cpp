@@ -4,16 +4,14 @@
 
 #include "graph_trace_utils.hpp"
 
-#include "graph_processor.hpp"
-#include "graph_consts.hpp"
-
-
-#include "tt_metal/common/assert.hpp"
-
-#include <unordered_set>
+#include <cstdlib>  // std::strtoul
 #include <string>
-#include <cstdlib> // std::strtoul
+#include <unordered_set>
 #include <vector>
+
+#include "graph_consts.hpp"
+#include "graph_processor.hpp"
+#include "tt_metal/common/assert.hpp"
 
 namespace ttnn::graph {
 
@@ -32,27 +30,31 @@ ttnn::Shape parse_shape(std::string_view shape_string) {
     while (str < end_str) {
         char* next;
         uint32_t value = std::strtoul(str, &next, 10);
-        if (str == next) break; // no conversion happened
+        if (str == next)
+            break;  // no conversion happened
         shape.push_back(value);
         str = next;
         if (*str == ',') {
-            ++str; // skip the comma
+            ++str;  // skip the comma
         }
         if (*str == ' ') {
-            ++str; // skip spaces, assume a single space
+            ++str;  // skip spaces, assume a single space
         }
     }
 
     return ttnn::Shape(shape);
 }
-} // namespace
+}  // namespace
 
 // returns sizes for every circular buffer allocation
 std::vector<uint32_t> extract_circular_buffer_allocations_per_core(const nlohmann::json& trace) {
     std::vector<uint32_t> circular_buffer_sizes;
     for (const auto& v : trace) {
         if (v["node_type"] == "circular_buffer_allocate") {
-            circular_buffer_sizes.emplace_back(std::stoi(v["params"]["size"].get<std::string>()));
+            const uint32_t cb_size = std::stoi(v["params"]["globally_allocated"].get<std::string>())
+                                         ? (uint32_t)0
+                                         : std::stoi(v["params"]["size"].get<std::string>());
+            circular_buffer_sizes.emplace_back(cb_size);
         }
     }
     return circular_buffer_sizes;
@@ -104,7 +106,7 @@ uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace) {
         } else if (v[kNodeType] == kNodeBufferDeallocate) {
             auto connection = v[kConnections][0].get<int>();
             auto buffer = trace[connection];
-            if(buffer[kParams][kType] == "L1") {
+            if (buffer[kParams][kType] == "L1") {
                 total_buffer -= stoi(buffer[kParams][kSize].get<std::string>());
             }
         } else if (v[kNodeType] == kNodeFunctionEnd) {
@@ -137,7 +139,7 @@ std::pair<uint32_t, uint32_t> count_intermediate_and_output_tensors(const nlohma
             last_end_found = true;
             last_end_index = i;
 
-            if(v[kParams][kName] == "create_device_tensor") {
+            if (v[kParams][kName] == "create_device_tensor") {
                 auto id = v[kConnections][0].get<int>();
                 intermediate_tensors.insert(id);
             }
@@ -148,14 +150,14 @@ std::pair<uint32_t, uint32_t> count_intermediate_and_output_tensors(const nlohma
     TT_ASSERT(last_end_found);
 
     auto connections = trace[last_end_index][kConnections].get<std::unordered_set<uint32_t>>();
-    for(auto index : connections) {
+    for (auto index : connections) {
         // It can be tensor or some other node like
-        if(trace[index][kNodeType] == kNodeTensor) {
+        if (trace[index][kNodeType] == kNodeTensor) {
             output_tensors.insert(index);
         }
     }
 
-    for(int index : output_tensors) {
+    for (int index : output_tensors) {
         intermediate_tensors.erase(index);
     }
 
@@ -163,7 +165,7 @@ std::pair<uint32_t, uint32_t> count_intermediate_and_output_tensors(const nlohma
     return {intermediate_tensors.size(), output_tensors.size()};
 }
 
-std::vector<std::string> extract_calltrace(const nlohmann::json& trace){
+std::vector<std::string> extract_calltrace(const nlohmann::json& trace) {
     std::vector<std::string> op_calls;
     size_t i = 0;
 
@@ -179,11 +181,10 @@ std::vector<std::string> extract_calltrace(const nlohmann::json& trace){
     return op_calls;
 }
 
-std::unordered_set<uint32_t> extract_output_tensors(const nlohmann::json& trace)
-{
+std::unordered_set<uint32_t> extract_output_tensors(const nlohmann::json& trace) {
     // Lambda to find the last 'function_end' node
     auto find_function_end_node = [](const auto& trace) -> const nlohmann::json& {
-        for(int i = trace.size() - 1; i >= 0; --i) {
+        for (int i = trace.size() - 1; i >= 0; --i) {
             const auto& v = trace[i];
             if (v[kNodeType] == kNodeFunctionEnd) {
                 return v;
@@ -211,13 +212,12 @@ std::unordered_set<uint32_t> extract_output_tensors(const nlohmann::json& trace)
     return output_tensors;
 }
 
-std::vector<TensorInfo> extract_output_info(const nlohmann::json& trace)
-{
+std::vector<TensorInfo> extract_output_info(const nlohmann::json& trace) {
     std::vector<TensorInfo> output;
     auto output_tensors = extract_output_tensors(trace);
 
     for (const auto& node : trace) {
-        if (node[kNodeType] != kNodeBuffer )
+        if (node[kNodeType] != kNodeBuffer)
             continue;
 
         auto connections = node[kConnections].get<std::unordered_set<uint32_t>>();
@@ -225,23 +225,25 @@ std::vector<TensorInfo> extract_output_info(const nlohmann::json& trace)
             if (output_tensors.find(tensor_id) == output_tensors.end())
                 continue;
 
-            const auto type = node[kParams][kType] == "L1" ? tt::tt_metal::BufferType::L1 : tt::tt_metal::BufferType::DRAM;
+            const auto type =
+                node[kParams][kType] == "L1" ? tt::tt_metal::BufferType::L1 : tt::tt_metal::BufferType::DRAM;
             const auto size = stoi(node[kParams][kSize].get<std::string>());
 
             const auto& tensor = trace[tensor_id];
             const std::string shape_string = tensor[kParams][kShape];
             const auto shape = parse_shape(shape_string);
 
-            output.emplace_back(TensorInfo {.shape = shape, .size = size, .type = type});
+            output.emplace_back(TensorInfo{.shape = shape, .size = size, .type = type});
         }
     }
 
     return output;
 }
 
-std::ostream &operator<<(std::ostream &os, const TensorInfo &info) {
-    os << "TensorInfo{shape: " << info.shape << ", size: " << info.size << ", type: " << static_cast<int>(info.type) << "}";
+std::ostream& operator<<(std::ostream& os, const TensorInfo& info) {
+    os << "TensorInfo{shape: " << info.shape << ", size: " << info.size << ", type: " << static_cast<int>(info.type)
+       << "}";
     return os;
 }
 
-} // namespace ttnn::graph
+}  // namespace ttnn::graph

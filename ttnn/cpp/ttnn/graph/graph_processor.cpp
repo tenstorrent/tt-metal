@@ -12,6 +12,7 @@
 #include <pybind11/stl.h>
 #include <cxxabi.h>
 #include <memory>
+#include <string>
 #include <typeindex>
 #include <unordered_map>
 #include "ttnn/core.hpp"
@@ -137,12 +138,13 @@ void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
 
 }
 
-void GraphProcessor::track_allocate_cb(const CoreRangeSet &core_range_set, uint64_t addr, uint64_t size) {
+void GraphProcessor::track_allocate_cb(const CoreRangeSet &core_range_set, uint64_t addr, uint64_t size, bool is_globally_allocated) {
     const std::lock_guard<std::mutex> lock(mutex);
     std::unordered_map<std::string, std::string> params = {
         {kSize, std::to_string(size)},
         {kAddress, std::to_string(addr)},
-        {"core_range_set", core_range_set.str()}
+        {"core_range_set", core_range_set.str()},
+        {"globally_allocated", std::to_string(is_globally_allocated)}
     };
     auto counter = graph.size();
     {
@@ -181,7 +183,7 @@ void GraphProcessor::track_program(tt::tt_metal::Program* program) {
     }
 
     for (auto& cb : program->circular_buffers()) {
-        track_allocate_cb(cb->core_ranges(), 0, cb->size());
+        track_allocate_cb(cb->core_ranges(), 0, cb->size(), cb->globally_allocated());
     }
 }
 
