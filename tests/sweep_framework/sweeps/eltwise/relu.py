@@ -3,9 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-
 import ttnn
-
+from tests.sweep_framework.utils import gen_shapes
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
@@ -18,14 +17,7 @@ TIMEOUT = 30
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": [
-            [8, 1, 33, 256],
-            [8, 1, 256, 32],
-            [8, 8, 256, 384],
-            [8, 5, 13, 512],
-            [8, 5, 32, 512],
-            [1, 1, 32, 16384],
-        ],
+        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 32),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
