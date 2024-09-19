@@ -29,7 +29,6 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
     export LLAMA3_TOKENIZER_PATH=<path_to_checkpoint_dir> # Path needs to include the tokenizer.model file
     export LLAMA3_CACHE_PATH=<weight_cache_dir>
 
-    export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
     export TIKTOKEN_CACHE_DIR=""
 
     pip install -r models/demos/t3000/llama2_70b/reference/llama/requirements.txt
