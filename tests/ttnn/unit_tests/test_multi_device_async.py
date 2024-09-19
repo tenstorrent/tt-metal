@@ -243,10 +243,14 @@ def test_multi_device_data_parallel_op_chain(pcie_mesh_device, program_cache, in
         pcie_mesh_device.get_device(device).enable_async(False)
 
 
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.ROW_MAJOR_LAYOUT,
+    ],
+)
 @pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_multi_device_argmax(pcie_mesh_device, layout, mem_config):
-    pytest.skip("Segfault on CI")
     for device in pcie_mesh_device.get_device_ids():
         pcie_mesh_device.get_device(device).enable_async(True)
 
