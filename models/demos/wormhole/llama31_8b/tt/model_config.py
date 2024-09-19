@@ -117,6 +117,15 @@ class TtModelArgs:
             grid = device.compute_with_storage_grid_size()
             self.max_grid_size = ttnn.CoreGrid(x=grid.x, y=grid.y)
 
+            self.dram_weight_grid = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
+                    )
+                }
+            )
+
             # Compute kernel shared by attention and MLP. FP32 acc is needed for accuracy
             self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,  # DRAM-bound so keep full precision here

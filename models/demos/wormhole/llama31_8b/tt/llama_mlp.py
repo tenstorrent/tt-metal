@@ -32,38 +32,21 @@ class TtLlamaMLP(torch.nn.Module):
         else:
             cache_name = lambda name: weight_cache_path / (base_name + f".{name}")
 
-        as_tensor = lambda name, type: ttnn.as_tensor(
-            torch_weight(name),
-            dtype=type,
-            device=self.device,
-            layout=self.model_config["MLP_W_LAYOUT_TILE"],
-            memory_config=self.model_config["MLP_WEIGHTS_MEMCFG"],
-            cache_file_name=cache_name(name),
-        )
-
-        # TODO move this to model config
-        weight_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(self.device.dram_grid_size().x - 1, self.device.dram_grid_size().y - 1),
-                )
-            }
-        )
-
         # w1/w3: 4096 x 14336: width-sharded on 12 banks, 14340 over 12 banks.
         w1_w3_shard_shape = (
             4096,
             14592 // 12,
         )  # (38 shards) 14336 - padded cols to divide by 12 dram cores (and divisible by tile size of 32)
-        w1_w3_shard_spec = ttnn.ShardSpec(weight_grid, w1_w3_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+        w1_w3_shard_spec = ttnn.ShardSpec(
+            args.dram_weight_grid, w1_w3_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False
+        )
         w1_w3_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, w1_w3_shard_spec
         )
         # w2: 14336 x 4096: width-sharded on 12 banks, 4096 over 12 banks.
         # TODO should dim 0 be expanded to 32k like in llama2?
         w2_shard_shape = (14336, 4224 // 12)  # (11 shards)  padded cols to divide by 12 dram cores
-        w2_shard_spec = ttnn.ShardSpec(weight_grid, w2_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+        w2_shard_spec = ttnn.ShardSpec(args.dram_weight_grid, w2_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
         w2_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
 
         # TODO Clean up this code. With sharding, we load the normal weights and then shard them
