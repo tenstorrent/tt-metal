@@ -576,10 +576,11 @@ constexpr auto clamp_bw = ttnn::register_operation<
 
 constexpr auto softplus_bw = ttnn::register_operation<
     "ttnn::softplus_bw",
-    operations::unary_backward::ExecuteUnaryBackwardSoftplus();
+    operations::unary_backward::ExecuteUnaryBackwardSoftplus>();
+
 constexpr auto hardtanh_bw = ttnn::register_operation<
     "ttnn::hardtanh_bw",
-    operations::unary_backward::ExecuteUnaryBackwardHardtanh();
+    operations::unary_backward::ExecuteUnaryBackwardHardtanh>();
 
 constexpr auto rdiv_bw = ttnn::register_operation<
     "ttnn::rdiv_bw",
