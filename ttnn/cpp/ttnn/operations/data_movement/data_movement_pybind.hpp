@@ -15,6 +15,7 @@
 #include "ttnn/operations/data_movement/clone/clone_pybind.hpp"
 #include "ttnn/operations/data_movement/concat/concat_pybind.hpp"
 #include "ttnn/operations/data_movement/copy/copy_pybind.hpp"
+#include "ttnn/operations/data_movement/expand/expand_pybind.hpp"
 #include "ttnn/operations/data_movement/fill_rm/fill_rm_pybind.hpp"
 #include "ttnn/operations/data_movement/fold/fold_pybind.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/indexed_fill_pybind.hpp"
@@ -78,6 +79,7 @@ void py_module(py::module& module) {
     py_bind_sharded_to_interleaved_partial(module);
     py_bind_squeeze(module);
     py_bind_unsqueeze(module);
+    expand::bind_expand_operation(module);
 }
 }  // namespace data_movement
 }  // namespace operations
