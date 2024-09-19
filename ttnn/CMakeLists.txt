@@ -608,19 +608,30 @@ if(WITH_PYTHON_BINDINGS)
     list(APPEND TTNN_PUBLIC_LINK_LIBRARIES pch_pybinds ${Python3_LIBRARIES})
 endif()
 
+message (STATUS "CMAKE COMPILER ID ${CMAKE_CXX_COMPILER_ID}")
+
+function(use_precompiled_header TARGET)
+    message(STATUS "PRECOMPILED_HEADER_TARGET: ${PRECOMPILED_HEADER_TARGET}")
+    if("${PRECOMPILED_HEADER_TARGET}" STREQUAL "")
+        set(PRECOMPILED_HEADER_TARGET "${TARGET}" PARENT_SCOPE)
+        target_precompile_headers(${TARGET} PUBLIC ${TTNN_PRECOMPILED_HEADERS})
+    else()
+        target_precompile_headers(${TARGET} REUSE_FROM ${PRECOMPILED_HEADER_TARGET})
+    endif()
+endfunction()
+
+set(PRECOMPILED_HEADER_TARGET "")
 
 function(add_ttnn_sublibrary SUBLIBRARY_NAME)
-    message("Adding sublibrary with ${SUBLIBRARY_NAME} ")
     add_library(${SUBLIBRARY_NAME} SHARED ${ARGN})
     target_include_directories(${SUBLIBRARY_NAME} PRIVATE ${TTNN_PUBLIC_INCLUDE_DIRS})
     target_link_libraries(${SUBLIBRARY_NAME} PRIVATE ${TTNN_PUBLIC_LINK_LIBRARIES})
     target_link_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
-    target_precompile_headers(${SUBLIBRARY_NAME} PRIVATE ${TTNN_PRECOMPILED_HEADERS})
+    use_precompiled_header(${SUBLIBRARY_NAME})
+    set(PRECOMPILED_HEADER_TARGET "${PRECOMPILED_HEADER_TARGET}" PARENT_SCOPE)
     target_compile_options(${SUBLIBRARY_NAME} PRIVATE -MP -Wno-int-to-pointer-cast -fno-var-tracking)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_compile_definitions(${SUBLIBRARY_NAME} PRIVATE DISABLE_NAMESPACE_STATIC_ASSERT)
-    else()
-        target_precompile_headers(${SUBLIBRARY_NAME} PRIVATE ${TTNN_PRECOMPILED_HEADERS})
     endif()
     install(TARGETS ${SUBLIBRARY_NAME}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -629,8 +640,6 @@ function(add_ttnn_sublibrary SUBLIBRARY_NAME)
     )
 endfunction()
 
-message("TTNN_PUBLIC_INCLUDE_DIRS: ${TTNN_PUBLIC_INCLUDE_DIRS}")
-message("TTNN_PUBLIC_LINK_LIBRARIES: ${TTNN_PUBLIC_LINK_LIBRARIES}")
 foreach(SUBLIBRARY_PATH ${TTNN_SUBLIBRARIES})
     set(SUBLIBRARY_SRCS ${TTNN_SRC})
     list(FILTER SUBLIBRARY_SRCS INCLUDE REGEX "${SUBLIBRARY_PATH}")
@@ -659,7 +668,7 @@ target_link_libraries(ttnn PUBLIC ttnn_tensor)
 target_link_libraries(ttnn PUBLIC tt_dnn)
 
 target_link_directories(ttnn PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
-target_precompile_headers(ttnn PRIVATE ${TTNN_PRECOMPILED_HEADERS})
+target_precompile_headers(ttnn REUSE_FROM ${PRECOMPILED_HEADER_TARGET})
 
 # We move the library binaries to a different path rather than PROJECT_BINARY_DIR
 # in the Python wheel
