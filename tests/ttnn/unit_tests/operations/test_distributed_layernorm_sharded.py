@@ -221,34 +221,34 @@ def test_post_allgather_layernorm(
     torch_output_tensor = compute_reference_output(torch_input_tensor, torch_weight, is_rmsnorm, eps)
     torch_output_chunks = torch.chunk(torch_output_tensor, num_devices, dim=-1)
 
-    # Compute global statistics
-    if is_rmsnorm:
-        global_ex2 = torch.mean(torch_input_tensor**2, dim=-1, keepdim=True)
-        tt_global_stats = ttnn.from_torch(
-            global_ex2, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
-    else:
-        global_ex = torch.mean(torch_input_tensor, dim=-1, keepdim=True)
-        global_ex = torch.nn.functional.pad(global_ex, (0, 31), "constant", 0)
-        global_ex2 = torch.mean(torch_input_tensor**2, dim=-1, keepdim=True)
-        global_ex2 = torch.nn.functional.pad(global_ex2, (0, 31), "constant", 0)
-        tt_global_stats = ttnn.concat(
-            [
-                ttnn.from_torch(global_ex, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG),
-                ttnn.from_torch(
-                    global_ex2, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-                ),
-            ],
-            -1,
-        )
+    # Compute distributed statistics
+    device_stats_list = []
+    for d in range(num_devices):
+        if is_rmsnorm:
+            local_ex2 = torch.mean(torch_input_chunks[d] ** 2, dim=-1, keepdim=True)
+            local_ex2 = torch.nn.functional.pad(local_ex2, (0, 31), "constant", 0)
+            device_stats_list.append(local_ex2)
+
+        else:
+            local_ex = torch.mean(torch_input_chunks[d], dim=-1, keepdim=True)
+            local_ex = torch.nn.functional.pad(local_ex, (0, 31), "constant", 0)
+            local_ex2 = torch.mean(torch_input_chunks[d] ** 2, dim=-1, keepdim=True)
+            local_ex2 = torch.nn.functional.pad(local_ex2, (0, 31), "constant", 0)
+            device_stats_list.append(local_ex)
+            device_stats_list.append(local_ex2)
+
+    device_stats = torch.cat(device_stats_list, dim=-1)
+    tt_device_stats = ttnn.from_torch(
+        device_stats, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
 
     # shard to 1 core
     tt_stats_sharded_config = ttnn.create_sharded_memory_config(
-        shape=(1, 1, 32, tt_global_stats.get_legacy_shape()[-1]),
+        shape=(1, 1, 32, tt_device_stats.get_legacy_shape()[-1]),
         core_grid=ttnn.CoreGrid(y=1, x=1),
         strategy=ttnn.ShardStrategy.WIDTH,
     )
-    tt_global_stats = ttnn.to_memory_config(tt_global_stats, memory_config=tt_stats_sharded_config)
+    tt_device_stats = ttnn.to_memory_config(tt_device_stats, memory_config=tt_stats_sharded_config)
 
     for d in range(num_devices):
         tt_input_tensor = create_tt_tensors(torch_input_chunks[d], device, input_df, core_grid, input_width)
@@ -256,7 +256,7 @@ def test_post_allgather_layernorm(
             torch_weight_chunks[d], device, weights_df, core_grid, input_width, is_weight=True
         )
         tt_output_tensor = compute_post_allgather_output(
-            tt_input_tensor, tt_weights, tt_global_stats, eps, is_rmsnorm, core_grid, input_width
+            tt_input_tensor, tt_weights, tt_device_stats, eps, is_rmsnorm, core_grid, input_width
         )
         tt_output_torch = ttnn.to_torch(tt_output_tensor).to(torch.bfloat16)
 
