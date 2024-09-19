@@ -112,8 +112,9 @@ void MAIN {
             cb_wait_front(cb_scaler_global, 1);
             reduce_init_delta<false>();
             tile_regs_acquire();
-            for (uint32_t w = 0; w < stats_tiles*num_distributed_blocks; w++) { // Need to read this interleaved now, we have SUM(X) and SUM(X^2) interleaved
-                reduce_tile(cb_stats, cb_scaler_global, 0, scaler0, w % stats_tiles); // E(x) and E(x^2) interleaved so we reduce each one into different dest reg
+            // striding over cb_stats, consisting [E(X), E(X^2)] from all the distributed devices in interleaved order
+            for (uint32_t w = 0; w < stats_tiles*num_distributed_blocks; w++) {
+                reduce_tile(cb_stats, cb_scaler_global, 0, scaler0, w % stats_tiles); // reducing E(x) and E(x^2) separately to different dst
                 cb_pop_front(cb_stats, 1);
             }
             tile_regs_commit();
