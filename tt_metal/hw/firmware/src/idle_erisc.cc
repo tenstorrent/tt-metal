@@ -128,7 +128,8 @@ int main() {
             uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, DISPATCH_CLASS_ETH_DM0);
             uint32_t tt_l1_ptr *cb_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
                 mailboxes->launch.kernel_config.cb_offset);
-            setup_cb_read_write_interfaces(cb_l1_base, 0, mailboxes->launch.kernel_config.max_cb_index, true, true, false);
+            uint8_t max_cb_index = calculate_max_cb_index(mailboxes->launch.kernel_config.cb_mask);
+            setup_cb_read_write_interfaces(cb_l1_base, 0, max_cb_index, true, true, false);
 
             flush_icache();
 

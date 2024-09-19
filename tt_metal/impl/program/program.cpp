@@ -154,7 +154,8 @@ KernelGroup::KernelGroup(
     kernel_id_array_t kernel_ids,
     bool erisc_is_idle,
     int last_cb_index,
-    const CoreRangeSet &new_ranges) :
+    const CoreRangeSet &new_ranges,
+    uint32_t cb_mask) :
     core_ranges({}) {
 
     this->programmable_core_type_index = programmable_core_type_index;
@@ -194,7 +195,7 @@ KernelGroup::KernelGroup(
     }
 
     this->launch_msg.kernel_config.exit_erisc_kernel = false;
-    this->launch_msg.kernel_config.max_cb_index = last_cb_index + 1;
+    this->launch_msg.kernel_config.cb_mask = cb_mask;
     this->launch_msg.go.run = RUN_MSG_GO;
 }
 
@@ -300,6 +301,8 @@ void Program::update_kernel_groups(uint32_t programmable_core_type_index) {
         for (auto &kg_to_cores : map) {
             int last_cb_index = -1;
 
+            uint32_t cb_mask{0};
+
             // Map from core X,Y back to the unique KernelGroup
             for (CoreRange range : kg_to_cores.second) {
                 for (auto y = range.start_coord.y; y <= range.end_coord.y; y++) {
@@ -309,6 +312,7 @@ void Program::update_kernel_groups(uint32_t programmable_core_type_index) {
                         if (not hal.get_supports_cbs(programmable_core_type_index)) continue;
                         auto val = per_core_cb_indices_.find(CoreCoord({x, y}));
                         if (val != per_core_cb_indices_.end()) {
+                            cb_mask |= static_cast<uint32_t>(val->second.to_ulong());
                             int i;
                             for (i = NUM_CIRCULAR_BUFFERS - 1; i >= 0; i--) {
                                 if (val->second[i]) {
@@ -327,7 +331,8 @@ void Program::update_kernel_groups(uint32_t programmable_core_type_index) {
                 kg_to_cores.first.kernel_ids,
                 erisc_is_idle,
                 last_cb_index,
-                kg_to_cores.second));
+                kg_to_cores.second,
+                cb_mask));
             index++;
         }
     }
@@ -359,6 +364,7 @@ CBHandle Program::add_circular_buffer(const CoreRangeSet &core_range_set, const 
     } else {
         circular_buffer->assign_global_address();
     }
+
     // Mark which buffer indices are being used on each core the circular buffer is used on
     for (const CoreRange &core_range : core_range_set.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
@@ -909,7 +915,7 @@ uint32_t Program::finalize_cbs(uint32_t programmable_core_type_index, uint32_t b
     // TODO: has to be better way to do this and don't read from volatile
     for (auto& kg : this->get_kernel_groups(programmable_core_type_index)) {
         // TODO "max_cb_index" is misnamed, it is really the count of indices
-        int32_t id = kg.launch_msg.kernel_config.max_cb_index;
+        int32_t id = (kg.launch_msg.kernel_config.cb_mask == 0 ? 0 : 31 - __builtin_clz(kg.launch_msg.kernel_config.cb_mask) + 1);
         if (id > count) {
             count = id;
         }

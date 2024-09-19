@@ -112,7 +112,7 @@ int main(int argc, char *argv[]) {
 #if !defined(UCK_CHLKC_MATH)
         uint32_t tt_l1_ptr *cb_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
             mailboxes->launch.kernel_config.cb_offset);
-        setup_cb_read_write_interfaces(cb_l1_base, 0, mailboxes->launch.kernel_config.max_cb_index, cb_init_read, cb_init_write, cb_init_write);
+        setup_cb_read_write_interfaces(cb_l1_base, 0, max_cb_index, cb_init_read, cb_init_write, cb_init_write);
 #endif
 
         rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +

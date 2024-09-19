@@ -127,6 +127,7 @@ class CircularBufferConfig {
             }
             this->data_formats_[buffer_index] = data_format;
             this->buffer_indices_.insert(buffer_index);
+            this->buffer_mask |= (1 << buffer_index);
         }
     }
 
@@ -135,6 +136,7 @@ class CircularBufferConfig {
     std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS> data_formats_;
     std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS> page_sizes_;
     std::unordered_set<uint8_t> buffer_indices_;
+    uint32_t buffer_mask{0};
     bool dynamic_cb_ = false;
     // `max_size_` is used to ensure that total size does not grow beyond associated buffer size
     std::optional<uint32_t> max_size_ = std::nullopt;

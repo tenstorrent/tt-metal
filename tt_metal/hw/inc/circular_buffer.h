@@ -6,6 +6,8 @@
 
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "risc_attribs.h"
+#include <array>
+#include <cstdint>
 
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface
 // Commands and data to send to device are pushed into the issue region
@@ -57,6 +59,7 @@ inline void setup_cb_read_write_interfaces(uint32_t tt_l1_ptr *cb_l1_base, uint3
 
     volatile tt_l1_ptr uint32_t* circular_buffer_config_addr = cb_l1_base + start_cb_index * WORDS_PER_CIRCULAR_BUFFER_CONFIG;
 
+    // #7493 : this needs to be densely packed
     for (uint32_t cb_id = start_cb_index; cb_id < max_cb_index; cb_id++) {
 
         // NOTE: fifo_addr, fifo_size and fifo_limit in 16B words!
@@ -87,3 +90,88 @@ inline void setup_cb_read_write_interfaces(uint32_t tt_l1_ptr *cb_l1_base, uint3
         circular_buffer_config_addr += WORDS_PER_CIRCULAR_BUFFER_CONFIG;
     }
 }
+
+size_t calculate_max_cb_index(uint32_t mask) {
+    if (mask == 0) return 0;
+    return 31 - __builtin_clz(mask) + 1;
+}
+
+struct array_mask{
+  std::array<int, 32> arr;
+  size_t size{0};
+};
+
+array_mask create_array_mask(uint32_t mask) {
+    array_mask result;
+    result.arr.fill(-1);
+
+    while (mask != 0) {
+        int bit_pos = __builtin_ctz(mask);
+        result.arr[result.size] = bit_pos;
+        result.size++;
+        mask &= (mask - 1);
+    }
+
+    return result;
+}
+
+class CBSetIterator {
+public:
+    using value_type = int;
+    using difference_type = std::ptrdiff_t;
+    using pointer = const int*;
+    using reference = const int&;
+    using iterator_category = std::input_iterator_tag;
+
+    CBSetIterator(uint32_t mask) : mask(mask), current_bit(find_next()) {}
+    CBSetIterator() : mask(0), current_bit(-1) {}
+
+    int operator*() const {
+        return current_bit;
+    }
+
+    CBSetIterator& operator++() {
+        mask &= (mask - 1);
+        current_bit = find_next();
+        return *this;
+    }
+
+    CBSetIterator operator++(int) {
+        CBSetIterator temp = *this;
+        ++(*this);
+        return temp;
+    }
+
+    bool operator==(const CBSetIterator& other) const {
+        return current_bit == other.current_bit;
+    }
+
+    bool operator!=(const CBSetIterator& other) const {
+        return !(*this == other);
+    }
+
+private:
+    uint32_t mask;
+    int current_bit;
+
+    int find_next() const {
+        if (mask == 0) return -1;
+        return __builtin_ctz(mask);
+    }
+};
+
+class CBSet {
+public:
+    CBSet(uint32_t mask) : mask(mask) {}
+
+    CBSetIterator begin() const {
+        return CBSetIterator(mask);
+    }
+
+    CBSetIterator end() const {
+        return CBSetIterator();
+    }
+
+private:
+    uint32_t mask;
+};
