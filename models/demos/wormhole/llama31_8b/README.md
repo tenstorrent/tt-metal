@@ -59,19 +59,19 @@ Note that while running the demo you might see the warning: `Op | WARNING  | TIL
 # Run the demo with a pre-written batch of 8 user prompts:
 
 # Prefill & Decode demo
-pytest models/demos/wormhole/llama31_8b/demo/demo_with_prefill.py::test_llama_demo[general_weights-1_batch]
+pytest models/demos/wormhole/llama31_8b/demo/demo_with_prefill.py::test_llama_demo[device_params0-general_weights-1_batch]
 
 # Decode-only demo
-pytest models/demos/wormhole/llama31_8b/demo/demo.py::test_llama_demo[general_weights]
+pytest models/demos/wormhole/llama31_8b/demo/demo.py::test_llama_demo[device_params0-general_weights]
 ```
 
 We also provide an input file with 32 user question-prompt for instruct weights (don't forget to update your env flags to the correct instruct weights folder):
 ```
 # Prefill & Decode demo
-pytest models/demos/wormhole/llama31_8b/demo/demo_with_prefill.py::test_llama_demo[instruct_weights-1_batch]
+pytest models/demos/wormhole/llama31_8b/demo/demo_with_prefill.py::test_llama_demo[device_params0-instruct_weights-1_batch]
 
 # Decode-only demo
-pytest models/demos/wormhole/llama31_8b/demo/demo.py::test_llama_demo[instruct_weights]
+pytest models/demos/wormhole/llama31_8b/demo/demo.py::test_llama_demo[device_params0-instruct_weights]
 ```
 
 Both input files are provided inside `models/demos/wormhole/llama31_8b/demo/`.
