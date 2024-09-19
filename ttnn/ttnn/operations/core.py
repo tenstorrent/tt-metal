@@ -196,22 +196,6 @@ ttnn.register_python_operation(
 ttnn.register_python_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operations.core.unsqueeze_to_4D)
 
 
-@ttnn.register_python_operation(
-    name="ttnn.squeeze",
-)
-def squeeze(tensor, dim):
-    r"""squeeze(tensor: ttnn.Tensor, dim: int) -> ttnn.Tensor"""
-    if dim != 0:
-        raise RuntimeError("Only dim=0 is supported for squeeze operation!")
-    if tensor.shape[0] != 1:
-        return tensor
-    if len(tensor.shape) == 1:
-        raise RuntimeError("Cannot squeeze a tensor of rank 1 because rank 0 is not supported by ttnn!")
-    _, *shape = tensor.shape
-    _, *full_shape = tensor.shape.with_tile_padding()
-    return ttnn.reshape(tensor, shape=ttnn.Shape(shape, full_shape))
-
-
 def _golden_function(input_tensor, *args, **kwargs):
     return input_tensor
 
