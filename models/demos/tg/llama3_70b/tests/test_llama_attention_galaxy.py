@@ -120,13 +120,13 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
         return result
 
 
-def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_theta):
+def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_theta, mode="decode"):
     assert len(x.size()) == 3
     batch, seq_len, _ = x.shape
 
     cache_name = lambda name: llama_attention_model.cache_path / (f"{name}")
 
-    if llama_attention_model.model_config["LLM_MODE"] == "decode":
+    if mode == "decode":
         assert seq_len == 1, "Only supporting decode mode"
         x = x.transpose(0, 1).unsqueeze(1)
         assert x.shape == (seq_len, 1, batch, llama_attention_model.hidden_size)
@@ -185,7 +185,7 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_
 
         attn_masks = None
 
-    elif llama_attention_model.model_config["LLM_MODE"] == "prefill":
+    elif mode == "prefill":
         assert (
             seq_len % 256 == 0 and seq_len > 0 and seq_len <= 8192
         ), "Prefill mode only supports seqlen as a multiple of 256 up to 8k"
@@ -310,8 +310,10 @@ def run_test_LlamaAttention_inference(
         cache_path=cache_path,
     )
 
+    mode = "decode" if seq_len == 1 else "prefill"
+
     all_tests_pass, all_pccs = True, []
-    if model_config["LLM_MODE"] == "prefill":
+    if mode == "prefill":
         generation_start_pos = 0
         generation_length = 1
     else:
@@ -327,7 +329,7 @@ def run_test_LlamaAttention_inference(
         start_pos = generation_start_pos + i
 
         # PyTorch output --------------------------------------------------------------------
-        if model_config["LLM_MODE"] == "prefill":
+        if mode == "prefill":
             attention_input, start_pos, freqs_cis, attn_mask = pytorch_LlamaAttention_model.prepare_inputs_prefill(
                 pt_inp_normed, start_pos
             )
@@ -345,13 +347,14 @@ def run_test_LlamaAttention_inference(
 
         # TT hardware execution -------------------------------------------------------------
         attention_input, start_pos, rot_mat, attn_mask = tt_llama_attention_prepare_inputs(
-            tt_LlamaAttention_model, tt_input, start_pos, configuration.rope_theta
+            tt_LlamaAttention_model, tt_input, start_pos, configuration.rope_theta, mode=mode
         )
         tt_out = tt_LlamaAttention_model(
             attention_input,
             rot_mat,
             start_pos,
             attn_mask,
+            mode=mode,
         )
         # tt_out = ttnn.to_torch(tt_out, mesh_composer=ListMeshToTensor(mesh_device))[0]
 
@@ -404,7 +407,7 @@ def run_test_LlamaAttention_inference(
         generation_start_pos,
         generation_length,
         seq_len,
-        model_config["LLM_MODE"] == "prefill",
+        mode == "prefill",
         pcc,
     )
 
@@ -470,8 +473,6 @@ def test_LlamaAttention_inference(
 
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,
-        batch=batch,
-        seq_len=seq_len,
         max_batch_size=max_batch_size,
         max_context_len=max_context_len,
     )
