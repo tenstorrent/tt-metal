@@ -472,7 +472,7 @@ class TtLlamaAttention_galaxy:
         value_layer.deallocate(True)
 
         program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.mesh_device.get_device(0).compute_with_storage_grid_size(),
+            compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=0,  # unused
             k_chunk_size=0,  # unused
         )

@@ -54,8 +54,8 @@ class TtLlamaMLP_galaxy:
                     ttnn.CoreRange(
                         ttnn.CoreCoord(0, 0),
                         ttnn.CoreCoord(
-                            self.mesh_device.get_device(0).dram_grid_size().x - 1,
-                            self.mesh_device.get_device(0).dram_grid_size().y - 1,
+                            self.mesh_device.dram_grid_size().x - 1,
+                            self.mesh_device.dram_grid_size().y - 1,
                         ),
                     )
                 }

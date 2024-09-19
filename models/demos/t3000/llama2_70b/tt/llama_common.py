@@ -189,7 +189,7 @@ def check_mesh_device(t3k_mesh_device, model_config):
         model_config["NUM_DEVICES"],
     )
 
-    compute_grid_size = t3k_mesh_device.get_device(0).compute_with_storage_grid_size()
+    compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
     assert not (
         compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]
     ), ("Requires grid size of at least %d to run", model_config["MAX_GRID_SIZE"])

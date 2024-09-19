@@ -46,9 +46,9 @@ void kernel_main() {
     };
 
 
-    const InterleavedPow2AddrGen<page_table_is_dram> page_table_gen = {
+    const InterleavedAddrGen<page_table_is_dram> page_table_gen = {
         .bank_base_address = page_table_addr,
-        .log_base_2_of_page_size = log2_page_table_stick_size
+        .page_size = page_table_stick_size
     };
     cb_reserve_back(cb_id_page_table, 1);
     uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
