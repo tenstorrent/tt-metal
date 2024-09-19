@@ -133,7 +133,7 @@ def compute_reference_output(torch_input_tensor, torch_weight, is_rmsnorm, eps):
 @pytest.mark.parametrize(("min_pcc_ex", "max_atol_ex"), [(0.9997, 0.01)])
 @pytest.mark.parametrize(("min_pcc_ex2", "max_atol_ex2"), [(0.987, 0.04)])
 def test_pre_allgather_layernorm(
-    all_devices,
+    device,
     use_program_cache,
     input_width,
     num_devices,
@@ -148,8 +148,6 @@ def test_pre_allgather_layernorm(
     min_pcc_ex2,
     max_atol_ex2,
 ):
-    device = all_devices[0]
-
     torch_input_tensor, _, torch_input_chunks, _ = create_input_and_weight_tensors(
         input_width, num_devices, seed, mean, std
     )
@@ -201,7 +199,7 @@ def test_pre_allgather_layernorm(
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
 @pytest.mark.parametrize("core_grid", ((4, 8),))
 def test_post_allgather_layernorm(
-    all_devices,
+    device,
     use_program_cache,
     input_width,
     num_devices,
@@ -216,8 +214,6 @@ def test_post_allgather_layernorm(
     max_atol,
     core_grid,
 ):
-    device = all_devices[0]
-
     torch_input_tensor, torch_weight, torch_input_chunks, torch_weight_chunks = create_input_and_weight_tensors(
         input_width, num_devices, seed, mean, std
     )
@@ -285,7 +281,7 @@ def test_post_allgather_layernorm(
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
 @pytest.mark.parametrize("core_grid", ((4, 8),))
 def test_simulated_distributed_layernorm(
-    all_devices,
+    device,
     use_program_cache,
     input_width,
     num_devices,
@@ -300,8 +296,6 @@ def test_simulated_distributed_layernorm(
     max_atol,
     core_grid,
 ):
-    device = all_devices[0]
-
     # Create input and weight tensors
     torch_input_tensor, torch_weight, torch_input_chunks, torch_weight_chunks = create_input_and_weight_tensors(
         input_width, num_devices, seed, mean, std
