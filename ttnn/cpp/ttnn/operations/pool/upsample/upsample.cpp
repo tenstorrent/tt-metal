@@ -11,15 +11,13 @@ namespace ttnn::operations::upsample {
 
 ttnn::Tensor ExecuteUpSample::invoke(const ttnn::Tensor& input_tensor,
     std::variant<int, tt::tt_metal::Array2D, tt::tt_metal::Array3D, tt::tt_metal::Array4D> scale_factor,
-    std::string mode,
-    std::optional<MemoryConfig> output_mem_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    const std::string &mode,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
         MemoryConfig mem_config = output_mem_config.value_or(input_tensor.memory_config());
         ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(
             ttnn::init_device_compute_kernel_config(input_tensor.device()->arch(), std::nullopt, MathFidelity::HiFi4));
-        if(mode.empty()) {
-            mode = "nearest";
-        }
+
         int scale_h = 1;
         int scale_w = 1;
         std::visit(
