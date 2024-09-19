@@ -32,16 +32,16 @@
 
 namespace ttnn::operations::binary_backward {
 
-// to be used for all binary backward ops to create a zeros tensor when there's no preallocated output_tensor
+// to be used for all binary backward ops to create an empty tensor when there's no preallocated output_tensor
 void preallocated_tensors_check(std::optional<Tensor>& input_grad, std::optional<Tensor>& other_grad, const Tensor& input, const Tensor& other,  const std::array<bool, 2>& required_outputs){
 
     TT_FATAL(required_outputs[0] || required_outputs[1], "Atleast one gradient is expected to be calculated.");
 
     if(required_outputs[0] && !input_grad.has_value()){
-        input_grad = ttnn::zeros_like(input);
+        input_grad = ttnn::empty_like(input);
     }
     if(required_outputs[1] && !other_grad.has_value()){
-        other_grad = ttnn::zeros_like(other);
+        other_grad = ttnn::empty_like(other);
     }
 }
 
