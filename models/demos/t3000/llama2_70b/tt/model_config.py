@@ -54,6 +54,8 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
         else:
             assert max_batch_size == 32
 
+    num_devices = 8
+
     L1_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
     WIDTH_SHARDED_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
     HEIGHT_SHARDED_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
@@ -67,6 +69,7 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
         "ALL_GATHER_NUM_LINKS": 1,
         "MAX_BATCH_SIZE": max_batch_size,
         "MAX_CONTEXT_LEN": max_context_len,
+        "NUM_DEVICES": num_devices,
         "llama3-tg": MAX_SEQ_LEN_LLAMA3,
         "llama3.1-tg": MAX_SEQ_LEN_LLAMA3_1,
         "COMPUTE_KERNEL_CONFIG": ttnn.WormholeComputeKernelConfig(
