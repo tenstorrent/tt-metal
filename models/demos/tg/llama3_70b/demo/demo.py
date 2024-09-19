@@ -281,21 +281,6 @@ def run_decode(
         if return_full_logits:
             full_logits.append(logits.clone().detach())
 
-        if cur_pos == min(prompt_lens):
-            key_caches = []
-            value_caches = []
-            # for i in range(len(model.tt_model.layers)):
-            #     key_cache = model.tt_model.layers[i].attention.layer_past[0]
-            #     key_cache = ttnn.to_torch(key_cache, mesh_composer=ttnn.ListMeshToTensor(tt_args.mesh_device))
-            #     key_caches.append(key_cache)
-            #     value_cache = model.tt_model.layers[i].attention.layer_past[1]
-            #     value_cache = ttnn.to_torch(value_cache, mesh_composer=ttnn.ListMeshToTensor(tt_args.mesh_device))
-            #     value_caches.append(value_cache)
-            # key_caches = torch.stack([torch.stack(key_cache, dim=0) for key_cache in key_caches])
-            # value_caches = torch.stack([torch.stack(value_cache, dim=0) for value_cache in value_caches])
-            # torch.save(torch.tensor(key_caches), "models/demos/tg/llama3_70b/data/decode_key_cache.pt")
-            # torch.save(torch.tensor(value_caches), "models/demos/tg/llama3_70b/data/decode_value_cache.pt")
-
     latency_printout(latencies, model_args, total_len - min_prompt_len)
     output = get_all_text(tokenizer, tokens, prompt_tokens, output_tokens)
 

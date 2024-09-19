@@ -201,7 +201,7 @@ class TtLlamaAttention_galaxy:
             self.FUSED_QKV_MM_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
                 (1, 1, self.model_config["MAX_MM_SEQ_LEN"], 2048),
                 (1, 1, 2048, 1280),
-                grid=ttnn.CoreGrid(x=8, y=4),
+                grid=ttnn.CoreGrid(x=8, y=self.model_config["CORE_GRID_Y"]),
                 overwrite_subblock_h=1,
                 overwrite_subblock_w=1,
                 fuse_batch=False,
@@ -210,7 +210,7 @@ class TtLlamaAttention_galaxy:
             self.SELFOUT_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
                 (1, 1, self.model_config["MAX_MM_SEQ_LEN"], 1024),
                 (1, 1, 1024, 2048),
-                grid=ttnn.CoreGrid(x=8, y=4),
+                grid=ttnn.CoreGrid(x=8, y=self.model_config["CORE_GRID_Y"]),
                 overwrite_subblock_h=1,
                 overwrite_subblock_w=1,
                 fuse_batch=False,
@@ -531,7 +531,7 @@ class TtLlamaAttention_galaxy:
         rot_mats,
     ):
         assert xs.shape[1] == 1, "batch must be 1"
-        assert xs.shape[2] % 128 == 0 and xs.shape[2] > 0, "Seqlen must be divisible by 128"
+        assert xs.shape[2] % 32 == 0 and xs.shape[2] > 0, "Seqlen must be divisible by 32"
         _, _, seq_len, _ = xs.shape
 
         max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
@@ -661,6 +661,7 @@ class TtLlamaAttention_galaxy:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
             program_config=self.SELFOUT_PROGCFG,
+            compute_kernel_config=self.COMPUTE_KERNEL_SELFOUT,
         )  # bsz, 1, seqlen, hidden_size
 
         attn_output = ttnn.reshape(attn_output, (1, 1, seq_len, -1))

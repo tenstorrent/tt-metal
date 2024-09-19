@@ -49,6 +49,13 @@ class TtLlamaMLP_galaxy:
         self.get_mlp_model_config()
 
     def get_mlp_model_config(self):
+        self.COMPUTE_KERNEL_LOFI = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
         if self.model_config["LLM_MODE"] == "decode":
             # Weight Sharding
             weight_grid = ttnn.CoreRangeSet(
@@ -95,13 +102,6 @@ class TtLlamaMLP_galaxy:
                 per_core_M=M // 32,  # M / TILE_HEIGHT = 32 / 32
                 per_core_N=w2_N // 8 // 32,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
                 fused_activation=None,
-            )
-
-            self.COMPUTE_KERNEL_LOFI = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi,
-                math_approx_mode=True,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
             )
 
             full_grid = ttnn.CoreRangeSet(
@@ -155,7 +155,7 @@ class TtLlamaMLP_galaxy:
                     hidden_dim_per_chip,
                 ),  # (1, 1, self.model_config["MAX_MM_SEQ_LEN"], 2048)
                 (1, 1, hidden_dim_per_chip, ff_outer_dim_per_chip),  # (1, 1, 2048, 3584)
-                grid=ttnn.CoreGrid(x=8, y=4),
+                grid=ttnn.CoreGrid(x=8, y=self.model_config["CORE_GRID_Y"]),
                 overwrite_subblock_h=1,
                 overwrite_subblock_w=1,
                 fuse_batch=False,
@@ -168,7 +168,7 @@ class TtLlamaMLP_galaxy:
                     ff_outer_dim_per_chip,
                 ),  # (1, 1, self.model_config["MAX_MM_SEQ_LEN"], 3584)
                 (1, 1, ff_outer_dim_per_chip, hidden_dim_per_chip),  # (1, 1, 3584, 2048)
-                grid=ttnn.CoreGrid(x=8, y=4),
+                grid=ttnn.CoreGrid(x=8, y=self.model_config["CORE_GRID_Y"]),
                 overwrite_subblock_h=1,
                 overwrite_subblock_w=1,
                 fuse_batch=False,
@@ -322,6 +322,7 @@ class TtLlamaMLP_galaxy:
             dtype=ttnn.bfloat16,
             program_config=self.FF1_PROGCFG,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
         w3_out = ttnn.matmul(
             x,
@@ -329,6 +330,7 @@ class TtLlamaMLP_galaxy:
             dtype=ttnn.bfloat16,
             program_config=self.FF1_PROGCFG,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
 
         w1_out = ttnn.reshape(w1_out, (1, 1, seq_len, -1))
@@ -348,24 +350,22 @@ class TtLlamaMLP_galaxy:
             num_links=2,
         )
 
-        # w1_out.deallocate(True)
-
         hidden_states = ttnn.mul(
             w1_out,
             w3_out,
             input_tensor_a_activation=ttnn.UnaryOpType.SILU,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # hidden_states = ttnn.to_memory_config(hidden_states, self.FF2_ACT_MEMCFG)
         hidden_states = ttnn.reshape(hidden_states, (1, batch_dim, seq_len // batch_dim, -1))
         hidden_states = ttnn.matmul(
             hidden_states,
             self.w2,
             dtype=ttnn.bfloat16,
             program_config=self.FF2_PROGCFG,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
 
         hidden_states = ttnn.reshape(hidden_states, (1, 1, seq_len, -1))

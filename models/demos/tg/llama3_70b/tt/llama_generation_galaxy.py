@@ -128,22 +128,8 @@ class TtLlamaModelForGeneration:
 
             # output_logits[user_id] = logits[:, :seq_len, :]
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
+            # output_logits[user_id] = logits[:, last_token_idx % 32 : last_token_idx % 32 + 1, :]
             output_logits[user_id] = logits[:, :seq_len, :]
-        # breakpoint()
-        # key_caches = []
-        # value_caches = []
-        # for i in range(len(self.tt_model.layers)):
-        #     key_cache = self.tt_model.layers[i].attention.layer_past[0]
-        #     key_cache = ttnn.to_torch(key_cache, mesh_composer=ttnn.ListMeshToTensor(self.mesh_device))
-        #     key_caches.append(key_cache)
-        #     value_cache = self.tt_model.layers[i].attention.layer_past[1]
-        #     value_cache = ttnn.to_torch(value_cache, mesh_composer=ttnn.ListMeshToTensor(self.mesh_device))
-        #     value_caches.append(value_cache)
-
-        # key_caches = torch.stack([torch.stack(key_cache, dim=0) for key_cache in key_caches])
-        # value_caches = torch.stack([torch.stack(value_cache, dim=0) for value_cache in value_caches])
-        # torch.save(torch.tensor(key_caches), "models/demos/tg/llama3_70b/data/key_cache.pt")
-        # torch.save(torch.tensor(value_caches), "models/demos/tg/llama3_70b/data/value_cache.pt")
         logger.info(f"Finished prefill for all users up to {seq_len} tokens, Starting decode...")
 
         return output_logits

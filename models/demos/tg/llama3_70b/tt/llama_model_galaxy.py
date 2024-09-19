@@ -139,14 +139,14 @@ class TtLlamaModel_galaxy:
             # seq_len is 32 if we slice LM head input
             hidden_size_per_chip = self.hidden_size // self.cluster_shape[0]
             self.LM_HEAD_PROGCFG = matmul_1d_config_from_tensor_shapes(
-                (1, 1, 128, hidden_size_per_chip),  # get only last 32 tokens # (1, 1, 32, 2048)
+                (1, 1, 128, hidden_size_per_chip),  # get only last 128 tokens # (1, 1, 128, 2048)
                 (
                     1,
                     1,
                     hidden_size_per_chip,
                     self.padded_vocab_size // self.cluster_shape[1],
                 ),  # (1, 1, 2048, 16 * 1024)
-                grid=ttnn.CoreGrid(x=8, y=2),
+                grid=ttnn.CoreGrid(x=8, y=4),
                 overwrite_subblock_h=1,
                 overwrite_subblock_w=1,
             )
@@ -265,7 +265,7 @@ class TtLlamaModel_galaxy:
 
             attn_masks = None
         elif self.model_config["LLM_MODE"] == "prefill":
-            assert seq_len % 128 == 0 and seq_len > 0, "Prefill mode only supports seq_len > 0 and seq_len % 128"
+            assert seq_len % 32 == 0 and seq_len > 0, "Prefill mode only supports seq_len > 0 and seq_len % 32"
 
             assert xs.shape == (batch, 1, seq_len, self.hidden_size // self.cluster_shape[0])
 
@@ -422,22 +422,12 @@ class TtLlamaModel_galaxy:
             gamma=self.norm_sharded,
         )
 
-        # Slice out last 32 tokens in LM head to produce next token
-        # TODO: Does not work for perplexity, or if we padded input to current sequence length
-        seq_len = norm_out.shape[2]
-        dmodel = norm_out.shape[3]
-        # norm_out = ttnn.slice(
-        #     norm_out,
-        #     [0, 0, seq_len - 32, 0],
-        #     [0, 0, seq_len - 1, dmodel - 1],
-        # )
-
         ### Each device does an LM head fracture
         lm_head_out = ttnn.matmul(
             norm_out,
             self.lm_head,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             compute_kernel_config=self.COMPUTE_KERNEL_CONFIG,
             program_config=self.LM_HEAD_PROGCFG,
         )
