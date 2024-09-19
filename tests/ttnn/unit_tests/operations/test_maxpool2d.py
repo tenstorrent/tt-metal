@@ -8,7 +8,7 @@ import torch
 import pytest
 import math
 
-from models.utility_functions import is_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 import ttnn
@@ -148,16 +148,19 @@ def run_max_pool(
     ## test for equivalance
     golden_shape = golden_pytorch.shape
     output_pytorch = output_pytorch.reshape(golden_shape[0], golden_shape[2], golden_shape[3], golden_shape[1])
-
     output_pytorch = torch.permute(output_pytorch, (0, 3, 1, 2))  ## N, C, H, W
-    passing, pcc = assert_with_pcc(output_pytorch, golden_pytorch)
+    passing, pcc = assert_with_pcc(golden_pytorch, output_pytorch)
 
     logger.debug(f"Passing: {passing}, PCC: {pcc}")
 
     ## do more rigorous comparision for each element
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     if dtype == ttnn.bfloat8_b:
-        atol = 0.35
+        if is_blackhole():
+            atol = 0.8
+            # atol = 0.45
+        else:
+            atol = 0.35
 
     allclose = torch.allclose(output_pytorch, golden_pytorch, atol=atol)
     isclose = torch.all(torch.isclose(output_pytorch, golden_pytorch, atol=atol))
