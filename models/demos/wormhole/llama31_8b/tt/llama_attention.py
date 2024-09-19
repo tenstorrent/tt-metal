@@ -341,7 +341,6 @@ class TtLlamaAttention(nn.Module):
             )  # seqlen, 1, batch, hidden_size
 
             ttnn.deallocate(attn_output_cat)
-            # dense_out = ttnn.sharded_to_interleaved(dense_out)
             dense_outputs.append(dense_out)
 
         # return the sum of the outputs
