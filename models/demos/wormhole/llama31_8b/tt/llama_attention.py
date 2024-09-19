@@ -100,6 +100,17 @@ class TtLlamaAttention(nn.Module):
                 cache_file_name=cache_name("wqkv"),
             )
 
+            # wo: 4096 x 4096: width-sharded on 12 banks, 4224 over 12 banks.
+            wo_shard_shape = (
+                4096,
+                4224 // 12,
+            )  # (11 shards) 4224 - padded cols to divide by 12 dram cores (and divisible by tile size of 32)
+            wo_shard_spec = ttnn.ShardSpec(
+                configuration.dram_weight_grid, wo_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False
+            )
+            wo_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, wo_shard_spec
+            )
             wo = ttnn.as_tensor(
                 torch.transpose(
                     torch.chunk(self.state_dict[wo_str], self.num_devices, dim=-1)[i],
@@ -107,7 +118,7 @@ class TtLlamaAttention(nn.Module):
                     -1,
                 ),
                 device=self.devices[i],
-                memory_config=self.model_config["ATTN_WEIGHTS_MEMCFG"],
+                memory_config=wo_mem_config,
                 dtype=self.dtype,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 cache_file_name=cache_name("wo"),
@@ -337,10 +348,10 @@ class TtLlamaAttention(nn.Module):
                 memory_config=self.model_config["ATTN_OUTPUT_MEMCFG"],
                 program_config=self.model_config["ATTN_OUTPUT_PROGCFG"],
                 compute_kernel_config=self.compute_kernel_config,
-                # core_grid=self.grid_size,
             )  # seqlen, 1, batch, hidden_size
 
             ttnn.deallocate(attn_output_cat)
+            # dense_out = ttnn.sharded_to_interleaved(dense_out)
             dense_outputs.append(dense_out)
 
         # return the sum of the outputs
