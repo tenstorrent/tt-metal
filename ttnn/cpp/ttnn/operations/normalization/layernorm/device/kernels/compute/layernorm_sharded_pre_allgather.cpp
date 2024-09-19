@@ -41,13 +41,6 @@ void MAIN {
         num_blocks_reduce = num_blocks_first_stage;
     }
 
-    bool enable_sqrt;
-    if (use_two_stage_reduce and not is_second_stage_reader) {
-        enable_sqrt = false;
-    } else {
-        enable_sqrt = true;
-    }
-
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t scaler0 = 0;
