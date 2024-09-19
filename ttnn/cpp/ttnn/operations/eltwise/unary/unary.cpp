@@ -83,6 +83,7 @@ template struct ExecuteUnary<UnaryOpType::ABS>;
 template struct ExecuteUnary<UnaryOpType::ACOS>;
 template struct ExecuteUnary<UnaryOpType::ASIN>;
 template struct ExecuteUnary<UnaryOpType::ATAN>;
+template struct ExecuteUnary<UnaryOpType::BITWISE_NOT>;
 template struct ExecuteUnary<UnaryOpType::COS>;
 template struct ExecuteUnary<UnaryOpType::ERFINV>;
 template struct ExecuteUnary<UnaryOpType::EXP2>;
@@ -373,7 +374,6 @@ template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::RIGHT_SHIFT, int32
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_AND, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_OR, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_XOR, int32_t>;
-template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_NOT, int32_t>;
 
 
 template <UnaryOpType unary_op_type, typename T>

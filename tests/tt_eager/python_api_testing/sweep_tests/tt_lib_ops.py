@@ -853,7 +853,6 @@ def eltwise_round(
 def eltwise_unary_rdiv_trunc(
     x,
     *args,
-    value,
     device,
     dtype,
     layout,
@@ -862,7 +861,7 @@ def eltwise_unary_rdiv_trunc(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.rdiv(t0, value, round_mode="trunc", memory_config=output_mem_config)
+    t1 = ttnn.rdiv(t0, round_mode="trunc", memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
