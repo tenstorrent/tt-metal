@@ -26,6 +26,7 @@ Table of Contents
     - [File structure and formats](#file-structure-and-formats)
     - [CI/CD Principles](#cicd-principles)
     - [Using CI/CD for development](#using-cicd-for-development)
+    - [Skipping CI/CD for documentation updates](#skipping-cicd-for-documentation-updates) 
     - [Documentation](#documentation)
     - [Git rules and guidelines](#git-rules-and-guidelines)
     - [Code reviews](#code-reviews)
@@ -504,6 +505,13 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
   limited machine resources. This means that developer and reviewer discretion
   is still the most important factor in ensuring PRs are merged successfully
   and without CI failure.
+
+### Skipping CI/CD for documentation updates
+- CI/CD can be skipped for *documentation only* updates that incur no functional change.
+- Upon submitting a PR and getting the necessary appovals:
+  - Click Squash and Merge; DONT CONFIRM
+  - Edit the top level commit message by prepending the token `[skip ci]`
+    - Example: `[skip ci] #9999: Update CONTRIBUTING.md`
 
 ### Documentation
 
