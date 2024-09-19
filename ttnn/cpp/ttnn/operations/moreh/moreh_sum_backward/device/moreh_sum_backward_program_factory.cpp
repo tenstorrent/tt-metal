@@ -6,8 +6,6 @@
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/reduction/generic/device/common.hpp"
-#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
 namespace ttnn::operations::moreh::moreh_sum_backward {
 
@@ -62,7 +60,7 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
 
     auto dims = operation_attributes.dims;
     auto keepdim = operation_attributes.keepdim;
-    auto input_grad_memory_config = operation_attributes.input_grad_memory_config;
+    auto memory_config = operation_attributes.memory_config;
     auto compute_kernel_config = operation_attributes.compute_kernel_config;
 
     ////////////////////////////////////////////////////////////////////////////
