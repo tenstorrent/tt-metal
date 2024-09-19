@@ -22,17 +22,13 @@ struct ExecuteUnaryBackwardNeg {
         std::optional<Tensor> input_grad = std::nullopt);
 };
 
-template <UnaryBackwardOpType unary_backward_op_type>
-struct ExecuteUnaryBackwardTwoFloat {
+struct ExecuteUnaryBackwardThreshold {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         float min,
         float max,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, min, max, output_memory_config);
-    }
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
 template <UnaryBackwardOpType unary_backward_op_type>
@@ -314,8 +310,7 @@ struct ExecuteUnaryBackwardGelu{
 
 constexpr auto threshold_bw = ttnn::register_operation<
     "ttnn::threshold_bw",
-    operations::unary_backward::ExecuteUnaryBackwardTwoFloat<
-        operations::unary_backward::UnaryBackwardOpType::THRESHOLD_BW>>();
+    operations::unary_backward::ExecuteUnaryBackwardThreshold>();
 
 constexpr auto multigammaln_bw = ttnn::register_operation<
     "ttnn::multigammaln_bw",
