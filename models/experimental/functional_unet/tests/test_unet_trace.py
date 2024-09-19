@@ -75,9 +75,7 @@ def test_unet_trace(
     logger.info(f"Average model performance={iterations * batch / (end-start) : .2f} fps")
 
     logger.info(f"Running sanity check against reference model output")
-    B, C, H, W = torch_output_tensor.shape
-    ttnn_tensor = ttnn.to_torch(outputs[-1]).reshape(B, H, W, -1)[:, :, :, :C].permute(0, 3, 1, 2)
-    assert_with_pcc(torch_output_tensor, ttnn_tensor, 0.97)
+    check_pcc_conv(torch_output_tensor, outputs[-1], 0.97)
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
@@ -184,9 +182,7 @@ def test_unet_trace_2cq(
     ttnn.DumpDeviceProfiler(device)
 
     logger.info(f"Running sanity check against reference model output")
-    B, C, H, W = torch_output_tensor.shape
-    ttnn_tensor = ttnn.to_torch(outputs[-1]).reshape(B, H, W, -1)[:, :, :, :C].permute(0, 3, 1, 2)
-    assert_with_pcc(torch_output_tensor, ttnn_tensor, 0.97)
+    check_pcc_conv(torch_output_tensor, outputs[-1], 0.97)
 
     ttnn.release_trace(device, tid)
 
@@ -317,12 +313,6 @@ def test_unet_trace_2cq_multi_device(
     logger.info(f"Average model performance={iterations * total_batch / (end-start) : .2f} fps")
 
     logger.info(f"Running sanity check against reference model output")
-    B, C, H, W = torch_output_tensor.shape
-    ttnn_tensor = (
-        ttnn.to_torch(outputs[-1], mesh_composer=output_mesh_composer)
-        .reshape(B, H, W, -1)[:, :, :, :C]
-        .permute(0, 3, 1, 2)
-    )
-    assert_with_pcc(torch_output_tensor, ttnn_tensor, 0.97)
+    check_pcc_conv(torch_output_tensor, outputs[-1], 0.97, mesh_composer=output_mesh_composer)
 
     ttnn.release_trace(mesh_device, tid)
