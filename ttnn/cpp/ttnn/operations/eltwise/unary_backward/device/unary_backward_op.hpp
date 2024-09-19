@@ -74,7 +74,6 @@ enum class UnaryBackwardOpType {
     DEG2RAD_BW,
     POLYGAMMA_BW,
     REPEAT_BW,
-    PROD_BW,
 };
 
 std::vector<Tensor> _acos_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
@@ -143,8 +142,6 @@ std::vector<Tensor> _logiteps_bw( const Tensor& grad, const Tensor& input, float
 std::vector<Tensor> _rdiv_bw( const Tensor& grad, const Tensor& input, float scalar, string round_mode = "None", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 std::vector<Tensor> _repeat_bw(const Tensor& grad, const Tensor& input, const tt::tt_metal::LegacyShape& shape, const std::optional<MemoryConfig>& output_mem_config);
-
-std::vector<Tensor> _prod_bw( const Tensor& grad, const Tensor& input, bool all_dimensions = true, int64_t dim = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config);
 
 // OpHandler struct template
@@ -554,13 +551,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::REPEAT_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const tt::tt_metal::LegacyShape& shape, const std::optional<MemoryConfig>& output_mem_config ) {
         return _repeat_bw(grad, input, shape, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::PROD_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, bool all_dimensions, int64_t dim, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _prod_bw(grad, input, all_dimensions, dim, output_mem_config);
     }
 };
 

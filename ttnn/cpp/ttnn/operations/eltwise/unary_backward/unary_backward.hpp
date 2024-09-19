@@ -253,17 +253,13 @@ struct ExecuteUnaryBackwardFill {
         std::optional<Tensor> input_grad = std::nullopt);
 };
 
-template <UnaryBackwardOpType unary_backward_op_type>
-struct ExecuteUnaryBackwardProdBW {
+struct ExecuteUnaryBackwardProd {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         bool all_dimensions = true,
         int64_t dim = 0,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, all_dimensions, dim, output_memory_config);
-    }
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardRecip {
@@ -616,7 +612,7 @@ constexpr auto silu_bw = ttnn::register_operation<
 
 constexpr auto prod_bw = ttnn::register_operation<
     "ttnn::prod_bw",
-    operations::unary_backward::ExecuteUnaryBackwardProdBW<operations::unary_backward::UnaryBackwardOpType::PROD_BW>>();
+    operations::unary_backward::ExecuteUnaryBackwardProd>();
 
 constexpr auto relu_bw = ttnn::register_operation<
     "ttnn::relu_bw",

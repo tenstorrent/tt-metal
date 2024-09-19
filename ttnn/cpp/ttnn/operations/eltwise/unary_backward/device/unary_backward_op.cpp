@@ -1466,7 +1466,7 @@ Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_
 
 // Prod
 // along a single dimension --> result: grad_data * (y / input )
-std::vector<Tensor> _prod_bw(
+std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     const Tensor& grad, const Tensor& input, bool all_dimensions, int64_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
