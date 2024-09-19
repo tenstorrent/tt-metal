@@ -86,7 +86,9 @@ def run_test_LlamaModel_inference(
         read_cache=True,
     )
 
-    if model_config["LLM_MODE"] == "prefill":
+    mode = "decode" if seq_len == 1 else "prefill"
+
+    if mode == "prefill":
         generation_start_pos = 0
         generation_length = 1
     else:
@@ -127,13 +129,8 @@ def run_test_LlamaModel_inference(
         logger.info(f"Finished PyTorch inference")
 
         # TT hardware execution -------------------------------------------------------------
-        tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tt_inp_ids, start_pos)
-        tt_out = tt_model(
-            tt_inp_emb,
-            rot_mat,
-            start_pos,
-            attn_mask,
-        )
+        tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tt_inp_ids, start_pos, mode=mode)
+        tt_out = tt_model(tt_inp_emb, rot_mat, start_pos, attn_mask, mode=mode)
         del tt_inp_emb, rot_mat, attn_mask
 
         tt_out = ttnn.to_torch(
@@ -143,10 +140,10 @@ def run_test_LlamaModel_inference(
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze()  # [batch, hidden_dim]
 
         tt_out = tt_out.float()
-        if model_config["LLM_MODE"] == "decode":
+        if mode == "decode":
             tt_out = tt_out[:batch]
             pytorch_out = pytorch_out.squeeze()  # [batch, hidden_dim]
-        elif model_config["LLM_MODE"] == "prefill":
+        elif mode == "prefill":
             # Take only the last token to compare with PyTorch output
             tt_out = tt_out[-1, :].unsqueeze(0)
             pytorch_out = pytorch_out[:, -1, :]
@@ -213,7 +210,7 @@ def run_test_LlamaModel_inference(
             generation_start_pos,
             generation_length,
             seq_len,
-            model_config["LLM_MODE"] == "prefill",
+            mode == "prefill",
             pcc,
         )
     all_tests_pass = all_tests_pass and cache_test_pass
@@ -288,8 +285,6 @@ def test_LlamaModel_inference(
 
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,
-        batch=batch,
-        seq_len=seq_len,
         max_batch_size=max_batch_size,
         max_context_len=max_context_len,
     )

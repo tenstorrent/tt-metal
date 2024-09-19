@@ -166,26 +166,18 @@ def run_test_LlamaModel_end_to_end(
 
     ##### Prepare Inputs #####
     prev_pos = total_len - 1
-    tt_inp_emb, prev_pos, rot_mat, attn_mask, cache_idxs = tt_model.prepare_inputs(
-        tokens[:, prev_pos:total_len], prev_pos
-    )
-    tt_inp_emb = ttnn.to_device(tt_inp_emb, mesh_device, memory_config=tt_model.model_config["DRAM_MEMCFG"])
+    tt_inp_emb, prev_pos, rot_mat, cache_idxs = tt_model.prepare_inputs(tokens[:, prev_pos:total_len], prev_pos)
+    tt_inp_emb = ttnn.to_device(tt_inp_emb, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     tt_inp_emb = tt_model.tt_embd(tt_inp_emb)
     tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, tt_model.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
 
     rot_mat = ttnn.to_device(rot_mat, mesh_device, memory_config=tt_model.model_config["ROT_MAT_MM_IN1_MEMCFG"])
-    cache_idxs = ttnn.to_device(cache_idxs, mesh_device, memory_config=tt_model.model_config["DRAM_MEMCFG"])
+    cache_idxs = ttnn.to_device(cache_idxs, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     ##### Compile Model #####
     logger.info("Compiling model")
     profiler.start(f"compile_time")
-    tt_logits = tt_model(
-        tt_inp_emb,
-        rot_mat,
-        prev_pos,
-        attn_mask,
-        cache_idxs=cache_idxs,
-    )
+    tt_logits = tt_model(tt_inp_emb, rot_mat, prev_pos, cache_idxs=cache_idxs, mode="decode")
     tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     tt_logits_tensors = ttnn.get_device_tensors(tt_logits)
     logits_rm = ttnn.to_layout(tt_logits_tensors[0], ttnn.ROW_MAJOR_LAYOUT)
@@ -198,13 +190,7 @@ def run_test_LlamaModel_end_to_end(
     ##### Capture Trace #####
     logger.info("Capturing trace")
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    tt_logits = tt_model(
-        tt_inp_emb,
-        rot_mat,
-        prev_pos,
-        attn_mask,
-        cache_idxs=cache_idxs,
-    )
+    tt_logits = tt_model(tt_inp_emb, rot_mat, prev_pos, cache_idxs=cache_idxs, mode="decode")
     tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     tt_logits_tensors = ttnn.get_device_tensors(tt_logits)
     logits_rm = ttnn.to_layout(tt_logits_tensors[0], ttnn.ROW_MAJOR_LAYOUT)
@@ -288,8 +274,6 @@ def test_Llama_perf_host(
 
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,
-        batch=batch,
-        seq_len=seq_len,
     )
 
     check_mesh_device(t3k_mesh_device, model_config)

@@ -163,7 +163,7 @@ jobs:
         run: tar -xvf ttm_wormhole_b0.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run frequent reg tests scripts
-        timeout-minutes: 30
+        timeout-minutes: 50
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME

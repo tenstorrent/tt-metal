@@ -106,7 +106,7 @@ class TtLlamaModel_galaxy:
             state_dict,
             cache_path,
         )
-        self.get_model_config()
+
         self.load_weights()
 
     def set_model_config(self, model_config):
@@ -114,7 +114,7 @@ class TtLlamaModel_galaxy:
         for layer in self.layers:
             layer.set_model_config(model_config)
 
-    def get_model_config(self):
+    def get_model_config(self, mode):
         self.LN_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
@@ -134,7 +134,7 @@ class TtLlamaModel_galaxy:
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
-        if self.model_config["LLM_MODE"] == "prefill":
+        if mode == "prefill":
             # seq_len is 32 if we slice LM head input
             hidden_size_per_chip = self.hidden_size // self.cluster_shape[0]
             self.LM_HEAD_PROGCFG = matmul_1d_config_from_tensor_shapes(
@@ -191,13 +191,13 @@ class TtLlamaModel_galaxy:
             cache_file_name=self.cache_path / norm_sharded_cache_str,
         )
 
-    def prepare_inputs(self, inp_ids, start_pos, valid_seq_len=None, attn_mask=None):
+    def prepare_inputs(self, inp_ids, start_pos, valid_seq_len=None, attn_mask=None, mode="decode"):
         assert inp_ids.dim() == 2
         batch, seq_len = inp_ids.shape
 
         cache_name = lambda name: self.cache_path / (f"{'llama3_' if self.llama3 else ''}{name}")
 
-        if self.model_config["LLM_MODE"] == "decode":
+        if mode == "decode":
             inp_ids = inp_ids.reshape(seq_len, 1, 1, batch)
         else:
             inp_ids = inp_ids.reshape(batch, 1, 1, seq_len)
@@ -213,7 +213,7 @@ class TtLlamaModel_galaxy:
 
         xs = self.tt_embd(x)
 
-        if self.model_config["LLM_MODE"] == "decode":
+        if mode == "decode":
             assert seq_len == 1, "Decode mode only supports seq_len=1"
             assert xs.shape == (seq_len, 1, batch, self.hidden_size // self.cluster_shape[0])
 
@@ -256,7 +256,7 @@ class TtLlamaModel_galaxy:
             )
 
             attn_masks = None
-        elif self.model_config["LLM_MODE"] == "prefill":
+        elif mode == "prefill":
             assert seq_len % 128 == 0 and seq_len > 0, "Prefill mode only supports seq_len > 0 and seq_len % 128"
 
             assert xs.shape == (batch, 1, seq_len, self.hidden_size // self.cluster_shape[0])
@@ -315,13 +315,15 @@ class TtLlamaModel_galaxy:
         start_pos: int,
         attn_masks: List[ttnn.Tensor],
         user_id: int = 0,
+        mode="decode",
     ) -> ttnn.Tensor:
-        if self.model_config["LLM_MODE"] == "decode":
+        self.get_model_config(mode)
+        if mode == "decode":
             return self.decode_forward(xs, rot_mats, start_pos, attn_masks)
-        elif self.model_config["LLM_MODE"] == "prefill":
+        elif mode == "prefill":
             return self.prefill_forward(xs, rot_mats, start_pos, attn_masks, user_id)
         else:
-            raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
+            raise ValueError(f"Unknown llm_mode: {mode}")
 
     def tt_distributed_rmsnorm(self, inp, epsilon, gamma):
         # Run distributed rmsnorm part 1
@@ -358,7 +360,7 @@ class TtLlamaModel_galaxy:
     ) -> ttnn.Tensor:
         ### Run all layers
         for layer in self.layers:
-            xs = layer(xs, rot_mats, start_pos, attn_masks)  # xs is fractured
+            xs = layer(xs, rot_mats, start_pos, attn_masks, mode="decode")  # xs is fractured
 
         xs_interleaved = ttnn.to_memory_config(xs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -374,11 +376,6 @@ class TtLlamaModel_galaxy:
         lm_head_out = ttnn.matmul(
             norm_out,
             self.lm_head,
-            # program_config=(
-            #     self.model_config["LLAMA3_LM_HEAD_MM_PROGCFG"]
-            #     if self.llama3
-            #     else self.model_config["LM_HEAD_MM_PROGCFG"]
-            # ),
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.COMPUTE_KERNEL_CONFIG,
@@ -406,7 +403,7 @@ class TtLlamaModel_galaxy:
     ) -> ttnn.Tensor:
         ### Run all layers
         for id, layer in enumerate(self.layers):
-            xs = layer(xs, rot_mats, start_pos, attn_masks, user_id)
+            xs = layer(xs, rot_mats, start_pos, attn_masks, user_id, mode="prefill")
 
         norm_out = self.tt_distributed_rmsnorm(
             xs,
