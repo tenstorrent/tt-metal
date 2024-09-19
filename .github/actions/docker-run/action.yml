@@ -45,6 +45,8 @@ runs:
       shell: bash
       run: |
         docker pull ghcr.io/${{ github.repository }}/${{ inputs.docker_image }}:${{ env.IMAGE_TAG }}
+    - name: Create folder for generated artifacts
+      run: mkdir -p ${{ github.workspace }}/generated
     - uses: addnab/docker-run-action@v3
       with:
         shell: bash
@@ -56,6 +58,7 @@ runs:
         options: |
           --rm
           -v ${{ github.workspace }}:/github_workspace:ro
+          -v ${{ github.workspace }}/generated:/github_generated
           --net=host
           ${{ inputs.docker_opts }}
           -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
@@ -64,5 +67,7 @@ runs:
         run: |
           cp -r /github_workspace/* /usr/app/
           cd /usr/app/
+          mkdir -p generated
           rm -rf tt_metal tt_eager
           ${{ inputs.run_args }}
+          cp -r generated/* /github_generated
