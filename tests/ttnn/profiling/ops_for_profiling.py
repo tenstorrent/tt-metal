@@ -396,6 +396,14 @@ all_binary_ops = [
         "name": "ttnn.divide",
     },
     {
+        "op": ttnn.div,
+        "name": "ttnn.div",
+    },
+    {
+        "op": ttnn.div_no_nan,
+        "name": "ttnn.div_no_nan",
+    },
+    {
         "op": ttnn.hypot,
         "name": "ttnn.hypot",
     },
@@ -1871,6 +1879,10 @@ all_unary_ops = [
     {
         "op": ttnn.ones_like,
         "name": "ttnn.ones_like",
+    },
+    {
+        "op": ttnn.empty_like,
+        "name": "ttnn.empty_like",
     },
     {
         "op": zeros,
