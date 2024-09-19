@@ -154,7 +154,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
     model_args = TtModelArgs(device, instruct=instruct_mode)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
-    model_args.n_layers = 1
+    model_args.n_layers = 32
 
     logger.info("Loading weights...")
     profiler.start("weight_loading")
@@ -610,7 +610,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
         "instruct_weights-3_batch",
     ],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 102400}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 2985984}], indirect=True)
 def test_llama_demo(
     device, use_program_cache, input_prompts, instruct_weights, is_ci_env, is_single_card_n300, num_batches
 ):
