@@ -49,7 +49,6 @@
 | [ResNet-50 (224x224) (data parallel)](./models/demos/tgg/resnet50)          | 1024  | [Two Galaxies](https://tenstorrent.com/hardware/galaxy)  | 128,800 | 448,000    |             |
 | [ViT](./models/demos/grayskull/vit)                                         | 9     | [e150](https://tenstorrent.com/hardware/grayskull)       | 1,360   | 2,000      |             |
 | [Stable Diffusion 1.4 (512x512)](./models/demos/wormhole/stable_diffusion)  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.167   | 0.3        |             |
-| [Unet (shallow)](./models/experimental/functional_unet)                     | 2     | [n150](https://tenstorrent.com/hardware/wormhole)        | 190     | 1000       |             |
 
 ## NLPs
 | Model                                               | Batch | Hardware                                           | sen/sec   | Target sen/sec | Release     |
@@ -65,7 +64,7 @@
 For the latest model updates and features, please see [MODEL_UPDATES.md](models/MODEL_UPDATES.md)
 
 ## TT-NN Tech Reports
-- [Advanced Performance Optimizations for Models](./tech_reports/AdvancedPerformanceOperationsForModels/AdvancedPerformanceOptimizationsForModels.md) (updated Sept 11th)
+- [Advanced Performance Optimizations for Models](./tech_reports/AdvancedPerformanceOperationsForModels/AdvancedPerformanceOptimizationsForModels.md) (updated Sept 18th)
 - [Programming Mesh of Devices](./tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md) (updated Sept 9th)
 ---
 

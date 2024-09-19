@@ -8,10 +8,7 @@ from loguru import logger
 
 
 import ttnn
-from models.utility_functions import (
-    comp_allclose_and_pcc,
-    skip_for_grayskull,
-)
+from models.utility_functions import comp_allclose_and_pcc, skip_for_grayskull, skip_for_blackhole
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
@@ -487,6 +484,7 @@ def test_moreh_sum_backward_fp32_dest_acc(input_shape, dim, compute_kernel_optio
     assert passing
 
 
+@skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "input_shape",

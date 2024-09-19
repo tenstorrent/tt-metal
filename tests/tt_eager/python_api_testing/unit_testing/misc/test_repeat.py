@@ -9,7 +9,7 @@ import sys
 import torch
 
 import ttnn
-from models.utility_functions import print_diff_argmax
+from models.utility_functions import print_diff_argmax, skip_for_blackhole
 import pytest
 from loguru import logger
 
@@ -49,6 +49,7 @@ def run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, ou
     assert passing
 
 
+@skip_for_blackhole("Alignment failure on BH, see #12349")
 @pytest.mark.parametrize(
     "input_shape, repeats",
     (
@@ -99,6 +100,7 @@ def test_repeat(
     run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, output_mem_config)
 
 
+@skip_for_blackhole("Alignment failure on BH, see #12349")
 @pytest.mark.parametrize(
     "input_shape, repeats",
     (

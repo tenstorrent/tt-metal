@@ -18,7 +18,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
     TILE_HEIGHT,
     TILE_WIDTH,
 )
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 
 
 def to_cpu(npu_tensor, shape, *, cpu_layout=ttnn.ROW_MAJOR_LAYOUT):
@@ -398,6 +398,7 @@ def test_moreh_layernorm(input_shape_normalized_dims, elementwise_affine, eps, d
     run_moreh_layernorm(input_shape_normalized_dims, elementwise_affine, eps, device)
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
 @pytest.mark.parametrize("eps", [1e-5], ids=["1e-5"])
 @pytest.mark.parametrize(
