@@ -6,7 +6,6 @@
 
 #include "dataflow_api.h"
 
-#include "debug/dprint.h"
 
 void kernel_main() {
     // in0/in1 common args
@@ -77,10 +76,6 @@ void kernel_main() {
     const DataFormat output_data_format = get_dataformat(cb_id_out0);
     constexpr const uint32_t output_tile_hw = get_tile_hw(cb_id_out0);
     constexpr const uint32_t output_num_faces = get_tile_num_faces(cb_id_out0);
-
-    DPRINT << output_single_tile_size_bytes << ENDL();
-    DPRINT << output_tile_hw << ENDL();
-    DPRINT << output_num_faces << ENDL();
 
     const InterleavedAddrGenFast<out_is_dram, output_tile_hw, output_num_faces> s = {
         .bank_base_address = out_tensor_addr,

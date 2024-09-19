@@ -6,7 +6,6 @@
 #include "llk_unpack_AB_matmul.h"
 #include "llk_unpack_common_api.h"
 
-#include "debug/dprint.h"
 
 /*************************************************************************
  * LLK UNPACK AB MATMUL

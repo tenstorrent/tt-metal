@@ -63,7 +63,8 @@ operation::ProgramWithCallbacks create_program(
 
     auto in0_tile = in0.get_tile();
     auto in1_tile = in1.get_tile();
-    auto output_tile = output.get_tile();
+    // cannot use the output tensor tile directly as that might be changed by user override
+    auto output_tile = tt::tt_metal::Tile({in0_tile.get_tile_shape()[0], in1_tile.get_tile_shape()[1]});
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);

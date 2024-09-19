@@ -82,8 +82,9 @@ void kernel_main() {
     }
 #else
     constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
-
-    const InterleavedAddrGenFast<in0_is_dram> s0 = {
+    constexpr const uint32_t in0_tile_hw = get_tile_hw(cb_id_in0);
+    constexpr const uint32_t in0_num_faces = get_tile_num_faces(cb_id_in0);
+    const InterleavedAddrGenFast<in0_is_dram, in0_tile_hw, in0_num_faces> s0 = {
         .bank_base_address = in0_tensor_addr, .page_size = in0_single_tile_size_bytes, .data_format = in0_data_format};
 #endif
 

@@ -731,6 +731,11 @@ void pytensor_module(py::module &m_tensor) {
                 auto owned_buffer = detail::create_owned_buffer_from_vector_of_floats(std::move(data), data_type);
                 return Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout, tile);
             }),
+            py::arg("data"),
+            py::arg("shape"),
+            py::arg("data_type"),
+            py::arg("layout"),
+            py::arg("tile") = std::nullopt,
             py::return_value_policy::move,
             R"doc(
                 +---------------+---------------+
@@ -768,7 +773,13 @@ void pytensor_module(py::module &m_tensor) {
                 auto tensor = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout, tile);
                 return tensor.to(device, MemoryConfig{});
             }),
-            py::keep_alive<1, 7>(),
+            py::keep_alive<1, 6>(),
+            py::arg("data"),
+            py::arg("shape"),
+            py::arg("data_type"),
+            py::arg("layout"),
+            py::arg("device") = std::nullopt,
+            py::arg("tile") = std::nullopt,
             py::return_value_policy::move,
             R"doc(
                 +---------------+---------------+
@@ -817,6 +828,13 @@ void pytensor_module(py::module &m_tensor) {
                 return tensor.to(device, memory_config);
             }),
             py::keep_alive<1, 7>(),
+            py::arg("data"),
+            py::arg("shape"),
+            py::arg("data_type"),
+            py::arg("layout"),
+            py::arg("device") = std::nullopt,
+            py::arg("memory_config"),
+            py::arg("tile") = std::nullopt,
             py::return_value_policy::move,
             R"doc(
                 +---------------+---------------+

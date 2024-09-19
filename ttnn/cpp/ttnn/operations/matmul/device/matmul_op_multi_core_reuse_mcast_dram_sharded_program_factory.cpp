@@ -1155,8 +1155,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
     auto in0_tile = a.get_tile();
     auto in1_tile = b.get_tile();
-    auto output_tile = output.get_tile();
-
+    // cannot use the output tensor tile directly as that might be changed by user override
+    auto output_tile = tt::tt_metal::Tile({in0_tile.get_tile_shape()[0], in1_tile.get_tile_shape()[1]});
     auto in0_tile_shape = a.get_tile().get_tile_shape();
     auto in1_tile_shape = b.get_tile().get_tile_shape();
 

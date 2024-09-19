@@ -75,13 +75,15 @@ void kernel_main() {
     // WRITER
     // single-tile
     const uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
+    constexpr const uint32_t output_tile_hw = get_tile_hw(cb_id_out0);
+    constexpr const uint32_t output_num_faces = get_tile_num_faces(cb_id_out0);
     const DataFormat output_data_format = get_dataformat(cb_id_out0);
 
     volatile tt_l1_ptr uint32_t* in1_mcast_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_receiver_semaphore_addr);
 
     // WRITER
-    const InterleavedAddrGenFast<out_is_dram> s = {
+    const InterleavedAddrGenFast<out_is_dram, output_tile_hw, output_num_faces> s = {
         .bank_base_address = out_tensor_addr,
         .page_size = output_single_tile_size_bytes,
         .data_format = output_data_format};
