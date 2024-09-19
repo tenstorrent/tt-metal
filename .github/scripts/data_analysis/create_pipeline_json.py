@@ -24,6 +24,8 @@ if __name__ == "__main__":
     with open(cicd_json_filename, "w") as f:
         f.write(pipeline.model_dump_json())
 
+    github_pipeline_json = pipeline.github_pipeline_id
+
     cicd_json_copy_filename = f"pipelinecopy_{github_pipeline_id}.json"
     with open(cicd_json_copy_filename, "w") as f:
         f.write(pipeline.model_dump_json())
