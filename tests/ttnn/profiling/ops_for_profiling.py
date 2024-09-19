@@ -368,6 +368,7 @@ all_binary_ops = [
         "op": ttnn.add,
         "name": "ttnn.add",
     },
+    {"op": ttnn.add, "name": "ttnn.add_sharded", "use_sharded_tensors": [True, True]},
     {
         "op": ttnn.sub,
         "name": "ttnn.sub",
@@ -390,6 +391,24 @@ all_binary_ops = [
         "op": ttnn.mul,
         "name": "ttnn.mul_bcast_hw",
         "shape_func": bcast_hw_shape_func_11,
+    },
+    {
+        "op": ttnn.mul,
+        "name": "ttnn.mul_bcast_h_sharded",
+        "shape_func": bcast_h_shape_func_1,
+        "use_sharded_tensors": [True, True],
+    },
+    {
+        "op": ttnn.mul,
+        "name": "ttnn.mul_bcast_w_sharded",
+        "shape_func": bcast_w_shape_func_1,
+        "use_sharded_tensors": [True, False],
+    },
+    {
+        "op": ttnn.mul,
+        "name": "ttnn.mul_bcast_hw_sharded",
+        "shape_func": bcast_hw_shape_func_11,
+        "use_sharded_tensors": [True, False],
     },
     {
         "op": ttnn.divide,
