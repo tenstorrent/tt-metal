@@ -509,8 +509,8 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
 ### Skipping CI/CD for documentation updates
 - CI/CD can be skipped for *documentation only* updates that incur no functional change.
 - Upon submitting a PR and getting the necessary appovals:
-  - Click Squash and Merge; DONT CONFIRM
-  - Edit the top level commit message by prepending the token `[skip ci]`
+  - Click Squash and Merge
+  - Before confirming, edit the top level commit message by prepending the token `[skip ci]`
     - Example: `[skip ci] #9999: Update CONTRIBUTING.md`
 
 ### Documentation
