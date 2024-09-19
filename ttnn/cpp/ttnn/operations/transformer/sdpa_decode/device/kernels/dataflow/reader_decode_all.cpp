@@ -86,6 +86,11 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
         cur_pos = index_ptr[cur_batch];
     }
+
+    if (cur_pos == (uint32_t) -1) {
+        // cur_pos of -1 indicates that the user should be skipped
+        return;
+    }
     volatile tt_l1_ptr uint32_t* page_table_ptr;
     if constexpr (is_paged_attention) {
         constexpr uint32_t cb_id_page_table = tt::CB::dataflow1;

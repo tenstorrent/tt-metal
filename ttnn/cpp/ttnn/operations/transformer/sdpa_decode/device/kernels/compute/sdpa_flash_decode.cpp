@@ -506,6 +506,11 @@ void MAIN {
         cur_pos = index_addr_ptr[4+cur_batch];
         cb_release_tile(cb_index_id);
     }
+
+    if (cur_pos == (uint32_t) -1) {
+        // cur_pos of -1 indicates that the user should be skipped
+        return;
+    }
     // Sequence length assignment
     auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(cur_pos, cur_batch, core_num, num_cores_per_batch, k_chunk_size);
     if (k_chunk_start == k_chunk_end) {
