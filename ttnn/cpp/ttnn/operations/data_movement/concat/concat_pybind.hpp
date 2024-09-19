@@ -16,16 +16,18 @@ namespace py = pybind11;
 
 void bind_concat(py::module& module) {
     const auto doc = R"doc(
-Concats :attr:`tensors` in the given :attr:`dim`.
 
 Args:
-    * :attr:`tensors`: the tensors to be concatenated.
-    * :attr:`dim`: the concatenating dimension.
+    input_tensor (ttnn.Tensor): the input tensor.
+    dim (number): the concatenating dimension.
 
 Keyword Args:
-    * :attr:`memory_config`: the memory configuration to use for the operation
-    * :attr:`queue_id` (Optional[uint8]): command queue id
-    * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
+    memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+    queue_id (int, optional): command queue id. Defaults to `0`.
+    output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+
+Returns:
+    ttnn.Tensor: the output tensor.
 
 Example:
 

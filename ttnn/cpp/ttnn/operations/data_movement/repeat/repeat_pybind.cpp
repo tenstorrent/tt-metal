@@ -42,15 +42,18 @@ namespace detail {
 
 void py_bind_repeat(py::module& module) {
     auto doc = R"doc(
-    repeat(input_tensor: ttnn.Tensor, repeat_dims : ttnn.Shape) -> ttnn.Tensor
 
     Returns a new tensor filled with repetition of input :attr:`input_tensor` according to number of times specified in :attr:`shape`.
 
     Args:
-        * :attr:`input_tensor`: the input_tensor to apply the repeate operation.
-        * :attr:`repeat_dims`: The number of repetitions for each element.
+        input_tensor (ttnn.Tensor): the input tensor.
+        repeat_dims (number): The number of repetitions for each element.
+
     Keyword Args:
-        * :attr:`memory_config`: the memory configuration to use for the operation
+        memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+    Returns:
+        ttnn.Tensor: the output tensor.
 
     Example:
 
