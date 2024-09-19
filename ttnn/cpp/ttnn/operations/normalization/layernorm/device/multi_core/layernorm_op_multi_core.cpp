@@ -1168,8 +1168,13 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t output_cb_index = tt::CB::c_out0; // output operands start at index 16
     tt::tt_metal::CircularBufferConfig output_cb_config = tt::tt_metal::CircularBufferConfig(out_CB_size, {{output_cb_index, out_data_format}})
 		.set_page_size(output_cb_index, out_single_tile_size).set_globally_allocated_address(*output.buffer());
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
-
+    CBHandle cb_output = 0;
+    if (is_pre_all_gather) {
+        cb_output = tt::tt_metal::CreateCircularBuffer(program, sender_cores, output_cb_config);
+    }
+    else{
+        cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+    }
     const auto& cores = grid_to_cores(all_cores.num_cores(), num_cores_x, num_cores_y, row_wise);
 
     // Runtime Args

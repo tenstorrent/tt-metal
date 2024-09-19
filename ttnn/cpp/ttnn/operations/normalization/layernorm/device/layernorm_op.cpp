@@ -180,6 +180,10 @@ std::vector<Tensor> LayerNorm::create_output_tensors(const std::vector<Tensor> &
                     auto output_shape = this->compute_output_shapes(input_tensors).at(0);
                     auto shard_spec = input_tensor.shard_spec().value();
                     shard_spec.shape[1] = output_shape[3];
+
+                    CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
+                    CoreRangeSet core_range_set({first_core_range});
+                    shard_spec.grid = core_range_set;
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
                     return {
