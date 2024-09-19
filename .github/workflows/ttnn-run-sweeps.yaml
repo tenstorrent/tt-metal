@@ -20,6 +20,7 @@ on:
           - eltwise.sin                          
           - eltwise.clamp.clamp_interleaved
           - eltwise.clip.clip_interleaved
+          - eltwise.cbrt.cbrt_interleaved
           - eltwise.subtract.subtract_interleaved
           - eltwise.subalpha.subalpha_interleaved
           - eltwise.rsub.rsub_interleaved
