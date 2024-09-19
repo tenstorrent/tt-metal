@@ -116,3 +116,9 @@ inline void _llk_unpack_clear_dbg_feature_disable_(){
 inline void _llk_enable_int8_fpu_math_() {
     enable_int8_fpu_math();
 }
+
+inline void _llk_unpack_set_srcb_dummy_valid_() {
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
+    TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+}
