@@ -12,7 +12,7 @@ from models.utility_functions import (
     comp_allclose_and_pcc,
     skip_for_grayskull,
 )
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
+from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
@@ -320,7 +320,7 @@ def moreh_sum_backward(input_shape, dim, keepdim, use_provide_output, compute_ke
 
     cpu_layout = ttnn.ROW_MAJOR_LAYOUT
     tt_input_grad_cpu = (
-        ttnn.moreh_sum_backward(
+        ttnn.operations.moreh.sum_backward(
             tt_output_grad,
             input=tt_input,
             dim=dim,
