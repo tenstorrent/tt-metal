@@ -68,18 +68,8 @@ float get_scaler(const ReduceConfig &test_config) {
             case ReduceDim::H:  return (1.0f / H);
             case ReduceDim::W:  return (1.0f / W);
             case ReduceDim::HW: return (1.0f / (H * W));
+            default: { TT_THROW("Unsupported ReduceDim={}", test_config.reduce_dim); break; }
         }
-    }
-}
-
-void set_math_fid_masks(uint16_t &math_fid_mask, MathFidelity math_fidelity = MathFidelity::HiFi4) {
-    auto arch = get_arch_from_string(get_env_arch_name());
-    switch (math_fidelity) {
-        case MathFidelity::HiFi4:
-        case MathFidelity::HiFi3: { break; }
-        case MathFidelity::HiFi2:
-        case MathFidelity::LoFi: { math_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE; break; }
-        default: { TT_THROW("Unsupported MathFidelity={}", math_fidelity); break; }
     }
 }
 
@@ -303,7 +293,6 @@ void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig
     };
 
     std::map<string, string> reduce_defines = {
-        // {"REDUCE_OP", test_config.do_max ? "PoolType::MAX" : "PoolType::SUM"},
         {"REDUCE_DIM", get_reduce_dim_define_string(test_config.reduce_dim)}
     };
     switch (test_config.reduce_type) {
@@ -332,9 +321,6 @@ void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig
     auto seed = std::chrono::system_clock::now().time_since_epoch().count();
 
     vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, test_config.data_gen_rand_max, test_config.data_gen_seed, test_config.data_gen_offset);
-    // std::vector<uint32_t> src_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 1.0078125f);
-    // std::cout << "src_vec[0] = " << std::hex << src_vec[0] << std::endl;
-    // std::cout << "src_vec[1] = " << std::hex << src_vec[1] << std::endl;
 
     tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
@@ -360,14 +346,8 @@ void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig
         uint16_t srcb_fid_mask = 0xFFFF;
         set_math_fid_masks_binary(srca_fid_mask, srcb_fid_mask, test_config.math_fidelity);
         uint32_t uint32_scaler = *reinterpret_cast<uint32_t*>(&scaler);
-        // std::cout << "srca_fid_mask = " << std::hex << srca_fid_mask << std::endl;
-        // std::cout << "srcb_fid_mask = " << std::hex << srcb_fid_mask << std::endl;
-        // std::cout << "scaler = " << std::dec << scaler << std::endl;
-        // std::cout << "uint32_scaler = " << std::hex << uint32_scaler << std::endl;
         uint32_scaler &= (0xFFFFFFFF & (srcb_fid_mask << 16));
-        // std::cout << "uint32_scaler = " << std::hex << uint32_scaler << std::endl;
         scaler = *reinterpret_cast<float*>(&uint32_scaler);
-        // std::cout << "scaler = " << scaler << std::endl;
         for (auto i = 0; i < u16_src0_vec.size(); i++) {
             u16_src0_vec[i] = u16_src0_vec[i] & srca_fid_mask;
         }
@@ -375,17 +355,11 @@ void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig
     // recover a linear view of input vector for consumption by gold_ function
     std::vector<uint16_t> src_linear = convert_layout<uint16_t>(u16_src0_vec, test_config.shape, TensorLayout::TILED32_4FACES, TensorLayout::LIN_ROW_MAJOR);
     std::vector<uint16_t> gold_reduced = test_config.golden_function(src_linear, test_config.shape, scaler, uint8_t(test_config.reduce_type), true); // result is uint16_t untilized
-    // std::cout << "gold_reduced[0] = " << std::hex << gold_reduced[0] << std::endl;
-    // std::cout << "gold_reduced[1] = " << std::hex << gold_reduced[1] << std::endl;
 
     // Tilize from row major and convert to pairs (uint32_t)
     auto gold_4f_u32 = u32_from_u16_vector(convert_layout<uint16_t>(gold_reduced, test_config.result_shape, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES));
 
     bool pass = packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);
-    // std::cout << "result_vec[0] = " << std::hex << result_vec[0] << std::endl;
-    // std::cout << "result_vec[1] = " << std::hex << result_vec[1] << std::endl;
-    // std::cout << "gold_4f_u32[0] = " << std::hex << gold_4f_u32[0] << std::endl;
-    // std::cout << "gold_4f_u32[1] = " << std::hex << gold_4f_u32[1] << std::endl;
     if (!pass)
         log_error(LogTest, "Failure position={}", argfail);
 
