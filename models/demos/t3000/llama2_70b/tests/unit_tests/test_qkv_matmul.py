@@ -69,7 +69,7 @@ class TtLlamaQKV(torch.nn.Module):
             for i in range(self.num_devices):
                 tensor_cache_path = get_weight_cache_path(self.cache_path, wqkv_cache_str, i, self.num_devices)
                 self.qkv_list.append(
-                    ttnn.load_tensor(str(tensor_cache_path)).to(self.devices[i], self.model_config["DRAM_MEMCFG"])
+                    ttnn.load_tensor(str(tensor_cache_path)).to(self.devices[i], ttnn.DRAM_MEMORY_CONFIG)
                 )
 
     def forward(self, xs: ttnn.Tensor) -> ttnn.Tensor:

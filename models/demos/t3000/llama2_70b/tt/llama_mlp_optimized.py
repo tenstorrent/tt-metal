@@ -119,61 +119,81 @@ class TtLlamaMLP_optimized:
             cache_file_name=self.cache_path / w3_dram_shard_str,
         )
 
-    def __call__(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
-        # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
-        if self.model_config["LLM_MODE"] == "decode":
+    def __call__(self, x: List[ttnn.Tensor], mode="decode") -> List[ttnn.Tensor]:
+        if mode == "decode":
             return self.decode_forward(x)
-        # Prefill should have input tensor of shape (1, batch, seqlen, hidden_size)
-        elif self.model_config["LLM_MODE"] == "prefill":
+        elif mode == "prefill":
             return self.prefill_forward(x)
         else:
-            raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
+            raise ValueError(f"Unknown llm_mode: {mode}")
 
     def prefill_forward(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
         # Prefill Reshape fix
         _, _, seq_len, _ = x.shape
         max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
-        batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
-        x = ttnn.reshape(x, (1, batch_dim, seq_len // batch_dim, self.hidden_size))
+        if seq_len >= max_mm_seq_len:
+            if seq_len % max_mm_seq_len != 0:
+                raise ValueError(f"Sequence length {seq_len} is not divisible by {max_mm_seq_len}")
+            batch_dim = seq_len // max_mm_seq_len  # Find the division factor
+            x = ttnn.reshape(x, (1, batch_dim, seq_len // batch_dim, self.hidden_size))
+            pc1 = self.model_config["PREFILL_PADDED_FF1_MM_PROGCFG"]
+            pc2 = self.model_config["PREFILL_PADDED_FF2_MM_PROGCFG"]
+            pc3 = self.model_config["PREFILL_PADDED_FF3_MM_PROGCFG"]
+        elif seq_len == 128:
+            pc1 = self.model_config["PREFILL_PADDED_FF1_MM_PROGCFG_128"]
+            pc2 = self.model_config["PREFILL_PADDED_FF2_MM_PROGCFG_128"]
+            pc3 = self.model_config["PREFILL_PADDED_FF3_MM_PROGCFG_128"]
+        else:
+            # ttnn.linear does not allow None program_config if weights are sharded
+            pc1 = self.model_config["PREFILL_PADDED_FF1_MM_PROGCFG"]
+            pc2 = self.model_config["PREFILL_PADDED_FF2_MM_PROGCFG"]
+            pc3 = self.model_config["PREFILL_PADDED_FF3_MM_PROGCFG"]
 
-        w1_out = ttnn.matmul(
+        w1_out = ttnn.linear(
             x,
             self.w1,
-            program_config=self.model_config["PADDED_FF1_MM_PROGCFG"],
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG_LOFI"],
-            dtype=self.model_config["BFLOAT16_DTYPE"],
+            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc1 else None,
+            dtype=ttnn.bfloat16,
+            activation="silu" if not pc1 else None,
+            program_config=pc1,
         )
 
-        w3_out = ttnn.matmul(
+        w3_out = ttnn.linear(
             x,
             self.w3,
-            program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG_LOFI"],
-            dtype=self.model_config["BFLOAT16_DTYPE"],
+            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc3 else None,
+            dtype=ttnn.bfloat16,
+            program_config=pc3,
         )
+
         x.deallocate(True)
 
-        hidden_states = ttnn.mul(w1_out, w3_out, dtype=ttnn.bfloat8_b, memory_config=self.model_config["DRAM_MEMCFG"])
+        hidden_states = ttnn.mul(w1_out, w3_out, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         w1_out.deallocate(True)
         w3_out.deallocate(True)
 
-        hidden_states_mm = ttnn.matmul(
+        hidden_states_mm = ttnn.linear(
             hidden_states,
             self.w2,
-            program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
-            compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
-            dtype=self.model_config["BFLOAT16_DTYPE"],
+            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc2 else None,
+            dtype=ttnn.bfloat8_b,
+            program_config=pc2,
         )
         hidden_states.deallocate(True)
-        # Prefill Reshape fix (reverse)
-        hidden_states_mm = ttnn.reshape(hidden_states_mm, (1, 1, seq_len, self.hidden_size))
+
+        if seq_len >= max_mm_seq_len:
+            # Prefill Reshape fix (reverse)
+            hidden_states_mm = ttnn.reshape(hidden_states_mm, (1, 1, seq_len, self.hidden_size))
 
         hidden_states_reduced = ttnn.reduce_scatter(
             hidden_states_mm,
             scatter_dim=3,
             math_op=ttnn.ReduceType.Sum,
             num_links=1,
-            memory_config=self.model_config["DRAM_MEMCFG"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         hidden_states_mm.deallocate(True)
@@ -224,7 +244,7 @@ class TtLlamaMLP_optimized:
             scatter_dim=3,
             math_op=ttnn.ReduceType.Sum,
             num_links=1,
-            memory_config=self.model_config["ATTN_ADD_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["RESIDUAL_ADD_OUTPUT_MEMCFG"],
         )
         hidden_states.deallocate(True)
         return hidden_states_reduced
