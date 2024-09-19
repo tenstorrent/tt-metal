@@ -20,7 +20,8 @@ AllGather create_all_gather_struct(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
-    const std::vector<Device*>& devices
+    const std::vector<Device*>& devices,
+    const all_gather_op::Topology topology
 ) {
     uint32_t num_devices = devices.size();
 
@@ -38,7 +39,7 @@ AllGather create_all_gather_struct(
     }
 
     return ttnn::AllGather{
-        dim, num_links, num_devices, device_index, user_defined_num_workers, user_defined_num_buffers_per_channel, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config())};
+        dim, num_links, num_devices, device_index, user_defined_num_workers, user_defined_num_buffers_per_channel, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config()), topology};
 }
 
 
@@ -189,11 +190,15 @@ Tensor all_gather(
     const Tensor& input_tensor, const uint32_t dim, const uint32_t num_links, const std::optional<MemoryConfig>& memory_config, const std::optional<size_t> user_defined_num_workers, const std::optional<size_t> user_defined_num_buffers_per_channel) {
 
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
-
+    all_gather_op::Topology topology = all_gather_op::Topology::Ring;
     auto devices = input_tensor.get_workers();
+    uint32_t num_devices = devices.size();
+    if (num_devices == 1){
+        topology = all_gather_op::Topology::Linear;
+    }
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
-        [dim, num_links, memory_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices](
+        [dim, num_links, memory_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, topology](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -201,7 +206,7 @@ Tensor all_gather(
             const auto& input_tensor = input_tensors.at(0);
 
             return operation::run(
-                create_all_gather_struct(input_tensor, dim, num_links, memory_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices),
+                create_all_gather_struct(input_tensor, dim, num_links, memory_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, topology),
                 {input_tensor});
         },
         {input_tensor},
