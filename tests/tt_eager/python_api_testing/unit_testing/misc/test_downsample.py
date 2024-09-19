@@ -22,9 +22,11 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
     create_conv_bias_tensor,
     create_conv_weight_tensor_special_padding,
 )
+from models.utility_functions import skip_for_blackhole
 import torch
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, stride_h, stride_w, num_cores, grid_size, height_sharded",

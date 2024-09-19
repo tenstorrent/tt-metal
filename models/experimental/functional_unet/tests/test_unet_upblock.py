@@ -85,7 +85,7 @@ def test_unet_upblock(
         ("upblock4", 16, 528, 80, 16),
     ],
 )
-@pytest.mark.parametrize("enable_async_mode", (False,), indirect=True)  # Enable when #12685 is resolved
+@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_unet_upblock_multi_device(
     batch,

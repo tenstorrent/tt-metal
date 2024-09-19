@@ -13,6 +13,9 @@ on:
           - add
           - line_all_gather
           - logical_and_
+          - eltwise.subtract.subtract_interleaved
+          - eltwise.subalpha.subalpha_interleaved
+          - eltwise.rsub.rsub_interleaved
           - eltwise.frac.frac_interleaved
           - eltwise.ceil.ceil_interleaved
           - eltwise.trunc.trunc_interleaved

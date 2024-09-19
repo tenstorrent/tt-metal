@@ -17,6 +17,7 @@ from models.utility_functions import (
     tt2torch_tensor,
     skip_for_grayskull,
     nearest_32,
+    skip_for_blackhole,
 )
 
 
@@ -71,6 +72,7 @@ def run_test_create_head_interleaved(device, n_local_heads, n_local_kv_heads, he
     assert out_pass_q and out_pass_k and out_pass_v
 
 
+@skip_for_blackhole("Requires eth connected devices to run, see #12349")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "n_local_heads, n_local_kv_heads, head_dim, batch",
@@ -172,6 +174,7 @@ def run_test_create_head_max_width_shard(device, n_local_heads, n_local_kv_heads
     assert out_pass_q and out_pass_k and out_pass_v
 
 
+@skip_for_blackhole("Requires eth connected devices to run, see #12349")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "n_local_heads, n_local_kv_heads, head_dim, batch",
@@ -275,6 +278,7 @@ def run_test_create_min_width_shard(
     assert out_pass_q and out_pass_k and out_pass_v
 
 
+@skip_for_blackhole("Requires eth connected devices to run, see #12349")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "n_local_heads, n_local_kv_heads, head_dim",
@@ -384,6 +388,7 @@ def run_test_create_width_shard_by_head(
     assert out_pass_q and out_pass_k and out_pass_v
 
 
+@skip_for_blackhole("Requires eth connected devices to run, see #12349")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "n_local_heads, n_local_kv_heads, head_dim",

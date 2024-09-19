@@ -4,7 +4,7 @@
 
 #include "common/bfloat16.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/ccl/line_all_gather/device/line_all_gather_op.hpp"
+#include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/cpp/ttnn/multi_device.hpp"
@@ -109,7 +109,7 @@ TEST(TGTests, TestAllGatherDeadlock) {
                 // Configure CCL running on this device.
                 uint32_t receiver_device_id = device_ids[(dev_idx) + 1 % num_devices_in_tunnel];
                 uint32_t sender_device_id = device_ids[(dev_idx + num_devices_in_tunnel - 1) % num_devices_in_tunnel];
-                auto all_gather_op = ttnn::LineAllGather{
+                auto all_gather_op = ttnn::AllGather{
                                         3, 2, num_devices_in_tunnel, dev_idx, std::nullopt, std::nullopt, receiver_device_id, sender_device_id, input_tensor.memory_config(), ttnn::all_gather_op::Topology::Linear};
                 // Send CCL to this device. All CCLs will complete simultaneously.
                 output_tensors.push_back(async_detail::run_operation(0, all_gather_op, {input_tensor}).at(0));
