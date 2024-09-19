@@ -46,6 +46,7 @@ runs:
       run: |
         docker pull ghcr.io/${{ github.repository }}/${{ inputs.docker_image }}:${{ env.IMAGE_TAG }}
     - name: Create folder for generated artifacts
+      shell: bash
       run: mkdir -p ${{ github.workspace }}/generated
     - uses: addnab/docker-run-action@v3
       with:
