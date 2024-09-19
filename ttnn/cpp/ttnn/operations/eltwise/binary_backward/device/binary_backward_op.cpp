@@ -667,10 +667,10 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
     input_grad = input_grad.value_or(ttnn::empty_like(input));
 
     if (round_mode == "None") {
-        ttnn::full_like(queue_id, input, std::numeric_limits<float>::infinity(), std::nullopt, std::nullopt, std::nullopt, output_mem_config, input_grad);
+        float t_inf = std::numeric_limits<float>::infinity();
         if (scalar == 0.0) {
             float t_nan = std::nanf("");
-            where(queue_id, ttnn::eqz(queue_id, grad, output_mem_config),t_nan, ttnn::multiply(queue_id, ttnn::sign(queue_id, grad, output_mem_config), input_grad.value(), std::nullopt, output_mem_config), output_mem_config, input_grad);
+            where(queue_id, ttnn::eqz(queue_id, grad, output_mem_config),t_nan, ttnn::multiply(queue_id, ttnn::sign(queue_id, grad, output_mem_config), t_inf, std::nullopt, output_mem_config), output_mem_config, input_grad);
             result.push_back(input_grad);
         } else {
             float inv_scalar = 1.0f / scalar;
@@ -678,7 +678,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
             result.push_back(input_grad);
         }
     } else {
-        ttnn::full_like(queue_id, grad, 0.0f, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config, input_grad);
+        ttnn::zeros_like(queue_id, grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config, input_grad);
         result.push_back(input_grad);
     }
     return result;
@@ -703,8 +703,9 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
     preallocated_tensors_check(input_grad, other_grad, input, other, {are_required_outputs[0], are_required_outputs[1]});
 
     if (round_mode == "None") {
-        Tensor t_inf = ttnn::full_like(queue_id, input, std::numeric_limits<float>::infinity(), input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
-        Tensor t_nan = ttnn::full_like(queue_id, input, std::nanf(""), input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
+        float t_nan = std::nanf("");
+        float t_inf = std::numeric_limits<float>::infinity();
+        float neg_inf = -std::numeric_limits<float>::infinity();
         if (are_required_outputs.at(0))
         {
             ttnn::multiply(queue_id, grad, ttnn::reciprocal(other, output_mem_config), std::nullopt, output_mem_config, input_grad);
@@ -715,7 +716,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
                     queue_id,
                     ttnn::eqz(queue_id, grad, output_mem_config),
                     t_nan,
-                    ttnn::multiply(queue_id, t_inf, ttnn::sign(grad, output_mem_config), std::nullopt, output_mem_config),
+                    ttnn::multiply(queue_id, ttnn::sign(grad, output_mem_config), t_inf, std::nullopt, output_mem_config),
                     output_mem_config),
                 input_grad.value(),
                 output_mem_config);
@@ -739,8 +740,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
                         queue_id,
                         ttnn::eqz(queue_id, input, output_mem_config),
                         t_nan,
-                        ttnn::multiply(queue_id, ttnn::multiply(queue_id, ttnn::neg(queue_id, t_inf, output_mem_config),
-                                ttnn::sign(queue_id, input, output_mem_config),
+                        ttnn::multiply(queue_id, ttnn::multiply(queue_id, ttnn::sign(queue_id, input, output_mem_config), neg_inf,
                                 std::nullopt,
                                 output_mem_config),
                             ttnn::sign(queue_id, grad, output_mem_config),
