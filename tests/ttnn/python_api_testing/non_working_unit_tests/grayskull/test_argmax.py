@@ -49,7 +49,7 @@ def run_argmax_tests(
         raise e
 
     ttnn.close_device(device)
-
+    tt_result = tt_result.squeeze(2)
     assert len(tt_result.shape) == len(ref_value.shape)
     assert tt_result.shape == ref_value.shape
     assert_with_pcc(ref_value, tt_result, 0.99)
@@ -57,7 +57,7 @@ def run_argmax_tests(
 
 test_sweep_args = [
     (
-        [(1, 3, 19, 98)],
+        [(1, 1, 19, 98)],
         [ttnn.bfloat16],
         [ttnn.ROW_MAJOR_LAYOUT],
         [ttnn.DRAM_MEMORY_CONFIG],
@@ -66,7 +66,7 @@ test_sweep_args = [
         {"dim": 3},
     ),
     (
-        [(2, 6, 107, 102)],
+        [(1, 1, 107, 102)],
         [ttnn.bfloat16],
         [ttnn.ROW_MAJOR_LAYOUT],
         [ttnn.L1_MEMORY_CONFIG],

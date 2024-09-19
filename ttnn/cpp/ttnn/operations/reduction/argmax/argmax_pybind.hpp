@@ -20,6 +20,8 @@ void bind_reduction_argmax_operation(py::module& module) {
             Returns the indices of the maximum value of elements in the ``input`` tensor
             If no ``dim`` is provided, it will return the indices of maximum value of all elements in given ``input``
 
+            Currenly this op only support dimension-specific reduction on last dimension.
+
             Input tensor must have BFLOAT16 data type and ROW_MAJOR layout.
 
             Output tensor will have UINT32 data type.
@@ -34,7 +36,7 @@ void bind_reduction_argmax_operation(py::module& module) {
                 * :attr:`input_tensor`: Input Tensor for argmax.
 
             Keyword Args:
-                * :attr:`dim`: the dimension to reduce. If None, the argmax of the flattened input is returned
+                * :attr:`dim`: the dimension to reduce. If None, the argmax of the flattened input is returned. Currenly only supports (dim=-1, dim=3, and dim=None)
                 * :attr:`memory_config`: Memory Config of the output tensor
                 * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
                 * :attr:`queue_id` (Optional[uint8]): command queue id
@@ -49,14 +51,16 @@ void bind_reduction_argmax_operation(py::module& module) {
             [] (const OperationType& self,
                 const ttnn::Tensor& input_tensor,
                 const std::optional<int> dim,
+                const bool use_multicore,
                 const std::optional<ttnn::MemoryConfig>& memory_config,
                 std::optional<ttnn::Tensor> optional_output_tensor,
                 uint8_t queue_id) {
-                    return self(queue_id, input_tensor, dim, memory_config, optional_output_tensor);
+                    return self(queue_id, input_tensor, dim, use_multicore, memory_config, optional_output_tensor);
                 },
                 py::arg("input_tensor").noconvert(),
                 py::kw_only(),
                 py::arg("dim") = std::nullopt,
+                py::arg("use_multicore") = false,
                 py::arg("memory_config") = std::nullopt,
                 py::arg("output_tensor") = std::nullopt,
                 py::arg("queue_id") = 0});
