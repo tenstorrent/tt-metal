@@ -86,6 +86,7 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, embd,
     for i, encoded in enumerate(encoded_prompts):
         if prefill_seq_len > 0:
             input_tokens_prefill[i] = torch.tensor(encoded[:prefill_seq_len]).to(input_tokens_prefill)
+            pt_tokenized_inputs_prefill = torch.tensor(input_tokens_prefill)
         input_tokens_decode[i, : len(encoded[prefill_seq_len:])] = torch.tensor(encoded[prefill_seq_len:]).to(
             input_tokens_decode
         )
@@ -97,7 +98,6 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, embd,
 
     # Select the first token from the prompts for initial decoding
     pt_tokenized_inputs_decode = torch.tensor(input_tokens_decode)
-    pt_tokenized_inputs_prefill = torch.tensor(input_tokens_prefill)
     emb_inputs_decode = embd(pt_tokenized_inputs_decode[:, 0]).view(model_args.max_batch_size, 1, -1)
     if prefill_seq_len > 0:
         emb_prefill_inputs = [
