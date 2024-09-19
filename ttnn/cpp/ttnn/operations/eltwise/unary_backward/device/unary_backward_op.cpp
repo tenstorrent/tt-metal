@@ -54,7 +54,7 @@ std::vector<Tensor> ExecuteUnaryBackwardClamp::invoke(
 
 // Hardtanh
 // result: torch.where((input <= min) | (input >= max), 0.0, grad)
-std::vector<Tensor> _hardtanh_bw(
+std::vector<Tensor> ExecuteUnaryBackwardHardtanh::invoke(
     const Tensor& grad, const Tensor& input, float min, float max, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = ttnn::where(

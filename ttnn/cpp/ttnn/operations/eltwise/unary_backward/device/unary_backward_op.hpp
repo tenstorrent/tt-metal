@@ -13,7 +13,6 @@
 namespace ttnn::operations::unary_backward {
 
 enum class UnaryBackwardOpType {
-    HARDTANH_BW,
     DIV_BW,
     RDIV_BW,
     MULTIGAMMALN_BW,
@@ -131,8 +130,6 @@ std::vector<Tensor> _floor_bw( const Tensor& grad, const Tensor& input, const st
 std::vector<Tensor> _round_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _log_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 
-std::vector<Tensor> _hardtanh_bw( const Tensor& grad, const Tensor& input, float min = -1.0, float max = 1.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-
 std::vector<Tensor> _add_bw( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 std::vector<Tensor> _eq_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
@@ -153,13 +150,6 @@ Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_
 // OpHandler struct template
 template <UnaryBackwardOpType OpType>
 struct OpHandler;
-
-template <>
-struct OpHandler<UnaryBackwardOpType::HARDTANH_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float min, float max, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _hardtanh_bw(grad, input, min, max, output_mem_config);
-    }
-};
 
 template <>
 struct OpHandler<UnaryBackwardOpType::RPOW_BW> {
