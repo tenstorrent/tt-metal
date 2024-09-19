@@ -139,6 +139,7 @@ class TtLlamaDecoder_galaxy:
         self.model_config = model_config
         self.attention.set_model_config(model_config)
         self.mlp.set_model_config(model_config)
+        self.get_decoder_config()
 
     def load_weights(self):
         """
