@@ -13,13 +13,12 @@ struct MorehSumBackward {
         std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
         bool keepdim,
         const std::optional<Tensor>& input_grad,
-        const std::optional<MemoryConfig>& input_grad_mem_config,
+        const std::optional<MemoryConfig>& input_grad_memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_sum_backward
 
 namespace ttnn {
-constexpr auto moreh_sum_backward = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::moreh_sum_backward",
-    ttnn::operations::moreh::moreh_sum_backward::MorehSumBackward>();
+constexpr auto moreh_sum_backward = ttnn::
+    register_operation<"ttnn::moreh_sum_backward", ttnn::operations::moreh::moreh_sum_backward::MorehSumBackward>();
 }
