@@ -75,12 +75,13 @@ def register_pre_operation_hook(hook):
 
     register_pre_operation_hook is a context manager that registers a pre-operation hook. The hook can be used to run custom code before the operation is executed.
 
-    The hook takes in the following arguments:
-    - operation: The operation that is being called
-    - args: The arguments that are passed to the operation
-    - kwargs: The keyword arguments that are passed to the operation
+    Args:
+        operation: The operation that is being called.
+        args: The arguments that are passed to the operation.
+        kwargs: The keyword arguments that are passed to the operation.
 
-    The hook must return None.
+    Returns:
+        `None`: the hook is executed.
 
     """
 
@@ -99,13 +100,14 @@ def register_post_operation_hook(hook):
 
     register_post_operation_hook is a context manager that registers a post-operation hook. The hook can be used to run custom code after the operation is executed.
 
-    The hook takes in the following arguments:
-    - operation: The operation that is being called
-    - args: The arguments that are passed to the operation
-    - kwargs: The keyword arguments that are passed to the operation
-    - output: The output of the operation
+    Args:
+        operation: The operation that is being called.
+        args: The arguments that are passed to the operation.
+        kwargs: The keyword arguments that are passed to the operation.
+        output: The output of the operation.
 
-    The hook must return None.
+    Returns:
+        `None`: the hook is executed.
 
     """
 

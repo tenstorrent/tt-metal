@@ -68,7 +68,7 @@ void py_bind_split_query_key_value_and_split_heads(pybind11::module& module) {
                 num_heads (int): num heads to split into.
                 num_kv_heads (int, optional): num heads of Key and num heads of Value. If not passed in, then :attr:`num_kv_heads` is set to :attr:`num_heads`. Defaults to `None`.
                 transpose_key (bool): Whether to transpose the Key tensor on the last two dimensions. Defaults to `true`
-                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `DRAM_MEMORY_CONFIG`.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
             Returns:
                Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: the output tensor.
