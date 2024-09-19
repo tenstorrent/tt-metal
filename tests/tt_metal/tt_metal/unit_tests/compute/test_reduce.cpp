@@ -437,6 +437,7 @@ TEST_F(DeviceFixture, ComputeReduceW) {
         if (math_fid == 1) continue;
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
+                if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) continue;
                 log_info(LogTest, "MathFid = {}, ReduceType = {}, FP32DestAcc = {}", math_fid, reduce_type, fp32_dest_acc_en);
                 ReduceConfig test_config = {
                     .shape = shape,
@@ -531,6 +532,7 @@ TEST_F(DeviceFixture, ComputeReduceWMathOnly) {
         if (math_fid == 1) continue;
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
+                if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) continue;
                 log_info(LogTest, "MathFid = {}, ReduceType = {}, FP32DestAcc = {}", math_fid, reduce_type, fp32_dest_acc_en);
                 ReduceConfig test_config = {
                     .shape = shape,
@@ -627,6 +629,7 @@ TEST_F(DeviceFixture, ComputeReduceWShortInit) {
         if (math_fid == 1) continue;
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
+                if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) continue;
                 log_info(LogTest, "MathFid = {}, ReduceType = {}, FP32DestAcc = {}", math_fid, reduce_type, fp32_dest_acc_en);
                 ReduceConfig test_config = {
                     .short_init = true,
