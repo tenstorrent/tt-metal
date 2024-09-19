@@ -21,12 +21,15 @@ void bind_permute(py::module& module) {
             Permutes the dimensions of the input tensor according to the specified permutation.
 
             Args:
-                * :attr:`input_tensor`: Input Tensor for permute.
-                * :attr:`dims`: the permutation of the dimensions of the input tensor.
+                input_tensor (ttnn.Tensor): the input tensor.
+                dim (number): tthe permutation of the dimensions of the input tensor.
 
             Keyword Args:
-                * :attr:`memory_config`: Memory Config of the output tensor
-                * :attr:`queue_id`: command queue id
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                queue_id (int, optional): command queue id. Defaults to `0`.
+
+           Returns:
+               List of ttnn.Tensor: the output tensor.
 
             Example:
 

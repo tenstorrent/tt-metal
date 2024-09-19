@@ -86,23 +86,29 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
         R"doc(
         {2}
 
-        Supports broadcasting.
+        .. math::
+            \mathrm{{output\_tensor}} = {0}(\mathrm{{input\_tensor\_a,input\_tensor\_b}}).
 
         Args:
-            * :attr:`input_tensor_a`
-            * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (ttnn.Tensor or Number): the input tensor.
 
         Keyword args:
-            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
-            * :attr:`dtype` (Optional[ttnn.DataType]): data type for the output tensor
-            * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-            * :attr:`activations` (Optional[List[str]]): list of activation functions to apply to the output tensor
-            * :attr:`queue_id` (Optional[uint8]): command queue id
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            dtype (ttnn.DataType, optional): Data type for the output tensor. Defaults to `Null`.
+            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+            activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `Null`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Supports broadcasting.
 
         Example:
 
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
             >>> output = {1}(tensor1, tensor2)
         )doc",
         operation.base_name(),
@@ -206,18 +212,24 @@ void bind_binary_composite_with_alpha(py::module& module, const binary_operation
         R"doc(
             {2}
 
+            .. math::
+                \mathrm{{output\_tensor}} = {0}(\mathrm{{input\_tensor\_a,input\_tensor\_b*alpha}}).
+
             Args:
-                * :attr:`input_tensor_a`
-                * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
-                * :attr:`alpha`
+                input_tensor_a (ttnn.Tensor): the input tensor.
+                input_tensor_b (ttnn.Tensor): the input tensor.
+                alpha (float): the alpha value.
 
             Keyword Args:
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
 
             Example:
 
-                >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-                >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+                >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+                >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
                 >>> output = {1}(tensor1, tensor2, alpha)
         )doc",
         operation.base_name(),
@@ -298,12 +310,18 @@ void bind_div_like_ops(py::module& module, const binary_operation_t& operation, 
         R"doc(
             {2}
 
+            .. math::
+                \mathrm{{output\_tensor}} = {0}(\mathrm{{input\_tensor\_a,input\_tensor\_b}}).
+
             Args:
-                * :attr:`input_tensor_a`
-                * :attr:`input_tensor_b` (ttnn.Tensor or Number)
+                input_tensor_a (ttnn.Tensor): the input tensor.
+                input_tensor_b (ttnn.Tensor or Number): the input tensor.
 
             Keyword Args:
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
 
             Example:
 
@@ -462,11 +480,14 @@ void bind_binary_overload_operation(py::module& module, const binary_operation_t
             {2}
 
             Args:
-                * :attr:`input_a` (ttnn.Tensor)
-                * :attr:`input_b` (ttnn.Tensor or Number)
+                input_tensor_a (ttnn.Tensor): the input tensor.
+                input_tensor_b (ttnn.Tensor or Number): the input tensor.
 
             Keyword Args:
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
 
             Example::
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -513,8 +534,11 @@ void bind_inplace_operation(py::module& module, const binary_operation_t& operat
             {2}
 
             Args:
-                * :attr:`input_a` (ttnn.Tensor)
-                * :attr:`input_b` (ttnn.Tensor or Number)
+                input_tensor_a (ttnn.Tensor): the input tensor.
+                input_tensor_b (ttnn.Tensor or Number): the input tensor.
+
+            Returns:
+               List of ttnn.Tensor: the output tensor.
 
             Example::
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -554,9 +578,15 @@ void bind_logical_inplace_operation(py::module& module, const binary_operation_t
         R"doc(
             {2}
 
+            .. math::
+               \mathrm{{output\_tensor}} = {0}(\mathrm{{input\_tensor\_a,input\_tensor\_b}}).
+
             Args:
-                * :attr:`input_a` (ttnn.Tensor)
-                * :attr:`input_b` (ttnn.Tensor)
+                input_tensor_a (ttnn.Tensor): the input tensor.
+                input_tensor_b (ttnn.Tensor): the input tensor.
+
+            Returns:
+                List of ttnn.Tensor: the output tensor.
 
             Example::
                 >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -641,8 +671,7 @@ void py_module(py::module& module) {
     detail::bind_binary_operation(
         module,
         ttnn::add,
-        R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{ input\_tensor\_a }}_i + \mathrm{{ input\_tensor\_b }}_i)doc");
+        R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_inplace_operation(
         module,
@@ -653,8 +682,7 @@ void py_module(py::module& module) {
     detail::bind_binary_operation(
         module,
         ttnn::subtract,
-        R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{ input\_tensor\_a }}_i - \mathrm{{ input\_tensor\_b }}_i)doc");
+        R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_inplace_operation(
         module,
@@ -665,8 +693,7 @@ void py_module(py::module& module) {
     detail::bind_binary_operation(
         module,
         ttnn::multiply,
-        R"doc(Multiplies :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{ input\_tensor\_a }}_i \times \mathrm{{ input\_tensor\_b }}_i)doc");
+        R"doc(Multiplies :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_inplace_operation(
         module,
@@ -677,86 +704,72 @@ void py_module(py::module& module) {
     detail::bind_binary_operation(
         module,
         ttnn::eq,
-        R"doc(Compares if :attr:`input_tensor_a` is equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i == \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compares if :attr:`input_tensor_a` is equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::ne,
-        R"doc(Compares if :attr:`input_tensor_a` is not equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i != \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compares if :attr:`input_tensor_a` is not equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::lt,
-        R"doc(Compares if :attr:`input_tensor_a` is less than :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i < \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compares if :attr:`input_tensor_a` is less than :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::le,
-        R"doc(MCompares if :attr:`input_tensor_a` is less than or equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i <= \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(MCompares if :attr:`input_tensor_a` is less than or equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::gt,
-        R"doc(Compares if :attr:`input_tensor_a` is greater than :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i > \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compares if :attr:`input_tensor_a` is greater than :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::ge,
-        R"doc(Compares if :attr:`input_tensor_a` is greater than or equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i >= \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compares if :attr:`input_tensor_a` is greater than or equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::logical_and,
-        R"doc(Compute logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i && \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::logical_or,
-        R"doc(Compute logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::ldexp,
-        R"doc(Compute ldexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute ldexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::logaddexp,
-        R"doc(Compute logaddexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute logaddexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::logaddexp2,
-        R"doc(Compute logaddexp2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute logaddexp2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::squared_difference,
-        R"doc(Compute squared difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute squared difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::bias_gelu,
-        R"doc(Compute bias_gelu of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute bias_gelu of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_operation(
         module,
         ttnn::divide,
-        R"doc(Divides :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Divides :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     auto prim_module = module.def_submodule("prim", "Primitive binary operations");
 
@@ -811,8 +824,7 @@ void py_module(py::module& module) {
     detail::bind_logical_inplace_operation(
         module,
         ttnn::logical_or_,
-        R"doc(Compute inplace logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute inplace logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_composite(
         module,
@@ -823,20 +835,17 @@ void py_module(py::module& module) {
     detail::bind_logical_inplace_operation(
         module,
         ttnn::logical_and_,
-        R"doc(Compute inplace logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute inplace logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_composite_with_alpha(
         module,
         ttnn::addalpha,
-        R"doc(Compute addalpha :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute addalpha :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`.)doc");
 
     detail::bind_binary_composite_with_alpha(
         module,
         ttnn::subalpha,
-        R"doc(Compute subalpha :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute subalpha :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_composite_with_rtol_atol(
         module,
@@ -853,14 +862,12 @@ void py_module(py::module& module) {
     detail::bind_div_like_ops(
         module,
         ttnn::div_no_nan,
-        R"doc(Compute div_no_nan :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute div_no_nan :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_div_like_ops(
         module,
         ttnn::floor_div,
-        R"doc(Compute floor division :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-        .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
+        R"doc(Compute floor division :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_composite(
         module,
@@ -893,38 +900,32 @@ void py_module(py::module& module) {
     detail::bind_inplace_operation(
         module,
         ttnn::gt_,
-        R"doc(Perform Greater than in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`
-        .. math:: \mathrm{{input\_a}}_i > \mathrm{{input\_b}}_i)doc");
+        R"doc(Perform Greater than in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc");
 
     detail::bind_inplace_operation(
         module,
         ttnn::ge_,
-        R"doc(Perform Greater than or equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`
-        .. math:: \mathrm{{input\_a}}_i >= \mathrm{{input\_b}}_i)doc");
+        R"doc(Perform Greater than or equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc");
 
     detail::bind_inplace_operation(
         module,
         ttnn::lt_,
-        R"doc(Perform Less than in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`
-        .. math:: \mathrm{{input\_a}}_i < \mathrm{{input\_b}}_i)doc");
+        R"doc(Perform Less than in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc");
 
     detail::bind_inplace_operation(
         module,
         ttnn::le_,
-        R"doc(Perform Less than or equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`
-        .. math:: \mathrm{{input\_a}}_i <= \mathrm{{input\_b}}_i)doc");
+        R"doc(Perform Less than or equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc");
 
     detail::bind_inplace_operation(
         module,
         ttnn::eq_,
-        R"doc(Perform Equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`
-        .. math:: \mathrm{{input\_a}}_i = \mathrm{{input\_b}}_i)doc");
+        R"doc(Perform Equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc");
 
     detail::bind_inplace_operation(
         module,
         ttnn::ne_,
-        R"doc(Perform Not equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`
-        .. math:: \mathrm{{input\_a}}_i != \mathrm{{input\_b}}_i)doc");
+        R"doc(Perform Not equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc");
 
 }
 

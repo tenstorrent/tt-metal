@@ -16,25 +16,26 @@ namespace py = pybind11;
 void bind_untilize_with_halo_v2(py::module& module) {
     auto doc =
         R"doc(
-            untilize_with_halo_v2(input_tensor: ttnn.Tensor, padding_config: ttnn.Tensor, local_config: ttnn.Tensor, remote_config: ttnn.Tensor, \*, pad_val: int, ncores_nhw: int, max_out_nsticks_per_core: int,
-                                  memory_config: Optional[MemoryConfig] = None, remote_read: bool = False, transpose_mcast: bool = False, queue_id: int = 0) -> ttnn.Tensor
 
             Untilizes input tiled data to row major format and constructs halo'd output shards.
 
             Args:
-                * :attr:`input_tensor`: Input Tensor.
-                * :attr:`padding_config`: Padding config tensor.
-                * :attr:`local_config`: Local config tensor.
-                * :attr:`remote_config`: Remote config tensor.
+                input_tensor (ttnn.Tensor): the input tensor.
+                padding_config (ttnn.Tensor): Padding config tensor.
+                local_config (ttnn.Tensor): Local config tensor.
+                remote_config (ttnn.Tensor): Remote config tensor.
 
             Keyword Args:
-                * :attr:`pad_val`: Pad value.
-                * :attr:`ncores_nhw`: Number of cores per NHW.
-                * :attr:`max_out_nsticks_per_core`: Max output nsticks per core.
-                * :attr:`memory_config`: Output memory config.
-                * :attr:`remote_read`: Remote read.
-                * :attr:`transpose_mcast`: Transpose mcast.
-                * :attr:`queue_id`: command queue id.
+                pad_val (int, optional): pad value.
+                ncores_nhw (int, optional): Number of cores per NHW..
+                max_out_nsticks_per_core (int, optional): Max output nsticks per core.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                remote_read (bool, optional): Remote read.  Defaults to `False`.
+                ncores_nhw (bool, optional): Transpose mcast.  Defaults to `False`.
+                queue_id (int, optional): command queue id. Defaults to `0`.
+            Returns:
+                ttnn.Tensor: the output tensor.
+
         )doc";
 
     using OperationType = decltype(ttnn::untilize_with_halo_v2);

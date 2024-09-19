@@ -683,10 +683,10 @@ void bind_power(py::module& module, const unary_operation_t& operation) {
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword Args:
-            exponent (float | int): exponent is an integer >= 0.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
+            exponent (float,int, optional): exponent is an integer. Defaults to `>0`.
 
         Returns:
             ttnn.Tensor: the output tensor.
