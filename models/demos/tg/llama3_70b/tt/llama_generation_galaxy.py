@@ -52,12 +52,12 @@ class TtLlamaModelForGeneration:
 
         del state_dict
 
-    def forward(self, tokens: torch.Tensor, start_pos: int, tokenizer):
+    def forward(self, tokens: torch.Tensor, start_pos: int):
         _, seq_len = tokens.shape
         if seq_len == 1:
             return self.decode_forward(tokens, start_pos)
         else:
-            return self.prefill_forward(tokens, start_pos, tokenizer)
+            return self.prefill_forward(tokens, start_pos)
 
     def decode_forward(self, tokens: torch.Tensor, start_pos: int):
         self._update_model_config("decode", tokens.shape[0], 1)
@@ -108,7 +108,7 @@ class TtLlamaModelForGeneration:
         del tt_logits
         return logits
 
-    def prefill_forward(self, tokens: torch.Tensor, start_pos: int, tokenizer):
+    def prefill_forward(self, tokens: torch.Tensor, start_pos: int):
         batch, seq_len = tokens.shape
         assert seq_len <= 8 * 1024, f"Only prefill up to 2048 tokens is supported, got {seq_len}"
 
