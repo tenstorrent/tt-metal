@@ -60,8 +60,8 @@ namespace detail {
             }
 
             Tensor output_chunk = ttnn::slice(preprocessed,
-                                              tt::tt_metal::Shape(start_shape),
-                                              tt::tt_metal::Shape(end_shape),
+                                              tt::tt_metal::LegacyShape(start_shape),
+                                              tt::tt_metal::LegacyShape(end_shape),
                                               std::nullopt,
                                               mem_config);
             if (input_rank < 4) {
