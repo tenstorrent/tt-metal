@@ -38,7 +38,7 @@ struct addr_mod_t
     // CLR, CR, INCR(8 bits)
     struct addr_mod_dest_t
     {
-        uint8_t incr = 0;
+        int16_t incr = 0;
         uint8_t clr  = 0;
         uint8_t cr   = 0;
         uint8_t c_to_cr = 0;

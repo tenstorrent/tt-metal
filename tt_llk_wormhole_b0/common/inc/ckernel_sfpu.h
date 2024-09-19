@@ -17,6 +17,7 @@
 #include "sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h"
 #include "sfpu/ckernel_sfpu_clamp.h"
 #include "sfpu/ckernel_sfpu_comp.h"
+#include "sfpu/ckernel_sfpu_cumsum.h"
 #include "sfpu/ckernel_sfpu_dropout.h"
 #include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_gelu.h"
