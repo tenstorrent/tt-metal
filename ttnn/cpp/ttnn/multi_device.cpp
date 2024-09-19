@@ -12,12 +12,12 @@
 
 namespace ttnn::multi_device {
 
-MeshDevice open_mesh_device(const MeshShape& mesh_shape, const DeviceIds& device_ids, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues, DispatchCoreType dispatch_core_type) {
-    return MeshDevice(mesh_shape, device_ids, l1_small_size, trace_region_size, num_command_queues, dispatch_core_type);
+std::shared_ptr<MeshDevice> open_mesh_device(const MeshShape& mesh_shape, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues, DispatchCoreType dispatch_core_type, const std::pair<size_t, size_t>& offset) {
+    return MeshDevice::create(mesh_shape, l1_small_size, trace_region_size, num_command_queues, dispatch_core_type, offset);
 }
 
-void close_mesh_device(MeshDevice &multi_device) {
-    multi_device.close_devices();
+void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) {
+    mesh_device->close_devices();
 }
 
 std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor) {

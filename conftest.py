@@ -207,9 +207,7 @@ def mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
 
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
 
-    mesh_device = ttnn.open_mesh_device(
-        mesh_shape, device_ids[:num_devices_requested], dispatch_core_type=get_dispatch_core_type(), **device_params
-    )
+    mesh_device = ttnn.open_mesh_device(mesh_shape, dispatch_core_type=get_dispatch_core_type(), **device_params)
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
@@ -235,9 +233,9 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
 
     mesh_device = ttnn.open_mesh_device(
         ttnn.MeshShape(1, num_pcie_devices_requested),
-        device_ids[:num_pcie_devices_requested],
         dispatch_core_type=get_dispatch_core_type(),
         **device_params,
+        physical_device_ids=device_ids[:num_pcie_devices_requested],
     )
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
@@ -256,17 +254,9 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
 
     if ttnn.get_num_devices() < 8:
         pytest.skip()
-    device_ids = [0, 4, 5, 1, 2, 6, 7, 3]
-    try:
-        num_devices_requested = min(request.param, len(device_ids))
-    except (ValueError, AttributeError):
-        num_devices_requested = len(device_ids)
-
-    request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
 
     mesh_device = ttnn.open_mesh_device(
-        ttnn.MeshShape(1, num_devices_requested),
-        device_ids[:num_devices_requested],
+        ttnn.MeshShape(2, 4),
         dispatch_core_type=get_dispatch_core_type(),
         **device_params,
     )

@@ -55,17 +55,8 @@ TEST(TGTests, TestAllGatherDeadlock) {
     TT_FATAL(num_devices_in_tunnel == 4, "Expected Galaxy to have tunnel depth of 4");
     TT_FATAL(num_mmio_devices * cluster_tunnel_count == 8, "Expected 8 tunnels in a Galaxy");
 
-    std::vector<chip_id_t> all_device_ids = {};
-    for (uint32_t mmio_idx = 0; mmio_idx < num_mmio_devices; mmio_idx++) {
-        auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_idx);
-        for (uint32_t tunnel_idx = 0; tunnel_idx < tunnels_from_mmio.size(); tunnel_idx++) {
-            auto remote_devices_in_tunnel = tunnels_from_mmio.at(tunnel_idx);
-            all_device_ids.insert(all_device_ids.end(), remote_devices_in_tunnel.begin(), remote_devices_in_tunnel.end());
-        }
-    }
-
     // Create the device mesh: Grid size is <num_tunnels, tunnel_depth>.
-    auto mesh = ttnn::multi_device::open_mesh_device({cluster_tunnel_count * num_mmio_devices, num_devices_in_tunnel}, all_device_ids, 0, 0, 1, DispatchCoreType::WORKER);
+    auto mesh = ttnn::multi_device::open_mesh_device({cluster_tunnel_count * num_mmio_devices, num_devices_in_tunnel}, 0, 0, 1, DispatchCoreType::WORKER);
 
     // Setup input data and output data containers
     MemoryConfig mem_cfg = MemoryConfig{
@@ -87,7 +78,7 @@ TEST(TGTests, TestAllGatherDeadlock) {
     // Iterate over each tunnel and run line all-gather multiple times.
     // For each tunnel, send adversarial traffic to the first chip, that can hang the network if the CCL is not tagged.
     for (uint32_t row = 0; row < 8; row++) {
-        auto devs = mesh.get_devices_on_row(row);
+        auto devs = mesh->get_devices_on_row(row);
         std::vector<uint32_t> device_ids = {};
         for (auto dev : devs) {
             device_ids.push_back(dev->id());
@@ -146,26 +137,17 @@ TEST(TGTests, TestReduceScatterDeadlock) {
     TT_FATAL(num_devices_in_tunnel == 4, "Expected Galaxy to have tunnel depth of 4");
     TT_FATAL(num_mmio_devices * cluster_tunnel_count == 8, "Expected 8 tunnels in a Galaxy");
 
-    std::vector<chip_id_t> all_device_ids = {};
-    for (uint32_t mmio_idx = 0; mmio_idx < num_mmio_devices; mmio_idx++) {
-        auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_idx);
-        for (uint32_t tunnel_idx = 0; tunnel_idx < tunnels_from_mmio.size(); tunnel_idx++) {
-            auto remote_devices_in_tunnel = tunnels_from_mmio.at(tunnel_idx);
-            all_device_ids.insert(all_device_ids.end(), remote_devices_in_tunnel.begin(), remote_devices_in_tunnel.end());
-        }
-    }
-
     // Create the device mesh: Grid size is <num_tunnels, tunnel_depth>.
-    auto mesh = ttnn::multi_device::open_mesh_device({cluster_tunnel_count * num_mmio_devices, num_devices_in_tunnel}, all_device_ids, 0, 0, 1, DispatchCoreType::WORKER);
+    auto mesh = ttnn::multi_device::open_mesh_device({cluster_tunnel_count * num_mmio_devices, num_devices_in_tunnel}, 0, 0, 1, DispatchCoreType::WORKER);
     // Create the outer ring on which Reduce Scatter will be run. This allows us to verify that there are no deadlocks when we send CCLs to the
     // first tunnel (forward path).
-    std::vector<Device*> ring_devices = mesh.get_devices_on_row(0); // Tunnel 0
-    std::vector<Device*> ring_devices_1 = mesh.get_devices_on_column(3); // Orthogonal to tunnel .. no deadlocks
+    std::vector<Device*> ring_devices = mesh->get_devices_on_row(0); // Tunnel 0
+    std::vector<Device*> ring_devices_1 = mesh->get_devices_on_column(3); // Orthogonal to tunnel .. no deadlocks
     ring_devices_1 = std::vector<Device*>(ring_devices_1.begin() + 1, ring_devices_1.end());
-    std::vector<Device*> ring_devices_2 = mesh.get_devices_on_row(7); // Tunnel 7 .. potential deadlocks with lack of buffering
+    std::vector<Device*> ring_devices_2 = mesh->get_devices_on_row(7); // Tunnel 7 .. potential deadlocks with lack of buffering
     std::reverse(ring_devices_2.begin(), ring_devices_2.end());
     ring_devices_2 = std::vector<Device*>(ring_devices_2.begin() + 1, ring_devices_2.end());
-    std::vector<Device*> ring_devices_3 = mesh.get_devices_on_column(0); // Orthogonal to tunnel .. no deadlocks
+    std::vector<Device*> ring_devices_3 = mesh->get_devices_on_column(0); // Orthogonal to tunnel .. no deadlocks
     std::reverse(ring_devices_3.begin(), ring_devices_3.end());
     ring_devices_3 = std::vector<Device*>(ring_devices_3.begin() + 1, ring_devices_3.end() - 1);
 

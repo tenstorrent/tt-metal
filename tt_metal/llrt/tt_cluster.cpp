@@ -325,6 +325,16 @@ tt_device &Cluster::get_driver(chip_id_t device_id) const {
     return *(this->mmio_device_id_to_driver_.at(mmio_device_id));
 }
 
+std::unordered_map<chip_id_t, eth_coord_t> Cluster::get_user_chip_ethernet_coordinates() const {
+    auto user_chip_ethernet_coordinates = this->cluster_desc_->get_chip_locations();
+    if (this->is_galaxy_cluster()) {
+        std::erase_if(user_chip_ethernet_coordinates, [this](const auto& entry) {
+            return this->cluster_desc_->get_board_type(entry.first) != BoardType::GALAXY;
+        });
+    }
+    return user_chip_ethernet_coordinates;
+}
+
 const metal_SocDescriptor &Cluster::get_soc_desc(chip_id_t chip) const {
     if (this->sdesc_per_chip_.find(chip) == this->sdesc_per_chip_.end()) {
         TT_THROW(

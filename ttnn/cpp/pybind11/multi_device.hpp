@@ -16,20 +16,36 @@ namespace ttnn {
 
 namespace multi_device {
 
-void py_module_types(py::module& module) { py::class_<MeshDevice>(module, "MeshDevice"); }
+void py_module_types(py::module& module) { py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice"); }
 
 void py_module(py::module& module) {
-    auto py_mesh_device = static_cast<py::class_<MeshDevice>>(module.attr("MeshDevice"));
+    auto py_mesh_device = static_cast<py::class_<MeshDevice, std::shared_ptr<MeshDevice>>>(module.attr("MeshDevice"));
     py_mesh_device
         .def(
-            py::init<MeshShape, std::vector<int>, size_t, size_t, size_t, DispatchCoreType>(),
+            py::init([](const MeshShape& mesh_device_shape,
+                        size_t l1_small_size,
+                        size_t trace_region_size,
+                        size_t num_command_queues,
+                        DispatchCoreType dispatch_core_type,
+                        const std::pair<size_t, size_t>& offset,
+                        const std::vector<int>& physical_device_ids) {
+                return MeshDevice::create(
+                    mesh_device_shape,
+                    l1_small_size,
+                    trace_region_size,
+                    num_command_queues,
+                    dispatch_core_type,
+                    offset,
+                    physical_device_ids);
+            }),
             py::kw_only(),
             py::arg("mesh_shape"),
-            py::arg("device_ids"),
             py::arg("l1_small_size"),
             py::arg("trace_region_size"),
             py::arg("num_command_queues"),
-            py::arg("dispatch_core_type"))
+            py::arg("dispatch_core_type"),
+            py::arg("offset"),
+            py::arg("physical_device_ids"))
         .def("get_num_devices", &MeshDevice::num_devices)
         .def("get_device_ids", &MeshDevice::get_device_ids)
         .def(
@@ -106,11 +122,11 @@ void py_module(py::module& module) {
         &open_mesh_device,
         py::kw_only(),
         py::arg("mesh_shape"),
-        py::arg("device_ids"),
         py::arg("l1_small_size"),
         py::arg("trace_region_size"),
         py::arg("num_command_queues"),
-        py::arg("dispatch_core_type"));
+        py::arg("dispatch_core_type"),
+        py::arg("physical_device_ids"));
 
     module.def("close_mesh_device", &close_mesh_device, py::arg("mesh_device"), py::kw_only());
     module.def(
@@ -147,6 +163,7 @@ void py_module(py::module& module) {
     )doc");
     module.def("get_device_tensors", &get_device_tensors, py::arg("tensor"), py::kw_only());
     module.def("aggregate_as_tensor", &aggregate_as_tensor, py::arg("tensors"), py::kw_only());
+    module.def("get_t3k_physical_device_ids_ring", &tt::tt_metal::get_t3k_physical_device_ids_ring);
 }
 
 }  // namespace multi_device

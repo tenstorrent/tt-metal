@@ -5,7 +5,7 @@
 import contextlib
 import functools
 
-from typing import List, Dict, Optional, Callable, Tuple, Optional, Callable, Union
+from typing import List, Dict, Optional, Callable, Tuple, Optional, Callable, Union, List
 
 import ttnn
 
@@ -134,26 +134,36 @@ def get_device_ids() -> List[int]:
 
 def open_mesh_device(
     mesh_shape: ttnn.MeshShape,
-    device_ids: List[int],
     l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
     trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
     num_command_queues: int = 1,
     dispatch_core_type: int = DispatchCoreType.WORKER,
+    offset: Tuple[int, int] = (0, 0),
+    physical_device_ids: List[int] = [],
 ):
     """
-    open_mesh_device(mesh_shape: ttnn.MeshShape, device_ids: int) -> ttnn.MeshDevice:
+    Open a mesh device with the specified configuration.
 
-    Open a device with the given device_id. If the device is already open, return the existing device.
+    Args:
+        mesh_shape (ttnn.MeshShape): The shape of the mesh device.
+        l1_small_size (int, optional): Size of the L1 small memory. Defaults to ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE.
+        trace_region_size (int, optional): Size of the trace region. Defaults to ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE.
+        num_command_queues (int, optional): Number of command queues. Defaults to 1.
+        dispatch_core_type (int, optional): Type of dispatch core. Defaults to DispatchCoreType.WORKER.
+        offset (Tuple[int, int], optional): Offset in logical mesh coordinates for the mesh device. Defaults to (0, 0).
+
+    Returns:
+        ttnn._ttnn.multi_device.MeshDevice: The opened mesh device.
+
     """
-    assert len(device_ids) > 0
-
     return ttnn._ttnn.multi_device.MeshDevice(
         mesh_shape=mesh_shape.as_tuple(),
-        device_ids=device_ids,
         l1_small_size=l1_small_size,
         trace_region_size=trace_region_size,
         num_command_queues=num_command_queues,
         dispatch_core_type=dispatch_core_type,
+        offset=offset,
+        physical_device_ids=physical_device_ids,
     )
 
 

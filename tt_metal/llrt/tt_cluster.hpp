@@ -57,6 +57,8 @@ class Cluster {
         }
     }
 
+    std::unordered_map<chip_id_t, eth_coord_t> get_user_chip_ethernet_coordinates() const;
+
     size_t number_of_devices() const { return this->cluster_desc_->get_number_of_chips(); }
 
     size_t number_of_pci_devices() const { return this->cluster_desc_->get_chips_with_mmio().size(); }

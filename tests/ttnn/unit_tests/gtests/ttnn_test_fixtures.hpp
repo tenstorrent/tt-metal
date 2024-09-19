@@ -67,19 +67,20 @@ class T3kMultiDeviceFixture : public ::testing::Test {
         if (num_devices < 8 or arch != tt::ARCH::WORMHOLE_B0) {
             GTEST_SKIP() << "Skipping T3K Multi-Device test suite on non T3K machine.";
         }
-        const auto T3K_DEVICE_IDS = DeviceIds{0, 4, 5, 1, 2, 6, 7, 3};
         constexpr auto DEFAULT_NUM_COMMAND_QUEUES = 1;
-        mesh_device_ = std::make_unique<MeshDevice>(
-            MeshShape{1, num_devices},
-            T3K_DEVICE_IDS,
+        mesh_device_ = MeshDevice::create(
+            MeshShape{2, 4},
             DEFAULT_L1_SMALL_SIZE,
             DEFAULT_TRACE_REGION_SIZE,
             DEFAULT_NUM_COMMAND_QUEUES,
             DispatchCoreType::WORKER);
     }
 
-    void TearDown() override { mesh_device_.reset(); }
-    std::unique_ptr<MeshDevice> mesh_device_;
+    void TearDown() override {
+        mesh_device_->close_devices();
+        mesh_device_.reset();
+    }
+    std::shared_ptr<MeshDevice> mesh_device_;
 };
 
 }  // namespace ttnn::multi_device::test

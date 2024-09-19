@@ -11,11 +11,11 @@ namespace ttnn::events {
 
 MultiDeviceEvent::MultiDeviceEvent(MeshDevice* mesh_device) {
     TT_ASSERT(mesh_device != nullptr, "Must provide a valid mesh_device when initializing an event on multiple devices.");
-    auto& devices = mesh_device->mesh_devices;
+    auto devices = mesh_device->get_devices();
     this->events = std::vector<std::shared_ptr<Event>>(devices.size());
     for (int event_idx = 0; event_idx < devices.size(); event_idx++) {
         this->events[event_idx] = std::make_shared<Event>();
-        this->events[event_idx]->device = devices[event_idx].second;
+        this->events[event_idx]->device = devices[event_idx];
     }
 }
 

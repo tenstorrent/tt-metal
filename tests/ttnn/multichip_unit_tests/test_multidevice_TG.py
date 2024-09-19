@@ -210,9 +210,7 @@ def test_galaxy_matmul_2d_fracture_dram_sharded(M, K, N, weights_dtype, mesh_sha
         {
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(
-                    mesh_device.get_device(0).dram_grid_size().x - 1, mesh_device.get_device(0).dram_grid_size().y - 1
-                ),
+                ttnn.CoreCoord(mesh_device.dram_grid_size().x - 1, mesh_device.dram_grid_size().y - 1),
             )
         }
     )
@@ -711,7 +709,7 @@ class TestUpdateCache:
 
             xt = x
 
-            compute_grid_size = mesh_device.get_device(0).compute_with_storage_grid_size()
+            compute_grid_size = mesh_device.compute_with_storage_grid_size()
             num_cores = min(seq_len // 32 * num_heads, 32)  # Always use max 32 cores for testing
             mesh_shape = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
             input_shard_spec = ttnn.ShardSpec(
@@ -783,7 +781,7 @@ class TestUpdateCache:
             x_new = torch.cat((x_new, torch.zeros(32 - num_users - batch_offset, num_heads, 1, head_dim)), dim=0)
             assert x_new.shape[0] == 32, f"Expected x.shape[0] to be 32, got {x_new.shape[0]}"
         xt = x_new.permute(2, 1, 0, 3)
-        compute_grid_size = mesh_device.get_device(0).compute_with_storage_grid_size()
+        compute_grid_size = mesh_device.compute_with_storage_grid_size()
         num_cores = min(max(num_users, 32) // 32 * num_heads, compute_grid_size.x * compute_grid_size.y)
         mesh_shape = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
         input_shard_spec = ttnn.ShardSpec(
@@ -865,7 +863,7 @@ def run_test_sdpa_decode_single_iter(
     sharded_in=False,
     sharded_out=False,
 ):
-    compute_grid_size = mesh_device.get_device(0).compute_with_storage_grid_size()
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
         pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
 
