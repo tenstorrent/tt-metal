@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import torch
 import random
 from itertools import product
 
@@ -38,13 +37,3 @@ def gen_shapes(start_shape, end_shape, interval, num_samples="all"):
             shapes.append(shape)
 
     return shapes
-
-
-def gen_low_high_scalars(low=-100, high=100, dtype=torch.bfloat16):
-    low = torch.tensor(1, dtype=dtype).uniform_(low, high).item()
-    high = torch.tensor(1, dtype=dtype).uniform_(low, high).item()
-
-    if low >= high:
-        low, high = high, low
-
-    return low, high
