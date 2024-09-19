@@ -20,16 +20,15 @@ namespace ttnn::operations::data_movement {
 namespace detail {
 
     std::vector<Tensor> split_dim_n_chunks_rm(const Tensor &input_tensor, int dim, int num_splits, const MemoryConfig &mem_config) {
-        TT_FATAL(input_tensor.get_layout() == Layout::ROW_MAJOR, "This op only supports row major tensors.");
-        TT_FATAL(input_tensor.get_shape()[dim] % num_splits == 0, "Split dimension must be divisible by num_splits.");
+        TT_FATAL(input_tensor.get_layout() == Layout::ROW_MAJOR, "ttnn.split only supports row major tensors.");
+        TT_FATAL(input_tensor.get_shape()[dim] % num_splits == 0, "Split dimension {} must be divisible by num_splits {}.", input_tensor.get_shape()[dim], num_splits);
         auto input_shape = input_tensor.get_shape();
         auto input_rank = input_shape.size();
 
         const bool on_host = input_tensor.storage_type() == StorageType::OWNED || input_tensor.storage_type() == StorageType::BORROWED;
-        std::optional<Device *> dev = on_host ? std::nullopt : std::make_optional(input_tensor.device());
+        std::optional<Device *> device = on_host ? std::nullopt : std::make_optional(input_tensor.device());
 
-        Tensor preprocessed = Tensor(input_tensor);
-        preprocessed = ttnn::unsqueeze_to_4D(preprocessed); // ensure we're 4D before slicing
+        Tensor preprocessed = ttnn::unsqueeze_to_4D(input_tensor); // ensure we're 4D before slicing
         dim += 4 - input_rank; // convert to 4D index
 
         if (!on_host && input_tensor.get_dtype() == DataType::BFLOAT16) {
@@ -69,7 +68,7 @@ namespace detail {
             }
 
             tt::tt_metal::Layout layout = input_tensor.get_layout();
-            if (dev && (input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::UINT16)
+            if (device && (input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::UINT16)
                 && chunk_len % 2 != 0) {
                 layout = Layout::TILE; // bf16 and uint16 tensors must be tiled if the chunk length is odd due to packing constraints
                 output_chunk = output_chunk.pad_to_tile(0.0);
@@ -77,8 +76,8 @@ namespace detail {
 
             output_chunk = output_chunk.to(layout);
 
-            if (dev) {
-                output_chunk = output_chunk.to(*dev);
+            if (device) {
+                output_chunk = output_chunk.to(*device);
             }
 
             output_tensors.push_back(output_chunk);
