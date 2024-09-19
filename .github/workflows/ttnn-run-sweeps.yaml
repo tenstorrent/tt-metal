@@ -18,12 +18,16 @@ on:
           - eltwise.gelu
           - eltwise.cos 
           - eltwise.sin                          
+          - eltwise.clamp.clamp_interleaved
+          - eltwise.clip.clip_interleaved
+          - eltwise.cbrt.cbrt_interleaved
           - eltwise.subtract.subtract_interleaved
           - eltwise.subalpha.subalpha_interleaved
           - eltwise.rsub.rsub_interleaved
           - eltwise.frac.frac_interleaved
           - eltwise.ceil.ceil_interleaved
           - eltwise.trunc.trunc_interleaved
+          - eltwise.floor.floor_interleaved
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
           - matmul.full.matmul_default_interleaved
