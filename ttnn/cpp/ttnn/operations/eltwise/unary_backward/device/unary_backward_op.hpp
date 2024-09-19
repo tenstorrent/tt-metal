@@ -14,7 +14,6 @@ namespace ttnn::operations::unary_backward {
 
 enum class UnaryBackwardOpType {
     HARDTANH_BW,
-    SOFTPLUS_BW,
     DIV_BW,
     RDIV_BW,
     MULTIGAMMALN_BW,
@@ -132,7 +131,6 @@ std::vector<Tensor> _floor_bw( const Tensor& grad, const Tensor& input, const st
 std::vector<Tensor> _round_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _log_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 
-std::vector<Tensor> _softplus_bw( const Tensor& grad, const Tensor& input, float beta = 1.0, float threshold = 20.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 std::vector<Tensor> _hardtanh_bw( const Tensor& grad, const Tensor& input, float min = -1.0, float max = 1.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 std::vector<Tensor> _add_bw( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
@@ -552,13 +550,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::SUB_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config ) {
         return _sub_bw(grad, input, scalar, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::SOFTPLUS_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float beta, float threshold, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _softplus_bw(grad, input, beta, threshold, output_mem_config);
     }
 };
 

@@ -81,7 +81,7 @@ std::vector<Tensor> ExecuteUnaryBackwardThreshold::invoke(
 }
 
 // Softplus
-std::vector<Tensor> _softplus_bw(
+std::vector<Tensor> ExecuteUnaryBackwardSoftplus::invoke(
     const Tensor& grad, const Tensor& input, float beta, float threshold, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor mul_input_beta = ttnn::multiply(input, beta, std::nullopt, output_mem_config);

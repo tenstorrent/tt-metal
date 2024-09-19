@@ -66,17 +66,22 @@ struct ExecuteUnaryBackwardWoFloat {
 
 };
 
-template <UnaryBackwardOpType unary_backward_op_type>
-struct ExecuteUnaryBackwardTwoFloatWithDefault {
+struct ExecuteUnaryBackwardSoftplus {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         float parameter_a,
         float parameter_b,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, parameter_a, parameter_b, output_memory_config);
-    }
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardHardtanh {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float parameter_a,
+        float parameter_b,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
 template <UnaryBackwardOpType unary_backward_op_type>
@@ -571,12 +576,10 @@ constexpr auto clamp_bw = ttnn::register_operation<
 
 constexpr auto softplus_bw = ttnn::register_operation<
     "ttnn::softplus_bw",
-    operations::unary_backward::ExecuteUnaryBackwardTwoFloatWithDefault<
-        operations::unary_backward::UnaryBackwardOpType::SOFTPLUS_BW>>();
+    operations::unary_backward::ExecuteUnaryBackwardSoftplus();
 constexpr auto hardtanh_bw = ttnn::register_operation<
     "ttnn::hardtanh_bw",
-    operations::unary_backward::ExecuteUnaryBackwardTwoFloatWithDefault<
-        operations::unary_backward::UnaryBackwardOpType::HARDTANH_BW>>();
+    operations::unary_backward::ExecuteUnaryBackwardHardtanh();
 
 constexpr auto rdiv_bw = ttnn::register_operation<
     "ttnn::rdiv_bw",
