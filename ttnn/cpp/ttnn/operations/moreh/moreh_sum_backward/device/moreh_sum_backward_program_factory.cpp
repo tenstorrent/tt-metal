@@ -62,7 +62,7 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
 
     auto dims = operation_attributes.dims;
     auto keepdim = operation_attributes.keepdim;
-    auto input_grad_mem_config = operation_attributes.input_grad_mem_config;
+    auto input_grad_memory_config = operation_attributes.input_grad_memory_config;
     auto compute_kernel_config = operation_attributes.compute_kernel_config;
 
     ////////////////////////////////////////////////////////////////////////////

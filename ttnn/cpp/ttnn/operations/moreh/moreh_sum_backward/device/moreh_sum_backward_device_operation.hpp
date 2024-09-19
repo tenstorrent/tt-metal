@@ -11,7 +11,7 @@ struct MorehSumBackwardOperation {
     struct operation_attributes_t {
         const std::vector<int64_t> dims;
         const bool keepdim;
-        const MemoryConfig input_grad_mem_config;
+        const MemoryConfig input_grad_memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
     };
 
@@ -60,8 +60,8 @@ struct MorehSumBackwardOperation {
         const std::vector<int64_t>& dims,
         bool keepdim,
         const std::optional<Tensor>& input_grad,
-        const MemoryConfig& input_grad_mem_config,
-        const DeviceComputeKernelConfig& compute_kernel_config);
+        const std::optional<MemoryConfig>& input_grad_memory_config,
+        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_sum_backward
 

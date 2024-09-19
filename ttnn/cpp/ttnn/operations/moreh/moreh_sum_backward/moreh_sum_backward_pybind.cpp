@@ -20,7 +20,7 @@ void bind_moreh_sum_backward_operation(py::module& module) {
             py::arg("dim") = std::nullopt,
             py::arg("keepdim") = false,
             py::arg("input_grad") = std::nullopt,
-            py::arg("input_grad_mem_config") = std::nullopt,
+            py::arg("input_grad_memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
         });
 }
