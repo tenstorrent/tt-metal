@@ -69,7 +69,7 @@ def run(test_module, input_queue, output_queue):
         device, device_name = next(device_generator)
         print(f"SWEEPS: Opened device configuration, {device_name}.")
     except AssertionError as e:
-        output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None])
+        output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None, None])
         return
     try:
         while True:
