@@ -19,7 +19,7 @@ from infra.data_collection import pydantic_models
 
 
 def get_cicd_json_filename(pipeline):
-    github_pipeline_start_ts = get_data_pipeline_datetime_from_datetime(pipeline).pipeline_start_ts
+    github_pipeline_start_ts = get_data_pipeline_datetime_from_datetime(pipeline.pipeline_start_ts)
     github_pipeline_id = pipeline.github_pipeline_id
     cicd_json_filename = f"pipeline_{github_pipeline_id}_{github_pipeline_start_ts}.json"
 
