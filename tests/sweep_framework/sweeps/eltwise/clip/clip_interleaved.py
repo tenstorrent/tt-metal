@@ -2,29 +2,30 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+from typing import Optional, Tuple
 
+import torch
+from tests.sweep_framework.permutations import *
+import random
 import ttnn
+from tests.sweep_framework.utils import gen_shapes, gen_low_high_scalars
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_clip_args
 from models.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
 
+random.seed(0)
+
+
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
-# Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
+# Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "suite_1": {
-        "input_shape": [
-            [8, 1, 33, 256],
-            [8, 1, 256, 32],
-            [8, 5, 13, 512],
-            [8, 5, 32, 512],
-        ],
+    "nightly": {
+        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 128),
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -36,7 +37,7 @@ parameters = {
 # This is the run instructions for the test, defined by the developer.
 # The run function must take the above-defined parameters as inputs.
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
-# If you defined a device_mesh_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
+# If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_shape,
     input_a_dtype,
@@ -46,8 +47,24 @@ def run(
     *,
     device,
 ) -> list:
-    torch_input_tensor_a = torch_random(input_shape, -100, 100, dtype=torch.float16)
-    torch_output_tensor = torch.nn.functional.gelu(torch_input_tensor_a)
+    data_seed = random.randint(0, 20000000)
+    torch.manual_seed(data_seed)
+
+    torch_input_tensor_a = torch_random(input_shape, -100, 100, dtype=torch.float32)
+
+    if input_a_dtype == ttnn.bfloat16:
+        torch_input_tensor_a = torch_input_tensor_a.to(torch.bfloat16)
+
+    elif input_a_dtype == ttnn.bfloat8_b:
+        tt_tensor = ttnn.from_torch(
+            torch_input_tensor_a, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=None, memory_config=None
+        )
+
+        torch_input_tensor_a = ttnn.to_torch(tt_tensor)
+
+    low, high = gen_low_high_scalars()
+
+    torch_output_tensor = torch.clip(torch_input_tensor_a, low, high)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -57,13 +74,8 @@ def run(
         memory_config=input_a_memory_config,
     )
 
-    low = torch.tensor(1, dtype=torch.float16).uniform_(-100, 100).item()
-    high = torch.tensor(1, dtype=torch.float16).uniform_(-100, 100).item()
-    if low >= high:
-        low, high = high, low
-
     start_time = start_measuring_time()
-    result = ttnn.clamp(input_tensor_a, low, high, memory_config=output_memory_config)
+    result = ttnn.clip(input_tensor_a, low, high, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
