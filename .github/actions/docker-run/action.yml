@@ -66,8 +66,8 @@ runs:
           --net=host
           ${{ inputs.docker_opts }}
           -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
-          -e HOST_UID=$(id -u)
-          -e HOST_GID=$(id -g)
+          -e HOST_UID=$UID
+          -e HOST_GID=$GID
           -e PYTHONPATH=/usr/app
           ${{ inputs.device }}
         run: |
