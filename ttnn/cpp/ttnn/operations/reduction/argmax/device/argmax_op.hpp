@@ -15,6 +15,7 @@ namespace ttnn::operations::reduction {
 struct ArgMax {
     const DataType output_dtype;
     const std::optional<int> dim;
+    const bool use_multicore;
     const MemoryConfig output_mem_config;
 
     void validate_with_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;

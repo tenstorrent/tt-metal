@@ -8,7 +8,7 @@ from loguru import logger
 from functools import partial
 
 import ttnn
-from models.utility_functions import comp_allclose_and_pcc
+from models.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
 
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
@@ -33,6 +33,7 @@ def get_tensors(input_shape, output_shape, device):
     return tt_input, tt_output, torch_input
 
 
+@skip_for_blackhole("Hangs on Blackhole, see #12349")
 @pytest.mark.parametrize(
     "shapes",
     (

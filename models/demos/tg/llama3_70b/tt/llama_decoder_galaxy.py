@@ -78,10 +78,9 @@ class TtLlamaDecoder_galaxy:
             read_cache=read_cache,
         )
 
-        self.get_decoder_config()
         self.load_weights()
 
-    def get_decoder_config(self):
+    def get_decoder_config(self, mode):
         self.LN_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
@@ -89,7 +88,7 @@ class TtLlamaDecoder_galaxy:
             packer_l1_acc=False,
         )
 
-        if self.model_config["LLM_MODE"] == "decode":
+        if mode == "decode":
             self.LN_PROGCFG = ttnn.LayerNormShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=[8, 4],
                 subblock_w=8,
@@ -189,13 +188,15 @@ class TtLlamaDecoder_galaxy:
         start_pos: int,
         attn_masks: List[ttnn.Tensor],
         user_id: int = 0,
+        mode="decode",
     ) -> ttnn.Tensor:
-        if self.model_config["LLM_MODE"] == "decode":
+        self.get_decoder_config(mode)
+        if mode == "decode":
             return self.decode_forward(xs, rot_mats, start_pos, attn_masks)
-        elif self.model_config["LLM_MODE"] == "prefill":
+        elif mode == "prefill":
             return self.prefill_forward(xs, rot_mats, attn_masks, user_id)
         else:
-            raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
+            raise ValueError(f"Unknown llm_mode: {mode}")
 
     def tt_distributed_rmsnorm(self, inp, epsilon, gamma):
         # Run distributed rmsnorm part 1
@@ -241,7 +242,7 @@ class TtLlamaDecoder_galaxy:
         )
 
         attn_norm_out = ttnn.to_memory_config(attn_norm_out, memory_config=self.ATTN_ACT_MEMCFG)
-        attn_outs = self.attention(attn_norm_out, rot_mats, start_pos, attn_masks)
+        attn_outs = self.attention(attn_norm_out, rot_mats, start_pos, attn_masks, mode="decode")
         attn_outs = ttnn.to_memory_config(attn_outs, memory_config=self.MLP_ACT_MEMCFG)
 
         output = xs
@@ -260,7 +261,7 @@ class TtLlamaDecoder_galaxy:
         )
 
         ffn_norm_out = ttnn.to_memory_config(ffn_norm_out, memory_config=self.MLP_ACT_MEMCFG)
-        ffn_out = self.mlp(ffn_norm_out)
+        ffn_out = self.mlp(ffn_norm_out, mode="decode")
 
         ### residual add
         output = ttnn.add(
@@ -285,7 +286,7 @@ class TtLlamaDecoder_galaxy:
             gamma=self.attn_norm_sharded,
         )
 
-        attn_outs = self.attention(attn_outs, rot_mats, 0, attn_masks, user_id)
+        attn_outs = self.attention(attn_outs, rot_mats, 0, attn_masks, user_id, mode="prefill")
 
         output = xs
         output = ttnn.add(
@@ -300,7 +301,7 @@ class TtLlamaDecoder_galaxy:
             gamma=self.ffn_norm_sharded,
         )
 
-        ffn_out = self.mlp(ffn_norm_out)
+        ffn_out = self.mlp(ffn_norm_out, mode="prefill")
 
         # residual add
         output = ttnn.add(

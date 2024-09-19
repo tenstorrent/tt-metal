@@ -9,12 +9,14 @@ import numpy as np  # remove this
 from loguru import logger
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout, update_process_id
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
+from models.utility_functions import skip_for_blackhole
 import ttnn
 from tt_lib.utils import (
     _nearest_y,
 )
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "input_height, input_width, num_cores, shard_grid, shard_strategy",
     (

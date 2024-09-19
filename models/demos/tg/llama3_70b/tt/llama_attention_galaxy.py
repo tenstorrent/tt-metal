@@ -71,7 +71,6 @@ class TtLlamaAttention_galaxy:
         self.cache_path = cache_path
         self.transformation_mats = transformation_mats
 
-        self.get_attn_model_config()
         self.get_slice_mat()
         self.get_user_selection_mat()
         self.load_weights()
@@ -108,8 +107,8 @@ class TtLlamaAttention_galaxy:
             mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
         )
 
-    def get_attn_model_config(self):
-        if self.model_config["LLM_MODE"] == "decode":
+    def get_attn_model_config(self, mode):
+        if mode == "decode":
             # 32 x 2048 X 2048 x 1280
             self.FUSED_QKV_MM_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 5),
@@ -200,7 +199,7 @@ class TtLlamaAttention_galaxy:
                 use_height_and_width_as_shard_shape=True,
             )
 
-        elif self.model_config["LLM_MODE"] == "prefill":
+        elif mode == "prefill":
             self.COMPUTE_KERNEL_QKV = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=True,
@@ -352,21 +351,15 @@ class TtLlamaAttention_galaxy:
             cache_file_name=self.cache_path / wo_cache_str,
         )
 
-    def __call__(
-        self,
-        xs,
-        rot_mats,
-        start_pos: int,
-        attn_masks,
-        user_id: int = 0,
-    ):
+    def __call__(self, xs, rot_mats, start_pos: int, attn_masks, user_id: int = 0, mode="decode"):
+        self.get_attn_model_config(mode)
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
-        if self.model_config["LLM_MODE"] == "decode":
+        if mode == "decode":
             return self.decode_forward(xs, rot_mats, start_pos, attn_masks)
-        elif self.model_config["LLM_MODE"] == "prefill":
+        elif mode == "prefill":
             return self.prefill_forward(xs, rot_mats, attn_masks, user_id)
         else:
-            raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
+            raise ValueError(f"Unknown llm_mode: {mode}")
 
     def decode_forward(
         self,
@@ -479,7 +472,7 @@ class TtLlamaAttention_galaxy:
         value_layer.deallocate(True)
 
         program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.mesh_device.get_device(0).compute_with_storage_grid_size(),
+            compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=0,  # unused
             k_chunk_size=0,  # unused
         )

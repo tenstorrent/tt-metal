@@ -154,9 +154,7 @@ def run_test_LlamaModel_end_to_end(
         if user_id == 0 or user_id == 25:
             profiler.start(f"processing_of_prefill_input_{user_id}")
 
-        tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(
-            prefill_ids[user_id : user_id + 1], start_pos=0
-        )
+        tt_inp_emb, start_pos, rot_mat = tt_model.prepare_inputs(prefill_ids[user_id : user_id + 1], start_pos=0)
         if user_id == 0 or user_id == 25:
             profiler.end(f"processing_of_prefill_input_{user_id}")
             profiler.start(f"model_run_for_prefill_{user_id}")
@@ -165,7 +163,6 @@ def run_test_LlamaModel_end_to_end(
             tt_inp_emb,
             rot_mat,
             start_pos,
-            attn_mask,
             user_id=user_id,
         )
         if user_id == 0 or user_id == 25:
@@ -173,7 +170,6 @@ def run_test_LlamaModel_end_to_end(
 
         del tt_inp_emb
         del rot_mat
-        del attn_mask
 
         logits = torch.cat([tt2torch_tensor(tt_o).squeeze(1) for tt_o in tt_logits], -1)
         logits = logits[..., : configuration.vocab_size].float()
@@ -206,14 +202,14 @@ def run_test_LlamaModel_end_to_end(
         if cur_pos == 0 or cur_pos == 35:  # Skip the first few iterations to warm up
             profiler.start(f"processing_of_decode_input_{cur_pos}")
 
-        tt_inp_emb, start_pos, rot_mat, attn_mask, cache_idxs = tt_model.prepare_inputs(decode_ids, start_pos)
+        tt_inp_emb, start_pos, rot_mat, cache_idxs = tt_model.prepare_inputs(decode_ids, start_pos)
 
-        tt_inp_emb = ttnn.to_device(tt_inp_emb, mesh_device, memory_config=tt_model.model_config["DRAM_MEMCFG"])
+        tt_inp_emb = ttnn.to_device(tt_inp_emb, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         tt_inp_emb = tt_model.tt_embd(tt_inp_emb)
         tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, tt_model.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
 
         rot_mat = ttnn.to_device(rot_mat, mesh_device, memory_config=tt_model.model_config["ROT_MAT_MM_IN1_MEMCFG"])
-        cache_idxs = ttnn.to_device(cache_idxs, mesh_device, memory_config=tt_model.model_config["DRAM_MEMCFG"])
+        cache_idxs = ttnn.to_device(cache_idxs, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         if cur_pos == 0 or cur_pos == 35:  # Skip the first few iterations to warm up
             profiler.end(f"processing_of_decode_input_{cur_pos}")
@@ -223,7 +219,6 @@ def run_test_LlamaModel_end_to_end(
             tt_inp_emb,
             rot_mat,
             start_pos,
-            attn_mask,
             cache_idxs=cache_idxs,
         )
 
@@ -232,7 +227,6 @@ def run_test_LlamaModel_end_to_end(
 
         del tt_inp_emb
         del rot_mat
-        del attn_mask
 
         for i in mesh_device.get_device_ids():
             device = mesh_device.get_device(i)
@@ -316,7 +310,7 @@ def test_Llama_perf_host(
     if t3k_mesh_device.get_num_devices() < n_devices and not emulated:
         pytest.skip(f"Requires at {n_devices} devices to run")
 
-    compute_grid_size = t3k_mesh_device.get_device(0).compute_with_storage_grid_size()
+    compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 

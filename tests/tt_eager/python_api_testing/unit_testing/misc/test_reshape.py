@@ -5,10 +5,11 @@
 import torch
 
 import ttnn
-from models.utility_functions import print_diff_argmax
+from models.utility_functions import print_diff_argmax, skip_for_blackhole
 import ttnn
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 def test_tile_major_reshape(device):
     torch.manual_seed(0)
 

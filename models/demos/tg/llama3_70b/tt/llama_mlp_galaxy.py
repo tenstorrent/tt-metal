@@ -41,22 +41,21 @@ class TtLlamaMLP_galaxy:
         self.layer_name = f"{base_url}.{layer_num}"
         self.cache_path = cache_path
 
-        self.get_mlp_model_config()
         self.load_weights()
 
     def set_model_config(self, model_config):
         self.model_config = model_config
 
-    def get_mlp_model_config(self):
-        if self.model_config["LLM_MODE"] == "decode":
+    def get_mlp_model_config(self, mode):
+        if mode == "decode":
             # Weight Sharding
             weight_grid = ttnn.CoreRangeSet(
                 {
                     ttnn.CoreRange(
                         ttnn.CoreCoord(0, 0),
                         ttnn.CoreCoord(
-                            self.mesh_device.get_device(0).dram_grid_size().x - 1,
-                            self.mesh_device.get_device(0).dram_grid_size().y - 1,
+                            self.mesh_device.dram_grid_size().x - 1,
+                            self.mesh_device.dram_grid_size().y - 1,
                         ),
                     )
                 }
@@ -157,7 +156,7 @@ class TtLlamaMLP_galaxy:
                 use_height_and_width_as_shard_shape=True,
             )
 
-        elif self.model_config["LLM_MODE"] == "prefill":
+        elif mode == "prefill":
             hidden_dim_per_chip = self.hidden_size // self.cluster_shape[0]  # 2048
             ff_outer_dim_per_chip = (
                 self.state_dict["layers.0.feed_forward.w1.weight"].shape[0] // self.cluster_shape[1]
@@ -251,14 +250,15 @@ class TtLlamaMLP_galaxy:
             cache_file_name=self.cache_path / w2_cache_str,
         )
 
-    def __call__(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
+    def __call__(self, x: List[ttnn.Tensor], mode="decode") -> List[ttnn.Tensor]:
+        self.get_mlp_model_config(mode)
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
-        if self.model_config["LLM_MODE"] == "decode":
+        if mode == "decode":
             return self.decode_forward(x)
-        elif self.model_config["LLM_MODE"] == "prefill":
+        elif mode == "prefill":
             return self.prefill_forward(x)
         else:
-            raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
+            raise ValueError(f"Unknown llm_mode: {mode}")
 
     def decode_forward(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
         w1_out = ttnn.matmul(

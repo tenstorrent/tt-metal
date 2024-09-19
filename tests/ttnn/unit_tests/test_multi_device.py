@@ -23,8 +23,7 @@ def test_mesh_device_open_close_explicit(silicon_arch_name, silicon_arch_wormhol
     if num_pcie_devices <= 1:
         pytest.skip("Requires multiple devices to run")
 
-    mesh_shape, device_ids = ttnn.MeshShape(2, 2), ttnn.get_pcie_device_ids()
-    multi_device = ttnn.open_mesh_device(mesh_shape, device_ids)
+    multi_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 2))
     ttnn.close_mesh_device(multi_device)
 
 
@@ -34,12 +33,12 @@ def test_multi_device_subset_mesh(silicon_arch_name, silicon_arch_wormhole_b0):
     if num_pcie_devices <= 1:
         pytest.skip("Requires multiple devices to run")
 
-    mesh_shape, device_ids = ttnn.MeshShape(1, 2), ttnn.get_pcie_device_ids()
-    multi_device = ttnn.open_mesh_device(mesh_shape, device_ids)
+    mesh_shape = ttnn.MeshShape(1, 2)
+    multi_device = ttnn.open_mesh_device(mesh_shape)
     assert multi_device.get_num_devices() == 2
     ttnn.close_mesh_device(multi_device)
 
-    multi_device = ttnn.open_mesh_device(mesh_shape, device_ids)
+    multi_device = ttnn.open_mesh_device(mesh_shape)
     assert multi_device.get_num_devices() == 2
     ttnn.close_mesh_device(multi_device)
 
