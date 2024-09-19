@@ -74,7 +74,7 @@ def test_unet_downblock(
         ("downblock4", 32, 132, 20),
     ],
 )
-@pytest.mark.parametrize("enable_async_mode", (False,), indirect=True)  # Enable when #12685 is resolved
+@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_unet_downblock_multi_device(
     batch, groups, block_name, input_channels, input_height, input_width, mesh_device, reset_seeds, enable_async_mode

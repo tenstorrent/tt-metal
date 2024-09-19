@@ -6,6 +6,7 @@ import torch
 import pytest
 import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
+from models.utility_functions import skip_for_blackhole
 
 
 @pytest.mark.parametrize(
@@ -28,6 +29,7 @@ def test_unary_square_ttnn(input_shapes, device):
     assert comp_pass
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "input_shapes",
     (

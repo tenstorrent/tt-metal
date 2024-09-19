@@ -148,7 +148,8 @@ AllGather create_all_gather_struct(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> user_defined_num_workersm,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
-    const std::vector<Device*>& devices
+    const std::vector<Device*>& devices,
+    const all_gather_op::Topology topology
 );
 
 // All Gather Variants

@@ -9,7 +9,7 @@ import ttnn
 from ttnn import ReplicateTensorToMesh
 from models.demos.t3000.llama2_70b.tt.llama_common import ShardTensor2dMesh, ConcatMesh2DToTensor
 from models.utility_functions import nearest_32
-from models.demos.tg.llama3_70b.tt.llama_common import tt_all_reduce
+from models.demos.tg.llama3_70b.tt.llama_common import tt_all_reduce, tt_sharded_all_reduce
 from models.demos.t3000.falcon40b.tt.model_utils import (
     matmul_2d_config_from_tensor_shapes as get_matmul_2d_config_from_tensor_shapes,
 )
@@ -55,8 +55,8 @@ class TtLlamaMLP_galaxy:
                     ttnn.CoreRange(
                         ttnn.CoreCoord(0, 0),
                         ttnn.CoreCoord(
-                            self.mesh_device.get_device(0).dram_grid_size().x - 1,
-                            self.mesh_device.get_device(0).dram_grid_size().y - 1,
+                            self.mesh_device.dram_grid_size().x - 1,
+                            self.mesh_device.dram_grid_size().y - 1,
                         ),
                     )
                 }
@@ -135,6 +135,22 @@ class TtLlamaMLP_galaxy:
 
             self.FF1_ACT_MEMCFG = ttnn.create_sharded_memory_config(
                 shape=(32, 2048 // 8),
+                core_grid=ttnn.CoreGrid(y=1, x=8),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            mesh_rows, mesh_cols = 8, 4
+            self.FF1_OUT_GATHERED_MEMCFG = ttnn.create_sharded_memory_config(
+                shape=(M * mesh_cols, N // 8),
+                core_grid=ttnn.CoreGrid(y=1, x=8),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            self.FF2_OUT_GATHERED_MEMCFG = ttnn.create_sharded_memory_config(
+                shape=(32 * mesh_rows, 2048 // 8),
                 core_grid=ttnn.CoreGrid(y=1, x=8),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -266,11 +282,11 @@ class TtLlamaMLP_galaxy:
         )
         x.deallocate(True)
 
-        w1_out = tt_all_reduce(
-            w1_out, self.mesh_device, cluster_axis=1, num_links=2, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        w1_out = tt_sharded_all_reduce(
+            w1_out, self.mesh_device, cluster_axis=1, num_links=2, memory_config=self.FF1_OUT_GATHERED_MEMCFG
         )
-        w3_out = tt_all_reduce(
-            w3_out, self.mesh_device, cluster_axis=1, num_links=2, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        w3_out = tt_sharded_all_reduce(
+            w3_out, self.mesh_device, cluster_axis=1, num_links=2, memory_config=self.FF1_OUT_GATHERED_MEMCFG
         )
 
         w1_out = ttnn.to_memory_config(w1_out, self.FULL_GRID_MEMCFG)
@@ -297,12 +313,12 @@ class TtLlamaMLP_galaxy:
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
 
-        hidden_states = tt_all_reduce(
+        hidden_states = tt_sharded_all_reduce(
             hidden_states,
             self.mesh_device,
             cluster_axis=0,
             num_links=2,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            memory_config=self.FF2_OUT_GATHERED_MEMCFG,
         )
 
         hidden_states = ttnn.to_memory_config(hidden_states, self.FF1_ACT_MEMCFG)
