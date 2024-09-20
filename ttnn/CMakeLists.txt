@@ -447,32 +447,7 @@ set(TTNN_SUBLIBRARIES
     ttnn/operations/ccl/
     ttnn/operations/conv/conv2d
     ttnn/operations/core
-    ttnn/operations/core/compute_kernel
-    ttnn/operations/core/to_layout
-    ttnn/operations/data_movement/bcast
-    ttnn/operations/data_movement/concat
-    ttnn/operations/data_movement/copy
-    ttnn/operations/data_movement/data_transfer
-    ttnn/operations/data_movement/fill_rm
-    ttnn/operations/data_movement/fold
-    ttnn/operations/data_movement/indexed_fill
-    ttnn/operations/data_movement/move
-    ttnn/operations/data_movement/non_zero_indices
-    ttnn/operations/data_movement/pad
-    ttnn/operations/data_movement/permute
-    ttnn/operations/data_movement/repeat
-    ttnn/operations/data_movement/repeat_interleave
-    ttnn/operations/data_movement/reshape
-    ttnn/operations/data_movement/sharded
-    ttnn/operations/data_movement/sharded_partial
-    ttnn/operations/data_movement/slice
-    ttnn/operations/data_movement/split
-    ttnn/operations/data_movement/tilize
-    ttnn/operations/data_movement/tilize_with_val_padding
-    ttnn/operations/data_movement/transpose
-    ttnn/operations/data_movement/untilize
-    ttnn/operations/data_movement/untilize_with_halo_v2
-    ttnn/operations/data_movement/untilize_with_unpadding
+    ttnn/operations/data_movement
     ttnn/operations/eltwise/binary
     ttnn/operations/eltwise/binary_backward
     ttnn/operations/eltwise/complex
@@ -483,11 +458,9 @@ set(TTNN_SUBLIBRARIES
     ttnn/operations/eltwise/ternary_backward
     ttnn/operations/eltwise/unary
     ttnn/operations/eltwise/unary_backward
-    ttnn/operations/embedding/device
-    ttnn/operations/embedding_backward/device
-    ttnn/operations/embedding_backward/embedding_backward
-    ttnn/operations/embedding_backward/embedding_backward_pybind
-    ttnn/operations/examples/example
+    ttnn/operations/embedding_backward
+    ttnn/operations/embedding
+    ttnn/operations/examples
     ttnn/operations/experimental/auto_format
     ttnn/operations/experimental/ccl
     ttnn/operations/experimental/copy
@@ -497,41 +470,15 @@ set(TTNN_SUBLIBRARIES
     ttnn/operations/experimental/reduction
     ttnn/operations/experimental/ssm
     ttnn/operations/experimental/transformer
-    ttnn/operations/kv_cache/device
-    ttnn/operations/kv_cache/kv_cache
-    ttnn/operations/kv_cache/kv_cache_pybind
-    ttnn/operations/loss/loss
-    ttnn/operations/loss/loss_pybind
-    ttnn/operations/matmul/device
-    ttnn/operations/matmul/matmul
-    ttnn/operations/matmul/matmul_pybind
+    ttnn/operations/kv_cache
+    ttnn/operations/loss
+    ttnn/operations/matmul
     ttnn/operations/moreh
-    ttnn/operations/normalization/groupnorm
-    ttnn/operations/normalization/layernorm
-    ttnn/operations/normalization/layernorm_distributed
-    ttnn/operations/normalization/rmsnorm
-    ttnn/operations/normalization/rmsnorm_distributed
-    ttnn/operations/normalization/softmax
-    ttnn/operations/pool/avgpool
-    ttnn/operations/pool/downsample
-    ttnn/operations/pool/maxpool
-    ttnn/operations/pool/upsample
-    ttnn/operations/reduction/argmax
-    ttnn/operations/reduction/generic
-    ttnn/operations/reduction/moe
-    ttnn/operations/reduction/prod
-    ttnn/operations/reduction/reduction_pybind
-    ttnn/operations/reduction/topk
-    ttnn/operations/sliding_window/halo
-    ttnn/operations/sliding_window/reference_sliding_window
-    ttnn/operations/sliding_window/sliding_window
-    ttnn/operations/transformer/attention_softmax
-    ttnn/operations/transformer/concatenate_heads
-    ttnn/operations/transformer/sdpa
-    ttnn/operations/transformer/sdpa_decode
-    ttnn/operations/transformer/sdpa_decode_gqa
-    ttnn/operations/transformer/split_query_key_value_and_split_heads
-    ttnn/operations/transformer/transformer_pybind
+    ttnn/operations/normalization
+    ttnn/operations/pool
+    ttnn/operations/reduction
+    ttnn/operations/sliding_window
+    ttnn/operations/transformer
 )
 
 
