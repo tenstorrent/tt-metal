@@ -13,11 +13,10 @@ on:
           - add
           - line_all_gather
           - logical_and_
-          - eltwise.logical_or_
-          - eltwise.relu
-          - eltwise.gelu
-          - eltwise.cos
-          - eltwise.sin
+          - eltwise.unary.relu.relu_interleaved
+          - eltwise.unary.gelu.gelu_interleaved
+          - eltwise.unary.cos.cos_interleaved
+          - eltwise.unary.sin.sin_interleaved
           - eltwise.unary.clamp.clamp_interleaved
           - eltwise.unary.clip.clip_interleaved
           - eltwise.unary.cbrt.cbrt_interleaved
@@ -30,6 +29,7 @@ on:
           - eltwise.binary.multiply.multiply_interleaved
           - eltwise.binary.div.div_interleaved
           - eltwise.binary.div_no_nan.div_no_nan_interleaved
+          - eltwise.binary.logical_or.logical_or_interleaved
           - eltwise.composite.binary.addalpha.subalpha_interleaved
           - eltwise.composite.binary.subalpha.subalpha_interleaved
           - eltwise.ternary.addcmul.addcmul_interleaved
