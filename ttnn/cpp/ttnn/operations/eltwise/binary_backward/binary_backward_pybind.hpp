@@ -790,8 +790,10 @@ void bind_binary_bw_div(py::module& module, const binary_backward_operation_t& o
             * :attr:`input_tensor_b` (ComplexTensor or ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
 
         Keyword args:
+            * :attr:`are_required_outputs` (Optional[bool]): required output gradients
             * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
-            * :attr:`dtype` (Optional[ttnn.DataType]): data type for the output tensor
+            * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
+            * :attr:`queue_id` (Optional[uint8]): command queue id
 
         Supported dtypes, layouts, and ranks:
 
@@ -822,15 +824,19 @@ void bind_binary_bw_div(py::module& module, const binary_backward_operation_t& o
                const Tensor& input_tensor_a,
                const float scalar,
                std::string round_mode,
-               const std::optional<MemoryConfig>& memory_config){
-                return self(grad_tensor, input_tensor_a, scalar, round_mode, memory_config);
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& input_grad,
+               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+                return self(queue_id, grad_tensor, input_tensor_a, scalar, round_mode, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor_a"),
             py::arg("scalar"),
             py::kw_only(),
             py::arg("round_mode") = "None",
-            py::arg("memory_config") = std::nullopt},
+            py::arg("memory_config") = std::nullopt,
+            py::arg("input_grad") = std::nullopt,
+            py::arg("queue_id") = ttnn::DefaultQueueId},
 
         // tensor and tensor
         ttnn::pybind_overload_t{
@@ -839,15 +845,23 @@ void bind_binary_bw_div(py::module& module, const binary_backward_operation_t& o
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& other_tensor,
                std::string round_mode,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, other_tensor, round_mode, memory_config);
+               const std::vector<bool>& are_required_outputs,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& input_grad,
+               const std::optional<ttnn::Tensor>& other_grad,
+               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+                return self(queue_id, grad_tensor, input_tensor, other_tensor, round_mode, are_required_outputs, memory_config, input_grad, other_grad);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor"),
             py::arg("other_tensor"),
             py::kw_only(),
             py::arg("round_mode") = "None",
-            py::arg("memory_config") = std::nullopt},
+            py::arg("are_required_outputs") = std::vector<bool>{true, true},
+            py::arg("memory_config") = std::nullopt,
+            py::arg("input_grad") = std::nullopt,
+            py::arg("other_grad") = std::nullopt,
+            py::arg("queue_id") = ttnn::DefaultQueueId},
 
         // complex tensor
         ttnn::pybind_overload_t{
