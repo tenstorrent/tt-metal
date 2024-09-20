@@ -45,12 +45,15 @@ runs:
       shell: bash
       run: |
         docker pull ghcr.io/${{ github.repository }}/${{ inputs.docker_image }}:${{ env.IMAGE_TAG }}
-    - name: Create folder for generated artifacts
+    - name: Prepare folders for artifact extracting
+      id: prepare-for-artifacts
       shell: bash
       run: |
         mkdir -p ${{ github.workspace }}/generated
         # So cp works later even if no artifacts generated
         touch ${{ github.workspace }}/generated/.keep
+        echo "host-uid=$(echo $UID)" >> "$GITHUB_OUTPUT"
+        echo "host-gid=$(echo $GID)" >> "$GITHUB_OUTPUT"
     - uses: addnab/docker-run-action@v3
       with:
         shell: bash
@@ -66,8 +69,8 @@ runs:
           --net=host
           ${{ inputs.docker_opts }}
           -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
-          -e HOST_UID=$(echo $UID)
-          -e HOST_GID=$(echo $GID)
+          -e HOST_UID=${{ steps.prepare-for-artifacts.outputs.host-uid }}
+          -e HOST_GID=${{ steps.prepare-for-artifacts.outputs.host-gid }}
           -e PYTHONPATH=/usr/app
           ${{ inputs.device }}
         run: |
