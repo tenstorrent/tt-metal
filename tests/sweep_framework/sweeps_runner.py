@@ -13,11 +13,11 @@ from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_re
 from multiprocessing import Process, Queue
 from queue import Empty
 import subprocess
-from statuses import TestStatus, VectorValidity, VectorStatus
-import tt_smi_util
+from framework.statuses import TestStatus, VectorValidity, VectorStatus
+import framework.tt_smi_util as tt_smi_util
 from elasticsearch import Elasticsearch, NotFoundError
-from elastic_config import *
-from sweeps_logger import sweeps_logger as logger
+from framework.elastic_config import *
+from framework.sweeps_logger import sweeps_logger as logger
 
 ARCH = os.getenv("ARCH_NAME")
 
@@ -471,9 +471,9 @@ if __name__ == "__main__":
         enable_profiler()
 
     from ttnn import *
-    from serialize import *
-    from device_fixtures import default_device
-    from sweeps_logger import sweeps_logger as logger
+    from framework.serialize import *
+    from framework.device_fixtures import default_device
+    from framework.sweeps_logger import sweeps_logger as logger
 
     run_sweeps(args.module_name, args.suite_name, args.vector_id)
 
