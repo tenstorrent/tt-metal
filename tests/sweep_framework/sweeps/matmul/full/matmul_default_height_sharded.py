@@ -20,6 +20,8 @@ from tests.ttnn.utils_for_testing import (
 )
 from models.utility_functions import torch_random
 
+TIMEOUT = 5
+
 
 def get_height_sharded_specs(
     batch_sizes_choices: List[Tuple[int, ...]], m_size_choices: List[int], num_cores_choices: List[int]
@@ -86,7 +88,7 @@ def run(
     # TODO: row_wise=False and ROW_MAJOR shard orientation gives bad PCC
     # TODO: COL_MAJOR shard orientation doesn't work for get_matmul_program_config
     input_a_memory_config.shard_spec = ttnn.ShardSpec(
-        ttnn.experimental.tensor.num_cores_to_core_range_set(num_cores_height, core_grid, row_wise=True),
+        ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores_height, core_grid, row_wise=True)),
         (per_core_height, k_size),
         ttnn.ShardOrientation.ROW_MAJOR,
         False,

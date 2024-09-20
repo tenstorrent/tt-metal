@@ -7,7 +7,7 @@
 #include "tt_metal/detail/util.hpp"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/cb_utils.hpp"
 #include "paged_cache_operation.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/experimental/paged_cache/device/paged_fill_cache_program_factory.hpp"
 
 namespace ttnn::operations::experimental::paged_cache::detail {
@@ -47,8 +47,6 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(const Tensor& cache_
     uint32_t log2_page_table_stick_size_B = std::log2(page_table_stick_size_B);
     tt::DataFormat page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.get_dtype());
 
-    TT_FATAL(1 << log2_page_table_stick_size_B == page_table_stick_size_B, "page_table_stick_size_B must be a power of 2");
-
     tt_metal::Device *device = input_tensor.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -61,7 +59,7 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(const Tensor& cache_
     CoreRangeSet all_cores({}), core_group_1({}), core_group_2({});
 
     row_major = true;
-    std::tie(num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2) = split_work_to_cores(compute_with_storage_grid_size,  num_blocks_of_work, row_major);
+    std::tie(num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2) = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size,  num_blocks_of_work, row_major);
     uint32_t num_input_tiles = Wt * 2; // double buffered
 
     tt::CB src0_cb_index = tt::CB::c_in0;

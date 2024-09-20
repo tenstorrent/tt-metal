@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "debug/status.h"
+#include "debug/waypoint.h"
 #include "debug/ring_buffer.h"
 
 // Helper function to sync execution by forcing other riscs to wait for brisc, which in turn waits
@@ -34,17 +34,14 @@ void MAIN {
     uint32_t sync_wait_cycles = get_arg_val<uint32_t>(0);
     uint32_t sync_address     = get_arg_val<uint32_t>(1);
     WATCHER_RING_BUFFER_PUSH(sync_wait_cycles);
-#if defined(COMPILE_FOR_IDLE_ERISC)
-    sync_wait_cycles = 0x5f5e1000U;
-#endif
 
     // Post a new waypoint with a delay after (to let the watcher poll it)
     hacky_sync(1, sync_wait_cycles, sync_address);
-    DEBUG_STATUS("AAAA");
+    WAYPOINT("AAAA");
     hacky_sync(2, sync_wait_cycles, sync_address);
-    //DEBUG_STATUS("BBBB");
+    //WAYPOINT("BBBB");
     hacky_sync(3, sync_wait_cycles, sync_address);
-    //DEBUG_STATUS("CCCC");
+    //WAYPOINT("CCCC");
     hacky_sync(4, sync_wait_cycles, sync_address);
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 }

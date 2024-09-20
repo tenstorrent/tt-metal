@@ -23,6 +23,14 @@ const char *RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
     "READ_DEBUG_DELAY",
     "WRITE_DEBUG_DELAY",
     "ATOMIC_DEBUG_DELAY",
+    "DISABLE_L1_DATA_CACHE",
+};
+
+const char *RunTimeDebugClassNames[RunTimeDebugClassCount] = {
+    "N/A",
+    "worker",
+    "dispatch",
+    "all"
 };
 
 // Note: global initialization order is non-deterministic
@@ -109,7 +117,7 @@ RunTimeOptions::RunTimeOptions() {
 
 const std::string &RunTimeOptions::get_root_dir() {
     if (root_dir == "") {
-        TT_THROW("Env var " + std::string("TT_METAL_HOME") + " is not set.");
+        TT_THROW("Env var TT_METAL_HOME is not set.");
     }
 
     return root_dir;
@@ -142,7 +150,7 @@ void RunTimeOptions::ParseWatcherEnv() {
 
     // Any watcher features to disabled based on env var.
     std::set all_features = {
-        watcher_status_str,
+        watcher_waypoint_str,
         watcher_noc_sanitize_str,
         watcher_assert_str,
         watcher_pause_str,
@@ -181,7 +189,7 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature) {
     // Set feature enabled if the user asked for any feature cores
     feature_targets[feature].enabled = false;
     for (auto &core_type_and_all_flag : feature_targets[feature].all_cores)
-        if (core_type_and_all_flag.second)
+        if (core_type_and_all_flag.second != RunTimeDebugClassNoneSpecified)
             feature_targets[feature].enabled = true;
     for (auto &core_type_and_cores : feature_targets[feature].cores)
         if (core_type_and_cores.second.size() > 0)
@@ -198,9 +206,14 @@ void RunTimeOptions::ParseFeatureCoreRange(
     vector<CoreCoord> cores;
 
     // Check if "all" is specified, rather than a range of cores.
-    if (str != nullptr && strcmp(str, "all") == 0) {
-        feature_targets[feature].all_cores[core_type] = true;
-        return;
+    feature_targets[feature].all_cores[core_type] = RunTimeDebugClassNoneSpecified;
+    if (str != nullptr) {
+        for (int idx = 0; idx < RunTimeDebugClassCount; idx++) {
+            if (strcmp(str, RunTimeDebugClassNames[idx]) == 0) {
+                feature_targets[feature].all_cores[core_type] = idx;
+                return;
+            }
+        }
     }
     if (str != nullptr) {
         if (isdigit(str[0])) {
@@ -272,24 +285,37 @@ void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std
 }
 
 void RunTimeOptions::ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string &env_var) {
-    // Default is all RISCVs enabled for printing.
-    uint32_t riscv_mask = DPRINT_RISCV_BR | DPRINT_RISCV_TR0 | DPRINT_RISCV_TR1 | DPRINT_RISCV_TR2 | DPRINT_RISCV_NC;
+    uint32_t riscv_mask = 0;
     char *env_var_str = std::getenv(env_var.c_str());
+
     if (env_var_str != nullptr) {
-        if (strcmp(env_var_str, "BR") == 0) {
-            riscv_mask = DPRINT_RISCV_BR;
-        } else if (strcmp(env_var_str, "NC") == 0) {
-            riscv_mask = DPRINT_RISCV_NC;
-        } else if (strcmp(env_var_str, "TR0") == 0) {
-            riscv_mask = DPRINT_RISCV_TR0;
-        } else if (strcmp(env_var_str, "TR1") == 0) {
-            riscv_mask = DPRINT_RISCV_TR1;
-        } else if (strcmp(env_var_str, "TR2") == 0) {
-            riscv_mask = DPRINT_RISCV_TR2;
-        } else {
-            TT_THROW("Invalid TT_DEBUG_PRINT_RISCV");
+        if (strstr(env_var_str, "BR")) {
+            riscv_mask |= RISCV_BR;
         }
+        if (strstr(env_var_str, "NC")) {
+            riscv_mask |= RISCV_NC;
+        }
+        if (strstr(env_var_str, "TR0")) {
+            riscv_mask |= RISCV_TR0;
+        }
+        if (strstr(env_var_str, "TR1")) {
+            riscv_mask |= RISCV_TR1;
+        }
+        if (strstr(env_var_str, "TR2")) {
+            riscv_mask |= RISCV_TR2;
+        }
+        if (strstr(env_var_str, "TR")) {
+            riscv_mask |= (RISCV_TR0 | RISCV_TR1 | RISCV_TR2);
+        }
+        if (strstr(env_var_str, "ER")) {
+            riscv_mask |= RISCV_ER;
+        }
+    } else {
+        // Default is all RISCVs enabled.
+        bool default_disabled = (feature == RunTimeDebugFeatures::RunTimeDebugFeatureDisableL1DataCache);
+        riscv_mask = default_disabled ? 0 : (RISCV_ER | RISCV_BR | RISCV_TR0 | RISCV_TR1 | RISCV_TR2 | RISCV_NC);
     }
+
     feature_targets[feature].riscv_mask = riscv_mask;
 }
 

@@ -5,7 +5,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sgd/moreh_sgd_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -49,7 +49,7 @@ void MorehSGD::validate_with_output_tensors(
     }
 }
 
-std::vector<Shape> MorehSGD::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehSGD::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     auto output_shape = input_tensors.at(0).get_legacy_shape();
     return {output_shape, output_shape};
 }
@@ -121,7 +121,7 @@ std::vector<std::optional<Tensor>> moreh_sgd(
     bool momentum_initialized,
     const MemoryConfig& param_out_mem_config,
     const MemoryConfig& momentum_buffer_out_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto device = param_in.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});

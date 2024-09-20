@@ -83,6 +83,7 @@ enum class UnaryOpType {
     LEFT_SHIFT,
     REMAINDER,
     FMOD,
+    DROPOUT
 };
 
 struct UnaryWithParam {
@@ -102,3 +103,15 @@ struct UnaryWithParam {
 using FusedActivations = std::vector<ttnn::operations::unary::UnaryWithParam>;
 
 }
+
+namespace tt::stl::json {
+
+template <>
+struct from_json_t<ttnn::operations::unary::UnaryWithParam> {
+    auto operator()(const nlohmann::json& json_object) const {
+        return ttnn::operations::unary::UnaryWithParam{
+            from_json<ttnn::operations::unary::UnaryOpType>(json_object["op_type"]),
+            from_json<std::vector<float>>(json_object["params"])};
+    }
+};
+};  // namespace tt::stl::json

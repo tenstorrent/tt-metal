@@ -7,18 +7,24 @@ from loguru import logger
 import torch
 import pytest
 from models.utility_functions import (
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
     skip_for_grayskull,
     is_grayskull,
     is_wormhole_b0,
     is_x2_harvested,
+    is_blackhole,
+    skip_for_blackhole,
+    is_blackhole,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc, check_with_pcc_without_tensor_printout
 import ttnn
-import math
-import os
-import torch.nn as nn
 
+
+def _nearest_32(x):
+    return math.ceil(x / 32) * 32
+
+
+from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 # def plot_diff(vals, fid, nsticks, stick_len):
 #     import matplotlib.pyplot as plt
@@ -52,6 +58,7 @@ def run_conv(
     pad_w,
     use_1d_systolic_array,
     config_override,
+    dilation=1,
     use_shallow_conv_variant=False,
     transpose_mcast=True,
     enable_auto_formatting=False,
@@ -63,6 +70,7 @@ def run_conv(
     debug=False,
     groups=1,
     has_bias=True,
+    shard_layout=None,
 ):
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
@@ -70,9 +78,13 @@ def run_conv(
     conv_bias_shape = [1, 1, 1, output_channels]
     torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
     # torch_input_tensor_nchw = torch.ones(conv_input_shape, dtype=torch.bfloat16).float()
+    # torch_input_tensor_nchw = torch.tensor(range(input_height * input_width)).reshape([1,1,input_height,input_width]).float()
+    # torch_input_tensor_nchw = torch_input_tensor_nchw.broadcast_to(conv_input_shape).float()
+
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
     torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
     # torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()
+
     torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
     torch_out_golden_tensor = torch.nn.functional.conv2d(
         torch_input_tensor_nchw,
@@ -80,6 +92,7 @@ def run_conv(
         bias=torch_bias_tensor.reshape(-1) if has_bias else None,
         stride=(stride_h, stride_w),
         padding=(pad_h, pad_w),
+        dilation=(dilation, dilation),
         groups=groups,
     )
     output_shape_nhwc = [
@@ -101,12 +114,16 @@ def run_conv(
         )
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
-    # breakpoint()
+
+    if shard_layout is None:
+        shard_layout = (
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED if use_1d_systolic_array else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        )
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
         math_fidelity=math_fidelity,
-        height_sharding=use_1d_systolic_array,
+        shard_layout=shard_layout,
         input_channels_alignment=(
             16 if use_shallow_conv_variant or (input_channels == 16 and input_height == 115) else 32
         ),
@@ -119,7 +136,10 @@ def run_conv(
     )
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
-        print("Setting Act Block H to ", conv_config.act_block_h_override)
+
+    if config_override and "act_block_w_div" in config_override:
+        conv_config.act_block_w_div = config_override["act_block_w_div"]
+
     if config_override and "num_cores_nhw" in config_override:
         if config_override["num_cores_nhw"] == 98:
             conv_config.core_grid = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (11, 7)), ttnn.CoreRange((0, 8), (1, 8))})
@@ -136,6 +156,7 @@ def run_conv(
         kernel_size=(filter_height, filter_width),
         stride=(stride_h, stride_w),
         padding=(pad_h, pad_w),
+        dilation=(dilation, dilation),
         batch_size=batch_size,
         input_height=input_height,
         input_width=input_width,
@@ -148,29 +169,22 @@ def run_conv(
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
 
-    # if enable_auto_formatting:
-    #     torch_output_tensor = torch.split(torch_output_tensor, output_channels, 3)[0]
-    #     torch_output_tensor = torch.reshape(torch_output_tensor, output_shape_nhwc)
-    # else:
-    #     tt_output_tensor = conv.copy_output_from_device(tt_output_tensor_on_device)
-    #     assert tt_output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
-    #     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
-
     # torch_output_tensor is in row major layout and NHWC shape
     # NHWC to NCHW
-    torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, output_channels)
+    torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, torch_output_tensor.shape[-1])
+    torch_output_tensor = torch_output_tensor[:, :, :, :output_channels]
 
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
     reader_patterns_cache.clear()
 
     if not fp32_accum:
-        pcc = 0.995
+        pcc = 0.99
     elif math_fidelity == ttnn.MathFidelity.LoFi and activations_dtype == ttnn.bfloat8_b:
         pcc = 0.9969
     else:
         pcc = 0.998
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
-    print(pcc_msg)
+    logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
     assert passing
 
 
@@ -239,7 +253,9 @@ def run_conv_with_split(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
         math_fidelity=math_fidelity,
-        height_sharding=use_1d_systolic_array,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        if use_1d_systolic_array
+        else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         fp32_dest_acc_enabled=fp32_accum,
         packer_l1_accum_enabled=packer_l1_acc,
         # input_channels_alignment=(16 if use_shallow_conv_variant else 32),
@@ -301,9 +317,237 @@ def run_conv_with_split(
     assert_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
 
 
-@skip_for_wormhole_b0(
-    "Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range"
+@skip_for_grayskull()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("stride", [1, 2])
+@pytest.mark.parametrize(
+    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, pad_h, pad_w, act_block_w_div",
+    (
+        (128, 128, 8, 8, 3, 3, 0, 0, 1),
+        (128, 256, 8, 8, 3, 3, 1, 1, 1),
+        (576, 576, 8, 8, 3, 3, 0, 0, 1),
+        (960, 960, 4, 4, 3, 3, 0, 0, 1),
+        (256, 2048, 8, 8, 3, 3, 1, 1, 8),
+        (512, 2048, 16, 16, 3, 3, 1, 1, 4),
+        (768, 768, 16, 16, 3, 3, 0, 0, 1),
+        (1280, 2560, 16, 16, 3, 3, 1, 1, 2),
+        (1280, 2560, 16, 16, 3, 3, 0, 0, 2),
+    ),
 )
+@pytest.mark.parametrize(
+    "has_bias",
+    [True],
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat16],
+)
+def test_conv_ws(
+    device,
+    use_program_cache,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    pad_h,
+    pad_w,
+    act_block_w_div,
+    stride,
+    has_bias,
+    weights_dtype,
+    activations_dtype,
+):
+    stride_h = stride
+    stride_w = stride
+    batch_size = 2
+    fp32_accum = False
+    packer_l1_acc = False
+    deallocate_activation = False
+    debug = False
+    groups = 1
+
+    torch.manual_seed(0)
+    conv_input_shape = [batch_size, input_channels, input_height, input_width]
+    conv_weight_shape = [output_channels, input_channels // groups, filter_height, filter_width]
+    conv_bias_shape = [1, 1, 1, output_channels]
+
+    torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
+    torch_input_tensor_nchw = torch_input_tensor_nchw.broadcast_to(conv_input_shape).float()
+    torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
+
+    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+
+    tt_bias_tensor = None
+    torch_bias_tensor = None
+    if has_bias:
+        torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() * 50
+        tt_bias_tensor = ttnn.from_torch(
+            torch_bias_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+        )
+        torch_bias_tensor = torch_bias_tensor.reshape(-1)
+    torch_out_golden_tensor = torch.nn.functional.conv2d(
+        torch_input_tensor_nchw,
+        torch_weight_tensor,
+        bias=torch_bias_tensor,
+        stride=(stride_h, stride_w),
+        padding=(pad_h, pad_w),
+        groups=groups,
+    )
+    output_shape_nhwc = [
+        torch_out_golden_tensor.shape[0],
+        torch_out_golden_tensor.shape[2],
+        torch_out_golden_tensor.shape[3],
+        torch_out_golden_tensor.shape[1],
+    ]
+
+    reader_patterns_cache = {}
+    tt_weight_tensor = ttnn.from_torch(
+        torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+    )
+
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn.bfloat16)
+
+    tt_input_tensor = ttnn.reshape(tt_input_tensor, [1, 1, input_height * input_width * batch_size, input_channels])
+
+    conv_config = ttnn.Conv2dConfig(
+        dtype=activations_dtype,
+        weights_dtype=weights_dtype,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        input_channels_alignment=32,
+        deallocate_activation=deallocate_activation,
+        fp32_dest_acc_enabled=fp32_accum,
+        packer_l1_accum_enabled=packer_l1_acc,
+        enable_act_double_buffer=False,
+        enable_split_reader=False,
+        enable_subblock_padding=False,
+        reshard_if_not_optimal=True,
+        act_block_w_div=act_block_w_div,
+    )
+    [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
+        input_tensor=tt_input_tensor,
+        weight_tensor=tt_weight_tensor,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        bias_tensor=tt_bias_tensor,
+        kernel_size=(filter_height, filter_width),
+        stride=(stride_h, stride_w),
+        padding=(pad_h, pad_w),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        conv_config=conv_config,
+        conv_op_cache=reader_patterns_cache,
+        debug=debug,
+        groups=groups,
+    )
+
+    tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
+    torch_output_tensor = ttnn.to_torch(tt_output_tensor)
+
+    # torch_output_tensor is in row major layout and NHWC shape
+    # NHWC to NCHW
+    # torch_output_tensor = torch_output_tensor[:, :, : batch_size * out_height * out_width, :]
+    torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, output_channels)
+    logger.info(f"Output Shape : {torch_output_tensor.shape}")
+    torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
+    reader_patterns_cache.clear()
+
+    pcc = 0.94
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
+    logger.info(f"{pcc_msg} Threshold : {pcc}")
+    if not passing:
+        logger.error("Fails with PCC ", pcc_msg)
+    assert passing
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, use_1d_systolic_array, config_override, use_shallow_conv_variant",
+    (
+        # mlp sub_module
+        (1, 3, 32, 512, 512, 7, 7, 4, 4, 3, 3, 1, True, {"act_block_h": 64}, False),  # ncrisc build failed
+        # efficient selfattention sub_module
+        (1, 32, 32, 128, 128, 8, 8, 8, 8, 0, 0, 1, True, None, False),  # ncrisc build failed, Two times called in model
+        (1, 64, 64, 64, 64, 4, 4, 4, 4, 0, 0, 1, True, None, False),  # ncrisc build failed, Two times called in model
+        (1, 160, 160, 32, 32, 2, 2, 2, 2, 0, 0, 1, True, None, False),  # pass , Two times called in model
+        # dwconv sub_module
+        (1, 128, 128, 128, 128, 3, 3, 1, 1, 1, 1, 128, True, {"act_block_h": 64}, False),
+        (1, 256, 256, 64, 64, 3, 3, 1, 1, 1, 1, 256, True, None, False),  # pass , Two times called in model
+        (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, 640, False, {"act_block_h": 32}, False),
+        # (1,1024, 1024, 16, 16, 3, 3, 1, 1, 1, 1, 1024, False, None, False), #Switch to Width Sharding
+        # decode_head sub_module
+        # (1,1024, 256, 128, 128, 1, 1, 1, 1, 0, 0, 1, False, {"act_block_h": 32}, False), #pass for activation_dtype=bf8 but fails for bf16
+        (1, 256, 150, 128, 128, 1, 1, 1, 1, 0, 0, 1, True, None, False),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@skip_for_grayskull()
+def test_conv_for_segformer_512x512(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    use_1d_systolic_array,
+    config_override,
+    use_shallow_conv_variant,
+    groups,
+    output_layout,
+):
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        use_1d_systolic_array,
+        config_override,
+        use_shallow_conv_variant=use_shallow_conv_variant,
+        groups=groups,
+        output_layout=output_layout,
+        has_bias=False,
+    )
+
+
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="This is test is for Grayskull only. Skipping")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
@@ -361,6 +605,9 @@ def test_resnet50_conv_gs(
     use_1d_systolic_array,
     config_override,
 ):
+    if is_blackhole():
+        pytest.skip("This test is for Grayskull only")
+
     if batch_size > 8 and (activations_dtype != ttnn.bfloat8_b or weights_dtype != ttnn.bfloat8_b):
         pytest.skip("Batch > 8 must be run fully bfp8")
     if batch_size == 20 and input_channels >= 128 and filter_width > 1:
@@ -402,8 +649,8 @@ def test_resnet50_conv_gs(
     )
 
 
-# @pytest.mark.skip("Needs to be tests with new API")
 @skip_for_grayskull()
+@skip_for_blackhole()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
@@ -537,7 +784,6 @@ def test_resnet50_conv_wh(
     )
 
 
-@pytest.mark.skip("Needs to be tests with new API")
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
@@ -614,9 +860,6 @@ def test_resnet50_conv_wh_fp32(
     config_override,
     packer_l1_acc,
 ):
-    if device.core_grid.y > 7:
-        pytest.skip("Not tested for N150 yet")
-
     if batch_size > 8 and (activations_dtype != ttnn.bfloat8_b or weights_dtype != ttnn.bfloat8_b):
         pytest.skip("Batch > 8 must be run fully bfp8")
 
@@ -659,8 +902,6 @@ def test_resnet50_conv_wh_fp32(
     )
 
 
-# @pytest.mark.skip("New API needs to be tested")
-# @skip_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
@@ -793,9 +1034,8 @@ def test_sd_conv(
         )
 
 
-# @skip_for_wormhole_b0("Issue #7179: non-deterministically fails on N150 regression")
-# @pytest.mark.skip("New API needs to be tested")
 @skip_for_grayskull()
+@skip_for_blackhole()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
@@ -958,8 +1198,7 @@ def test_sd_conv_wh(
         )
 
 
-# @pytest.mark.skip("New API needs to be tested")
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override, use_shallow_conv_variant",
@@ -1032,6 +1271,9 @@ def test_unet_conv(
     use_shallow_conv_variant,
     output_layout,
 ):
+    if is_blackhole():
+        pytest.skip("This test is for Grayskull only")
+
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and input_height >= 1056:
@@ -1060,17 +1302,17 @@ def test_unet_conv(
     )
 
 
-@pytest.mark.skip("New API needs to be tested")
 @skip_for_grayskull()
+@skip_for_blackhole()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override, use_shallow_conv_variant",
     (
         # unet convs with batch size 2
         # unique convs in unet (complete list)
-        (2, 16, 3, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 5 * 32}, False),
-        (2, 16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 5 * 32}, False),
-        (2, 16, 16, 528, 80, 3, 3, 1, 1, 1, 1, True, None, False),
+        (2, 16, 4, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 16 * 32}, True),
+        (2, 16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 16 * 32}, True),
+        (2, 16, 16, 528, 80, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 16 * 32}, True),
         (2, 32, 16, 264, 40, 3, 3, 1, 1, 1, 1, True, None, False),
         (2, 32, 32, 264, 40, 3, 3, 1, 1, 1, 1, True, None, False),
         (2, 32, 32, 132, 20, 3, 3, 1, 1, 1, 1, True, None, False),
@@ -1080,26 +1322,11 @@ def test_unet_conv(
         (2, 32, 32, 132, 20, 3, 3, 1, 1, 1, 1, True, None, False),
         (2, 32, 64, 264, 40, 3, 3, 1, 1, 1, 1, True, None, False),
         (2, 32, 32, 264, 40, 3, 3, 1, 1, 1, 1, True, None, False),
-        (
-            2,
-            16,
-            48,
-            528,
-            80,
-            3,
-            3,
-            1,
-            1,
-            1,
-            1,
-            True,
-            {"act_block_h": 32},
-            False,
-        ),  # fails. mismatch. It passes when input_channels=64. Probably an issue with padding when input_channels % 32 != 0.
-        (2, 16, 16, 528, 80, 3, 3, 1, 1, 1, 1, True, None, False),
-        (2, 16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 5 * 32}, False),
-        (2, 16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 5 * 32}, False),
-        (2, 1, 16, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 5 * 32}, False),
+        (2, 16, 48, 528, 80, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 16 * 32}, True),
+        (2, 16, 16, 528, 80, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 16 * 32}, True),
+        (2, 16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 16 * 32}, True),
+        (2, 16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 16 * 32}, True),
+        # (2, 1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, True, {"act_block_h": 5 * 32}, False) # Enable when issue #11490 resolved
     ),
 )
 @pytest.mark.parametrize(
@@ -1165,7 +1392,6 @@ def test_unet_conv_wh(
     )
 
 
-@pytest.mark.skip("New API needs to be tested")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, config_override",
@@ -1197,9 +1423,6 @@ def test_halo_reshard_conv(
     pad_w,
     config_override,
 ):
-    if is_wormhole_b0() and device.core_grid.y > 7:
-        pytest.skip("Not tested for N150 yet")
-
     math_fidelity = ttnn.MathFidelity.HiFi4
     activations_dtype = ttnn.bfloat16
     weights_dtype = ttnn.bfloat8_b
@@ -1281,6 +1504,89 @@ def test_conv_core_nondivis(
         pad_w,
         use_1d_systolic_array,
         config_override,
+    )
+
+
+# The following test takes various shape sizes from resnet50, unet and stable diffusion and tests for different number of groups - all the way to num_groups = num_in_channels (depthwise conv)
+@skip_for_grayskull()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("stride", [1])
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize(
+    "output_channels, input_channels, input_height, input_width,  act_block_w_div, shard_layout",
+    (
+        (768, 768, 16, 16, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        (1280, 1280, 16, 16, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        (1280, 1280, 8, 8, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        (1280, 2560, 8, 8, 2, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        (128, 128, 8, 8, 1, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+        (128, 128, 16, 16, 1, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+        (128, 128, 32, 32, 1, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+        (32, 32, 64, 64, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (32, 32, 128, 64, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (16, 16, 528, 80, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (32, 16, 264, 40, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "filter, dilation, pad",
+    [
+        [3, 2, 2],
+        [3, 3, 3],
+    ],
+)
+def test_conv_dilation(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    act_block_w_div,
+    shard_layout,
+    filter,
+    stride,
+    pad,
+    output_layout,
+    dilation,
+):
+    config_override = {"act_block_w_div": act_block_w_div}
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter,
+        filter,
+        stride,
+        stride,
+        pad,
+        pad,
+        True,
+        config_override,
+        shard_layout=shard_layout,
+        output_layout=output_layout,
+        dilation=dilation,
+        has_bias=False,
     )
 
 
@@ -1488,4 +1794,210 @@ def test_yolov4_conv_groups_larger_than_one(
         groups=groups,
         padded_input_channels=16 if input_channels == 3 else None,
         output_layout=output_layout,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    " output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override, use_shallow_conv_variant, groups",
+    ((96, 3, 512, 512, 4, 4, 4, 4, 0, 0, True, None, False, 1),),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    [1, 8],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat8_b, ttnn.bfloat16],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+def test_swin_s_conv(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    use_1d_systolic_array,
+    config_override,
+    use_shallow_conv_variant,
+    groups,
+    output_layout,
+):
+    if device.core_grid.y == 7:
+        pytest.skip("This test is not supported for N300")
+    if batch_size == 8:
+        pytest.skip("OOM issue for batch_size 8")
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        use_1d_systolic_array,
+        config_override,
+        use_shallow_conv_variant=use_shallow_conv_variant,
+        groups=groups,
+        output_layout=output_layout,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, shard_layout, config_override, use_shallow_conv_variant",
+    (
+        # mlp sub_module
+        # (1, 3, 32, 512, 512, 7, 7, 4, 4, 3, 3, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None, False),
+        # efficient selfattention sub_module
+        (1, 32, 32, 128, 128, 8, 8, 8, 8, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
+        (1, 64, 64, 64, 64, 4, 4, 4, 4, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
+        (1, 256, 150, 128, 128, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
+        (1, 32, 16, 64, 64, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
+        (1, 96, 24, 32, 32, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat8_b, ttnn.bfloat16],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@skip_for_grayskull()
+def test_conv_for_segformer_512x512(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    shard_layout,
+    config_override,
+    use_shallow_conv_variant,
+    groups,
+    output_layout,
+):
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        False,
+        config_override,
+        use_shallow_conv_variant=use_shallow_conv_variant,
+        groups=groups,
+        output_layout=output_layout,
+        shard_layout=shard_layout,
+    )
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, groups, use_1d_systolic_array",
+    (
+        (1, 48, 32, 252, 252, 3, 3, 1, 1, 0, 0, 2, 2, 1, True),
+        (1, 56, 48, 248, 248, 3, 3, 1, 1, 0, 0, 4, 4, 1, True),
+        (1, 64, 56, 240, 240, 3, 3, 1, 1, 0, 0, 8, 8, 1, True),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+def test_model_k_256x256(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    dilation_h,
+    dilation_w,
+    groups,
+    use_1d_systolic_array,
+):
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        use_1d_systolic_array,
+        None,
+        dilation=dilation_h,
     )

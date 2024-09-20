@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,14 +7,12 @@ import torch
 from models.utility_functions import (
     is_grayskull,
     is_wormhole_b0,
+    _nearest_y,
     pad_and_fold_conv_activation_for_unity_stride,
 )
 from typing import List
 from loguru import logger
-
-
-use_new_maxpool2d = True
-
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 hardcoded_matmul_config_linear = {
     8: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -181,7 +179,9 @@ class resnet50Bottleneck:
                     dtype=self.model_config["ACTIVATIONS_DTYPE"],
                     weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                     math_fidelity=self.model_config["MATH_FIDELITY"],
-                    height_sharding=height_sharding,
+                    shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+                    if height_sharding
+                    else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                     deallocate_activation=True,
                     reallocate_halo_output=not (is_wormhole_b0() and batch_size == 16),
                     reshard_if_not_optimal=reshard_if_not_optimal,
@@ -219,26 +219,6 @@ class resnet50Bottleneck:
         logger.debug(
             f"==== Running {batch_size}, {input_height}, {input_width}, {self.conv1_input_channels}, {self.conv1_output_channels}"
         )
-        # if (
-        #     is_wormhole_b0()
-        #     and (batch_size == 20)  ## or batch_size == 16)
-        #     and input_height == 56
-        #     and self.conv1_input_channels == 256
-        #     and self.conv1_output_channels == 128
-        # ):
-        #     # TODO: fix the need to do the reshard here
-        #     ## reshard to 49 cores
-        #     ## TensorMemoryLayout::HEIGHT_SHARDED;(grid={[(x=0;y=0) - (x=7;y=5)]; [(x=0;y=6) - (x=0;y=6)]}; shape={1280; 256}; orientation=ShardOrientation::ROW_MAJOR; halo=false
-        #     mem_config = ttnn.create_sharded_memory_config_(
-        #         ttnn.Shape([batch_size * input_height * input_width, 256]),
-        #         (ttnn.CoreGrid(x=8, y=6), ttnn.CoreGrid(x=1, y=7)),
-        #         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        #         ttnn.ShardOrientation.ROW_MAJOR,
-        #         tile_layout=True,
-        #     )
-        #     x_resharded = ttnn.to_memory_config(x, mem_config)
-        #     ttnn.deallocate(x)
-        #     x = ttnn.reallocate(x_resharded)
 
         # conv1 is 1x1 conv
         logger.debug(f"Running conv1")
@@ -261,7 +241,9 @@ class resnet50Bottleneck:
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 math_fidelity=self.model_config["MATH_FIDELITY"],
                 activation="relu",
-                height_sharding=height_sharding,
+                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+                if height_sharding
+                else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
                 transpose_shards=transpose_shards,
                 packer_l1_accum_enabled=packer_l1_acc,
@@ -343,7 +325,9 @@ class resnet50Bottleneck:
                 deallocate_activation=True,
                 reallocate_halo_output=reallocate_halo_output,
                 act_block_h_override=act_block_h_override,
-                height_sharding=height_sharding,
+                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+                if height_sharding
+                else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
                 transpose_shards=transpose_shards,
                 packer_l1_accum_enabled=packer_l1_acc,
@@ -387,7 +371,9 @@ class resnet50Bottleneck:
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 math_fidelity=self.model_config["MATH_FIDELITY"],
-                height_sharding=height_sharding,
+                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+                if height_sharding
+                else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
                 transpose_shards=transpose_shards,
                 packer_l1_accum_enabled=packer_l1_acc,
@@ -434,7 +420,6 @@ class resnet50Bottleneck:
                 out,
                 ds_out,
                 activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)],
-                memory_config=ttnn.get_memory_config(out),
             )
         else:
             out = ttnn.add(
@@ -456,6 +441,9 @@ class resnet50:
         parameters,
         batch_size,
         model_config,
+        input_shape,
+        kernel_size,
+        stride,
         dealloc_input=True,
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
         mesh_mapper=None,
@@ -492,24 +480,6 @@ class resnet50:
 
         self.max_pool_reader_patterns_cache = {}
         max_pool_parallel_config_override = {}
-
-        if not use_new_maxpool2d:
-            self.max_pool = ttnn.MaxPool2d(
-                kernel_size=(3, 3),
-                stride=(2, 2),
-                padding=(1, 1),
-                dilation=(1, 1),
-                dtype=ttnn.bfloat16,
-                device=self.device,
-                batch_size=self.batch_size,
-                input_height=112,
-                input_width=112,
-                reader_patterns_cache=self.max_pool_reader_patterns_cache,
-                deallocate_activation=True,
-                parallel_config_override=max_pool_parallel_config_override,
-                channels=self.conv1_output_channels,
-                mesh_mapper=self.mesh_mapper,
-            )
 
         self.layer1 = self._make_layer(
             parameters=parameters.layer1,
@@ -576,6 +546,8 @@ class resnet50:
         )  # num_classes = 1000
 
         self.transpose_shards = True
+        act_block_h_override = 1568
+
         if is_wormhole_b0():
             self.transpose_shards = False
             if batch_size == 16:
@@ -605,9 +577,11 @@ class resnet50:
             enable_act_double_buffer=True if whb0_and_b16 else False,
             enable_split_reader=True if whb0_and_b16 else False,
             enable_subblock_padding=False,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            reshard_if_not_optimal=False,
         )
         if whb0_and_b16:
-            self.conv1_config.act_block_h_override = 256
+            self.conv1_config.act_block_h_override = 64
 
         self.conv1_kernel_size = (4, 4)
         self.conv1_stride = (1, 1)
@@ -620,6 +594,48 @@ class resnet50:
         self.conv1_output_width = (
             (self.conv1_input_width - self.conv1_kernel_size[1] + 2 * self.conv1_padding[1]) // self.conv1_stride[1]
         ) + 1
+
+        # fold params
+        self.fold_stride_h = stride
+        self.fold_stride_w = stride
+        _, c, h, w = input_shape
+        n = batch_size
+        h += kernel_size * 2
+        w += kernel_size * 2
+        C = _nearest_y(c, 4)
+        self.fold_pad_c = C - c
+        self.fold_pad_h = kernel_size
+        self.fold_pad_w = kernel_size
+        self.fold_output_shape = (
+            n,
+            h // self.fold_stride_h,
+            w // self.fold_stride_w,
+            C * (self.fold_stride_h * self.fold_stride_w),
+        )
+        if self.batch_size == 16:
+            num_cores_x = 8
+            num_cores_y = 8
+        elif self.batch_size == 20:
+            if is_grayskull():
+                num_cores_x = 10
+                num_cores_y = 8
+            elif is_wormhole_b0():  # untested due to unsupported batch20 on WH
+                num_cores_x = 8
+                num_cores_y = 5
+        self.fold_compute_grid_size = (num_cores_x, num_cores_y)
+
+        conv_dummy_tensor = torch.rand((self.fold_output_shape), dtype=torch.bfloat16)
+        conv_dummy_tensor = ttnn.from_torch(conv_dummy_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+        _, self.override_fold_mem_config, _ = ttnn.get_conv_padded_input_shape_and_mem_config(
+            device=device,
+            input_tensor=conv_dummy_tensor,
+            conv_config=self.conv1_config,
+            batch_size=self.batch_size,
+            height=self.conv1_output_height,
+            width=self.conv1_output_width,
+            in_channels=self.conv1_input_channels,
+            out_channels=self.conv1_output_channels,
+        )
 
     def __del__(self):
         # Need to clear global configs for each Resnet run
@@ -655,23 +671,12 @@ class resnet50:
             )
         return layers
 
-    def preprocessing(self, torch_input_tensor, inputs_mesh_mapper=None):
-        resnet50_first_conv_kernel_size = 3
-        resnet50_first_conv_stride = 2
-        input_tensor = pad_and_fold_conv_activation_for_unity_stride(
-            torch_input_tensor,
-            resnet50_first_conv_kernel_size,
-            resnet50_first_conv_kernel_size,
-            resnet50_first_conv_stride,
-            resnet50_first_conv_stride,
-        )
-        input_tensor = torch.permute(input_tensor, (0, 2, 3, 1))
-        input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, mesh_mapper=inputs_mesh_mapper)
-        return input_tensor
-
     def __call__(self, input_tensor, device, ops_parallel_config) -> ttnn.Tensor:
         return self.run(
-            input_tensor, device, ops_parallel_config, {} if not ops_parallel_config else self.conv_op_cache
+            input_tensor,
+            device,
+            ops_parallel_config,
+            {} if not ops_parallel_config else self.conv_op_cache,
         )
 
     ## merged runs (first and optimized)
@@ -683,8 +688,30 @@ class resnet50:
         else:
             logger.debug(f"==== Optimized run")
 
+        logger.debug(f"==== fold on device")
+
+        # run fold
+        fold_output_tensor = ttnn.fold(
+            input_tensor,
+            self.fold_stride_h,
+            self.fold_stride_w,
+            use_transpose_as_fold=True,
+            pad_c=self.fold_pad_c,
+            pad_h=self.fold_pad_h,
+            pad_w=self.fold_pad_w,
+            grid_size=self.fold_compute_grid_size,
+            override_memory_config=self.override_fold_mem_config,
+        )
+        n, c, h, w = fold_output_tensor.shape
+        fold_output_tensor = ttnn.reshape(fold_output_tensor, (1, 1, n * c * h, w))
+
+        ttnn.deallocate(input_tensor)
+
+        logger.debug(f"==== first conv")
+
+        # first conv
         x, x_height, x_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
-            input_tensor=input_tensor,
+            input_tensor=fold_output_tensor,
             weight_tensor=self.conv1_weight_tensor,
             in_channels=self.conv1_input_channels,
             out_channels=self.conv1_output_channels,
@@ -703,21 +730,18 @@ class resnet50:
         if self.batch_size == 20:
             x = ttnn.reallocate(x)
 
-        if use_new_maxpool2d:
-            x = ttnn.max_pool2d_new(
-                input_tensor=x,
-                batch_size=self.batch_size,
-                input_h=x_height,
-                input_w=x_width,
-                channels=self.conv1_output_channels,
-                kernel_size=[3, 3],
-                stride=[2, 2],
-                padding=[1, 1],
-                dilation=[1, 1],
-                device=device,
-            )
-        else:
-            x = self.max_pool(x)
+        x = ttnn.max_pool2d(
+            input_tensor=x,
+            batch_size=self.batch_size,
+            input_h=x_height,
+            input_w=x_width,
+            channels=self.conv1_output_channels,
+            kernel_size=[3, 3],
+            stride=[2, 2],
+            padding=[1, 1],
+            dilation=[1, 1],
+            device=device,
+        )
 
         x_height = 56
         x_width = 56
@@ -1073,11 +1097,11 @@ class resnet50:
         )
 
         grid_size = (8, 4)
-        shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+        shard_grid = ttnn.CoreRangeSet(
             {
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, 0),
-                    ttnn.experimental.tensor.CoreCoord(grid_size[0] - 1, grid_size[1] - 1),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1),
                 )
             }
         )
@@ -1085,11 +1109,9 @@ class resnet50:
             x.volume() // x.get_legacy_shape()[-1],
             x.get_legacy_shape()[-1] // (grid_size[0] * grid_size[1]),
         ]
-        shard_spec = ttnn.experimental.tensor.ShardSpec(
-            shard_grid, shard_shape, ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
-        )
-        width_sharded_mem_config = ttnn.types.MemoryConfig(
-            ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec
+        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+        width_sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec
         )
         x = ttnn.to_memory_config(x, width_sharded_mem_config)
 

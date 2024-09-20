@@ -58,3 +58,36 @@ def test_to_layout_2D(device, height, width, on_device, from_layout, to_layout, 
 
     assert_with_pcc(torch_input_tensor, output_tensor)
     assert torch.allclose(torch_input_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [(1, 1, 32, 128 * 1024), (1, 1, 128, 5120), (1, 1, 512, 5120), (1, 1, 128, 128 * 1024)],
+)
+@pytest.mark.parametrize("on_device", [True])
+@pytest.mark.parametrize("from_layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("to_layout", [ttnn.ROW_MAJOR_LAYOUT])
+def test_to_layout_wide_tensor(device, shape, on_device, from_layout, to_layout):
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor)
+    assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    input_tensor = ttnn.to_layout(input_tensor, from_layout)
+    assert input_tensor.layout == from_layout
+
+    if on_device:
+        input_tensor = ttnn.to_device(input_tensor, device)
+        assert ttnn.is_tensor_storage_on_device(input_tensor)
+
+    output_tensor = ttnn.to_layout(input_tensor, to_layout)
+    assert output_tensor.layout == to_layout
+
+    if on_device:
+        assert ttnn.is_tensor_storage_on_device(output_tensor)
+        output_tensor = ttnn.from_device(output_tensor)
+        assert not ttnn.is_tensor_storage_on_device(output_tensor)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_input_tensor, output_tensor)
+    assert torch.allclose(torch_input_tensor, output_tensor)

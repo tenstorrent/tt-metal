@@ -863,8 +863,7 @@ TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanitySingleCoreDataMo
 }
 
 // Sanity test for setting and verifying common and unique runtime args to single cores via ERISC(IDLE). Some arch may return 0 active eth cores, that's okay.
-// FIXME - Disabled due to #7771 kernels not running on idle eth cores. At one point this was passing, but then before merging same day
-// it started hanging just like below inactive-idle-eth test.
+// FIXME - Re-enable when FD-on-idle-eth is supported
 TEST_F(CommandQueueSingleCardFixture, DISABLED_IncrementRuntimeArgsSanitySingleCoreDataMovementEriscIdle) {
     for (Device *device : devices_) {
         for (const auto &eth_core : device->get_active_ethernet_cores(true)) {
@@ -878,7 +877,7 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_IncrementRuntimeArgsSanitySingleC
 }
 
 // Sanity test for setting and verifying common and unique runtime args to single cores via inactive ERISC cores. Some arch may return 0 active eth cores, that's okay.
-// FIXME - Disabled due to #7771 kernels not running on idle eth cores.
+// FIXME - Re-enable when FD-on-idle-eth is supported
 TEST_F(CommandQueueSingleCardFixture, DISABLED_IncrementRuntimeArgsSanitySingleCoreDataMovementEriscInactive) {
     for (Device *device : devices_) {
         for (const auto &eth_core : device->get_inactive_ethernet_cores()) {
@@ -1383,7 +1382,7 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
                 SetRuntimeArgs(program, dummy_trisc_kernel, cr_set, trisc_unique_rtargs);
                 SetCommonRuntimeArgs(program, dummy_trisc_kernel, trisc_common_rtargs);
             } else {
-                TT_ASSERT("Invalid");
+                TT_THROW("Invalid");
             }
         }
 

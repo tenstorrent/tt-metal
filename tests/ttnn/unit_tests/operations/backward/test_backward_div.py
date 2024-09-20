@@ -7,7 +7,8 @@ import pytest
 import ttnn
 from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, data_gen_with_val, compare_pcc
 from models.utility_functions import (
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
 )
 
 
@@ -81,7 +82,7 @@ def test_bw_div_binary_default(input_shapes, device):
     ),
 )
 @pytest.mark.parametrize("scalar", [0.0])
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_bw_unary_div_0(input_shapes, scalar, round_mode, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     grad_data, grad_tensor = data_gen_with_val(input_shapes, device, False, val=0)
@@ -140,7 +141,7 @@ def test_bw_unary_div(input_shapes, scalar, round_mode, device):
     ),
 )
 @pytest.mark.parametrize("scalar", [0.0])
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_bw_unary_div_0_default(input_shapes, scalar, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     grad_data, grad_tensor = data_gen_with_val(input_shapes, device, False, val=0)

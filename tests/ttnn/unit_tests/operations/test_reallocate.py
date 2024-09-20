@@ -9,10 +9,10 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_blackhole
 
 
-@skip_for_wormhole_b0("#7733: fix for sharding on whb0")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="#7733: fix for sharding on whb0")
 @pytest.mark.parametrize(
     "mem_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG]
 )
@@ -26,23 +26,23 @@ def test_ttnn_reallocate(device, mem_config, num_allocs):
     if num_allocs == 2 and mem_config == ttnn.DRAM_MEMORY_CONFIG:
         pytest.xfail("#7732: dram tensor corruption after move")
 
-    shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+    shard_grid = ttnn.CoreRangeSet(
         {
-            ttnn.experimental.tensor.CoreRange(
-                ttnn.experimental.tensor.CoreCoord(0, 0),
-                ttnn.experimental.tensor.CoreCoord(7, 7),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(7, 7),
             ),
         }
     )
 
     # If sharded, creat actual memory config
     if mem_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
-        shard_spec = ttnn.experimental.tensor.ShardSpec(
-            shard_grid, [batch * height * depth // 8, width], ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
+        shard_spec = ttnn.ShardSpec(
+            shard_grid, [batch * height * depth // 8, width], ttnn.ShardOrientation.ROW_MAJOR, False
         )
-        mem_config = ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.experimental.tensor.BufferType.L1,
+        mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
             shard_spec,
         )
 

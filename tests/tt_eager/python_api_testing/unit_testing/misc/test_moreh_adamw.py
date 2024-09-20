@@ -10,7 +10,7 @@ import ttnn
 import ttnn
 import pytest
 from models.utility_functions import (
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
     comp_allclose_and_pcc,
     comp_pcc,
     comp_allclose,
@@ -36,7 +36,7 @@ def create_tt_tensors(cpu_grad, cpu_weight, cpu_exp_avg, cpu_exp_avg_sq, cpu_max
         return ret
 
     def create_empty_tensor(x, device):
-        ret = ttnn.empty(x.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+        ret = ttnn.zeros(x.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
         return ret
 
     # input tensors

@@ -21,7 +21,8 @@ from models.experimental.vit.vit_helper_funcs import get_data_loader, get_batch
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.utility_functions import (
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
     torch2tt_tensor,
@@ -45,7 +46,7 @@ def get_imagenet_label_dict():
 
 
 @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -118,29 +119,27 @@ def test_accuracy(
         patch_size = 16
         torch_pixel_values = torch_pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
         N, H, W, C = torch_pixel_values.shape
-        shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+        shard_grid = ttnn.CoreRangeSet(
             {
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, 0),
-                    ttnn.experimental.tensor.CoreCoord(7, 0),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(7, 0),
                 ),
             }
         )
         n_cores = 8
-        shard_spec = ttnn.experimental.tensor.ShardSpec(
-            shard_grid, [N * H * W // n_cores, C], ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
-        )
+        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
 
         tt_inputs = torch2tt_tensor(
             torch_pixel_values,
             device,
-            ttnn.experimental.tensor.Layout.ROW_MAJOR,
-            tt_memory_config=ttnn.experimental.tensor.MemoryConfig(
-                ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.experimental.tensor.BufferType.L1,
+            ttnn.ROW_MAJOR_LAYOUT,
+            tt_memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
                 shard_spec,
             ),
-            tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+            tt_dtype=ttnn.bfloat16,
         )
 
         if torch_attention_mask is not None:

@@ -13,14 +13,14 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 #include <sstream>
 #include <type_traits>
 
-#include "ttnn/operations/experimental/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 
 using namespace tt::constants;
@@ -29,34 +29,69 @@ namespace ttnn {
 
 using namespace ccl;
 
-static std::tuple<CoreRangeSet,CoreRangeSet> select_worker_cores(AllGatherConfig const& all_gather_config, uint32_t num_links, uint32_t link, uint32_t full_send_direction, CoreCoord const& core_grid_offset) {
+static std::tuple<CoreRangeSet, CoreRangeSet, std::map<std::pair<uint32_t, uint32_t>, std::vector<CoreRangeSet>>>
+get_all_worker_cores(AllGatherConfig const& all_gather_config, uint32_t num_links, uint32_t num_full_send_directions, CoreCoord const& core_grid_offset, bool is_linear, uint32_t ring_size, uint32_t ring_index) {
     constexpr uint32_t worker_grid_width = 8;
     const bool fit_sender_and_receiver_workers_on_same_row = (worker_grid_width / 2) >= all_gather_config.get_num_workers_per_link();
-    std::set<CoreRange> receiver_worker_cores = {};
-    std::set<CoreRange> sender_worker_cores = {};
-    uint32_t max_cols = 8;
-    uint32_t curr_row = link * (((all_gather_config.get_num_workers_per_link()  * 2 - 1) / max_cols) + 1) +
-        (full_send_direction * num_links * (((all_gather_config.get_num_workers_per_link() * 2 - 1) / max_cols) + 1)) + core_grid_offset.y;
-    uint32_t curr_col = core_grid_offset.x;
-    for (uint32_t r = 0; r < all_gather_config.get_num_workers_per_link(); r++) {
-        receiver_worker_cores.insert(CoreRange(CoreCoord(curr_col, curr_row)));
-        curr_col ++;
-        if (curr_col == max_cols) {
-            curr_col = 0;
-            curr_row++;
-        }
-    }
-    for (uint32_t s = 0; s < all_gather_config.get_num_workers_per_link(); s++) {
-        sender_worker_cores.insert(CoreRange(CoreCoord(curr_col, curr_row)));
-        curr_col ++;
-        if (curr_col == max_cols) {
-            curr_col = 0;
-            curr_row++;
-        }
-    }
-    return {CoreRangeSet(receiver_worker_cores), CoreRangeSet(sender_worker_cores)};
-}
 
+    std::set<CoreRange> receiver_worker_cores;
+    std::set<CoreRange> sender_worker_cores;
+    std::map<std::pair<uint32_t, uint32_t>, std::vector<CoreRangeSet>> worker_core_map;
+
+    for (uint32_t full_send_direction = 0; full_send_direction < num_full_send_directions; ++full_send_direction) {
+
+        // If linear topology, the first chip in the chain will not have a "receiver" eth core (or more correctly,
+        // it doesn't have an input clockwise our output counter-clockwise connection)
+        bool is_first_chip_in_chain = is_linear && (full_send_direction == 0 ? ring_index == 0 : ring_index == ring_size - 1);
+        // If linear topology, the last chip in the chain will not have a "sender" eth core (or more correctly,
+        // it doesn't have an output clockwise our input counter-clockwise connection)
+        bool is_last_chip_in_chain = is_linear && (full_send_direction == 0 ? ring_index == ring_size - 1 : ring_index == 0);
+
+        bool sender_enabled = (!is_linear || !is_last_chip_in_chain);
+        bool receiver_enabled = (!is_linear || !is_first_chip_in_chain);
+
+        for (uint32_t link = 0; link < num_links; ++link) {
+            uint32_t max_cols = 8;
+            uint32_t curr_row = link * (((all_gather_config.get_num_workers_per_link()  * 2 - 1) / max_cols) + 1) +
+                (full_send_direction * num_links * (((all_gather_config.get_num_workers_per_link() * 2 - 1) / max_cols) + 1)) + core_grid_offset.y;
+            uint32_t curr_col = core_grid_offset.x;
+
+            std::set<CoreRange> local_receiver_worker_cores;
+            std::set<CoreRange> local_sender_worker_cores;
+
+            if (receiver_enabled) {
+                for (uint32_t r = 0; r < all_gather_config.get_num_workers_per_link(); r++) {
+                    CoreCoord receiver_coord(curr_col, curr_row);
+                    receiver_worker_cores.insert(CoreRange(receiver_coord));
+                    local_receiver_worker_cores.insert(CoreRange(receiver_coord)); // Local receiver cores
+                    curr_col++;
+                    if (curr_col == max_cols) {
+                        curr_col = 0;
+                        curr_row++;
+                    }
+                }
+            }
+
+            if (sender_enabled) {
+                for (uint32_t s = 0; s < all_gather_config.get_num_workers_per_link(); s++) {
+                    CoreCoord sender_coord(curr_col, curr_row);
+                    sender_worker_cores.insert(CoreRange(sender_coord));
+                    local_sender_worker_cores.insert(CoreRange(sender_coord)); // Local sender cores
+                    curr_col++;
+                    if (curr_col == max_cols) {
+                        curr_col = 0;
+                        curr_row++;
+                    }
+                }
+            }
+
+            // Insert into map for (link, full_send_direction) as key
+            worker_core_map[std::make_pair(link, full_send_direction)] = {CoreRangeSet(local_receiver_worker_cores), CoreRangeSet(local_sender_worker_cores)};
+        }
+    }
+
+    return {CoreRangeSet(receiver_worker_cores), CoreRangeSet(sender_worker_cores), worker_core_map};
+}
 
 static std::vector<std::vector<uint32_t>> compute_worker_sender_num_transfers(
     AllGatherConfig const& all_gather_config, uint32_t num_links, uint32_t ring_size, uint32_t ring_index, all_gather_op::Topology topology, uint32_t direction
@@ -85,12 +120,12 @@ static std::vector<std::vector<uint32_t>> compute_worker_sender_num_transfers(
                             break;
 
                         default:
-                            TT_FATAL("Unsupported bidirectional mode");
+                            TT_THROW("Unsupported bidirectional mode {}. Please change.", all_gather_config.get_bidirectional_mode());
                     };
                     break;
 
                 default:
-                    TT_FATAL("Unsupported topology");
+                    TT_THROW("Unsupported topology {}. Please change.", topology);
             };
         }
     }
@@ -123,12 +158,12 @@ static std::vector<std::vector<uint32_t>> compute_worker_receiver_num_transfers(
                             break;
 
                         default:
-                            TT_FATAL("Unsupported bidirectional mode");
+                            TT_THROW("Unsupported bidirectional mode {}. Please change.", all_gather_config.get_bidirectional_mode());
                     };
                     break;
 
                 default:
-                    TT_FATAL("Unsupported topology");
+                    TT_THROW("Unsupported topology {}. Please change.", topology);
             };
         }
     }
@@ -148,7 +183,8 @@ static bool shard_grid_is_transposed(Tensor const& t) {
     TT_FATAL(
         t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
         t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-        t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED
+        t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        "Unsupported memory layout {}.", t.memory_config().memory_layout
     );
     bool shard_grid_transposed =
         ((t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
@@ -173,11 +209,11 @@ static void log_sharded_tensor_kernel_args(Tensor const& tensor, std::size_t pag
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
 //   (in other words, disable the "bidirectional" send flag)
-operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor& input_tensor, Tensor& output_tensor, const uint32_t dim, const uint32_t num_links, const uint32_t ring_size, const uint32_t ring_index, const std::optional<chip_id_t> receiver_device_id, const std::optional<chip_id_t> sender_device_id, all_gather_op::Topology topology) {
+operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor& input_tensor, Tensor& output_tensor, const uint32_t dim, const uint32_t num_links, const uint32_t ring_size, const uint32_t ring_index, const std::optional<chip_id_t> receiver_device_id, const std::optional<chip_id_t> sender_device_id, all_gather_op::Topology topology, const std::optional<size_t> user_defined_num_workers, const std::optional<size_t> user_defined_num_buffers_per_channel) {
 
     tt::tt_metal::Program program{};
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
-    return all_gather_multi_core_with_workers_helper(program, input_tensor, output_tensor, dim, num_links, ring_size, ring_index, receiver_device_id, sender_device_id, topology, empty_fused_op_signaler);
+    return all_gather_multi_core_with_workers_helper(program, input_tensor, output_tensor, dim, num_links, ring_size, ring_index, receiver_device_id, sender_device_id, topology, user_defined_num_workers, user_defined_num_buffers_per_channel, empty_fused_op_signaler);
 }
 
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
@@ -191,6 +227,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     all_gather_op::Topology topology,
+    const std::optional<size_t> user_defined_num_workers,
+    const std::optional<size_t> user_defined_num_buffers_per_channel,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset) {
 
@@ -201,16 +239,22 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     std::unique_ptr<ccl::CclOpTensorConfig> output_tensor_config = ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(output_tensor);
 
     std::size_t num_edm_buffers_per_channel = 2;
-    // Issue #10978: CCLs need to be tagged as having multi-device dependencies, when running on Galaxy.
-    program.capture_multi_device_dependencies();
+    if (user_defined_num_buffers_per_channel.has_value()) {
+        // Override with user defined value
+        num_edm_buffers_per_channel = user_defined_num_buffers_per_channel.value();
+    }
+
     const auto& device = input_tensor.device();
 
     /* All gather fusion */
     bool fuse_op = fused_op_signaler.has_value();
+
+    // Need a seperate signaler for the sender workers, to handle the first tensor slice that is locally available
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_sender_workers;
     if (fuse_op) {
-        fused_op_signaler->init_fused_op(device);
+        fused_op_signaler_sender_workers = fused_op_signaler.value();
     }
-    auto const& all_gather_config = AllGatherConfig(input_tensor, output_tensor, dim, ring_size, num_links, topology, num_edm_buffers_per_channel, fuse_op);
+    auto const& all_gather_config = AllGatherConfig(input_tensor, output_tensor, dim, ring_size, num_links, topology, num_edm_buffers_per_channel, fuse_op, user_defined_num_workers);
     auto const& topology_config = ttnn::ccl::RingTopology(device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
 
     bool enable_print = false;
@@ -263,6 +307,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     constexpr uint32_t max_num_full_send_directions = 2;
     // number of worker cores is 2x this since there is 1 worker for the sender buffer and 1 worker for the receiver buffer
     uint32_t global_num_workers = num_links * all_gather_config.get_num_eth_buffers_per_edm() * num_full_send_directions;
+    uint32_t global_num_workers_per_direction = global_num_workers / num_full_send_directions;
     uint32_t total_worker_core_pairs_used = global_num_workers;
 
     uint32_t num_input_pages = input_tensor.buffer()->size() / input_page_size;
@@ -271,15 +316,6 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     std::vector<EriscDatamoverBuilder> clockwise_edm_builders;
     std::vector<EriscDatamoverBuilder> counter_clockwise_edm_builders;
     TT_ASSERT(num_full_send_directions > 0);
-
-    std::vector<std::pair<KernelHandle, CoreCoord>> receive_reader_kernel_core_list;
-    std::vector<std::pair<KernelHandle, CoreCoord>> receive_writer_kernel_core_list;
-    std::vector<std::pair<KernelHandle, CoreCoord>> send_reader_kernel_core_list;
-    std::vector<std::pair<KernelHandle, CoreCoord>> send_writer_kernel_core_list;
-    receive_reader_kernel_core_list.reserve(total_worker_core_pairs_used);
-    receive_writer_kernel_core_list.reserve(total_worker_core_pairs_used);
-    send_reader_kernel_core_list.reserve(total_worker_core_pairs_used);
-    send_writer_kernel_core_list.reserve(total_worker_core_pairs_used);
 
     // TODO: move to all-gather config
     auto edm_sem_addrs_per_link = std::vector<std::vector<uint32_t>>(num_links);
@@ -321,6 +357,177 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
             all_gather_config.get_num_buffers_per_channel(),
             input_tensor.device()->id());
     }
+
+    // KERNEL CREATION
+    auto const& [all_receiver_workers, all_sender_workers, worker_core_map] = get_all_worker_cores(all_gather_config, num_links, num_full_send_directions, core_grid_offset, is_linear, ring_size, ring_index);
+    auto all_sender_worker_cores = corerange_to_cores(all_sender_workers, std::nullopt, true);
+    auto all_receiver_worker_cores = corerange_to_cores(all_receiver_workers, std::nullopt, true);
+
+    // Circular Buffer Setup
+    uint32_t cb_page_size = input_page_size;
+    log_trace(tt::LogOp, "input_page_size: {}", input_page_size);
+    uint32_t cb_num_pages = 2 * max_pages_per_chunk;
+    log_trace(tt::LogOp, "cb_num_pages: {}", cb_num_pages);
+    uint32_t src0_cb_index = tt::CB::c_in0;
+    CircularBufferConfig cb_src0_config = CircularBufferConfig(cb_num_pages * cb_page_size, {{src0_cb_index, df}})
+    .set_page_size(src0_cb_index, cb_page_size);
+    CBHandle cb_src0_sender_workers = CreateCircularBuffer(program, all_sender_workers, cb_src0_config);
+    CBHandle cb_src0_receiver_workers = CreateCircularBuffer(program, all_receiver_workers, cb_src0_config);
+
+    // This semaphore is used by the receiver core to tell workers that data is available to read
+    auto receiver_worker_semaphore_id = CreateSemaphore(program, all_receiver_workers, 0);
+    // This semaphore is used by the receiver core to tell the worker sender writer that sender buffer is available to write to
+    auto sender_worker_writer_semaphore_id = CreateSemaphore(program, all_sender_workers, 0);
+    // This semaphore is used by the worker receiver writer to tell the worker sender reader that data has been committed to memory
+    // This is currently a running counter of how many chunks were committed since the sender worker never decrements this buffer
+    // Potentially avoid overflow by having it actually decrement (using noc atomic inc with value of -1)
+    auto sender_worker_reader_semaphore_id = CreateSemaphore(program, all_sender_workers, 0);
+
+    // Sender Reader
+    auto build_worker_send_reader_ct_args = [&]() {
+        std::vector<uint32_t> worker_reader_sender_ct_args = {
+            static_cast<uint32_t>(all_gather_config.is_input_dram()),
+            static_cast<uint32_t>(all_gather_config.is_output_dram()),
+            static_cast<uint32_t>(input_page_size),
+            static_cast<uint32_t>(output_page_size),
+            static_cast<uint32_t>(ring_index),
+            static_cast<uint32_t>(sender_worker_reader_semaphore_id),
+            static_cast<uint32_t>(cb_num_pages / 2),
+            static_cast<uint32_t>(ring_size)
+        };
+        if (is_sharded) {
+            emit_sharded_tensor_kernel_ct_args(device, input_tensor, worker_reader_sender_ct_args, input_pages_per_shard_y, input_pages_per_shard_x);
+            emit_sharded_tensor_kernel_ct_args(device, output_tensor, worker_reader_sender_ct_args, output_pages_per_shard_y, output_pages_per_shard_x);
+        };
+
+        log_trace(tt::LogOp, "Worker SR CT args");
+        log_trace(tt::LogOp, "\tall_gather_config.is_input_dram(): {}", all_gather_config.is_input_dram());
+        log_trace(tt::LogOp, "\tall_gather_config.is_output_dram(): {}", all_gather_config.is_output_dram());
+        log_trace(tt::LogOp, "\tinput_page_size: {}", input_page_size);
+        log_trace(tt::LogOp, "\toutput_page_size: {}", output_page_size);
+        log_trace(tt::LogOp, "\tring_index: {}", ring_index);
+        log_trace(tt::LogOp, "\tsender_worker_reader_semaphore_id: {}", sender_worker_reader_semaphore_id);
+
+        if (is_sharded) {
+            log_sharded_tensor_kernel_args(input_tensor, input_pages_per_shard_y, input_pages_per_shard_x, "input");
+            log_sharded_tensor_kernel_args(output_tensor, output_pages_per_shard_y, output_pages_per_shard_x, "output");
+        }
+
+        return worker_reader_sender_ct_args;
+    };
+
+    std::vector<uint32_t> const& worker_send_reader_ct_args = build_worker_send_reader_ct_args();
+
+    std::string const& send_reader_kernel_path = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_interleaved_ring_gather_send_reader.cpp";
+    KernelHandle worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        send_reader_kernel_path,
+        all_sender_workers,
+        tt::tt_metal::ReaderDataMovementConfig(worker_send_reader_ct_args, worker_defines));
+
+    // Sender Writer
+    auto build_worker_sender_writer_ct_args = [&]() {
+        std::vector<uint32_t> worker_writer_sender_ct_args = {
+            static_cast<uint32_t>(all_gather_config.is_output_dram()),
+            static_cast<uint32_t>(input_page_size),
+            static_cast<uint32_t>(output_page_size),
+            static_cast<uint32_t>(ring_index),
+
+            // worker local L1 address of semaphore
+            static_cast<uint32_t>(sender_worker_writer_semaphore_id),
+            static_cast<uint32_t>(cb_num_pages / 2),
+            static_cast<uint32_t>(num_edm_buffers_per_channel),
+        };
+
+        if (is_sharded) {
+            emit_sharded_tensor_kernel_ct_args(device, output_tensor, worker_writer_sender_ct_args, output_pages_per_shard_y, output_pages_per_shard_x);
+        }
+        log_trace(tt::LogOp, "Worker SW CT args");
+        log_trace(tt::LogOp, "\tall_gather_config.is_output_dram(): {}", all_gather_config.is_output_dram());
+        log_trace(tt::LogOp, "\tinput_page_size: {}", input_page_size);
+        log_trace(tt::LogOp, "\toutput_page_size: {}", output_page_size);
+        log_trace(tt::LogOp, "\tring_index: {}", ring_index);
+        log_trace(tt::LogOp, "\tsender_worker_writer_semaphore_id: {}", sender_worker_writer_semaphore_id);
+        log_trace(tt::LogOp, "\thalf_cb_num_pages: {}", cb_num_pages / 2);
+
+        if (is_sharded) {
+            log_sharded_tensor_kernel_args(output_tensor, output_pages_per_shard_y, output_pages_per_shard_x, "output");
+        }
+        return worker_writer_sender_ct_args;
+    };
+
+    std::vector<uint32_t> const& worker_sender_writer_ct_args = build_worker_sender_writer_ct_args();
+
+    std::string const& sender_writer_kernel_path = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_interleaved_ring_gather_send_writer.cpp";
+    KernelHandle worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        sender_writer_kernel_path,
+        all_sender_workers,
+        tt::tt_metal::WriterDataMovementConfig(worker_sender_writer_ct_args, worker_defines));
+
+    // Receiver Reader
+    auto build_worker_receiver_reader_ct_args = [&]() {
+        std::vector<uint32_t> worker_receiver_reader_ct_args = {
+            static_cast<uint32_t>(input_page_size),
+            static_cast<uint32_t>(receiver_worker_semaphore_id),
+            static_cast<uint32_t>(cb_num_pages / 2),
+            static_cast<uint32_t>(num_edm_buffers_per_channel)
+        };
+
+        log_trace(tt::LogOp, "Worker RR ct args");
+        log_trace(tt::LogOp, "\tinput_page_size: {}", input_page_size);
+        log_trace(tt::LogOp, "\treceiver_worker_semaphore_id: {}", receiver_worker_semaphore_id);
+        log_trace(tt::LogOp, "\thalf_cb_num_pages : {}", cb_num_pages / 2);
+        return worker_receiver_reader_ct_args;
+    };
+    std::vector<uint32_t> const& worker_receiver_reader_ct_args = build_worker_receiver_reader_ct_args();
+
+    std::string const& receiver_reader_kernel_path = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_interleaved_ring_gather_receive_reader.cpp";
+    KernelHandle worker_receiver_reader_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        receiver_reader_kernel_path,
+        all_receiver_workers,
+        tt::tt_metal::ReaderDataMovementConfig(worker_receiver_reader_ct_args, worker_defines));
+
+    // Receiver Writer
+    auto build_worker_receive_writer_ct_args = [&]() {
+        std::vector<uint32_t> worker_writer_receiver_ct_args = {
+            static_cast<uint32_t>(all_gather_config.is_output_dram()),
+            static_cast<uint32_t>(input_page_size),
+            static_cast<uint32_t>(output_page_size),
+            static_cast<uint32_t>(sender_worker_reader_semaphore_id),
+            static_cast<uint32_t>(cb_num_pages / 2),
+            static_cast<uint32_t>(ring_size),
+            static_cast<bool>(fuse_op)
+        };
+
+        if (is_sharded) {
+            emit_sharded_tensor_kernel_ct_args(device, output_tensor, worker_writer_receiver_ct_args, output_pages_per_shard_y, output_pages_per_shard_x);
+        }
+
+        log_trace(tt::LogOp, "Worker RW ct args");
+        log_trace(tt::LogOp, "\tall_gather_config.is_output_dram(): {}", all_gather_config.is_output_dram());
+        log_trace(tt::LogOp, "\tinput_page_size: {}", input_page_size);
+        log_trace(tt::LogOp, "\toutput_page_size: {}", output_page_size);
+        log_trace(tt::LogOp, "\tsender_worker_reader_semaphore_id: {}", sender_worker_reader_semaphore_id);
+        log_trace(tt::LogOp, "\thalf_cb_num_pages: {}", cb_num_pages / 2);
+        log_trace(tt::LogOp, "\tring_size: {}", ring_size);
+        log_trace(tt::LogOp, "\tfuse_op: {}", fuse_op);
+
+        if (is_sharded) {
+            log_sharded_tensor_kernel_args(output_tensor, output_pages_per_shard_y, output_pages_per_shard_x, "output");
+        }
+
+        return worker_writer_receiver_ct_args;
+    };
+    std::vector<uint32_t> const& worker_receive_writer_ct_args = build_worker_receive_writer_ct_args();
+
+    std::string const& receiver_writer_kernel_path = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_interleaved_ring_gather_receive_writer.cpp";
+    KernelHandle worker_receiver_writer_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        receiver_writer_kernel_path,
+        all_receiver_workers,
+        tt::tt_metal::WriterDataMovementConfig(worker_receive_writer_ct_args, worker_defines));
 
     for (uint32_t direction = 0; direction < num_full_send_directions; direction++) {
         // if we're in ring topology, we'll always need to transfer all ring indices (except the last one)
@@ -400,27 +607,12 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
         for (uint32_t i = 0; i < num_links; ++i) {
             // We can't have overlap between the mcast grid for worker cores for different links since mcasting the semaphore in receiver would corrupt other link semaphores
             // We can have overlap between a link's sender and receiver worker grids if we have the semaphores at different addresses
-            auto const& [receiver_workers, sender_workers] = select_worker_cores(all_gather_config, num_links, i, direction, core_grid_offset);
-
-            // Circular Buffer Setup
-            uint32_t cb_page_size = input_page_size;
-            log_trace(tt::LogOp, "input_page_size: {}", input_page_size);
-            uint32_t cb_num_pages = 2 * max_pages_per_chunk;
-            log_trace(tt::LogOp, "cb_num_pages: {}", cb_num_pages);
-            uint32_t src0_cb_index = tt::CB::c_in0;
-            CircularBufferConfig cb_src0_config = CircularBufferConfig(cb_num_pages * cb_page_size, {{src0_cb_index, df}})
-            .set_page_size(src0_cb_index, cb_page_size);
-            CBHandle cb_src0_sender_workers = CreateCircularBuffer(program, sender_workers, cb_src0_config);
-            CBHandle cb_src0_receiver_workers = CreateCircularBuffer(program, receiver_workers, cb_src0_config);
-
-            // This semaphore is used by the receiver core to tell workers that data is available to read
-            auto receiver_worker_semaphore_id = CreateSemaphore(program, receiver_workers, 0);
-            // This semaphore is used by the receiver core to tell the worker sender writer that sender buffer is available to write to
-            auto sender_worker_writer_semaphore_id = CreateSemaphore(program, sender_workers, 0);
-            // This semaphore is used by the worker receiver writer to tell the worker sender reader that data has been committed to memory
-            // This is currently a running counter of how many chunks were committed since the sender worker never decrements this buffer
-            // Potentially avoid overflow by having it actually decrement (using noc atomic inc with value of -1)
-            auto sender_worker_reader_semaphore_id = CreateSemaphore(program, sender_workers, 0);
+            // Get receiver and sender CoreRangeSets
+            const auto& worker_core_vector = worker_core_map.at(std::make_pair(i, direction));
+            // ensure the vector is size of 2
+            TT_FATAL(worker_core_vector.size() == 2, "Worker core vector should contain receiver and sender cores sets only");
+            const auto& receiver_workers = worker_core_vector[0];  // Receiver cores
+            const auto& sender_workers = worker_core_vector[1];    // Sender cores
 
             // Rename this the _channel
             std::vector<uint32_t> pages_per_buffer;
@@ -478,6 +670,9 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
             /* All gather fusion */
             if (fuse_op) {
                 fused_op_signaler->init_all_gather(program, device, receiver_workers, receiver_worker_cores);
+                if (direction == 1) {
+                    fused_op_signaler_sender_workers->init_all_gather(program, device, sender_workers, sender_worker_cores);
+                }
             }
 
             {
@@ -542,19 +737,13 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
             std::vector<uint32_t> receiver_eth_sem_addrs; receiver_eth_sem_addrs.reserve(all_gather_config.get_num_workers_per_link());
             std::vector<uint32_t> receiver_eth_buffer_addrs; receiver_eth_buffer_addrs.reserve(all_gather_config.get_num_workers_per_link());
             for (uint32_t b = 0; b < all_gather_config.get_num_workers_per_link(); ++b) {
-                std::vector<ccl::WorkerXY> sender_worker_coords;
-                std::vector<ccl::WorkerXY> receiver_worker_coords;
-                sender_worker_coords.push_back(
-                    ttnn::ccl::WorkerXY(
-                        device->worker_core_from_logical_core(sender_worker_cores.at(b)).x,
-                        device->worker_core_from_logical_core(sender_worker_cores.at(b)).y));
-                receiver_worker_coords.push_back(
-                    ttnn::ccl::WorkerXY(
-                        device->worker_core_from_logical_core(receiver_worker_cores.at(b)).x,
-                        device->worker_core_from_logical_core(receiver_worker_cores.at(b)).y));
-
                 bool sender_enabled = (!is_linear || !is_last_chip_in_chain);
                 if (sender_enabled) {
+                    std::vector<ccl::WorkerXY> sender_worker_coords;
+                    sender_worker_coords.push_back(
+                        ttnn::ccl::WorkerXY(
+                            device->worker_core_from_logical_core(sender_worker_cores.at(b)).x,
+                            device->worker_core_from_logical_core(sender_worker_cores.at(b)).y));
                     auto &sender_edm_builder = is_buffer_in_clockwise_direction(b) ? clockwise_edm_builders.at(i) : counter_clockwise_edm_builders.at(i);
                     log_trace(tt::LogOp, "Adding sender EDM channel");
                     EriscDatamoverBuilder::ChannelBufferInterface const& sender_channel_buffer_info =
@@ -570,6 +759,11 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
 
                 bool receiver_enabled = (!is_linear || !is_first_chip_in_chain);
                 if (receiver_enabled) {
+                    std::vector<ccl::WorkerXY> receiver_worker_coords;
+                    receiver_worker_coords.push_back(
+                        ttnn::ccl::WorkerXY(
+                            device->worker_core_from_logical_core(receiver_worker_cores.at(b)).x,
+                            device->worker_core_from_logical_core(receiver_worker_cores.at(b)).y));
                     auto &receiver_edm_builder = is_buffer_in_clockwise_direction(b) ? counter_clockwise_edm_builders.at(i) : clockwise_edm_builders.at(i);
                     log_trace(tt::LogOp, "Adding receiver EDM channel");
                     EriscDatamoverBuilder::ChannelBufferInterface const& receiver_channel_buffer_info =
@@ -584,7 +778,6 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                 }
             }
 
-
             for (uint32_t b = 0; b < all_gather_config.get_num_workers_per_link(); ++b) {
                 uint32_t global_worker_index = all_gather_config.get_num_workers_per_link() * i + b;
 
@@ -597,18 +790,22 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                 log_trace(tt::LogOp,"\tlast_output_page_offset={}", last_output_page_offset);
                 log_trace(tt::LogOp,"\tlast_output_addr_offset={}", last_output_addr_offset);
 
-                if (!is_linear || !is_last_chip_in_chain) {
+                bool sender_enabled = (!is_linear || !is_last_chip_in_chain);
+                bool receiver_enabled = (!is_linear || !is_first_chip_in_chain);
+
+                // SEND WORKERS
+                if (sender_enabled) {
                     //// Send Reader
-                    auto build_worker_send_reader_ct_args = [&]() {
-                        std::vector<uint32_t> worker_reader_sender_ct_args = {
-                            static_cast<uint32_t>(all_gather_config.is_input_dram()),
-                            static_cast<uint32_t>(all_gather_config.is_output_dram()),
-                            static_cast<uint32_t>(sender_worker_num_transfers.at(i).at(b)),
-                            static_cast<uint32_t>(num_full_chunks_per_worker.at(b)),
-                            static_cast<uint32_t>(input_page_size),
-                            static_cast<uint32_t>(output_page_size),
-                            static_cast<uint32_t>(pages_per_eth_l1_buffer.at(b)),
-                            static_cast<uint32_t>(rem_pages_per_worker.at(b)),
+                    auto build_worker_send_reader_rt_args = [&]() {
+                        bool is_clockwise = is_buffer_in_clockwise_direction(b);
+
+                        std::vector<uint32_t> args = {
+                            static_cast<uint32_t>(input_buffer->address()),
+                            static_cast<uint32_t>(output_buffer->address()),
+                            static_cast<uint32_t>(sender_worker_num_transfers.at(i).at(b)), // move to rt
+                            static_cast<uint32_t>(num_full_chunks_per_worker.at(b)), // move to rt
+                            static_cast<uint32_t>(pages_per_eth_l1_buffer.at(b)), // move to rt
+                            static_cast<uint32_t>(rem_pages_per_worker.at(b)), // move to rt
                             static_cast<uint32_t>(tensor_slicer.input_start_page_idx),
                             static_cast<uint32_t>(tensor_slicer.output_start_page_idx),
                             static_cast<uint32_t>(tensor_slicer.output_start_addr_offset),
@@ -622,24 +819,16 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                             static_cast<uint32_t>(tensor_slicer.output_page_offset),
                             static_cast<uint32_t>(last_output_addr_offset),
                             static_cast<uint32_t>(tensor_slicer.output_addr_offset),
-                            static_cast<uint32_t>(ring_index),
-                            static_cast<uint32_t>(sender_worker_reader_semaphore_id),
                             static_cast<uint32_t>(is_clockwise_direction ? 1 : 0),
-                            static_cast<uint32_t>(cb_num_pages / 2),
-                            static_cast<uint32_t>(ring_size)
                         };
                         if (is_sharded) {
-                            emit_sharded_tensor_kernel_ct_args(device, input_tensor, worker_reader_sender_ct_args, input_pages_per_shard_y, input_pages_per_shard_x);
-                            emit_sharded_tensor_kernel_ct_args(device, output_tensor, worker_reader_sender_ct_args, output_pages_per_shard_y, output_pages_per_shard_x);
-                        };
+                            emit_sharded_tensor_kernel_rt_args(device, input_tensor, args);
+                            emit_sharded_tensor_kernel_rt_args(device, output_tensor, args);
+                        }
 
-                        log_trace(tt::LogOp, "Worker {} SR args", b);
-                        log_trace(tt::LogOp, "\tall_gather_config.is_input_dram(): {}", all_gather_config.is_input_dram());
-                        log_trace(tt::LogOp, "\tall_gather_config.is_output_dram(): {}", all_gather_config.is_output_dram());
+                        log_trace(tt::LogOp, "Worker {} SR RT args", b);
                         log_trace(tt::LogOp, "\tsender_num_transfers: {}", sender_worker_num_transfers.at(i).at(b));
                         log_trace(tt::LogOp, "\tnum_full_chunks_per_worker.at(b): {}", num_full_chunks_per_worker.at(b));
-                        log_trace(tt::LogOp, "\tinput_page_size: {}", input_page_size);
-                        log_trace(tt::LogOp, "\toutput_page_size: {}", output_page_size);
                         log_trace(tt::LogOp, "\tpages_per_eth_l1_buffer.at(b): {}", pages_per_eth_l1_buffer.at(b));
                         log_trace(tt::LogOp, "\trem_pages_per_worker.at(b): {}", rem_pages_per_worker.at(b));
                         log_trace(tt::LogOp, "\tinput_start_page_idx: {}", tensor_slicer.input_start_page_idx);
@@ -655,59 +844,29 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                         log_trace(tt::LogOp, "\toutput_page_offset: {}", tensor_slicer.output_page_offset);
                         log_trace(tt::LogOp, "\tlast_output_addr_offset: {}", last_output_addr_offset);
                         log_trace(tt::LogOp, "\toutput_addr_offset: {}", tensor_slicer.output_addr_offset);
-                        log_trace(tt::LogOp, "\tring_index: {}", ring_index);
-                        log_trace(tt::LogOp, "\tsender_worker_reader_semaphore_id: {}", sender_worker_reader_semaphore_id);
                         log_trace(tt::LogOp, "\tis_clockwise_direction: {}", is_clockwise_direction ? 1 : 0);
 
-                        if (is_sharded) {
-                            log_sharded_tensor_kernel_args(input_tensor, input_pages_per_shard_y, input_pages_per_shard_x, "input");
-                            log_sharded_tensor_kernel_args(output_tensor, output_pages_per_shard_y, output_pages_per_shard_x, "output");
-                        }
-
-                        return worker_reader_sender_ct_args;
-                    };
-
-                    std::vector<uint32_t> const& worker_send_reader_ct_args = build_worker_send_reader_ct_args();
-
-                    auto build_worker_send_reader_rt_args = [&]() {
-                        bool is_clockwise = is_buffer_in_clockwise_direction(b);
-
-                        std::vector<uint32_t> args = {
-                            static_cast<uint32_t>(input_buffer->address()),
-                            static_cast<uint32_t>(output_buffer->address())
-                        };
-                        if (is_sharded) {
-                            emit_sharded_tensor_kernel_rt_args(device, input_tensor, args);
-                            emit_sharded_tensor_kernel_rt_args(device, output_tensor, args);
-                        }
                         return args;
                     };
                     std::vector<uint32_t> const& worker_send_reader_rt_args = build_worker_send_reader_rt_args();
 
-                    std::string const& send_reader_kernel_path = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_interleaved_ring_gather_send_reader.cpp";
-                    KernelHandle worker_reader_sender_kernel_id = tt::tt_metal::CreateKernel(
-                        program,
-                        send_reader_kernel_path,
-                        sender_worker_cores.at(b),
-                        tt::tt_metal::ReaderDataMovementConfig(worker_send_reader_ct_args, worker_defines));
-                    send_reader_kernel_core_list.push_back({worker_reader_sender_kernel_id, sender_worker_cores.at(b)});
-
                     tt::tt_metal::SetRuntimeArgs(
                         program,
-                        worker_reader_sender_kernel_id,
+                        worker_sender_reader_kernel_id,
                         sender_worker_cores.at(b),
                         worker_send_reader_rt_args);
 
 
                     //// Send Writer
-                    auto build_worker_sender_writer_ct_args = [&]() {
+                    auto build_worker_sender_writer_rt_args = [&]() {
                         CoreCoord const& worker_eth_sender_core = is_clockwise_direction ? eth_sender_cores.at(i) : eth_receiver_cores.at(i);
-                        std::vector<uint32_t> worker_writer_sender_ct_args = {
-                            static_cast<uint32_t>(all_gather_config.is_output_dram()),
+
+                        std::vector<uint32_t> worker_writer_sender_rt_args = {
+                            static_cast<uint32_t>(output_buffer->address()),
+                            static_cast<uint32_t>(sender_eth_buffer_addrs.at(b)),
+                            static_cast<uint32_t>(sender_eth_sem_addrs.at(b)),
                             static_cast<uint32_t>(sender_worker_num_transfers.at(i).at(b)),
                             static_cast<uint32_t>(num_full_chunks_per_worker.at(b)),
-                            static_cast<uint32_t>(input_page_size),
-                            static_cast<uint32_t>(output_page_size),
                             static_cast<uint32_t>(pages_per_eth_l1_buffer.at(b)),
                             static_cast<uint32_t>(rem_pages_per_worker.at(b)),
                             static_cast<uint32_t>(tensor_slicer.input_start_page_idx),
@@ -719,25 +878,21 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                             static_cast<uint32_t>(tensor_slicer.col_offset),
                             static_cast<uint32_t>(tensor_slicer.num_rows),
                             static_cast<uint32_t>(tensor_slicer.num_cols),
-                            static_cast<uint32_t>(ring_index),
-
-                            // worker local L1 address of semaphore
-                            static_cast<uint32_t>(sender_worker_writer_semaphore_id),
                             static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_sender_core).x),
                             static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_sender_core).y),
-                            static_cast<uint32_t>(cb_num_pages / 2),
-                            static_cast<uint32_t>(num_edm_buffers_per_channel)
+                            static_cast<bool>(fuse_op && direction == 1)
                         };
 
                         if (is_sharded) {
-                            emit_sharded_tensor_kernel_ct_args(device, output_tensor, worker_writer_sender_ct_args, output_pages_per_shard_y, output_pages_per_shard_x);
+                            emit_sharded_tensor_kernel_rt_args(device, output_tensor, worker_writer_sender_rt_args);
                         }
-                        log_trace(tt::LogOp, "Worker {} SW CT args", b);
-                        log_trace(tt::LogOp, "\tall_gather_config.is_output_dram(): {}", all_gather_config.is_output_dram());
+
+                        log_trace(tt::LogOp, "Worker {} SW rt args", b);
+                        log_trace(tt::LogOp, "\toutput_buffer->address(): {}", output_buffer->address());
+                        log_trace(tt::LogOp, "\tsender_eth_buffer_addrs: {}", sender_eth_buffer_addrs.at(b));
+                        log_trace(tt::LogOp, "\tsender_eth_sem_addrs: {}", sender_eth_sem_addrs.at(b));
                         log_trace(tt::LogOp, "\tsender_num_transfers: {}", sender_worker_num_transfers.at(i).at(b));
                         log_trace(tt::LogOp, "\tnum_full_chunks_per_worker: {}", num_full_chunks_per_worker.at(b));
-                        log_trace(tt::LogOp, "\tinput_page_size: {}", input_page_size);
-                        log_trace(tt::LogOp, "\toutput_page_size: {}", output_page_size);
                         log_trace(tt::LogOp, "\tpages_per_eth_l1_buffer: {}", pages_per_eth_l1_buffer.at(b));
                         log_trace(tt::LogOp, "\trem_pages_per_worker: {}", rem_pages_per_worker.at(b));
                         log_trace(tt::LogOp, "\tinput_start_page_idx: {}", tensor_slicer.input_start_page_idx);
@@ -749,61 +904,32 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                         log_trace(tt::LogOp, "\tcol_offset: {}", tensor_slicer.col_offset);
                         log_trace(tt::LogOp, "\tnum_rows: {}", tensor_slicer.num_rows);
                         log_trace(tt::LogOp, "\tnum_cols: {}", tensor_slicer.num_cols);
-                        log_trace(tt::LogOp, "\tring_index: {}", ring_index);
-                        log_trace(tt::LogOp, "\tsender_worker_writer_semaphore_id: {}", sender_worker_writer_semaphore_id);
                         log_trace(tt::LogOp, "\tethernet_core_x: {}", device->ethernet_core_from_logical_core(worker_eth_sender_core).x);
                         log_trace(tt::LogOp, "\tethernet_core_y: {}", device->ethernet_core_from_logical_core(worker_eth_sender_core).y);
-                        log_trace(tt::LogOp, "\thalf_cb_num_pages: {}", cb_num_pages / 2);
 
-                        if (is_sharded) {
-                            log_sharded_tensor_kernel_args(output_tensor, output_pages_per_shard_y, output_pages_per_shard_x, "output");
-                        }
-                        return worker_writer_sender_ct_args;
-                    };
-
-                    std::vector<uint32_t> const& worker_sender_writer_ct_args = build_worker_sender_writer_ct_args();
-
-                    auto build_worker_sender_writer_rt_args = [&]() {
-                        std::vector<uint32_t> worker_writer_sender_rt_args = {
-                            static_cast<uint32_t>(output_buffer->address()),
-                            static_cast<uint32_t>(sender_eth_buffer_addrs.at(b)),
-                            static_cast<uint32_t>(sender_eth_sem_addrs.at(b))
-                        };
-
-                        if (is_sharded) {
-                            emit_sharded_tensor_kernel_rt_args(device, output_tensor, worker_writer_sender_rt_args);
+                        if (fuse_op && direction == 1) {
+                            fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
+                                worker_writer_sender_rt_args,
+                                global_num_workers_per_direction,
+                                b,
+                                is_clockwise_direction ? 0 : 1
+                            );
                         }
 
-                        log_trace(tt::LogOp, "Worker {} SW rt args", b);
-                        log_trace(tt::LogOp, "\toutput_buffer->address(): {}", output_buffer->address());
-                        log_trace(tt::LogOp, "\tsender_eth_buffer_addrs: {}", sender_eth_buffer_addrs.at(b));
-                        log_trace(tt::LogOp, "\tsender_eth_sem_addrs: {}", sender_eth_sem_addrs.at(b));
                         return worker_writer_sender_rt_args;
                     };
                     std::vector<uint32_t> const& worker_sender_writer_rt_args = build_worker_sender_writer_rt_args();
-
-                    std::string const& sender_writer_kernel_path = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_interleaved_ring_gather_send_writer.cpp";
-                    KernelHandle worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
-                        program,
-                        sender_writer_kernel_path,
-                        sender_worker_cores.at(b),
-                        tt::tt_metal::WriterDataMovementConfig(worker_sender_writer_ct_args, worker_defines));
-
-                    send_writer_kernel_core_list.push_back({worker_sender_writer_kernel_id, sender_worker_cores.at(b)});
 
                     tt::tt_metal::SetRuntimeArgs(
                         program,
                         worker_sender_writer_kernel_id,
                         sender_worker_cores.at(b),
                         worker_sender_writer_rt_args);
-
-                } // (!is_linear || !is_last_chip_in_chain)
-                else {
-                    log_trace(tt::LogOp, "Skipping sender workers for linear chain");
                 }
 
                 // RECEIVER WORKERS
-                if (!is_linear || !is_first_chip_in_chain) {
+                if (receiver_enabled) {
+
                     TT_ASSERT(!is_linear ||
                         ((is_clockwise_direction && (ring_index != 0)) || (!is_clockwise_direction && ring_index != ring_size - 1))
                     );
@@ -844,57 +970,32 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                     log_trace(tt::LogOp,"\treceiver_output_start_page_idx={}", receiver_output_start_page_idx);
                     log_trace(tt::LogOp,"\treceiver_ring_index={}", receiver_ring_index);
 
-                    //// Receive Reader
-                    auto build_worker_receiver_reader_ct_args = [&]() {
+                   //// Receive Reader
+                    auto build_worker_receiver_reader_rt_args = [&]() {
                         CoreCoord const& worker_eth_receiver_core = is_clockwise_direction ? eth_receiver_cores.at(i) : eth_sender_cores.at(i);
-                        std::vector<uint32_t> worker_receiver_reader_ct_args = {
+                        std::vector<uint32_t> worker_reader_receiver_rt_args = {
+                            static_cast<uint32_t>(receiver_eth_buffer_addrs.at(b)),
                             static_cast<uint32_t>(receiver_worker_num_transfers.at(i).at(b)),
                             static_cast<uint32_t>(num_full_chunks_per_worker.at(b)),
-                            static_cast<uint32_t>(input_page_size),
                             static_cast<uint32_t>(pages_per_chunk),
                             static_cast<uint32_t>(rem_pages_per_worker.at(b)),
                             static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_receiver_core).x),
                             static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_receiver_core).y),
                             static_cast<uint32_t>(receiver_eth_sem_addrs.at(b)),
-                            static_cast<uint32_t>(receiver_worker_semaphore_id),
-                            static_cast<uint32_t>(cb_num_pages / 2),
-                            static_cast<uint32_t>(num_edm_buffers_per_channel)
                         };
 
-                        log_trace(tt::LogOp, "Worker {} RR ct args", b);
+                        log_trace(tt::LogOp, "Worker {} RR rt args", b);
+                        log_trace(tt::LogOp, "\treceiver_eth_buffer_addrs: {}", receiver_eth_buffer_addrs.at(b));
                         log_trace(tt::LogOp, "\treceiver_num_transfers: {}", receiver_worker_num_transfers.at(i).at(b));
                         log_trace(tt::LogOp, "\tnum_full_chunks_per_worker: {}", num_full_chunks_per_worker.at(b));
-                        log_trace(tt::LogOp, "\tinput_page_size: {}", input_page_size);
                         log_trace(tt::LogOp, "\tpages_per_chunk: {}", pages_per_chunk);
                         log_trace(tt::LogOp, "\trem_pages_per_worker: {}", rem_pages_per_worker.at(b));
                         log_trace(tt::LogOp, "\tethernet_core_x: {}", device->ethernet_core_from_logical_core(worker_eth_receiver_core).x);
                         log_trace(tt::LogOp, "\tethernet_core_y: {}", device->ethernet_core_from_logical_core(worker_eth_receiver_core).y);
                         log_trace(tt::LogOp, "\treceiver_eth_sem_addrs: {}", receiver_eth_sem_addrs.at(b));
-                        log_trace(tt::LogOp, "\treceiver_worker_semaphore_id: {}", receiver_worker_semaphore_id);
-                        log_trace(tt::LogOp, "\thalf_cb_num_pages : {}", cb_num_pages / 2);
-                        return worker_receiver_reader_ct_args;
-                    };
-                    std::vector<uint32_t> const& worker_receiver_reader_ct_args = build_worker_receiver_reader_ct_args();
-
-                    auto build_worker_receiver_reader_rt_args = [&]() {
-                        std::vector<uint32_t> worker_reader_receiver_rt_args = {
-                            static_cast<uint32_t>(receiver_eth_buffer_addrs.at(b))
-                        };
-
-                        log_trace(tt::LogOp, "Worker {} RR rt args", b);
-                        log_trace(tt::LogOp, "\treceiver_eth_buffer_addrs: {}", receiver_eth_buffer_addrs.at(b));
                         return worker_reader_receiver_rt_args;
                     };
                     std::vector<uint32_t> worker_receiver_reader_rt_args = build_worker_receiver_reader_rt_args();
-
-                    std::string const& receiver_reader_kernel_path = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_interleaved_ring_gather_receive_reader.cpp";
-                    KernelHandle worker_receiver_reader_kernel_id = tt::tt_metal::CreateKernel(
-                        program,
-                        receiver_reader_kernel_path,
-                        receiver_worker_cores.at(b),
-                        tt::tt_metal::ReaderDataMovementConfig(worker_receiver_reader_ct_args, worker_defines));
-
-                    receive_reader_kernel_core_list.push_back({worker_receiver_reader_kernel_id, receiver_worker_cores.at(b)});
 
                     tt::tt_metal::SetRuntimeArgs(
                         program,
@@ -903,13 +1004,20 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                         worker_receiver_reader_rt_args);
 
                     //// Receive Writer
-                    auto build_worker_receive_writer_ct_args = [&]() {
-                        std::vector<uint32_t> worker_writer_receiver_ct_args = {
-                            static_cast<uint32_t>(all_gather_config.is_output_dram()),
+                    auto build_worker_receive_writer_rt_args = [&]() {
+                        uint32_t sender_core_x = -1, sender_core_y = -1;
+                        if (sender_enabled) {
+                            auto worker_sender_reader = device->worker_core_from_logical_core(sender_worker_cores.at(b));
+                            sender_core_x = worker_sender_reader.x;
+                            sender_core_y = worker_sender_reader.y;
+                        }
+                        std::vector<uint32_t> worker_writer_receiver_rt_args = {
+                            static_cast<uint32_t>(output_buffer->address()),
+                            static_cast<uint32_t>(sender_core_x),
+                            static_cast<uint32_t>(sender_core_y),
+                            static_cast<uint32_t>(sender_enabled),
                             static_cast<uint32_t>(receiver_worker_num_transfers.at(i).at(b)),
                             static_cast<uint32_t>(num_full_chunks_per_worker.at(b)),
-                            static_cast<uint32_t>(input_page_size),
-                            static_cast<uint32_t>(output_page_size),
                             static_cast<uint32_t>(pages_per_eth_l1_buffer.at(b)),
                             static_cast<uint32_t>(rem_pages_per_worker.at(b)),
                             static_cast<uint32_t>(receiver_output_start_page_idx),
@@ -925,33 +1033,19 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                             static_cast<uint32_t>(last_output_addr_offset),
                             static_cast<uint32_t>(tensor_slicer.output_addr_offset),
                             static_cast<uint32_t>(receiver_ring_index),
-                            static_cast<uint32_t>(sender_worker_reader_semaphore_id),
                             static_cast<uint32_t>(is_clockwise_direction ? 1 : 0),
-                            static_cast<uint32_t>(cb_num_pages / 2),
-                            static_cast<uint32_t>(ring_size),
-                            static_cast<bool>(fuse_op)
                         };
 
                         if (is_sharded) {
-                            emit_sharded_tensor_kernel_ct_args(device, output_tensor, worker_writer_receiver_ct_args, output_pages_per_shard_y, output_pages_per_shard_x);
+                            emit_sharded_tensor_kernel_rt_args(device, output_tensor, worker_writer_receiver_rt_args);
                         }
 
-                        if (fuse_op) {
-                            uint32_t global_num_workers_per_direction = global_num_workers / num_full_send_directions;
-                            fused_op_signaler->emit_all_gather_fused_op_ct_args(worker_writer_receiver_ct_args, global_num_workers_per_direction, b);
-                        } else {
-                            // Push dummy args so that kernel doesn't error out at compile time from the lack of args when fuse_op=false
-                            for (uint32_t w = 0; w < experimental::ccl::AllGatherFusedOpSignaler::get_num_ct_args(); ++w) {
-                                worker_writer_receiver_ct_args.push_back(static_cast<uint32_t>(0));
-                            }
-                        }
-
-                        log_trace(tt::LogOp, "Worker {} RW ct args", b);
-                        log_trace(tt::LogOp, "\tall_gather_config.is_output_dram(): {}", all_gather_config.is_output_dram());
+                        log_trace(tt::LogOp, "Worker {} RW rt args", b);
+                        log_trace(tt::LogOp, "\toutput_buffer->address(): {}", output_buffer->address());
+                        log_trace(tt::LogOp, "\tworker_sender_reader.x: {}", sender_core_x);
+                        log_trace(tt::LogOp, "\tworker_sender_reader.y: {}", sender_core_y);
                         log_trace(tt::LogOp, "\treceiver_num_transfers: {}", receiver_worker_num_transfers.at(i).at(b));
                         log_trace(tt::LogOp, "\tnum_full_chunks_per_worker.at(b): {}", num_full_chunks_per_worker.at(b));
-                        log_trace(tt::LogOp, "\tinput_page_size: {}", input_page_size);
-                        log_trace(tt::LogOp, "\toutput_page_size: {}", output_page_size);
                         log_trace(tt::LogOp, "\tpages_per_eth_l1_buffer.at(b): {}", pages_per_eth_l1_buffer.at(b));
                         log_trace(tt::LogOp, "\trem_pages_per_worker.at(b): {}", rem_pages_per_worker.at(b));
                         log_trace(tt::LogOp, "\treceiver_output_start_page_idx: {}", receiver_output_start_page_idx);
@@ -967,60 +1061,27 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                         log_trace(tt::LogOp, "\tlast_output_addr_offset: {}", last_output_addr_offset);
                         log_trace(tt::LogOp, "\toutput_addr_offset: {}", tensor_slicer.output_addr_offset);
                         log_trace(tt::LogOp, "\treceiver_ring_index: {}", receiver_ring_index);
-                        log_trace(tt::LogOp, "\tsender_worker_reader_semaphore_id: {}", sender_worker_reader_semaphore_id);
                         log_trace(tt::LogOp, "\tis_clockwise_direction ? 1 : 0: {}", is_clockwise_direction ? 1 : 0);
-                        log_trace(tt::LogOp, "\thalf_cb_num_pages: {}", cb_num_pages / 2);
-                        log_trace(tt::LogOp, "\tring_size: {}", ring_size);
-
-                        if (is_sharded) {
-                            log_sharded_tensor_kernel_args(output_tensor, output_pages_per_shard_y, output_pages_per_shard_x, "output");
-                        }
-
-                        return worker_writer_receiver_ct_args;
-                    };
-                    std::vector<uint32_t> const& worker_receive_writer_ct_args = build_worker_receive_writer_ct_args();
-
-                    auto build_worker_receive_writer_rt_args = [&]() {
-                        auto worker_sender_reader = device->worker_core_from_logical_core(sender_worker_cores.at(b));
-                        std::vector<uint32_t> worker_writer_receiver_rt_args = {
-                            static_cast<uint32_t>(output_buffer->address()),
-                            static_cast<uint32_t>(worker_sender_reader.x),
-                            static_cast<uint32_t>(worker_sender_reader.y),
-                        };
-
-                        if (is_sharded) {
-                            emit_sharded_tensor_kernel_rt_args(device, output_tensor, worker_writer_receiver_rt_args);
-                        }
 
                         /* All Gather fusion */
                         if (fuse_op) {
-                            fused_op_signaler->emit_all_gather_fused_op_rt_args(worker_writer_receiver_rt_args, is_clockwise_direction ? 0 : 1);
+                            fused_op_signaler->push_all_gather_fused_op_rt_args(
+                                worker_writer_receiver_rt_args,
+                                global_num_workers_per_direction,
+                                b,
+                                is_clockwise_direction ? 0 : 1
+                            );
                         }
 
-                        log_trace(tt::LogOp, "Worker {} RW rt args", b);
-                        log_trace(tt::LogOp, "\toutput_buffer->address(): {}", output_buffer->address());
-                        log_trace(tt::LogOp, "\tworker_sender_reader.x: {}", worker_sender_reader.x);
-                        log_trace(tt::LogOp, "\tworker_sender_reader.y: {}", worker_sender_reader.y);
                         return worker_writer_receiver_rt_args;
                     };
                     std::vector<uint32_t> worker_receive_writer_rt_args = build_worker_receive_writer_rt_args();
 
-                    std::string const& receiver_writer_kernel_path = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_interleaved_ring_gather_receive_writer.cpp";
-                    KernelHandle worker_receive_writer_kernel_id = tt::tt_metal::CreateKernel(
-                        program,
-                        receiver_writer_kernel_path,
-                        receiver_worker_cores.at(b),
-                        tt::tt_metal::WriterDataMovementConfig(worker_receive_writer_ct_args, worker_defines));
-
-                    receive_writer_kernel_core_list.push_back({worker_receive_writer_kernel_id, receiver_worker_cores.at(b)});
                     tt::tt_metal::SetRuntimeArgs(
                         program,
-                        worker_receive_writer_kernel_id,
+                        worker_receiver_writer_kernel_id,
                         receiver_worker_cores.at(b),
                         worker_receive_writer_rt_args);
-                } // (!is_linear || !is_first_chip_in_chain)
-                else {
-                    log_trace(tt::LogOp, "Skipping receiver workers for linear chain");
                 }
 
                 uint32_t pages_per_worker = num_full_chunks_per_worker.at(b) * pages_per_chunk + rem_pages_per_worker.at(b);
@@ -1047,7 +1108,14 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
         receiver_device_id,
         sender_device_id);
 
-    auto override_runtime_arguments_callback = [num_links, receive_reader_kernel_core_list, receive_writer_kernel_core_list, send_reader_kernel_core_list, send_writer_kernel_core_list] (
+    auto override_runtime_arguments_callback =
+        [worker_sender_reader_kernel_id,
+         worker_sender_writer_kernel_id,
+         worker_receiver_reader_kernel_id,
+         worker_receiver_writer_kernel_id,
+         num_links,
+         all_sender_worker_cores,
+         all_receiver_worker_cores] (
         const void* operation,
         Program& program,
         const std::vector<Tensor>& input_tensors,
@@ -1056,17 +1124,25 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     ) {
         const auto& input = input_tensors[0];
         const auto& output = output_tensors[0];
-        for (auto const& [kernel_id, core] : receive_writer_kernel_core_list) {
-            auto &worker_writer_receiver_runtime_args = GetRuntimeArgs(program, kernel_id, core);
+
+        // update receivers
+        auto &worker_writer_receiver_runtime_args_by_core = GetRuntimeArgs(program, worker_receiver_writer_kernel_id);
+        for (auto const& core : all_receiver_worker_cores) {
+            //writer
+            auto &worker_writer_receiver_runtime_args = worker_writer_receiver_runtime_args_by_core[core.x][core.y];
             worker_writer_receiver_runtime_args.at(0) = output.buffer()->address();
         }
-        for (auto const& [kernel_id, core] : send_reader_kernel_core_list) {
-            auto &worker_reader_sender_runtime_args = GetRuntimeArgs(program, kernel_id, core);
+
+        // update senders
+        auto &worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);
+        auto &worker_writer_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_writer_kernel_id);
+        for (auto const& core : all_sender_worker_cores) {
+            // reader
+            auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
             worker_reader_sender_runtime_args.at(0) = input.buffer()->address();
             worker_reader_sender_runtime_args.at(1) = output.buffer()->address();
-        }
-        for (auto const& [kernel_id, core] : send_writer_kernel_core_list) {
-            auto &worker_writer_sender_runtime_args = GetRuntimeArgs(program, kernel_id, core);
+            // writer
+            auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
             worker_writer_sender_runtime_args.at(0) = output.buffer()->address();
         }
     };

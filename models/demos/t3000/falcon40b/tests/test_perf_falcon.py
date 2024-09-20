@@ -31,7 +31,7 @@ from models.perf.perf_utils import prep_perf_report
 
 # TODO: Replace this with actual Falcon application-level tests
 def run_test_FalconCausalLM_end_to_end(
-    device_mesh,
+    mesh_device,
     model_version,
     llm_mode,
     batch,
@@ -52,7 +52,7 @@ def run_test_FalconCausalLM_end_to_end(
 
     # Clear global profiler state before starting measurements
     profiler.clear()
-    devices = device_mesh.get_devices()
+    devices = mesh_device.get_devices()
     model_name = model_location_generator(model_version, model_subdir="Falcon")
 
     profiler.start("hugging_face_model_setup")
@@ -91,14 +91,14 @@ def run_test_FalconCausalLM_end_to_end(
     else:
         raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
     for device in devices:
-        ttnn.device.synchronize_device(device)
+        ttnn.synchronize_device(device)
 
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
     # since we don't yet have embedding support on device
     # device, state_dict, base_url, max_position_embeddings, config, num_decoders
     profiler.start("TtFalcon_model_setup")
     tt_FalconCausalLM = TtFalconCausalLM(
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         num_layers,
@@ -109,7 +109,7 @@ def run_test_FalconCausalLM_end_to_end(
         use_global_cos_sin_cache,
     )
     for device in devices:
-        ttnn.device.synchronize_device(device)
+        ttnn.synchronize_device(device)
     profiler.end("TtFalcon_model_setup")
 
     del state_dict
@@ -157,7 +157,7 @@ def run_test_FalconCausalLM_end_to_end(
             tt_outs.append(tt_out)
 
         tt_outs = [
-            ttnn.to_torch(tt_out, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=-1))
+            ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
             for tt_out in tt_outs
         ]
         tt_out = tt_outs
@@ -171,11 +171,11 @@ def run_test_FalconCausalLM_end_to_end(
             layer_past_len=kv_cache_len,
             use_cache=use_cache,
         )
-        tt_out = ttnn.to_torch(tt_out, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=-1))
+        tt_out = ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
 
     profiler.end("first_model_run_with_compile", force_enable=True)
     for device in devices:
-        ttnn.device.synchronize_device(device)
+        ttnn.synchronize_device(device)
 
     del tt_out
     del tt_layer_present
@@ -190,7 +190,7 @@ def run_test_FalconCausalLM_end_to_end(
 
     for _ in range(warmup_iterations):
         for device in devices:
-            ttnn.experimental.device.DumpDeviceProfiler(device)
+            ttnn.DumpDeviceProfiler(device)
         if llm_mode == "prefill":
             model_inputs = torch.split(model_input, 1)
             tt_inputs, tt_attention_mask = zip(
@@ -213,7 +213,7 @@ def run_test_FalconCausalLM_end_to_end(
                 tt_outs.append(tt_out)
 
             tt_outs = [
-                ttnn.to_torch(tt_out, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=-1))
+                ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
                 for tt_out in tt_outs
             ]
         elif llm_mode == "decode":
@@ -228,15 +228,15 @@ def run_test_FalconCausalLM_end_to_end(
                 layer_past_len=kv_cache_len,
                 use_cache=use_cache,
             )
-            tt_outs = ttnn.to_torch(tt_out, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=-1))
+            tt_outs = ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
 
     profiler.end(f"model_warmup_run_for_inference")
     for device in devices:
-        ttnn.device.synchronize_device(device)
+        ttnn.synchronize_device(device)
 
     # Run for perf iteration - profiler enabled
     for device in devices:
-        ttnn.experimental.device.DumpDeviceProfiler(device)
+        ttnn.DumpDeviceProfiler(device)
     profiler.enable()
     enable_persistent_kernel_cache()
     logger.info(f"Enable profiler and enable binary and compile cache")
@@ -286,7 +286,7 @@ def run_test_FalconCausalLM_end_to_end(
         _ = ttnn.to_torch(tt_FalconCausalLM.perf_e2e_test_tile_tensor)
 
     for device in devices:
-        ttnn.device.synchronize_device(device)
+        ttnn.synchronize_device(device)
 
     profiler.end(f"model_run_for_inference")
 
@@ -370,7 +370,7 @@ def test_perf_bare_metal(
     model_config_str,
     model_location_generator,
     get_tt_cache_path,
-    t3k_device_mesh,
+    t3k_mesh_device,
     use_program_cache,
     is_ci_env,
     async_mode,
@@ -382,7 +382,7 @@ def test_perf_bare_metal(
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
-    devices = t3k_device_mesh.get_devices()
+    devices = t3k_mesh_device.get_devices()
     for device in devices:
         device.enable_async(async_mode)
     compute_grid_size = devices[0].compute_with_storage_grid_size()
@@ -397,7 +397,7 @@ def test_perf_bare_metal(
     disable_compilation_reports()
 
     run_test_FalconCausalLM_end_to_end(
-        t3k_device_mesh,
+        t3k_mesh_device,
         model_version,
         llm_mode,
         batch,
@@ -447,7 +447,7 @@ def test_device_perf_bare_metal(
     model_config_str,
     model_location_generator,
     get_tt_cache_path,
-    t3k_device_mesh,
+    t3k_mesh_device,
     use_program_cache,
     is_ci_env,
 ):
@@ -458,7 +458,7 @@ def test_device_perf_bare_metal(
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
-    devices = t3k_device_mesh.get_devices()
+    devices = t3k_mesh_device.get_devices()
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
@@ -471,7 +471,7 @@ def test_device_perf_bare_metal(
     disable_compilation_reports()
 
     run_test_FalconCausalLM_end_to_end(
-        t3k_device_mesh,
+        t3k_mesh_device,
         model_version,
         llm_mode,
         batch,

@@ -57,6 +57,8 @@ class Cluster {
         }
     }
 
+    std::unordered_map<chip_id_t, eth_coord_t> get_user_chip_ethernet_coordinates() const;
+
     size_t number_of_devices() const { return this->cluster_desc_->get_number_of_chips(); }
 
     size_t number_of_pci_devices() const { return this->cluster_desc_->get_chips_with_mmio().size(); }
@@ -105,10 +107,10 @@ class Cluster {
         chip_id_t mmio_device_id = device_to_mmio_device_.at(chip_id);
         tt_SiliconDevice *device =
             dynamic_cast<tt_SiliconDevice *>(this->mmio_device_id_to_driver_.at(mmio_device_id).get());
-        return device->get_m_dma_buf_size();
+        return 0;
     }
 
-    std::function<void(uint32_t, uint32_t, const uint8_t *, uint32_t)> get_fast_pcie_static_tlb_write_callable(
+    std::function<void(uint32_t, uint32_t, const uint8_t *)> get_fast_pcie_static_tlb_write_callable(
         int chip_id) const {
         chip_id_t mmio_device_id = device_to_mmio_device_.at(chip_id);
         tt_SiliconDevice *device =

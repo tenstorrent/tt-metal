@@ -22,9 +22,9 @@ using namespace constants;
 //////////////////////////////////////////////////////////////////////////////////////////
 
 Tensor perform_transpose_wh(Tensor& input_tensor) {
-    TT_FATAL(input_tensor.storage_type() == StorageType::OWNED);
+    TT_FATAL(input_tensor.storage_type() == StorageType::OWNED, "Error");
     auto ashape = input_tensor.get_legacy_shape();
-    TT_FATAL(ashape.rank() == 4);
+    TT_FATAL(ashape.rank() == 4, "Error");
     auto bshape = ashape;
     bshape[2] = ashape[3];
     bshape[3] = ashape[2];
@@ -77,7 +77,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        Shape shape = {1, 1, 10*TILE_HEIGHT, 12*TILE_WIDTH};
+        tt::tt_metal::LegacyShape shape = {1, 1, 10*TILE_HEIGHT, 12*TILE_WIDTH};
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a =  tt::numpy::random::random(shape).to(Layout::TILE).to(device);
 
@@ -119,7 +119,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

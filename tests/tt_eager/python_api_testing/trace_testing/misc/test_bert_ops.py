@@ -11,12 +11,12 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.utility_functions import is_wormhole_b0, is_grayskull, skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b0, is_blackhole
 from loguru import logger
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
 
 
-@pytest.mark.skipif(is_wormhole_b0(), reason="Unsupported parallelizations for WH B0")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported parallelizations for WH B0 and BH")
 @pytest.mark.parametrize("fidelity", [ttnn.MathFidelity.LoFi, ttnn.MathFidelity.HiFi2], ids=["LoFi", "HiFi2"])
 @pytest.mark.parametrize(
     "in1_in_dram, out_sharded, in0_sharded, M, K, N, activation",
@@ -163,9 +163,9 @@ class TestBertOpsTrace:
         run_ops(in0_t_res)
         # Capture
         logger.info("Start Trace capture")
-        tid = ttnn.experimental.device.BeginTraceCapture(device, cq_id)
+        tid = ttnn.begin_trace_capture(device, cq_id=cq_id)
         output_t_res = run_ops(in0_t_res)
-        ttnn.experimental.device.EndTraceCapture(device, cq_id, tid)
+        ttnn.end_trace_capture(device, tid, cq_id=cq_id)
         logger.info("Trace captured")
 
         for iter in range(trace_loops):
@@ -175,7 +175,7 @@ class TestBertOpsTrace:
             )
             ttnn.copy_host_to_device_tensor(in0_t_updated, in0_t_res)
             logger.info(f"Running iteration {iter}")
-            ttnn.experimental.device.ReplayTrace(device, cq_id, tid, True)
+            ttnn.execute_trace(device, tid, cq_id=cq_id, blocking=True)
 
             pt_out = in0 @ in1
 
@@ -191,7 +191,7 @@ class TestBertOpsTrace:
             assert passing
 
         # Done with the trace, can deallocate the buffers now.
-        ttnn.experimental.device.ReleaseTrace(device, tid)
+        ttnn.release_trace(device, tid)
         device.enable_async(False)
 
     @pytest.mark.parametrize("device_params", [{"trace_region_size": 34816}], indirect=True)
@@ -225,7 +225,7 @@ class TestBertOpsTrace:
         )
 
     @pytest.mark.parametrize("cq_id", [0])
-    @pytest.mark.parametrize("device_params", [{"trace_region_size": 34816, "num_hw_cqs": 2}], indirect=True)
+    @pytest.mark.parametrize("device_params", [{"trace_region_size": 34816, "num_command_queues": 2}], indirect=True)
     def test_bert_linear_2cqs_initialized(
         self,
         device,

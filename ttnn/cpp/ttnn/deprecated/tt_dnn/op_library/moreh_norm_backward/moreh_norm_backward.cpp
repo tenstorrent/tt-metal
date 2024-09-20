@@ -13,7 +13,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_norm_backward/moreh_norm_backward_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/deprecated/tt_numpy/functions.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -36,14 +36,14 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
 }
 
 
-void get_tensor_dim(std::vector<uint32_t> &dim, const Shape& shape) {
+void get_tensor_dim(std::vector<uint32_t> &dim, const tt::tt_metal::LegacyShape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
 
         // last 2-dim
         if (idx == rank - 1 || idx == rank - 2) {
-            dim[i] = shape[idx] / TILE_HEIGHT;
+            dim[i] = shape[idx] / tt::constants::TILE_HEIGHT;
         }
         else {
             dim[i] = shape[idx];
@@ -56,7 +56,7 @@ void get_tensor_dim(std::vector<uint32_t> &dim, const Shape& shape) {
     }
 }
 
-Shape get_output_grad_shape(const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keep_batch_dim) {
+tt::tt_metal::LegacyShape get_output_grad_shape(const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keep_batch_dim) {
     if (keep_batch_dim) {
         return output_grad.get_legacy_shape();
     }
@@ -68,20 +68,20 @@ Shape get_output_grad_shape(const Tensor &output_grad, const Tensor &input_grad,
         TT_FATAL(dim < rank, "dim {} < rank {}", dim, rank);
         bool is_tile_dim = (dim == rank - 1 || dim == rank - 2);
         if (is_tile_dim) {
-            shape[dim] = TILE_HEIGHT;
+            shape[dim] = tt::constants::TILE_HEIGHT;
             padding[dim] = Padding::PadDimension{0, 31};
         } else {
             shape[dim] = 1;
         }
     }
 
-    return Shape(shape, padding);
+    return tt::tt_metal::LegacyShape(shape, padding);
 }
 
 }  // namespace
 
 operation::ProgramWithCallbacks moreh_norm_backward_(
-    const Tensor &input, const Tensor &output, const Tensor &output_grad, float p, const std::vector<int64_t> &dims, const bool &keep_batch_dim, const Tensor &input_grad, const DeviceComputeKernelConfig compute_kernel_config) {
+    const Tensor &input, const Tensor &output, const Tensor &output_grad, float p, const std::vector<int64_t> &dims, const bool &keep_batch_dim, const Tensor &input_grad, const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -117,7 +117,7 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
         }
     }
 
-    const auto num_input_grad_tiles = input_grad.volume() / TILE_HW;
+    const auto num_input_grad_tiles = input_grad.volume() / tt::constants::TILE_HW;
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(output_grad.device()->arch(), compute_kernel_config);
 
     auto [floored_p, decimal, p_is_negative] = get_floored_p_and_decimal_and_p_is_negative(p);

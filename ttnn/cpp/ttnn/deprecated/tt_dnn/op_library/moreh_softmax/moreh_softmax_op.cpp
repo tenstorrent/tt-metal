@@ -6,7 +6,7 @@
 
 #include "ttnn/run_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -32,7 +32,7 @@ void MorehSoftmax::validate_with_output_tensors(
 
     TT_ASSERT(
         this->dim >= 0 && this->dim < rank,
-        fmt::format("dim {} should be less than output tensor rank {}", this->dim, rank));
+        "dim {} should be less than output tensor rank {}", this->dim, rank);
 
     if (output_tensors.empty() || !output_tensors.at(0).has_value()) {
         // If the user decided to not use any optional output tensors, then this would be empty or would be a nullptr.
@@ -42,7 +42,7 @@ void MorehSoftmax::validate_with_output_tensors(
     TT_ASSERT(output_tensors.size() == 1, "Must have 1 output tensors");
 }
 
-std::vector<Shape> MorehSoftmax::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehSoftmax::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     return {input_tensors.at(0).get_legacy_shape()};
 }
 
@@ -108,23 +108,23 @@ MorehSoftmaxOpParallelizationStrategy MorehSoftmax::get_parallelization_strategy
         TT_ASSERT(
             this->strategy == MorehSoftmaxOpParallelizationStrategy::SMALL_H ||
                 this->strategy == MorehSoftmaxOpParallelizationStrategy::LARGE_H,
-            fmt::format("Invalid parallelization strategy. {} is not for dim H", this->strategy));
+            "Invalid parallelization strategy. {} is not for dim H", this->strategy);
 
         if (this->strategy == MorehSoftmaxOpParallelizationStrategy::SMALL_H) {
             TT_ASSERT(
                 is_moreh_softmax_h_small_available(input, this->compute_kernel_config),
-                fmt::format("not enough circular buffer memory for {}", this->strategy));
+                "not enough circular buffer memory for {}", this->strategy);
         }
     } else if (rank - 1 == this->dim) {
         TT_ASSERT(
             this->strategy == MorehSoftmaxOpParallelizationStrategy::SMALL_W ||
                 this->strategy == MorehSoftmaxOpParallelizationStrategy::LARGE_W,
-            fmt::format("Invalid parallelization strategy. {} is not for dim W", this->strategy));
+            "Invalid parallelization strategy. {} is not for dim W", this->strategy);
 
         if (this->strategy == MorehSoftmaxOpParallelizationStrategy::SMALL_W) {
             TT_ASSERT(
                 is_moreh_softmax_w_small_available(input, this->compute_kernel_config),
-                fmt::format("not enough circular buffer memory for {}", this->strategy));
+                "not enough circular buffer memory for {}", this->strategy);
         }
     } else {
         TT_ASSERT(
@@ -141,7 +141,7 @@ Tensor moreh_softmax(
     std::optional<Tensor> output_tensor,
     const MorehSoftmaxOpParallelizationStrategy strategy,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto device = input_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
@@ -182,7 +182,7 @@ Tensor moreh_softmin(
     std::optional<Tensor> output_tensor,
     const MorehSoftmaxOpParallelizationStrategy strategy,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto device = input_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
@@ -223,7 +223,7 @@ Tensor moreh_logsoftmax(
     std::optional<Tensor> output_tensor,
     const MorehSoftmaxOpParallelizationStrategy strategy,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto device = input_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});

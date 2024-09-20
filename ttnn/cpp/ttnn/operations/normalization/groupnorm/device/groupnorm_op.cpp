@@ -22,7 +22,7 @@ void GroupNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
     const auto& gamma = optional_input_tensors.at(0);
     const auto& beta = optional_input_tensors.at(1);
     const auto& input_mask = optional_input_tensors.at(2);
-    TT_FATAL(a.get_dtype() == DataType::BFLOAT16);
+    TT_FATAL(a.get_dtype() == DataType::BFLOAT16, "Error");
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
     TT_FATAL(a.get_legacy_shape()[3] % this->num_groups == 0,  "channel must be divisible by num_groups!");
@@ -30,45 +30,45 @@ void GroupNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
 
     if (gamma.has_value()) {
         if (gamma.value().get_layout() == Layout::TILE) {
-            TT_FATAL(a.get_legacy_shape()[3] == gamma.value().get_legacy_shape()[3], fmt::format("{} != {}", a.get_legacy_shape()[3], gamma.value().get_legacy_shape()[3]));
-            TT_FATAL(a.device() == gamma.value().device());
+            TT_FATAL(a.get_legacy_shape()[3] == gamma.value().get_legacy_shape()[3], "{} != {}", a.get_legacy_shape()[3], gamma.value().get_legacy_shape()[3]);
+            TT_FATAL(a.device() == gamma.value().device(), "Error");
             TT_FATAL(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-            TT_FATAL(gamma.value().get_legacy_shape()[2] == TILE_HEIGHT);
+            TT_FATAL(gamma.value().get_legacy_shape()[2] == TILE_HEIGHT, "Error");
         } else {
-            TT_FATAL(gamma.value().get_layout() == Layout::ROW_MAJOR);
-            TT_FATAL((gamma.value().get_legacy_shape()[3] == TILE_WIDTH));
-            TT_FATAL(a.device() == gamma.value().device());
+            TT_FATAL(gamma.value().get_layout() == Layout::ROW_MAJOR, "Error");
+            TT_FATAL((gamma.value().get_legacy_shape()[3] == TILE_WIDTH), "Error");
+            TT_FATAL(a.device() == gamma.value().device(), "Error");
             TT_FATAL(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-            TT_FATAL(gamma.value().get_dtype() == DataType::BFLOAT16);
+            TT_FATAL(gamma.value().get_dtype() == DataType::BFLOAT16, "Error");
         }
         if (beta.has_value()) {
-            TT_FATAL(gamma.value().get_layout() == beta.value().get_layout());
+            TT_FATAL(gamma.value().get_layout() == beta.value().get_layout(), "Error");
         }
     }
 
     if (beta.has_value()) {
         if (beta.value().get_layout() == Layout::TILE) {
-            TT_FATAL(a.get_legacy_shape()[3] == beta.value().get_legacy_shape()[3]);
-            TT_FATAL(a.device() == beta.value().device());
+            TT_FATAL(a.get_legacy_shape()[3] == beta.value().get_legacy_shape()[3], "Error");
+            TT_FATAL(a.device() == beta.value().device(), "Error");
             TT_FATAL(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-            TT_FATAL(beta.value().get_legacy_shape()[2] == TILE_HEIGHT);
+            TT_FATAL(beta.value().get_legacy_shape()[2] == TILE_HEIGHT, "Error");
         } else {
-            TT_FATAL(beta.value().get_layout() == Layout::ROW_MAJOR);
-            TT_FATAL(beta.value().get_legacy_shape()[3] == TILE_WIDTH);
-            TT_FATAL(a.device() == beta.value().device());
+            TT_FATAL(beta.value().get_layout() == Layout::ROW_MAJOR, "Error");
+            TT_FATAL(beta.value().get_legacy_shape()[3] == TILE_WIDTH, "Error");
+            TT_FATAL(a.device() == beta.value().device(), "Error");
             TT_FATAL(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-            TT_FATAL(beta.value().get_dtype() == DataType::BFLOAT16);
+            TT_FATAL(beta.value().get_dtype() == DataType::BFLOAT16, "Error");
         }
     }
 
     if (input_mask.has_value()) {
-        TT_FATAL(input_mask.value().get_layout() == Layout::TILE);
-        TT_FATAL(input_mask.value().get_legacy_shape()[1] == this->num_groups);
-        TT_FATAL(input_mask.value().get_legacy_shape()[2] == TILE_HEIGHT);
-        TT_FATAL(input_mask.value().get_legacy_shape()[3] % TILE_WIDTH == 0);
+        TT_FATAL(input_mask.value().get_layout() == Layout::TILE, "Error");
+        TT_FATAL(input_mask.value().get_legacy_shape()[1] == this->num_groups, "Error");
+        TT_FATAL(input_mask.value().get_legacy_shape()[2] == TILE_HEIGHT, "Error");
+        TT_FATAL(input_mask.value().get_legacy_shape()[3] % TILE_WIDTH == 0, "Error");
     }
 }
-std::vector<tt::tt_metal::Shape> GroupNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> GroupNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     return {input_tensor.get_legacy_shape()};
 }

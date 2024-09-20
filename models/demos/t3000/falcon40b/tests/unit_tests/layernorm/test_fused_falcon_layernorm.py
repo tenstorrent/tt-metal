@@ -91,7 +91,7 @@ class TtFusedFalconLayernorm:
             ln_attn_beta_host = torch2tt_tensor(
                 ln_attn_beta_torch_padded,
                 None,
-                tt_layout=ttnn.experimental.tensor.Layout.TILE,
+                tt_layout=ttnn.TILE_LAYOUT,
                 tt_memory_config=self.model_config["LN_ATTN_BIAS_MEMCFG"],
                 tt_dtype=self.model_config["LN_ATTN_BIAS_DTYPE"],
             )
@@ -104,7 +104,7 @@ class TtFusedFalconLayernorm:
             ln_mlp_gamma_host = torch2tt_tensor(
                 ln_mlp_gamma_torch_padded,
                 None,
-                tt_layout=ttnn.experimental.tensor.Layout.TILE,
+                tt_layout=ttnn.TILE_LAYOUT,
                 tt_memory_config=self.model_config["LN_MLP_WEIGHTS_MEMCFG"],
                 tt_dtype=self.model_config["LN_MLP_WEIGHTS_DTYPE"],
             )
@@ -117,7 +117,7 @@ class TtFusedFalconLayernorm:
             ln_mlp_beta_host = torch2tt_tensor(
                 ln_mlp_beta_torch_padded,
                 None,
-                tt_layout=ttnn.experimental.tensor.Layout.TILE,
+                tt_layout=ttnn.TILE_LAYOUT,
                 tt_memory_config=self.model_config["LN_MLP_BIAS_MEMCFG"],
                 tt_dtype=self.model_config["LN_MLP_BIAS_DTYPE"],
             )
@@ -125,35 +125,35 @@ class TtFusedFalconLayernorm:
 
         self.layernorm_eps = config.layer_norm_epsilon
 
-        shard_spec_cores_grid = ttnn.experimental.tensor.CoreRangeSet(
+        shard_spec_cores_grid = ttnn.CoreRangeSet(
             {
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, 0),
-                    ttnn.experimental.tensor.CoreCoord(7, 7),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(7, 7),
                 ),
             }
         )
         H = config.hidden_size  # 8192
-        self.sharded_memconfig = ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            ttnn.experimental.tensor.BufferType.L1,
-            ttnn.experimental.tensor.ShardSpec(
+        self.sharded_memconfig = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
                 shard_spec_cores_grid,
                 [self.model_config["SEQ_LEN"] // 8, H // 8],  # 1024
-                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
-        # self.width_sharded_memconfig = ttnn.experimental.tensor.MemoryConfig(
-        #     ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        #     ttnn.experimental.tensor.BufferType.L1,
-        #     ttnn.experimental.tensor.ShardSpec(
+        # self.width_sharded_memconfig = ttnn.MemoryConfig(
+        #     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        #     ttnn.BufferType.L1,
+        #     ttnn.ShardSpec(
         #         shard_spec_cores_grid,
         #         [
         #             self.model_config["SEQ_LEN"],
         #             H // 64,
         #         ],
-        #         ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+        #         ttnn.ShardOrientation.ROW_MAJOR,
         #         False,
         #     ),
         # )
@@ -166,12 +166,9 @@ class TtFusedFalconLayernorm:
             inplace=False,
         )
 
-        self.interleaved_memconfig = ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
-            ttnn.experimental.tensor.BufferType.L1,
-        )
+        self.interleaved_memconfig = ttnn.L1_MEMORY_CONFIG
 
-    def __call__(self, x: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
+    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # # OG layernorm
         # out1 = ttnn.layer_norm(
         #     x, epsilon=self.layernorm_eps, weight=self.ln_attn_gamma, bias=self.ln_attn_beta, memory_config=self.sharded_memconfig, program_config=self.prg_config
@@ -190,34 +187,34 @@ class TtFusedFalconLayernorm:
             program_config=self.prg_config,
         )
 
-        out1 = ttnn.experimental.tensor.bcast(
+        out1 = ttnn.bcast(
             out2,
             self.ln_attn_gamma,
-            math_op=ttnn.experimental.tensor.BcastOpMath.MUL,
-            dim=ttnn.experimental.tensor.BcastOpDim.H,
-            output_mem_config=self.sharded_memconfig,
+            math_op=ttnn.BcastOpMath.MUL,
+            dim=ttnn.BcastOpDim.H,
+            memory_config=self.sharded_memconfig,
         )
-        out1 = ttnn.experimental.tensor.bcast(
+        out1 = ttnn.bcast(
             out1,
             self.ln_attn_beta,
-            math_op=ttnn.experimental.tensor.BcastOpMath.ADD,
-            dim=ttnn.experimental.tensor.BcastOpDim.H,
-            output_mem_config=self.sharded_memconfig,
+            math_op=ttnn.BcastOpMath.ADD,
+            dim=ttnn.BcastOpDim.H,
+            memory_config=self.sharded_memconfig,
         )
 
-        out2 = ttnn.experimental.tensor.bcast(
+        out2 = ttnn.bcast(
             out2,
             self.ln_mlp_gamma,
-            math_op=ttnn.experimental.tensor.BcastOpMath.MUL,
-            dim=ttnn.experimental.tensor.BcastOpDim.H,
-            output_mem_config=self.sharded_memconfig,
+            math_op=ttnn.BcastOpMath.MUL,
+            dim=ttnn.BcastOpDim.H,
+            memory_config=self.sharded_memconfig,
         )
-        out2 = ttnn.experimental.tensor.bcast(
+        out2 = ttnn.bcast(
             out2,
             self.ln_mlp_beta,
-            math_op=ttnn.experimental.tensor.BcastOpMath.ADD,
-            dim=ttnn.experimental.tensor.BcastOpDim.H,
-            output_mem_config=self.sharded_memconfig,
+            math_op=ttnn.BcastOpMath.ADD,
+            dim=ttnn.BcastOpDim.H,
+            memory_config=self.sharded_memconfig,
         )
 
         return out1, out2

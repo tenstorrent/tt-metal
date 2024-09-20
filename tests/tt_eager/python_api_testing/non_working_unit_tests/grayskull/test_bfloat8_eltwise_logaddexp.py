@@ -58,7 +58,7 @@ test_sweep_args = [
         [ttnn.bfloat8_b, ttnn.bfloat8_b],
         [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT],
         [
-            "SYSTEM_MEMORY",
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         ],
         ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),

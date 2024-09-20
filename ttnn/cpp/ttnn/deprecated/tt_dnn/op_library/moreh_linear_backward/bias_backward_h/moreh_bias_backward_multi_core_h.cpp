@@ -4,7 +4,7 @@
 
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_linear_backward/moreh_linear_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -15,7 +15,7 @@ namespace operations {
 
 namespace primary {
 
-operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &output_grad, const Tensor &bias_grad, const DeviceComputeKernelConfig &compute_kernel_config) {
+operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &output_grad, const Tensor &bias_grad, const ttnn::DeviceComputeKernelConfig &compute_kernel_config) {
     Program program{};
 
     DataFormat cb_data_format = datatype_to_dataformat_converter(output_grad.get_dtype());

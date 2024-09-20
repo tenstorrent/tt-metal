@@ -19,13 +19,13 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor.device() == cache_tensor.device(), "Operands to update_cache need to be on the same device!");
     TT_FATAL(input_tensor.buffer() != nullptr and cache_tensor.buffer() != nullptr, "Operands to update_cache need to be allocated in buffers on device!");
     TT_FATAL((input_tensor.get_layout() == Layout::TILE && cache_tensor.get_layout() == Layout::TILE), "Inputs to update_cache must be tilized");
-    TT_FATAL(input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B);
-    TT_FATAL(cache_tensor.get_dtype() == DataType::FLOAT32 || cache_tensor.get_dtype() == DataType::BFLOAT16 || cache_tensor.get_dtype() == DataType::BFLOAT8_B);
+    TT_FATAL(input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B, "Error");
+    TT_FATAL(cache_tensor.get_dtype() == DataType::FLOAT32 || cache_tensor.get_dtype() == DataType::BFLOAT16 || cache_tensor.get_dtype() == DataType::BFLOAT8_B, "Error");
 
-    TT_FATAL(input_tensor.get_legacy_shape()[-1] == cache_tensor.get_legacy_shape()[-1]);
-    TT_FATAL(input_tensor.get_legacy_shape()[0] == 1);
-    TT_FATAL(input_tensor.get_legacy_shape()[1] == cache_tensor.get_legacy_shape()[1]);
-    TT_FATAL(cache_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+    TT_FATAL(input_tensor.get_legacy_shape()[-1] == cache_tensor.get_legacy_shape()[-1], "Error");
+    TT_FATAL(input_tensor.get_legacy_shape()[0] == 1, "Error");
+    TT_FATAL(input_tensor.get_legacy_shape()[1] == cache_tensor.get_legacy_shape()[1], "Error");
+    TT_FATAL(cache_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
     if (this->op_type == UpdateCacheOpType::FILL) {
         // TODO: If we want to support mixed precision like decode, we need to add simple compute kernel for conversion
         TT_FATAL(input_tensor.get_dtype() == cache_tensor.get_dtype(), "Input and cache tensors must have same dtype!");
@@ -37,35 +37,35 @@ void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
         if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED and input_tensor.get_legacy_shape()[1] > 1) {
             const uint32_t num_blocks_of_work = input_tensor.get_legacy_shape()[1] * input_tensor.get_legacy_shape()[-2] / TILE_HEIGHT;
             const auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-            TT_FATAL((num_blocks_of_work <= compute_with_storage_grid_size.x * compute_with_storage_grid_size.y));
+            TT_FATAL((num_blocks_of_work <= compute_with_storage_grid_size.x * compute_with_storage_grid_size.y), "Error");
         }
 
         if (input_tensor.is_sharded()) {
-            TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
-            TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.get_legacy_shape()[-1]);
+            TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED, "Error");
+            TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.get_legacy_shape()[-1], "Error");
             // Require even work division along seq_len and also only 1 head per core
             TT_FATAL(input_tensor.get_legacy_shape()[-2] % input_tensor.shard_spec().value().shape[0] == 0, "Seq len must be divisible by shard height!");
         }
 
-        TT_FATAL(this->batch_idx < cache_tensor.get_legacy_shape()[0]);
-        TT_FATAL(input_tensor.get_legacy_shape()[-2] <= cache_tensor.get_legacy_shape()[-2]);
+        TT_FATAL(this->batch_idx < cache_tensor.get_legacy_shape()[0], "Error");
+        TT_FATAL(input_tensor.get_legacy_shape()[-2] <= cache_tensor.get_legacy_shape()[-2], "Error");
     } else if (this->op_type == UpdateCacheOpType::UPDATE) {
         if (input_tensor.is_sharded()) {
-            TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
-            TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.get_legacy_shape()[-1]);
+            TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED, "Error");
+            TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.get_legacy_shape()[-1], "Error");
             // Require even work division for now
-            TT_FATAL((input_tensor.volume() / input_tensor.get_legacy_shape()[-1]) % input_tensor.shard_spec().value().shape[0] == 0);
+            TT_FATAL((input_tensor.volume() / input_tensor.get_legacy_shape()[-1]) % input_tensor.shard_spec().value().shape[0] == 0, "Error");
         } else {
-            TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+            TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
         }
-        TT_FATAL(cache_tensor.get_legacy_shape()[0] <= input_tensor.get_legacy_shape()[-2]);
+        TT_FATAL(cache_tensor.get_legacy_shape()[0] <= input_tensor.get_legacy_shape()[-2], "Error");
         // batch offset is only valid if num_user less than 32 and batch_offset + num_user <= 32
-        if (cache_tensor.get_legacy_shape()[0] < 32) TT_FATAL(this->batch_offset + cache_tensor.get_legacy_shape()[0] <= 32);
-        else TT_FATAL(this->batch_offset == 0);
+        if (cache_tensor.get_legacy_shape()[0] < 32) TT_FATAL(this->batch_offset + cache_tensor.get_legacy_shape()[0] <= 32, "Error");
+        else TT_FATAL(this->batch_offset == 0, "Error");
     }
 }
 
-std::vector<tt::tt_metal::Shape> UpdateCache::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> UpdateCache::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     // Do nothing because it's an in-place operation
     return {};
 }

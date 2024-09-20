@@ -86,11 +86,12 @@ void kernel_main() {
             Ht = 4
             Wt = 4
     */
+    #if RELOAD_IMPL == 0
     cb_reserve_back(sin_cb_id, sin_cos_cb_size_in_tiles);
     cb_reserve_back(cos_cb_id, sin_cos_cb_size_in_tiles);
     uint32_t sin_l1_write_addr = get_write_ptr(sin_cb_id);
     uint32_t cos_l1_write_addr = get_write_ptr(cos_cb_id);
-
+    #endif
 
     // To make sure the sin/cos row are read only once
     uint32_t sin_cos_row_cnt = 0;
@@ -99,6 +100,12 @@ void kernel_main() {
     uint32_t input_row_cnt = 0;
 
     for (uint32_t i = 0; i < num_rows_per_core; ++i) {
+        #if RELOAD_IMPL == 1
+        cb_reserve_back(sin_cb_id, Wt);
+        cb_reserve_back(cos_cb_id, Wt);
+        uint32_t sin_l1_write_addr = get_write_ptr(sin_cb_id);
+        uint32_t cos_l1_write_addr = get_write_ptr(cos_cb_id);
+        #endif
         cb_reserve_back(input_cb_id, Wt);
         uint32_t input_l1_write_addr = get_write_ptr(input_cb_id);
         for (uint32_t j = 0; j < Wt; ++j) {
@@ -124,6 +131,10 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(input_cb_id, Wt);
         input_row_cnt++;
+        #if RELOAD_IMPL == 1
+        cb_push_back(sin_cb_id, Wt);
+        cb_push_back(cos_cb_id, Wt);
+        #else
 
         if (!done_sin_cos) {
             cb_push_back(sin_cb_id, Wt);
@@ -136,9 +147,11 @@ void kernel_main() {
                 done_sin_cos = true;
             }
         }
+        #endif
         // Update input_curr_idx to stride the correct amount to the next row
         if (input_row_cnt % num_sin_cos_rows_per_core == 0) {
             input_curr_idx += (Ht - num_sin_cos_rows_per_core) * Wt;
+            cos_sin_curr_idx = cos_sin_start_idx; // For reload case, reset cos_sin_curr_idx
         }
     }
 

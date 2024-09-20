@@ -35,7 +35,7 @@ void Hal::initialize(tt::ARCH arch) {
             break;
 
         default:
-            TT_ASSERT("Unsupported arch for HAL");
+            TT_THROW("Unsupported arch for HAL");
         }
 
         this->initialized_ = true;
@@ -58,12 +58,14 @@ HalCoreInfoType::HalCoreInfoType(HalProgrammableCoreType programmable_core_type,
                                  CoreType core_type,
                                  uint32_t core_proc_count,
                                  const std::vector<DeviceAddr>& mem_map_bases,
-                                 const std::vector<uint32_t>& mem_map_sizes) :
+                                 const std::vector<uint32_t>& mem_map_sizes,
+                                 bool supports_cbs) :
     programmable_core_type_(programmable_core_type),
     core_type_(core_type),
     proc_count_(core_proc_count),
     mem_map_bases_(mem_map_bases),
-    mem_map_sizes_(mem_map_sizes) {
+    mem_map_sizes_(mem_map_sizes),
+    supports_cbs_(supports_cbs) {
 }
 
 }  // namespace tt_metal

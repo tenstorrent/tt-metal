@@ -4,14 +4,14 @@
 
 import torch
 import pytest
-
 import ttnn
 from loguru import logger
 from models.utility_functions import nearest_32, pad_by_zero
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
-from models.utility_functions import is_grayskull
+from models.utility_functions import is_grayskull, skip_for_blackhole
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("head_dim", [64])
 @pytest.mark.parametrize("max_seq_len", [2048])
 @pytest.mark.parametrize("num_users", [8, 16, 32, 64])
@@ -40,9 +40,7 @@ class TestUpdateCache:
             if in_sharded:
                 compute_grid_size = device.compute_with_storage_grid_size()
                 num_cores = min(seq_len // 32 * num_heads, 32)  # Always use max 32 cores for testing
-                shard_grid = ttnn.CoreRangeSet(
-                    ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
-                )
+                shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
                 input_shard_spec = ttnn.ShardSpec(
                     shard_grid,
                     [
@@ -106,9 +104,7 @@ class TestUpdateCache:
         if in_sharded:
             compute_grid_size = device.compute_with_storage_grid_size()
             num_cores = min(max(num_users, 32) // 32 * num_heads, compute_grid_size.x * compute_grid_size.y)
-            shard_grid = ttnn.CoreRangeSet(
-                ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
-            )
+            shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
             input_shard_spec = ttnn.ShardSpec(
                 shard_grid,
                 [
@@ -144,6 +140,7 @@ class TestUpdateCache:
         assert eq_cache and eq_update
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("head_dim", [64])
 @pytest.mark.parametrize("max_seq_len", [2048])
 @pytest.mark.parametrize("num_users", [8, 16, 32, 64])
@@ -174,9 +171,7 @@ class TestUpdateCacheFP32:
             if in_sharded:
                 compute_grid_size = device.compute_with_storage_grid_size()
                 num_cores = min(seq_len // 32 * num_heads, 32)  # Always use max 32 cores for testing
-                shard_grid = ttnn.CoreRangeSet(
-                    ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
-                )
+                shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
                 input_shard_spec = ttnn.ShardSpec(
                     shard_grid,
                     [
@@ -242,9 +237,7 @@ class TestUpdateCacheFP32:
         if in_sharded:
             compute_grid_size = device.compute_with_storage_grid_size()
             num_cores = min(max(num_users, 32) // 32 * num_heads, compute_grid_size.x * compute_grid_size.y)
-            shard_grid = ttnn.CoreRangeSet(
-                ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
-            )
+            shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
             input_shard_spec = ttnn.ShardSpec(
                 shard_grid,
                 [

@@ -12,7 +12,7 @@ namespace ttnn {
     using DeviceBuffer = std::shared_ptr<Buffer>;
     using queue_id = uint8_t;
 
-    DeviceBuffer allocate_buffer_on_device(uint32_t buffer_size_bytes, types::Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config, const std::optional<ShardSpecBuffer>& shard_spec = std::nullopt);
+    DeviceBuffer allocate_buffer_on_device(size_t buffer_size_bytes, types::Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config, const std::optional<ShardSpecBuffer>& shard_spec = std::nullopt);
 
     void write_buffer(queue_id cq_id, Tensor& dst, std::vector<std::shared_ptr<void>> src, const std::optional<std::size_t> transfer_size = std::nullopt);
 
@@ -20,7 +20,7 @@ namespace ttnn {
 
     void queue_synchronize(CommandQueue& cq);
 
-    void event_synchronize(Device* device, std::shared_ptr<Event> event);
+    void event_synchronize(std::shared_ptr<Event> event);
 
     bool event_query(std::shared_ptr<Event> event);
 

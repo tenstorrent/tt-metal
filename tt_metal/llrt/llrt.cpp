@@ -9,6 +9,8 @@
 
 #include "jit_build/settings.hpp"
 
+#include "fmt/ranges.h"
+
 #include <unordered_set>
 #include <mutex>
 #include "dev_msgs.h"
@@ -105,7 +107,7 @@ uint16_t get_binary_code_size16(const ll_api::memory& mem, int riscv_id) {
             range_min = MEM_IERISC_FIRMWARE_BASE;
             range_max = MEM_IERISC_FIRMWARE_BASE + MEM_IERISC_FIRMWARE_SIZE;
             break;
-        default: TT_ASSERT("Bad riscv_id: {}", riscv_id);
+        default: TT_THROW("Bad riscv_id: {}", riscv_id);
     }
 
     uint64_t min = std::numeric_limits<decltype(min)>::max();
@@ -294,7 +296,9 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
                 run,
                 run_state,
                 RUN_MSG_DONE);
-            TT_FATAL(run_mailbox_read_val[0] == run_state || run_mailbox_read_val[0] == RUN_MSG_DONE);
+            TT_FATAL(
+                run_mailbox_read_val[0] == run_state || run_mailbox_read_val[0] == RUN_MSG_DONE,
+                "Read unexpected run_mailbox value");
         }
 
         return run == RUN_MSG_DONE;
@@ -324,11 +328,7 @@ void wait_until_cores_done(
 
         // Print not-done cores
         if (loop_count % 1000 == 0) {
-            string not_done_cores_str = "Not done phys cores: ";
-            for (const auto &core : not_done_phys_cores) {
-                not_done_cores_str += (core.str() + " ");
-            }
-            log_debug(tt::LogMetal, not_done_cores_str.c_str());
+            log_debug(tt::LogMetal, "Not done phys cores: {}", fmt::join(not_done_phys_cores, " "));
         }
 
         for (auto it = not_done_phys_cores.begin(); it != not_done_phys_cores.end(); ) {

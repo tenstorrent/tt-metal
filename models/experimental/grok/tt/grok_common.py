@@ -54,7 +54,7 @@ def get_rotation_mat(dhead, end):
     return rot_mat
 
 
-def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, device_mesh):
+def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, mesh_device):
     """
     Prepare inputs for decode mode.
     x: (batch, seq, hidden_dim)
@@ -74,11 +74,11 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, device_mesh):
     # input goes to L1
     xs_1SBH = ttnn.from_torch(
         x_1SBH,
-        device=device_mesh,
+        device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
 
     # Attention mask
@@ -90,11 +90,11 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, device_mesh):
 
     attn_mask = ttnn.from_torch(
         attn_mask,
-        device=device_mesh,
+        device=mesh_device,
         dtype=ttnn.bfloat4_b,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
 
     ATTN_MASK_MEMCFG = ttnn.create_sharded_memory_config(
@@ -110,7 +110,7 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, device_mesh):
     return xs_1SBH, attn_mask
 
 
-def prepare_rotation_mat_ttnn(head_dim, max_seq_len, device_mesh):
+def prepare_rotation_mat_ttnn(head_dim, max_seq_len, mesh_device):
     """
     Prepare rotation matricies for decode mode.
     """
@@ -118,10 +118,10 @@ def prepare_rotation_mat_ttnn(head_dim, max_seq_len, device_mesh):
     rot_mats = [
         ttnn.from_torch(
             rot_mat_i.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
-            device=device_mesh,
+            device=mesh_device,
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
         for rot_mat_i in rot_mat
     ]
@@ -153,7 +153,7 @@ def sample(logits: torch.Tensor, temperature: float, top_p: float):
     return next_token
 
 
-def cache_attention(device_mesh, state_dict, model_args, rot_emb_matrix_list, seq_start, seq_len, dtype):
+def cache_attention(mesh_device, state_dict, model_args, rot_emb_matrix_list, seq_start, seq_len, dtype):
     logger.info(f"Caching attention ops for iterations {seq_start} to {seq_start + seq_len}...")
     from models.experimental.grok.tt.grok_attention import TtGrokAttention
 
@@ -161,13 +161,13 @@ def cache_attention(device_mesh, state_dict, model_args, rot_emb_matrix_list, se
         torch.randn(1, 1, 32, 4096),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device_mesh,
+        device=mesh_device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
 
     tt_attn = TtGrokAttention(
-        device_mesh,
+        mesh_device,
         state_dict,
         model_args,
         layer_num=0,
@@ -181,11 +181,11 @@ def cache_attention(device_mesh, state_dict, model_args, rot_emb_matrix_list, se
         attn_mask = ttnn.from_torch(
             # torch.zeros(1, 1, 32, padded_layer_past_len),
             torch.zeros(1, 32, 32, padded_layer_past_len),
-            device=device_mesh,
+            device=mesh_device,
             dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
 
         ATTN_MASK_MEMCFG = ttnn.create_sharded_memory_config(

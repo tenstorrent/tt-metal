@@ -5,12 +5,14 @@
 #pragma once
 #include <optional>
 
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/types.hpp"
+
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 namespace ttnn {
 
@@ -19,7 +21,7 @@ namespace operations {
 namespace matmul {
 
 using ttnn::operations::unary::UnaryWithParam;
-using tt::tt_metal::Shape;
+using tt::tt_metal::LegacyShape;
 
 /*
  * GENERAL MATMUL AND BMM
@@ -166,8 +168,8 @@ struct Matmul {
     void validate(
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Shape> compute_output_shapes_dram_sharded(
+    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes_dram_sharded(
         const std::vector<Tensor> &input_tensors, uint32_t N_unpadded) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(
@@ -185,6 +187,29 @@ Matmul create_matmul_struct(
     const Tensor &input_tensor_b,
     const struct Matmul &parameters
 );
+
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
+    tt::tt_metal::Program& program,
+    const Tensor &input_tensor_a,
+    const Tensor &input_tensor_b,
+    const std::optional<const Tensor> bias,
+    Tensor &output_tensor,
+    bool bcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const MatmulProgramConfig program_config,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helper(
+    tt::tt_metal::Program& program,
+    const Tensor &input_tensor_a,
+    const Tensor &input_tensor_b,
+    const std::optional<const Tensor> bias,
+    Tensor &output_tensor,
+    bool bcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const MatmulProgramConfig program_config,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &matmul_signal_info);
 
 Tensor matmul(
     const Tensor &input_tensor_a,

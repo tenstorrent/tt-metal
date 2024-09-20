@@ -11,6 +11,7 @@
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
 #include "ttnn/operations/eltwise/ternary_backward/ternary_backward.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/cpp/ttnn/common/constants.hpp"
 
 namespace py = pybind11;
 
@@ -136,7 +137,7 @@ void bind_binary_backward_int_default(py::module& module, const binary_backward_
 template <typename binary_backward_operation_t>
 void bind_binary_backward_opt_float_default(py::module& module, const binary_backward_operation_t& operation, const std::string& parameter_name, const std::string& parameter_doc, float parameter_value, std::string_view description, std::string_view supported_dtype) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, {2}: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, {2}: float, *, are_required_outputs: Optional[List[bool]] = [True, True], memory_config: Optional[ttnn.MemoryConfig] = None, output_tensor: Optional[ttnn.Tensor] = None ) -> std::vector<Tensor>
 
         {5}
 
@@ -147,7 +148,12 @@ void bind_binary_backward_opt_float_default(py::module& module, const binary_bac
             * :attr:`{2}` (float):`{3}`,Default value = {4}
 
         Keyword args:
+            * :attr:`are_required_outputs` (Optional[bool]): required output gradients
             * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
+            * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
+            * :attr:`queue_id` (Optional[uint8]): command queue id
+
+
 
         Supported dtypes, layouts, and ranks:
 
@@ -181,23 +187,23 @@ void bind_binary_backward_opt_float_default(py::module& module, const binary_bac
                const ttnn::Tensor& input_tensor_a,
                const ttnn::Tensor& input_tensor_b,
                float parameter,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::vector<bool>& are_required_outputs,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_a_grad,
                const std::optional<ttnn::Tensor>& input_b_grad,
                const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(queue_id, grad_tensor, input_tensor_a, input_tensor_b, parameter, memory_config, are_required_outputs, input_a_grad, input_b_grad);
+                return self(queue_id, grad_tensor, input_tensor_a, input_tensor_b, parameter, are_required_outputs, memory_config, input_a_grad, input_b_grad);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::arg(parameter_name.c_str()) = parameter_value,
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
             py::arg("are_required_outputs") = std::vector<bool>{true, true},
+            py::arg("memory_config") = std::nullopt,
             py::arg("input_a_grad") = std::nullopt,
             py::arg("input_b_grad") = std::nullopt,
-            py::arg("queue_id") = 0}
+            py::arg("queue_id") = ttnn::DefaultQueueId}
     );
 }
 
@@ -346,6 +352,143 @@ void bind_binary_backward_float_default(py::module& module, const binary_backwar
 }
 
 template <typename binary_backward_operation_t>
+void bind_binary_backward_sub_alpha(py::module& module, const binary_backward_operation_t& operation, const std::string& parameter_name, const std::string& parameter_doc, float parameter_value, std::string_view description, std::string_view supported_dtype) {
+    auto doc = fmt::format(
+        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, {2}: float, *, are_required_outputs: Optional[List[bool]] = [True, True], memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+
+        {5}
+
+        Args:
+            * :attr:`grad_tensor`
+            * :attr:`input_tensor_a`
+            * :attr:`input_tensor_b`
+            * :attr:`{2}` (float):`{3}`,Default value = {4}
+
+        Keyword args:
+            * :attr:`are_required_outputs` (Optional[bool]): required output gradients
+            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
+            * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
+            * :attr:`queue_id` (Optional[uint8]): command queue id
+
+        Supported dtypes, layouts, and ranks:
+
+        {6}
+
+        Note : bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
+
+        Example:
+
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+            >>> output = {1}(grad_tensor, tensor1, tensor2, float)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        parameter_name,
+        parameter_doc,
+        parameter_value,
+        description,
+        supported_dtype);
+
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const binary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor,
+               const ttnn::Tensor& other_tensor,
+               float alpha,
+               const std::vector<bool>& are_required_outputs,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& input_grad,
+               const std::optional<ttnn::Tensor>& other_grad,
+               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+                return self(queue_id, grad_tensor, input_tensor, other_tensor, alpha, are_required_outputs, memory_config, input_grad, other_grad);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::arg(parameter_name.c_str()) = parameter_value,
+            py::kw_only(),
+            py::arg("are_required_outputs") = std::vector<bool>{true, true},
+            py::arg("memory_config") = std::nullopt,
+            py::arg("input_grad") = std::nullopt,
+             py::arg("other_grad") = std::nullopt,
+            py::arg("queue_id") = ttnn::DefaultQueueId}
+    );
+}
+
+template <typename binary_backward_operation_t>
+void bind_binary_backward_rsub(py::module& module, const binary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
+
+    auto doc = fmt::format(
+        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, are_required_outputs: Optional[List[bool]] = [True, True], memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+
+        {2}
+
+        Args:
+            * :attr:`grad_tensor`
+            * :attr:`input_tensor_a`
+            * :attr:`input_tensor_b`
+
+        Keyword args:
+            * :attr:`are_required_outputs` (Optional[bool]): required output gradients
+            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
+            * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
+            * :attr:`queue_id` (Optional[uint8]): command queue id
+
+        Supported dtypes, layouts, and ranks:
+
+        {3}
+
+        Note : bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
+
+        Example:
+
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+            >>> output = {1}(grad_tensor, tensor1, tensor2, float)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        description,
+        supported_dtype);
+
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const binary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor,
+               const ttnn::Tensor& other_tensor,
+               const std::vector<bool>& are_required_outputs,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& input_grad,
+               const std::optional<ttnn::Tensor>& other_grad,
+               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+                return self(queue_id, grad_tensor, input_tensor, other_tensor, are_required_outputs, memory_config, input_grad, other_grad);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::kw_only(),
+            py::arg("are_required_outputs") = std::vector<bool>{true, true},
+            py::arg("memory_config") = std::nullopt,
+            py::arg("input_grad") = std::nullopt,
+             py::arg("other_grad") = std::nullopt,
+            py::arg("queue_id") = ttnn::DefaultQueueId}
+    );
+}
+
+template <typename binary_backward_operation_t>
 void bind_binary_bw_mul(py::module& module, const binary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
     auto doc = fmt::format(
         R"doc({0}(input_tensor_a: Union[ttnn.Tensor, ComplexTensor] , input_tensor_b: Union[ComplexTensor, ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, activations: Optional[List[str]] = None) -> ttnn.Tensor or ComplexTensor
@@ -358,10 +501,9 @@ void bind_binary_bw_mul(py::module& module, const binary_backward_operation_t& o
             * :attr:`input_tensor_b` (ComplexTensor or ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
 
         Keyword args:
+            * :attr:`are_required_outputs` (Optional[bool]): required output gradients
             * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
-            * :attr:`dtype` (Optional[ttnn.DataType]): data type for the output tensor
             * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-            * :attr:`activations` (Optional[List[str]]): list of activation functions to apply to the output tensor
             * :attr:`queue_id` (Optional[uint8]): command queue id
 
         Supported dtypes, layouts, and ranks:
@@ -392,14 +534,216 @@ void bind_binary_bw_mul(py::module& module, const binary_backward_operation_t& o
                const Tensor& grad_tensor,
                const Tensor& input_tensor_a,
                const float scalar,
-               const std::optional<MemoryConfig>& memory_config){
-                return self(grad_tensor, input_tensor_a, scalar, memory_config);
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& input_grad,
+               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+                return self(queue_id, grad_tensor, input_tensor_a, scalar, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor_a"),
             py::arg("scalar"),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt},
+            py::arg("memory_config") = std::nullopt,
+            py::arg("input_grad") = std::nullopt,
+            py::arg("queue_id") = ttnn::DefaultQueueId},
+
+        // tensor and tensor
+        ttnn::pybind_overload_t{
+            [](const binary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor,
+               const ttnn::Tensor& other_tensor,
+               const std::vector<bool>& are_required_outputs,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& input_grad,
+               const std::optional<ttnn::Tensor>& other_grad,
+               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+                return self(queue_id, grad_tensor, input_tensor, other_tensor, are_required_outputs, memory_config, input_grad, other_grad);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor"),
+            py::arg("other_tensor"),
+            py::kw_only(),
+            py::arg("are_required_outputs") = std::vector<bool>{true, true},
+            py::arg("memory_config") = std::nullopt,
+            py::arg("input_grad") = std::nullopt,
+            py::arg("other_grad") = std::nullopt,
+            py::arg("queue_id") = ttnn::DefaultQueueId},
+
+        // complex tensor
+        ttnn::pybind_overload_t{
+            [](const binary_backward_operation_t& self,
+               const ComplexTensor& grad_tensor,
+               const ComplexTensor& input_tensor_a,
+               const ComplexTensor& input_tensor_b,
+               const MemoryConfig& memory_config) {
+                return self(grad_tensor, input_tensor_a, input_tensor_b, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt});
+}
+
+
+template <typename binary_backward_operation_t>
+void bind_binary_bw(py::module& module, const binary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
+    auto doc = fmt::format(
+        R"doc({0}(input_tensor_a: Union[ttnn.Tensor, ComplexTensor] , input_tensor_b: Union[ComplexTensor, ttnn.Tensor, int, float], *, are_required_outputs: Optional[List[bool]] = [True, True], memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, activations: Optional[List[str]] = None) -> ttnn.Tensor or ComplexTensor
+
+        {2}
+        Supports broadcasting.
+
+        Args:
+            * :attr:`input_tensor_a` (ComplexTensor or ttnn.Tensor)
+            * :attr:`input_tensor_b` (ComplexTensor or ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
+
+        Keyword args:
+            * :attr:`are_required_outputs` (Optional[bool]): required output gradients
+            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
+            * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
+            * :attr:`queue_id` (Optional[uint8]): command queue id
+
+        Supported dtypes, layouts, and ranks:
+
+        {3}
+
+        Note : bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
+
+        Example:
+
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+            >>> output = {1}(tensor1, tensor2)
+
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        description,
+        supported_dtype);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        // tensor and scalar
+        ttnn::pybind_overload_t{
+            [](const binary_backward_operation_t& self,
+               const Tensor& grad_tensor,
+               const Tensor& input_tensor_a,
+               const float scalar,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& input_grad,
+               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+                 return self(queue_id, grad_tensor, input_tensor_a, scalar, memory_config, input_grad);
+             },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::arg("scalar"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("input_grad") = std::nullopt,
+            py::arg("queue_id") = ttnn::DefaultQueueId},
+
+        // tensor and tensor
+        ttnn::pybind_overload_t{
+            [](const binary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor,
+               const ttnn::Tensor& other_tensor,
+               const std::vector<bool>& are_required_outputs,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& input_grad,
+               const std::optional<ttnn::Tensor>& other_grad,
+               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+                return self(queue_id, grad_tensor, input_tensor, other_tensor, are_required_outputs, memory_config, input_grad, other_grad);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor"),
+            py::arg("other_tensor"),
+            py::kw_only(),
+            py::arg("are_required_outputs") = std::vector<bool>{true, true},
+            py::arg("memory_config") = std::nullopt,
+            py::arg("input_grad") = std::nullopt,
+            py::arg("other_grad") = std::nullopt,
+            py::arg("queue_id") = ttnn::DefaultQueueId},
+
+        // complex tensor
+        ttnn::pybind_overload_t{
+            [](const binary_backward_operation_t& self,
+               const ComplexTensor& grad_tensor,
+               const ComplexTensor& input_tensor_a,
+               const ComplexTensor& input_tensor_b,
+               float alpha,
+               const std::optional<MemoryConfig>& memory_config) {
+                return self(grad_tensor, input_tensor_a, input_tensor_b, alpha, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::arg("alpha"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt});
+}
+
+template <typename binary_backward_operation_t>
+void bind_binary_bw_optional(py::module& module, const binary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype = "") {
+    auto doc = fmt::format(
+        R"doc({0}(input_tensor_a: Union[ttnn.Tensor, ComplexTensor] , input_tensor_b: Union[ComplexTensor, ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, activations: Optional[List[str]] = None) -> ttnn.Tensor or ComplexTensor
+
+        {2}
+
+        Args:
+            * :attr:`input_tensor_a` (ttnn.Tensor)
+            * :attr:`input_tensor_b` (ttnn.Tensor or Number).
+
+        Keyword args:
+            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
+            * :attr:`dtype` (Optional[ttnn.DataType]): data type for the output tensor
+            * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
+            * :attr:`queue_id` (Optional[uint8]): command queue id
+
+        Supported dtypes, layouts, and ranks:
+
+        {3}
+
+        Note : bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
+
+        Example:
+
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+            >>> output = {1}(tensor1, tensor2)
+
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        description,
+        supported_dtype);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        // tensor and scalar
+        ttnn::pybind_overload_t{
+            [](const binary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor,
+               float other,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& input_grad,
+               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+                return self(queue_id, grad_tensor, input_tensor, other, memory_config, input_grad);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor"),
+            py::arg("other"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("input_grad") = std::nullopt,
+            py::arg("queue_id") = 0},
 
         // tensor and tensor
         ttnn::pybind_overload_t{
@@ -422,22 +766,7 @@ void bind_binary_bw_mul(py::module& module, const binary_backward_operation_t& o
             py::arg("are_required_outputs") = std::vector<bool>{true, true},
             py::arg("input_grad") = std::nullopt,
             py::arg("other_grad") = std::nullopt,
-            py::arg("queue_id") = 0},
-
-        // complex tensor
-        ttnn::pybind_overload_t{
-            [](const binary_backward_operation_t& self,
-               const ComplexTensor& grad_tensor,
-               const ComplexTensor& input_tensor_a,
-               const ComplexTensor& input_tensor_b,
-               const MemoryConfig& memory_config) {
-                return self(grad_tensor, input_tensor_a, input_tensor_b, memory_config);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor_a"),
-            py::arg("input_tensor_b"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt});
+            py::arg("queue_id") = 0});
 }
 
 template <typename binary_backward_operation_t>
@@ -613,6 +942,137 @@ void bind_binary_bw_operation(py::module& module, const binary_backward_operatio
             py::arg("memory_config") = std::nullopt});
 }
 
+template <typename binary_backward_operation_t>
+void bind_binary_backward_overload(py::module& module, const binary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
+    auto doc = fmt::format(
+        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, float], *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+
+        {2}
+
+        Args:
+            * :attr:`grad_tensor`
+            * :attr:`input_tensor_a`
+            * :attr:`input_tensor_b` (ttnn.Tensor or Scalar)
+
+        Keyword args:
+            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
+
+        Supported dtypes, layouts, and ranks:
+
+        Example:
+
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+            >>> output = {1}(grad_tensor, tensor1, tensor2/scalar)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        description,
+        supported_dtype);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        // tensor and scalar
+        ttnn::pybind_overload_t{
+            [](const binary_backward_operation_t& self,
+               const Tensor& grad_tensor,
+               const Tensor& input_tensor_a,
+               const float scalar,
+               const std::optional<ttnn::MemoryConfig>& memory_config)-> std::vector<ttnn::Tensor> {
+               return self(grad_tensor, input_tensor_a, scalar, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::arg("scalar"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt},
+
+        // tensor and tensor
+        ttnn::pybind_overload_t{
+            [](const binary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor_a,
+               const ttnn::Tensor& input_tensor_b,
+               const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
+               return self(grad_tensor, input_tensor_a, input_tensor_b, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt});
+}
+
+template <typename binary_backward_operation_t>
+void bind_binary_backward_assign(py::module& module, const binary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
+    auto doc = fmt::format(
+        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+
+        {2}
+
+        Args:
+            * :attr:`grad_tensor`
+            * :attr:`input_tensor_a`
+            * :attr:`input_tensor_b`
+
+        Keyword args:
+            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
+            * :attr:`queue_id` (Optional[uint8]): command queue id
+
+        Supported dtypes, layouts, and ranks:
+
+        Example:
+
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+            >>> output = {1}(grad_tensor, tensor1, tensor2/scalar)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        description,
+        supported_dtype);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        // tensor
+        ttnn::pybind_overload_t{
+            [](const binary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const uint8_t& queue_id) -> std::vector<ttnn::Tensor> {
+               return self(queue_id, grad_tensor, input_tensor, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("queue_id") = 0},
+
+        // tensor and tensor
+        ttnn::pybind_overload_t{
+            [](const binary_backward_operation_t& self,
+               const ttnn::Tensor& grad_tensor,
+               const ttnn::Tensor& input_tensor_a,
+               const ttnn::Tensor& input_tensor_b,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const uint8_t& queue_id) -> std::vector<ttnn::Tensor> {
+               return self(queue_id, grad_tensor, input_tensor_a, input_tensor_b, memory_config);
+            },
+            py::arg("grad_tensor"),
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("queue_id") = 0});
+}
+
 }  // namespace detail
 
 
@@ -628,7 +1088,7 @@ void py_module(py::module& module) {
         |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
         +----------------------------+---------------------------------+-------------------+)doc");
 
-    detail::bind_binary_bw_operation(
+    detail::bind_binary_bw(
         module,
         ttnn::add_bw,
         R"doc(Performs backward operations for add of :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc",
@@ -639,10 +1099,10 @@ void py_module(py::module& module) {
         |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
         +----------------------------+---------------------------------+-------------------+)doc");
 
-    detail::bind_binary_bw_operation(
+    detail::bind_binary_bw(
         module,
         ttnn::sub_bw,
-        R"doc(Performs backward operations for sub of :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc",
+        R"doc(Performs backward operations for subtract of :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc",
         R"doc(
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
@@ -661,6 +1121,46 @@ void py_module(py::module& module) {
         |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
         +----------------------------+---------------------------------+-------------------+)doc");
 
+    detail::bind_binary_backward_overload(
+        module,
+        ttnn::remainder_bw,
+        R"doc(Performs backward operations for remainder of :attr:`input_tensor_a`, :attr:`scalar` or attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
+        R"doc(
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16                |       ROW_MAJOR, TILE           |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+)doc");
+
+    detail::bind_binary_backward_overload(
+        module,
+        ttnn::fmod_bw,
+        R"doc(Performs backward operations for fmod of :attr:`input_tensor_a`, :attr:`scalar` or attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
+
+        R"doc(
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16                |       ROW_MAJOR, TILE           |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+)doc");
+
+    detail::bind_binary_backward_assign(
+        module,
+        ttnn::assign_bw,
+        R"doc(Performs backward operations for assign of :attr:`input_tensor_a`, :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
+
+        R"doc(
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16                |       ROW_MAJOR, TILE           |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+)doc");
+    
+    detail::bind_binary_bw_optional(
+        module,
+        ttnn::lt_bw,
+        R"doc(Performs backward operations for less than operation of :attr:`input_tensor_a` and attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc");
+
     detail::bind_binary_backward_ops(
         module,
         ttnn::atan2_bw,
@@ -672,7 +1172,7 @@ void py_module(py::module& module) {
         |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
         +----------------------------+---------------------------------+-------------------+)doc");
 
-    detail::bind_binary_backward_float_default(
+    detail::bind_binary_backward_sub_alpha(
         module,
         ttnn::subalpha_bw,
         "alpha", "Alpha value", 1.0f,
@@ -774,7 +1274,7 @@ void py_module(py::module& module) {
         |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
         +----------------------------+---------------------------------+-------------------+)doc");
 
-    detail::bind_binary_backward_ops(
+    detail::bind_binary_backward_rsub(
         module,
         ttnn::rsub_bw,
         R"doc(Performs backward operations for subraction of :attr:`input_tensor_a` from :attr:`input_tensor_b` with given attr:`grad_tensor` (reversed order of subtraction operator).)doc",

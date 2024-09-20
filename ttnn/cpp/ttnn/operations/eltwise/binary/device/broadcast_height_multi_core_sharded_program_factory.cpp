@@ -4,20 +4,22 @@
 
 #include "binary_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
-//#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/operations/data_movement/bcast/bcast.hpp"
+//#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 //#include "ttnn/device_operation.hpp"
 
+
+
 namespace ttnn::operations::binary {
 
-static const tt::tt_metal::BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType binary_op_type) {
+static const BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType binary_op_type) {
     switch (binary_op_type) {
-        case BinaryOpType::ADD: return tt::tt_metal::BcastOpMath::ADD;
-        case BinaryOpType::SUB: return tt::tt_metal::BcastOpMath::SUB;
-        case BinaryOpType::MUL: return tt::tt_metal::BcastOpMath::MUL;
+        case BinaryOpType::ADD: return BcastOpMath::ADD;
+        case BinaryOpType::SUB: return BcastOpMath::SUB;
+        case BinaryOpType::MUL: return BcastOpMath::MUL;
         default: TT_THROW("BinaryOpType cannot be mapped to BcastOpMath");
     }
 }
@@ -29,6 +31,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::constants;
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
@@ -94,7 +97,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
         Ht = shard_spec.shape[0] / TILE_HEIGHT;
         TT_ASSERT((shard_spec.shape[0] % (bN * TILE_HEIGHT) == 0), "Shard height per batch must be divisible by TILE_HEIGHT {} {} {} ", shard_spec.shape[0], bN, TILE_HEIGHT);
     } else{
-        TT_FATAL(false, "Unsupported memory layout");
+        TT_THROW("Unsupported memory layout");
     }
 
     TT_ASSERT((shard_spec.shape[0] % TILE_HEIGHT == 0) && (shard_spec.shape[0] % TILE_WIDTH == 0), "Shard shapes must be multiple of TILE_HEIGHT ");
@@ -131,7 +134,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
 
     KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/bcast/kernels/dataflow/reader_bcast_h_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/reader_bcast_h_sharded.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -139,7 +142,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
     //const char* compute_name = bcast_op_utils::get_compute_name(BcastOpDim::H));
     auto bcast_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/bcast/kernels/compute/bcast_h.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_h.cpp",
         all_cores,
         tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines}
     );
@@ -216,6 +219,7 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreSharded::override_runtime_a
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::constants;
 
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
@@ -247,7 +251,7 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreSharded::override_runtime_a
             Wt = shard_spec.shape[1] / TILE_WIDTH;
             Ht = shard_spec.shape[0] / TILE_HEIGHT;
         } else{
-            TT_FATAL(false, "Unsupported memory layout");
+            TT_THROW("Unsupported memory layout");
         }
         uint32_t Ht_per_core = 0, ncores_y = ncores / ncores_x;
         for (uint32_t i = 0; i < ncores; i++){

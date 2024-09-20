@@ -16,7 +16,7 @@ namespace ttnn::operations::experimental::matmul {
         const CoreCoord& compute_with_storage_grid_size,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<const DataType> output_dtype,
-        std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
         std::optional<Tensor> optional_output_tensor) {
 
         auto mem_config = memory_config.value_or(input_tensor_a.memory_config());
@@ -32,11 +32,11 @@ namespace ttnn::operations::experimental::matmul {
             }
         }
 
-        auto arch = input_tensor_a.storage_type() == StorageType::DEVICE ? input_tensor_a.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
+        auto arch = input_tensor_a.storage_type() == StorageType::DEVICE ? input_tensor_a.device()->arch() : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
         auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config);
 
         // Need to cache on out_subblock_w because it must be a compile time arg for optimal use of templated pack_untilize APIs
-        const uint32_t Nt = input_tensor_b.get_legacy_shape()[-1] / TILE_WIDTH;
+        const uint32_t Nt = input_tensor_b.get_legacy_shape()[-1] / tt::constants::TILE_WIDTH;
         constexpr uint32_t HALF_DST_MAX = 8; // 8 is the max number of tiles for half DST (assuming out_subblock_h == 1)
         constexpr uint32_t HALF_DST_MAX_FP32 = 4; // max dst tiles are 4 for fp32
         uint32_t out_subblock_w;
@@ -59,7 +59,7 @@ namespace ttnn::operations::experimental::matmul {
         const CoreCoord& compute_with_storage_grid_size,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<const DataType> output_dtype,
-        std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
         std::optional<Tensor> optional_output_tensor) {
         return invoke(
             ttnn::DefaultQueueId, input_tensor_a, input_tensor_b, compute_with_storage_grid_size, memory_config, output_dtype, compute_kernel_config, optional_output_tensor);

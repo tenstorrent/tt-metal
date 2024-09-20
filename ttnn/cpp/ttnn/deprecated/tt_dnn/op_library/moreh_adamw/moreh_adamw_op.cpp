@@ -62,7 +62,7 @@ void MorehAdamW::validate_with_output_tensors(
     }
 }
 
-std::vector<Shape> MorehAdamW::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehAdamW::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     auto output_shape = input_tensors.at(0).get_legacy_shape();
     return {output_shape, output_shape, output_shape, output_shape};
 }
@@ -147,7 +147,7 @@ std::vector<std::optional<Tensor>> moreh_adamw(
     const std::optional<const Tensor> exp_avg_sq_out,
     const std::optional<const Tensor> max_exp_avg_sq_out,
     const MemoryConfig& mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
 
     auto device = param_in.device();
     auto grid_coord = device->compute_with_storage_grid_size();

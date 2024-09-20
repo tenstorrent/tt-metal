@@ -13,9 +13,9 @@ Some OPs in this library might change layout of input tensors and pad them to be
 These OPs will unpad the result tensor before it is returned to caller.
 
 There is a limitation that tensor in ROW_MAJOR layout on TT Accelerator device must have the size of last dimension ``X`` be divisible by 2.
-You can't create these type of tensors on TT Accelerator device or send them to TT Accelerator device with ```tt_lib.tensor.Tensor.to()``.
+You can't create these type of tensors on TT Accelerator device or send them to TT Accelerator device with ```ttnn.Tensor.to()``.
 However, you can supply these type of tensors to OPs from TT-LIB library as they can automatically pad the last dimension before moving the tensor
-to TT Accelerator device. To use this functionality, you must call `tt_lib.device.SetDefaultDevice(tt_device)` to set your TT Accelerator device
+to TT Accelerator device. To use this functionality, you must call `ttnn.SetDefaultDevice(tt_device)` to set your TT Accelerator device
 as the default device that will be used to execute operations on tensors that are on host machine.
 
 Operation Infrastructure
@@ -34,7 +34,7 @@ New Device Operation
 
     struct <NewOperation> {
         void validate(const std::vector<Tensor> &input_tensors) const;
-        std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+        std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
         std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
         operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     };
@@ -48,7 +48,7 @@ New Device Operation with a member
         int some_member
 
         void validate(const std::vector<Tensor> &input_tensors) const;
-        std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+        std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
         std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
         operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     };
@@ -61,7 +61,7 @@ New Device Operation with Optional Input Tensors
     struct <NewOperation> {
         void validate(const std::vector<Tensor> &input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
-        std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+        std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
         std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
         operation::ProgramWithCallbacks create_program(
             const std::vector<Tensor>& input_tensors,
@@ -80,7 +80,7 @@ and create_output_tensors with the additional parameter for the output_tensors.
 
     struct <NewOperation> {
         void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-        std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+        std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
         std::vector<std::optional<Tensor>> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
         operation::ProgramWithOptionalOutputTensors create_program(const std::vector<Tensor>& input_tensors, std::vector<std::optional<Tensor>> &output_tensors) const;
 
@@ -106,13 +106,11 @@ Fast Dispatch
 
 Fast dispatch allows programs/kernels to be enqueued to run, so host code does not have to wait for ops/programs to finish running.
 The enqueued programs run asynchronously to the host code.
-To wait for kernels to complete, either read a tensor from device to host with:
+To wait for kernels to complete, either read a tensor from device to host with tensor.cpu:
 
-.. autofunction:: tt_lib.tensor.Tensor.cpu
+.. autofunction:: ttnn.Tensor.cpu
 
 or to perform only a wait, use:
-
-.. autofunction:: tt_lib.device.Synchronize
 
 
 Program Caching
@@ -223,10 +221,6 @@ Primary Operations
 
 .. autofunction:: tt_lib.operations.primary.moreh_logsoftmax_backward
 
-.. autofunction:: tt_lib.operations.primary.moreh_mean
-
-.. autofunction:: tt_lib.operations.primary.moreh_mean_backward
-
 .. autofunction:: tt_lib.operations.primary.moreh_groupnorm
 
 .. autofunction:: tt_lib.operations.primary.moreh_groupnorm_backward
@@ -235,22 +229,14 @@ Primary Operations
 
 .. autofunction:: tt_lib.operations.primary.moreh_norm_backward
 
-.. autofunction:: tt_lib.operations.primary.moreh_nll_loss_unreduced
-
-.. autofunction:: tt_lib.operations.primary.moreh_nll_loss_unreduced_backward
-
 Enums
 =====
 
-.. autoclass:: tt_lib.tensor.BcastOpMath
+.. autoclass:: ttnn.BcastOpMath
 
-.. autoclass:: tt_lib.tensor.BcastOpDim
+.. autoclass:: ttnn.BcastOpDim
 
 
-Broadcast and Reduce
-====================
-
-.. autofunction:: tt_lib.tensor.bcast
 
 
 
@@ -358,8 +344,3 @@ Complex Operations (Type 2)
 Type 2 Complex representation allows for more flexible storage than earlier one while providing same set of
 operations; specifically this storage allows for compute without the cost of split-concat implicit in
 the Type 1 contiguous representations.
-
-Other Operations
-================
-
-.. autofunction:: tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout

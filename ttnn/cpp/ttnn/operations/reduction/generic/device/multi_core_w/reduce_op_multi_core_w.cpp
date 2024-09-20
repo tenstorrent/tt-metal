@@ -5,7 +5,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
 using namespace tt::constants;
@@ -19,7 +19,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     const Tensor &a,
     Tensor &output,
     ReduceOpMath reduce_op,
-    const DeviceComputeKernelConfig &compute_kernel_config,
+    const ttnn::DeviceComputeKernelConfig &compute_kernel_config,
     float scaler) {
     const auto shape = a.get_legacy_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
@@ -50,7 +50,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto num_rows = NC * Ht;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_rows);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows);
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;

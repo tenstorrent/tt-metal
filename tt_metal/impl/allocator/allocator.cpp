@@ -27,7 +27,7 @@ static char const *get_memory_pool_name(BufferType buffer_type) {
 }
 #endif
 
-void BankManager::init_allocator(uint64_t size_bytes, uint32_t alignment_bytes, uint64_t offset) {
+void BankManager::init_allocator(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset) {
     this->allocator_ =
         std::make_unique<FreeList>(size_bytes, offset, alignment_bytes, alignment_bytes, FreeList::SearchPolicy::FIRST);
 }
@@ -53,9 +53,9 @@ void validate_num_banks(uint32_t num_banks, const BufferType &buffer_type) {
 BankManager::BankManager(
     const BufferType &buffer_type,
     const std::vector<int64_t> &bank_offsets,
-    uint64_t size_bytes,
+    DeviceAddr size_bytes,
     uint32_t alignment_bytes,
-    uint64_t alloc_offset) :
+    DeviceAddr alloc_offset) :
     buffer_type_(buffer_type), alignment_bytes_(alignment_bytes) {
     unsigned int bank_id = 0;
     for (const auto bank_offset : bank_offsets) {
@@ -70,10 +70,10 @@ BankManager::BankManager(
 BankManager::BankManager(
     const BufferType &buffer_type,
     const std::unordered_map<uint32_t, int64_t> &bank_id_to_bank_offset,
-    uint64_t size_bytes,
-    uint64_t interleaved_address_limit,
+    DeviceAddr size_bytes,
+    DeviceAddr interleaved_address_limit,
     uint32_t alignment_bytes,
-    uint64_t alloc_offset) :
+    DeviceAddr alloc_offset) :
     buffer_type_(buffer_type),
     bank_id_to_bank_offset_(bank_id_to_bank_offset),
     interleaved_address_limit_(interleaved_address_limit),
@@ -84,13 +84,13 @@ BankManager::BankManager(
 
 uint32_t BankManager::num_banks() const { return this->bank_id_to_bank_offset_.size(); }
 
-uint32_t BankManager::bank_size() const {
+DeviceAddr BankManager::bank_size() const {
     TT_ASSERT(bool(this->allocator_), "Allocator not initialized!");
-    uint64_t max_size_bytes_u64 = this->allocator_->max_size_bytes();
-    if (max_size_bytes_u64 > std::numeric_limits<uint32_t>::max()) {
-        TT_THROW("Bank size {} overflows uint32_t", max_size_bytes_u64);
+    DeviceAddr max_size_bytes_u64 = this->allocator_->max_size_bytes();
+    if (max_size_bytes_u64 > std::numeric_limits<DeviceAddr>::max()) {
+        TT_THROW("Bank size {} overflows DeviceAddr", max_size_bytes_u64);
     }
-    uint32_t max_size_bytes = (uint32_t)max_size_bytes_u64;
+    DeviceAddr max_size_bytes = (DeviceAddr)max_size_bytes_u64;
     return max_size_bytes;
 }
 
@@ -108,8 +108,8 @@ void BankManager::validate_bank_id(uint32_t bank_id) const {
 }
 
 uint64_t BankManager::allocate_buffer(
-    uint32_t size,
-    uint32_t page_size,
+    DeviceAddr size,
+    DeviceAddr page_size,
     bool bottom_up,
     CoreCoord compute_grid_size,
     std::optional<uint32_t> num_shards) {
@@ -120,14 +120,16 @@ uint64_t BankManager::allocate_buffer(
         is_sharded = true;
         TT_FATAL(
             num_shards.value() <= num_compute_banks,
-            "Expected number of shards to be less than or equal to total number of L1 banks in compute cores");
+            "Expected number of shards {} to be less than or equal to total number of L1 banks {} in compute cores",
+            num_shards.value(),
+            num_compute_banks);
         num_banks = num_shards.value();
     }
-    uint32_t size_per_bank = tt::tt_metal::detail::SizeBytesPerBank(size, page_size, num_banks, this->alignment_bytes_);
-    uint64_t address_limit = 0;
+    DeviceAddr size_per_bank = tt::tt_metal::detail::SizeBytesPerBank(size, page_size, num_banks, this->alignment_bytes_);
+    DeviceAddr address_limit = 0;
     if (!is_sharded and this->buffer_type_ == BufferType::L1) {
         address_limit = this->interleaved_address_limit_;
-        TT_FATAL(address_limit > 0);
+        TT_FATAL(address_limit > 0, "Address limit {} needs to be larger than zero.", address_limit);
     }
     TT_ASSERT(bool(this->allocator_), "Allocator not initialized!");
     auto address = this->allocator_->allocate(size_per_bank, bottom_up, address_limit);
@@ -144,10 +146,10 @@ uint64_t BankManager::allocate_buffer(
     return address.value();
 }
 
-void BankManager::deallocate_buffer(uint64_t address) { this->allocator_->deallocate(address); }
+void BankManager::deallocate_buffer(DeviceAddr address) { this->allocator_->deallocate(address); }
 
 void BankManager::deallocate_all() {
-    for (uint64_t addr : this->allocated_buffers_) {
+    for (DeviceAddr addr : this->allocated_buffers_) {
         this->allocator_->deallocate(addr);
     }
 }
@@ -174,14 +176,14 @@ BankManager &&BankManager::operator=(BankManager &&that) {
     return std::move(*this);
 }
 
-std::optional<uint64_t> BankManager::lowest_occupied_address(uint32_t bank_id) const {
+std::optional<DeviceAddr> BankManager::lowest_occupied_address(uint32_t bank_id) const {
     if (not this->allocator_)
         return std::nullopt;
     auto lowest_address = this->allocator_->lowest_occupied_address();
     if (not lowest_address.has_value()) {
         return lowest_address;
     }
-    auto adjusted_abs_addr = lowest_address.value() + this->bank_offset(bank_id);
+    DeviceAddr adjusted_abs_addr = lowest_address.value() + this->bank_offset(bank_id);
     return adjusted_abs_addr;
 }
 
@@ -196,9 +198,9 @@ void BankManager::dump_blocks(std::ofstream &out) const {
 
 void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &alloc_config) {
     // Space up to DRAM_UNRESERVED_BASE is reserved for DRAM write barrier
-    uint64_t offset_bytes = static_cast<uint64_t>(DRAM_UNRESERVED_BASE);
+    DeviceAddr offset_bytes = static_cast<DeviceAddr>(DRAM_UNRESERVED_BASE);
     // DRAM bank is between unreserved start and trace_region start: UNRESERVED | DRAM BANK | TRACE REGION
-    uint32_t dram_bank_size = alloc_config.dram_bank_size - DRAM_UNRESERVED_BASE - alloc_config.trace_region_size;
+    DeviceAddr dram_bank_size = alloc_config.dram_bank_size - DRAM_UNRESERVED_BASE - alloc_config.trace_region_size;
     std::vector<int64_t> bank_offsets(alloc_config.num_dram_channels);
     for (uint32_t channel_id = 0; channel_id < alloc_config.num_dram_channels; channel_id++) {
         bank_offsets.at(channel_id) = static_cast<int32_t>(alloc_config.dram_bank_offsets.at(channel_id));
@@ -211,21 +213,19 @@ void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &allo
         allocator.dram_channel_to_bank_ids.insert({bank_id, {bank_id}});
         allocator.logical_core_to_bank_ids[BufferType::DRAM].insert({logical_core, {bank_id}});
     }
-    if (alloc_config.trace_region_size > 0) {
-        // Trace buffers are allocated in this region (top-down). Trace region is offset at dram_bank_size + UNRESERVED
-        // offset
-        allocator.trace_buffer_manager = BankManager(
-            BufferType::TRACE,
-            bank_offsets,
-            alloc_config.trace_region_size,
-            ALLOCATOR_ALIGNMENT,
-            dram_bank_size + DRAM_UNRESERVED_BASE);
-        for (uint32_t bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
-            CoreCoord logical_core = CoreCoord{bank_id, 0};
-            allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
-            allocator.dram_channel_to_bank_ids.insert({bank_id, {bank_id}});
-            allocator.logical_core_to_bank_ids[BufferType::TRACE].insert({logical_core, {bank_id}});
-        }
+    // Trace buffers are allocated in this region (top-down). Trace region is offset at dram_bank_size + UNRESERVED
+    // offset
+    allocator.trace_buffer_manager = BankManager(
+        BufferType::TRACE,
+        bank_offsets,
+        alloc_config.trace_region_size,
+        ALLOCATOR_ALIGNMENT,
+        dram_bank_size + DRAM_UNRESERVED_BASE);
+    for (uint32_t bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
+        CoreCoord logical_core = CoreCoord{bank_id, 0};
+        allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
+        allocator.dram_channel_to_bank_ids.insert({bank_id, {bank_id}});
+        allocator.logical_core_to_bank_ids[BufferType::TRACE].insert({logical_core, {bank_id}});
     }
 }
 
@@ -233,8 +233,8 @@ void init_one_bank_per_l1(Allocator &allocator, const AllocatorConfig &alloc_con
     TT_ASSERT(alloc_config.l1_small_size == 0);
     uint32_t num_l1_banks = alloc_config.worker_grid_size.y * alloc_config.worker_grid_size.x;
     // Space up to L1_UNRESERVED_BASE is reserved for risc binaries, kernel args, debug and perf monitoring tools
-    uint64_t offset_bytes = static_cast<uint64_t>(L1_UNRESERVED_BASE);
-    uint32_t l1_bank_size = alloc_config.worker_l1_size - L1_UNRESERVED_BASE;
+    DeviceAddr offset_bytes = static_cast<DeviceAddr>(L1_UNRESERVED_BASE);
+    DeviceAddr l1_bank_size = alloc_config.worker_l1_size - L1_UNRESERVED_BASE;
     std::vector<int64_t> bank_offsets(num_l1_banks, 0);
     allocator.l1_manager = BankManager(BufferType::L1, bank_offsets, l1_bank_size, ALLOCATOR_ALIGNMENT, offset_bytes);
 
@@ -262,7 +262,7 @@ uint32_t num_banks(const Allocator &allocator, const BufferType &buffer_type) {
     return 0;
 }
 
-uint32_t bank_size(const Allocator &allocator, const BufferType &buffer_type) {
+DeviceAddr bank_size(const Allocator &allocator, const BufferType &buffer_type) {
     switch (buffer_type) {
         case BufferType::DRAM: return allocator.dram_manager.bank_size();
         case BufferType::L1: return allocator.l1_manager.bank_size();
@@ -339,16 +339,16 @@ void dump_memory_blocks(const Allocator &allocator, const BufferType &buffer_typ
     }
 }
 
-std::optional<uint64_t> lowest_occupied_l1_address(const Allocator &allocator, uint32_t bank_id) {
+std::optional<DeviceAddr> lowest_occupied_l1_address(const Allocator &allocator, uint32_t bank_id) {
     // l1_manager always sits below l1_small_manager in the address space, so there is no need to check l1_small_manager
     return allocator.l1_manager.lowest_occupied_address(bank_id);
 }
 
-uint64_t base_alloc(
+DeviceAddr base_alloc(
     const AllocatorConfig &config,
     BankManager &bank_manager,
-    uint64_t size,
-    uint64_t page_size,
+    DeviceAddr size,
+    DeviceAddr page_size,
     bool bottom_up,
     std::optional<uint32_t> num_shards) {
     return bank_manager.allocate_buffer(size, page_size, bottom_up, config.compute_grid_size, num_shards);
@@ -360,8 +360,8 @@ void enable_allocs(Allocator &allocator) { allocator.disabled_allocs = false; }
 
 uint64_t allocate_buffer(
     Allocator &allocator,
-    uint32_t size,
-    uint32_t page_size,
+    DeviceAddr size,
+    DeviceAddr page_size,
     const BufferType &buffer_type,
     bool bottom_up,
     std::optional<uint32_t> num_shards) {
@@ -389,7 +389,7 @@ uint64_t allocate_buffer(
     return address;
 }
 
-void deallocate_buffer(Allocator &allocator, uint64_t address, const BufferType &buffer_type) {
+void deallocate_buffer(Allocator &allocator, DeviceAddr address, const BufferType &buffer_type) {
     switch (buffer_type) {
         case BufferType::DRAM: allocator.dram_manager.deallocate_buffer(address); break;
         case BufferType::L1: allocator.l1_manager.deallocate_buffer(address); break;

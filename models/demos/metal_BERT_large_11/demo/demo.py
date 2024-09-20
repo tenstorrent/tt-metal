@@ -17,7 +17,11 @@ from models.utility_functions import (
 )
 
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
-from models.demos.metal_BERT_large_11.tt.model_config import get_model_config, get_tt_cache_path
+from models.demos.metal_BERT_large_11.tt.model_config import (
+    get_model_config,
+    get_tt_cache_path,
+    skip_unsupported_config,
+)
 from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
 
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
@@ -355,7 +359,7 @@ def run_bert_question_and_answering_inference(
     return measurements, model_answers
 
 
-@pytest.mark.parametrize("batch", (7, 12), ids=["batch_7", "batch_12"])
+@pytest.mark.parametrize("batch", (7, 8, 12), ids=["batch_7", "batch_8", "batch_12"])
 @pytest.mark.parametrize(
     "input_path, NUM_RUNS",
     (("models/demos/metal_BERT_large_11/demo/input_data.json", 1),),
@@ -368,6 +372,8 @@ def test_demo(
     device,
     use_program_cache,
 ):
+    model_config_str = "BFLOAT8_B-SHARDED"
+    skip_unsupported_config(device, model_config_str, batch)
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
@@ -377,7 +383,7 @@ def test_demo(
         seq_len=384,
         return_attention_mask=True,
         return_token_type_ids=True,
-        model_config=get_model_config(batch, device.compute_with_storage_grid_size(), "BFLOAT8_B-SHARDED"),
+        model_config=get_model_config(batch, device.compute_with_storage_grid_size(), model_config_str),
         tt_cache_path=get_tt_cache_path("phiyodr/bert-large-finetuned-squad2"),
         NUM_RUNS=NUM_RUNS,
         input_path=input_path,
@@ -386,12 +392,14 @@ def test_demo(
     )
 
 
-@pytest.mark.parametrize("batch", (7, 12), ids=["batch_7", "batch_12"])
+@pytest.mark.parametrize("batch", (7, 8, 12), ids=["batch_7", "batch_8", "batch_12"])
 @pytest.mark.parametrize(
     "loop_count",
     ((20),),
 )
 def test_demo_squadv2(model_location_generator, device, use_program_cache, batch, loop_count):
+    model_config_str = "BFLOAT8_B-SHARDED"
+    skip_unsupported_config(device, model_config_str, batch)
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
@@ -401,7 +409,7 @@ def test_demo_squadv2(model_location_generator, device, use_program_cache, batch
         seq_len=384,
         return_attention_mask=True,
         return_token_type_ids=True,
-        model_config=get_model_config(batch, device.compute_with_storage_grid_size(), "BFLOAT8_B-SHARDED"),
+        model_config=get_model_config(batch, device.compute_with_storage_grid_size(), model_config_str),
         tt_cache_path=get_tt_cache_path("phiyodr/bert-large-finetuned-squad2"),
         model_location_generator=model_location_generator,
         device=device,

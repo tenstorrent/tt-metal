@@ -16,7 +16,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -58,7 +58,7 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
 
     if (keepdim) {
         bool ranks_are_equal = (input_rank == output_rank);
-        input_shape[dim] = (is_tile_dim) ? (TILE_HEIGHT) : (1);
+        input_shape[dim] = (is_tile_dim) ? (tt::constants::TILE_HEIGHT) : (1);
         input_shape_wo_padding[dim] = 1;
 
         if (!ranks_are_equal) {
@@ -81,11 +81,11 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
         expand_to_max_dim(output_dim_wo_padding, output_shape_wo_padding);
 
         for (int i = 0; i < input_rank; ++i) {
-            TT_FATAL(input_dim[i] == output_dim[i]);
-            TT_FATAL(input_dim_wo_padding[i] == output_dim_wo_padding[i]);
+            TT_FATAL(input_dim[i] == output_dim[i], "Error");
+            TT_FATAL(input_dim_wo_padding[i] == output_dim_wo_padding[i], "Error");
         }
     } else {
-        TT_FATAL(!is_tile_dim);
+        TT_FATAL(!is_tile_dim, "Error");
         std::vector<uint32_t> expected_output_shape;
         std::vector<uint32_t> expected_output_shape_wo_padding;
         for (int i = 0; i < output_shape.rank(); ++i) {
@@ -103,8 +103,8 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
         for (int i = 0; i < input_rank; ++i) {
             if (i == dim)
                 continue;
-            TT_FATAL(input_shape[i] == expected_output_shape[i]);
-            TT_FATAL(input_shape_wo_padding[i] == expected_output_shape_wo_padding[i]);
+            TT_FATAL(input_shape[i] == expected_output_shape[i], "Error");
+            TT_FATAL(input_shape_wo_padding[i] == expected_output_shape_wo_padding[i], "Error");
         }
     }
 }
@@ -137,14 +137,15 @@ void MorehNorm::validate_with_output_tensors(
     }
 }
 
-std::vector<Shape> MorehNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    using namespace tt::constants;
     const auto& input = input_tensors.at(0);
     const auto& input_shape = input.get_legacy_shape();
     const auto input_rank = input_shape.rank();
     const bool is_tile_dim = (this->dim == input_rank - 1 || this->dim == input_rank - 2);
     log_debug(LogOp, "{}:{} dim {}, keepdim {}", __func__, __LINE__, this->dim, this->keepdim);
 
-    Shape output_shape = input_shape;
+    tt::tt_metal::LegacyShape output_shape = input_shape;
     if (this->keepdim) {
         auto shape = input_shape;
         auto padding = shape.padding();
@@ -158,7 +159,7 @@ std::vector<Shape> MorehNorm::compute_output_shapes(const std::vector<Tensor> &i
             shape[this->dim] = 1;
         }
 
-        output_shape = Shape(shape, padding);
+        output_shape = tt::tt_metal::LegacyShape(shape, padding);
     } else {
         std::vector<uint32_t> shape;
         std::vector<Padding::PadDimension> pad_dimensions;
@@ -178,7 +179,7 @@ std::vector<Shape> MorehNorm::compute_output_shapes(const std::vector<Tensor> &i
         }
 
         auto padding = Padding(pad_dimensions, input_padding.pad_value());
-        output_shape = Shape(shape, padding);
+        output_shape = tt::tt_metal::LegacyShape(shape, padding);
     }
 
     log_debug(LogOp, "{}:{} output_shape {}", __func__, __LINE__, output_shape);
@@ -204,7 +205,7 @@ Tensor moreh_norm(
     const bool keepdim,
     const std::optional<const Tensor> output,
     const std::optional<MemoryConfig> &memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     if (dim == std::nullopt) {
         std::vector<int64_t> dims(input.get_legacy_shape().rank());
         std::iota(dims.begin(), dims.end(), 0);
@@ -250,7 +251,7 @@ Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim,
     const bool keepdim,
     const std::optional<const Tensor> output,
     const std::optional<MemoryConfig> &memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config
 ) {
     auto device = input.device();
 

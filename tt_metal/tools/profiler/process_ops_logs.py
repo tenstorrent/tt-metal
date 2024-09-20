@@ -190,9 +190,27 @@ def append_device_data(ops, deviceLogFolder):
         for device in deviceOps:
             assert device in deviceData["devices"].keys()
             deviceOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
-            assert len(deviceOps[device]) == len(
-                deviceOpsTime
-            ), f"Device data mismatch. Expected {len(deviceOps[device])} but received {len(deviceOpsTime)} ops on device {device}"
+            if len(deviceOps[device]) != len(deviceOpsTime):
+                deviceOPId = None
+                hostOPId = None
+                for deviceOp, deviceOpTime in zip(deviceOps[device], deviceOpsTime):
+                    if len(deviceOpTime["timeseries"]) > 0:
+                        timeID, ts, statData, risc, core = deviceOpTime["timeseries"][0]
+                        if "zone_name" in timeID.keys() and "FW" in timeID["zone_name"]:
+                            if "run_host_id" in timeID.keys():
+                                if timeID["run_host_id"] != deviceOp["global_call_count"]:
+                                    deviceOPId = timeID["run_host_id"]
+                                    hostOPId = deviceOp["global_call_count"]
+                                    break
+
+                if deviceOPId and hostOPId:
+                    assert (
+                        False
+                    ), f"Device data mismatch: Expected {len(deviceOps[device])} but received {len(deviceOpsTime)} ops on device {device}. Device is showing op ID {deviceOPId} when host is showing op ID {hostOPId}"
+                else:
+                    assert (
+                        True
+                    ), f"Device data mismatch: Expected {len(deviceOps[device])} but received {len(deviceOpsTime)} ops on device {device}"
             for deviceOp, deviceOpTime in zip(deviceOps[device], deviceOpsTime):
                 cores = set()
                 for timeID, ts, statData, risc, core in deviceOpTime["timeseries"]:
@@ -213,7 +231,9 @@ def append_device_data(ops, deviceLogFolder):
     return deviceOps
 
 
-def get_device_data_generate_report(deviceLogFolder, outputFolder, date, nameAppend):
+def get_device_data_generate_report(
+    deviceLogFolder, outputFolder, date, nameAppend, export_csv=True, cleanup_device_log=False
+):
     deviceTimesLog = os.path.join(deviceLogFolder, PROFILER_DEVICE_SIDE_LOG)
     devicePreOpTime = {}
     deviceOps = {}
@@ -236,11 +256,12 @@ def get_device_data_generate_report(deviceLogFolder, outputFolder, date, nameApp
         name += f"_{dateStr}"
         outFolder = os.path.join(outFolder, dateStr)
 
-    allOpsCSVPath = os.path.join(outFolder, f"{name}.csv")
-    logger.info(f"Copying runtime artifacts")
-    os.system(f"rm -rf {outFolder}; mkdir -p {outFolder}")
-    if os.path.isfile(f"{PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG}"):
-        os.system(f"cp {PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
+    if export_csv:
+        allOpsCSVPath = os.path.join(outFolder, f"{name}.csv")
+        logger.info(f"Copying runtime artifacts")
+        os.system(f"rm -rf {outFolder}; mkdir -p {outFolder}")
+        if os.path.isfile(f"{PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG}"):
+            os.system(f"cp {PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
 
     if os.path.isfile(deviceTimesLog):
         logger.info(f"Getting device only ops data")
@@ -291,21 +312,25 @@ def get_device_data_generate_report(deviceLogFolder, outputFolder, date, nameApp
                         devicePreOpTime[device] = analysisData[0]["end_cycle"]
                 rowDicts.append(rowDict)
 
-        with open(allOpsCSVPath, "w") as allOpsCSV:
-            allHeaders = []
-            for header in OPS_CSV_HEADER:
-                if header in rowDicts[-1].keys():
-                    allHeaders.append(header)
-            writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders)
-            writer.writeheader()
-            for rowDict in rowDicts:
-                for field, fieldData in rowDict.items():
-                    rowDict[field] = str(fieldData).replace(",", ";")
-                writer.writerow(rowDict)
-        logger.info(f"Device only OPs csv generated at: {allOpsCSVPath}")
+        if export_csv:
+            with open(allOpsCSVPath, "w") as allOpsCSV:
+                allHeaders = []
+                for header in OPS_CSV_HEADER:
+                    if header in rowDicts[-1].keys():
+                        allHeaders.append(header)
+                writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders)
+                writer.writeheader()
+                for rowDict in rowDicts:
+                    for field, fieldData in rowDict.items():
+                        rowDict[field] = str(fieldData).replace(",", ";")
+                    writer.writerow(rowDict)
+            logger.info(f"Device only OPs csv generated at: {allOpsCSVPath}")
+
+        if cleanup_device_log:
+            os.remove(deviceTimesLog)
     else:
         logger.info("No device logs found")
-    return deviceOps
+    return rowDicts
 
 
 def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):

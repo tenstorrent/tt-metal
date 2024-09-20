@@ -9,7 +9,6 @@ from typing import Union, Tuple, Optional, Any, Callable, Dict
 from loguru import logger
 import torch
 
-import tt_lib as ttl
 
 import ttnn
 import ttnn.decorators
@@ -36,20 +35,31 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
     elif isinstance(slices, slice):
         slices = (slices,)
     elif isinstance(slices, type(...)):
-        raise RuntimeError("Ellipsis is not supported!")
+        return ttnn.clone(input_tensor)
 
     normalized_slices = []
+
+    ellipsis_found = False
     for s in slices:
         if isinstance(s, int):
             normalized_slices.append(slice(None, s, None))
         elif isinstance(s, slice):
             normalized_slices.append(s)
+        elif s is Ellipsis:
+            if ellipsis_found:
+                raise ValueError("Only one ellipsis ('...') is allowed in a slice.")
+            ellipsis_found = True
+            # Fill in the remaining dimensions with slice(None) based on how many slices are missing
+            num_missing_slices = input_rank - len(slices) + 1
+            normalized_slices.extend([slice(None)] * num_missing_slices)
         else:
-            raise RuntimeError("Invalid slice type!")
-    slices = tuple(normalized_slices)
+            raise TypeError(f"Invalid slice object: {s}")
 
-    while len(slices) != input_rank:
-        slices = slices + (slice(None, None, None),)
+    # If fewer slices than the rank, pad with slice(None)
+    while len(normalized_slices) < input_rank:
+        normalized_slices.append(slice(None))
+
+    slices = tuple(normalized_slices)
 
     if isinstance(slices, tuple):
         if len(slices) > input_rank:
@@ -62,16 +72,19 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
             slices = (slice(None, None, None),) + slices
         slice_start = [_slice.start if _slice.start is not None else 0 for _slice in slices]
         slice_end = [
-            (_slice.stop if _slice.stop is not None else input_tensor.shape[index])
+            (max(input_tensor.shape[index] + _slice.stop, 1) if _slice.stop < 0 else _slice.stop)
+            if _slice.stop is not None
+            else input_tensor.shape[index]
             for index, _slice in enumerate(slices)
         ]
+        slice_step = [_slice.step if _slice.step is not None else 1 for _slice in slices]
 
         padded_slice_end = list(slice_end)
         if input_layout == ttnn.TILE_LAYOUT:
             padded_slice_end[-1] = int(math.ceil((slice_end[-1]) / ttnn.TILE_SIZE)) * ttnn.TILE_SIZE
             padded_slice_end[-2] = int(math.ceil((slice_end[-2]) / ttnn.TILE_SIZE)) * ttnn.TILE_SIZE
 
-        if list(padded_slice_end) == list(input_tensor.shape.with_tile_padding()):
+        if list(padded_slice_end) == list(input_tensor.shape.with_tile_padding()) and (slice_step is None):
             output = input_tensor
         else:
             padded_slice_end_minus_1 = [x - 1 for x in padded_slice_end]
@@ -79,13 +92,19 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
                 raise RuntimeError("ttnn.Tensor.__getitem__: cannot return a scalar!")
 
             if ttnn.is_tensor_storage_on_device(input_tensor):
-                output = ttnn.slice(input_tensor, slice_start, padded_slice_end_minus_1)
+                output = ttnn.slice(input_tensor, slice_start, padded_slice_end_minus_1, slice_step)
             else:
+                if any([x != 1 for x in slice_step]):
+                    raise NotImplementedError("ttnn.Tensor.__getitem__: step is not supported for host tensor!")
                 input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
                 output = input_tensor.unpad(slice_start, padded_slice_end_minus_1)
                 output = ttnn.to_layout(output, input_layout)
-
-        output_shape = [end - start for (start, end) in zip(slice_start, slice_end)][-input_rank:]
+        output_shape = [
+            0
+            if slices[i].stop is not None and slices[i].stop + input_tensor.shape[i] == slices[i].start
+            else len(range(start, end, step))
+            for i, (start, end, step) in enumerate(zip(slice_start, slice_end, slice_step))
+        ][-input_rank:]
         padded_output_shape = list(output.shape.with_tile_padding())[-input_rank:]
         return ttnn.reshape(output, shape=ttnn.Shape(output_shape, padded_output_shape))
 
@@ -177,22 +196,6 @@ ttnn.register_python_operation(
 ttnn.register_python_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operations.core.unsqueeze_to_4D)
 
 
-@ttnn.register_python_operation(
-    name="ttnn.squeeze",
-)
-def squeeze(tensor, dim):
-    r"""squeeze(tensor: ttnn.Tensor, dim: int) -> ttnn.Tensor"""
-    if dim != 0:
-        raise RuntimeError("Only dim=0 is supported for squeeze operation!")
-    if tensor.shape[0] != 1:
-        return tensor
-    if len(tensor.shape) == 1:
-        raise RuntimeError("Cannot squeeze a tensor of rank 1 because rank 0 is not supported by ttnn!")
-    _, *shape = tensor.shape
-    _, *full_shape = tensor.shape.with_tile_padding()
-    return ttnn.reshape(tensor, shape=ttnn.Shape(shape, full_shape))
-
-
 def _golden_function(input_tensor, *args, **kwargs):
     return input_tensor
 
@@ -245,9 +248,9 @@ def from_torch(
 
     if mesh_mapper:
         shards = mesh_mapper.map(tensor)
-        tensor = ttl.tensor.Tensor(shards, dtype, mesh_mapper.config())
+        tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config())
     else:
-        tensor = ttl.tensor.Tensor(tensor, dtype)
+        tensor = ttnn.Tensor(tensor, dtype)
 
     if layout is not None:
         tensor = ttnn.to_layout(tensor, layout, device=device)
@@ -280,7 +283,7 @@ class TorchTensor(torch.Tensor):
         # this tells torch to treat TorchTensor just like torch.Tensor's.
         # Otherwise, torch will complain that it doesn't know how to handle it.
         types = tuple(torch.Tensor if t == TorchTensor else t for t in types)
-        func = ttl.tensor.decorate_external_operation(func, function_name=f"(torch) {func.__name__}")
+        func = ttnn._ttnn.tensor.decorate_external_operation(func, function_name=f"(torch) {func.__name__}")
         return super().__torch_function__(func, types, func_args, func_kwargs)
 
 
@@ -471,7 +474,7 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.Device = No
         raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file does not exist.")
     if not file_name.is_file():
         raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file is not a file.")
-    return ttl.tensor.load_tensor(str(file_name), device)
+    return ttnn._ttnn.tensor.load_tensor(str(file_name), device)
 
 
 @ttnn.register_python_operation(name="ttnn.dump_tensor")
@@ -479,7 +482,7 @@ def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor, distri
     if distribute is None:
         distribute = dict()
     file_name = pathlib.Path(file_name)
-    ttl.tensor.dump_tensor(str(file_name), tensor, distribute)
+    ttnn._ttnn.tensor.dump_tensor(str(file_name), tensor, distribute)
 
 
 @ttnn.register_python_operation(name="ttnn.as_tensor")
@@ -580,7 +583,7 @@ def as_tensor(
             )
             pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
             distributed_config = mesh_mapper.config() if mesh_mapper else dict()
-            ttnn.dump_tensor(cache_file_name, tensor, distributed_config)
+            ttnn._ttnn.tensor.dump_tensor(cache_file_name, tensor, distributed_config)
             return tensor
 
         if isinstance(mesh_mapper, ttnn.ReplicateTensorToMesh):
@@ -593,7 +596,7 @@ def as_tensor(
         cache_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}.bin"
 
         try:
-            tensor = ttnn.load_tensor(cache_file_name, device=device)
+            tensor = ttnn._ttnn.tensor.load_tensor(cache_file_name, device=device)
             if tuple(tensor.shape) != tuple(tensor.shape):
                 logger.warning(
                     f"Cached file {cache_file_name} has shape {tensor.shape}, expected {tensor.shape}, regenerating cache"

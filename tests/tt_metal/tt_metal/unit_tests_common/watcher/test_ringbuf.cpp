@@ -192,7 +192,7 @@ TEST_F(WatcherFixture, TestWatcherRingBufferErisc) {
 }
 TEST_F(WatcherFixture, TestWatcherRingBufferIErisc) {
     if (!this->IsSlowDispatch()) {
-        log_info(tt::LogTest, "Skip due to #7771");
+        log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
     }
     for (Device* device : this->devices_) {

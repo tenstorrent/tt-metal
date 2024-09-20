@@ -9,7 +9,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include "ttnn/operations/core/core.hpp"
@@ -34,6 +34,7 @@ inline bool has_tile_padding(const Tensor& t) {
 }
 
 ttnn::Tensor permute_impl(const ttnn::Tensor &a, const std::vector<uint32_t>& dims, const MemoryConfig& output_mem_config) {
+    using ttnn::operations::experimental::auto_format::AutoFormat;
     Device * device;
 
     // Get the device
@@ -126,7 +127,7 @@ ttnn::Tensor permute_launch(const ttnn::Tensor &a, const std::vector<std::int64_
             std::vector<uint32_t> seq_dims(dims.size());
             std::iota(seq_dims.begin(), seq_dims.end(), 0);
             if (normalized_dims == seq_dims) {
-                return {AutoFormat::move_tensor_to_mem_config(a, output_mem_config)};
+                return {ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(a, output_mem_config)};
             }
             return {permute_impl(a, normalized_dims, output_mem_config)};
         }, {a}, output_tensors);
@@ -158,14 +159,14 @@ ttnn::Tensor ExecutePermute::invoke(
     const auto input_layout = input_tensor.get_layout();
     const auto input_rank = input_tensor.get_shape().rank();
 
-    TT_FATAL(input_rank <= 4);
+    TT_FATAL(input_rank <= 4, "Error");
     TT_FATAL(
         input_rank == dims.size(),
         "The number of dimensions in the tensor input does not match the length of the desired ordering");
 
     auto adjust_order = [](const std::vector<int64_t>& dims) {
         std::vector<std::int64_t> new_order;
-        TT_FATAL(dims.size() <= 4);
+        TT_FATAL(dims.size() <= 4, "Error");
         int additional_ranks = 4 - dims.size();
         for (int i = 0; i < additional_ranks; i++) {
             new_order.push_back(i);
@@ -182,7 +183,7 @@ ttnn::Tensor ExecutePermute::invoke(
         itensor = ttnn::to_layout(itensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
     }
 
-    TT_FATAL(detail::is_on_device(itensor) and itensor.get_shape().rank() == 4);
+    TT_FATAL(detail::is_on_device(itensor) and itensor.get_shape().rank() == 4, "Error");
     auto output_tensor = detail::permute_launch(itensor, iorder, memory_config.value_or(input_tensor.memory_config()));
     output_tensor = ttnn::to_layout(output_tensor, input_layout, std::nullopt, std::nullopt, (Device*)nullptr);
 

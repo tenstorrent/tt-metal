@@ -9,7 +9,8 @@
 namespace ttnn::operations::experimental::ssm {
 
 void HCSumReduce::validate(const std::vector<Tensor>& input_tensors) const {
-    TT_FATAL(input_tensors.size() == 1);
+    using namespace tt::constants;
+    TT_FATAL(input_tensors.size() == 1, "Error");
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL((input_tensor_a.get_layout() == Layout::TILE), "Inputs to ssm_1d_sum_reduce must be tilized");
 
@@ -41,7 +42,7 @@ void HCSumReduce::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(((ashape[3] / TILE_WIDTH) % latent == 0), "Final dim/TILE_SIZE must be a multiple of latent size!");
 }
 
-std::vector<tt::tt_metal::Shape> HCSumReduce::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> HCSumReduce::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     constexpr uint32_t latent = 32;
     const auto& input_tensor_a = input_tensors.at(0);
     const auto shape_a = input_tensor_a.get_legacy_shape();

@@ -143,7 +143,7 @@ void add_reader_writer_kernels(tt_metal::Program &program, const CoreCoord &logi
             break;
         }
         default:
-            TT_FATAL(false, "Unsupported reduce dim!");
+            TT_THROW("Unsupported reduce dim!");
     }
 }
 
@@ -154,7 +154,7 @@ std::string get_reduce_dim_define_string(const ReduceDim &reduce_dim) {
         case ReduceDim::W: reduce_dim_define_str = "ReduceDim::REDUCE_ROW"; break;
         case ReduceDim::HW: reduce_dim_define_str = "ReduceDim::REDUCE_SCALAR"; break;
         default:
-            TT_FATAL(false, "Unsupported reduce dim!");
+            TT_THROW("Unsupported reduce dim!");
     }
     return reduce_dim_define_str;
 }
@@ -166,7 +166,7 @@ std::string get_compute_kernel_name(const ReduceDim &reduce_dim) {
         case ReduceDim::W: compute_kernel_name = "tests/tt_metal/tt_metal/test_kernels/compute/reduce_w.cpp"; break;
         case ReduceDim::HW: compute_kernel_name = "tests/tt_metal/tt_metal/test_kernels/compute/reduce_hw.cpp"; break;
         default:
-            TT_FATAL(false, "Unsupported reduce dim!");
+            TT_THROW("Unsupported reduce dim!");
     }
     return compute_kernel_name;
 }
@@ -179,8 +179,8 @@ void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig
     uint32_t W = test_config.shape[3], H = test_config.shape[2], NC = test_config.shape[1]*test_config.shape[0];
     uint32_t HW = H*W;
     uint32_t N = test_config.shape[0]*test_config.shape[1];
-    TT_FATAL(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
-    TT_FATAL(H > 0 && W > 0 && NC > 0);
+    TT_FATAL(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0, "Error");
+    TT_FATAL(H > 0 && W > 0 && NC > 0, "Error");
     uint32_t Wt = W/TILE_WIDTH;
     uint32_t Ht = H/TILE_HEIGHT;
 
@@ -190,13 +190,13 @@ void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig
         case ReduceDim::W: num_golden_elements = NC*H*TILE_WIDTH/2; break; // expecting one tile in H, and half the elements since the vector packs 2 uint16_ts
         case ReduceDim::HW: num_golden_elements = NC*32*32/2; break; // expecting one tile in H, and half the elements since the vector packs 2 uint16_ts
         default:
-            TT_FATAL(false, "Unsupported reduce dim!");
+            TT_THROW("Unsupported reduce dim!");
     }
 
     float scaler = (test_config.do_max or test_config.reduce_dim == ReduceDim::HW) ? 1.0f : (test_config.reduce_dim == ReduceDim::H ? 1.0f/H : 1.0f/W);
     uint32_t num_tensor_tiles = NC*H*W / (TILE_WIDTH*TILE_HEIGHT);
     uint32_t divisor = test_config.reduce_dim == ReduceDim::W ? Wt : Ht;
-    TT_FATAL(num_tensor_tiles%divisor == 0);
+    TT_FATAL(num_tensor_tiles%divisor == 0, "Error");
 
     uint32_t single_tile_bytes = 2 * 1024;
     uint32_t dram_buffer_size = single_tile_bytes * num_tensor_tiles;
@@ -218,7 +218,7 @@ void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig
         case ReduceDim::W: output_size_bytes = dram_buffer_size / Wt; break;
         case ReduceDim::HW: output_size_bytes = dram_buffer_size / (Ht * Wt); break;
         default:
-            TT_FATAL(false, "Unsupported reduce dim!");
+            TT_THROW("Unsupported reduce dim!");
     }
 
     tt_metal::InterleavedBufferConfig dst_config{
@@ -264,7 +264,7 @@ void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig
     {
         reduce_defines["SHORT_INIT"] = "1";
     }
-  
+
     if (test_config.math_only_reduce) {
         reduce_defines["MATH_ONLY"] = "1";
     } else {

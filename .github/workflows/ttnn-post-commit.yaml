@@ -42,54 +42,53 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
+        os: ["ubuntu-20.04"]
         test-group:
           - name: ttnn group 1
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 6 --group 1 -m "not disable_fast_runtime_mode"
+            cmd: pytest tests/ttnn/unit_tests -xv --splits 6 --group 1 -m "not disable_fast_runtime_mode"
           - name: ttnn group 2
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 6 --group 2 -m "not disable_fast_runtime_mode"
+            cmd: pytest tests/ttnn/unit_tests -xv --splits 6 --group 2 -m "not disable_fast_runtime_mode"
           - name: ttnn group 3
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 6 --group 3 -m "not disable_fast_runtime_mode"
+            cmd: pytest tests/ttnn/unit_tests -xv --splits 6 --group 3 -m "not disable_fast_runtime_mode"
           - name: ttnn group 4
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 6 --group 4 -m "not disable_fast_runtime_mode"
+            cmd: pytest tests/ttnn/unit_tests -xv --splits 6 --group 4 -m "not disable_fast_runtime_mode"
           - name: ttnn group 5
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 6 --group 5 -m "not disable_fast_runtime_mode"
+            cmd: pytest tests/ttnn/unit_tests -xv --splits 6 --group 5 -m "not disable_fast_runtime_mode"
           - name: ttnn group 6
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv --splits 6 --group 6 -m "not disable_fast_runtime_mode"
+            cmd: pytest tests/ttnn/unit_tests -xv --splits 6 --group 6 -m "not disable_fast_runtime_mode"
           - name: ttnn fast runtime off
-            cmd: pytest $TT_METAL_HOME/tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
+            cmd: pytest tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
             fast_runtime_mode_off: true
-          - name: ttnn examples and cpp tests
-            cmd: ./build/test/ttnn/unit_tests_ttnn && ./tests/scripts/run_ttnn_examples.sh
-          - name: ttnn ccl cpp unit tests
-            cmd: ./build/test/ttnn/unit_tests_ttnn_ccl
+          - name: ttnn example tests
+            cmd: ./tests/scripts/run_ttnn_examples.sh
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ inputs.arch }}
       LOGURU_LEVEL: INFO
+      # may not need this
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on:
       - ${{ inputs.runner-label }}
       - "in-service"
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: ./.github/actions/prepare-metal-run
+      - uses: actions/download-artifact@v4
         with:
-          arch: ${{ inputs.arch }}
+          name: eager-dist-${{ matrix.os }}-${{ inputs.arch }}
       - name: Set ttnn fast runtime if exists in config
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
         run: |
           echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ${{ matrix.test-group.cmd }}
+        uses: ./.github/actions/docker-run
+        with:
+          docker_username: ${{ github.actor }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_image_arch: ${{ inputs.arch }}
+          run_args: |
+            WHEEL_FILENAME=$(ls -1 *.whl)
+            pip3 install --user $WHEEL_FILENAME
+            ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:

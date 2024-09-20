@@ -14,7 +14,7 @@
 #include "ttnn/deprecated/tt_numpy/functions.hpp"
 #include "ttnn/tensor/types.hpp"
 
-using tt::tt_metal::Shape;
+using tt::tt_metal::LegacyShape;
 using tt::tt_metal::Tensor;
 using namespace ttnn::operations::sliding_window;
 
@@ -76,7 +76,7 @@ uint32_t validate_generate_halo_kernel_config(
             if (pad_metadata[idx] != val) {
                 invalids++;
                 log_info(
-                    tt::LogTest, "Error at index = {}, Expected = {}, Calculated = {}", idx, val, pad_metadata[idx]);
+                    tt::LogTest, "Error at index = {}, Expected = {}, Calculated = {}", idx, val, bool(pad_metadata[idx]));
             }
         }
         return invalids;
@@ -141,21 +141,21 @@ uint32_t validate_generate_functions(
     auto halo_kernel_config = generate_halo_kernel_config_tensors(
         tensor_metadata, shard_boundaries, false, false, remote_read, device);
 
-    auto [filter_h, filter_w] = config.window_hw_;
-    auto [input_h, input_w] = config.input_hw_;
-    auto [stride_h, stride_w] = config.stride_hw_;
+    auto [filter_h, filter_w] = config.window_hw;
+    auto [input_h, input_w] = config.input_hw;
+    auto [stride_h, stride_w] = config.stride_hw;
     auto output_shape = config.get_output_shape();
     uint32_t output_n, output_h, output_w;
     std::tie(output_n, output_h, output_w) = std::forward_as_tuple(output_shape[0], output_shape[1], output_shape[2]);
 
-    uint32_t padded_input_h = input_h + 2 * config.pad_hw_.first;
-    uint32_t padded_input_w = input_w + 2 * config.pad_hw_.second;
+    uint32_t padded_input_h = input_h + 2 * config.pad_hw.first;
+    uint32_t padded_input_w = input_w + 2 * config.pad_hw.second;
 
     auto ref_pad_metadata = pad_metadata_from_tensor_metadata(tensor_metadata);
     if (ref_pad_metadata != pad_metadata) {
         for (auto i = 0; i < ref_pad_metadata.size(); i++) {
             if (ref_pad_metadata[i] != pad_metadata[i])
-                log_info(tt::LogTest, "Error at i = {}, Calculated = {}", i, ref_pad_metadata[i]);
+                log_info(tt::LogTest, "Error at i = {}, Calculated = {}", i, bool(ref_pad_metadata[i]));
         }
         log_error(
             tt::LogTest,
@@ -362,25 +362,20 @@ int main() {
 
     log_info(tt::LogTest, "Tests for Sliding window metadata calcations starts");
     for (auto tc : configs) {
-        SlidingWindowConfig config = SlidingWindowConfig(
-            tc.batch_size,
-            tc.input_h,
-            tc.input_w,
-            tc.filter_h,
-            tc.filter_w,
-            tc.stride_h,
-            tc.stride_w,
-            tc.pad_h,
-            tc.pad_w,
-            1,
-            1,
-            tc.num_cores_nhw);
-        Shape input_tensor_shape = {
-            config.batch_size_,
-            config.input_hw_.first + 2 * config.pad_hw_.first,
-            config.input_hw_.second + 2 * config.pad_hw_.second};
-        Shape output_tensor_shape = config.get_output_shape().value;
-        Shape filter_tensor_shape = {config.window_hw_.first, config.window_hw_.second};
+        SlidingWindowConfig config{
+            .batch_size = tc.batch_size,
+            .input_hw = {tc.input_h, tc.input_w},
+            .window_hw = {tc.filter_h, tc.filter_w},
+            .stride_hw = {tc.stride_h, tc.stride_w},
+            .pad_hw = {tc.pad_h, tc.pad_w},
+            .dilation_hw = {1, 1},
+            .num_cores_nhw = tc.num_cores_nhw};
+        tt::tt_metal::LegacyShape input_tensor_shape = {
+            config.batch_size,
+            config.input_hw.first + 2 * config.pad_hw.first,
+            config.input_hw.second + 2 * config.pad_hw.second};
+        tt::tt_metal::LegacyShape output_tensor_shape = config.get_output_shape().value;
+        tt::tt_metal::LegacyShape filter_tensor_shape = {config.window_hw.first, config.window_hw.second};
 
         Tensor input_padded_tensor =
             tt::numpy::random::random(input_tensor_shape, DataType::BFLOAT16).to(Layout::ROW_MAJOR).cpu();
@@ -392,12 +387,12 @@ int main() {
         vector<float> filter_vector = create_filter_vec(filter_tensor_buf, tc.filter_h, tc.filter_w);
         owned_buffer::Buffer<bfloat16> out_golden_tensor_buf = ref_conv_op(
             input_padded_tensor,
-            ttnn::types::Shape(input_tensor_shape),
+            ttnn::Shape(input_tensor_shape),
             tc.stride_h,
             tc.stride_w,
             filter_vector,
-            ttnn::types::Shape(filter_tensor_shape),
-            ttnn::types::Shape(output_tensor_shape));
+            ttnn::Shape(filter_tensor_shape),
+            ttnn::Shape(output_tensor_shape));
 
         auto failed_tests = validate_generate_functions(
             device,
@@ -430,6 +425,6 @@ int main() {
         }
     }
     log_info(tt::LogTest, "Tests for Sliding window metadata calcations ends");
-    TT_FATAL(tt::tt_metal::CloseDevice(device));
+    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
     return 0;
 }

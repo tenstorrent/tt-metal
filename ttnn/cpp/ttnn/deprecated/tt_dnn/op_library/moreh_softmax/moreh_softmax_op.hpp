@@ -8,7 +8,7 @@
 
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <optional>
 
 namespace tt {
@@ -32,19 +32,19 @@ enum class MorehSoftmaxOp {
     LOGSOFTMAX,
 };
 
-bool is_moreh_softmax_w_small_available(const Tensor &tensor, const DeviceComputeKernelConfig& compute_kernel_config);
-bool is_moreh_softmax_h_small_available(const Tensor &tensor, const DeviceComputeKernelConfig& compute_kernel_config);
+bool is_moreh_softmax_w_small_available(const Tensor &tensor, const ttnn::DeviceComputeKernelConfig& compute_kernel_config);
+bool is_moreh_softmax_h_small_available(const Tensor &tensor, const ttnn::DeviceComputeKernelConfig& compute_kernel_config);
 
 operation::ProgramWithCallbacks moreh_softmax_w_small(
-    const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op, const DeviceComputeKernelConfig compute_kernel_config);
+    const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op, const ttnn::DeviceComputeKernelConfig compute_kernel_config);
 operation::ProgramWithCallbacks moreh_softmax_w_large(
-    const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op, const DeviceComputeKernelConfig compute_kernel_config);
+    const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op, const ttnn::DeviceComputeKernelConfig compute_kernel_config);
 operation::ProgramWithCallbacks moreh_softmax_h_small(
-    const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op, const DeviceComputeKernelConfig compute_kernel_config);
+    const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op, const ttnn::DeviceComputeKernelConfig compute_kernel_config);
 operation::ProgramWithCallbacks moreh_softmax_h_large(
-    const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op, const DeviceComputeKernelConfig compute_kernel_config);
+    const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op, const ttnn::DeviceComputeKernelConfig compute_kernel_config);
 operation::ProgramWithCallbacks moreh_softmax_c_large(
-    const Tensor &input, const Tensor &output, uint32_t dim, const CoreRange core_range, const MorehSoftmaxOp op, const DeviceComputeKernelConfig compute_kernel_config);
+    const Tensor &input, const Tensor &output, uint32_t dim, const CoreRange core_range, const MorehSoftmaxOp op, const ttnn::DeviceComputeKernelConfig compute_kernel_config);
 
 struct MorehSoftmax {
     const uint32_t dim;
@@ -52,10 +52,10 @@ struct MorehSoftmax {
     const MorehSoftmaxOp op;
     const MorehSoftmaxOpParallelizationStrategy strategy;
     const MemoryConfig output_mem_config;
-    const DeviceComputeKernelConfig compute_kernel_config;
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
 
     void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     MorehSoftmaxOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
@@ -72,7 +72,7 @@ Tensor moreh_softmax(
     std::optional<Tensor> output_tensor = std::nullopt,
     const MorehSoftmaxOpParallelizationStrategy strategy = MorehSoftmaxOpParallelizationStrategy::NONE,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 Tensor moreh_softmin(
     const Tensor &input_tensor,
@@ -80,7 +80,7 @@ Tensor moreh_softmin(
     std::optional<Tensor> output_tensor = std::nullopt,
     const MorehSoftmaxOpParallelizationStrategy strategy = MorehSoftmaxOpParallelizationStrategy::NONE,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 Tensor moreh_logsoftmax(
     const Tensor &input_tensor,
@@ -88,7 +88,7 @@ Tensor moreh_logsoftmax(
     std::optional<Tensor> output_tensor = std::nullopt,
     const MorehSoftmaxOpParallelizationStrategy strategy = MorehSoftmaxOpParallelizationStrategy::NONE,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace primary
 }  // namespace operations

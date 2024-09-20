@@ -16,7 +16,6 @@
 #include "tt_metal/common/math.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/conv/conv2d/device/optimized_conv_op.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv_op.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
@@ -38,9 +37,10 @@ struct Conv2dConfig {
     bool deallocate_activation = false;
     bool reallocate_halo_output = false;
     uint32_t act_block_h_override = 0;
+    uint32_t act_block_w_div = 1; //Amount by which the maximum possible act_block_width is divided. Max act_block_w = (in_channels * window_w * window_h)/total_num_cores;
     bool reshard_if_not_optimal = false; // if true, override_sharding_config should not be set to true
     bool override_sharding_config = false; // if true, reshard_if_not_optimal should not be set to true
-    bool height_sharding = true; // used only if override_sharding_config is true
+    TensorMemoryLayout shard_layout = TensorMemoryLayout::HEIGHT_SHARDED; // used only if override_sharding_config is true
     std::optional<CoreRangeSet> core_grid = std::nullopt; // used only if override_sharding_config is true
     bool transpose_shards = true; // used only if override_sharding_config is true and if height sharding is false
     Layout output_layout = Layout::TILE;
@@ -59,9 +59,10 @@ struct Conv2dConfig {
         "deallocate_activation",
         "reallocate_halo_output",
         "act_block_h_override",
+        "act_block_w_div",
         "reshard_if_not_optimal",
         "override_sharding_config",
-        "height_sharding",
+        "shard_layout",
         "core_grid",
         "transpose_shards",
         "output_layout",
@@ -81,9 +82,10 @@ struct Conv2dConfig {
             std::cref(this->deallocate_activation),
             std::cref(this->reallocate_halo_output),
             std::cref(this->act_block_h_override),
+            std::cref(this->act_block_w_div),
             std::cref(this->reshard_if_not_optimal),
             std::cref(this->override_sharding_config),
-            std::cref(this->height_sharding),
+            std::cref(this->shard_layout),
             std::cref(this->core_grid),
             std::cref(this->transpose_shards),
             std::cref(this->output_layout),
@@ -101,7 +103,7 @@ uint32_t find_closest_common_largest_divisor(uint32_t num1, uint32_t num2, uint3
 
 template <typename T>
 sliding_window::ParallelConfig determine_parallel_config(
-    bool height_sharding,
+    const TensorMemoryLayout shard_layout,
     uint32_t batch_size,
     uint32_t input_channels,
     uint32_t output_height,
@@ -115,7 +117,7 @@ uint32_t get_num_cores_nhw_from_parallel_config(const sliding_window::ParallelCo
 
 uint32_t get_num_cores_channels_from_parallel_config(const sliding_window::ParallelConfig& pconfig);
 
-MemoryConfig create_sharded_memory_config_from_parallel_config(const Shape& tensor_shape, sliding_window::ParallelConfig& parallel_config, uint32_t tile_size);
+MemoryConfig create_sharded_memory_config_from_parallel_config(const ttnn::Shape& tensor_shape, sliding_window::ParallelConfig& parallel_config, uint32_t tile_size);
 
 OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw);
 
@@ -146,6 +148,25 @@ std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, bool> shard_or_reshard_
     uint32_t out_channels);
 
 void validate_weight_and_bias_tensors(const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor);
+
+// Converts convolution weights to tilized 2d matrix layout.
+// Returns a new tensor with layout=Tile
+Tensor convert_conv_weight_tensor_to_tiled_layout(
+    Tensor conv_weight_tensor,
+    uint32_t in1_block_h,
+    uint32_t in1_block_w,
+    std::optional<DataType> output_dtype = std::nullopt);
+
+// Converts convolution weights to tilized 2d matrix layout with special block height padding
+// Returns a new tensor with layout=Tile
+Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
+    Tensor conv_weight_tensor,
+    uint32_t in1_block_h,
+    uint32_t in1_block_w,
+    std::optional<DataType> output_dtype = std::nullopt);
+
+// Converts convolution weights to grouped layout with padded zeros
+Tensor convert_conv_weight_tensor_to_grouped_layout(Tensor conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
 
 template <typename T>
 std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor, uint32_t input_channels_alignment, DataType weights_bias_dtype, uint32_t weight_block_h_ntiles, uint32_t weight_block_w_ntiles, const sliding_window::ParallelConfig& parallel_config, T * device, uint32_t groups, uint32_t act_block_h_ntiles, uint32_t input_width);
@@ -194,7 +215,7 @@ struct Conv2dOperation{
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
-        DeviceMesh * device,
+        MeshDevice * device,
         uint32_t in_channels,
         uint32_t out_channels,
         uint32_t batch_size,

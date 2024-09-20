@@ -12,7 +12,7 @@ from models.utility_functions import comp_pcc, torch2tt_tensor, tt2torch_tensor,
 
 @pytest.mark.parametrize(
     "shard_orientation",
-    (ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, ttnn.experimental.tensor.ShardOrientation.COL_MAJOR),
+    (ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR),
 )
 @pytest.mark.parametrize(
     "output_sharded",
@@ -40,14 +40,12 @@ def test_group_attn_matmul(
 
     compute_grid_size = device.compute_with_storage_grid_size()
 
-    interleaved_mem_config = ttnn.experimental.tensor.MemoryConfig(
-        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
-    )
+    interleaved_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     # NOTE: Mixed precision is supported as well; but might not have enough space for larger seq_len with BFLOAT16
-    in0_dtype = ttnn.experimental.tensor.DataType.BFLOAT8_B
-    in1_dtype = ttnn.experimental.tensor.DataType.BFLOAT8_B
-    output_dtype = ttnn.experimental.tensor.DataType.BFLOAT8_B
+    in0_dtype = ttnn.bfloat8_b
+    in1_dtype = ttnn.bfloat8_b
+    output_dtype = ttnn.bfloat8_b
 
     q_len = 1
     input_shape_a = [q_len, q_heads, batch, K]
@@ -56,23 +54,15 @@ def test_group_attn_matmul(
     input_tensor_a = torch.randn(input_shape_a).bfloat16()
     input_tensor_b = torch.randn(input_shape_b).bfloat16()
 
-    tt_input_tensor_a = (
-        ttnn.experimental.tensor.Tensor(input_tensor_a, in0_dtype)
-        .to(ttnn.experimental.tensor.Layout.TILE)
-        .to(device, interleaved_mem_config)
-    )
-    tt_input_tensor_b = (
-        ttnn.experimental.tensor.Tensor(input_tensor_b, in1_dtype)
-        .to(ttnn.experimental.tensor.Layout.TILE)
-        .to(device, interleaved_mem_config)
-    )
+    tt_input_tensor_a = ttnn.Tensor(input_tensor_a, in0_dtype).to(ttnn.TILE_LAYOUT).to(device, interleaved_mem_config)
+    tt_input_tensor_b = ttnn.Tensor(input_tensor_b, in1_dtype).to(ttnn.TILE_LAYOUT).to(device, interleaved_mem_config)
 
     if in0_sharded:
         tt_input_tensor_a = ttnn.interleaved_to_sharded(
             tt_input_tensor_a,
             compute_grid_size,
             [q_len * batch, K],
-            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             shard_orientation,
         )
 
@@ -81,14 +71,14 @@ def test_group_attn_matmul(
             tt_input_tensor_b,
             compute_grid_size,
             [kv_heads * K, seq_len],
-            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             shard_orientation,
         )
 
     if output_sharded:
-        output_mem_config = ttnn.experimental.tensor.MemoryConfig(
-            memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            buffer_type=ttnn.experimental.tensor.BufferType.L1,
+        output_mem_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
         )
     else:
         output_mem_config = interleaved_mem_config
@@ -103,7 +93,7 @@ def test_group_attn_matmul(
     if output_sharded:
         tt_output_tensor_on_device = ttnn.sharded_to_interleaved(tt_output_tensor_on_device, interleaved_mem_config)
 
-    tt_output_tensor = tt_output_tensor_on_device.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_output_tensor = tt_output_tensor_on_device.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     input_tensor_a = input_tensor_a.to(torch.float)
     input_tensor_b = torch.repeat_interleave(input_tensor_b.to(torch.float), q_heads // kv_heads, dim=1)
@@ -121,8 +111,8 @@ def test_group_attn_matmul(
         [32, 8192, 1152, 8],
     ],
 )
-@pytest.mark.parametrize("activations_dtype", [ttnn.experimental.tensor.DataType.BFLOAT16])
-@pytest.mark.parametrize("weights_dtype", [ttnn.experimental.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("activations_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("weights_dtype", [ttnn.bfloat8_b])
 def test_sharded_matmul_1d_in0(
     device, in0_sharded, out_sharded, M, K, N, num_cores, activations_dtype, weights_dtype, function_level_defaults
 ):
@@ -132,13 +122,10 @@ def test_sharded_matmul_1d_in0(
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, 1, N]
 
-    interleaved_mem_config = ttnn.experimental.tensor.MemoryConfig(
-        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttnn.experimental.tensor.BufferType.DRAM,
-    )
-    sharded_mem_config = ttnn.experimental.tensor.MemoryConfig(
-        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        buffer_type=ttnn.experimental.tensor.BufferType.L1,
+    interleaved_mem_config = ttnn.DRAM_MEMORY_CONFIG
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
     )
 
     in0 = torch.randn(in0_shape).bfloat16().float()
@@ -156,8 +143,8 @@ def test_sharded_matmul_1d_in0(
             in0_t,
             grid_size,
             [M, K // num_cores],
-            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
         )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -201,8 +188,8 @@ def test_sharded_matmul_1d_in0(
 )
 @pytest.mark.parametrize("out_sharded", [True], ids=["out_sharded"])
 @pytest.mark.parametrize("in0_sharded", [True], ids=["in0_sharded"])
-@pytest.mark.parametrize("weights_dtype", [ttnn.experimental.tensor.DataType.BFLOAT8_B])
-@pytest.mark.parametrize("activations_dtype", [ttnn.experimental.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("weights_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("activations_dtype", [ttnn.bfloat8_b])
 def test_sharded_matmul_1d_in0_multi_chip(
     pcie_devices,
     num_devices,
@@ -225,13 +212,10 @@ def test_sharded_matmul_1d_in0_multi_chip(
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
 
-    interleaved_mem_config = ttnn.experimental.tensor.MemoryConfig(
-        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttnn.experimental.tensor.BufferType.DRAM,
-    )
-    sharded_mem_config = ttnn.experimental.tensor.MemoryConfig(
-        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        buffer_type=ttnn.experimental.tensor.BufferType.L1,
+    interleaved_mem_config = ttnn.DRAM_MEMORY_CONFIG
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
     )
 
     in0 = torch.randn(in0_shape).bfloat16().float()
@@ -250,8 +234,8 @@ def test_sharded_matmul_1d_in0_multi_chip(
                 in0_temp,
                 grid_size,
                 [M, K // num_cores],
-                ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
             )
         in0_t.append(in0_temp)
 
@@ -317,8 +301,8 @@ def test_sharded_matmul_1d_in0_multi_chip(
 )
 @pytest.mark.parametrize("out_sharded", [True], ids=["out_sharded"])
 @pytest.mark.parametrize("in0_sharded", [True], ids=["in0_sharded"])
-@pytest.mark.parametrize("weights_dtype", [ttnn.experimental.tensor.DataType.BFLOAT8_B])
-@pytest.mark.parametrize("activations_dtype", [ttnn.experimental.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("weights_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("activations_dtype", [ttnn.bfloat8_b])
 def test_sharded_matmul_1d_in0_multi_chip(
     all_devices,
     num_devices,
@@ -338,13 +322,10 @@ def test_sharded_matmul_1d_in0_multi_chip(
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
 
-    interleaved_mem_config = ttnn.experimental.tensor.MemoryConfig(
-        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttnn.experimental.tensor.BufferType.DRAM,
-    )
-    sharded_mem_config = ttnn.experimental.tensor.MemoryConfig(
-        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        buffer_type=ttnn.experimental.tensor.BufferType.L1,
+    interleaved_mem_config = ttnn.DRAM_MEMORY_CONFIG
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
     )
 
     in0 = torch.randn(in0_shape).bfloat16().float()
@@ -363,8 +344,8 @@ def test_sharded_matmul_1d_in0_multi_chip(
                 in0_temp,
                 grid_size,
                 [M, K // num_cores],
-                ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
             )
         in0_t.append(in0_temp)
 
@@ -422,7 +403,7 @@ def test_sharded_matmul_1d_in0_multi_chip(
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.experimental.tensor.DataType.BFLOAT8_B, ttnn.experimental.tensor.DataType.BFLOAT16),
+    (ttnn.bfloat8_b, ttnn.bfloat16),
     ids=["BFLOAT8_B", "BFLOAT16"],
 )
 @pytest.mark.parametrize(
@@ -445,9 +426,7 @@ def test_sharded_nlp_create_qkv_heads_test(
     torch.manual_seed(1234)
     compute_grid_size = device.compute_with_storage_grid_size()
     num_cores = num_kv_heads
-    shard_grid = ttnn.experimental.tensor.CoreRangeSet(
-        ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
-    )
+    shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
     q_shape = [seq_len, 1, batch, num_cores, num_q_heads // num_cores * head_dim]
     kv_shape = [seq_len, 1, batch, num_cores, num_kv_heads // num_cores * head_dim]
     Q = torch.randn(q_shape)
@@ -459,71 +438,59 @@ def test_sharded_nlp_create_qkv_heads_test(
         B = torch.concat([K.flatten(-2, -1), V.flatten(-2, -1)], -1)
         A_interleaved = torch.concat([Q], -1).flatten(-2, -1)
         B_interleaved = torch.concat([K, V], -1).flatten(-2, -1)
-        in0_shard_spec = ttnn.experimental.tensor.ShardSpec(
+        in0_shard_spec = ttnn.ShardSpec(
             shard_grid,
             [
                 seq_len * batch,
                 A_interleaved.shape[-1] // num_cores,
             ],
-            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         )
-        in1_shard_spec = ttnn.experimental.tensor.ShardSpec(
+        in1_shard_spec = ttnn.ShardSpec(
             shard_grid,
             [
                 seq_len * batch,
                 B_interleaved.shape[-1] // num_cores,
             ],
-            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         )
-        in0_mem_config = ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.experimental.tensor.BufferType.L1,
+        in0_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
             in0_shard_spec,
         )
-        in1_mem_config = ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.experimental.tensor.BufferType.L1,
+        in1_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
             in1_shard_spec,
         )
-        in0_t = (
-            ttnn.experimental.tensor.Tensor(A_interleaved, dtype)
-            .to(ttnn.experimental.tensor.Layout.TILE)
-            .to(device, in0_mem_config)
-        )
-        in1_t = (
-            ttnn.experimental.tensor.Tensor(B_interleaved, dtype)
-            .to(ttnn.experimental.tensor.Layout.TILE)
-            .to(device, in1_mem_config)
-        )
+        in0_t = ttnn.Tensor(A_interleaved, dtype).to(ttnn.TILE_LAYOUT).to(device, in0_mem_config)
+        in1_t = ttnn.Tensor(B_interleaved, dtype).to(ttnn.TILE_LAYOUT).to(device, in1_mem_config)
     else:
         A = torch.concat([Q.flatten(-2, -1), K.flatten(-2, -1), V.flatten(-2, -1)], -1)
         A_interleaved = torch.concat([Q, K, V], -1).flatten(-2, -1)
-        in0_shard_spec = ttnn.experimental.tensor.ShardSpec(
+        in0_shard_spec = ttnn.ShardSpec(
             shard_grid,
             [
                 seq_len * batch,
                 A_interleaved.shape[-1] // num_cores,
             ],
-            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         )
-        in0_mem_config = ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.experimental.tensor.BufferType.L1,
+        in0_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
             in0_shard_spec,
         )
-        in0_t = (
-            ttnn.experimental.tensor.Tensor(A_interleaved, dtype)
-            .to(ttnn.experimental.tensor.Layout.TILE)
-            .to(device, in0_mem_config)
-        )
+        in0_t = ttnn.Tensor(A_interleaved, dtype).to(ttnn.TILE_LAYOUT).to(device, in0_mem_config)
 
     out_shard_spec = in0_shard_spec
-    out_mem_config = ttnn.experimental.tensor.MemoryConfig(
-        ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.experimental.tensor.BufferType.L1,
+    out_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
         out_shard_spec,
     )
     q, k, v = ttnn.experimental.nlp_create_qkv_heads(
@@ -556,7 +523,7 @@ def test_sharded_nlp_create_qkv_heads_test(
     ref_k = torch.reshape(ref_k, [seq_len, batch, num_kv_heads, head_dim]).transpose(-3, -2)
     ref_v = torch.reshape(ref_v, [seq_len, batch, num_kv_heads, head_dim]).transpose(-3, -2)
 
-    if dtype == ttnn.experimental.tensor.DataType.BFLOAT8_B:
+    if dtype == ttnn.bfloat8_b:
         pcc = 0.99
     else:
         pcc = 1.0

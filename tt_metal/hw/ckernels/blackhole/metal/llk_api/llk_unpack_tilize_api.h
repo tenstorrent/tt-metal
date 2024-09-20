@@ -77,10 +77,10 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, s
 
     std::uint32_t base_address = cb_interface[operand_id].fifo_rd_ptr - 1;  // Remove header size added by descriptor
 
-    DEBUG_STATUS("UPTW");
+    WAYPOINT("UPTW");
     _llk_unpack_tilize_(
         base_address, tile_index, unpack_src_format[operand_id], block_ct_dim, face_r_dim, num_faces, narrow_tile);
-    DEBUG_STATUS("UPTD");
+    WAYPOINT("UPTD");
 }
 
 inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c_tiles) {
@@ -129,7 +129,8 @@ inline void llk_unpack_tilizeA_B_hw_configure_disaggregated(
         &unpack_tilizeA_B_params, within_face_16x16_transpose);
 }
 
-template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false>
+// TODO: add support for all the template parameters
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B_mop_config(const bool narrow_tile = false, const std::uint32_t num_faces = 4) {
 
     const std::uint32_t replay_buf_run_len = 6;
@@ -166,7 +167,7 @@ inline void llk_unpack_tilizeA_B_mop_config(const bool narrow_tile = false, cons
     tmp.program(instrn_buffer);
 }
 
-template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false>
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -198,7 +199,7 @@ inline void llk_unpack_tilizeA_B_init(
     cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(unpA_ch1_y_stride);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
-    llk_unpack_tilizeA_B_mop_config(narrow_tile, num_faces);
+    llk_unpack_tilizeA_B_mop_config<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(narrow_tile, num_faces);
 }
 
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false>
@@ -233,7 +234,7 @@ inline void llk_unpack_tilizeA_B(
     // Clear z/w start counters for SrcA/B
     TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, 0b1111);
 
-    DEBUG_STATUS("UPTW");
+    WAYPOINT("UPTW");
 
     for (std::uint32_t n = 0; n < num_faces; n++) {
 
@@ -287,7 +288,7 @@ inline void llk_unpack_tilizeA_B(
         switch_config_context(unp_cfg_context);
     }
 
-    DEBUG_STATUS("UPTD");
+    WAYPOINT("UPTD");
 }
 
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false>

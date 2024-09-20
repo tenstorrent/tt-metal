@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/device/fast_reduce_nc_program_factory.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/run_operation.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -17,7 +17,9 @@ using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const tt::tt_metal::Shape& shape, uint32_t dim) {
+namespace {
+
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const tt::tt_metal::LegacyShape& shape, uint32_t dim) {
     const auto rank = shape.rank();
 
     TT_FATAL(rank >= 2, "Shape must have at least two dims.");
@@ -36,7 +38,9 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dim
     return { Wt, Ht, inner_tile_size, reduce_tile_size};
 }
 
-operation::ProgramWithCallbacks reduce_nc_factory(const ttnn::Tensor &input, const ttnn::Tensor &output, int64_t dim,const DeviceComputeKernelConfig &compute_kernel_config) {
+}
+
+operation::ProgramWithCallbacks reduce_nc_factory(const ttnn::Tensor &input, const ttnn::Tensor &output, int64_t dim,const ttnn::DeviceComputeKernelConfig &compute_kernel_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -81,7 +85,7 @@ operation::ProgramWithCallbacks reduce_nc_factory(const ttnn::Tensor &input, con
          core_group_1,
          core_group_2,
          num_cols_per_core_group_1,
-         num_cols_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_output_tiles);
+         num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_output_tiles);
     const auto intermed_cb_data_format = (fp32_dest_acc_en) ? tt::DataFormat::Float32: cb_data_format;
     const auto intermed_cb_single_tile_size = (fp32_dest_acc_en) ? single_tile_size*2: single_tile_size;
 

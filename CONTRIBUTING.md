@@ -26,6 +26,7 @@ Table of Contents
     - [File structure and formats](#file-structure-and-formats)
     - [CI/CD Principles](#cicd-principles)
     - [Using CI/CD for development](#using-cicd-for-development)
+    - [Skipping CI/CD for documentation updates](#skipping-cicd-for-documentation-updates) 
     - [Documentation](#documentation)
     - [Git rules and guidelines](#git-rules-and-guidelines)
     - [Code reviews](#code-reviews)
@@ -415,10 +416,10 @@ k_id[15]: tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block_zm.cpp
 ```
 TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1 ./your_program
 ```
-  - If you still cannot reproduce the hang, try disabling the debug status and assert features. This will reduce visiblity into the hang, but is better than nothing:
+  - If you still cannot reproduce the hang, try disabling the waypoint and assert features. This will reduce visiblity into the hang, but is better than nothing:
 ```
-TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1 TT_METAL_WATCHER_DISABLE_DEBUG_STATUS=1 ./your_program
-TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1 TT_METAL_WATCHER_DISABLE_DEBUG_STATUS=1 TT_METAL_WATCHER_DISABLE_ASSERT=1 ./your_program
+TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1 TT_METAL_WATCHER_DISABLE_WAYPOINT=1 ./your_program
+TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1 TT_METAL_WATCHER_DISABLE_WAYPOINT=1 TT_METAL_WATCHER_DISABLE_ASSERT=1 ./your_program
 ```
 
 #### Using watcher hang dump tool
@@ -504,6 +505,13 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
   limited machine resources. This means that developer and reviewer discretion
   is still the most important factor in ensuring PRs are merged successfully
   and without CI failure.
+
+### Skipping CI/CD for documentation updates
+- CI/CD can be skipped for *documentation only* updates that incur no functional change.
+- Upon submitting a PR and getting the necessary appovals:
+  - Click Squash and Merge
+  - Before confirming, edit the top level commit message by prepending the token `[skip ci]`
+    - Example: `[skip ci] #9999: Update CONTRIBUTING.md`
 
 ### Documentation
 

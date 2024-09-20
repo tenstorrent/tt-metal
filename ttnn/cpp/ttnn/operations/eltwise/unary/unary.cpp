@@ -5,7 +5,7 @@
 #include "unary.hpp"
 
 #include "ttnn/common/constants.hpp"
-#include "device/unary_op.hpp"
+#include "device/unary_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/pool/downsample/device/downsample_op.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -33,9 +33,7 @@ inline Tensor unary_impl(
                                                                           // DST directly, fp32 is converted to fp16b
 
     auto output_memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config.value_or(input_tensor.memory_config());
-    return operation::run(
-               Unary{op_chain, output_memory_config, fp32_dest_acc_en, preserve_fp32_precision, output_dtype},
-               {input_tensor}, {}, {optional_output_tensor}, queue_id).at(0);
+    return prim::unary(queue_id, input_tensor, op_chain, output_dtype, output_memory_config, fp32_dest_acc_en, preserve_fp32_precision, optional_output_tensor);
 }
 
 }  // namespace detail
@@ -305,6 +303,39 @@ Tensor Identity::invoke(
 
     return detail::unary_impl(
         DefaultQueueId, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+}
+
+Tensor Dropout::invoke(
+    const Tensor& input,
+    const uint32_t seed,
+    const float probability,
+    const float scale,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    TT_ASSERT(input.device()->arch() != tt::ARCH::GRAYSKULL, "Dropout is not currently supported on Grayskull");
+    return detail::unary_impl(
+        DefaultQueueId,
+        input,
+        {UnaryWithParam{UnaryOpType::DROPOUT, {static_cast<float>(seed), probability, scale}}},
+        memory_config,
+        optional_output_tensor);
+}
+
+Tensor Dropout::invoke(
+    uint8_t queue_id,
+    const Tensor& input,
+    const uint32_t seed,
+    const float probability,
+    const float scale,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    TT_ASSERT(input.device()->arch() != tt::ARCH::GRAYSKULL, "Dropout is not currently supported on Grayskull");
+    return detail::unary_impl(
+        queue_id,
+        input,
+        {UnaryWithParam{UnaryOpType::DROPOUT, {static_cast<float>(seed), probability, scale}}},
+        memory_config,
+        optional_output_tensor);
 }
 
 template <UnaryOpType unary_op_type, typename T>

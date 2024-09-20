@@ -24,7 +24,7 @@ void InterleavedToShardedPartialDeviceOperation::validate(const std::vector<Tens
 
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Input tensor must be Interleaved");
     if (input_tensor.get_dtype() != this->output_dtype) {
-        TT_FATAL(input_tensor.get_layout() == Layout::TILE);
+        TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
     }
     auto device_grid = input_tensor.device()->compute_with_storage_grid_size();
     TT_FATAL(this->grid_size.x <= device_grid.x && this->grid_size.y <= device_grid.y, "Grid size for sharding must be less than or equal to total grid available");
@@ -32,9 +32,9 @@ void InterleavedToShardedPartialDeviceOperation::validate(const std::vector<Tens
 }
 
 
-std::vector<tt::tt_metal::Shape> InterleavedToShardedPartialDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> InterleavedToShardedPartialDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    tt::tt_metal::Shape shape = input_tensor.get_legacy_shape();
+    tt::tt_metal::LegacyShape shape = input_tensor.get_legacy_shape();
 
     uint32_t total_height = input_tensor.volume() / shape[-1];
     uint32_t new_height = total_height / this->num_slices;

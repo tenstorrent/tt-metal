@@ -86,6 +86,7 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, embd,
     for i, encoded in enumerate(encoded_prompts):
         if prefill_seq_len > 0:
             input_tokens_prefill[i] = torch.tensor(encoded[:prefill_seq_len]).to(input_tokens_prefill)
+            pt_tokenized_inputs_prefill = torch.tensor(input_tokens_prefill)
         input_tokens_decode[i, : len(encoded[prefill_seq_len:])] = torch.tensor(encoded[prefill_seq_len:]).to(
             input_tokens_decode
         )
@@ -97,7 +98,6 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, embd,
 
     # Select the first token from the prompts for initial decoding
     pt_tokenized_inputs_decode = torch.tensor(input_tokens_decode)
-    pt_tokenized_inputs_prefill = torch.tensor(input_tokens_prefill)
     emb_inputs_decode = embd(pt_tokenized_inputs_decode[:, 0]).view(model_args.max_batch_size, 1, -1)
     if prefill_seq_len > 0:
         emb_prefill_inputs = [
@@ -308,7 +308,7 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
                     profiler.end(f"compile_prefill", iteration=batch_idx)
 
             # Device synchrozization ensures profiler is accurate in end-to-end timing
-            ttnn.device.synchronize_device(device)
+            ttnn.synchronize_device(device)
 
             profiler.end(f"inference_prefill", iteration=batch_idx)
             logger.info(f"Prefill finished [{prefill_seq_len} tokens]!")
@@ -358,7 +358,7 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
             # tt_out = ttnn.to_layout(tt_out, ttnn.ROW_MAJOR_LAYOUT)
             # tt_out = ttnn.permute(tt_out, (2, 1, 0, 3))
             # tt_out = ttnn.reshape(tt_out, (tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]))  # Squeeze(1)
-            # tt_out_argmax = ttnn.experimental.tensor.argmax(tt_out, dim=-1)
+            # tt_out_argmax = ttnn.argmax(tt_out, dim=-1)
             # Typecast from bf16 to uint32 for embedding
             # tt_out_tok = ttnn.clone(tt_out_argmax, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.uint32)
             # tt_out_tok = ttnn.experimental.tensor.typecast(tt_out_tok, dtype=ttnn.uint32)

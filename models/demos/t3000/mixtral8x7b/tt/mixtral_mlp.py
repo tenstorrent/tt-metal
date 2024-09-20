@@ -9,11 +9,11 @@ from models.common.lightweightmodule import LightweightModule
 
 
 class TtMixtralMLP(LightweightModule):
-    def __init__(self, device_mesh, state_dict, args, layer_num, dtypes):
+    def __init__(self, mesh_device, state_dict, args, layer_num, dtypes):
         super().__init__()
 
         self.state_dict = state_dict
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
         self.dtypes = dtypes
         self.model_args = args
         self.model_config = args.get_model_config()
@@ -35,8 +35,8 @@ class TtMixtralMLP(LightweightModule):
         as_tensor = lambda name: ttnn.as_tensor(
             torch_weight(name),
             dtype=dtypes[name],
-            device=self.device_mesh,
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=0),
+            device=self.mesh_device,
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=0),
             layout=self.model_config["MLP_W_LAYOUT_TILE"],
             memory_config=self.model_config["MLP_WEIGHTS_MEMCFG"],
             cache_file_name=cache_name(name),
@@ -82,6 +82,7 @@ class TtMixtralMLP(LightweightModule):
                 activation="silu" if not pc_1 else None,
                 program_config=pc_1,
             )
+
             w3_out = ttnn.linear(
                 x,
                 self.w3,
@@ -92,10 +93,9 @@ class TtMixtralMLP(LightweightModule):
             )
 
             x.deallocate(True)
-            w2_in = ttnn.multiply(w1_out, w3_out)
+            w2_in = ttnn.multiply(w1_out, w3_out, output_tensor=w1_out)
 
             w3_out.deallocate(True)
-            w1_out.deallocate(True)
 
             w2_out = ttnn.linear(
                 w2_in,

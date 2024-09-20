@@ -14,7 +14,7 @@ from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 class TtFalconMLP:
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         layer_num,
@@ -25,7 +25,7 @@ class TtFalconMLP:
         super().__init__()
 
         self.state_dict = state_dict
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
         self.hidden_size = hidden_size
         self.model_config = model_config
 
@@ -41,9 +41,9 @@ class TtFalconMLP:
             w1_weight,
             dtype=self.model_config["DENSE_H_TO_4H_MM_WEIGHTS_DTYPE"],
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=self.model_config["DENSE_H_TO_4H_MM_WEIGHTS_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=3),
             cache_file_name=tt_cache_path / dense_h_to_4h_str,
             preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
         )
@@ -52,9 +52,9 @@ class TtFalconMLP:
             w2_weight,
             dtype=self.model_config["DENSE_4H_TO_H_MM_WEIGHTS_DTYPE"],
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=self.model_config["DENSE_4H_TO_H_MM_WEIGHTS_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=2),
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=2),
             cache_file_name=tt_cache_path / f"{dense_4h_to_h_str}_height_fractured",
             preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
         )
@@ -82,14 +82,12 @@ class TtFalconMLP:
                 out_tensor,
                 self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
                 layout=ttnn.TILE_LAYOUT,
-                device=self.device_mesh,
+                device=self.mesh_device,
                 memory_config=self.model_config["DEFAULT_MEMCFG"],
-                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             )
 
-    def __call__(
-        self, x: List[ttnn.experimental.tensor.Tensor], llm_mode: str
-    ) -> List[ttnn.experimental.tensor.Tensor]:
+    def __call__(self, x: List[ttnn.Tensor], llm_mode: str) -> List[ttnn.Tensor]:
         if llm_mode == "prefill":
             return self.fwd_prefill(x)
         elif llm_mode == "decode":
@@ -97,7 +95,7 @@ class TtFalconMLP:
         else:
             assert False
 
-    def fwd_decode(self, x: List[ttnn.experimental.tensor.Tensor]) -> List[ttnn.experimental.tensor.Tensor]:
+    def fwd_decode(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
         hidden_states = ttnn.matmul(
             x,
             self.dense_h_to_4h_weights,
@@ -121,7 +119,7 @@ class TtFalconMLP:
 
         hidden_states = ttnn.get_device_tensors(
             hidden_states
-        )  # Workaround for reduce_scatter only taking a vector of tensors and not device_mesh
+        )  # Workaround for reduce_scatter only taking a vector of tensors and not mesh_device
 
         hidden_states = ttnn.get_device_tensors(
             ttnn.reduce_scatter(
@@ -142,7 +140,7 @@ class TtFalconMLP:
         # return TT Tensor
         return hidden_states
 
-    def fwd_prefill(self, x: List[ttnn.experimental.tensor.Tensor]) -> List[ttnn.experimental.tensor.Tensor]:
+    def fwd_prefill(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
         hidden_states = []
         should_deallocate_ln_tensors = determine_tensor_deallocation(
             self.model_config["layernorm_params"]["slice_size"], x.get_legacy_shape()[2]
@@ -157,7 +155,7 @@ class TtFalconMLP:
                 mlp_num_slices,
                 slice_idx,
                 self.model_config["MLP_INPUT_SHARD_LAYOUT"],
-                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
             )
 
             hidden_states_slice = falcon_prefill_matmul(
@@ -197,7 +195,7 @@ class TtFalconMLP:
 
         hidden_states = ttnn.get_device_tensors(
             self.output
-        )  # Workaround for reduce_scatter only taking a vector of tensors and not device_mesh
+        )  # Workaround for reduce_scatter only taking a vector of tensors and not mesh_device
 
         hidden_states = ttnn.get_device_tensors(
             ttnn.reduce_scatter(

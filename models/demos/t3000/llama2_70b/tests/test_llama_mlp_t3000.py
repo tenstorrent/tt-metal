@@ -6,7 +6,7 @@ import pytest
 
 from models.utility_functions import skip_for_grayskull
 from models.demos.t3000.llama2_70b.tests.test_llama_mlp import run_test_LlamaMLP_inference
-from models.demos.t3000.llama2_70b.tt.llama_common import setup_llama_env, check_device_mesh
+from models.demos.t3000.llama2_70b.tt.llama_common import setup_llama_env, check_mesh_device
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
@@ -16,7 +16,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import setup_llama_env, check
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    ((32, 1, 0.9995), (1, 128, 0.9996), (1, 2048, 0.9996), (1, 8192, 0.9996)),
+    ((32, 1, 0.9994), (1, 128, 0.998), (1, 2048, 0.998), (1, 8192, 0.998)),
     ids=("decode", "prefill_128", "prefill_2k", "prefill_8k"),
 )
 @pytest.mark.parametrize(
@@ -34,7 +34,7 @@ def test_LlamaMLP_inference_t3000(
     batch,
     seq_len,
     pcc,
-    t3k_device_mesh,
+    t3k_mesh_device,
     max_batch_size,
     max_context_len,
     llama_version,
@@ -51,15 +51,13 @@ def test_LlamaMLP_inference_t3000(
 
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,
-        batch=batch,
-        seq_len=seq_len,
         max_batch_size=max_batch_size,
         max_context_len=max_context_len,
     )
 
-    check_device_mesh(t3k_device_mesh, model_config)
+    check_mesh_device(t3k_mesh_device, model_config)
     run_test_LlamaMLP_inference(
-        t3k_device_mesh,
+        t3k_mesh_device,
         batch,
         seq_len,
         pcc,

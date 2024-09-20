@@ -82,6 +82,19 @@ static map<CoreType, set<CoreCoord>> get_all_physical_printable_cores(Device *de
     return all_physical_printable_cores;
 }
 
+// Helper function to get all physical printable cores that are used for dispatch. Should be a subset of
+// get_all_physical_printable_cores().
+static map<CoreType, set<CoreCoord>> get_dispatch_physical_printable_cores(Device* device) {
+    map<CoreType, set<CoreCoord>> physical_printable_dispatch_cores;
+    unsigned num_cqs = tt::llrt::OptionsG.get_num_hw_cqs();
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+    for (auto logical_core : tt::get_logical_dispatch_cores(device->id(), num_cqs, dispatch_core_type)) {
+        CoreCoord physical_core = device->physical_core_from_logical_core(logical_core, dispatch_core_type);
+        physical_printable_dispatch_cores[dispatch_core_type].insert(physical_core);
+    }
+    return physical_printable_dispatch_cores;
+}
+
 // A null stream for when the print server is muted.
 class NullBuffer : public std::streambuf {
 public:
@@ -183,7 +196,7 @@ private:
 static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
     // Since MATH RISCV doesn't have access to CBs, we can't print tiles from it. If the user still
     // tries to do this print a relevant message.
-    if ((1 << hart_id) == DPRINT_RISCV_TR1) {
+    if ((1 << hart_id) == tt::llrt::RISCV_TR1) {
         stream << "Warning: MATH core does not support TileSlice printing, omitting print..."
             << endl << std::flush;
         return;
@@ -369,7 +382,7 @@ DebugPrintServerContext::~DebugPrintServerContext() {
     // Wait for the thread to end, with a timeout
     auto future = std::async(std::launch::async, &std::thread::join, print_server_thread_);
     if (future.wait_for(std::chrono::seconds(2)) == std::future_status::timeout) {
-        TT_FATAL(false && "Timed out waiting on debug print thread to terminate.");
+        TT_THROW("Timed out waiting on debug print thread to terminate.");
     }
     delete print_server_thread_;
     print_server_thread_ = nullptr;
@@ -412,6 +425,7 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
     // A set of all valid printable cores, used for checking the user input. Note that the coords
     // here are physical.
     map<CoreType, set<CoreCoord>> all_physical_printable_cores = get_all_physical_printable_cores(device);
+    map<CoreType, set<CoreCoord>> dispatch_physical_printable_cores = get_dispatch_physical_printable_cores(device);
 
     // Initialize all print buffers on all cores on the device to have print disabled magic. We
     // will then write print enabled magic for only the cores the user has specified to monitor.
@@ -434,34 +448,48 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
         if (std::find(chip_ids.begin(), chip_ids.end(), device->id()) == chip_ids.end())
             return;
 
-    // Handle specifically disabled cores
-    std::unordered_set<CoreCoord> disabled_phys_cores;
-    for (auto &type_and_cores : tt::llrt::OptionsG.get_feature_disabled_cores(tt::llrt::RunTimeDebugFeatureDprint)) {
-        for (auto &core : type_and_cores.second) {
-            CoreCoord physical_core = device->physical_core_from_logical_core(core, type_and_cores.first);
-            disabled_phys_cores.insert(physical_core);
-        }
-    }
-
     // Core range depends on whether dprint_all_cores flag is set.
     vector<CoreCoord> print_cores_sanitized;
     for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
-        if (tt::llrt::OptionsG.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type)) {
+        if (tt::llrt::OptionsG.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type) ==
+            tt::llrt::RunTimeDebugClassAll) {
             // Print from all cores of the given type, cores returned here are guaranteed to be valid.
             for (CoreCoord phys_core: all_physical_printable_cores[core_type]) {
-                // Don't print on specifically disabled cores.
-                if (disabled_phys_cores.find(phys_core) != disabled_phys_cores.end())
-                    continue;
                 print_cores_sanitized.push_back(phys_core);
             }
             log_info(
                 tt::LogMetal,
                 "DPRINT enabled on device {}, all {} cores.",
                 device->id(),
-                tt::llrt::get_core_type_name(core_type)
-            );
+                tt::llrt::get_core_type_name(core_type));
+        } else if (
+            tt::llrt::OptionsG.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type) ==
+            tt::llrt::RunTimeDebugClassDispatch) {
+            for (CoreCoord phys_core : dispatch_physical_printable_cores[core_type]) {
+                print_cores_sanitized.push_back(phys_core);
+            }
+            log_info(
+                tt::LogMetal,
+                "DPRINT enabled on device {}, {} dispatch cores.",
+                device->id(),
+                tt::llrt::get_core_type_name(core_type));
+        } else if (
+            tt::llrt::OptionsG.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type) ==
+            tt::llrt::RunTimeDebugClassWorker) {
+            // For worker cores, take all cores and remove dispatch cores.
+            for (CoreCoord phys_core: all_physical_printable_cores[core_type]) {
+                if (dispatch_physical_printable_cores[core_type].find(phys_core) ==
+                    dispatch_physical_printable_cores[core_type].end()) {
+                    print_cores_sanitized.push_back(phys_core);
+                }
+            }
+            log_info(
+                tt::LogMetal,
+                "DPRINT enabled on device {}, {} worker cores.",
+                device->id(),
+                tt::llrt::get_core_type_name(core_type));
         } else {
-            // Only print from the cores specified by the user
+            // No "all cores" option provided, which means print from the cores specified by the user
             vector<CoreCoord> print_cores = tt::llrt::OptionsG.get_feature_cores(tt::llrt::RunTimeDebugFeatureDprint)[core_type];
 
             // We should also validate that the cores the user specified are valid worker cores.
@@ -476,9 +504,6 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
                     valid_logical_core = false;
                 }
                 if (valid_logical_core && all_physical_printable_cores[core_type].count(phys_core) > 0) {
-                    // Don't print on specifically disabled cores.
-                    if (disabled_phys_cores.find(phys_core) != disabled_phys_cores.end())
-                        continue;
                     print_cores_sanitized.push_back(phys_core);
                     log_info(
                         tt::LogMetal,
@@ -653,7 +678,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                 stream << error_str << flush;
                 log_warning(tt::LogMetal, "Debug Print Server encountered an error: {}", error_str);
                 raise_wait_lock_.unlock();
-                TT_THROW(error_str);
+                TT_THROW("{}", error_str);
                 server_killed_due_to_hang_ = true;
             }
 
@@ -857,7 +882,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     }
                 break;
                 default:
-                    TT_FATAL("Unexpected debug print type code" && false);
+                    TT_THROW("Unexpected debug print type code");
             }
 
             // TODO(AP): this is slow but leaving here for now for debugging the debug prints themselves
@@ -1021,7 +1046,7 @@ void DprintServerAwait() {
             DebugPrintServerContext::inst
         );
         if (future.wait_for(std::chrono::seconds(1)) == std::future_status::timeout) {
-            TT_FATAL(false && "Timed out waiting on debug print server to read data.");
+            TT_THROW("Timed out waiting on debug print server to read data.");
         }
     }
 }

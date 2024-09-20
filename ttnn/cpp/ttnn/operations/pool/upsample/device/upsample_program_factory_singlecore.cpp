@@ -16,11 +16,9 @@
 
 using namespace tt::constants;
 
-namespace tt {
-
-namespace tt_metal {
-
-operation::ProgramWithCallbacks upsample_single_core(const Tensor &input, Tensor& output, uint32_t scale_factor_h, uint32_t scale_factor_w) {
+namespace ttnn::operations::upsample {
+using namespace tt;
+operation::ProgramWithCallbacks upsample_single_core(const Tensor &input, Tensor& output, const uint32_t scale_factor_h, const uint32_t scale_factor_w) {
     Program program{};
     CoreRange core({0, 0}, {0, 0});
 
@@ -118,14 +116,16 @@ operation::ProgramWithCallbacks upsample_single_core(const Tensor &input, Tensor
     );
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
+        const void* operation,
+        Program &program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>&,
+        const std::vector<Tensor>& output_tensors
     ) {
 
-        auto src_buffer = input_buffers.at(0);
+        auto src_buffer = input_tensors.at(0).buffer();
 
-        auto dst_buffer = output_buffers.at(0);
+        auto dst_buffer = output_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
 
@@ -140,8 +140,7 @@ operation::ProgramWithCallbacks upsample_single_core(const Tensor &input, Tensor
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace ttnn::operations::upsample

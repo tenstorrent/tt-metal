@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <functional>
 #include <optional>
 #include <utility>
@@ -25,7 +25,7 @@ struct MorehLayerNorm {
     uint32_t normalized_dims;
     float eps;
     MemoryConfig memory_config;
-    const DeviceComputeKernelConfig compute_kernel_config;
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
 
     bool compute_mean;
     bool compute_rstd;
@@ -34,7 +34,7 @@ struct MorehLayerNorm {
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         const std::vector<std::optional<Tensor>> &output_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     operation::ProgramWithCallbacks create_program(
@@ -52,7 +52,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     const std::optional<const Tensor> beta,
     const std::optional<const Tensor> mean,
     const std::optional<const Tensor> rstd,
-    const DeviceComputeKernelConfig compute_kernel_config);
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config);
 
 std::vector<std::optional<Tensor>> moreh_layernorm(
     const Tensor &input,
@@ -64,7 +64,7 @@ std::vector<std::optional<Tensor>> moreh_layernorm(
     const std::optional<const Tensor> mean = std::nullopt,
     const std::optional<const Tensor> rstd = std::nullopt,
     const std::optional<MemoryConfig> &memory_config = std::nullopt,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace primary
 
@@ -82,7 +82,7 @@ std::vector<std::optional<Tensor>> moreh_layernorm(
     const std::optional<const Tensor> mean = std::nullopt,
     const std::optional<const Tensor> rstd = std::nullopt,
     const std::optional<MemoryConfig> &memory_config = std::nullopt,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt
     );
 
 }  // namespace tt_metal

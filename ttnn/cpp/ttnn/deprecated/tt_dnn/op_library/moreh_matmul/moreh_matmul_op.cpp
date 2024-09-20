@@ -31,8 +31,8 @@ inline bool is_dot_forward(const Tensor& input, const Tensor& other, bool transp
     return is_1d_tensor(input) && is_1d_tensor(other) && is_same_shape(input, other);
 }
 
-inline Shape compute_output_shape(
-    const Shape& input_shape, const Shape& other_shape, bool transpose_input, bool transpose_other) {
+tt::tt_metal::LegacyShape compute_output_shape(
+    const tt::tt_metal::LegacyShape& input_shape, const tt::tt_metal::LegacyShape& other_shape, bool transpose_input, bool transpose_other) {
     const auto& input_shape_wo_padding = input_shape.without_padding();
     const auto& other_shape_wo_padding = other_shape.without_padding();
 
@@ -68,17 +68,17 @@ inline Shape compute_output_shape(
     output_dim[output_rank - 2] = h;
     output_dim[output_rank - 1] = w;
 
-    Shape output_shape{output_dim};
+    tt::tt_metal::LegacyShape output_shape{output_dim};
     auto padding = output_shape.padding();
     // padding for t logmatrix dims
     padding[output_rank - 2] = Padding::PadDimension{0, h - h_wo_padding};
     padding[output_rank - 1] = Padding::PadDimension{0, w - w_wo_padding};
-    return {Shape(output_shape, padding)};
+    return {tt::tt_metal::LegacyShape(output_shape, padding)};
 }
 
 }  // namespace
 
-void get_tensor_dim(std::vector<uint32_t>& dim, const Shape& shape) {
+void get_tensor_dim(std::vector<uint32_t>& dim, const tt::tt_metal::LegacyShape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -97,7 +97,7 @@ void get_tensor_dim(std::vector<uint32_t>& dim, const Shape& shape) {
     }
 }
 
-std::vector<int64_t> find_reduce_dim(const Shape& a_shape, const Shape& b_shape) {
+std::vector<int64_t> find_reduce_dim(const tt::tt_metal::LegacyShape& a_shape, const tt::tt_metal::LegacyShape& b_shape) {
     std::vector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     std::vector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(a_dim, a_shape);
@@ -154,7 +154,7 @@ operation::ProgramWithCallbacks MorehMatmul::create_program(
 }
 
 // Must be provided in the case where an optional output tensor was not provided
-std::vector<Shape> MorehMatmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehMatmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     return {compute_output_shape(
         input_tensors.at(0).get_legacy_shape(),
         input_tensors.at(1).get_legacy_shape(),
@@ -247,10 +247,10 @@ Tensor moreh_matmul_(
     const std::optional<Tensor>& output,
     const std::optional<Tensor>& bias,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     log_debug(LogOp, "{}:{} run matmul {} {}", __func__, __LINE__, transpose_input, transpose_other);
 
-    TT_FATAL(input.storage_type() == StorageType::DEVICE);
+    TT_FATAL(input.storage_type() == StorageType::DEVICE, "Error");
     auto kernel_config_val = init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input, other}, {bias}))};
@@ -286,7 +286,7 @@ Tensor moreh_matmul(
     const std::optional<const Tensor> output,
     const std::optional<const Tensor> bias,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
 
     // TODO(seunghwan100): Add the argument "output_tensor" to moreh_dot.
     if (is_dot_forward(input, other, transpose_input, transpose_other)) {

@@ -12,7 +12,7 @@ jobs:
           { name: "t3k_falcon40b_tests", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 50, owner_id: U053W15B6JF}, #Djordje Ivanovic
           { name: "t3k_llama3_70b_tests", arch: wormhole_b0, cmd: run_t3000_llama3_70b_tests, timeout: 30, owner_id: U03FJB5TM5Y}, #Colman Glagovich
           { name: "t3k_falcon7b_tests", arch: wormhole_b0, cmd: run_t3000_falcon7b_tests, timeout: 90, owner_id: U05RWH3QUPM}, #Salar Hosseini
-          { name: "t3k_mixtral_tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 30, owner_id: U03PUAKE719}, # Miguel Tairum
+          { name: "t3k_mixtral_tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 50, owner_id: U03PUAKE719}, # Miguel Tairum
         ]
 
     name: ${{ matrix.test-group.name }}
@@ -22,7 +22,7 @@ jobs:
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
-    runs-on: [arch-wormhole_b0, "config-t3000", "in-service", "pipeline-perf"]
+    runs-on: ["arch-wormhole_b0", "config-t3000", "in-service", "pipeline-perf"]
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Enable performance mode
@@ -47,14 +47,14 @@ jobs:
           source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_demo_tests.sh
           ${{ matrix.test-group.cmd }}
       - name: Save environment data
-        if: ${{ (matrix.test-group.name == 't3k_falcon7b_tests' || matrix.test-group.name == 't3k_mixtral_tests') && success() }}
+        if: ${{ (matrix.test-group.name == 't3k_falcon7b_tests' || matrix.test-group.name == 't3k_mixtral_tests') && !cancelled() }}
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           python3 .github/scripts/data_analysis/create_benchmark_environment_csv.py
       - name: Upload benchmark data
-        if: ${{ (matrix.test-group.name == 't3k_falcon7b_tests' || matrix.test-group.name == 't3k_mixtral_tests') && success() }}
+        if: ${{ (matrix.test-group.name == 't3k_falcon7b_tests' || matrix.test-group.name == 't3k_mixtral_tests') && !cancelled() }}
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}

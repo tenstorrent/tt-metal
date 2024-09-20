@@ -7,38 +7,34 @@
 
 namespace ttnn {
 
-std::atomic<std::int64_t> TENSOR_ID = -1;
-std::atomic<std::int64_t> PYTHON_OPERATION_ID = -1;
-std::atomic<std::int64_t> DEVICE_OPERATION_ID = -1;
-
-std::int64_t get_python_operation_id() {
-    return PYTHON_OPERATION_ID.load();
+std::int64_t CoreIDs::get_python_operation_id() {
+    return python_operation_id.load();
 }
-void set_python_operation_id(std::int64_t python_operation_id) {
-    PYTHON_OPERATION_ID = python_operation_id;
+void CoreIDs::set_python_operation_id(std::int64_t python_operation_id_) {
+    python_operation_id = python_operation_id_;
 }
-void increment_python_operation_id() {
-    PYTHON_OPERATION_ID++;
+std::int64_t CoreIDs::fetch_and_increment_python_operation_id() {
+    return python_operation_id.fetch_add(1);
 }
 
-std::int64_t get_tensor_id() {
-    return TENSOR_ID.load();
+std::int64_t CoreIDs::get_tensor_id() {
+    return tensor_id.load();
 }
-void set_tensor_id(std::int64_t tensor_id) {
-    TENSOR_ID = tensor_id;
+void CoreIDs::set_tensor_id(std::int64_t tensor_id_) {
+    tensor_id = tensor_id_;
 }
-void increment_tensor_id() {
-    TENSOR_ID++;
+std::int64_t CoreIDs::fetch_and_increment_tensor_id() {
+    return tensor_id.fetch_add(1);
 }
 
-std::int64_t get_device_operation_id() {
-    return DEVICE_OPERATION_ID.load();
+std::int64_t CoreIDs::get_device_operation_id() {
+    return device_operation_id.load();
 }
-void set_device_operation_id(std::int64_t device_operation_id) {
-    DEVICE_OPERATION_ID = device_operation_id;
+void CoreIDs::set_device_operation_id(std::int64_t device_operation_id_) {
+    device_operation_id = device_operation_id_;
 }
-void increment_device_operation_id() {
-    DEVICE_OPERATION_ID++;
+std::int64_t CoreIDs::fetch_and_increment_device_operation_id() {
+    return device_operation_id.fetch_add(1);
 }
 
 }  // namespace ttnn

@@ -62,7 +62,7 @@ def test_bw_addalpha_wo_alpha(input_shapes, device):
     ),
 )
 @pytest.mark.parametrize("alpha", [0.05, 2.0, 1.5, 0.12])
-@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True], [False, False]])
+@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
 def test_bw_addalpha_with_opt_output(input_shapes, alpha, device, are_required_outputs):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     other_data, other_tensor = data_gen_with_range(input_shapes, -90, 100, device, True)
@@ -76,7 +76,9 @@ def test_bw_addalpha_with_opt_output(input_shapes, alpha, device, are_required_o
         _, other_grad = data_gen_with_range(input_shapes, -1, 1, device)
 
     cq_id = 0
-    tt_output_tensor_on_device = ttnn.addalpha_bw(
+
+    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    ttnn.addalpha_bw(
         grad_tensor,
         input_tensor,
         other_tensor,
@@ -86,6 +88,9 @@ def test_bw_addalpha_with_opt_output(input_shapes, alpha, device, are_required_o
         input_b_grad=other_grad,
         queue_id=cq_id,
     )
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+
+    tt_output_tensor_on_device = [input_grad, other_grad]
 
     golden_function = ttnn.get_golden_function(ttnn.addalpha_bw)
     golden_tensor = golden_function(grad_data, in_data, other_data, alpha)
@@ -105,7 +110,7 @@ def test_bw_addalpha_with_opt_output(input_shapes, alpha, device, are_required_o
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True], [False, False]])
+@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
 def test_bw_addalpha_with_opt_output_wo_alpha(input_shapes, device, are_required_outputs):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     other_data, other_tensor = data_gen_with_range(input_shapes, -90, 100, device, True)

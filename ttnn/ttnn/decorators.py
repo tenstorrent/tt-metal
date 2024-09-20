@@ -2,14 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from contextlib import contextmanager
 import dataclasses
-from functools import wraps
-import inspect
-import os
+import sys
 import time
 import traceback
 import types
+
+from contextlib import contextmanager
+from functools import wraps
+from importlib.machinery import ModuleSpec
+from importlib.util import module_from_spec
+from typing import Callable
 
 from loguru import logger
 
@@ -156,8 +159,7 @@ def set_tensor_id(tensor, force=False):
     if isinstance(tensor, (ttnn.Tensor, torch.Tensor)):
         if not force and hasattr(tensor, "tensor_id") and tensor.tensor_id is not None:
             return
-        tensor.tensor_id = ttnn._ttnn.get_tensor_id()
-        ttnn._ttnn.increment_tensor_id()
+        tensor.tensor_id = ttnn._ttnn.fetch_and_increment_tensor_id()
     elif isinstance(tensor, (list, tuple)):
         for element in tensor:
             set_tensor_id(element, force)
@@ -303,10 +305,10 @@ def posprocess_global_golden_function_outputs(outputs, golden_outputs):
 @dataclasses.dataclass
 class FastOperation:
     python_fully_qualified_name: str
-    function: callable
-    preprocess_golden_function_inputs: callable
-    golden_function: callable
-    postprocess_golden_function_outputs: callable
+    function: Callable
+    preprocess_golden_function_inputs: Callable
+    golden_function: Callable
+    postprocess_golden_function_outputs: Callable
     is_cpp_operation: bool
     is_experimental: bool
 
@@ -329,10 +331,10 @@ class FastOperation:
 @dataclasses.dataclass
 class Operation:
     python_fully_qualified_name: str
-    function: callable
-    preprocess_golden_function_inputs: callable
-    golden_function: callable
-    postprocess_golden_function_outputs: callable
+    function: Callable
+    preprocess_golden_function_inputs: Callable
+    golden_function: Callable
+    postprocess_golden_function_outputs: Callable
     is_cpp_operation: bool
     is_experimental: bool
 
@@ -597,7 +599,7 @@ class Operation:
     def __call__(self, *function_args, **function_kwargs):
         try:
             if not OPERATION_CALL_STACK:
-                ttnn._ttnn.increment_python_operation_id()
+                ttnn._ttnn.fetch_and_increment_python_operation_id()
             OPERATION_CALL_STACK.append(self.python_fully_qualified_name)
             output = self.decorated_function(*function_args, **function_kwargs)
         finally:
@@ -607,7 +609,23 @@ class Operation:
     __doc__ = property(lambda self: self.decorated_function.__doc__)
 
 
-REGISTERED_OPERATIONS = set()
+class RegisteredOperations:
+    def __init__(self):
+        self.operations = set()
+
+    def __iter__(self):
+        return iter(self.operations)
+
+    def __contains__(self, operation):
+        return operation in self.operations
+
+    def add(self, operation, name):
+        if operation in self.operations:
+            raise RuntimeError(f'Operation with name "{name}" is already registered')
+        self.operations.add(operation)
+
+
+REGISTERED_OPERATIONS = RegisteredOperations()
 
 
 def query_registered_operations(include_experimental=False):
@@ -690,69 +708,43 @@ def attach_golden_function(
     )
 
 
-def export_operation(python_fully_qualified_name, operation, is_method):
-    """
-    This function is used to export the operation to the ttnn module using the fully qualified name
-    For example, an operation named "ttnn.add" would be exported as ttnn.add.
-    Any level of nesting is possible.
-    """
-    global REGISTERED_OPERATIONS
+def create_module_if_not_exists(module_name):
+    if module_name in sys.modules:
+        return sys.modules[module_name]
 
-    if operation in REGISTERED_OPERATIONS:
-        raise RuntimeError(f'Operation with name "{python_fully_qualified_name}" is already registered')
+    # Recursively create parent modules if they don't exist
+    parent_module_name, _, child_module_name = module_name.rpartition(".")
+    if parent_module_name:
+        parent_module = create_module_if_not_exists(parent_module_name)
+    else:
+        parent_module = None
 
-    REGISTERED_OPERATIONS.add(operation)
+    # Create the module
+    new_module = module_from_spec(ModuleSpec(module_name, None))
 
-    # Do not export methods
-    if is_method:
-        return
-
-    module_path = python_fully_qualified_name.split(".")  # "ttnn.add" -> ["ttnn", "add"]
-
-    if len(module_path) < 2:
-        raise RuntimeError("Module path have to have at least 2 tokens!")
-
-    if module_path[0] != "ttnn":
-        raise RuntimeError('Module path must start with "ttnn."')
-
-    module_path = module_path[1:]  # ["ttnn", "add"] -> ["add"]
-
-    def recursive_helper(module, path):
-        submodule_name, *rest = path
-        if not rest:
-            setattr(module, submodule_name, operation)
-            return
-
-        submodule = getattr(module, submodule_name, types.ModuleType(submodule_name))
-        setattr(module, submodule_name, submodule)
-        recursive_helper(submodule, rest)
-
-    recursive_helper(ttnn, module_path)
+    if parent_module:
+        setattr(parent_module, child_module_name, new_module)
+    sys.modules[module_name] = new_module
+    return new_module
 
 
-def register_cpp_operation():
-    def operation_decorator(function: callable):
-        is_cpp_operation = hasattr(function, "__ttnn_operation__")
+def register_cpp_operation(target_module: types.ModuleType, func_name: str, function: Callable):
+    operation_class = FastOperation if ttnn.CONFIG.enable_fast_runtime_mode else Operation
 
-        if not is_cpp_operation:
-            raise RuntimeError(f"{function} is not a C++ operation)")
+    operation = operation_class(
+        python_fully_qualified_name=function.python_fully_qualified_name,
+        function=function,
+        golden_function=None,
+        preprocess_golden_function_inputs=None,
+        postprocess_golden_function_outputs=None,
+        is_cpp_operation=True,
+        is_experimental=False,
+    )
 
-        operation_class = FastOperation if ttnn.CONFIG.enable_fast_runtime_mode else Operation
+    REGISTERED_OPERATIONS.add(operation, func_name)
+    setattr(target_module, func_name, operation)
 
-        operation = operation_class(
-            python_fully_qualified_name=function.python_fully_qualified_name,
-            function=function,
-            golden_function=None,
-            preprocess_golden_function_inputs=None,
-            postprocess_golden_function_outputs=None,
-            is_cpp_operation=True,
-            is_experimental=False,
-        )
-
-        export_operation(function.python_fully_qualified_name, operation, is_method=False)
-        return operation
-
-    return operation_decorator
+    return operation
 
 
 def register_python_operation(
@@ -767,7 +759,7 @@ def register_python_operation(
 ):
     python_fully_qualified_name = name
 
-    def operation_decorator(function: callable):
+    def operation_decorator(function: Callable):
         is_cpp_operation = hasattr(function, "__ttnn_operation__")
 
         if is_cpp_operation:
@@ -807,7 +799,18 @@ def register_python_operation(
             preprocess_golden_function_inputs=preprocess_golden_function_inputs,
             postprocess_golden_function_outputs=postprocess_golden_function_outputs,
         )
-        export_operation(python_fully_qualified_name, operation, is_method)
+
+        if not is_method:  # Do not export methods
+            module_path, _, func_name = python_fully_qualified_name.rpartition(".")
+            if not module_path:
+                raise RuntimeError("Module path have to have at least 2 tokens!")
+            if not module_path.startswith("ttnn"):
+                raise RuntimeError('Module path must start with "ttnn."')
+
+            target_module = create_module_if_not_exists(module_path)
+
+            REGISTERED_OPERATIONS.add(operation, python_fully_qualified_name)
+            setattr(target_module, func_name, operation)
 
         # Wrap method appropriately in order to avoid errors
         if is_method:

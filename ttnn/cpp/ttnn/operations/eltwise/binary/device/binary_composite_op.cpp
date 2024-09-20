@@ -15,6 +15,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
 namespace ttnn::operations::binary{
 
@@ -158,7 +159,7 @@ Tensor _logical_xor(const Tensor& input_a, const Tensor& input_b, const std::opt
 }
 
 Tensor _div_overload(const Tensor& input_a, float value, bool accurate_mode, const std::string& round_mode, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor") && "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
+    TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
     Tensor result = ttnn::multiply(input_a, (1.0f/value), std::nullopt, output_mem_config);
     if(round_mode == "trunc"){
         result = ttnn::trunc(result);
@@ -170,7 +171,7 @@ Tensor _div_overload(const Tensor& input_a, float value, bool accurate_mode, con
 }
 
 Tensor _div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, const std::string& round_mode, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor") && "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
+    TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
     auto arch = input_a.device()->arch();
     if (arch == tt::ARCH::WORMHOLE_B0) {
         DataType input_dtype = input_a.get_dtype();
@@ -325,9 +326,9 @@ Tensor _scatter(const Tensor& input_a, const Tensor& input_b, const std::optiona
  *   by running reshape.
  */
 Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    const tt::tt_metal::Shape s_a = input_a.get_legacy_shape();
-    const tt::tt_metal::Shape s_b = input_b.get_legacy_shape();
-    auto num_ones = [](const tt::tt_metal::Shape& s) -> uint32_t {
+    const tt::tt_metal::LegacyShape s_a = input_a.get_legacy_shape();
+    const tt::tt_metal::LegacyShape s_b = input_b.get_legacy_shape();
+    auto num_ones = [](const tt::tt_metal::LegacyShape& s) -> uint32_t {
         uint32_t num1s = 0;
         for (uint32_t idx = 0; idx < 4; idx++) num1s += (uint32_t)(s[idx] == 1);
         return num1s;
@@ -351,13 +352,14 @@ Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<
     }
     a_slim = ttnn::to_layout(a_slim, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
     b_slim = ttnn::to_layout(b_slim, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
-    Device* device = AutoFormat::GetDefaultDevice();
+
+    auto device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
     if(device != nullptr) {
         if (a_slim.storage_type() != tt::tt_metal::StorageType::DEVICE) {
-            a_slim = AutoFormat::move_tensor_to_device(a_slim, device);
+            a_slim = ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_device(a_slim, device);
         }
         if (b_slim.storage_type() != tt::tt_metal::StorageType::DEVICE) {
-            b_slim = AutoFormat::move_tensor_to_device(b_slim, device);
+            b_slim = ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_device(b_slim, device);
         }
     }
 

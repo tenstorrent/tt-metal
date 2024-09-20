@@ -27,39 +27,39 @@ def where_binary_2(x, y):
 
 
 def bcast_add_h(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
+    ttnn.bcast(x, y, ttnn.BcastOpMath.ADD, ttnn.BcastOpDim.H)
 
 
 def bcast_add_w(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.W)
+    ttnn.bcast(x, y, ttnn.BcastOpMath.ADD, ttnn.BcastOpDim.W)
 
 
 def bcast_add_hw(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.HW)
+    ttnn.bcast(x, y, ttnn.BcastOpMath.ADD, ttnn.BcastOpDim.HW)
 
 
 def bcast_sub_h(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.SUB, tt_lib.tensor.BcastOpDim.H)
+    ttnn.bcast(x, y, ttnn.BcastOpMath.SUB, ttnn.BcastOpDim.H)
 
 
 def bcast_sub_w(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.SUB, tt_lib.tensor.BcastOpDim.W)
+    ttnn.bcast(x, y, ttnn.BcastOpMath.SUB, ttnn.BcastOpDim.W)
 
 
 def bcast_sub_hw(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.SUB, tt_lib.tensor.BcastOpDim.HW)
+    ttnn.bcast(x, y, ttnn.BcastOpMath.SUB, ttnn.BcastOpDim.HW)
 
 
 def bcast_mul_h(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.H)
+    ttnn.bcast(x, y, ttnn.BcastOpMath.MUL, ttnn.BcastOpDim.H)
 
 
 def bcast_mul_w(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.W)
+    ttnn.bcast(x, y, ttnn.BcastOpMath.MUL, ttnn.BcastOpDim.W)
 
 
 def bcast_mul_hw(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
+    ttnn.bcast(x, y, ttnn.BcastOpMath.MUL, ttnn.BcastOpDim.HW)
 
 
 def bcast_h_shape_func(input_shape):
@@ -283,108 +283,60 @@ def scale_mask_softmax_in_place_shape_func(input_shape):
     return input_shape, [1, 1, input_shape[-2], input_shape[-1]]
 
 
-def primaru_moreh_mean_0(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[0])
+def primary_moreh_mean_0(x):
+    ttnn.operations.moreh.mean(x, dim=[0])
 
 
-def primaru_moreh_mean_0_shape_func(input_shape):
-    return input_shape, [1, input_shape[1], input_shape[2], input_shape[3]]
+def primary_moreh_mean_01(x):
+    ttnn.operations.moreh.mean(x, dim=[0, 1])
 
 
-def primaru_moreh_mean_01(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[0, 1])
+def primary_moreh_mean_012(x):
+    ttnn.operations.moreh.mean(x, dim=[0, 1, 2])
 
 
-def primaru_moreh_mean_01_shape_func(input_shape):
-    return input_shape, [1, 1, input_shape[2], input_shape[3]]
+def primary_moreh_mean_0123(x):
+    ttnn.operations.moreh.mean(x, dim=[0, 1, 2, 3])
 
 
-def primaru_moreh_mean_012(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[0, 1, 2])
+def primary_moreh_mean_013(x):
+    ttnn.operations.moreh.mean(x, dim=[0, 1, 3])
 
 
-def primaru_moreh_mean_012_shape_func(input_shape):
-    return input_shape, [1, 1, 1, input_shape[3]]
+def primary_moreh_mean_023(x):
+    ttnn.operations.moreh.mean(x, dim=[0, 2, 3])
 
 
-def primaru_moreh_mean_0123(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[0, 1, 2, 3])
+def primary_moreh_mean_1(x):
+    ttnn.operations.moreh.mean(x, dim=[1])
 
 
-def primaru_moreh_mean_0123_shape_func(input_shape):
-    return input_shape, [1, 1, 1, 1]
+def primary_moreh_mean_12(x):
+    ttnn.operations.moreh.mean(x, dim=[1, 2])
 
 
-def primaru_moreh_mean_013(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[0, 1, 3])
+def primary_moreh_mean_123(x):
+    ttnn.operations.moreh.mean(x, dim=[1, 2, 3])
 
 
-def primaru_moreh_mean_013_shape_func(input_shape):
-    return input_shape, [1, 1, input_shape[2], 1]
+def primary_moreh_mean_13(x):
+    ttnn.operations.moreh.mean(x, dim=[1, 3])
 
 
-def primaru_moreh_mean_023(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[0, 2, 3])
+def primary_moreh_mean_2(x):
+    ttnn.operations.moreh.mean(x, dim=[2])
 
 
-def primaru_moreh_mean_023_shape_func(input_shape):
-    return input_shape, [1, input_shape[1], 1, 1]
+def primary_moreh_mean_23(x):
+    ttnn.operations.moreh.mean(x, dim=[2, 3])
 
 
-def primaru_moreh_mean_1(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[1])
+def primary_moreh_mean_3(x):
+    ttnn.operations.moreh.mean(x, dim=[3])
 
 
-def primaru_moreh_mean_1_shape_func(input_shape):
-    return input_shape, [input_shape[0], 1, input_shape[2], input_shape[3]]
-
-
-def primaru_moreh_mean_12(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[1, 2])
-
-
-def primaru_moreh_mean_12_shape_func(input_shape):
-    return input_shape, [input_shape[0], 1, 1, input_shape[3]]
-
-
-def primaru_moreh_mean_123(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[1, 2, 3])
-
-
-def primaru_moreh_mean_123_shape_func(input_shape):
-    return input_shape, [input_shape[0], 1, 1, 1]
-
-
-def primaru_moreh_mean_13(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[1, 3])
-
-
-def primaru_moreh_mean_13_shape_func(input_shape):
-    return input_shape, [input_shape[0], 1, input_shape[2], 1]
-
-
-def primaru_moreh_mean_2(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[2])
-
-
-def primaru_moreh_mean_2_shape_func(input_shape):
-    return input_shape, [input_shape[0], input_shape[1], 1, input_shape[3]]
-
-
-def primaru_moreh_mean_23(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[2, 3])
-
-
-def primaru_moreh_mean_23_shape_func(input_shape):
-    return input_shape, [input_shape[0], input_shape[1], 1, 1]
-
-
-def primaru_moreh_mean_3(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[3])
-
-
-def primaru_moreh_mean_3_shape_func(input_shape):
-    return input_shape, [input_shape[0], input_shape[1], input_shape[2], 1]
+def primary_moreh_mean_backward(x, y):
+    ttnn.operations.moreh.mean_backward(x, dim=[0], keepdim=True, input_grad=y)
 
 
 def celu_bw(x, y):
@@ -442,6 +394,14 @@ all_binary_ops = [
     {
         "op": ttnn.divide,
         "name": "ttnn.divide",
+    },
+    {
+        "op": ttnn.div,
+        "name": "ttnn.div",
+    },
+    {
+        "op": ttnn.div_no_nan,
+        "name": "ttnn.div_no_nan",
     },
     {
         "op": ttnn.hypot,
@@ -537,73 +497,73 @@ all_binary_ops = [
     },
     {
         "op": bcast_add_h,
-        "name": "tt_lib.tensor.bcast_add_h",
+        "name": "ttnn.bcast_add_h",
         "shape_func": bcast_h_shape_func,
     },
     {
         "op": bcast_add_w,
-        "name": "tt_lib.tensor.bcast_add_w",
+        "name": "ttnn.bcast_add_w",
         "shape_func": bcast_w_shape_func,
     },
     {
         "op": bcast_add_hw,
-        "name": "tt_lib.tensor.bcast_add_hw",
+        "name": "ttnn.bcast_add_hw",
         "shape_func": bcast_hw_shape_func,
     },
     {
         "op": bcast_sub_h,
-        "name": "tt_lib.tensor.bcast_sub_h",
+        "name": "ttnn.bcast_sub_h",
         "shape_func": bcast_h_shape_func,
     },
     {
         "op": bcast_sub_w,
-        "name": "tt_lib.tensor.bcast_sub_w",
+        "name": "ttnn.bcast_sub_w",
         "shape_func": bcast_w_shape_func,
     },
     {
         "op": bcast_sub_hw,
-        "name": "tt_lib.tensor.bcast_sub_hw",
+        "name": "ttnn.bcast_sub_hw",
         "shape_func": bcast_hw_shape_func,
     },
     {
         "op": bcast_mul_h,
-        "name": "tt_lib.tensor.bcast_mul_h",
+        "name": "ttnn.bcast_mul_h",
         "shape_func": bcast_h_shape_func,
     },
     {
         "op": bcast_mul_w,
-        "name": "tt_lib.tensor.bcast_mul_w",
+        "name": "ttnn.bcast_mul_w",
         "shape_func": bcast_w_shape_func,
     },
     {
         "op": bcast_mul_hw,
-        "name": "tt_lib.tensor.bcast_mul_hw",
+        "name": "ttnn.bcast_mul_hw",
         "shape_func": bcast_hw_shape_func,
     },
-    {
-        "op": ttnn.add,
-        "name": "ttnn.complex_add",
-        "is_complex": [True, True],
-        "need_out_mem_cfg": True,
-    },
-    {
-        "op": ttnn.sub,
-        "name": "ttnn.complex_sub",
-        "is_complex": [True, True],
-        "need_out_mem_cfg": True,
-    },
-    {
-        "op": ttnn.multiply,
-        "name": "ttnn.complex_mul",
-        "is_complex": [True, True],
-        "need_out_mem_cfg": True,
-    },
-    {
-        "op": ttnn.divide,
-        "name": "ttnn.complex_div",
-        "is_complex": [True, True],
-        "need_out_mem_cfg": True,
-    },
+    # {
+    #     "op": ttnn.add,
+    #     "name": "ttnn.complex_add",
+    #     "is_complex": [True, True],
+    #     "need_out_mem_cfg": True,
+    # },
+    # {
+    #     "op": ttnn.sub,
+    #     "name": "ttnn.complex_sub",
+    #     "is_complex": [True, True],
+    #     "need_out_mem_cfg": True,
+    # },
+    # {
+    #     "op": ttnn.multiply,
+    #     "name": "ttnn.complex_mul",
+    #     "is_complex": [True, True],
+    #     "need_out_mem_cfg": True,
+    # },
+    # {
+    #     "op": ttnn.divide,
+    #     "name": "ttnn.complex_div",
+    #     "is_complex": [True, True],
+    #     "need_out_mem_cfg": True,
+    # },
     {
         "op": concat_0,
         "name": "ttnn.concat_dim_0",
@@ -1034,60 +994,6 @@ all_binary_ops = [
         "shape_func": scale_mask_softmax_in_place_shape_func,
     },
     {
-        "op": primaru_moreh_mean_0,
-        "name": "tt_lib.operations.primary.moreh_mean_dims_0",
-        "shape_func": primaru_moreh_mean_0_shape_func,
-    },
-    {
-        "op": primaru_moreh_mean_01,
-        "name": "tt_lib.operations.primary.moreh_mean_dims_01",
-        "shape_func": primaru_moreh_mean_01_shape_func,
-    },
-    # {
-    #     "op": primaru_moreh_mean_012,
-    #     "name": "tt_lib.operations.primary.moreh_mean_dims_012",
-    #     "shape_func": primaru_moreh_mean_012_shape_func,
-    # },
-    # {
-    #     "op": primaru_moreh_mean_013,
-    #     "name": "tt_lib.operations.primary.moreh_mean_dims_013",
-    #     "shape_func": primaru_moreh_mean_013_shape_func,
-    # },
-    {
-        "op": primaru_moreh_mean_1,
-        "name": "tt_lib.operations.primary.moreh_mean_dims_1",
-        "shape_func": primaru_moreh_mean_1_shape_func,
-    },
-    # {
-    #     "op": primaru_moreh_mean_12,
-    #     "name": "tt_lib.operations.primary.moreh_mean_dims_12",
-    #     "shape_func": primaru_moreh_mean_12_shape_func,
-    # },
-    # {
-    #     "op": primaru_moreh_mean_13,
-    #     "name": "tt_lib.operations.primary.moreh_mean_dims_13",
-    #     "shape_func": primaru_moreh_mean_13_shape_func,
-    # },
-    # {
-    #     "op": primaru_moreh_mean_2,
-    #     "name": "tt_lib.operations.primary.moreh_mean_dims_2",
-    #     "shape_func": primaru_moreh_mean_2_shape_func,
-    # },
-    # {
-    #     "op": primaru_moreh_mean_23,
-    #     "name": "tt_lib.operations.primary.moreh_mean_dims_23",
-    #     "shape_func": primaru_moreh_mean_23_shape_func,
-    # },
-    # {
-    #     "op": primaru_moreh_mean_3,
-    #     "name": "tt_lib.operations.primary.moreh_mean_dims_3",
-    #     "shape_func": primaru_moreh_mean_3_shape_func,
-    # },
-    {
-        "op": tt_lib.operations.primary.moreh_mean_backward,
-        "name": "tt_lib.operations.primary.moreh_mean_backward",
-    },
-    {
         "op": ttnn.angle_bw,
         "name": "ttnn.angle_bw",
         "is_complex": [False, True],
@@ -1108,6 +1014,10 @@ all_binary_ops = [
     {
         "op": ttnn.round_bw,
         "name": "ttnn.round_bw",
+    },
+    {
+        "op": primary_moreh_mean_backward,
+        "name": "ttnn.operations.moreh.mean_backward",
     },
 ]
 
@@ -1286,7 +1196,7 @@ def ttnn_slice(x):
 
 
 def typecast(x):
-    ttnn.typecast(x, tt_lib.tensor.DataType.BFLOAT8_B)
+    ttnn.typecast(x, ttnn.bfloat8_b)
 
 
 def arange(x):
@@ -1971,6 +1881,10 @@ all_unary_ops = [
         "name": "ttnn.ones_like",
     },
     {
+        "op": ttnn.empty_like,
+        "name": "ttnn.empty_like",
+    },
+    {
         "op": zeros,
         "name": "ttnn.zeros",
     },
@@ -2259,13 +2173,6 @@ all_unary_ops = [
         "num_repeats": 2,
     },
     {
-        "op": argmax_dim_2,
-        "name": "ttnn.argmax_dim_2",
-        "shape_func": argmax_shape_func,
-        "layout": "ROW_MAJOR",
-        "num_repeats": 2,
-    },
-    {
         "op": argmax_dim_None,
         "name": "ttnn.argmax_dim_None",
         "shape_func": argmax_shape_func,
@@ -2364,6 +2271,58 @@ all_unary_ops = [
     {
         "op": fused_softmax,
         "name": "tt_lib.fused_ops.softmax.softmax",
+    },
+    {
+        "op": primary_moreh_mean_0,
+        "name": "ttnn.operations.moreh.mean_dims_0",
+    },
+    {
+        "op": primary_moreh_mean_01,
+        "name": "ttnn.operations.moreh.mean_dims_01",
+    },
+    {
+        "op": primary_moreh_mean_012,
+        "name": "ttnn.operations.moreh.mean_dims_012",
+    },
+    {
+        "op": primary_moreh_mean_013,
+        "name": "ttnn.operations.moreh.mean_dims_013",
+    },
+    {
+        "op": primary_moreh_mean_023,
+        "name": "ttnn.operations.moreh.mean_dims_023",
+    },
+    {
+        "op": primary_moreh_mean_0123,
+        "name": "ttnn.operations.moreh.mean_dims_0123",
+    },
+    {
+        "op": primary_moreh_mean_1,
+        "name": "ttnn.operations.moreh.mean_dims_1",
+    },
+    {
+        "op": primary_moreh_mean_12,
+        "name": "ttnn.operations.moreh.mean_dims_12",
+    },
+    {
+        "op": primary_moreh_mean_13,
+        "name": "ttnn.operations.moreh.mean_dims_13",
+    },
+    {
+        "op": primary_moreh_mean_123,
+        "name": "ttnn.operations.moreh.mean_dims_123",
+    },
+    {
+        "op": primary_moreh_mean_2,
+        "name": "ttnn.operations.moreh.mean_dims_2",
+    },
+    {
+        "op": primary_moreh_mean_23,
+        "name": "ttnn.operations.moreh.mean_dims_23",
+    },
+    {
+        "op": primary_moreh_mean_3,
+        "name": "ttnn.operations.moreh.mean_dims_3",
     },
 ]
 

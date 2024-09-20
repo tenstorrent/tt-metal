@@ -6,7 +6,7 @@
 
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -56,13 +56,13 @@ void MorehNllLossUnreducedBackward::validate_with_output_tensors(
     TT_FATAL(target_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss_unreduced need to be on device!");
     TT_FATAL(target_tensor.buffer() != nullptr, "Operands to nll_loss_unreduced need to be allocated in buffers on device!");
     TT_FATAL((target_tensor.get_layout() == Layout::TILE), "target_tensor to nll_loss_unreduced must be tilized");
-    TT_FATAL(target_tensor.get_dtype() == DataType::INT32);
+    TT_FATAL(target_tensor.get_dtype() == DataType::INT32, "Error");
 
     TT_FATAL(output_grad_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss_unreduced need to be on device!");
     TT_FATAL(
         output_grad_tensor.buffer() != nullptr, "Operands to nll_loss_unreduced need to be allocated in buffers on device!");
     TT_FATAL((output_grad_tensor.get_layout() == Layout::TILE), "target_tensor to nll_loss_unreduced must be tilized");
-    TT_FATAL(output_grad_tensor.get_dtype() == DataType::BFLOAT16);
+    TT_FATAL(output_grad_tensor.get_dtype() == DataType::BFLOAT16, "Error");
 
     if (input_grad_tensor.has_value()) {
         TT_FATAL(
@@ -73,7 +73,7 @@ void MorehNllLossUnreducedBackward::validate_with_output_tensors(
             "Operands to nll_loss need to be allocated in buffers on device!");
         TT_FATAL(
             (input_grad_tensor.value().get_layout() == Layout::TILE), "target_tensor to nll_loss_unreduced must be tilized");
-        TT_FATAL(input_grad_tensor.value().get_dtype() == DataType::BFLOAT16);
+        TT_FATAL(input_grad_tensor.value().get_dtype() == DataType::BFLOAT16, "Error");
     }
 
     if (weight_tensor.has_value()) {
@@ -84,14 +84,14 @@ void MorehNllLossUnreducedBackward::validate_with_output_tensors(
             weight_tensor.value().buffer() != nullptr,
             "weight_tensor to nll_loss need to be allocated in buffers on device!");
         TT_FATAL((weight_tensor.value().get_layout() == Layout::TILE), "weight_tensor to nll_loss_unreduced must be in tilized");
-        TT_FATAL(weight_tensor.value().get_dtype() == DataType::BFLOAT16);
+        TT_FATAL(weight_tensor.value().get_dtype() == DataType::BFLOAT16, "Error");
     }
 }
 
-std::vector<Shape> MorehNllLossUnreducedBackward::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehNllLossUnreducedBackward::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     // To calculate the output shape, we need the channel_size. However, the required tensors, target and output_grad,
     // do not contain the channel_size information.
-    TT_FATAL(false, "moreh_nll_loss_unreduced_backward not support create output tensors.");
+    TT_THROW("moreh_nll_loss_unreduced_backward not support create output tensors.");
     return {input_tensors.at(0).get_legacy_shape()};
 }
 
@@ -133,7 +133,7 @@ Tensor moreh_nll_loss_unreduced_backward(
     const std::optional<const Tensor> input_grad_tensor,
     const int32_t ignore_index,
     const MemoryConfig& memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto device = output_grad_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});

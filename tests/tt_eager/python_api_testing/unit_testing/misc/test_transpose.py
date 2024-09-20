@@ -11,7 +11,7 @@ import ttnn
 from loguru import logger
 from models.utility_functions import is_grayskull
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -57,6 +57,7 @@ def transpose(
         assert device.num_program_cache_entries() == expected_program_cache_size
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16, ttnn.float32),
@@ -96,6 +97,7 @@ def test_transpose_wh_bfp4(device):
     transpose(input_shape, device, dim0=-2, dim1=-1, input_dtype=ttnn.bfloat4_b)
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16, ttnn.float32),
@@ -118,7 +120,7 @@ def test_transpose_hc_program_cache(dtype, device, use_program_cache):
     H = H * 3
     W = W
     input_shape = (N, C, H, W)
-    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=1, input_dtype=dtype)
+    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=2, input_dtype=dtype)
 
     # changing shape, single core
     N = 1
@@ -128,7 +130,7 @@ def test_transpose_hc_program_cache(dtype, device, use_program_cache):
     input_shape = (N, C, H, W)
     # CACHE MISS since its single core
     # Cache size 2 more because of pad op in single core impl + transpose
-    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=3, input_dtype=dtype)
+    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=5, input_dtype=dtype)
 
 
 @pytest.mark.parametrize(
@@ -152,7 +154,7 @@ def test_transpose_cn_program_cache(dtype, device, use_program_cache):
     H = 32 * 4
     W = 32 * 3
     input_shape = (N, C, H, W)
-    transpose(input_shape, device, dim0=0, dim1=1, expected_program_cache_size=1, input_dtype=dtype)
+    transpose(input_shape, device, dim0=0, dim1=1, expected_program_cache_size=2, input_dtype=dtype)
 
 
 @pytest.mark.parametrize(
@@ -177,7 +179,7 @@ def test_transpose_wh_program_cache(dtype, device, use_program_cache):
     H = H * 3
     W = W
     input_shape = (N, C, H, W)
-    transpose(input_shape, device, dim0=-2, dim1=-1, expected_program_cache_size=1, input_dtype=dtype)
+    transpose(input_shape, device, dim0=-2, dim1=-1, expected_program_cache_size=2, input_dtype=dtype)
 
     # changing shape, single core
     N = 1
@@ -186,7 +188,7 @@ def test_transpose_wh_program_cache(dtype, device, use_program_cache):
     W = 32
     input_shape = (N, C, H, W)
     # CACHE MISS since its single core
-    transpose(input_shape, device, dim0=-2, dim1=-1, expected_program_cache_size=1, input_dtype=dtype)
+    transpose(input_shape, device, dim0=-2, dim1=-1, expected_program_cache_size=3, input_dtype=dtype)
 
 
 @pytest.mark.parametrize(
@@ -208,9 +210,7 @@ def test_transpose_wh_sharded_program_cache(dtype, device, use_program_cache):
     input_shape = torch.Size([N, C, H, W])
 
     num_cores = min(N, compute_grid_size.x * compute_grid_size.y)
-    shard_grid = ttnn.CoreRangeSet(
-        ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
-    )
+    shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
@@ -242,9 +242,7 @@ def test_transpose_wh_sharded_program_cache(dtype, device, use_program_cache):
     input_shape = torch.Size([N, C, H, W])
 
     num_cores = min(N, compute_grid_size.x * compute_grid_size.y)
-    shard_grid = ttnn.CoreRangeSet(
-        ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
-    )
+    shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
@@ -277,9 +275,7 @@ def test_transpose_wh_sharded_program_cache(dtype, device, use_program_cache):
     input_shape = torch.Size([N, C, H, W])
 
     num_cores = min(N, compute_grid_size.x * compute_grid_size.y)
-    shard_grid = ttnn.CoreRangeSet(
-        ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
-    )
+    shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
@@ -307,6 +303,7 @@ def test_transpose_wh_sharded_program_cache(dtype, device, use_program_cache):
         )
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @skip_for_grayskull("Grayskull has pcc issue when transpose used untilize")
 @pytest.mark.parametrize("n", [1])
 @pytest.mark.parametrize("c", [1])
@@ -339,6 +336,7 @@ def test_tranpose_hw_rm_with_padding(device, n, c, h, w):
     assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @skip_for_grayskull("Grayskull has pcc issue when transpose used untilize")
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [128])
@@ -378,6 +376,7 @@ def run_tranpose_hw_rm_program_cache(device, n, c, h, w, use_program_cache):
     assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @skip_for_grayskull("Grayskull has pcc issue when transpose used untilize")
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [128])
@@ -399,6 +398,7 @@ def test_tranpose_hw_rm_with_program_cache(device, n, c, h, w, use_program_cache
     assert device.num_program_cache_entries() == 1
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [224])
 @pytest.mark.parametrize("h", [16])
@@ -468,6 +468,7 @@ def run_tranpose_hw_sharded_rm_with_program_cache(device, n, c, h, w):
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [128])
@@ -488,6 +489,7 @@ def test_tranpose_hw_sharded_rm_with_program_cache(device, n, c, h, w, use_progr
     assert device.num_program_cache_entries() == 3
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [128])
@@ -527,6 +529,7 @@ def run_tranpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cache)
     assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("n", [20])
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [256])
@@ -576,6 +579,7 @@ def run_tranpose_hc_sharded(device, n, c, h, w, grid_size):
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "n, c, h, w, grid_size",
     [

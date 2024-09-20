@@ -4,7 +4,7 @@
 
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/run_operation.hpp"
 
 #include "tt_metal/host_api.hpp"
@@ -21,7 +21,7 @@ namespace primary {
 
 #define L1_512KB (512 * 1024)
 
-bool is_moreh_softmax_h_small_available(const Tensor &tensor, const DeviceComputeKernelConfig& compute_kernel_config) {
+bool is_moreh_softmax_h_small_available(const Tensor &tensor, const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
     auto h = tensor.get_legacy_shape()[-2];
     int32_t Ht = (h + TILE_HEIGHT - 1) / TILE_HEIGHT;
 
@@ -50,7 +50,7 @@ bool is_moreh_softmax_h_small_available(const Tensor &tensor, const DeviceComput
     return (L1_UNRESERVED_BASE + cb_usage <= L1_512KB);
 }
 
-operation::ProgramWithCallbacks moreh_softmax_h_small(const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op, const DeviceComputeKernelConfig compute_kernel_config) {
+operation::ProgramWithCallbacks moreh_softmax_h_small(const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op, const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     log_info(LogTest, "Small tensor algorithm selected");
     // split work
     auto shape = input.get_legacy_shape();

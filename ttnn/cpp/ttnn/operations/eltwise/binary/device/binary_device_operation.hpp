@@ -12,9 +12,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/run_operation.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
@@ -31,7 +30,6 @@ namespace ttnn::operations::binary {
 struct BinaryDeviceOperation {
     struct operation_attributes_t {
         BinaryOpType binary_op_type;
-        bool in_place;
         const std::optional<unary::FusedActivations> activations;
         const std::optional<unary::UnaryWithParam> input_tensor_a_activation;
         const MemoryConfig memory_config;
@@ -217,7 +215,6 @@ struct BinaryDeviceOperation {
         const Tensor& input_tensor_a_arg,
         const Tensor& input_tensor_b_arg,
         BinaryOpType binary_op_type,
-        bool in_place,
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<Tensor> optional_output_tensor,

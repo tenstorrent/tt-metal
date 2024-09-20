@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/deprecated/tt_numpy/functions.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -70,7 +70,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     const std::optional<const Tensor>& bias,
     bool transpose_input,
     bool transpose_other,
-    const DeviceComputeKernelConfig &compute_kernel_config) {
+    const ttnn::DeviceComputeKernelConfig &compute_kernel_config) {
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
@@ -345,7 +345,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
                 compute_rt_args
             );
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
-            TT_FATAL(compute_kernel_2_id.has_value());
+            TT_FATAL(compute_kernel_2_id.has_value(), "Error");
             num_output_tiles_per_core = num_output_tiles_per_core_group_2;
             std::vector<uint32_t> compute_rt_args;
             compute_rt_args.push_back(num_tiles_written);

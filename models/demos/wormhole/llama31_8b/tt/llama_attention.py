@@ -53,7 +53,10 @@ class TtLlamaAttention(nn.Module):
         self.rot_mat = rot_mat  # Rotational matrix in the form of a list of 8K tensors [1,1,head_dim,head_dim] for positional embedding on device
 
         layer_name = f"layers.{layer_num}.attention"
-        cache_name = lambda name: weight_cache_path / (f"{layer_name}.{name}")
+        if configuration.dummy_weights:
+            cache_name = lambda _: None
+        else:
+            cache_name = lambda name: weight_cache_path / (f"{layer_name}.{name}")
 
         wq_str = f"{layer_name}.wq.weight"
         wk_str = f"{layer_name}.wk.weight"
@@ -140,7 +143,7 @@ class TtLlamaAttention(nn.Module):
             self.layer_past_list.append(layer_past)
 
         self.q_heads_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(self.grid_size.x, self.grid_size.y),
+            compute_with_storage_grid_size=ttnn.CoreCoord(self.grid_size.x, self.grid_size.y),
             in0_block_w=4,
             out_subblock_h=4,
             out_subblock_w=1,
@@ -150,7 +153,7 @@ class TtLlamaAttention(nn.Module):
             fused_activation=None,
         )
         self.k_heads_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(self.grid_size.x, self.grid_size.y),
+            compute_with_storage_grid_size=ttnn.CoreCoord(self.grid_size.x, self.grid_size.y),
             in0_block_w=4,
             out_subblock_h=1,
             out_subblock_w=1,
@@ -161,7 +164,7 @@ class TtLlamaAttention(nn.Module):
         )
 
         self.expand_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(self.grid_size.x, self.grid_size.y),
+            compute_with_storage_grid_size=ttnn.CoreCoord(self.grid_size.x, self.grid_size.y),
             in0_block_w=4,
             out_subblock_h=2,
             out_subblock_w=2,
@@ -172,7 +175,7 @@ class TtLlamaAttention(nn.Module):
         )
 
         self.reduce_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(self.grid_size.x, self.grid_size.y),
+            compute_with_storage_grid_size=ttnn.CoreCoord(self.grid_size.x, self.grid_size.y),
             in0_block_w=4,
             out_subblock_h=4,
             out_subblock_w=1,
@@ -183,7 +186,7 @@ class TtLlamaAttention(nn.Module):
         )
 
         self.attn_program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(8, 4),
+            compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
             in0_block_w=1,
             out_subblock_h=1,
             out_subblock_w=4,
@@ -195,7 +198,7 @@ class TtLlamaAttention(nn.Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self.attention_grid = ttnn.experimental.tensor.CoreCoord(8, 4)
+        self.attention_grid = ttnn.CoreCoord(8, 4)
         self.scale = self.head_dim**-0.5
 
     def forward_decode(
@@ -321,7 +324,8 @@ class TtLlamaAttention(nn.Module):
             dense_out = ttnn.linear(
                 attn_output_cat,
                 wo,
-                memory_config=self.model_config["LM_HEAD_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["ATTN_OUTPUT_MEMCFG"],
+                program_config=self.model_config["ATTN_OUTPUT_PROGCFG"],
                 compute_kernel_config=self.compute_kernel_config,
                 # core_grid=self.grid_size,
             )  # seqlen, 1, batch, hidden_size
@@ -427,7 +431,6 @@ class TtLlamaAttention(nn.Module):
             q_heads_84SD,
             k_heads_K1SD,
             v_heads_V1SD,
-            attn_masks,
             is_causal=True,
             scale=self.scale,
             program_config=self.model_config["SDPA_PROGCFG"](seq_len),

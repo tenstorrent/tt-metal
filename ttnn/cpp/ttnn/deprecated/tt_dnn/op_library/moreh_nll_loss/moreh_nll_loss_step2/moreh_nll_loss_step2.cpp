@@ -5,7 +5,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -26,7 +26,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_step2_impl_2d(
     const int32_t ignore_index,
     const bool reduction_mean,
     const CoreRange core_range,
-    const DeviceComputeKernelConfig compute_kernel_config) {
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     // split work
     auto input_shape = input.get_legacy_shape();
     auto rank = input_shape.rank();
@@ -201,7 +201,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_step2_impl_3d(
     const int32_t ignore_index,
     const bool reduction_mean,
     const CoreRange core_range,
-    const DeviceComputeKernelConfig compute_kernel_config) {
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     // split work
     auto input_shape = input.get_legacy_shape();
     auto rank = input_shape.rank();
@@ -379,7 +379,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_step2_impl_4d(
     const int32_t ignore_index,
     const bool reduction_mean,
     const CoreRange core_range,
-    const DeviceComputeKernelConfig compute_kernel_config) {
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     // split work
     auto input_shape = input.get_legacy_shape();
     auto target_shape = target.get_legacy_shape();
@@ -565,7 +565,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_step2_impl(
     const int32_t ignore_index,
     const bool reduction_mean,
     const CoreRange core_range,
-    const DeviceComputeKernelConfig compute_kernel_config) {
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     // split work
     auto input_shape = input.get_legacy_shape();
     auto rank = input_shape.rank();

@@ -9,7 +9,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::experimental::paged_cache {
 
@@ -26,12 +26,12 @@ struct PagedUpdateCacheDeviceOperation {
     const std::vector<uint32_t> update_idxs;
     const uint32_t batch_offset;
     const PagedUpdateCacheOpType op_type;
-    const DeviceComputeKernelConfig compute_kernel_config;
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
 
     PagedUpdateCacheOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
-    const std::vector<tt::tt_metal::Shape> compute_output_shapes(
+    const std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(
         const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(
         const std::vector<Tensor> &input_tensors) const;

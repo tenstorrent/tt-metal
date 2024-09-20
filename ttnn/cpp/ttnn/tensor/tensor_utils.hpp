@@ -33,30 +33,39 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(Tensor conv_weight_tensor, u
 // Converts convolution weights to depthwise layout with broadcasted weights
 Tensor convert_conv_weight_tensor_to_depthwise_layout(Tensor conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype);
 
-const Shape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volume);
+const tt::tt_metal::LegacyShape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volume);
 
-const Shape infer_dims_for_reshape_RM(int N, int C, int H, int W, uint32_t old_volume);
+const tt::tt_metal::LegacyShape infer_dims_for_reshape_RM(int N, int C, int H, int W, uint32_t old_volume);
 
 template <typename T>
 static std::size_t compute_volume(const T& shape) {
-    auto volume = 1;
+    size_t volume = 1;
     for (auto index = 0; index < shape.size(); index++) {
         volume *= shape[index];
     }
     return volume;
 }
 
-static std::vector<std::size_t> compute_strides(Shape shape) {
+static std::vector<uint32_t> compute_strides(const tt::tt_metal::LegacyShape& shape) {
+    if (shape.rank() == 0)
+        return {};
+
     auto num_elements = compute_volume(shape);
-    std::vector<std::size_t> strides;
+    std::vector<uint32_t> strides;
     for (std::int32_t index = 0; index < shape.rank(); index++) {
+        if (shape[index] == 0) {
+            // Insert 0 to indicate no memory access for this dimension
+            strides.push_back(0);
+            continue;
+        }
+
         num_elements /= shape[index];
         strides.push_back(num_elements);
     }
     return strides;
 }
 
-static int compute_flat_indices(vector<int> indices, vector<std::size_t> strides) {
+static int compute_flat_indices(const vector<int>& indices, const vector<std::uint32_t> strides) {
     int flat_index = 0;
     for (auto i = 0; i < indices.size(); i++) {
         flat_index += indices[i] * strides[i];
@@ -66,7 +75,7 @@ static int compute_flat_indices(vector<int> indices, vector<std::size_t> strides
 
 template <typename T>
 static std::size_t compute_buffer_size(const T& shape, DataType data_type) {
-    const auto volume = compute_volume(shape);
+    const size_t volume = compute_volume(shape);
     if (data_type == DataType::BFLOAT8_B) {
         TT_ASSERT(volume % constants::TILE_HW == 0);
         const auto bfloat8_b_volume = volume / constants::TILE_HW * constants::BFLOAT8_B_TILE_HW;

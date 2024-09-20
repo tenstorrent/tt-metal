@@ -9,7 +9,7 @@ from transformers import FalconForCausalLM
 from models.utility_functions import tt_tensors_to_torch_tensors
 
 
-def initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, device_mesh):
+def initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, mesh_device):
     head_dim = configuration.hidden_size // configuration.num_attention_heads
     kv_cache = ()
     for _ in range(num_layers):
@@ -18,16 +18,16 @@ def initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, devi
         tt_k_cache = tt_from_torch(
             k_cache,
             dtype=ttnn.bfloat16,
-            device=device_mesh,
+            device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
         tt_v_cache = tt_from_torch(
             v_cache,
             dtype=ttnn.bfloat16,
-            device=device_mesh,
+            device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
         kv_cache += ((tt_k_cache, tt_v_cache),)
     return kv_cache
@@ -78,7 +78,7 @@ def get_rand_falcon_inputs(
     seq_len,
     batch,
     kv_cache_len,
-    device_mesh,
+    mesh_device,
     global_batch,
     head_dim,
     max_position_embeddings,
@@ -104,9 +104,9 @@ def get_rand_falcon_inputs(
             tt_attention_input = tt_from_torch(
                 attention_input.unsqueeze(1),
                 dtype=model_config["DEFAULT_DTYPE"],
-                device=device_mesh,
+                device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
+                mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
             )
 
             if model_config["PREFILL_OPTIMIZED_MODE"] and seq_len in [2048, 128, 1024]:
@@ -118,10 +118,10 @@ def get_rand_falcon_inputs(
                 tt_attention_mask = [
                     tt_from_torch(
                         attn_mask,
-                        dtype=ttnn.experimental.tensor.DataType.BFLOAT4_B,
-                        device=device_mesh,
+                        dtype=ttnn.bfloat4_b,
+                        device=mesh_device,
                         layout=ttnn.TILE_LAYOUT,
-                        mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
+                        mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
                     )
                     for attn_mask in attn_masks
                 ]
@@ -129,9 +129,9 @@ def get_rand_falcon_inputs(
                 tt_attention_mask = tt_from_torch(
                     (attention_mask_bool * -100000).expand(-1, configuration.num_attention_heads, -1, -1),
                     dtype=model_config["DEFAULT_DTYPE"],
-                    device=device_mesh,
+                    device=mesh_device,
                     layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
+                    mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
                 )
 
         # Generate kvcache for each layer
@@ -143,16 +143,16 @@ def get_rand_falcon_inputs(
             tt_k_cache = tt_from_torch(
                 tt_k_cache.unsqueeze(1),
                 dtype=model_config["DEFAULT_DTYPE"],
-                device=device_mesh,
+                device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
+                mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
             )
             tt_v_cache = tt_from_torch(
                 tt_v_cache.unsqueeze(1),
                 dtype=model_config["DEFAULT_DTYPE"],
-                device=device_mesh,
+                device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
+                mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
             )
             tt_layer_past += ((tt_k_cache, tt_v_cache),)
 
@@ -167,9 +167,9 @@ def get_rand_falcon_inputs(
             tt_attention_input = tt_from_torch(
                 attention_input.unsqueeze(1).transpose(0, 2),
                 dtype=model_config["DEFAULT_DTYPE"],
-                device=device_mesh,
+                device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ShardTensorToMesh(device_mesh, dim=2),
+                mesh_mapper=ShardTensorToMesh(mesh_device, dim=2),
             )
 
             attention_mask_bool = torch.zeros(global_batch, 1, q_len, kv_len, dtype=bool)
@@ -197,10 +197,10 @@ def get_rand_falcon_inputs(
             tt_attention_mask = tt_from_torch(
                 attention_mask_bool_padded,
                 dtype=model_config["DEFAULT_DTYPE"],
-                device=device_mesh,
+                device=mesh_device,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=model_config["ATTN_MASK_MEMCFG"],
-                mesh_mapper=ShardTensorToMesh(device_mesh, dim=device_shard_dim),
+                mesh_mapper=ShardTensorToMesh(mesh_device, dim=device_shard_dim),
             )
             if not model_config["l1_sharded"]:
                 # Tilize attn masks
@@ -225,16 +225,16 @@ def get_rand_falcon_inputs(
             tt_k_cache = tt_from_torch(
                 tt_k_cache.unsqueeze(1),
                 dtype=model_config["DEFAULT_DTYPE"],
-                device=device_mesh,
+                device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
+                mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
             )
             tt_v_cache = tt_from_torch(
                 tt_v_cache.unsqueeze(1),
                 dtype=model_config["DEFAULT_DTYPE"],
-                device=device_mesh,
+                device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
+                mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
             )
             tt_layer_past += ((tt_k_cache, tt_v_cache),)
 
@@ -255,10 +255,10 @@ def get_rand_falcon_inputs(
         )
 
 
-def concat_device_out_layer_present(device_mesh, tt_layer_present, seq_end_idx, end_idx_only=False):
+def concat_device_out_layer_present(mesh_device, tt_layer_present, seq_end_idx, end_idx_only=False):
     tt_layer_present = (
-        tt_tensors_to_torch_tensors(tt_layer_present[0], device_mesh, concat_dim=0).squeeze(1),
-        tt_tensors_to_torch_tensors(tt_layer_present[1], device_mesh, concat_dim=0).squeeze(1),
+        tt_tensors_to_torch_tensors(tt_layer_present[0], mesh_device, concat_dim=0).squeeze(1),
+        tt_tensors_to_torch_tensors(tt_layer_present[1], mesh_device, concat_dim=0).squeeze(1),
     )
     if not end_idx_only:
         tt_layer_present = (
@@ -273,18 +273,18 @@ def concat_device_out_layer_present(device_mesh, tt_layer_present, seq_end_idx, 
     return tt_layer_present
 
 
-def concat_device_outputs(device_mesh, tt_out, llm_mode, tt_layer_present, seq_end_idx):
+def concat_device_outputs(mesh_device, tt_out, llm_mode, tt_layer_present, seq_end_idx):
     concat_dim = 2 if llm_mode == "decode" else 0
-    tt_out = tt_tensors_to_torch_tensors(tt_out, device_mesh, concat_dim=concat_dim).squeeze(1)
+    tt_out = tt_tensors_to_torch_tensors(tt_out, mesh_device, concat_dim=concat_dim).squeeze(1)
     if llm_mode == "decode":
         tt_out = tt_out.transpose(0, 1)
-    tt_layer_present = concat_device_out_layer_present(device_mesh, tt_layer_present, seq_end_idx)
+    tt_layer_present = concat_device_out_layer_present(mesh_device, tt_layer_present, seq_end_idx)
     return tt_out, tt_layer_present
 
 
 def get_devices(device):
-    # device is either a ttnn.DeviceMesh or a ttnn.Device
-    if type(device) == ttnn.DeviceMesh:
+    # device is either a ttnn.MeshDevice or a ttnn.Device
+    if type(device) == ttnn.MeshDevice:
         devices = device.get_devices()
     elif type(device) == ttnn.Device:
         devices = [device]
@@ -294,27 +294,27 @@ def get_devices(device):
 
 
 def synchronize_devices(device):
-    # device is either a ttnn.DeviceMesh or a ttnn.Device
+    # device is either a ttnn.MeshDevice or a ttnn.Device
     devices = get_devices(device)
     for device in devices:
         ttnn.synchronize_device(device)
 
 
 def tt_from_torch(torch_tensor, dtype=None, device=None, layout=None, memory_config=None, mesh_mapper=None):
-    # device is either a ttnn.DeviceMesh or a ttnn.Device
+    # device is either a ttnn.MeshDevice or a ttnn.Device
     return ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
         device=device,
         layout=layout,
         memory_config=memory_config,
-        mesh_mapper=mesh_mapper if type(device) == ttnn.DeviceMesh else None,
+        mesh_mapper=mesh_mapper if type(device) == ttnn.MeshDevice else None,
     )
 
 
 def get_num_devices(device):
-    # device is either a ttnn.DeviceMesh or a ttnn.Device
-    if type(device) == ttnn.DeviceMesh:
+    # device is either a ttnn.MeshDevice or a ttnn.Device
+    if type(device) == ttnn.MeshDevice:
         return device.get_num_devices()
     elif type(device) == ttnn.Device:
         return 1
@@ -323,7 +323,7 @@ def get_num_devices(device):
 
 
 def dump_device_profiler(device):
-    # device is either a ttnn.DeviceMesh or a ttnn.Device
+    # device is either a ttnn.MeshDevice or a ttnn.Device
     devices = get_devices(device)
     for device in devices:
-        ttnn.experimental.device.DumpDeviceProfiler(device)
+        ttnn.DumpDeviceProfiler(device)

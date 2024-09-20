@@ -21,8 +21,7 @@ ttnn::Tensor ExecuteAttentionSoftmax<in_place>::invoke(
     float head_size = head_size_arg.has_value() ? 1.0f / std::sqrt(head_size_arg.value()) : 1.0f;
     if constexpr (in_place) {
         TT_FATAL(attention_mask.has_value(),
-         fmt::format("Cannot apply divide by sqrt(head_size) using in-place version when attention_mask is not set."));
-
+         "Cannot apply divide by sqrt(head_size) using in-place version when attention_mask is not set.");
     } else {
         if (not attention_mask.has_value()) {
             auto output_tensor = ttnn::multiply(input_tensor, head_size);

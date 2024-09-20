@@ -6,7 +6,7 @@
 #include "prod.hpp"
 #include "device/prod_nc_op.hpp"
 #include "device/prod_op_all.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
@@ -17,6 +17,7 @@ namespace ttnn::operations::reduction {
 
 // Autoformat support
 inline Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config) {
+    using ttnn::operations::experimental::auto_format::AutoFormat;
     auto formatted_input_tensor = temp;
     if(formatted_input_tensor.get_layout()==Layout::ROW_MAJOR){
         auto a_pad_shape = AutoFormat::pad_to_tile_shape(temp.get_legacy_shape(), false, false, true, true);
@@ -28,6 +29,7 @@ inline Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& outp
 }
 
 inline Tensor prod_all(const Tensor& input_a, const MemoryConfig& output_mem_config) {
+    using ttnn::operations::experimental::auto_format::AutoFormat;
     auto formatted_input_tensor = input_a;
     if (formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
         auto a_pad_shape = AutoFormat::pad_to_tile_shape(input_a.get_legacy_shape(), false, false, true, true);
@@ -42,6 +44,7 @@ inline Tensor prod_all(const Tensor& input_a, const MemoryConfig& output_mem_con
 }
 
 inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& output_mem_config) {
+    using ttnn::operations::experimental::auto_format::AutoFormat;
     // layout conversion
     auto formatted_input_tensor = temp;
     if(formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
@@ -55,7 +58,7 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
     }
     // Apply prod
     std::vector<int64_t> dimension = {(dim == 1 || dim == -3) ? 1 : 0};
-    tt::tt_metal::Shape input_shape = formatted_input_tensor.get_legacy_shape();
+    tt::tt_metal::LegacyShape input_shape = formatted_input_tensor.get_legacy_shape();
     std::array<uint32_t, 4> required = {
         ((dim == 1 || dim == -3) ? input_shape[0] : 1),
         ((dim == 1 || dim == -3) ? 1 : input_shape[1]),
@@ -83,7 +86,7 @@ Tensor ProdOperation::invoke(const Tensor& input_a, bool all_dimensions, int64_t
     if (all_dimensions) {
         return prod_all(input_a, output_mem_config);
     }
-    TT_FATAL(dim >= -4 && dim <= 3 && "Dimension out of range (expected to be in range of [-4, 3]");
+    TT_FATAL(dim >= -4 && dim <= 3, "Dimension out of range (expected to be in range of [-4, 3]");
     Tensor temp = input_a;
     // Permute for dim 2,3
     if (dim == 2 || dim == -2) {
@@ -100,19 +103,19 @@ Tensor ProdOperation::invoke(const Tensor& input_a, bool all_dimensions, int64_t
     } else if (dim == 2 || dim == -2) {
         std::vector<int64_t> after_permute_dims = {1, 2, 0, 3};
         Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
-        tt::tt_metal::Shape input_shape = input_a.get_legacy_shape();
+        tt::tt_metal::LegacyShape input_shape = input_a.get_legacy_shape();
         std::vector<uint32_t> start_index = {0, 0, 0, 0};
         std::vector<uint32_t> end_index = {input_shape[0] - 1, input_shape[1] - 1, 0, input_shape[3] - 1};
-        return ttnn::slice(0, required, start_index, end_index, std::nullopt);
+        return ttnn::slice(0, required, start_index, end_index, std::nullopt, std::nullopt);
     } else {  // dim 3
         // permute
         std::vector<int64_t> after_permute_dims = {1, 2, 0, 3};
         Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
         // unpad
-        tt::tt_metal::Shape input_shape = input_a.get_legacy_shape();
+        tt::tt_metal::LegacyShape input_shape = input_a.get_legacy_shape();
         std::vector<uint32_t> start_index = {0, 0, 0, 0};
         std::vector<uint32_t> end_index = {input_shape[0] - 1, input_shape[1] - 1, 0, input_shape[2] - 1};
-        Tensor new_unpad_tensor = ttnn::slice(0, required, start_index, end_index, std::nullopt);
+        Tensor new_unpad_tensor = ttnn::slice(0, required, start_index, end_index, std::nullopt, std::nullopt);
         // permute back
         after_permute_dims = {0, 1, 3, 2};
         Tensor res_host = ttnn::permute(new_unpad_tensor, after_permute_dims, output_mem_config);

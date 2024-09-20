@@ -200,7 +200,7 @@ void dirty_host_completion_buffer(uint32_t *host_hugepage_completion_buffer) {
     for (int i = 0; i < DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE / sizeof(uint32_t); i++) {
         host_hugepage_completion_buffer[i] = host_data_dirty_pattern;
     }
-    _mm_sfence();
+    tt_driver_atomics::sfence();
 }
 
 uint32_t round_cmd_size_up(uint32_t size) {
@@ -968,7 +968,7 @@ void gen_prefetcher_exec_buf_cmd_and_write_to_dram(Device *device,
     add_prefetcher_cmd(exec_buf_cmds, empty_sizes, CQ_PREFETCH_CMD_EXEC_BUF_END, dispatch_cmds);
 
     // writes cmds to dram
-    num_dram_banks_g = device->num_banks(BufferType::DRAM);;
+    num_dram_banks_g = device->num_banks(BufferType::DRAM);
 
     uint32_t page_size = 1 << exec_buf_log_page_size_g;
 
@@ -1344,7 +1344,7 @@ void nt_memcpy(uint8_t *__restrict dst, const uint8_t * __restrict src, size_t n
     }
 
     if (num_lines > 0)
-        _mm_sfence();
+        tt_driver_atomics::sfence();
 }
 
 void write_prefetcher_cmd(Device *device,
@@ -1747,7 +1747,7 @@ void configure_for_single_chip(Device *device,
                 (prefetch_relay_demux_queue_size_bytes >> 4), // 9: remote_tx_queue_size_words
                 (uint32_t)phys_prefetch_relay_demux_core.x, // 10: remote_tx_x
                 (uint32_t)phys_prefetch_relay_demux_core.y, // 11: remote_tx_y
-                num_dest_endpoints, // 12: remote_tx_queue_id
+                0, // 12: remote_tx_queue_id
                 (uint32_t)DispatchRemoteNetworkType::NOC0, // 13: tx_network_type
                 packetized_path_test_results_addr, // 14: test_results_addr
                 packetized_path_test_results_size, // 15: test_results_size
@@ -1987,7 +1987,7 @@ void configure_for_single_chip(Device *device,
                 (dispatch_relay_demux_queue_size_bytes >> 4), // 9: remote_tx_queue_size_words
                 (uint32_t)phys_dispatch_relay_demux_core.x, // 10: remote_tx_x
                 (uint32_t)phys_dispatch_relay_demux_core.y, // 11: remote_tx_y
-                num_dest_endpoints, // 12: remote_tx_queue_id
+                0, // 12: remote_tx_queue_id
                 (uint32_t)DispatchRemoteNetworkType::NOC0, // 13: tx_network_type
                 packetized_path_test_results_addr, // 14: test_results_addr
                 packetized_path_test_results_size, // 15: test_results_size

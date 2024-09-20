@@ -4,20 +4,22 @@
 
 #include "binary_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/operations/data_movement/bcast/bcast.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 #include "ttnn/device_operation.hpp"
 
+
+
 namespace ttnn::operations::binary {
 
-static const tt::tt_metal::BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType binary_op_type) {
+static const BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType binary_op_type) {
     switch (binary_op_type) {
-        case BinaryOpType::ADD: return tt::tt_metal::BcastOpMath::ADD;
-        case BinaryOpType::SUB: return tt::tt_metal::BcastOpMath::SUB;
-        case BinaryOpType::MUL: return tt::tt_metal::BcastOpMath::MUL;
+        case BinaryOpType::ADD: return BcastOpMath::ADD;
+        case BinaryOpType::SUB: return BcastOpMath::SUB;
+        case BinaryOpType::MUL: return BcastOpMath::MUL;
         default: TT_THROW("BinaryOpType cannot be mapped to BcastOpMath");
     }
 }
@@ -28,6 +30,7 @@ BinaryDeviceOperation::BroadcastWidthMultiCore::cached_program_t BinaryDeviceOpe
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::constants;
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
@@ -75,7 +78,7 @@ BinaryDeviceOperation::BroadcastWidthMultiCore::cached_program_t BinaryDeviceOpe
 
     constexpr bool row_major = false;
     auto [num_cores, all_cores, core_group_1, core_group_2, Wt_per_core_group_1, Wt_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, Wt, row_major);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, Wt, row_major);
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
 
@@ -114,20 +117,20 @@ BinaryDeviceOperation::BroadcastWidthMultiCore::cached_program_t BinaryDeviceOpe
 
     KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/bcast/kernels/dataflow/reader_bcast_w_interleaved_input_cols_partitioned.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/reader_bcast_w_interleaved_input_cols_partitioned.cpp",
         all_device_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/bcast/kernels/dataflow/writer_unary_interleaved_input_cols_batched.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/writer_unary_interleaved_input_cols_batched.cpp",
         all_device_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::map<std::string, std::string> bcast_defines = bcast_op_utils::get_defines(BcastOpDim::W, bcast_math);
     auto bcast_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/bcast/kernels/compute/bcast_w.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_w.cpp",
         all_device_cores,
         tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines});
 
@@ -210,6 +213,7 @@ void BinaryDeviceOperation::BroadcastWidthMultiCore::override_runtime_arguments(
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::constants;
 
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
@@ -254,7 +258,7 @@ void BinaryDeviceOperation::BroadcastWidthMultiCore::override_runtime_arguments(
 
     constexpr bool row_major = false;
     auto [num_cores, all_cores, core_group_1, core_group_2, Wt_per_core_group_1, Wt_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, Wt, row_major);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, Wt, row_major);
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
 

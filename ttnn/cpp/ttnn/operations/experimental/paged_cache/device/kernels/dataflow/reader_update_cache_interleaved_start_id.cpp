@@ -55,9 +55,9 @@ void kernel_main() {
 
     if constexpr (use_index_tensor) {
 
-        const InterleavedPow2AddrGen<index_is_dram> addrg = {
+        const InterleavedAddrGen<index_is_dram> addrg = {
             .bank_base_address = index_tensor_addr,
-            .log_base_2_of_page_size = log_base_2_of_page_size
+            .page_size = index_stick_size_B
         };
 
         cb_reserve_back(cb_index_id, 1);
@@ -75,9 +75,9 @@ void kernel_main() {
             skip_update = true;
         } else {
             if constexpr (is_paged_cache) {
-                const InterleavedPow2AddrGen<page_table_is_dram> page_table_gen = {
+                const InterleavedAddrGen<page_table_is_dram> page_table_gen = {
                     .bank_base_address = page_table_tensor_addr,
-                    .log_base_2_of_page_size = log2_page_table_stick_size
+                    .page_size = page_table_stick_size
                 };
                 cb_reserve_back(page_table_cb_id, 1);
                 uint32_t page_table_cb_wr_ptr = get_write_ptr(page_table_cb_id);

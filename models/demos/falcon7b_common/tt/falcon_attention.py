@@ -23,7 +23,7 @@ from models.demos.falcon7b_common.tests.test_utils import tt_from_torch
 class TtFalconRotaryEmbedding(torch.nn.Module):
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         dim,
         base_url,
         layer_num,
@@ -31,6 +31,7 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
         base=10000,
         model_config=None,
         tt_cache_path=None,
+        weights_dict=None,
     ):
         super().__init__()
         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
@@ -51,20 +52,22 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
         sin_str = f"{layer_name}.sin_cached"
 
         self.tt_cos_cached = get_weights_cached(
-            device_mesh,
+            mesh_device,
             model_config,
             tt_cache_path,
             cos_str,
             weight_config_str="COS_CACHED_WEIGHTS",
             weights_to_cache=emb.cos()[None, None, :, :],
+            weights_dict=weights_dict,
         )
         self.tt_sin_cached = get_weights_cached(
-            device_mesh,
+            mesh_device,
             model_config,
             tt_cache_path,
             sin_str,
             weight_config_str="SIN_CACHED_WEIGHTS",
             weights_to_cache=emb.sin()[None, None, :, :],
+            weights_dict=weights_dict,
         )
 
     def forward(self, layer: ttnn.Tensor, token_idx: Optional[int] = None) -> ttnn.Tensor:
@@ -86,7 +89,7 @@ class TtFalconAttentionPrefill(nn.Module):
 
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         layer_num,
@@ -102,7 +105,7 @@ class TtFalconAttentionPrefill(nn.Module):
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
         self.max_position_embeddings = max_position_embeddings
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
         self.state_dict = state_dict
         self.model_config = model_config
         self.padded_local_heads = nearest_32(num_heads)
@@ -118,7 +121,7 @@ class TtFalconAttentionPrefill(nn.Module):
         selfout_str = f"{layer_name}.dense.weight"
 
         self.query_key_value_weights = get_weights_cached(
-            device_mesh,
+            mesh_device,
             model_config,
             tt_cache_path,
             query_key_value_str,
@@ -127,7 +130,7 @@ class TtFalconAttentionPrefill(nn.Module):
             weights_dict=weights_dict,
         )
         self.dense_weights = get_weights_cached(
-            device_mesh,
+            mesh_device,
             model_config,
             tt_cache_path,
             selfout_str,
@@ -137,21 +140,22 @@ class TtFalconAttentionPrefill(nn.Module):
         )
 
         self.rotary_embedding = TtFalconRotaryEmbedding(
-            device_mesh,
+            mesh_device,
             self.head_dim,
             base_url,
             layer_num,
             max_position_embeddings=self.max_position_embeddings,
             model_config=model_config,
             tt_cache_path=tt_cache_path,
+            weights_dict=weights_dict,
         )
 
         self.scalar = tt_from_torch(
             torch.tensor(1 / math.sqrt(self.head_dim)).view(1, 1),
             dtype=model_config["DEFAULT_DTYPE"],
-            device=device_mesh,
+            device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
 
         # optimized version can utilize single float value for softmax
@@ -168,10 +172,10 @@ class TtFalconAttentionPrefill(nn.Module):
                 tt_tensors = tt_from_torch(
                     tensor.detach(),
                     ttnn.bfloat16,
-                    device=self.device_mesh,
+                    device=self.mesh_device,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=self.model_config["ATTN_OPTIMIZED_MEMCFG"],
-                    mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                    mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
                 )
                 self.model_config["ATTN_OUTPUT_TENSORS"][seq_len] = tt_tensors
 
@@ -245,9 +249,9 @@ class TtFalconAttentionPrefill(nn.Module):
             memory_config=(
                 self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"]
                 if llm_mode == "prefill" or self.model_config["l1_sharded"] == False
-                else ttnn.experimental.tensor.MemoryConfig(
-                    ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                    ttnn.experimental.tensor.BufferType.L1,
+                else ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
                 )
             ),
         )
@@ -332,7 +336,7 @@ class TtFalconAttentionPrefill(nn.Module):
                 self.query_key_value_weights,
                 program_config=self.model_config["FUSED_QKV_MM_OPTIMIZED_PROGCFG"],
                 memory_config=self.model_config["FUSED_QKV_MM_OPTIMIZED_MEMCFG"],
-                dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+                dtype=ttnn.bfloat16,
                 compute_kernel_config=self.model_config["FUSED_QKV_MM_OPTIMIZED_KERNEL_CONFIG"],
             )
         else:
@@ -396,8 +400,8 @@ class TtFalconAttentionPrefill(nn.Module):
                 mm_activations_height_shard_spec,
                 num_slices,  # num_slices
                 i,  # slice_index
-                ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
             )
 
             subblock_h = 1
@@ -413,7 +417,7 @@ class TtFalconAttentionPrefill(nn.Module):
                 key_layer_transposed,
                 program_config=qkt_prg_cfg,
                 memory_config=self.model_config["QKTV_MM_OPTIMIZED_MEMCFG"],
-                dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+                dtype=ttnn.bfloat16,
                 compute_kernel_config=self.model_config["QKTV_AND_SOFTMAX_OPTIMIZED_KERNEL_CONFIG"],
             )
 
@@ -436,7 +440,7 @@ class TtFalconAttentionPrefill(nn.Module):
                 value_layer,
                 program_config=qktv_prg_cfg,
                 memory_config=self.model_config["QKTV_MM_OPTIMIZED_MEMCFG"],
-                dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+                dtype=ttnn.bfloat16,
                 compute_kernel_config=self.model_config["QKTV_AND_SOFTMAX_OPTIMIZED_KERNEL_CONFIG"],
             )
 
@@ -477,7 +481,7 @@ class TtFalconAttentionDecode(nn.Module):
 
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         layer_num,
@@ -493,7 +497,7 @@ class TtFalconAttentionDecode(nn.Module):
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
         self.max_position_embeddings = max_position_embeddings
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
         self.state_dict = state_dict
         self.model_config = model_config
         self.padded_local_heads = nearest_32(num_heads)
@@ -509,7 +513,7 @@ class TtFalconAttentionDecode(nn.Module):
         selfout_str = f"{layer_name}.dense.weight"
 
         self.query_key_value_weights = get_weights_cached(
-            device_mesh,
+            mesh_device,
             model_config,
             tt_cache_path,
             query_key_value_str,
@@ -518,7 +522,7 @@ class TtFalconAttentionDecode(nn.Module):
             weights_dict=weights_dict,
         )
         self.dense_weights = get_weights_cached(
-            device_mesh,
+            mesh_device,
             model_config,
             tt_cache_path,
             selfout_str,
@@ -528,13 +532,14 @@ class TtFalconAttentionDecode(nn.Module):
         )
 
         self.rotary_embedding = TtFalconRotaryEmbedding(
-            device_mesh,
+            mesh_device,
             self.head_dim,
             base_url,
             layer_num,
             max_position_embeddings=self.max_position_embeddings,
             model_config=model_config,
             tt_cache_path=tt_cache_path,
+            weights_dict=weights_dict,
         )
 
         self.scalar = 1 / math.sqrt(self.head_dim)
@@ -542,9 +547,9 @@ class TtFalconAttentionDecode(nn.Module):
             self.tt_scalar = tt_from_torch(
                 torch.tensor(self.scalar).view(1, 1),
                 dtype=model_config["DEFAULT_DTYPE"],
-                device=device_mesh,
+                device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ReplicateTensorToMesh(device_mesh),
+                mesh_mapper=ReplicateTensorToMesh(mesh_device),
             )
 
     def forward(
@@ -658,9 +663,9 @@ class TtFalconAttentionDecode(nn.Module):
             memory_config=(
                 self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"]
                 if self.model_config["l1_sharded"] == False
-                else ttnn.experimental.tensor.MemoryConfig(
-                    ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                    ttnn.experimental.tensor.BufferType.L1,
+                else ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
                 )
             ),
         )
@@ -685,7 +690,7 @@ class TtFalconAttentionDecode(nn.Module):
             attn_weights = ttnn.experimental.attn_matmul(
                 query_layer,
                 key_layer_transposed,
-                compute_with_storage_grid_size=self.device_mesh.compute_with_storage_grid_size(),
+                compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
                 memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
                 dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
             )
@@ -695,7 +700,7 @@ class TtFalconAttentionDecode(nn.Module):
             attn_weights = ttnn.experimental.group_attn_matmul(
                 query_layer,
                 key_layer_transposed,
-                compute_with_storage_grid_size=self.device_mesh.compute_with_storage_grid_size(),
+                compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
                 memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
                 dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
             )
@@ -808,7 +813,7 @@ class TtFalconAttentionDecode(nn.Module):
                 attn_output = ttnn.experimental.attn_matmul(
                     attn_weights,
                     value_layer,
-                    compute_with_storage_grid_size=self.device_mesh.compute_with_storage_grid_size(),
+                    compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
                     memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
                     dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                 )
@@ -816,7 +821,7 @@ class TtFalconAttentionDecode(nn.Module):
                 attn_output = ttnn.experimental.group_attn_matmul(
                     attn_weights,
                     value_layer,
-                    compute_with_storage_grid_size=self.device_mesh.compute_with_storage_grid_size(),
+                    compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
                     memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
                     dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                 )

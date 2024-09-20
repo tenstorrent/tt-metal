@@ -33,7 +33,7 @@ from models.utility_functions import is_wormhole_b0
     ],
 )
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)  # Option to run Falcon in Async mode
-@pytest.mark.parametrize("device_mesh", (1, 2, 3, 4, 5, 6, 7, 8), indirect=True)
+@pytest.mark.parametrize("mesh_device", (1, 2, 3, 4, 5, 6, 7, 8), indirect=True)
 def test_demo_multichip(
     perf_mode,  # Option to measure perf using max seq length (with invalid outputs) and expected perf (t/s)
     max_seq_len,
@@ -43,12 +43,12 @@ def test_demo_multichip(
     user_input,
     model_location_generator,
     get_tt_cache_path,
-    device_mesh,
+    mesh_device,
     use_program_cache,
     enable_async_mode,
     is_ci_env,
 ):
-    num_devices = device_mesh.get_num_devices()
+    num_devices = mesh_device.get_num_devices()
     if is_ci_env:
         if num_devices != 8 or (not expected_greedy_output_path and not expected_perf_metrics):
             pytest.skip("Skipping test in CI since it provides redundant testing")
@@ -74,7 +74,7 @@ def test_demo_multichip(
         model_config_strs_prefill_decode=["BFLOAT16-DRAM", "BFLOAT16-L1_SHARDED"],
         model_location_generator=model_location_generator,
         get_tt_cache_path=get_tt_cache_path,
-        device_mesh=device_mesh,
+        mesh_device=mesh_device,
         perf_mode=perf_mode,
         greedy_sampling=greedy_sampling,
         expected_perf_metrics=expected_perf_metrics,

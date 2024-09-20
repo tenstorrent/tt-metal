@@ -19,7 +19,7 @@ from models.demos.t3000.llama2_70b.tt.llama_model_optimized import TtLlamaModel_
 from models.utility_functions import skip_for_grayskull
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
-    check_device_mesh,
+    check_mesh_device,
     extract_pcc_from_log,
     MAX_SEQ_LEN,
     MAX_SEQ_LEN_LLAMA3,
@@ -30,7 +30,10 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     should_skip_model_load,
     check_kv_cache,
 )
-import gc
+
+
+DEVICE_PERF_START_SIGNPOST = "START_PERF_RUN"
+DEVICE_PERF_END_SIGNPOST = "END_PERF_RUN"
 
 
 class PytorchLlamaModel(torch.nn.Module):
@@ -58,9 +61,10 @@ class PytorchLlamaModel(torch.nn.Module):
 
 
 def run_test_LlamaModel_inference(
-    t3k_device_mesh,
+    t3k_mesh_device,
     batch,
     seq_len,
+    max_context_len,
     pcc,
     model_config,
     n_layers,
@@ -69,7 +73,12 @@ def run_test_LlamaModel_inference(
     tokenizer_path,
     cache_path,
     prompt_file=None,
+    generation_start_pos=0,
+    device_perf=False,  # set to True when measuring device perf
 ):
+    if device_perf:  # Enable tracy signpost support in device perf runs only
+        from tracy import signpost
+
     # Load prompt file if provided
     prompt = None
     if prompt_file:
@@ -84,7 +93,7 @@ def run_test_LlamaModel_inference(
     hugging_face_reference = Llama.build(
         ckpt_dir,
         tokenizer_path,
-        max_seq_len=MAX_SEQ_LEN if llama_version == "llama2" else MAX_SEQ_LEN_LLAMA3,
+        max_seq_len=max_context_len,
         max_batch_size=batch,
         n_layers=n_layers,
         skip_model_load=skip_model_load,
@@ -100,7 +109,7 @@ def run_test_LlamaModel_inference(
     pytorch_model = PytorchLlamaModel(hugging_face_reference_model)
     # TT model -------------------------------------------------------------------------
     tt_model = TtLlamaModel_optimized(
-        t3k_device_mesh,
+        t3k_mesh_device,
         state_dict,
         BASE_URL,
         n_layers,
@@ -109,11 +118,11 @@ def run_test_LlamaModel_inference(
         cache_path=cache_path,
     )
 
-    if model_config["LLM_MODE"] == "prefill":
-        generation_start_pos = 0
+    mode = "prefill" if seq_len > 1 else "decode"
+
+    if mode == "prefill" or device_perf:
         generation_length = 1
     else:
-        generation_start_pos = UNIT_TEST_START_POS
         generation_length = UNIT_TEST_GENERATION_LENGTH
 
     # Pre-process inputs in prompt mode
@@ -147,25 +156,43 @@ def run_test_LlamaModel_inference(
             start_pos,
         )
 
+        if device_perf:
+            signpost(DEVICE_PERF_START_SIGNPOST)  # start for device perf measurement
         # TT hardware execution -------------------------------------------------------------
-        tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tt_inp_ids, start_pos)
+        tt_inp_emb, start_pos, rot_mat, cache_idxs = tt_model.prepare_inputs(tt_inp_ids, start_pos, mode=mode)
+
+        # Send to device
+        if mode == "decode":
+            tt_inp_emb = ttnn.to_device(tt_inp_emb, t3k_mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            tt_inp_emb = tt_model.tt_embd(tt_inp_emb)
+            tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
+            rot_mat = ttnn.to_device(rot_mat, t3k_mesh_device, memory_config=model_config["ROT_MAT_MM_IN1_MEMCFG"])
+            cache_idxs = ttnn.to_device(cache_idxs, t3k_mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         tt_out = tt_model(
             tt_inp_emb,
             rot_mat,
             start_pos,
-            attn_mask,
+            cache_idxs=cache_idxs,
+            mode=mode,
         )
-        del tt_inp_emb, rot_mat, attn_mask
+        del tt_inp_emb, rot_mat
 
         tt_out = ttnn.from_device(tt_out)
-        tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=3))
+        tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
+
+        if device_perf:
+            signpost(DEVICE_PERF_END_SIGNPOST)  # end for device perf measurement
+
         tt_out = tt_out[..., : configuration.vocab_size]
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze()  # [batch, hidden_dim]
-        if model_config["LLM_MODE"] == "decode":
+        if mode == "decode":
             tt_out = tt_out[:batch]
         tt_out = tt_out.float()
-        pytorch_out = pytorch_out.squeeze()  # [batch, hidden_dim]
+        if mode == "decode":
+            pytorch_out = pytorch_out.squeeze().reshape(batch, -1)  # [batch, hidden_dim]
+        else:
+            pytorch_out = pytorch_out.squeeze().reshape(seq_len, -1)  # [seq, hidden_dim]
 
         # check outputs ----------------------------------------------------------------------
         does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
@@ -177,9 +204,6 @@ def run_test_LlamaModel_inference(
         )
         logger.info(f"Mean KL Divergence: {kl_divs.mean()}")
 
-        # Write the code to check top-5 and top-1 accuracy. It should show the
-        # percentage where the top-1 prediction in pytorch was in the top-5
-        # predictions in tt.
         reference_top1 = np.argmax(pytorch_out, axis=-1)
         top1_acc = top_k_accuracy_score(reference_top1, tt_out, k=1, labels=np.arange(tt_out.shape[-1]))
         top5_acc = top_k_accuracy_score(reference_top1, tt_out, k=5, labels=np.arange(tt_out.shape[-1]))
@@ -214,7 +238,7 @@ def run_test_LlamaModel_inference(
 
     tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_model.layers[0].attention.layer_past]
     tt_layer_present_all = [
-        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0)).transpose(0, 1)[:batch, ...]
+        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=1))[:batch, ...]
         for lp in tt_layer_present_all
     ]
 
@@ -224,15 +248,14 @@ def run_test_LlamaModel_inference(
         generation_start_pos,
         generation_length,
         seq_len,
-        model_config["LLM_MODE"] == "prefill",
+        mode == "prefill",
         pcc,
     )
+    all_tests_pass = all_tests_pass and cache_test_pass
     if all_tests_pass:
         logger.info(f"{llama_version} output Passed!")
-    else:
-        gc.collect()
-        logger.warning(f"{llama_version} output Failed!")
-        assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
+
+    assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
 
 
 @pytest.mark.timeout(240000)
@@ -262,18 +285,20 @@ def run_test_LlamaModel_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len",
-    ((32, 1), (16, 1), (1, 128), (1, 2048), (1, 8192)),
-    ids=("decode", "decodeb16", "prefill_128", "prefill_2k", "prefill_8k"),
+    ((32, 1), (16, 1), (1, 1), (1, 128), (1, 2048), (1, 8192), (1, 128 * 1024)),
+    ids=("decode", "decodeb16", "decodeb1", "prefill_128", "prefill_2k", "prefill_8k", "prefill_128k"),
 )
 @pytest.mark.parametrize(
     "max_batch_size, max_context_len",
     (
         (32, 2048),
-        # (16, 8192),
+        (16, 8192),
+        (1, 128 * 1024),
     ),
     ids=(
         "short_context",
-        # "long_context",
+        "8k_context",
+        "128k_context",
     ),
 )
 @pytest.mark.parametrize(
@@ -286,17 +311,18 @@ def test_LlamaModel_inference(
     seq_len,
     pcc,
     n_layers,
-    t3k_device_mesh,
+    t3k_mesh_device,
     max_batch_size,
     max_context_len,
     llama_version,
     prompt_file,
     use_program_cache,
 ):
-    if seq_len == 1 and batch != max_batch_size:
+    is_decode = seq_len == 1
+    if is_decode and batch != max_batch_size:
         pytest.skip(f"Input batch size should match max_batch_size")
 
-    if batch == 1 and seq_len > max_context_len:
+    if not is_decode and seq_len > max_context_len:
         pytest.skip(f"Prefill with seq_len={seq_len} is not supported with short context")
 
     if llama_version == "llama2" and seq_len > 2048:
@@ -304,18 +330,17 @@ def test_LlamaModel_inference(
 
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,
-        batch=batch,
-        seq_len=seq_len,
         max_batch_size=max_batch_size,
         max_context_len=max_context_len,
     )
 
-    check_device_mesh(t3k_device_mesh, model_config)
+    check_mesh_device(t3k_mesh_device, model_config)
 
     run_test_LlamaModel_inference(
-        t3k_device_mesh,
+        t3k_mesh_device,
         batch,
         seq_len,
+        max_context_len,
         pcc,
         model_config,
         n_layers,

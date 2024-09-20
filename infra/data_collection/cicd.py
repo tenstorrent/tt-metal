@@ -41,12 +41,22 @@ def create_cicd_json_for_data_analysis(
 
     workflow_outputs_dir = get_workflow_outputs_dir()
 
-    github_job_id_to_test_reports = get_github_job_id_to_test_reports(workflow_outputs_dir, github_pipeline_id)
+    github_job_ids = []
+    for raw_job in raw_jobs:
+        github_job_id = int(raw_job["github_job_id"])
+        github_job_ids.append(github_job_id)
+
+    github_job_id_to_test_reports = get_github_job_id_to_test_reports(
+        workflow_outputs_dir, github_pipeline_id, github_job_ids
+    )
 
     jobs = []
 
     for raw_job in raw_jobs:
         github_job_id = raw_job["github_job_id"]
+
+        logger.info(f"Processing raw GitHub job {github_job_id}")
+
         test_report_exists = github_job_id in github_job_id_to_test_reports
         if test_report_exists:
             test_report_path = github_job_id_to_test_reports[github_job_id]

@@ -10,137 +10,106 @@ from ttnn.model_preprocessing import (
 )
 
 import ttnn
-
 from ttnn.dot_access import DotAccessDict
 
 
 def update_model_config(config, batch_size):
-    core_grid = ttnn.CoreGrid(y=8, x=12)
+    core_grid = ttnn.CoreGrid(y=batch_size, x=12)
+    seqL_t = 224 // 32  # 7
+    dim_t = 768 // 32  # 24
+    dim_t__x = dim_t // core_grid.x  # 2
+    head_num = 12
+    head_seqL_t = (head_num * seqL_t) // core_grid.x  # 7
+    head_size_t__x = dim_t // head_num  # 2
+    class__x = (1152 // 32) // core_grid.x  # 3
 
+    # sharding configs
     program_configs = {
-        "fold_output_program_config": ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            ttnn.experimental.tensor.BufferType.L1,
-            ttnn.experimental.tensor.ShardSpec(
-                ttnn.experimental.tensor.CoreRangeSet(
-                    {
-                        ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, 0),
-                            ttnn.experimental.tensor.CoreCoord(12, 7),
-                        ),
-                    }
-                ),
-                [
-                    224,
-                    192,
-                ],
-                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
-                False,
-            ),
-        ),
-        "embedding_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=3,
-            out_subblock_h=1,
-            out_subblock_w=6,
-            per_core_M=7,
-            per_core_N=6,
-            transpose_mcast=False,
-            fused_activation=None,
-        ),
         "query_key_value_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=2,
+            in0_block_w=dim_t__x,  # 2,
             out_subblock_h=1,
-            out_subblock_w=6,
-            per_core_M=7,
-            per_core_N=6,
+            out_subblock_w=(3 * dim_t__x),  # 6,
+            per_core_M=seqL_t,  # 7,
+            per_core_N=(3 * dim_t__x),  # 6,
             transpose_mcast=False,
             fused_activation=None,
         ),
         "query_by_key_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=2,
+            in0_block_w=dim_t__x,  # 2,
             out_subblock_h=1,
-            out_subblock_w=7,
-            per_core_M=7,
-            per_core_N=7,
+            out_subblock_w=seqL_t,  # 7,
+            per_core_M=seqL_t,  # 7,
+            per_core_N=head_seqL_t,  # 7,
         ),
         "attention_probabilities_by_value_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=7,
+            in0_block_w=seqL_t,  # 7,
             out_subblock_h=1,
-            out_subblock_w=2,
-            per_core_M=7,
-            per_core_N=2,
+            out_subblock_w=head_size_t__x,  # 2,
+            per_core_M=seqL_t,  # 7,
+            per_core_N=head_size_t__x,  # 2,
         ),
         "self_output_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=2,
-            out_subblock_h=7,
-            out_subblock_w=2,
-            per_core_M=7,
-            per_core_N=2,
+            in0_block_w=dim_t__x,  # 2,
+            out_subblock_h=seqL_t,  # 7,
+            out_subblock_w=dim_t__x,  # 2,
+            per_core_M=seqL_t,  # 7,
+            per_core_N=dim_t__x,  # 2,
             transpose_mcast=False,
             fused_activation=None,
         ),
         "ff1_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=2,
+            in0_block_w=dim_t__x,  # 2,
             out_subblock_h=1,
-            out_subblock_w=4,
-            per_core_M=7,
-            per_core_N=8,
+            out_subblock_w=(4 * dim_t__x) // 2,  # 4,
+            per_core_M=seqL_t,  # 7,
+            per_core_N=(4 * dim_t__x),  # 8,
             transpose_mcast=False,
             fused_activation=(ttnn.UnaryOpType.GELU, True),
         ),
         "ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=8,
-            out_subblock_h=7,
-            out_subblock_w=2,
-            per_core_M=7,
-            per_core_N=2,
+            in0_block_w=(4 * dim_t__x),  # 8,
+            out_subblock_h=seqL_t,  # 7,
+            out_subblock_w=dim_t__x,  # 2,
+            per_core_M=seqL_t,  # 7,
+            per_core_N=dim_t__x,  # 2,
             transpose_mcast=False,
             fused_activation=None,
         ),
         "classifer_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=2,
+            in0_block_w=dim_t__x,  # 2,
             out_subblock_h=1,
-            out_subblock_w=3,
-            per_core_M=7,
-            per_core_N=3,
+            out_subblock_w=class__x,  # 3,
+            per_core_M=seqL_t,  # 7,
+            per_core_N=class__x,  # 3,
             transpose_mcast=False,
             fused_activation=(ttnn.UnaryOpType.GELU, True),
         ),
         "layernorm_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            subblock_w=2,
-            block_h=7,
-            block_w=2,
-            # math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
-            # im_data_format=ttnn.experimental.tensor.DataType.BFLOAT16,
-            # out_data_format=ttnn.bfloat8_b,
+            subblock_w=dim_t__x,  # 2,
+            block_h=seqL_t,  # 7,
+            block_w=dim_t__x,  # 2,
             inplace=False,
         ),
         "layernorm_after_output_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            subblock_w=2,
-            block_h=7,
-            block_w=2,
-            # math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
-            # im_data_format=ttnn.experimental.tensor.DataType.BFLOAT16,
-            # out_data_format=ttnn.bfloat8_b,
+            subblock_w=dim_t__x,  # 2,
+            block_h=seqL_t,  # 7,
+            block_w=dim_t__x,  # 2,
             inplace=False,
         ),
         "softmax_program_config": ttnn.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            subblock_w=7,
-            block_h=7,
-            block_w=7,
-            # math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
-            # im_data_format=ttnn.experimental.tensor.DataType.BFLOAT16,
+            subblock_w=head_seqL_t,  # 7,
+            block_h=seqL_t,  # 7,
+            block_w=head_seqL_t,  # 7,
         ),
     }
 
@@ -155,45 +124,16 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
     batch_size, img_h, img_w, img_c = pixel_values.shape  # permuted input NHWC
     patch_size = 16
     patch_count = img_h // patch_size  # 14
-    patch_size_sq_trpl = int(patch_size * patch_size * 3)  # 768
-    patch_count_all = int(patch_count * patch_count)  # 196
+    patch_size_sq_trpl = patch_size * patch_size * 3  # 768
+    patch_count_all = patch_count * patch_count  # 196
     stride_h = patch_size
     stride_w = 1
 
     folded_pixel_values = ttnn.fold(pixel_values, stride_h, stride_w)  # 1568, 1024
     ttnn.deallocate(pixel_values)
-    folded_pixel_values = ttnn.to_memory_config(
-        folded_pixel_values, memory_config=ttnn.L1_MEMORY_CONFIG
-    )  # Convert back to interleaved or otherwise to_layout will fail
+    folded_pixel_values = ttnn.to_memory_config(folded_pixel_values, memory_config=ttnn.L1_MEMORY_CONFIG)
+    # Convert back to interleaved or otherwise to_layout will fail
     folded_pixel_values = ttnn.to_layout(folded_pixel_values, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-
-    #### Exp 1 of resharding after Fold and before Matmul
-    # pixel_values = ttnn.pad(pixel_values, ((0, 0), (0, 0), (0, 224), (0, 128)), 0)
-    # output_sharded_memory_config_args = dict(core_grid=ttnn.CoreGrid(y=8, x=12), strategy=ttnn.ShardStrategy.BLOCK)
-    # input_shape = [fold_h_padded, fold_w_padded]
-    # output_shard_memory_config = ttnn.create_sharded_memory_config(input_shape, **output_sharded_memory_config_args)
-    # resharded_pixel_values = ttnn.to_memory_config(pixel_values, output_shard_memory_config)
-
-    #### Exp 2 of resharding after Fold and before Matmul
-    # pixel_values = ttnn.pad(pixel_values, ((0, 0), (0, 0), (0, 224), (0, 128)), 0)
-    # post_fold_config = ttnn.experimental.tensor.MemoryConfig(
-    #     ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-    #     ttnn.experimental.tensor.BufferType.L1,
-    #     ttnn.experimental.tensor.ShardSpec(
-    #         ttnn.experimental.tensor.CoreRangeSet(
-    #             {ttnn.experimental.tensor.CoreRange(
-    #                     ttnn.experimental.tensor.CoreCoord(0, 0),
-    #                     ttnn.experimental.tensor.CoreCoord(11, 7),
-    #             ),},
-    #         ),
-    #         [224,192],
-    #         ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
-    #         False,
-    #     ),
-    # )
-    # resharded_pixel_values = ttnn.reshard(pixel_values, post_fold_config)
-
-    # return resharded_pixel_values
 
     if unittest_check:
         parameters = parameters.vit.embeddings.patch_embeddings
@@ -204,10 +144,8 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
         bias=parameters.projection.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=8, x=12),
-        # program_config=config.program_configs["embedding_matmul_program_config"],
+        core_grid=config.core_grid,
     )
-    # ttnn.deallocate(pixel_values)
 
     patch_embedding_output = ttnn.to_layout(patch_embedding_output, layout=ttnn.ROW_MAJOR_LAYOUT)
     patch_embedding_output = ttnn.reshape(patch_embedding_output, (batch_size, patch_count_all, patch_size_sq_trpl))
@@ -225,10 +163,7 @@ def vit_embeddings(
 ):
     parameters = parameters.vit.embeddings
 
-    l1_memory_config = ttnn.experimental.tensor.MemoryConfig(
-        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttnn.experimental.tensor.BufferType.L1,
-    )
+    l1_memory_config = ttnn.L1_MEMORY_CONFIG
 
     patch_embeddings = vit_patch_embeddings(config, pixel_values, parameters=parameters.patch_embeddings)
     embedding_output = ttnn.concat([cls_token, patch_embeddings], -2, memory_config=l1_memory_config)
@@ -236,8 +171,6 @@ def vit_embeddings(
     embedding_output = ttnn.add(
         embedding_output, position_embeddings, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
     )
-    # Needed to improve PCC in an older commit
-    # embedding_output = ttnn.pad(embedding_output, ((0, 0), (0, 27), (0, 0)), 0)
 
     return embedding_output
 
@@ -463,7 +396,11 @@ def vit_encoder(
     encoder_input = ttnn.to_memory_config(
         embeddings,
         memory_config=ttnn.create_sharded_memory_config(
-            [8, 224, 768],  # embeddings.shape, # hardcoded because a bug where it still sees the 197 not 224
+            [
+                config.core_grid.y,
+                224,
+                768,
+            ],  # embeddings.shape, # hardcoded because a bug where it still sees the 197 not 224
             core_grid=config.core_grid,
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,

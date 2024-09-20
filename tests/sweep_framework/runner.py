@@ -9,12 +9,12 @@ import importlib
 import datetime
 import os
 import enlighten
+from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report, PROFILER_LOGS_DIR
 from multiprocessing import Process, Queue
 from queue import Empty
 import subprocess
 from statuses import TestStatus, VectorValidity, VectorStatus
 import tt_smi_util
-from device_fixtures import default_device
 from elasticsearch import Elasticsearch, NotFoundError
 from elastic_config import *
 
@@ -38,15 +38,39 @@ def get_username():
 
 def get_devices(test_module):
     try:
-        return test_module.device_mesh_fixture()
+        return test_module.mesh_device_fixture()
     except:
         return default_device()
 
 
+def gather_single_test_perf(device, test_passed):
+    if not isinstance(device, ttnn.Device):
+        print("SWEEPS: Multi-device perf is not supported. Failing.")
+        return None
+    ttnn.DumpDeviceProfiler(device)
+    opPerfData = get_device_data_generate_report(
+        PROFILER_LOGS_DIR, None, None, None, export_csv=False, cleanup_device_log=True
+    )
+    if not test_passed:
+        return None
+    elif opPerfData == []:
+        print("SWEEPS: No profiling data available. Ensure you are running with the profiler build.")
+        return None
+    elif len(opPerfData) > 1:
+        print("SWEEPS: Composite op detected in device perf measurement. Composite op perf is not supported. Failing.")
+        return None
+    else:
+        return opPerfData[0]
+
+
 def run(test_module, input_queue, output_queue):
     device_generator = get_devices(test_module)
-    device, device_name = next(device_generator)
-    print(f"SWEEPS: Opened device configuration, {device_name}.")
+    try:
+        device, device_name = next(device_generator)
+        print(f"SWEEPS: Opened device configuration, {device_name}.")
+    except AssertionError as e:
+        output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None, None])
+        return
     try:
         while True:
             test_vector = input_queue.get(block=True, timeout=1)
@@ -62,10 +86,14 @@ def run(test_module, input_queue, output_queue):
             except Exception as e:
                 status, message = False, str(e)
                 e2e_perf = None
-            output_queue.put([status, message, e2e_perf])
+            if MEASURE_DEVICE_PERF:
+                perf_result = gather_single_test_perf(device, status)
+                output_queue.put([status, message, e2e_perf, perf_result])
+            else:
+                output_queue.put([status, message, e2e_perf, None])
     except Empty as e:
         try:
-            # Run teardown in device_mesh_fixture
+            # Run teardown in mesh_device_fixture
             next(device_generator)
         except StopIteration:
             print(f"SWEEPS: Closed device configuration, {device_name}.")
@@ -119,11 +147,25 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
                     )
                     run(test_module, input_queue, output_queue)
                 response = output_queue.get(block=True, timeout=timeout)
-                status, message, e2e_perf = response[0], response[1], response[2]
-                if status:
+                status, message, e2e_perf, device_perf = response[0], response[1], response[2], response[3]
+                if status and MEASURE_DEVICE_PERF and device_perf is None:
+                    result["status"] = TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF
+                    result["message"] = message
+                elif status and MEASURE_DEVICE_PERF:
+                    result["status"] = TestStatus.PASS
+                    result["message"] = message
+                    result["device_perf"] = device_perf
+                elif status:
                     result["status"] = TestStatus.PASS
                     result["message"] = message
                 else:
+                    if "DEVICE EXCEPTION" in message:
+                        print(
+                            "SWEEPS: DEVICE EXCEPTION: Device could not be initialized. The following assertion was thrown: ",
+                            message,
+                        )
+                        print("SWEEPS: Skipping test suite because of device error, proceeding...")
+                        return []
                     if "Out of Memory: Not enough space to allocate" in message:
                         result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
                     elif "Watcher" in message:
@@ -148,6 +190,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
 
         suite_pbar.update()
         results.append(result)
+
     if p is not None:
         p.join()
 
@@ -156,13 +199,14 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
 
 
 def sanitize_inputs(test_vectors):
-    info_field_names = ["sweep_name", "suite_name", "vector_id"]
+    info_field_names = ["sweep_name", "suite_name", "vector_id", "input_hash"]
     header_info = []
     for vector in test_vectors:
         header = dict()
         for field in info_field_names:
             header[field] = vector.pop(field)
         vector.pop("timestamp")
+        vector.pop("tag")
         header_info.append(header)
     return header_info, test_vectors
 
@@ -172,7 +216,11 @@ def get_suite_vectors(client, vector_index, suite):
         index=vector_index,
         query={
             "bool": {
-                "must": [{"match": {"status": str(VectorStatus.CURRENT)}}, {"match": {"suite_name.keyword": suite}}]
+                "must": [
+                    {"match": {"status": str(VectorStatus.CURRENT)}},
+                    {"match": {"suite_name.keyword": suite}},
+                    {"match": {"tag.keyword": SWEEPS_TAG}},
+                ]
             }
         },
         size=10000,
@@ -198,12 +246,36 @@ def run_sweeps(module_name, suite_name, vector_id):
             vector_index = VECTOR_INDEX_PREFIX + sweep_name
             print(f"SWEEPS: Executing tests for module {sweep_name}...")
             try:
-                response = client.search(
-                    index=vector_index,
-                    aggregations={"suites": {"terms": {"field": "suite_name.keyword", "size": 10000}}},
-                )
-                suites = [suite["key"] for suite in response["aggregations"]["suites"]["buckets"]]
+                if not suite_name:
+                    response = client.search(
+                        index=vector_index,
+                        query={"match": {"tag.keyword": SWEEPS_TAG}},
+                        aggregations={"suites": {"terms": {"field": "suite_name.keyword", "size": 10000}}},
+                    )
+                    suites = [suite["key"] for suite in response["aggregations"]["suites"]["buckets"]]
+                else:
+                    response = client.search(
+                        index=vector_index,
+                        query={
+                            "bool": {
+                                "must": [
+                                    {"match": {"tag.keyword": SWEEPS_TAG}},
+                                    {"match": {"suite_name.keyword": suite_name}},
+                                ]
+                            }
+                        },
+                        aggregations={"suites": {"terms": {"field": "suite_name.keyword", "size": 10000}}},
+                    )
+                    suites = [suite["key"] for suite in response["aggregations"]["suites"]["buckets"]]
                 if len(suites) == 0:
+                    if not suite_name:
+                        print(
+                            f"SWEEPS: No suites found for module {sweep_name}, with tag {SWEEPS_TAG}. If you meant to run the CI suites of tests, use '--tag ci-main' in your test command, otherwise, run the parameter generator with your own tag and try again. Continuing..."
+                        )
+                    else:
+                        print(
+                            f"SWEEPS: No suite named {suite_name} found for module {sweep_name}, with tag {SWEEPS_TAG}. If you meant to run the CI suite of tests, use '--tag ci-main' in your test command, otherwise, run the parameter generator with your own tag and try again. Continuing..."
+                        )
                     continue
 
                 module_pbar = pbar_manager.counter(total=len(suites), desc=f"Module: {sweep_name}", leave=False)
@@ -242,11 +314,15 @@ def run_sweeps(module_name, suite_name, vector_id):
                 if not suite_name:
                     response = client.search(
                         index=vector_index,
+                        query={"match": {"tag.keyword": SWEEPS_TAG}},
                         aggregations={"suites": {"terms": {"field": "suite_name.keyword", "size": 10000}}},
                         size=10000,
                     )
                     suites = [suite["key"] for suite in response["aggregations"]["suites"]["buckets"]]
                     if len(suites) == 0:
+                        print(
+                            f"SWEEPS: No suites found for module {module_name}, with tag {SWEEPS_TAG}. If you meant to run the CI suites of tests, use '--tag ci-main' in your test command, otherwise, run the parameter generator with your own tag and try again."
+                        )
                         return
 
                     for suite in suites:
@@ -284,6 +360,9 @@ def export_test_results(header_info, results):
     for i in range(len(results)):
         result = header_info[i]
         for elem in results[i].keys():
+            if elem == "device_perf":
+                result[elem] = results[i][elem]
+                continue
             result[elem] = serialize(results[i][elem])
         client.index(index=results_index, body=result)
 
@@ -300,6 +379,18 @@ def disable_watcher():
     print("SWEEPS: Disabling Watcher")
     os.environ.pop("TT_METAL_WATCHER")
     os.environ.pop("TT_METAL_WATCHER_APPEND")
+
+
+def enable_profiler():
+    print("SWEEPS: Enabling Device Profiler")
+    os.environ["TT_METAL_DEVICE_PROFILER"] = "1"
+    os.environ["ENABLE_TRACY"] = "1"
+
+
+def disable_profiler():
+    print("SWEEPS: Disabling Device Profiler")
+    os.environ.pop("TT_METAL_DEVICE_PROFILER")
+    os.environ.pop("ENABLE_TRACY")
 
 
 if __name__ == "__main__":
@@ -330,22 +421,30 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--device-perf",
+        required=False,
+        action="store_true",
+        help="Measure device perf using device profiler. REQUIRES PROFILER BUILD!",
+    )
+
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         required=False,
         help="Add this flag to perform a dry run.",
     )
+    parser.add_argument(
+        "--tag",
+        required=False,
+        default=os.getenv("USER"),
+        help="Custom tag for the vectors you are running. This is to keep copies seperate from other people's test vectors. By default, this will be your username. You are able to specify a tag when generating tests using the generator.",
+    )
 
     args = parser.parse_args(sys.argv[1:])
-
-    if not args.module_name and args.suite_name:
-        parser.print_help()
-        print("ERROR: Module name is required if suite name is specified.")
-        exit(1)
-
     if not args.module_name and args.vector_id:
         parser.print_help()
         print("ERROR: Module name is required if vector id is specified.")
+        exit(1)
 
     global ELASTIC_CONNECTION_STRING
     ELASTIC_CONNECTION_STRING = get_elastic_url(args.elastic)
@@ -353,16 +452,31 @@ if __name__ == "__main__":
     global MEASURE_PERF
     MEASURE_PERF = args.perf
 
+    global MEASURE_DEVICE_PERF
+    MEASURE_DEVICE_PERF = args.device_perf
+
     global DRY_RUN
     DRY_RUN = args.dry_run
+
+    global SWEEPS_TAG
+    SWEEPS_TAG = args.tag
+
+    print(f"SWEEPS: Running current sweeps with tag: {SWEEPS_TAG}.")
 
     if args.watcher:
         enable_watcher()
 
+    if MEASURE_DEVICE_PERF:
+        enable_profiler()
+
     from ttnn import *
     from serialize import *
+    from device_fixtures import default_device
 
     run_sweeps(args.module_name, args.suite_name, args.vector_id)
 
     if args.watcher:
         disable_watcher()
+
+    if MEASURE_DEVICE_PERF:
+        disable_profiler()

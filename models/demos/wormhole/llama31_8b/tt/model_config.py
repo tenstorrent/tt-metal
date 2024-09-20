@@ -5,10 +5,10 @@
 import os
 import ttnn
 from pathlib import Path
-from models.utility_functions import is_wormhole_b0
 from loguru import logger
-import tarfile
-import urllib.request
+import torch
+import json
+from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 
 
 class TtModelArgs:
@@ -57,32 +57,35 @@ class TtModelArgs:
         "QK_MM_OUTPUT",
         "QKV_MM_OUTPUT",
         "CONCAT_HEADS_OUTPUT",
-        "LM_HEAD_OUTPUT",
+        "ATTN_OUTPUT",
         "ATTN_W_LAYOUT",
         # Decoder
         "DEC_SKIP_OUTPUT",
         "OUTPUT_MM",
     )
 
-    def __init__(self, device, instruct=False):
-        # Assert if all folders and files exist
-        assert os.path.exists(
-            self.DEFAULT_CKPT_DIR
-        ), f"Checkpoint directory {self.DEFAULT_CKPT_DIR} does not exist, please use export LLAMA_CKPT_DIR=..."
-        assert os.path.isfile(
-            self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
-        ), f"Tokenizer file {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'} does not exist, please use export LLAMA_TOKENIZER_PATH=..."
-        assert os.path.exists(
-            self.DEFAULT_CACHE_PATH
-        ), f"Cache directory {self.DEFAULT_CACHE_PATH} does not exist, please use export LLAMA_CACHE_PATH=..."
-        # Check if weights exist in the specified folder. If not warn the user to run the download and untar script.
-        assert os.path.isfile(
-            self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
-        ), f"weights consolidated.00.pth file does not exist. Please use the script `models/demos/wormhole/llama31_8b/scripts/get_weights.py` to download and untar the weights."
+    def __init__(self, device, instruct=False, dummy_weights=False):
+        if not dummy_weights:
+            # Assert if all folders and files exist
+            assert os.path.exists(
+                self.DEFAULT_CKPT_DIR
+            ), f"Checkpoint directory {self.DEFAULT_CKPT_DIR} does not exist, please use export LLAMA_CKPT_DIR=..."
+            assert os.path.isfile(
+                self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
+            ), f"Tokenizer file {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'} does not exist, please use export LLAMA_TOKENIZER_PATH=..."
+            assert os.path.exists(
+                self.DEFAULT_CACHE_PATH
+            ), f"Cache directory {self.DEFAULT_CACHE_PATH} does not exist, please use export LLAMA_CACHE_PATH=..."
+            # Check if weights exist in the specified folder. If not warn the user to run the download and untar script.
+            assert os.path.isfile(
+                self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
+            ), f"weights consolidated.00.pth file does not exist. Please use the script `models/demos/wormhole/llama31_8b/scripts/get_weights.py` to download and untar the weights."
 
         logger.info(f"Checkpoint directory: {self.DEFAULT_CKPT_DIR}")
         logger.info(f"Tokenizer file: {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'}")
         logger.info(f"Cache directory: {self.DEFAULT_CACHE_PATH}")
+        if dummy_weights:
+            logger.info(f"Note: Using dummy weights, weight caching disabled")
 
         # Some consumers like SentencePiece only accept str not Path for files
         self.model_base_path = Path(self.DEFAULT_CKPT_DIR)
@@ -93,6 +96,12 @@ class TtModelArgs:
         self.tokenizer_path = self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
 
         self.instruct = instruct
+        self.dummy_weights = dummy_weights
+
+        # Enable workarounds by default until di/dt issues are fixed
+        self.di_dt_workaround = os.getenv("DISABLE_DI_DT_WORKAROUND") != "1"
+        if not self.di_dt_workaround:
+            logger.info("Disabling di/dt workaround, re-enable if you see hangs")
 
         DRAM_MEMCFG = ttnn.DRAM_MEMORY_CONFIG
         L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
@@ -105,27 +114,12 @@ class TtModelArgs:
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
 
         if device is not None:  # Avoid issue with test_llama_torch.py not having a device
-            grid_size = device.compute_with_storage_grid_size()
-            for i in range(grid_size.y, 0, -1):
-                # Force the number of rows in the grid to be a factor of max_batch_size for a valid sharding
-                if self.max_batch_size % i == 0:
-                    grid_size_y = i
-                    break
-            assert (
-                self.max_batch_size % grid_size_y == 0
-            ), f"Number of rows in the grid should be a factor of max_batch_size ({self.max_batch_size})"
-            self.max_grid_size = ttnn.CoreGrid(y=grid_size_y, x=grid_size.x)  # (y,x)
-
-            # Add sharded memory config for MLP FF1/FF3
-            mlp_shard_config = ttnn.create_sharded_memory_config(
-                [self.max_batch_size, self.hidden_dim], self.max_grid_size, ttnn.ShardStrategy.WIDTH
-            )
-            self.model_config["FF1_OUTPUT_MEMCFG"] = mlp_shard_config
-            self.model_config["FF3_OUTPUT_MEMCFG"] = mlp_shard_config
+            grid = device.compute_with_storage_grid_size()
+            self.max_grid_size = ttnn.CoreGrid(x=grid.x, y=grid.y)
 
             # Compute kernel shared by attention and MLP. FP32 acc is needed for accuracy
             self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_fidelity=ttnn.MathFidelity.HiFi2,  # DRAM-bound so keep full precision here
                 math_approx_mode=False,
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
@@ -135,6 +129,17 @@ class TtModelArgs:
                 compute_with_storage_grid_size=(8, 8),
                 q_chunk_size=256 if seqlen > 8192 * 2 else (128 if seqlen >= 8192 else 64),
                 k_chunk_size=256 if seqlen > 8192 * 2 else (128 if seqlen >= 8192 else 64),
+            )
+            self.model_config["ATTN_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                in0_block_w=4,  # how much inner dim you take each time
+                out_subblock_h=1,  # Must be divisible by per_core_M
+                out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                per_core_M=1,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                per_core_N=2,  # N / TILE_WIDTH / Grid_Size
+                mcast_in0=True,
+                fused_activation=None,
+                fuse_batch=True,
             )
 
             self.model_config["PREFILL_MLP_W1_PRG_CONFIG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -172,7 +177,6 @@ class TtModelArgs:
                 fused_activation=None,
                 fuse_batch=False,
             )
-            # FIXME: This configuration avoids di/dt non-deterministic hangs. Issue #11354
             self.model_config[
                 "PREFILL_MLP_W1_PRG_CONFIG_128"
             ] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -186,7 +190,6 @@ class TtModelArgs:
                 fused_activation=ttnn.UnaryOpType.SILU,
                 fuse_batch=False,
             )
-            # FIXME: This configuration avoids di/dt non-deterministic hangs. Issue #11354
             self.model_config[
                 "PREFILL_MLP_W3_PRG_CONFIG_128"
             ] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -200,20 +203,35 @@ class TtModelArgs:
                 fused_activation=None,
                 fuse_batch=False,
             )
-            # FIXME: This configuration avoids di/dt non-deterministic hangs. Issue #11354
-            self.model_config[
-                "PREFILL_MLP_W2_PRG_CONFIG_128"
-            ] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
-                in0_block_w=1,  # how much inner dim you take each time
-                out_subblock_h=1,  # Must be divisible by per_core_M
-                out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=seq_len // 32,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=2,  # 4096 / 32 / 64 cores = 2.86 -> 4 (32 cores) # N / TILE_WIDTH / Grid_Size
-                mcast_in0=True,
-                fused_activation=None,
-                fuse_batch=False,
-            )
+            if self.di_dt_workaround:
+                self.model_config[
+                    "PREFILL_MLP_W2_PRG_CONFIG_128"
+                ] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=(8, 8),
+                    in0_block_w=1,  # how much inner dim you take each time
+                    out_subblock_h=1,  # Must be divisible by per_core_M
+                    out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                    per_core_M=seq_len // 32,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                    per_core_N=2,  # 4096 / 32 / 64 cores = 2.86 -> 4 (32 cores) # N / TILE_WIDTH / Grid_Size
+                    mcast_in0=True,
+                    fused_activation=None,
+                    fuse_batch=False,
+                )
+            else:
+                self.model_config[
+                    "PREFILL_MLP_W2_PRG_CONFIG_128"
+                ] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=(8, 8),
+                    in0_block_w=4,  # how much inner dim you take each time
+                    out_subblock_h=1,  # Must be divisible by per_core_M
+                    out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                    per_core_M=seq_len // 32,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                    per_core_N=2,  # 4096 / 32 / 64 cores = 2.86 -> 4 (32 cores) # N / TILE_WIDTH / Grid_Size
+                    mcast_in0=True,
+                    fused_activation=None,
+                    fuse_batch=False,
+                )
+
             self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 in0_block_w=1,  # how much inner dim you take each time
@@ -242,18 +260,30 @@ class TtModelArgs:
                 fuse_batch=seq_len <= 2048,
             )
 
-            # FIXME: This configuration avoids di/dt non-deterministic hangs. Issue #11354
-            self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(7, 8),
-                in0_block_w=1,
-                per_core_M=1,
-                per_core_N=72,  # vocab size = 128k = 4008 tiles. 4008/56cores = 72
-                out_subblock_h=1,
-                out_subblock_w=1,
-                fuse_batch=True,
-                fused_activation=None,
-                mcast_in0=True,
-            )
+            if self.di_dt_workaround:
+                self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=(7, 8),
+                    in0_block_w=1,
+                    per_core_M=1,
+                    per_core_N=72,  # vocab size = 128k = 4008 tiles. 4008/56cores = 72
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    fuse_batch=True,
+                    fused_activation=None,
+                    mcast_in0=True,
+                )
+            else:
+                self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=(8, 8),
+                    in0_block_w=2,
+                    per_core_M=1,
+                    per_core_N=72,  # vocab size = 128k = 4008 tiles. 4008/56cores = 72
+                    out_subblock_h=1,
+                    out_subblock_w=4,
+                    fuse_batch=True,
+                    fused_activation=None,
+                    mcast_in0=True,
+                )
 
             self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
                 (seq_len // 8, self.head_dim),
@@ -263,8 +293,8 @@ class TtModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
 
-            self.model_config["MLP_KERNEL_CONFIG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
+            self.model_config["MLP_KERNEL_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,  # DRAM-bound so keep full precision here
                 math_approx_mode=True,
                 fp32_dest_acc_en=False,
                 packer_l1_acc=True,
@@ -276,8 +306,8 @@ class TtModelArgs:
                 k_chunk_size=32,
             )
 
-            self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
+            self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"] = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=False,
                 fp32_dest_acc_en=False,
                 packer_l1_acc=False,
@@ -323,3 +353,20 @@ class TtModelArgs:
 
     def get_compute_kernel_config(self):
         return self.compute_kernel_config
+
+    def load_state_dict(self):
+        """Generate or load state_dict for n_layers of the model"""
+        if self.dummy_weights:
+            reference_model = Transformer(self)
+            state_dict = reference_model.state_dict()
+            state_dict = {k: torch.randn_like(v) for k, v in state_dict.items()}
+        else:
+            state_dict = torch.load(self.consolidated_weights_path, map_location=torch.device("cpu"))
+
+        keys_dict = list(state_dict.keys())[:]
+        remv = [f"layers.{i}." for i in list(range(self.n_layers, 32))]
+        for k in keys_dict:
+            if any([r in k for r in remv]):
+                state_dict.pop(k)
+
+        return state_dict

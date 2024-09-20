@@ -13,6 +13,8 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
+TIMEOUT = 5
+
 
 class TensorMemoryConfigs(enum.Enum):
     CUSTOM_MEMORY_CONFIG = enum.auto()
@@ -75,7 +77,7 @@ parameters = {
                 memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 buffer_type=ttnn.BufferType.L1,
                 shard_spec=ttnn.ShardSpec(
-                    ttnn.experimental.tensor.num_cores_to_core_range_set(28, core_grid, row_wise=True),
+                    ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(28, core_grid, row_wise=True)),
                     (64, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.ROW_MAJOR,
                     False,
@@ -103,7 +105,7 @@ parameters = {
                 memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 buffer_type=ttnn.BufferType.L1,
                 shard_spec=ttnn.ShardSpec(
-                    ttnn.experimental.tensor.num_cores_to_core_range_set(35, core_grid, row_wise=True),
+                    ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(35, core_grid, row_wise=True)),
                     (64, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.ROW_MAJOR,
                     False,
@@ -132,7 +134,7 @@ parameters = {
                 memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 buffer_type=ttnn.BufferType.L1,
                 shard_spec=ttnn.ShardSpec(
-                    ttnn.experimental.tensor.num_cores_to_core_range_set(28, core_grid, row_wise=True),
+                    ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(28, core_grid, row_wise=True)),
                     (64, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.ROW_MAJOR,
                     False,
@@ -161,7 +163,7 @@ parameters = {
                 memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 buffer_type=ttnn.BufferType.L1,
                 shard_spec=ttnn.ShardSpec(
-                    ttnn.experimental.tensor.num_cores_to_core_range_set(30, core_grid, row_wise=True),
+                    ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(30, core_grid, row_wise=True)),
                     (64, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.ROW_MAJOR,
                     False,

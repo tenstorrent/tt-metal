@@ -23,56 +23,56 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
     uint32_t W = shape[3], H = shape[2], C = shape[1], N = shape[0];
     uint32_t HW = H*W;
     if (not row_major) {
-        TT_FATAL(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
-        TT_FATAL(input_tensor.volume() % TILE_HW == 0);
+        TT_FATAL(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0, "Error");
+        TT_FATAL(input_tensor.volume() % TILE_HW == 0, "Error");
     }
     uint32_t ROW_MAJOR_STICK_WIDTH = 16;
     if (this->dim == TransposeOpDim::WH) {
         if (row_major) {
-            TT_FATAL((W * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0 && (H * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0);
+            TT_FATAL((W * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0 && (H * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0, "Error");
         }
         if (input_tensor.is_sharded()) {
-            TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
+            TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED, "Error");
             const auto shard_spec = input_tensor.shard_spec().value();
-            TT_FATAL(shard_spec.shape[1] == W);
-            TT_FATAL(shard_spec.shape[0] % H == 0);
-            TT_FATAL(this->output_mem_config.is_sharded());
-            TT_FATAL(this->output_mem_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED);
+            TT_FATAL(shard_spec.shape[1] == W, "Error");
+            TT_FATAL(shard_spec.shape[0] % H == 0, "Error");
+            TT_FATAL(this->output_mem_config.is_sharded(), "Error");
+            TT_FATAL(this->output_mem_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED, "Error");
         } else {
-            TT_FATAL(!this->output_mem_config.is_sharded());
+            TT_FATAL(!this->output_mem_config.is_sharded(), "Error");
         }
     } else {
         if (input_tensor.is_sharded()) {
-            TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+            TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
             const auto shard_spec = input_tensor.shard_spec().value();
-            TT_FATAL(shard_spec.shape[1] == W);
-            TT_FATAL(this->output_mem_config.is_sharded());
-            TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+            TT_FATAL(shard_spec.shape[1] == W, "Error");
+            TT_FATAL(this->output_mem_config.is_sharded(), "Error");
+            TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
         } else {
-            TT_FATAL(!this->output_mem_config.is_sharded());
+            TT_FATAL(!this->output_mem_config.is_sharded(), "Error");
         }
     }
     if (this->dim == TransposeOpDim::HC) {
         if (row_major) {
-            TT_FATAL((W * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0);
+            TT_FATAL((W * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0, "Error");
         } else {
-            TT_FATAL(C % TILE_HEIGHT == 0);
+            TT_FATAL(C % TILE_HEIGHT == 0, "Error");
         }
-        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32);
+        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32, "Error");
     } else if (this->dim == TransposeOpDim::CW) {
-        TT_FATAL(C % TILE_WIDTH == 0);
-        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32);
+        TT_FATAL(C % TILE_WIDTH == 0, "Error");
+        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32, "Error");
     } else if (this->dim == TransposeOpDim::NH) {
-        TT_FATAL(N % TILE_HEIGHT == 0);
-        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32);
+        TT_FATAL(N % TILE_HEIGHT == 0, "Error");
+        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32, "Error");
     } else if (this->dim == TransposeOpDim::NW) {
-        TT_FATAL(N % TILE_WIDTH == 0);
-        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32);
+        TT_FATAL(N % TILE_WIDTH == 0, "Error");
+        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32, "Error");
     }
 }
 
 
-std::vector<tt::tt_metal::Shape> Transpose::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> Transpose::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto out_shape = input_tensor.get_legacy_shape();
     auto padding = out_shape.padding();
@@ -102,7 +102,7 @@ std::vector<tt::tt_metal::Shape> Transpose::compute_output_shapes(const std::vec
             std::swap(padding[1], padding[3]);
             break;
     }
-    return {tt::tt_metal::Shape(out_shape, padding)};
+    return {tt::tt_metal::LegacyShape(out_shape, padding)};
 }
 
 
@@ -183,16 +183,6 @@ TransposeOpParallelizationStrategy Transpose::get_parallelization_strategy(const
     }
 }
 
-const operation::Hash Transpose::compute_program_hash(
-    const std::vector<Tensor> &input_tensors) const {
-    auto input_tensor = input_tensors.at(0);
-    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor.storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensor.get_storage()),__FILE__, __LINE__));
-    auto input_mem_config = std::get<DeviceStorage>(input_tensor.storage()).memory_config();
-    auto output_mem_config = this->output_mem_config;
-    auto dtype = input_tensor.dtype();
-    return operation::hash_operation<Transpose>(
-        input_mem_config, output_mem_config, dtype, this->dim, get_parallelization_strategy(input_tensors));
-}
 
 
 

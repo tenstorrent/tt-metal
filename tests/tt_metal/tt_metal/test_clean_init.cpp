@@ -142,7 +142,7 @@ int main(int argc, char **argv) {
 
     // Skip teardown by throwing.
     if (skip_teardown) {
-        TT_FATAL(false, "Skip teardown by throwing");
+        TT_THROW("Skip teardown by throwing");
     } else {
         for (auto device : devices) {
             pass &= CloseDevice(device);
@@ -150,7 +150,7 @@ int main(int argc, char **argv) {
     }
 
     // Error out with non-zero return code if we don't detect a pass
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

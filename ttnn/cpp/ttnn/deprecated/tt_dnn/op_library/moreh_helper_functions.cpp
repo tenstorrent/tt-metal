@@ -4,15 +4,16 @@
 
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
-#include "tt_metal/detail/util.hpp"
 #include "common/constants.hpp"
-
 #include "third_party/magic_enum/magic_enum.hpp"
+#include "tt_metal/detail/util.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 namespace tt {
 namespace operations {
 namespace primary {
+
+using namespace constants;
 
 std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
     CoreRangeSet all_cores,
@@ -60,7 +61,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
          core_group_1_t,
          core_group_2_t,
          num_tiles_per_core_group_1,
-         num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, units_to_divide);
+         num_tiles_per_core_group_2] = tt_metal::split_work_to_cores(grid_size, units_to_divide);
 
     auto core_x_offset = core_range.start_coord.x;
     auto core_y_offset = core_range.start_coord.y;
@@ -132,8 +133,15 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     std::vector<KernelHandle> compute_kernel_ids{};
     KernelHandle compute_kernel_id{};
     for (auto arg : args) {
-        compute_kernel_id =
-            CreateComputeKernel(program, file_name, arg, defines, math_fidelity, fp32_dest_acc_en, math_approx_mode, preserve_fp32_precision);
+        compute_kernel_id = CreateComputeKernel(
+            program,
+            file_name,
+            arg,
+            defines,
+            math_fidelity,
+            fp32_dest_acc_en,
+            math_approx_mode,
+            preserve_fp32_precision);
         compute_kernel_ids.push_back(compute_kernel_id);
     }
     return compute_kernel_ids;
@@ -161,6 +169,36 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
                 .math_approx_mode = math_approx_mode,
                 .compile_args = arg.compile_args,
                 .defines = defines});
+    }
+    return compute_kernel_id;
+}
+
+[[maybe_unused]] std::vector<KernelHandle> CreateComputeKernel(
+    Program &program, const std::string &file_name, std::vector<ComputeKernelArg> args, ComputeKernelConfig config) {
+    std::vector<KernelHandle> compute_kernel_ids{};
+    KernelHandle compute_kernel_id{};
+    for (auto arg : args) {
+        compute_kernel_id = CreateComputeKernel(program, file_name, arg, config);
+        compute_kernel_ids.push_back(compute_kernel_id);
+    }
+    return compute_kernel_ids;
+}
+
+[[maybe_unused]] KernelHandle CreateComputeKernel(
+    Program &program, const std::string &file_name, ComputeKernelArg arg, ComputeKernelConfig config) {
+    KernelHandle compute_kernel_id{0};
+    if (arg.num_tile_per_core_group > 0) {
+        compute_kernel_id = CreateKernel(
+            program,
+            file_name,
+            arg.core_spec,
+            tt_metal::ComputeConfig{
+                .math_fidelity = config.math_fidelity,
+                .fp32_dest_acc_en = config.fp32_dest_acc_en,
+                .preserve_fp32_precision = config.preserve_fp32_precision,
+                .math_approx_mode = config.math_approx_mode,
+                .compile_args = arg.compile_args,
+                .defines = config.defines});
     }
     return compute_kernel_id;
 }
@@ -202,22 +240,27 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 void check_tensor(
-    const Tensor& tensor,
-    const std::string& op_name,
-    const std::string& tensor_name,
+    const Tensor &tensor,
+    const std::string &op_name,
+    const std::string &tensor_name,
     const std::initializer_list<DataType> &data_types,
     Layout layout,
     bool check_dtype,
     bool check_layout) {
     if (check_layout) {
-        TT_FATAL(tensor.get_layout() == layout, "{} {} only supports {} layout.", op_name, tensor_name, magic_enum::enum_name(layout));
+        TT_FATAL(
+            tensor.get_layout() == layout,
+            "{} {} only supports {} layout.",
+            op_name,
+            tensor_name,
+            magic_enum::enum_name(layout));
     }
     TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} {} need to be on device!", op_name, tensor_name);
     TT_FATAL(tensor.buffer() != nullptr, "{} {} need to be allocated in buffers on device!", op_name, tensor_name);
 
     if (check_dtype) {
         bool dtype_supported = false;
-        for (const auto& data_type : data_types) {
+        for (const auto &data_type : data_types) {
             if (tensor.get_dtype() == data_type) {
                 dtype_supported = true;
                 break;
@@ -226,7 +269,7 @@ void check_tensor(
         if (!dtype_supported) {
             std::string dtype_string = "[";
             bool is_first = true;
-            for (const auto& data_type : data_types) {
+            for (const auto &data_type : data_types) {
                 if (!is_first) {
                     dtype_string += ", ";
                 }
@@ -235,15 +278,16 @@ void check_tensor(
             }
             dtype_string += "]";
 
-            TT_FATAL(dtype_supported, "{} {} only supports specific data types. {} ", op_name, tensor_name, dtype_string);
+            TT_FATAL(
+                dtype_supported, "{} {} only supports specific data types. {} ", op_name, tensor_name, dtype_string);
         }
     }
 }
 
 void check_tensor(
     std::optional<Tensor> tensor,
-    const std::string& op_name,
-    const std::string& tensor_name,
+    const std::string &op_name,
+    const std::string &tensor_name,
     const std::initializer_list<DataType> &data_types,
     Layout layout,
     bool check_dtype,
@@ -255,18 +299,10 @@ void check_tensor(
 }
 
 bool is_hw_dim(uint32_t dim, uint32_t rank) {
-    if (rank == 1 || rank == 2) {
-        return true;
-    }
-    if (rank >= 3) {
-        if (dim >= rank - 2) {
-            return true;
-        }
-    }
-    return false;
+    return (dim >= rank - 2);
 }
 
-uint32_t compute_inner(Shape shape, uint32_t dim) {
+uint32_t compute_inner(tt::tt_metal::LegacyShape shape, uint32_t dim) {
     uint32_t num_inner = 1;
     auto rank = shape.rank();
 
@@ -281,7 +317,7 @@ uint32_t compute_inner(Shape shape, uint32_t dim) {
     return num_inner;
 }
 
-uint32_t compute_outer(Shape shape, uint32_t dim) {
+uint32_t compute_outer(tt::tt_metal::LegacyShape shape, uint32_t dim) {
     uint32_t num_outer = 1;
     auto rank = shape.rank();
 
@@ -295,7 +331,7 @@ uint32_t compute_outer(Shape shape, uint32_t dim) {
     return num_outer;
 }
 
-void expand_to_max_dim(std::vector<uint32_t> &dim, const Shape& shape) {
+void expand_to_max_dim(std::vector<uint32_t> &dim, const tt::tt_metal::LegacyShape &shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -303,6 +339,140 @@ void expand_to_max_dim(std::vector<uint32_t> &dim, const Shape& shape) {
     }
 }
 
+void validate_input_with_dim(const Tensor &input, const int64_t &dim) {
+    auto input_shape = input.get_legacy_shape();
+    auto input_shape_wo_padding = input.get_legacy_shape().without_padding();
+    const auto input_rank = input_shape.rank();
+    log_debug(LogOp, "{}:{} input_rank {}", __func__, __LINE__, input_rank);
+    TT_FATAL(
+        (dim >= 0 && dim <= tt::tt_metal::MAX_NUM_DIMENSIONS),
+        "dim must be between 0 and {}.",
+        tt::tt_metal::MAX_NUM_DIMENSIONS);
+    TT_FATAL((dim < input_rank), "dim must be smaller than input tensor rank {}.", input_rank);
+}
+
+void validate_output_with_keepdim(const Tensor &input, const Tensor &output, const int64_t &dim, const bool &keep_dim) {
+    auto input_shape = input.get_legacy_shape();
+    auto input_shape_wo_padding = input_shape.without_padding();
+    const auto input_rank = input_shape.rank();
+
+    const auto &output_shape = output.get_legacy_shape();
+    const auto &output_shape_wo_padding = output_shape.without_padding();
+    const auto output_rank = output_shape.rank();
+
+    const bool is_tile_dim = (dim == input_rank - 1 || dim == input_rank - 2);
+
+    log_debug(LogOp, "{}:{} keep_dim {} dim {}", __func__, __LINE__, keep_dim, dim);
+    log_debug(LogOp, "{}:{} input_shape {} wo_padding {}", __func__, __LINE__, input_shape, input_shape_wo_padding);
+    log_debug(LogOp, "{}:{} output_shape {} wo_paddoutg {}", __func__, __LINE__, output_shape, output_shape_wo_padding);
+
+    if (keep_dim) {
+        bool ranks_are_equal = (input_rank == output_rank);
+        input_shape[dim] = (is_tile_dim) ? (TILE_HEIGHT) : (1);
+        input_shape_wo_padding[dim] = 1;
+
+        if (!ranks_are_equal) {
+            log_warning(
+                LogOp,
+                "{}:{} input_rank {} and output_rank {} are not the same in keep_dim mode",
+                __func__,
+                __LINE__,
+                input_rank,
+                output_rank);
+        }
+
+        std::vector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        std::vector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        std::vector<uint32_t> input_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        std::vector<uint32_t> output_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        expand_to_max_dim(input_dim, input_shape);
+        expand_to_max_dim(output_dim, output_shape);
+        expand_to_max_dim(input_dim_wo_padding, input_shape_wo_padding);
+        expand_to_max_dim(output_dim_wo_padding, output_shape_wo_padding);
+
+        for (int i = 0; i < input_rank; ++i) {
+            TT_FATAL(input_dim[i] == output_dim[i], "Error");
+            TT_FATAL(input_dim_wo_padding[i] == output_dim_wo_padding[i], "Error");
+        }
+    } else {
+        std::vector<uint32_t> expected_output_shape;
+        std::vector<uint32_t> expected_output_shape_wo_padding;
+        for (int i = 0; i < output_shape.rank(); ++i) {
+            if (i == dim && !is_tile_dim) {
+                expected_output_shape.push_back(1);
+                expected_output_shape_wo_padding.push_back(1);
+            }
+            expected_output_shape.push_back(output_shape[i]);
+            expected_output_shape_wo_padding.push_back(output_shape_wo_padding[i]);
+        }
+
+        log_debug(LogOp, "{}:{} expected_output_shape {}", __func__, __LINE__, expected_output_shape);
+        log_debug(
+            LogOp, "{}:{} expected_output_shape_wo_padding {}", __func__, __LINE__, expected_output_shape_wo_padding);
+        for (int i = 0; i < input_rank; ++i) {
+            if (i == dim)
+                continue;
+            TT_FATAL(input_shape[i] == expected_output_shape[i], "Error");
+            TT_FATAL(input_shape_wo_padding[i] == expected_output_shape_wo_padding[i], "Error");
+        }
+    }
+}
+
+void initialize_dims_with_range(std::vector<int64_t> &dims, uint32_t input_rank) {
+    dims.resize(input_rank);
+    std::iota(dims.begin(), dims.end(), 0);
+}
+
+std::vector<int64_t> get_dim(
+    const std::optional<std::variant<int64_t, std::vector<int64_t>>> &dim, uint32_t input_rank) {
+    std::vector<int64_t> dims;
+    if (!dim.has_value()) {
+        initialize_dims_with_range(dims, input_rank);
+    } else if (std::holds_alternative<int64_t>(dim.value())) {
+        auto d = std::get<int64_t>(dim.value());
+        dims.push_back(d);
+    } else {
+        dims = std::get<std::vector<int64_t>>(dim.value());
+        if (dims.empty()) {
+            initialize_dims_with_range(dims, input_rank);
+        }
+    }
+    return dims;
+}
+
+std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const tt::tt_metal::LegacyShape& shape) {
+    const auto rank = shape.rank();
+
+    TT_FATAL(rank >= 2, "Shape must have at least two dims.");
+    uint32_t W = shape[-1];
+    uint32_t H = shape[-2];
+
+    uint32_t other_dims_product = 1;
+    for (auto i = 0; i < rank - 2; ++i) {
+        other_dims_product *= shape[i];
+    }
+
+    return { W, H, other_dims_product};
+}
+
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const tt::tt_metal::LegacyShape& shape, uint32_t dim) {
+    const auto rank = shape.rank();
+
+    TT_FATAL(rank >= 2, "Shape must have at least two dims.");
+    uint32_t Wt = shape[-1] / TILE_WIDTH;
+    uint32_t Ht = shape[-2] / TILE_HEIGHT;
+
+    uint32_t reduce_dim = shape[dim];
+    uint32_t inner_dims_product = 1;
+    for (auto i = dim + 1; i < rank - 2; ++i) {
+        inner_dims_product *= shape[i];
+    }
+
+    uint32_t inner_tile_size = inner_dims_product * Ht * Wt;
+    uint32_t reduce_tile_size = reduce_dim * inner_tile_size;
+
+    return { Wt, Ht, inner_tile_size, reduce_tile_size};
+}
 
 }  // namespace primary
 }  // namespace operations

@@ -15,15 +15,20 @@
 
 namespace unit_tests::compute {
 
-std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t> &src_vec, const std::vector<uint32_t> &shape) {
+std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t> &src_vec, const GoldenConfig &config) {
     vector<uint32_t> dst_vec;
 
-    int num_rows = shape.at(0);
-    int num_cols = shape.at(1) / 2;
+    int num_rows = config.num_tiles_r_dim * config.face_r_dim * (config.num_faces > 2 ? 2: 1);
+    //Due to each element being 32 bits, for bfloat16 thats 2 elements
+    int num_cols = (config.num_tiles_c_dim * config.face_c_dim *  (config.num_faces >= 2 ? 2: 1)) / 2;
 
-    int num_tile_rows = num_rows / 32;
-    int num_tile_cols = num_cols / 16;
+    int num_tile_rows = config.num_tiles_r_dim;
+    int num_tile_cols = config.num_tiles_c_dim;
 
+    //Due to each element being 32 bits, for bfloat16 thats 2 elements
+    int num_c_dim = config.face_c_dim / 2;
+    //Untilize outputs correct number of r_dim & num_faces
+    //But assumes increments are still default 16x16 faces
     int face_size = 16 * 8;
     int tile_size = face_size * 4;
 
@@ -37,23 +42,26 @@ std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t> &src_ve
         int physical_start_for_tile_row = tile_start_index * 32 * 16;
 
         // Iterate over tile columns 32 times (naive, but simple for validation)
-        for (int x = 0; x < 2; x++) {
-            for (int i = 0; i < 16; i++) { // num rows in a face
+        uint32_t num_iterations = (config.num_faces > 2) ? 2 : 1;
+        for (int x = 0; x < num_iterations; x++) {
+            for (int i = 0; i < config.face_r_dim; i++) { // num rows in a face
                 for (int j = 0; j < num_tile_cols; j++) { // num columns top two faces
                     // Left face row copy
-                    for (int k = 0; k < 8; k++) {
-                        int idx = physical_start_for_tile_row + i * 8 + k + j * tile_size;
-                        TT_FATAL(ind.find(idx) == ind.end(), t);
+                    for (int k = 0; k < num_c_dim; k++) {
+                        int idx = physical_start_for_tile_row + i * num_c_dim + k + j * tile_size;
+                        TT_FATAL(ind.find(idx) == ind.end(), "{}", t);
                         ind.insert(idx);
                         dst_vec.push_back(src_vec.at(idx));
                     }
 
-                    // Right face row copy
-                    for (int k = 0; k < 8; k++) {
-                        int idx = physical_start_for_tile_row + i * 8 + k + face_size + j * tile_size;
-                        TT_FATAL(ind.find(idx) == ind.end(), t);
-                        ind.insert(idx);
-                        dst_vec.push_back(src_vec.at(idx));
+                    if(config.num_faces > 1) {
+                        // Right face row copy
+                        for (int k = 0; k < num_c_dim; k++) {
+                            int idx = physical_start_for_tile_row + i * num_c_dim + k + face_size + j * tile_size;
+                            TT_FATAL(ind.find(idx) == ind.end(), "{}", t);
+                            ind.insert(idx);
+                            dst_vec.push_back(src_vec.at(idx));
+                        }
                     }
                 }
             }
@@ -65,11 +73,13 @@ std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t> &src_ve
     return dst_vec;
 }
 
-std::vector<uint32_t> gold_standard_tilize(const std::vector<uint32_t> &src_vec, const std::vector<uint32_t> &shape) {
+std::vector<uint32_t> gold_standard_tilize(const std::vector<uint32_t> &src_vec, const GoldenConfig &config) {
     vector<uint32_t> dst_vec;
 
-    int num_rows = shape.at(0);
-    int num_cols = shape.at(1) / 2;
+    //TODO: RT update this one to use variable tile sizes
+    int num_rows = config.num_tiles_r_dim * config.face_r_dim * (config.num_faces > 2 ? 2: 1);
+    //Due to each element being 32 bits, for bfloat16 thats 2 elements
+    int num_cols = (config.num_tiles_c_dim * config.face_c_dim *  (config.num_faces >= 2 ? 2: 1)) / 2;
     for (int x = 0; x < num_rows; x += 32) {
         for (int y = 0; y < num_cols; y += 16) {
             int start = x * num_cols + y;
@@ -117,7 +127,7 @@ std::vector<uint16_t> gold_transpose_wh(const std::vector<uint16_t> &src_vec, co
     for (int w = 0; w < shape[3]; w++) {
         auto toffs = addrt.offs(n, c, w, h);
         auto offs = addr.offs(n, c, h, w);
-        TT_FATAL(toffs < transposed.size() && offs < src_vec.size());
+        TT_FATAL(toffs < transposed.size() && offs < src_vec.size(), "Error");
         transposed[toffs] = src_vec[offs];
     }
 
@@ -129,7 +139,7 @@ std::vector<uint16_t> gold_transpose_wh(const std::vector<uint16_t> &src_vec, co
 // result is also untilized
 std::vector<uint16_t> gold_reduce_h(const std::vector<uint16_t> &src_vec, const std::vector<uint32_t> &shape, float scaler, bool red_max, bool zeropad) {
     vector<uint32_t> shape_dst{shape[0], shape[1], 1, shape[3]};
-    TT_FATAL(shape[2] > 0);
+    TT_FATAL(shape[2] > 0, "Error");
     if (zeropad)
         shape_dst[2] = 32;
     TensAddr addr(shape);
@@ -213,9 +223,9 @@ std::vector<uint16_t> gold_reduce_hw(const std::vector<uint16_t> &src_vec, const
     return reduced;
 }
 
-std::vector<uint32_t> gold_standard_tilize_w_elwadd(const std::vector<uint32_t> &src0_vec, const std::vector<uint32_t> &src1_vec, const std::vector<uint32_t> &shape) {
+std::vector<uint32_t> gold_standard_tilize_w_elwadd(const std::vector<uint32_t> &src0_vec, const std::vector<uint32_t> &src1_vec, const GoldenConfig &config) {
 
-    std::vector<bfloat16> unpacked_tilize_src0_vec = tt::test_utils::unpack_vector<bfloat16, uint32_t>(gold_standard_tilize(src0_vec, shape));
+    std::vector<bfloat16> unpacked_tilize_src0_vec = tt::test_utils::unpack_vector<bfloat16, uint32_t>(gold_standard_tilize(src0_vec, config));
     std::vector<bfloat16> unpacked_src1_vec = tt::test_utils::unpack_vector<bfloat16, uint32_t>(src1_vec);
 
     std::vector<bfloat16> result_vec(unpacked_tilize_src0_vec.size());

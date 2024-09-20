@@ -11,15 +11,19 @@ from transformers import BertForQuestionAnswering, BertTokenizer
 import ttnn
 
 from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
-from models.demos.metal_BERT_large_11.tt.model_config import get_model_config, get_tt_cache_path
+from models.demos.metal_BERT_large_11.tt.model_config import (
+    get_model_config,
+    get_tt_cache_path,
+    skip_unsupported_config,
+)
 from models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
     profiler,
-    is_e75,
     run_for_grayskull,
     run_for_wormhole_b0,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
 )
 from models.perf.perf_utils import prep_perf_report
 
@@ -147,7 +151,7 @@ def run_perf_bert11(
     logger.info(f"bert11 compile time: {compile_time}")
 
 
-@skip_for_wormhole_b0(reason_str="Didn't test on WH yet")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Didn't test on WH yet")
 @run_for_wormhole_b0(reason_str="WH specific batch size")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
@@ -164,6 +168,7 @@ def test_perf_bare_metal_wh(
     inference_iterations,
     model_location_generator,
 ):
+    skip_unsupported_config(device, model_config_str, batch_size)
     run_perf_bert11(
         batch_size,
         model_config_str,
@@ -191,8 +196,7 @@ def test_perf_bare_metal_gs(
     inference_iterations,
     model_location_generator,
 ):
-    if is_e75(device):
-        pytest.skip("Bert large 11 is not supported on E75")
+    skip_unsupported_config(device, model_config_str, batch_size)
 
     run_perf_bert11(
         batch_size,

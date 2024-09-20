@@ -11,6 +11,7 @@
 namespace ttnn::operations::reduction::detail {
 
 operation::ProgramWithCallbacks topk_single_core_interleaved(const Tensor &input_tensor, const uint16_t k, const int8_t dim, Tensor &value_tensor, Tensor &index_tensor) {
+    using namespace tt::constants;
     tt::tt_metal::Program program{};
     CoreRange core({0, 0}, {0, 0});
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
@@ -191,7 +192,7 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
         uint16_t rem = width % split_size;
         uint16_t num_cores = width / split_size + (rem > 0);
         uint32_t memory_cost_gather = 2*num_cores * (value_tile_size + index_tile_size); // gathering one index and one value tile from each local core, allocating two CBs for each
-        uint32_t memory_cost_local = (split_size / TILE_WIDTH) * (value_tile_size + index_tile_size); // we divide the width into split_size chunks and each chunk, as well as a matching set of indices, is processed by a core
+        uint32_t memory_cost_local = (split_size / tt::constants::TILE_WIDTH) * (value_tile_size + index_tile_size); // we divide the width into split_size chunks and each chunk, as well as a matching set of indices, is processed by a core
         if (num_cores <= max_cores && (memory_cost_gather + memory_cost_local) < L1_SIZE && num_cores > 1) {
             return {num_cores + 1, split_size, rem, num_cores * k};
         }
@@ -204,6 +205,7 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
  *
 */
 operation::ProgramWithCallbacks topk_multicore_interleaved(const Tensor &input_tensor, const uint16_t k, const int8_t dim, Tensor &value_tensor, Tensor &index_tensor) {
+    using namespace tt::constants;
     tt::tt_metal::Program program{};
 
 

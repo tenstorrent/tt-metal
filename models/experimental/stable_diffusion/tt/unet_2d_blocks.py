@@ -243,7 +243,7 @@ class TtCrossAttnUpBlock2D(nn.Module):
         attention_mask=None,
     ) -> ttnn.Tensor:
         # TODO(Patrick, William) - attention mask is not used
-        device = ttnn.experimental.device.GetDefaultDevice()
+        device = ttnn.GetDefaultDevice()
         for resnet, attn in zip(self.resnets, self.attentions):
             res_hidden_states = res_hidden_states_tuple[-1]
             res_hidden_states_tuple = res_hidden_states_tuple[:-1]

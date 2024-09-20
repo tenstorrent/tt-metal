@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -23,7 +23,7 @@ struct ScaledDotProductAttentionGQADecode {
 
     void validate(const std::vector<Tensor>& input_tensors) const;
 
-    std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
 
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
 

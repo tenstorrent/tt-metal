@@ -42,7 +42,7 @@ void MorehBiasAddBackward::validate_with_output_tensors(
     }
 }
 
-std::vector<Shape> MorehBiasAddBackward::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehBiasAddBackward::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     return {input_tensors.at(1).get_legacy_shape()};
 }
 
@@ -52,7 +52,7 @@ std::vector<Tensor> MorehBiasAddBackward::create_output_tensors(
         return {output_tensors.at(0).value()};
     }
 
-    TT_FATAL(input_tensors.size() == 2);
+    TT_FATAL(input_tensors.size() == 2, "Error");
     return operation::generic_create_output_tensors(
         *this, input_tensors, input_tensors.at(1).get_dtype(), Layout::TILE, this->bias_grad_mem_config);
 }
@@ -101,7 +101,7 @@ std::vector<std::optional<Tensor>> moreh_linear_backward(
     const MemoryConfig& input_grad_mem_config,
     const MemoryConfig& weight_grad_mem_config,
     const MemoryConfig& bias_grad_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     std::vector<std::optional<Tensor>> result(3);
     const auto [input_required_grad, weight_required_grad, bias_required_grad] =
         get_required_outputs(are_required_outputs);
@@ -111,7 +111,7 @@ std::vector<std::optional<Tensor>> moreh_linear_backward(
             weight.storage_type() == StorageType::DEVICE,
         "input and weight tensors need to be on device");
 
-    TT_FATAL(output_grad.storage_type() == StorageType::DEVICE);
+    TT_FATAL(output_grad.storage_type() == StorageType::DEVICE, "Error");
     auto kernel_config_val = init_device_compute_kernel_config(output_grad.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
     moreh_linear_backward_validate(output_grad, input, weight, input_grad, weight_grad, bias_grad);

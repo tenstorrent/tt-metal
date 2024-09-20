@@ -6,7 +6,6 @@
 #include "debug/dprint.h"
 #include "tt_metal/impl/dispatch/kernels/packet_queue.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_helpers.hpp"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen.hpp"
 
 packet_input_queue_state_t input_queue;
 packet_output_queue_state_t output_queues[MAX_SWITCH_FAN_OUT];
@@ -198,14 +197,14 @@ void kernel_main() {
     write_test_results(test_results, PQ_TEST_MISC_INDEX+4, endpoint_id_start_index);
 
     for (uint32_t i = 0; i < demux_fan_out; i++) {
-        output_queues[i].init(i, remote_tx_queue_start_addr_words[i], remote_tx_queue_size_words[i],
+        output_queues[i].init(i + 1, remote_tx_queue_start_addr_words[i], remote_tx_queue_size_words[i],
                               remote_tx_x[i], remote_tx_y[i], remote_tx_queue_id[i], remote_tx_network_type[i],
                               &input_queue, 1,
                               output_depacketize[i], output_depacketize_log_page_size[i],
                               output_depacketize_local_sem[i], output_depacketize_downstream_sem[i],
                               output_depacketize_remove_header[i]);
     }
-    input_queue.init(demux_fan_out, rx_queue_start_addr_words, rx_queue_size_words,
+    input_queue.init(0, rx_queue_start_addr_words, rx_queue_size_words,
                      remote_rx_x, remote_rx_y, remote_rx_queue_id, remote_rx_network_type);
 
     if (!wait_all_src_dest_ready(&input_queue, 1, output_queues, demux_fan_out, timeout_cycles)) {

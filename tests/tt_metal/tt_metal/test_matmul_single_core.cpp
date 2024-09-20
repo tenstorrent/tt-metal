@@ -22,8 +22,8 @@ using namespace tt;
 // is contiguous
 template <typename T>
 std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
-    TT_FATAL(rows % 32 == 0);
-    TT_FATAL(cols % 32 == 0);
+    TT_FATAL(rows % 32 == 0, "Error");
+    TT_FATAL(cols % 32 == 0, "Error");
     int num_tiles_r = rows / 32;
     int num_tiles_c = cols / 32;
     std::vector<T> result;
@@ -49,8 +49,8 @@ std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
 // transform it back to row major full tensor. (This function inverts the tilize() function)
 template <typename T>
 std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
-    TT_FATAL(rows % 32 == 0);
-    TT_FATAL(cols % 32 == 0);
+    TT_FATAL(rows % 32 == 0, "Error");
+    TT_FATAL(cols % 32 == 0, "Error");
     int num_tiles_r = rows / 32;
     int num_tiles_c = cols / 32;
     std::vector<T> result;
@@ -130,7 +130,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
         return data;
     }
     if(min_K_N > K) {
-        TT_FATAL(false);
+        TT_FATAL(false, "Error");
     }
     std::vector<bfloat16> result;
     for(int i = 0; i < M * 32; i++) {
@@ -178,9 +178,9 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Weights block = {}x{}, #blocks = {}, #sub-blocks = {}", out_subblock_w, in0_block_w, K / in0_block_w, N / out_subblock_w);
 
         uint32_t single_tile_size = 2 * 1024;
-        TT_FATAL(M * in0_block_w * single_tile_size * 2 <= 130*1024);
-        TT_FATAL(N * in0_block_w * single_tile_size * 2 <= 130*1024);
-        TT_FATAL(M * N * single_tile_size <= 540*1024);
+        TT_FATAL(M * in0_block_w * single_tile_size * 2 <= 130*1024, "Error");
+        TT_FATAL(N * in0_block_w * single_tile_size * 2 <= 130*1024, "Error");
+        TT_FATAL(M * N * single_tile_size <= 540*1024, "Error");
         uint32_t dram_buffer_size_act = single_tile_size * M * K; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
         uint32_t dram_buffer_size_weights = single_tile_size * K * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
         uint32_t dram_buffer_size_out = single_tile_size * M * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
@@ -370,7 +370,7 @@ int main(int argc, char **argv) {
         auto golden = select_columns(tensor.get_values(), M, K, std::min(K, N));
         // auto golden = tensor.get_values();
         pass &= (golden == result_untilized);
-        pass &= tt_metal::CloseDevice(device);;
+        pass &= tt_metal::CloseDevice(device);
         log_info(LogTest, "Closing device");
 
     } catch (const std::exception &e) {
@@ -387,7 +387,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

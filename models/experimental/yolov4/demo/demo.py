@@ -563,9 +563,9 @@ def test_yolov4_model(device, model_location_generator, reset_seeds, input_path)
     torch_model.eval()
 
     n_classes = 80
-    namesfile = str(model_path / "coco.names")
+    namesfile = "models/experimental/yolov4/demo/coco.names"
     if input_path == "":
-        imgfile = str(model_path / "giraffe_320.jpg")
+        imgfile = "models/experimental/yolov4/demo/giraffe_320.jpg"
     else:
         imgfile = input_path
     width = 320

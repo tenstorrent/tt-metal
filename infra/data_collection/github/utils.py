@@ -10,38 +10,6 @@ from datetime import datetime
 
 from loguru import logger
 
-PIPELINE_CSV_FIELDS = (
-    "github_pipeline_id",
-    "pipeline_submission_ts",
-    "pipeline_start_ts",
-    "pipeline_end_ts",
-    "name",
-    "project",
-    "trigger",
-    "vcs_platform",
-    "git_branch_name",
-    "git_commit_hash",
-    "git_author",
-    "orchestrator",
-)
-
-JOB_CSV_FIELDS = (
-    "github_job_id",
-    "host_name",
-    "card_type",
-    "os",
-    "location",
-    "name",
-    "job_submission_ts",
-    "job_start_ts",
-    "job_end_ts",
-    "job_success",
-    "is_build_job",
-    "job_matrix_config",
-    "docker_image",
-)
-
-
 BENCHMARK_ENVIRONMENT_CSV_FIELDS = (
     "git_repo_name",
     "git_commit_hash",
@@ -91,7 +59,17 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
 
     jobs = github_jobs_json["jobs"]
     jobs_start_times = list(map(lambda job_: get_datetime_from_github_datetime(job_["started_at"]), jobs))
-    sorted_jobs_start_times = sorted(jobs_start_times)
+    # We filter out jobs that started before because that means they're from a previous attempt for that pipeline
+    eligible_jobs_start_times = list(
+        filter(
+            lambda job_start_time_: job_start_time_ >= get_datetime_from_github_datetime(pipeline_submission_ts),
+            jobs_start_times,
+        )
+    )
+    sorted_jobs_start_times = sorted(eligible_jobs_start_times)
+    assert (
+        sorted_jobs_start_times
+    ), f"It seems that this pipeline does not have any jobs that started on or after the pipeline was submitted, which should be impossible. Please directly inspect the JSON objects"
     pipeline_start_ts = get_data_pipeline_datetime_from_datetime(sorted_jobs_start_times[0])
 
     pipeline_end_ts = github_pipeline_json["updated_at"]
@@ -258,36 +236,6 @@ def get_job_row_from_github_job(github_job):
 
 def get_job_rows_from_github_info(github_pipeline_json, github_jobs_json):
     return list(map(get_job_row_from_github_job, github_jobs_json["jobs"]))
-
-
-def create_csvs_for_data_analysis(
-    github_runner_environment,
-    github_pipeline_json_filename,
-    github_jobs_json_filename,
-    github_pipeline_csv_filename=None,
-    github_jobs_csv_filename=None,
-):
-    with open(github_pipeline_json_filename) as github_pipeline_json_file:
-        github_pipeline_json = json.load(github_pipeline_json_file)
-
-    with open(github_jobs_json_filename) as github_jobs_json_file:
-        github_jobs_json = json.load(github_jobs_json_file)
-
-    pipeline_row = get_pipeline_row_from_github_info(github_runner_environment, github_pipeline_json, github_jobs_json)
-
-    job_rows = get_job_rows_from_github_info(github_pipeline_json, github_jobs_json)
-
-    github_pipeline_id = pipeline_row["github_pipeline_id"]
-    github_pipeline_start_ts = pipeline_row["pipeline_start_ts"]
-
-    if not github_pipeline_csv_filename:
-        github_pipeline_csv_filename = f"pipeline_{github_pipeline_id}_{github_pipeline_start_ts}.csv"
-
-    if not github_jobs_csv_filename:
-        github_jobs_csv_filename = f"job_{github_pipeline_id}_{github_pipeline_start_ts}.csv"
-
-    create_csv(github_pipeline_csv_filename, PIPELINE_CSV_FIELDS, [pipeline_row])
-    create_csv(github_jobs_csv_filename, JOB_CSV_FIELDS, job_rows)
 
 
 def get_github_benchmark_environment_csv_filenames():

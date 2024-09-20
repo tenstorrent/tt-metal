@@ -19,7 +19,7 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
     const auto& cos = input_tensors.at(1);
     const auto& sin = input_tensors.at(2);
     const auto& trans_mat = input_tensors.at(3);
-    TT_FATAL(input_tensors.size() == 4);
+    TT_FATAL(input_tensors.size() == 4, "Error");
     auto ref_device = input_tensor.device();
     for (const auto& input : input_tensors) {
         TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
@@ -33,7 +33,7 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
     uint32_t B = input_tensor.get_legacy_shape()[0];
     uint32_t head_dim = input_tensor.get_legacy_shape()[-1];
 
-    TT_FATAL(head_dim <= 128 || std::get<WormholeComputeKernelConfig>(this->compute_kernel_config).fp32_dest_acc_en == false, "If head_dim is > 128, fp32_dest_acc_en must be False");
+    TT_FATAL(head_dim <= 128 || std::get<ttnn::WormholeComputeKernelConfig>(this->compute_kernel_config).fp32_dest_acc_en == false, "If head_dim is > 128, fp32_dest_acc_en must be False");
     TT_FATAL(((seq_len & (seq_len - 1)) == 0), "Sequence must be a power of 2");
     // Check that head_dim is less than 256
     TT_FATAL(head_dim <= 256, "Head dim must be less than 256");
@@ -51,12 +51,12 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
     TT_FATAL(trans_mat.get_legacy_shape()[-1] == TILE_WIDTH, "Transformation matrix must have 4rd dim equal to TILE_WIDTH");
 
 
-    TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
-    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+    TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
 
 }
 
-std::vector<Shape> RotaryEmbeddingLlama::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> RotaryEmbeddingLlama::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto shape = input_tensor.get_legacy_shape();
     return {shape};

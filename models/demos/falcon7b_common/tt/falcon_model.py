@@ -25,7 +25,7 @@ class TtFalconModelShared(torch.nn.Module):
     @abstractmethod
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         num_layers,
@@ -38,8 +38,8 @@ class TtFalconModelShared(torch.nn.Module):
 
         # NOTE: Once we make embeddings run on device, pass in state dict
         # instead of model itself
-        self.device_mesh = device_mesh
-        self.num_devices = get_num_devices(device_mesh)
+        self.mesh_device = mesh_device
+        self.num_devices = get_num_devices(mesh_device)
         self.state_dict = state_dict
         self.base_url = base_url
         self.config = config
@@ -49,20 +49,20 @@ class TtFalconModelShared(torch.nn.Module):
         layer_name = f"{base_url}"
         embedding_weights_str = f"{layer_name}.word_embeddings.weight"
         self.embedding_weights = get_weights_cached(
-            device_mesh,
+            mesh_device,
             model_config,
             tt_cache_path,
             embedding_weights_str,
             weight_config_str="WORD_EMBEDDING_WEIGHTS",
             weights_to_cache=(state_dict[embedding_weights_str] if state_dict else None),
-            tt_layout=ttnn.experimental.tensor.Layout.ROW_MAJOR,
+            tt_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
         # stack all decoders
         self.layers = torch.nn.ModuleList(
             [
                 TtFalconDecoderLayer(
-                    device_mesh=device_mesh,
+                    mesh_device=mesh_device,
                     state_dict=state_dict,
                     base_url=f"{base_url}.h",
                     layer_num=layer_num,
@@ -79,7 +79,7 @@ class TtFalconModelShared(torch.nn.Module):
         layernorm_bias_str = f"{layer_name}.ln_f.bias"
 
         self.layernorm_gamma = get_weights_cached(
-            device_mesh,
+            mesh_device,
             model_config,
             tt_cache_path,
             layernorm_weights_str,
@@ -87,7 +87,7 @@ class TtFalconModelShared(torch.nn.Module):
             weights_to_cache=(self.state_dict[layernorm_weights_str] if self.state_dict else None),
         )
         self.layernorm_beta = get_weights_cached(
-            device_mesh,
+            mesh_device,
             model_config,
             tt_cache_path,
             layernorm_bias_str,
@@ -130,11 +130,11 @@ class TtFalconModelShared(torch.nn.Module):
                 attn_masks_unordered = [
                     tt_from_torch(
                         attention_mask_slice,
-                        dtype=ttnn.experimental.tensor.DataType.BFLOAT16,  # subsequent tilize op excepts bfloat16 inputs
-                        device=self.device_mesh,
-                        layout=ttnn.experimental.tensor.Layout.ROW_MAJOR,
+                        dtype=ttnn.bfloat16,  # subsequent tilize op excepts bfloat16 inputs
+                        device=self.mesh_device,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
                         memory_config=self.model_config["ATTN_MASK_MEMCFG"],
-                        mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                        mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
                     )
                     for attention_mask_slice in attention_mask_
                 ]
@@ -152,11 +152,11 @@ class TtFalconModelShared(torch.nn.Module):
                 # Send attn masks to device
                 tt_attention_mask = tt_from_torch(
                     attention_mask_,
-                    dtype=ttnn.experimental.tensor.DataType.BFLOAT16,  # subsequent tilize op excepts bfloat16 inputs
-                    device=self.device_mesh,
-                    layout=ttnn.experimental.tensor.Layout.ROW_MAJOR,
+                    dtype=ttnn.bfloat16,  # subsequent tilize op excepts bfloat16 inputs
+                    device=self.mesh_device,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
                     memory_config=self.model_config["ATTN_MASK_MEMCFG"],
-                    mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                    mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
                 )
                 # Repeat attn masks for all heads
                 tt_attention_mask = ttnn.repeat(
@@ -175,9 +175,9 @@ class TtFalconModelShared(torch.nn.Module):
                 input_ids,
                 dtype=self.model_config["INPUT_DTYPE"],
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device_mesh,
+                device=self.mesh_device,
                 memory_config=self.model_config["INPUT_MEMCFG"],
-                mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=0),
+                mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=0),
             )
         elif llm_mode == "decode":
             assert batch_size % 32 == 0, "For decode, batch_size must be multiple of 32!"
@@ -206,11 +206,11 @@ class TtFalconModelShared(torch.nn.Module):
             # Send attn masks to device
             tt_attention_mask = tt_from_torch(
                 attention_mask,
-                dtype=ttnn.experimental.tensor.DataType.BFLOAT16,  # subsequent tilize op excepts bfloat16 inputs
-                device=self.device_mesh,
-                layout=ttnn.experimental.tensor.Layout.ROW_MAJOR,
+                dtype=ttnn.bfloat16,  # subsequent tilize op excepts bfloat16 inputs
+                device=self.mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=self.model_config["ATTN_MASK_MEMCFG"],
-                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             )
             if not self.model_config["l1_sharded"]:
                 # Tilize attn masks
@@ -224,9 +224,9 @@ class TtFalconModelShared(torch.nn.Module):
                 input_ids.transpose(0, 1),
                 dtype=self.model_config["INPUT_DTYPE"],
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device_mesh,
+                device=self.mesh_device,
                 memory_config=self.model_config["INPUT_MEMCFG"],
-                mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=1),
+                mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=1),
             )
         else:
             raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
@@ -252,7 +252,7 @@ class TtFalconModelShared(torch.nn.Module):
             memory_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
         )
         input_embeddings = ttnn.unsqueeze_to_4D(input_embeddings)
-        input_embeddings = ttnn.to_layout(input_embeddings, ttnn.experimental.tensor.Layout.TILE)
+        input_embeddings = ttnn.to_layout(input_embeddings, ttnn.TILE_LAYOUT)
 
         layer_output = input_embeddings
         presents = ()
@@ -271,7 +271,7 @@ class TtFalconModelShared(torch.nn.Module):
             layer_output = layer_output[0]
 
             if device_perf_run and idx % 8 == 0:
-                dump_device_profiler(self.device_mesh)
+                dump_device_profiler(self.mesh_device)
 
         # apply final norm layer
         layer_output = layernorm(
@@ -288,7 +288,7 @@ class TtFalconModelShared(torch.nn.Module):
 class TtFalconModel(TtFalconModelShared):
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         num_layers,
@@ -298,7 +298,7 @@ class TtFalconModel(TtFalconModelShared):
         tt_cache_path,
     ):
         super().__init__(
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             base_url=base_url,
             num_layers=num_layers,

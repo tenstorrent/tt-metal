@@ -89,7 +89,7 @@ def falcon_dense_h_to_4h_matmul(
 class TtFalconMLPPrefill(nn.Module):
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         layer_num,
@@ -102,7 +102,7 @@ class TtFalconMLPPrefill(nn.Module):
         super().__init__()
 
         self.state_dict = state_dict
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
         self.hidden_size = hidden_size
         self.model_config = model_config
         self.max_position_embeddings = max_position_embeddings
@@ -127,7 +127,7 @@ class TtFalconMLPPrefill(nn.Module):
         )
 
         self.dense_h_to_4h_weights = get_weights_cached(
-            device_mesh,
+            mesh_device,
             model_config,
             tt_cache_path,
             dense_h_to_4h_str,
@@ -137,7 +137,7 @@ class TtFalconMLPPrefill(nn.Module):
             custom_output_shape=custom_output_shape_h_to_4h,
         )
         self.dense_4h_to_h_weights = get_weights_cached(
-            device_mesh,
+            mesh_device,
             model_config,
             tt_cache_path,
             dense_4h_to_h_str,
@@ -163,10 +163,10 @@ class TtFalconMLPPrefill(nn.Module):
             tt_padding = tt_from_torch(
                 tt_padding,
                 ttnn.bfloat16,
-                device=self.device_mesh,
+                device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             )
             mlp_padding_tensors[seq_len] = tt_padding
         self.model_config["MLP_PREFILL_PADDING_TENSORS"] = mlp_padding_tensors
@@ -178,10 +178,10 @@ class TtFalconMLPPrefill(nn.Module):
         out_tt = tt_from_torch(
             out_tensor,
             ttnn.bfloat16,
-            device=self.device_mesh,
+            device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
         )
         self.model_config["MLP_OUTPUT_TENSORS"] = out_tt
 
@@ -203,8 +203,8 @@ class TtFalconMLPPrefill(nn.Module):
                     [self.seq_len // num_slices // grid_size[1], padded_hidden_size // grid_size[0]],
                     num_slices,
                     slice_idx,
-                    ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                    ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+                    ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                    ttnn.ShardOrientation.ROW_MAJOR,
                 )
 
                 hidden_states = ttnn.matmul(
@@ -269,7 +269,7 @@ class TtFalconMLPPrefill(nn.Module):
 class TtFalconMLPDecode(nn.Module):
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         layer_num,
@@ -282,7 +282,7 @@ class TtFalconMLPDecode(nn.Module):
         super().__init__()
 
         self.state_dict = state_dict
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
         self.hidden_size = hidden_size
         self.model_config = model_config
         self.padding_value = model_config["MLP_PADDING_VALUE"]
@@ -304,7 +304,7 @@ class TtFalconMLPDecode(nn.Module):
         )
 
         self.dense_h_to_4h_weights = get_weights_cached(
-            device_mesh,
+            mesh_device,
             model_config,
             tt_cache_path,
             dense_h_to_4h_str,
@@ -314,7 +314,7 @@ class TtFalconMLPDecode(nn.Module):
             custom_output_shape=custom_output_shape_h_to_4h,
         )
         self.dense_4h_to_h_weights = get_weights_cached(
-            device_mesh,
+            mesh_device,
             model_config,
             tt_cache_path,
             dense_4h_to_h_str,
@@ -331,10 +331,10 @@ class TtFalconMLPDecode(nn.Module):
         tt_paddings = tt_from_torch(
             tt_padding,
             ttnn.bfloat16,
-            device=self.device_mesh,
+            device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
         )
         self.model_config["MLP_DECODE_PADDING_TENSORS"] = tt_paddings
 

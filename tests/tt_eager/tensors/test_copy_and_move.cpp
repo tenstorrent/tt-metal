@@ -23,7 +23,7 @@ using namespace constants;
 bool test_tensor_copy_semantics(Device *device) {
 
     bool pass = true;
-    Shape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+    tt::tt_metal::LegacyShape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
 
     // host tensor to host tensor copy constructor
     Tensor host_a = tt::numpy::random::random(single_tile_shape).to(Layout::TILE);
@@ -82,7 +82,7 @@ bool test_tensor_copy_semantics(Device *device) {
 
 bool test_tensor_move_semantics(Device *device) {
     bool pass = true;
-    Shape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+    tt::tt_metal::LegacyShape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
 
     auto random_tensor = tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), single_tile_shape);
     auto bfloat_data = owned_buffer::get_as<bfloat16>(random_tensor);
@@ -149,7 +149,7 @@ bool test_tensor_move_semantics(Device *device) {
 bool test_tensor_deallocate_semantics(Device *device) {
 
     bool pass = true;
-    Shape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+    tt::tt_metal::LegacyShape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
 
     MemoryConfig dram_mem_config = MemoryConfig{.memory_layout=TensorMemoryLayout::INTERLEAVED, .buffer_type=BufferType::DRAM};
     MemoryConfig l1_mem_config = MemoryConfig{.memory_layout=TensorMemoryLayout::INTERLEAVED, .buffer_type=BufferType::L1};
@@ -189,7 +189,7 @@ bool test_tensor_deallocate_semantics(Device *device) {
 
 bool test_tensor_deallocate_and_close_device(Device *device) {
     bool pass = true;
-    Shape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+    tt::tt_metal::LegacyShape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
 
     MemoryConfig dram_mem_config =
         MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM};
@@ -238,7 +238,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

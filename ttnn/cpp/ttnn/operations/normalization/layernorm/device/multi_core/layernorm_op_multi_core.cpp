@@ -4,7 +4,7 @@
 
 #include "impl/buffers/circular_buffer_types.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
 
 #include "tt_metal/host_api.hpp"
@@ -95,7 +95,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype()) == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
         } else {
-            TT_FATAL("arch not supported");
+            TT_THROW("arch not supported");
         }
 
     }, compute_kernel_config);
@@ -190,7 +190,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     uint32_t num_tile_rows = NC * Ht;
     auto grid_size = device->compute_with_storage_grid_size();
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = split_work_to_cores(grid_size, num_tile_rows, true);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -451,7 +451,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = in_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
         } else {
-            TT_FATAL("arch not supported");
+            TT_THROW("arch not supported");
         }
 
     }, compute_kernel_config);

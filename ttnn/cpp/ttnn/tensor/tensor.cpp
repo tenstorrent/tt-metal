@@ -8,31 +8,21 @@
 #include <memory>
 
 #include "common/bfloat16.hpp"
+#include "tensor_ops.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/graph/graph_tracking.hpp"
 #include "ttnn/core.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::constants;
 
-namespace{
-    inline void SynchronizeWorkerThreads(const std::vector<Device*>& workers) {
-        // Push empty work to threads and ensure its been picked up
-        static auto empty_work = std::make_shared<std::function<void()>>([](){});
-        for (auto target_device : workers) {
-            target_device->work_executor.push_work(empty_work);
-        }
-        // Block until work has been picked up, to flush the queue
-        for (auto target_device : workers) {
-            while(not target_device->work_executor.worker_queue.empty());
-        }
-    }
-}
 
 namespace tt {
 
@@ -91,7 +81,7 @@ Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, L
     this->tensor_attributes->metadata_populated = true;
 }
 
-Tensor::Tensor(const Storage storage, const Shape shape, DataType dtype, Layout layout) :
+Tensor::Tensor(const Storage storage, const tt::tt_metal::LegacyShape shape, DataType dtype, Layout layout) :
     Tensor(storage, ttnn::Shape{shape}, dtype, layout) {}
 
 Tensor::~Tensor() {
@@ -204,7 +194,7 @@ void Tensor::deallocate(bool force) {
                             auto dealloc_lambda = std::make_shared<std::function<void(Device*)>>(
                                 [force, attr = this->tensor_attributes](Device* worker) mutable {
                                     ZoneScopedN("ShardDeallocate");
-                                    TT_ASSERT(std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(attr->storage), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(attr->storage),__FILE__, __LINE__));
+                                    TT_ASSERT(std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(attr->storage), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(attr->storage));
                                     auto& s = std::get<MultiDeviceStorage>(attr->storage);
                                     if (s.has_buffer_for_device(worker)) {
                                         auto& device_buffer = s.get_buffer_for_device(worker);
@@ -354,7 +344,7 @@ std::vector<Device*> Tensor::get_workers(bool blocking) const {
 }
 
 // Getters - Spin until tensor is populated before querying tensor metadata
-const Shape& Tensor::get_legacy_shape() const {
+const tt::tt_metal::LegacyShape& Tensor::get_legacy_shape() const {
     this->wait_for_tensor_metadata_populated();
     return this->tensor_attributes->shape.value;
 }
@@ -378,180 +368,33 @@ const Storage& Tensor::get_storage() const {
 }
 
 Tensor Tensor::to(CommandQueue& queue, const MemoryConfig& mem_config) const {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::to", *this, queue, mem_config);
-    auto target_device = queue.device();
-    // Tensor can be using borrowed storage. If so, when running in async mode, copy this tensor to owned storage.
-    Tensor async_safe_tensor = copy_borrowed_tensor_in_async_mode(target_device, *this);
-    // Populate device storage outside of thread, so that downstream
-    // functions running in main can get storage type without blocking
-    Tensor device_tensor({target_device});
-    // Record main thread ref count for tensors before pushing to queue.
-    uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
-    uint32_t original_tensor_ref_count = async_safe_tensor.tensor_attributes->record_main_thread_ref_count();
-    queue.device()->push_work([async_safe_tensor, device_tensor, mem_config, target_device]() mutable {
-        if (async_safe_tensor.storage_type() == StorageType::DEVICE) {
-            TT_ASSERT(async_safe_tensor.device() == target_device && "Currently do not support moving between devices");
-            device_tensor.populate_buffers_and_metadata(async_safe_tensor);
-        } else {
-            tensor_impl::validate_on_device_dtype_and_layout(
-                target_device,
-                async_safe_tensor.get_legacy_shape(),
-                async_safe_tensor.get_dtype(),
-                async_safe_tensor.get_layout());
-            auto local_tensor =
-                tensor_impl::to_device_wrapper(async_safe_tensor, target_device, mem_config, std::nullopt);
-            // Populate device tensor
-            device_tensor.populate_buffers_and_metadata(local_tensor);
-        }
-    });
-    // Update main thread ref count for tensors after pushing to queue (update original tensor and returned tensor,
-    // since both can be on device).
-    device_tensor.tensor_attributes->update_main_thread_ref_count(device_tensor.workers.at(0), device_tensor_ref_count);
-    async_safe_tensor.tensor_attributes->update_main_thread_ref_count(
-        device_tensor.workers.at(0), original_tensor_ref_count);
-    device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
-    GraphTracker::instance().track_function_end(device_tensor);
-    return device_tensor;
+    return tensor_ops::tensor_to(*this, queue.device(), mem_config);
 }
 
 Tensor Tensor::to(Device* target_device, const MemoryConfig& mem_config) const {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::to", *this, target_device, mem_config);
-    // Tensor can be using borrowed storage. If so, when running in async mode, copy this tensor to owned storage.
-    Tensor async_safe_tensor = copy_borrowed_tensor_in_async_mode(target_device, *this);
-    // Populate device storage outside of thread, so that downstream
-    // functions running in main can get storage type without blocking
-    Tensor device_tensor({target_device});
-    // Record main thread ref count for tensors before pushing to queue.
-    uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
-    uint32_t original_tensor_ref_count = async_safe_tensor.tensor_attributes->record_main_thread_ref_count();
-    target_device->push_work([async_safe_tensor, device_tensor, mem_config, target_device]() mutable {
-        if (async_safe_tensor.storage_type() == StorageType::DEVICE) {
-            TT_ASSERT(async_safe_tensor.device() == target_device && "Currently do not support moving between devices");
-            device_tensor.populate_buffers_and_metadata(async_safe_tensor);
-        } else {
-            tensor_impl::validate_on_device_dtype_and_layout(
-                target_device,
-                async_safe_tensor.get_legacy_shape(),
-                async_safe_tensor.get_dtype(),
-                async_safe_tensor.get_layout());
-            auto local_tensor =
-                tensor_impl::to_device_wrapper(async_safe_tensor, target_device, mem_config, std::nullopt);
-            // Populate device tensor
-            device_tensor.populate_buffers_and_metadata(local_tensor);
-        }
-    });
-    // Update main thread ref count for tensors after pushing to queue (update original tensor and returned tensor,
-    // since both can be on device).
-    device_tensor.tensor_attributes->update_main_thread_ref_count(device_tensor.workers.at(0), device_tensor_ref_count);
-    async_safe_tensor.tensor_attributes->update_main_thread_ref_count(
-        device_tensor.workers.at(0), original_tensor_ref_count);
-    device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
-    GraphTracker::instance().track_function_end(device_tensor);
-    return device_tensor;
+    return tensor_ops::tensor_to(*this, target_device, mem_config);
 }
 
-Tensor Tensor::to(DeviceMesh* device_mesh, const MemoryConfig& mem_config) const {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::to", *this, device_mesh, mem_config);
-    std::vector<Device*> workers_to_use = distribute_tensor_to_mesh(*this, *device_mesh);
-    auto output = this->to(workers_to_use, mem_config);
-    output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
-    return output;
+Tensor Tensor::to(MeshDevice* mesh_device, const MemoryConfig& mem_config) const {
+    std::vector<Device*> workers_to_use = distribute_tensor_to_mesh(*this, *mesh_device);
+    return tensor_ops::tensor_to(*this, workers_to_use, mem_config);
 }
 
 Tensor Tensor::to(const std::vector<Device*>& workers, const MemoryConfig& mem_config) const {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::to", *this, workers, mem_config);
-    TT_FATAL(
-        validate_worker_modes(workers), "All device threads/workers must be running in the same mode (ASYNC or SYNC)");
-    Tensor device_tensor = Tensor(workers);
-    uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
-    uint32_t original_tensor_ref_count = this->tensor_attributes->record_main_thread_ref_count();
-    uint32_t num_workers = workers.size();
-    for (int worker_index = 0; worker_index < workers.size(); ++worker_index) {
-        auto& worker = workers[worker_index];
-        worker->push_work([worker, *this, device_tensor, mem_config, num_workers, worker_index]() mutable {
-            auto shard = get_shard_for_device(*this, worker, worker_index);
-            if (shard.storage_type() == StorageType::OWNED) {
-                shard = tensor_impl::to_device_wrapper(shard, worker, mem_config, std::nullopt);
-            }
-            insert_buffer_and_shape_for_device(worker, shard, device_tensor, worker_index);
-            uint32_t num_workers_completed = (device_tensor.tensor_attributes->num_workers_completed)++;
-            if (not num_workers_completed) {
-                device_tensor.set_shape(this->get_shape());
-                device_tensor.set_dtype(this->get_dtype());
-                device_tensor.set_layout(this->get_layout());
-                device_tensor.tensor_attributes->metadata_populated = true;
-            }
-        });
-    }
-    device_tensor.tensor_attributes->update_main_thread_ref_count(workers.at(0), device_tensor_ref_count);
-    this->tensor_attributes->update_main_thread_ref_count(workers.at(0), original_tensor_ref_count);
-    device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
-    GraphTracker::instance().track_function_end(device_tensor);
-    return device_tensor;
+    return tensor_ops::tensor_to(*this, workers, mem_config);
 }
 
 Tensor Tensor::cpu(bool blocking, uint8_t cq_id) const {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::cpu", *this, blocking);
-    auto workers = this->get_workers(blocking);
-    if (not workers.size()) {
-        // Tensor is on host and does not have a worker group.
-        // Return immediately. If this is a result of .cpu() called twice,
-        // tensor accessors will stall until tensor is populated.
-        auto output = tt::tt_metal::set_tensor_id(*this);
-        GraphTracker::instance().track_function_end(output);
-        return output;
-    }
-    TT_FATAL(
-        validate_worker_modes(workers), "All device threads/workers must be running in the same mode (ASYNC or SYNC)");
-    Tensor host_tensor({}, workers.size());
-    uint32_t original_tensor_ref_count = this->tensor_attributes->record_main_thread_ref_count();
-    for (int worker_index = 0; worker_index < workers.size(); worker_index++) {
-        auto target_device = workers[worker_index];
-        target_device->push_work([host_tensor, blocking, target_device, *this, workers, worker_index, cq_id]() mutable {
-            TT_ASSERT(
-                this->storage_type() == StorageType::DEVICE or this->storage_type() == StorageType::MULTI_DEVICE,
-                "Can only use worker queue for cpu call if tensor is on device.");
-            auto shard = get_shard_for_device(*this, target_device);
-            shard = tensor_impl::to_host_wrapper(shard, blocking, cq_id);
-            insert_buffer_and_shape_for_device(target_device, shard, host_tensor, worker_index);
-            uint32_t num_workers_completed = (host_tensor.tensor_attributes->num_workers_completed)++;
-            if (not num_workers_completed) {
-                host_tensor.set_shape(this->get_shape());
-                host_tensor.set_dtype(this->get_dtype());
-                host_tensor.set_layout(this->get_layout());
-                host_tensor.tensor_attributes->metadata_populated = true;
-            }
-        });
-    }
-
-    if (blocking) {
-        SynchronizeWorkerThreads(workers);
-    }
-    // Update main_thread_ref_count for tensor after pushing to queue.
-    this->tensor_attributes->update_main_thread_ref_count(workers.at(0), original_tensor_ref_count);
-    host_tensor = tt::tt_metal::set_tensor_id(host_tensor);
-    GraphTracker::instance().track_function_end(host_tensor);
-    return host_tensor;
+    return tensor_ops::tensor_cpu(*this, blocking, cq_id);
 }
 
 Tensor Tensor::cpu_sharded() const {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::cpu_sharded", *this);
-    auto output = tensor_impl::to_host_sharded_wrapper(*this);
-    output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
-    return output;
+    return tensor_ops::tensor_cpu_sharded(*this);
 }
 
 Tensor Tensor::extract_shard(const CoreCoord& core) const {
     ZoneScoped;
-    auto buffer_page_mapping = generate_buffer_page_mapping(*this->buffer());
+    const auto& buffer_page_mapping = *this->buffer()->get_buffer_page_mapping();
     auto core_id = buffer_page_mapping.core_to_core_id_.at(core);
     return this->extract_shard(core_id);
 }
@@ -561,186 +404,33 @@ Tensor Tensor::extract_shard(const uint32_t& core_id) const {
 }
 
 Tensor Tensor::to(Layout target_layout, Device* worker) const {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::to", *this, target_layout, worker);
-    // Only push layout conversion to worker if running in async mode
-    if (worker and worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS) {
-        // Tensor can be using borrowed storage. If so, when running in async mode, copy this tensor to owned storage.
-        Tensor async_safe_tensor = copy_borrowed_tensor_in_async_mode(worker, *this);
-        Tensor tensor_modified_layout = Tensor({}, 1);
-        worker->push_work([async_safe_tensor, tensor_modified_layout, target_layout]() mutable {
-            TT_ASSERT(
-                async_safe_tensor.storage_type() == StorageType::OWNED or
-                async_safe_tensor.storage_type() == StorageType::BORROWED &&
-                    "to(layout) must be called on host tensors with a single buffer when a single worker is specified");
-            auto local_tensor = tensor_impl::to_layout_wrapper(async_safe_tensor, target_layout);
-            // Populate modified layout tensor
-            tensor_modified_layout.populate_buffers_and_metadata(local_tensor);
-        });
-        tensor_modified_layout = tt::tt_metal::set_tensor_id(tensor_modified_layout);
-        GraphTracker::instance().track_function_end(tensor_modified_layout);
-        return tensor_modified_layout;
-    }
-    // Running without worker threads (non-async)
-    TT_ASSERT(
-        this->storage_type() != StorageType::DEVICE or
-        this->storage_type() != StorageType::MULTI_DEVICE && "Bring tensor to host before converting to target layout");
-    auto output = tensor_impl::to_layout_wrapper(*this, target_layout);
-    output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
-    return output;
+    return tensor_ops::tensor_to(*this, target_layout, worker);
 }
 
-Tensor Tensor::to(Layout target_layout, DeviceMesh* device_mesh) const {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::to", *this, target_layout, device_mesh);
-    if (device_mesh) {
-        auto workers = distribute_tensor_to_mesh(*this, *device_mesh);
-        TT_FATAL(
-            validate_worker_modes(workers),
-            "All device threads/workers must be running in the same mode (ASYNC or SYNC)");
-
-        std::optional<DistributedTensorConfig> distributed_config = std::nullopt;
-        if (std::holds_alternative<MultiDeviceHostStorage>(this->get_storage())) {
-            auto& host_storage = std::get<MultiDeviceHostStorage>(this->get_storage());
-            distributed_config = host_storage.strategy;
-        }
-        Tensor tensor_modified_layout = Tensor({}, workers.size(), distributed_config);
-        for (int worker_index = 0; worker_index < workers.size(); ++worker_index) {
-            auto& worker = workers[worker_index];
-            worker->push_work([*this, tensor_modified_layout, target_layout, worker, worker_index]() mutable {
-                TT_ASSERT(
-                    this->storage_type() == StorageType::OWNED || this->storage_type() == StorageType::BORROWED ||
-                    this->storage_type() == StorageType::MULTI_DEVICE_HOST &&
-                        "to(layout) must be called on host tensors with MULTI_DEVICE_HOST_STORAGE when multiple "
-                        "workers "
-                        "are specified");
-                ;
-                auto shard = get_shard_for_device(*this, worker, worker_index);
-                shard = tensor_impl::to_layout_wrapper(shard, target_layout);
-                insert_buffer_and_shape_for_device(worker, shard, tensor_modified_layout, worker_index);
-                uint32_t num_workers_completed = (tensor_modified_layout.tensor_attributes->num_workers_completed)++;
-                if (not num_workers_completed) {
-                    tensor_modified_layout.set_shape(this->get_shape());
-                    tensor_modified_layout.set_dtype(this->get_dtype());
-                    tensor_modified_layout.set_layout(target_layout);
-                    tensor_modified_layout.tensor_attributes->metadata_populated = true;
-                };
-            });
-        }
-        tensor_modified_layout = tt::tt_metal::set_tensor_id(tensor_modified_layout);
-        GraphTracker::instance().track_function_end(tensor_modified_layout);
-        return tensor_modified_layout;
-    }
-    // Running without worker threads (non-async)
-    TT_ASSERT(
-        this->storage_type() != StorageType::DEVICE or
-        this->storage_type() != StorageType::MULTI_DEVICE && "Bring tensor to host before converting to target layout");
-    auto output = tensor_impl::to_layout_wrapper(*this, target_layout);
-    output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
-    return output;
+Tensor Tensor::to(Layout target_layout, MeshDevice* mesh_device) const {
+    return tensor_ops::tensor_to(*this, target_layout, mesh_device);
 }
 
 const std::string Tensor::write_to_string() const { return tensor_impl::to_string_wrapper(*this); }
 
 void Tensor::print() const {
-    GraphTracker::instance().track_function_start("Tensor::print", *this);
-    std::cout << write_to_string() << std::endl;
-    GraphTracker::instance().track_function_end();
+    tensor_ops::tensor_print(*this);
 }
 
-Tensor Tensor::pad(const Shape& output_tensor_shape, const Shape& input_tensor_start, float pad_value) const {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::pad", *this, output_tensor_shape, input_tensor_start, pad_value);
-    TT_ASSERT(
-        this->storage_type() == StorageType::OWNED or this->storage_type() == StorageType::MULTI_DEVICE_HOST or
-        this->storage_type() == StorageType::BORROWED && "Tensor must be on host for padding");
-    TT_ASSERT(this->get_layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for padding");
-
-    auto input_shape = this->get_legacy_shape();
-    auto dimensions_pads = std::vector<Padding::PadDimension>();
-    for (auto index = 0; index < input_shape.rank(); index++) {
-        auto front = input_tensor_start[index];
-        auto back = output_tensor_shape[index] - (input_tensor_start[index] + input_shape[index]);
-        dimensions_pads.push_back(Padding::PadDimension{.front = front, .back = back});
-    }
-    const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-    auto output_shape_with_padding = Shape(output_tensor_shape, padding);
-
-    auto output = tensor_impl::pad_wrapper(*this, output_shape_with_padding, input_tensor_start, pad_value);
-    output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
-    return output;
+Tensor Tensor::pad(const tt::tt_metal::LegacyShape& output_tensor_shape, const tt::tt_metal::LegacyShape& input_tensor_start, float pad_value) const {
+    return tensor_ops::tensor_pad(*this, output_tensor_shape, input_tensor_start, pad_value);
 }
 
-Tensor Tensor::unpad(const Shape& output_tensor_start, const Shape& output_tensor_end) const {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::unpad", *this, output_tensor_start, output_tensor_end);
-    TT_ASSERT(this->get_layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for unpadding");
-    auto output = tensor_impl::unpad_wrapper(*this, output_tensor_start, output_tensor_end);
-    output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
-    return output;
+Tensor Tensor::unpad(const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end) const {
+    return tensor_ops::tensor_unpad(*this, output_tensor_start, output_tensor_end);
 }
 
 Tensor Tensor::pad_to_tile(float pad_value) const {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::pad_to_tile", *this, pad_value);
-    uint32_t height = this->get_legacy_shape()[-2];
-    uint32_t width = this->get_legacy_shape()[-1];
-    uint32_t padded_height = round_up(height, TILE_HEIGHT);
-    uint32_t padded_width = round_up(width, TILE_WIDTH);
-
-    std::vector<uint32_t> shape;
-    std::vector<uint32_t> padded_shape;
-    std::vector<uint32_t> input_tensor_start;
-
-    for (auto index = 0; index < this->get_legacy_shape().rank() - 2; index++) {
-        shape.push_back(this->get_legacy_shape().without_padding()[index]);
-        padded_shape.push_back(this->get_legacy_shape()[index]);
-        input_tensor_start.push_back(0);
-    }
-
-    shape.push_back(height);
-    shape.push_back(width);
-    padded_shape.push_back(padded_height);
-    padded_shape.push_back(padded_width);
-    input_tensor_start.push_back(0);
-    input_tensor_start.push_back(0);
-
-    auto output = this->pad(Shape(shape, padded_shape), Shape{input_tensor_start}, pad_value);
-    output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
-    return output;
+    return tensor_ops::tensor_pad_to_tile(*this, pad_value);
 }
 
-Tensor Tensor::unpad_from_tile(const Shape& output_tensor_shape) const {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::unpad_from_tile", *this, output_tensor_shape);
-
-    for (auto index = 0; index < this->get_legacy_shape().rank() - 2; index++) {
-        TT_ASSERT(
-            this->get_legacy_shape().without_padding()[index] == output_tensor_shape[index],
-            "Input shape must match output shape apart from last 2 dims");
-    }
-    TT_ASSERT(
-        this->get_legacy_shape()[-2] % TILE_HEIGHT == 0 && this->get_legacy_shape()[-1] % TILE_WIDTH == 0,
-        "Last 2 dims of input shape must be multiples of 32");
-    TT_ASSERT(
-        this->get_legacy_shape()[-2] - TILE_HEIGHT < output_tensor_shape[-2] &&
-            this->get_legacy_shape()[-1] - TILE_WIDTH < output_tensor_shape[-1],
-        "Last 2 dims of output must be within range to have been padded to input");
-    std::vector<uint32_t> output_tensor_start{};
-    std::vector<uint32_t> output_tensor_end{};
-    for (auto index = 0; index < this->get_legacy_shape().rank(); index++) {
-        output_tensor_start.push_back(0);
-        output_tensor_end.push_back(output_tensor_shape[index] - 1);
-    }
-    auto output = this->unpad(output_tensor_start, output_tensor_end);
-    output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
-    return output;
+Tensor Tensor::unpad_from_tile(const tt::tt_metal::LegacyShape& output_tensor_shape) const {
+    return tensor_ops::tensor_unpad_from_tile(*this, output_tensor_shape);
 }
 
 const bool Tensor::is_sharded() const {
@@ -750,129 +440,25 @@ const bool Tensor::is_sharded() const {
 uint32_t Tensor::element_size() const { return tensor_impl::element_size_bytes(this->get_dtype()); }
 
 Tensor Tensor::reshape(int N, int C, int H, int W) const {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::reshape", *this, N, C, H, W);
-    auto new_shape = infer_dims_for_reshape(N, C, H, W, this->volume());
-    auto output = this->reshape(new_shape);
-    output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
-    return output;
+    return tensor_ops::tensor_reshape(*this, N, C, H, W);
 }
 
-Tensor Tensor::reshape(const Shape& new_shape) const {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::reshape", *this, new_shape);
-    TT_ASSERT(
-        this->volume() == tt::tt_metal::compute_volume(new_shape),
-        "{} != {}",
-        this->volume(),
-        tt::tt_metal::compute_volume(new_shape));
-    if (this->get_layout() == Layout::TILE) {
-        TT_ASSERT(
-            new_shape[-2] % TILE_HEIGHT == 0 && new_shape[-1] % TILE_WIDTH == 0 &&
-            "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
-    }
-    auto output = std::visit(
-        [this, &new_shape](auto&& storage) -> Tensor {
-            using T = std::decay_t<decltype(storage)>;
-            const auto& tensor = *this;
-            if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
-                auto updated_storage = std::get<T>(tensor.get_storage());
-                for (int i = 0; i < updated_storage.shapes.size(); i++) {
-                    updated_storage.shapes[i] = new_shape;
-                }
-                return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout());
-            }
-            if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                MultiDeviceStorage updated_storage = std::get<T>(tensor.get_storage());
-                std::unordered_map<int, Shape> new_shapes;
-
-                for (auto device_id : updated_storage.ordered_device_ids) {
-                    new_shapes.insert({device_id, new_shape});
-                }
-                updated_storage.shapes = new_shapes;
-                return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout());
-            }
-            if constexpr (std::is_same_v<T, DeviceStorage>) {
-                if (this->get_layout() == Layout::ROW_MAJOR) {
-                    if (tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-                        DeviceStorage device_storage = std::get<T>(tensor.get_storage());
-                        DeviceBuffer device_buffer = device_storage.get_buffer();
-                        device_buffer->set_page_size(new_shape[-1] * tensor.element_size());
-                        device_storage.insert_buffer(device_buffer);
-                        return Tensor(device_storage, new_shape, tensor.get_dtype(), tensor.get_layout());
-                    } else {
-                        DeviceStorage device_storage = std::get<T>(tensor.get_storage());
-                        DeviceBuffer device_buffer = device_storage.get_buffer();
-                        ShardSpecBuffer shard_spec_buffer = device_buffer->shard_spec();
-
-                        auto shard_spec = shard_spec_buffer.tensor_shard_spec;
-                        auto shard_shape = shard_spec.shape;
-
-                        uint32_t mul_div = new_shape[-1] > shard_shape[1] ?
-                                        (new_shape[-1] / shard_shape[1]) :
-                                        (shard_shape[1] / new_shape[-1]);
-                        shard_spec.shape[0] = new_shape[-1] > shard_shape[1] ? shard_shape[0] / mul_div : shard_shape[0] * mul_div;
-                        shard_spec.shape[1] = new_shape[-1];
-
-                        shard_spec_buffer.page_shape = {1, new_shape[-1]};
-                        shard_spec_buffer.tensor2d_shape = {shard_spec.shape[0], 1};
-                        shard_spec_buffer.set_shard_spec(shard_spec);
-
-                        device_buffer->set_shard_spec(shard_spec_buffer);
-                        device_storage.insert_buffer(device_buffer);
-
-                        return Tensor(device_storage, new_shape, tensor.get_dtype(), tensor.get_layout());
-                    }
-                } else {
-                    return Tensor(tensor.get_storage(), new_shape, tensor.get_dtype(), tensor.get_layout());
-                }
-            } else {
-                return Tensor(tensor.get_storage(), new_shape, tensor.get_dtype(), tensor.get_layout());
-            }
-        },
-        this->get_storage());
-    output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
-    return output;
+Tensor Tensor::reshape(const tt::tt_metal::LegacyShape& new_shape) const {
+    return tensor_ops::tensor_reshape(*this, new_shape);
 }
 
 bool Tensor::is_allocated() const {
     ZoneScoped;
     auto output = std::visit(
         [](auto&& storage) -> bool {
-            using T = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<T, OwnedStorage>) {
-                return std::visit([](auto&& buffer) -> bool { return buffer.is_allocated(); }, storage.buffer);
-            } else if constexpr (std::is_same_v<T, DeviceStorage>) {
-                return bool(storage.buffer) and storage.buffer->size() > 0;
-            } else if constexpr (std::is_same_v<T, BorrowedStorage>) {
-                return true;
-            } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
-                bool is_allocated = true;
-                for (int i = 0; i < storage.num_buffers(); i++) {
-                    is_allocated &=
-                        std::visit([](auto&& buffer) -> bool { return buffer.is_allocated(); }, storage.get_buffer(i));
-                }
-                return is_allocated;
-            } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                bool is_allocated = true;
-                for (int i = 0; i < storage.ordered_device_ids.size(); ++i) {
-                    auto device_id = storage.ordered_device_ids[i];
-                    const auto& buffer = storage.get_buffer_for_device_id(device_id);
-                    is_allocated &= bool(buffer) and buffer->size() > 0;
-                }
-                return is_allocated;
-            } else {
-                raise_unsupported_storage<T>();
-            }
+            return storage.is_allocated();
         },
         this->get_storage());
     return output;
 }
 
 std::vector<uint32_t> Tensor::host_page_ordering() {
-    auto buffer_page_mapping = generate_buffer_page_mapping(*this->buffer());
+    const auto& buffer_page_mapping = *this->buffer()->get_buffer_page_mapping();
     auto cores = buffer_page_mapping.all_cores_;
     auto shard_size = buffer()->shard_spec().size();
     auto num_pages = cores.size() * shard_size;
@@ -908,26 +494,14 @@ StorageType Tensor::storage_type() const {
         this->get_storage());
 }
 
-namespace detail {
-const Shape compute_strides(const Shape& shape) {
-    auto num_elements = compute_volume(shape);
-    std::vector<std::uint32_t> strides;
-    for (std::int32_t index = 0; index < shape.rank(); index++) {
-        num_elements /= shape[index];
-        strides.push_back(num_elements);
-    }
-    return strides;
-}
-}  // namespace detail
-
-const Shape Tensor::strides() const { return detail::compute_strides(this->get_legacy_shape()); }
+const tt::tt_metal::LegacyShape Tensor::strides() const { return tt::tt_metal::LegacyShape(tt::tt_metal::compute_strides(this->get_legacy_shape())); }
 
 uint32_t Tensor::volume() const { return tt::tt_metal::compute_volume(this->get_legacy_shape()); }
 
 uint32_t Tensor::intended_volume() const { return tt::tt_metal::compute_volume(this->get_shape()); }
 
 Tensor create_device_tensor(
-    const Shape& shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config) {
+    const tt::tt_metal::LegacyShape& shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("tt::tt_metal::create_device_tensor", shape, data_type, layout, device, memory_config);
     if (memory_config.is_sharded()) {
@@ -946,7 +520,7 @@ Tensor create_device_tensor(
         auto page_shape = tensor_impl::get_sharded_page_shape(layout, data_type, shard_spec.shape);
         std::array<uint32_t, 2> tensor2d_size = {other_dims / page_shape[0], width / page_shape[1]};
         ShardSpecBuffer shard_spec_buffer(shard_spec, page_shape, tensor2d_size);
-        uint32_t packed_size_in_bytes =
+        size_t packed_size_in_bytes =
             tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
         auto device_buffer = tensor_impl::allocate_buffer_on_device(
             packed_size_in_bytes, device, shape, data_type, layout, memory_config, shard_spec_buffer);
@@ -956,7 +530,7 @@ Tensor create_device_tensor(
         GraphTracker::instance().track_function_end(output);
         return output;
     } else {
-        uint32_t packed_size_in_bytes =
+        size_t packed_size_in_bytes =
             tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
         auto device_buffer = tensor_impl::allocate_buffer_on_device(
             packed_size_in_bytes, device, shape, data_type, layout, memory_config);
@@ -966,6 +540,7 @@ Tensor create_device_tensor(
         return output;
     }
 }
+
 
 namespace detail {
 template <typename DataType>
@@ -1102,10 +677,10 @@ Tensor allocate_tensor_on_device(
     const ttnn::Shape& shape,
     DataType data_type,
     Layout layout,
-    DeviceMesh* device_mesh,
+    MeshDevice* mesh_device,
     const MemoryConfig& memory_config) {
     // Top level wrapper to asynchronously create a device tensor (multi-device)
-    Tensor device_tensor = Tensor(device_mesh->get_devices());
+    Tensor device_tensor = Tensor(mesh_device->get_devices());
     uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
     const auto& workers = device_tensor.get_workers();
     uint32_t num_workers = workers.size();
@@ -1148,9 +723,9 @@ void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id) {
                 device_tensor.storage_type() == StorageType::DEVICE or
                     device_tensor.storage_type() == StorageType::MULTI_DEVICE,
                 "write_tensor only supports host_tensor to device_tensor data transfer");
-            TT_FATAL(async_safe_tensor.get_shape() == device_tensor.get_shape());
-            TT_FATAL(async_safe_tensor.get_dtype() == device_tensor.get_dtype());
-            TT_FATAL(async_safe_tensor.get_layout() == device_tensor.get_layout());
+            TT_FATAL(async_safe_tensor.get_shape() == device_tensor.get_shape(), "Error");
+            TT_FATAL(async_safe_tensor.get_dtype() == device_tensor.get_dtype(), "Error");
+            TT_FATAL(async_safe_tensor.get_layout() == device_tensor.get_layout(), "Error");
             std::visit(
                 [worker_index, worker, cq_id, &async_safe_tensor](auto&& s) {
                     void* host_data = nullptr;
@@ -1162,7 +737,7 @@ void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id) {
                             auto host_storage = std::get<BorrowedStorage>(async_safe_tensor.get_storage());
                             std::visit([&host_data](auto&& b) { host_data = b.data(); }, host_storage.buffer);
                         } else {
-                            TT_ASSERT(std::holds_alternative<OwnedStorage>(async_safe_tensor.get_storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(async_safe_tensor.get_storage()),__FILE__, __LINE__));
+                            TT_ASSERT(std::holds_alternative<OwnedStorage>(async_safe_tensor.get_storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(async_safe_tensor.get_storage()));
                             auto host_storage = std::get<OwnedStorage>(async_safe_tensor.get_storage());
                             std::visit([&host_data](auto&& b) { host_data = b.begin(); }, host_storage.get_buffer());
                         }
@@ -1185,7 +760,7 @@ void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id) {
 }
 
 
-std::vector<Device*> distribute_tensor_to_mesh(const Tensor& tensor, DeviceMesh& device_mesh) {
+std::vector<Device*> distribute_tensor_to_mesh(const Tensor& tensor, MeshDevice& mesh_device) {
     auto get_multi_device_workers = [&](const std::vector<Device*>& workers) {
         if (std::holds_alternative<MultiDeviceStorage>(tensor.get_storage()) or
             std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage())) {
@@ -1194,22 +769,22 @@ std::vector<Device*> distribute_tensor_to_mesh(const Tensor& tensor, DeviceMesh&
         return workers;
     };
 
-    if (device_mesh.get_view() != nullptr and std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage())) {
+    if (mesh_device.get_view() != nullptr and std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage())) {
         const auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());
 
         return std::visit([&](const auto& strategy) {
             using StrategyType = std::decay_t<decltype(strategy)>;
             if constexpr (std::is_same_v<StrategyType, ShardTensor2D>) {
-                auto mesh_view = device_mesh.get_view();
+                auto mesh_view = mesh_device.get_view();
                 return mesh_view->get_devices(strategy.shard_mesh);
             } else {
-                return get_multi_device_workers(device_mesh.get_devices());
+                return get_multi_device_workers(mesh_device.get_devices());
             }
         }, host_storage.strategy);
     } else if (std::holds_alternative<MultiDeviceStorage>(tensor.get_storage())) {
         return tensor.workers;
     } else {
-        return get_multi_device_workers(device_mesh.get_devices());
+        return get_multi_device_workers(mesh_device.get_devices());
     }
 }
 
@@ -1218,8 +793,7 @@ Tensor set_tensor_id(const Tensor& tensor) {
         return tensor;
     }
     auto output = tensor;
-    ttnn::increment_tensor_id();
-    output.tensor_id = ttnn::get_tensor_id();
+    output.tensor_id = ttnn::CoreIDs::instance().fetch_and_increment_tensor_id();
     return output;
 };
 

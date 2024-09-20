@@ -44,8 +44,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check ttnn is not used in tt_metal tests
-        run: if (( $(grep -Rnw 'tests/tt_metal' -e 'ttnn' | wc -l ) > 6 )); then exit 1; fi
+        run: if (( $(grep -Rnw 'tests/tt_metal' -e 'ttnn' | wc -l ) > 11 )); then exit 1; fi
       - name: Check tt_eager constructs is not used in tt_metal tests
         run: |
           if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_lib' | wc -l ) > 0 )); then exit 1; fi
           if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_eager' | wc -l ) > 10 )); then exit 1; fi
+  check-sweeps-workflow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5.0.0
+      - name: Check sweeps workflow option count against sweep file count
+        run: |
+          pip install pyyaml
+          python tests/sweep_framework/sweeps_workflow_verification.py

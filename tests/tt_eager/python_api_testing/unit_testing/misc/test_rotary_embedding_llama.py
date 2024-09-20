@@ -11,7 +11,7 @@ from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 
 from models.demos.t3000.llama2_70b.tt.llama_common import precompute_freqs, freqs_to_rotation_matrix, gather_rotary_emb
 
@@ -178,6 +178,7 @@ def run_test_rotary_embedding_llama(
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
+@skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "batch, seq_len",
@@ -190,6 +191,7 @@ def run_test_rotary_embedding_llama(
         (1, 4096),
         (1, 8192),
         (1, 16384),
+        (1, 128 * 1024),
     ),
     ids=(
         "prefill_32",
@@ -200,6 +202,7 @@ def run_test_rotary_embedding_llama(
         "prefill_4k",
         "prefill_8k",
         "prefill_16k",
+        "prefill_128k",
     ),
 )
 @pytest.mark.parametrize(
@@ -230,6 +233,9 @@ def test_rotary_embedding_llama(
     if compute_grid_size.x < 8 or compute_grid_size.y < 8:
         pytest.skip(f"Requires grid size of at least {(8, 8)} to run")
 
+    if seq_len == 128 * 1024 and (n_heads, n_kv_heads, head_dim) != (8, 1, 128):
+        pytest.skip("Only testing for (8, 1, 128) due to time constraints")
+
     max_seq_len = max(4096, seq_len)
 
     run_test_rotary_embedding_llama(devices, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, max_seq_len, datatype)
@@ -241,13 +247,14 @@ def test_rotary_embedding_llama(
             inp.reshape(-1).tolist(),
             inp.shape,
             ttnn.bfloat16,
-            ttnn.Layout.ROW_MAJOR,
+            ttnn.ROW_MAJOR_LAYOUT,
         )
-        .to(ttnn.Layout.TILE)
+        .to(ttnn.TILE_LAYOUT)
         .to(devices[0])
     )
 
 
+@skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "batch, seq_len",
@@ -299,9 +306,9 @@ def test_rotary_embedding_llama_with_program_cache(
                 inp.reshape(-1).tolist(),
                 inp.shape,
                 ttnn.bfloat16,
-                ttnn.Layout.ROW_MAJOR,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttnn.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(devices[0])
         )
 

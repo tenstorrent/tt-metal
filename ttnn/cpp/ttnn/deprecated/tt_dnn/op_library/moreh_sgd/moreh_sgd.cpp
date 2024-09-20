@@ -5,7 +5,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sgd/moreh_sgd_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -31,7 +31,7 @@ operation::ProgramWithCallbacks moreh_sgd_(
     bool nesterov,
     bool momentum_initialized,
     const CoreRange core_range,
-    const DeviceComputeKernelConfig compute_kernel_config) {
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     // split work
     auto shape = param_in.get_legacy_shape();
     auto H = shape[-2];
@@ -147,7 +147,7 @@ operation::ProgramWithCallbacks moreh_sgd_(
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            TT_FATAL(false, "Core not in specified core ranges");
+            TT_THROW("Core not in specified core ranges");
         }
 
         union { float f; uint32_t u; } u_lr, u_momentum, u_dampening, u_weight_decay, u_one;
@@ -212,7 +212,7 @@ operation::ProgramWithCallbacks moreh_sgd_(
                 runtime_args[0] = param_in.buffer()->address();
                 runtime_args[1] = grad.buffer()->address();
                 if (momentum_buffer_in.has_value()) {
-                    runtime_args[2] = momentum_buffer_in.value().buffer()->address();;
+                    runtime_args[2] = momentum_buffer_in.value().buffer()->address();
                 }
             }
 

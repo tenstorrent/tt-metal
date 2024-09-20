@@ -3,12 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "prefix_scan_op.hpp"
-
+#include "tt_metal/common/constants.hpp"
 #include "prefix_scan_program_factory.hpp"
 
 namespace ttnn::operations::experimental::ssm {
 
 void PrefixScan::validate(const std::vector<Tensor>& input_tensors) const {
+    using namespace tt::constants;
     TT_FATAL(input_tensors.size() == 3, "Expected 3 input tensors (A, Bx, H)");
 
     const auto& a = input_tensors[0];
@@ -20,7 +21,7 @@ void PrefixScan::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& shape = a.get_legacy_shape();
     TT_FATAL(shape.rank() == 4, "Expected input tensors to be rank 4");
     TT_FATAL(shape[0] == 1 && shape[1] == 1, "Dimension 0 and 1 should be size 1");
-    TT_FATAL(shape[2] >= TILE_HEIGHT && shape[2] % TILE_HEIGHT == 0, "Sequence length should be a multiple of 32");
+    TT_FATAL(shape[2] >= tt::constants::TILE_HEIGHT && shape[2] % tt::constants::TILE_HEIGHT == 0, "Sequence length should be a multiple of 32");
 
     const auto& h = input_tensors.at(2);
     TT_FATAL(h.dtype() == DataType::BFLOAT16, "Expected initial hidden state to be bfloat16");
@@ -41,7 +42,7 @@ void PrefixScan::validate(const std::vector<Tensor>& input_tensors) const {
         "Expected h tensor to be row major orientation");
 }
 
-std::vector<tt::tt_metal::Shape> PrefixScan::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> PrefixScan::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& a = input_tensors.at(0);
     return {a.get_legacy_shape()};
 }

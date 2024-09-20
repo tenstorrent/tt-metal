@@ -6,33 +6,35 @@
 
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
 void kernel_main() {
     // READER
+    uint32_t rt_args_idx = 0;
     // in1 tensor args
-    const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(0);
-    uint32_t in1_tensor_start_tile_id = get_arg_val<uint32_t>(1);
+    const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t in1_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
     // in1 mcast args
-    const uint32_t in1_mcast_dest_noc_start_x = get_arg_val<uint32_t>(2);
-    const uint32_t in1_mcast_dest_noc_start_y = get_arg_val<uint32_t>(3);
-    const uint32_t in1_mcast_dest_noc_end_x = get_arg_val<uint32_t>(4);
-    const uint32_t in1_mcast_dest_noc_end_y = get_arg_val<uint32_t>(5);
+    const uint32_t in1_mcast_dest_noc_start_x = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in1_mcast_dest_noc_start_y = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in1_mcast_dest_noc_end_x = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in1_mcast_dest_noc_end_y = get_arg_val<uint32_t>(rt_args_idx++);
 
     // WRITER
     // out tensor args
-    const uint32_t out_tensor_addr = get_arg_val<uint32_t>(6);
-    uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(7);
+    const uint32_t out_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
 
     // padding args (READER)
-    const uint32_t last_block_w = get_arg_val<uint32_t>(8);
+    const uint32_t last_block_w = get_arg_val<uint32_t>(rt_args_idx++);
     // padding args (WRITER)
-    const uint32_t out_num_nonzero_subblocks_h = get_arg_val<uint32_t>(9);
-    const uint32_t out_last_subblock_h = get_arg_val<uint32_t>(10);
-    const uint32_t padded_block_tiles_h_skip = get_arg_val<uint32_t>(11);
-    const uint32_t out_num_nonzero_subblocks_w = get_arg_val<uint32_t>(12);
-    const uint32_t out_last_subblock_w = get_arg_val<uint32_t>(13);
-    const uint32_t padded_subblock_tiles_addr_skip = get_arg_val<uint32_t>(14);
-    const uint32_t padded_block_tiles_w_skip = get_arg_val<uint32_t>(15);
+    const uint32_t out_num_nonzero_subblocks_h = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t out_last_subblock_h = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t padded_block_tiles_h_skip = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t out_num_nonzero_subblocks_w = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t out_last_subblock_w = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t padded_subblock_tiles_addr_skip = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t padded_block_tiles_w_skip = get_arg_val<uint32_t>(rt_args_idx++);
 
     // COMPILE TIME ARGS
     // interleaved accessor args
@@ -76,8 +78,8 @@ void kernel_main() {
 
 #ifdef FUSE_BIAS
     // in3 mcast args
-    const uint32_t in3_tensor_addr = get_arg_val<uint32_t>(16);
-    const uint32_t in3_tensor_start_tile_id = get_arg_val<uint32_t>(17);
+    const uint32_t in3_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in3_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
 
     constexpr bool in3_is_dram = get_compile_time_arg_val(24) == 1;
     constexpr uint32_t in3_tensor_stride_w = get_compile_time_arg_val(25);
@@ -92,23 +94,39 @@ void kernel_main() {
         .bank_base_address = in3_tensor_addr,
         .page_size = bias_single_tile_size_bytes,
         .data_format = bias_data_format};
+#else
+    rt_args_idx += 2; // Skip over placeholders
 #endif
+
+    constexpr bool fuse_op = (bool)get_compile_time_arg_val(26);
+
+    MatmulOpReceiver fused_op_receiver;
+    if constexpr(fuse_op) {
+        fused_op_receiver = MatmulOpReceiver(
+            false, /* wait_for_op_signal */
+            rt_args_idx,
+            num_blocks,
+            in1_block_h /* tiles_per_block (in the same dimension */
+        );
+    }
+
 
 // RT and COMPILE TIME ARGS for DRAM sharded weights
 #ifdef IN1_DRAM_SHARDED
-    const uint32_t vc = get_arg_val<uint32_t>(18);
-    const uint32_t num_dram_shards_to_read = get_arg_val<uint32_t>(19);
-    const uint32_t dram_tensor_start_offset = get_arg_val<uint32_t>(20);
-    tt_l1_ptr uint32_t* in1_block_w_dram_stride_bytes = (tt_l1_ptr uint32_t*)get_arg_addr(21);
-    tt_l1_ptr uint32_t* current_dram_bank_id = (tt_l1_ptr uint32_t*)get_arg_addr(22);
+    const uint32_t vc = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t num_dram_shards_to_read = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t dram_tensor_start_offset = get_arg_val<uint32_t>(rt_args_idx++);
+    tt_l1_ptr uint32_t* in1_block_w_dram_stride_bytes = (tt_l1_ptr uint32_t*)get_arg_addr(rt_args_idx++);
+    tt_l1_ptr uint32_t* current_dram_bank_id = (tt_l1_ptr uint32_t*)get_arg_addr(rt_args_idx++);
 
-    constexpr uint32_t in1_dram_block_num_tiles = get_compile_time_arg_val(26);
-    constexpr uint32_t in1_block_w_dram_bytes = get_compile_time_arg_val(27);
+    constexpr uint32_t in1_dram_block_num_tiles = get_compile_time_arg_val(27);
+    constexpr uint32_t in1_block_w_dram_bytes = get_compile_time_arg_val(28);
 #endif
 
     constexpr uint32_t cb_id_in1 = 1;
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
+
 
 //  READER
 #ifdef IN1_SHARDED
@@ -166,6 +184,13 @@ void kernel_main() {
 #endif
         uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
         for (uint32_t block = 0; block < num_blocks; ++block) {
+            if constexpr(fuse_op) {
+                fused_op_receiver.update_current_block_start_tile_id(
+                    block,
+                    in1_tensor_current_block_start_tile_id,
+                    in1_tensor_start_tile_id
+                );
+            }
 #ifdef IN1_DRAM_SHARDED
             // Operand 1
             cb_reserve_back(cb_id_in1, in1_block_num_tiles);
@@ -245,7 +270,7 @@ void kernel_main() {
 
             // num_dests must not include source, since we are NOT really doing a local copy!
             noc_async_write_multicast(
-                in1_start_address, in1_multicast_data_addr, in1_block_size_bytes, in1_mcast_num_cores, false, false);
+                in1_start_address, in1_multicast_data_addr, in1_block_size_bytes, in1_mcast_num_cores, true, true);
 
             // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same
             // cmd_buf Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
@@ -255,10 +280,7 @@ void kernel_main() {
             noc_semaphore_set_multicast(
                 in1_mcast_receiver_semaphore_addr,
                 in1_mcast_receiver_semaphore_noc_addr,
-                in1_mcast_num_cores,
-                false,
-                false);
-
+                in1_mcast_num_cores);
 #endif
 
 #ifndef IN1_SHARDED
@@ -329,7 +351,7 @@ void kernel_main() {
 
             // num_dests must not include source, since we are NOT really doing a local copy!
             noc_async_write_multicast(
-                in3_start_address, in3_multicast_data_addr, in3_block_size_bytes, in1_mcast_num_cores, false, false);
+                in3_start_address, in3_multicast_data_addr, in3_block_size_bytes, in1_mcast_num_cores, true, true);
             // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same
             // cmd_buf Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
 
@@ -338,10 +360,7 @@ void kernel_main() {
             noc_semaphore_set_multicast(
                 in1_mcast_receiver_semaphore_addr,
                 in1_mcast_receiver_semaphore_noc_addr,
-                in1_mcast_num_cores,
-                false,
-                false);
-
+                in1_mcast_num_cores);
 #endif
 
             cb_push_back(cb_id_in3, in1_block_w);

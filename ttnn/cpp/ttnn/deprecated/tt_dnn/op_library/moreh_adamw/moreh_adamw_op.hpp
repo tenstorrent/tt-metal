@@ -7,7 +7,7 @@
 #include <optional>
 #include <vector>
 
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -28,13 +28,13 @@ struct MorehAdamW {
 
     const CoreRange core_range;  // unused for now
     MemoryConfig output_mem_config;
-    const DeviceComputeKernelConfig compute_kernel_config;
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
 
     void validate_with_output_tensors(
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
         const std::vector<std::optional<Tensor>> &output_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     operation::ProgramWithCallbacks create_program(
@@ -78,7 +78,7 @@ operation::ProgramWithCallbacks moreh_adamw_(
     const Tensor& exp_avg_sq_out,
     const std::optional<const Tensor> max_exp_avg_sq_out,
     const CoreRange core_range,
-    const DeviceComputeKernelConfig compute_kernel_config);
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config);
 
 std::vector<std::optional<Tensor>> moreh_adamw(
     const Tensor& param_in,
@@ -100,7 +100,7 @@ std::vector<std::optional<Tensor>> moreh_adamw(
     const std::optional<const Tensor> exp_avg_sq_out = std::nullopt,
     const std::optional<const Tensor> max_exp_avg_sq_out = std::nullopt,
     const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt
 
     );
 

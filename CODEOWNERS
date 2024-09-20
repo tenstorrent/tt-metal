@@ -2,6 +2,7 @@
 # precedence.
 
 .github/ @tt-rkim @ttmchiou @TT-billteng
+.github/workflows/ttnn-run-sweeps.yaml @xanderchin @jdesousa-TT @sjameelTT
 
 /infra/ @tt-rkim
 
@@ -9,8 +10,10 @@ CONTRIBUTING.md @tt-rkim
 
 CODEOWNERS @tt-rkim
 
-INSTALLING.md @tt-rkim
+INSTALLING.md @tt-rkim @TT-billteng
 METALIUM_GUIDE.md @davorchap
+
+# Dependencies
 
 third_party/ @tt-rkim @TT-billteng
 
@@ -22,6 +25,7 @@ pyproject.toml @tt-rkim @TT-billteng
 requirements*.txt @tt-rkim @TT-billteng
 setup_hugepages.py @tt-rkim @TT-billteng
 
+scripts/docker @TT-billteng
 scripts/build_scripts/ @tt-rkim @vtangTT @TT-billteng
 scripts/build_scripts/build_with_profiler_opt.sh @mo-tenstorrent @tt-rkim
 cmake/ @tt-rkim @vtangTT @TT-billteng
@@ -84,44 +88,42 @@ tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tt-rkim
 tests/scripts/run_performance.sh @tt-rkim
 
 # eager - tensor
-# **/tensor/ @TT-BrianLiu @tt-aho @arakhmati
-
-# eager - tensor and op infra
-ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/ccl/ @SeanNijjar
-ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/program_cache.*pp @arakhmati @eyonland @cfjchu @xanderchin
-ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh*/** @razorback3 @dongjin-na
-ttnn/cpp/ttnn/tensor/ @arakhmati @patrickroberts @yan-zaretskiy @eyonland @cfjchu @xanderchin
-
-# eager - python api
-# **/tt_lib/
-**/ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @TT-BrianLiu @tt-aho @mywoodstock @eyonland @ayerofieiev-tt @razorback3 @dongjin-na
-**/ttnn/cpp/ttnn/deprecated/tt_lib/csrc/tt_lib_bindings_tensor_pytensor.cpp @arakhmati @eyonland @cfjchu @xanderchin
-**/ttnn/cpp/ttnn/deprecated/tt_lib/fallback_ops @tt-aho
+# **/tensor/ @TT-BrianLiu @tt-aho @dmakoviichuk-tt
 
 # TTNN
-ttnn/ @eyonland @arakhmati @patrickroberts @yan-zaretskiy @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dmakoviichuk-tt
+ttnn/ @eyonland @patrickroberts @yan-zaretskiy @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dmakoviichuk-tt
+ttnn/ttnn/library_tweaks.py @ayerofieiev-tt @dmakoviichuk-tt @tt-rkim
 ttnn/**/kernels/ # Removes the owners above from owning kernels unless specified afterwards
-ttnn/setup.py @ayerofieiev-tt @dmakoviichuk-tt @tt-rkim
 ttnn/**/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @yan-zaretskiy
+ttnn/cpp/ttnn/tensor/ @patrickroberts @yan-zaretskiy @eyonland @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
+ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/ccl/ @SeanNijjar
+ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/program_cache.*pp @eyonland @cfjchu @xanderchin
+ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
+ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @TT-BrianLiu @mywoodstock @eyonland @ayerofieiev-tt @razorback3 @dongjin-na
+ttnn/cpp/ttnn/deprecated/tt_lib/csrc/tt_lib_bindings_tensor_pytensor.cpp @eyonland @cfjchu @xanderchin
+ttnn/cpp/ttnn/deprecated/tt_lib/fallback_ops @tt-aho
+
+ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
 ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @cfjchu
 ttnn/cpp/ttnn/operations/pool/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
-ttnn/cpp/ttnn/operations/conv2d/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
-ttnn/cpp/ttnn/operations/data_movement/ @tarafdarTT @sjameelTT @yan-zaretskiy
+ttnn/cpp/ttnn/operations/conv/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic @bbradelTT
+ttnn/cpp/ttnn/operations/sliding_window/ @mywoodstock @sankarmanoj-tt @pavlejosipovic
+ttnn/cpp/ttnn/operations/data_movement/ @tarafdarTT @sjameelTT @yan-zaretskiy @jaykru-tt
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT
-ttnn/cpp/ttnn/operations/eltwise/ @arakhmati @patrickroberts @yan-zaretskiy @eyonland
+ttnn/cpp/ttnn/operations/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
 ttnn/cpp/ttnn/operations/reduction/ @SeanNijjar @tarafdarTT @sjameelTT
 ttnn/cpp/ttnn/operations/normalization/ @yugaoTT @tt-aho
 ttnn/cpp/ttnn/operations/embedding/ @tarafdarTT @tt-aho @TT-BrianLiu
 ttnn/cpp/ttnn/operations/embedding_backward/ @TT-BrianLiu @yan-zaretskiy
-ttnn/cpp/ttnn/operations/moreh*/** @razorback3 @dongjin-na
-tests/ttnn/ @eyonland @arakhmati @patrickroberts @yan-zaretskiy @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dmakoviichuk-tt @razorback3 @dongjin-na
+tests/ttnn/ @eyonland @patrickroberts @yan-zaretskiy @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dmakoviichuk-tt @razorback3 @dongjin-na
 tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
+
 # models
 /models/ @tt-rkim @uaydonat
 /models/*/**
 models/conv_on_device_utils*.py @mywoodstock @shwetankTT @sankarmanoj-tt
-functional_*/ @eyonland @arakhmati @patrickroberts @yan-zaretskiy @cfjchu @xanderchin
-models/demos @eyonland @arakhmati @patrickroberts @yan-zaretskiy @cfjchu @xanderchin
+functional_*/ @eyonland @patrickroberts @yan-zaretskiy @cfjchu @xanderchin
+models/demos @eyonland @patrickroberts @yan-zaretskiy @cfjchu @xanderchin
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
 models/demos/wormhole @uaydonat @eyonland
 models/demos/t3000 @uaydonat
@@ -139,15 +141,14 @@ models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
 models/demos/tg/llama3_70b @cglagovichTT @caixunshiren @uaydonat
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/grayskull @uaydonat @eyonland
-models/demos/resnet @mywoodstock @shwetankTT @tt-aho
-models/demos/ttnn_resnet @mywoodstock @shwetankTT @tt-aho
+models/demos/**/*resnet* @mywoodstock @shwetankTT @tt-aho
 models/experimental/functional_unet @esmalTT @uaydonat @mywoodstock
 models/perf/ @uaydonat @tt-rkim
 models/perf/benchmarking_utils.py @skhorasganiTT @tt-rkim
 
 # docs
-docs/source/ttnn/dependencies/tt_lib.rst @eyonland @arakhmati @patrickroberts @yan-zaretskiy @cfjchu @xanderchin @ayerofieiev-tt
-docs/source/ttnn/ @eyonland @arakhmati @patrickroberts @yan-zaretskiy @cfjchu @xanderchin @ayerofieiev-tt @razorback3 @dongjin-na
+docs/source/ttnn/dependencies/tt_lib.rst @eyonland @patrickroberts @yan-zaretskiy @cfjchu @xanderchin @ayerofieiev-tt
+docs/source/ttnn/ @eyonland @patrickroberts @yan-zaretskiy @cfjchu @xanderchin @ayerofieiev-tt @razorback3 @dongjin-na
 # docs/source/apis/host_apis/ @abhullar-tt @TT-billteng @davorchap @tt-rkim
 # docs/source/apis/host_apis2.rst @abhullar-tt @TT-billteng @davorchap @tt-rkim
 # docs/source/apis/kernel_apis/ @davorchap @pgkeller @tt-rkim
@@ -161,6 +162,7 @@ tests/python_api_testing/unit_testing/fallback_ops @tt-aho
 tests/ttnn/integration_tests/stable_diffusion @esmalTT @uaydonat @mywoodstock
 tests/device_perf_tests/stable_diffusion/test_perf_stable_diffusion.py @esmalTT @uaydonat @mywoodstock
 tests/ttnn/integration_tests/unet @esmalTT @uaydonat @mywoodstock
+tests/nightly/wh_b0_only_eth/experimental/functional_unet @esmalTT @uaydonat @mywoodstock
 scripts/profiler/ @mo-tenstorrent
 scripts/docker @ttmchiou @TT-billteng @tt-rkim
 

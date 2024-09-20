@@ -3,24 +3,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
+import functools
 
-from typing import List, Dict, Optional, Callable, Tuple, Optional, Callable, Union
+from typing import List, Dict, Optional, Callable, Tuple, Optional, Callable, Union, List
 
 import ttnn
 
 
-def get_device_mesh_core_grid(device_mesh):
-    compute_with_storage_grid_size = device_mesh.compute_with_storage_grid_size()
+def get_mesh_device_core_grid(mesh_device):
+    compute_with_storage_grid_size = mesh_device.compute_with_storage_grid_size()
     return ttnn.CoreGrid(y=compute_with_storage_grid_size.y, x=compute_with_storage_grid_size.x)
 
 
-DeviceMesh = ttnn._ttnn.multi_device.DeviceMesh
-DeviceMesh.core_grid = property(get_device_mesh_core_grid)
-DispatchCoreType = ttnn._ttnn.deprecated.device.DispatchCoreType
+MeshDevice = ttnn._ttnn.multi_device.MeshDevice
+MeshDevice.core_grid = property(get_mesh_device_core_grid)
+DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
 
 
 def _get_rich_table(
-    device_mesh: "ttnn.DeviceMesh", style_cell: Optional[Callable] = None, annotate_cell: Optional[Callable] = None
+    mesh_device: "ttnn.MeshDevice", style_cell: Optional[Callable] = None, annotate_cell: Optional[Callable] = None
 ):
     from rich import box, padding
     from rich.align import Align
@@ -32,13 +33,13 @@ def _get_rich_table(
 
     # Setup rich table
     try:
-        rows, cols = device_mesh.shape
+        rows, cols = mesh_device.shape
     except AttributeError as e:
         logger.error("Error getting device mesh shape: {}.", e)
         rows, cols = 0, 0
 
     mesh_table = Table(
-        title=f"DeviceMesh(rows={rows}, cols={cols}):",
+        title=f"MeshDevice(rows={rows}, cols={cols}):",
         show_header=False,
         show_footer=False,
         box=box.SQUARE,
@@ -55,9 +56,9 @@ def _get_rich_table(
         row_cells = []
         for col_idx in range(cols):
             try:
-                device = device_mesh.get_device(row_idx, col_idx)
+                device = mesh_device.get_device(row_idx, col_idx)
             except Exception as e:
-                logger.error("Error fetching device from DeviceMesh at row {}, col {}: {}.", row_idx, col_idx, e)
+                logger.error("Error fetching device from MeshDevice at row {}, col {}: {}.", row_idx, col_idx, e)
                 device = None
 
             try:
@@ -80,7 +81,7 @@ def _get_rich_table(
     return mesh_table
 
 
-def visualize_device_mesh(device_mesh: "ttnn.DeviceMesh", tensor: "ttnn.Tensor" = None):
+def visualize_mesh_device(mesh_device: "ttnn.MeshDevice", tensor: "ttnn.Tensor" = None):
     """
     Visualize the device mesh and the given tensor (if specified).
     """
@@ -109,16 +110,16 @@ def visualize_device_mesh(device_mesh: "ttnn.DeviceMesh", tensor: "ttnn.Tensor" 
         style_cell = color_mapped_devices
         annotate_cell = annotate_with_tensor_shape
 
-    mesh_table = _get_rich_table(device_mesh, style_cell=style_cell, annotate_cell=annotate_cell)
+    mesh_table = _get_rich_table(mesh_device, style_cell=style_cell, annotate_cell=annotate_cell)
     Console().print(mesh_table)
 
 
 def get_num_devices() -> List[int]:
-    return ttnn._ttnn.deprecated.device.GetNumAvailableDevices()
+    return ttnn._ttnn.device.GetNumAvailableDevices()
 
 
 def get_num_pcie_devices() -> int:
-    return ttnn._ttnn.deprecated.device.GetNumPCIeDevices()
+    return ttnn._ttnn.device.GetNumPCIeDevices()
 
 
 def get_pcie_device_ids() -> List[int]:
@@ -131,56 +132,66 @@ def get_device_ids() -> List[int]:
     return list(range(num_devices))
 
 
-def open_device_mesh(
-    device_grid: ttnn.DeviceGrid,
-    device_ids: List[int],
-    l1_small_size: int = ttnn._ttnn.deprecated.device.DEFAULT_L1_SMALL_SIZE,
-    trace_region_size: int = ttnn._ttnn.deprecated.device.DEFAULT_TRACE_REGION_SIZE,
+def open_mesh_device(
+    mesh_shape: ttnn.MeshShape,
+    l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
+    trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
     num_command_queues: int = 1,
     dispatch_core_type: int = DispatchCoreType.WORKER,
+    offset: Tuple[int, int] = (0, 0),
+    physical_device_ids: List[int] = [],
 ):
     """
-    open_device_mesh(device_grid: ttnn.DeviceGrid, device_ids: int) -> ttnn.DeviceMesh:
+    Open a mesh device with the specified configuration.
 
-    Open a device with the given device_id. If the device is already open, return the existing device.
+    Args:
+        mesh_shape (ttnn.MeshShape): The shape of the mesh device.
+        l1_small_size (int, optional): Size of the L1 small memory. Defaults to ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE.
+        trace_region_size (int, optional): Size of the trace region. Defaults to ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE.
+        num_command_queues (int, optional): Number of command queues. Defaults to 1.
+        dispatch_core_type (int, optional): Type of dispatch core. Defaults to DispatchCoreType.WORKER.
+        offset (Tuple[int, int], optional): Offset in logical mesh coordinates for the mesh device. Defaults to (0, 0).
+
+    Returns:
+        ttnn._ttnn.multi_device.MeshDevice: The opened mesh device.
+
     """
-    assert len(device_ids) > 0
-
-    return ttnn._ttnn.multi_device.DeviceMesh(
-        device_grid=device_grid.as_tuple(),
-        device_ids=device_ids,
+    return ttnn._ttnn.multi_device.MeshDevice(
+        mesh_shape=mesh_shape.as_tuple(),
         l1_small_size=l1_small_size,
         trace_region_size=trace_region_size,
         num_command_queues=num_command_queues,
         dispatch_core_type=dispatch_core_type,
+        offset=offset,
+        physical_device_ids=physical_device_ids,
     )
 
 
-def close_device_mesh(device_mesh):
+def close_mesh_device(mesh_device):
     """
-    close_device_mesh(multi_device: ttnn.Multi) -> None:
+    close_mesh_device(multi_device: ttnn.Multi) -> None:
 
     Close the device and remove it from the device cache.
     """
-    return ttnn._ttnn.multi_device.close_device_mesh(device_mesh)
+    return ttnn._ttnn.multi_device.close_mesh_device(mesh_device)
 
 
 @contextlib.contextmanager
-def create_device_mesh(
-    device_grid: ttnn.DeviceGrid,
+def create_mesh_device(
+    mesh_shape: ttnn.MeshShape,
     device_ids: List[int],
-    l1_small_size: int = ttnn._ttnn.deprecated.device.DEFAULT_L1_SMALL_SIZE,
-    trace_region_size: int = ttnn._ttnn.deprecated.device.DEFAULT_TRACE_REGION_SIZE,
+    l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
+    trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
     num_command_queues: int = 1,
     dispatch_core_type: int = DispatchCoreType.WORKER,
 ):
     """
-    create_device_mesh(device_grid: ttnn.DeviceGrid, device_ids: List[int]) -> ttnn.DeviceMesh
+    create_mesh_device(mesh_shape: ttnn.MeshShape, device_ids: List[int]) -> ttnn.MeshDevice
 
     Context manager for opening and closing a device.
     """
-    device_mesh = open_device_mesh(
-        device_grid=device_grid,
+    mesh_device = open_mesh_device(
+        mesh_shape=mesh_shape,
         device_ids=device_ids,
         l1_small_size=l1_small_size,
         trace_region_size=trace_region_size,
@@ -188,24 +199,24 @@ def create_device_mesh(
         dispatch_core_type=dispatch_core_type,
     )
     try:
-        yield device_mesh
+        yield mesh_device
     finally:
-        close_device_mesh(device_mesh)
+        close_mesh_device(mesh_device)
 
 
-def synchronize_devices(devices: Union["ttnn.Device", "ttnn.DeviceMesh"], queue_id: Optional[int] = None) -> None:
+def synchronize_devices(devices: Union["ttnn.Device", "ttnn.MeshDevice"], queue_id: Optional[int] = None) -> None:
     """
-    synchronize_devices(devices: Union[ttnn.Device, ttnn.DeviceMesh], queue_id: Optional[int] = None) -> None:
+    synchronize_devices(devices: Union[ttnn.Device, ttnn.MeshDevice], queue_id: Optional[int] = None) -> None:
 
     Synchronize the devices with host by waiting for all operations to complete.
     If queue_id is provided then only the operations associated with that queue_id are waited for,
     otherwise operations for all command queues are waited on.
     """
     if isinstance(devices, ttnn.Device):
-        ttnn._ttnn.deprecated.device.Synchronize(devices, queue_id)
+        ttnn._ttnn.device.Synchronize(devices, queue_id)
     else:
         for device in devices.get_device_ids():
-            ttnn._ttnn.deprecated.device.Synchronize(devices.get_device(device), queue_id)
+            ttnn._ttnn.device.Synchronize(devices.get_device(device), queue_id)
 
 
 class TensorToMesh:
@@ -214,8 +225,8 @@ class TensorToMesh:
     You can also "Bring your own TensorToMesh" based on your custom mapping.
     """
 
-    def __init__(self, device_mesh):
-        self.device_mesh = device_mesh
+    def __init__(self, mesh_device):
+        self.mesh_device = mesh_device
 
     def map(self, tensor: "torch.Tensor"):
         raise NotImplementedError("Subclasses must implement this method")
@@ -238,14 +249,14 @@ class MeshToTensor:
 
 
 class ShardTensorToMesh(TensorToMesh):
-    def __init__(self, device_mesh, dim):
-        super().__init__(device_mesh)
+    def __init__(self, mesh_device, dim):
+        super().__init__(mesh_device)
         self.shard_dim = dim
 
     def map(self, tensor: "torch.Tensor") -> Dict[int, ttnn.Tensor]:
         import torch
 
-        sliced_tensors = torch.chunk(tensor, self.device_mesh.get_num_devices(), dim=self.shard_dim)
+        sliced_tensors = torch.chunk(tensor, self.mesh_device.get_num_devices(), dim=self.shard_dim)
         return list(sliced_tensors)
 
     def config(self):
@@ -263,12 +274,12 @@ class ShardTensor2dMesh(TensorToMesh):
     allowing for efficient parallel processing in distributed computing environments.
     """
 
-    def __init__(self, device_mesh: DeviceMesh, mesh_shape: Tuple[int, int], dims: Tuple[Optional[int], Optional[int]]):
+    def __init__(self, mesh_device: MeshDevice, mesh_shape: Tuple[int, int], dims: Tuple[Optional[int], Optional[int]]):
         """
         Initialize the ShardTensor2dMesh.
 
         Args:
-            device_mesh: The target device mesh for distributing the tensor.
+            mesh_device: The target device mesh for distributing the tensor.
             mesh_shape: The shape of the 2D mesh as (rows, cols).
             dims: The dimensions to shard along, specified as (row_dim, col_dim).
 
@@ -288,12 +299,12 @@ class ShardTensor2dMesh(TensorToMesh):
         3. dims=(None, None):
            - Fully replicate the tensor across all devices
         """
-        super().__init__(device_mesh)
+        super().__init__(mesh_device)
         self.mesh_shape: Tuple[int, int] = mesh_shape
         self.dims: Tuple[Optional[int], Optional[int]] = dims
 
-        device_mesh_rows, device_mesh_cols = self.device_mesh.shape
-        if mesh_shape[0] > device_mesh_rows or mesh_shape[1] > device_mesh_cols:
+        mesh_device_rows, mesh_device_cols = self.mesh_device.shape
+        if mesh_shape[0] > mesh_device_rows or mesh_shape[1] > mesh_device_cols:
             raise ValueError("ShardTensor2dMesh: Device mesh shape does not match the provided mesh shape.")
 
     def map(self, tensor: "torch.Tensor") -> List["torch.Tensor"]:
@@ -356,12 +367,12 @@ class ConcatMesh2dToTensor(MeshToTensor):
     sharded tensors from a 2D device mesh back into a single tensor.
     """
 
-    def __init__(self, device_mesh: DeviceMesh, mesh_shape: Tuple[int, int], dims: Tuple[int, int]):
+    def __init__(self, mesh_device: MeshDevice, mesh_shape: Tuple[int, int], dims: Tuple[int, int]):
         """
         Initialize the ConcatMesh2dToTensor.
 
         Args:
-            device_mesh: The source device mesh containing the sharded tensors.
+            mesh_device: The source device mesh containing the sharded tensors.
             mesh_shape: The shape of the 2D mesh as (rows, cols).
             dims: A tuple of two integers specifying the dimensions along which to concatenate the tensors.
                   The first element (row_dim) indicates the dimension for concatenating tensors from different rows.
@@ -374,7 +385,7 @@ class ConcatMesh2dToTensor(MeshToTensor):
         Raises:
             ValueError: If either dimension in 'dims' is None or if both dimensions are the same.
         """
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
         self.mesh_shape = mesh_shape
         self.dims = dims
         if self.dims[0] == self.dims[1]:
@@ -395,55 +406,97 @@ class ConcatMesh2dToTensor(MeshToTensor):
         """
         import torch
 
-        device_shards = [ttnn.to_torch(tt_input_tensor) for tt_input_tensor in ttnn.get_device_tensors(tensor)]
+        device_shards = [
+            ttnn.to_torch(tt_input_tensor, mesh_composer=None) for tt_input_tensor in ttnn.get_device_tensors(tensor)
+        ]
 
         rows, cols = self.mesh_shape
         row_dim, col_dim = self.dims
 
         # Reshape the list of shards into a 2D list representing the device mesh
-        device_grid = [device_shards[i : i + cols] for i in range(0, len(device_shards), cols)]
+        mesh_shape = [device_shards[i : i + cols] for i in range(0, len(device_shards), cols)]
 
         # Concatenate along columns first (within each row)
-        row_concatenated = [torch.cat(row, dim=col_dim) for row in device_grid]
+        row_concatenated = [torch.cat(row, dim=col_dim) for row in mesh_shape]
 
         # Then concatenate the resulting tensors along rows
         return torch.cat(row_concatenated, dim=row_dim)
 
 
 class ReplicateTensorToMesh(TensorToMesh):
-    def __init__(self, device_mesh: DeviceMesh):
-        super().__init__(device_mesh)
+    def __init__(self, mesh_device: MeshDevice):
+        super().__init__(mesh_device)
 
     def map(self, tensor: "torch.Tensor"):
-        return [tensor for i in range(self.device_mesh.get_num_devices())]
+        return [tensor for i in range(self.mesh_device.get_num_devices())]
 
     def config(self):
         return {
             "strategy": "replicate",
-            "replication_factor": str(self.device_mesh.get_num_devices()),
+            "replication_factor": str(self.mesh_device.get_num_devices()),
         }
 
 
 class ConcatMeshToTensor(MeshToTensor):
-    def __init__(self, device_mesh: DeviceMesh, dim: int):
+    def __init__(self, mesh_device: MeshDevice, dim: int):
         self.concat_dim = dim
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
 
     def compose(self, tensor: ttnn.Tensor) -> "torch.Tensor":
         import torch
 
         device_shards_converted_to_torch = [
-            ttnn.to_torch(tt_input_tensor) for tt_input_tensor in ttnn.get_device_tensors(tensor)
+            ttnn.to_torch(tt_input_tensor, mesh_composer=None) for tt_input_tensor in ttnn.get_device_tensors(tensor)
         ]
         return torch.cat(device_shards_converted_to_torch, dim=self.concat_dim)
 
 
 class ListMeshToTensor(MeshToTensor):
-    def __init__(self, device_mesh: DeviceMesh):
-        self.device_mesh = device_mesh
+    def __init__(self, mesh_device: MeshDevice):
+        self.mesh_device = mesh_device
 
     def compose(self, tensor: ttnn.Tensor) -> List["torch.Tensor"]:
-        return [ttnn.to_torch(tt_input_tensor) for tt_input_tensor in ttnn.get_device_tensors(tensor)]
+        return [
+            ttnn.to_torch(tt_input_tensor, mesh_composer=None) for tt_input_tensor in ttnn.get_device_tensors(tensor)
+        ]
+
+
+@contextlib.contextmanager
+def distribute(default: Union[TensorToMesh, MeshToTensor]):
+    """
+    Context manager to temporarily modify the behavior of ttnn.from_torch and ttnn.to_torch to use the specified
+    mesh_mapper or mesh_composer for tensor distribution and composition to/from MeshDevice.
+    Invocations of ttnn.from_torch(..) will use the mesh_mapper as defined by the default in ttnn.distribute.
+    Invocations of ttnn.to_torch(..) will use the mesh_composer as defined by the default in ttnn.distribute.
+
+    Args:
+        mesh_mapper_or_composer (Union[TensorToMesh, MeshToTensor]): An instance of either TensorToMesh or MeshToTensor
+            used to map tensors to a mesh or compose tensors from a mesh.
+
+    Example:
+        with distribute(ShardTensorToMesh(mesh_device, dim=3)):
+            # Code here will use the default mapper
+            result = ttnn.from_torch(torch_tensor)
+
+        is equivalent to:
+        result = ttnn.from_torch(torch_tensor, mesh_mapper=ShardTensorToMesh(mesh_device, dim=3))
+    """
+    _original_to_torch = ttnn.to_torch
+    _original_from_torch = ttnn.from_torch
+
+    try:
+        if isinstance(default, TensorToMesh):
+            ttnn.from_torch = functools.partial(_original_from_torch, mesh_mapper=default)
+        elif isinstance(default, MeshToTensor):
+            ttnn.to_torch = functools.partial(_original_to_torch, mesh_composer=default)
+        else:
+            raise ValueError("Argument must be an instance of either TensorToMesh or MeshToTensor.")
+        yield
+
+    finally:
+        # Restore the original functions
+        ttnn.from_torch = _original_from_torch
+        ttnn.to_torch = _original_to_torch
 
 
 __all__ = []

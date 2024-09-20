@@ -25,7 +25,7 @@ class TtFalconModelShared:
     @abstractmethod
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         num_layers,
@@ -39,7 +39,7 @@ class TtFalconModelShared:
 
         # NOTE: Once we make embeddings run on device, pass in state dict
         # instead of model itself
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
         self.state_dict = state_dict
         self.base_url = base_url
         self.config = config
@@ -47,7 +47,7 @@ class TtFalconModelShared:
         self.model_config = model_config
         self.num_layers = num_layers
         self.hidden_size = config.hidden_size
-        self.num_devices = device_mesh.get_num_devices()
+        self.num_devices = mesh_device.get_num_devices()
         self.ln_output_tensors_dict = {
             "final_layernorm": dict(),
             "mlp_layernorm": dict(),
@@ -56,7 +56,7 @@ class TtFalconModelShared:
 
         # Word Embeddings
         self.embeddings = TtFalconEmbeddings(
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             cache_path=tt_cache_path,
             model_config=model_config,
@@ -64,7 +64,7 @@ class TtFalconModelShared:
 
         if use_global_cos_sin_cache:
             global_cos_sin_cache = generate_cos_sin_cache(
-                device_mesh,
+                mesh_device,
                 config.hidden_size // config.num_attention_heads,
                 base_url,
                 max_position_embeddings,
@@ -77,7 +77,7 @@ class TtFalconModelShared:
         # stack all decoders
         self.layers = [
             TtFalconDecoderLayer(
-                device_mesh=device_mesh,
+                mesh_device=mesh_device,
                 state_dict=state_dict,
                 base_url=f"{base_url}.h",
                 layer_num=layer_num,
@@ -105,9 +105,9 @@ class TtFalconModelShared:
             tensor=self.state_dict[layernorm_weights_str],
             dtype=self.model_config["LN_F_WEIGHTS_DTYPE"],
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device_mesh,
+            device=mesh_device,
             memory_config=self.model_config["LN_F_WEIGHTS_MEMCFG"],
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(mesh_device),
             cache_file_name=layernorm_weights_path,
             preprocess=lambda x: x.reshape(1, 1, -1, 32),
         )
@@ -116,9 +116,9 @@ class TtFalconModelShared:
             tensor=self.state_dict[layernorm_bias_str],
             dtype=self.model_config["LN_F_BIAS_DTYPE"],
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device_mesh,
+            device=mesh_device,
             memory_config=self.model_config["LN_F_BIAS_MEMCFG"],
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(mesh_device),
             cache_file_name=layernorm_bias_path,
             preprocess=lambda x: x.reshape(1, 1, -1, 32),
         )
@@ -136,9 +136,9 @@ class TtFalconModelShared:
             tensor=attn_mask_bool,
             dtype=self.model_config["BFLOAT16_DTYPE"],
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=attention_mask_memconfig,
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             preprocess=lambda x: (x * -1e5),
         )
 
@@ -179,9 +179,9 @@ class TtFalconModelShared:
             tensor=input_ids,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
         )
 
         # Generate input and attention_mask ---------------------------------------------
@@ -202,7 +202,7 @@ class TtFalconModelShared:
                     sequence_size,
                     self.model_config["layernorm_params"]["slice_size"],
                     self.ln_output_tensors_dict,
-                    self.device_mesh,
+                    self.mesh_device,
                     self.hidden_size,
                     self.model_config["LN_MLP_OUTPUT_DTYPE"],
                 )
@@ -228,9 +228,9 @@ class TtFalconModelShared:
                 tensor=attention_mask_bool_padded,
                 dtype=self.model_config["BFLOAT16_DTYPE"],  # subsequent tilize op expects bfloat16 inputs
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device_mesh,
+                device=self.mesh_device,
                 memory_config=self.model_config["DEFAULT_MEMCFG"],
-                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
                 preprocess=lambda x: (x.transpose(0, 2) * -1e5).expand(1, 1, -1, -1),
             )
 
@@ -248,14 +248,14 @@ class TtFalconModelShared:
     @abstractmethod
     def __call__(
         self,
-        input_ids: ttnn.experimental.tensor.Tensor,
+        input_ids: ttnn.Tensor,
         llm_mode: str,
-        attention_mask: ttnn.experimental.tensor.Tensor = None,
+        attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> ttnn.experimental.tensor.Tensor:
+    ) -> ttnn.Tensor:
         input_embeddings = self.embeddings(input_ids)
 
         if llm_mode == "prefill":
@@ -283,14 +283,14 @@ class TtFalconModelShared:
 
     def fwd_prefill(
         self,
-        input_embeddings: ttnn.experimental.tensor.Tensor,
+        input_embeddings: ttnn.Tensor,
         llm_mode: str,
-        attention_mask: ttnn.experimental.tensor.Tensor = None,
+        attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> ttnn.experimental.tensor.Tensor:
+    ) -> ttnn.Tensor:
         layer_output = input_embeddings
         presents = ()
         for idx, layer in enumerate(self.layers):
@@ -341,14 +341,14 @@ class TtFalconModelShared:
 
     def fwd_decode(
         self,
-        input_embeddings: ttnn.experimental.tensor.Tensor,
+        input_embeddings: ttnn.Tensor,
         llm_mode: str,
-        attention_mask: ttnn.experimental.tensor.Tensor = None,
+        attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> ttnn.experimental.tensor.Tensor:
+    ) -> ttnn.Tensor:
         layer_output = input_embeddings
         presents = ()
         for idx, layer in enumerate(self.layers):
@@ -396,7 +396,7 @@ class TtFalconModelShared:
 class TtFalconModel(TtFalconModelShared):
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         num_layers,
@@ -407,7 +407,7 @@ class TtFalconModel(TtFalconModelShared):
         use_global_cos_sin_cache,
     ):
         super().__init__(
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             base_url=base_url,
             num_layers=num_layers,
@@ -420,14 +420,14 @@ class TtFalconModel(TtFalconModelShared):
 
     def __call__(
         self,
-        input_ids: ttnn.experimental.tensor.Tensor,
+        input_ids: ttnn.Tensor,
         llm_mode: str,
-        attention_mask: ttnn.experimental.tensor.Tensor = None,
+        attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> ttnn.experimental.tensor.Tensor:
+    ) -> ttnn.Tensor:
         hidden_states, presents = super().__call__(
             input_ids=input_ids,
             llm_mode=llm_mode,

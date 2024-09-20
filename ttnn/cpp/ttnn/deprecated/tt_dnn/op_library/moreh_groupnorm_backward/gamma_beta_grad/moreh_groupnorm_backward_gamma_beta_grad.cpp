@@ -14,7 +14,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm_backward/moreh_groupnorm_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -32,6 +32,7 @@ operation::ProgramWithOptionalOutputTensors moreh_groupnorm_backward_gamma_beta_
     uint32_t num_groups,
     const std::optional<const Tensor> gamma_grad,
     const std::optional<const Tensor> beta_grad) {
+    using namespace tt::constants;
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -86,9 +87,9 @@ operation::ProgramWithOptionalOutputTensors moreh_groupnorm_backward_gamma_beta_
          num_channels_per_core_group_1,
          num_channels_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_channels);
 
-    log_debug(LogTest, fmt::format("num_cores_to_be_used: {}", num_cores_to_be_used).c_str());
-    log_debug(LogTest, fmt::format("num_channels_per_core_group_1: {}", num_channels_per_core_group_1).c_str());
-    log_debug(LogTest, fmt::format("num_channels_per_core_group_2: {}", num_channels_per_core_group_2).c_str());
+    log_debug(LogTest, "num_cores_to_be_used: {}", num_cores_to_be_used);
+    log_debug(LogTest, "num_channels_per_core_group_1: {}", num_channels_per_core_group_1);
+    log_debug(LogTest, "num_channels_per_core_group_2: {}", num_channels_per_core_group_2);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup

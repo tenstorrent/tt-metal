@@ -4,7 +4,6 @@
 
 import torch
 import pytest
-
 import ttnn
 from loguru import logger
 from models.utility_functions import nearest_32, pad_by_zero
@@ -26,10 +25,8 @@ def run_test_update_cache_decode(
     # Input is sharded
     compute_grid_size = device.compute_with_storage_grid_size()
     num_cores = num_users
-    shard_grid = ttnn.experimental.tensor.CoreRangeSet(
-        ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
-    )
-    input_shard_spec = ttnn.experimental.tensor.ShardSpec(
+    shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+    input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
             xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
@@ -38,9 +35,7 @@ def run_test_update_cache_decode(
         ttnn.ShardOrientation.ROW_MAJOR,
         False,
     )
-    input_mem_config = ttnn.experimental.tensor.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.experimental.tensor.BufferType.L1, input_shard_spec
-    )
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
     xt = xt.to(device, input_mem_config)
 
     # Create arbitrary update indices
@@ -111,10 +106,8 @@ def test_update_cache_decode(
         # Input is sharded
         compute_grid_size = device.compute_with_storage_grid_size()
         num_cores = num_users
-        shard_grid = ttnn.experimental.tensor.CoreRangeSet(
-            ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
-        )
-        input_shard_spec = ttnn.experimental.tensor.ShardSpec(
+        shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+        input_shard_spec = ttnn.ShardSpec(
             shard_grid,
             [
                 xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
@@ -123,8 +116,8 @@ def test_update_cache_decode(
             ttnn.ShardOrientation.ROW_MAJOR,
             False,
         )
-        input_mem_config = ttnn.experimental.tensor.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.experimental.tensor.BufferType.L1, input_shard_spec
+        input_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
         )
         sharded_low = xt.to(device, input_mem_config)
         sharded_reserved = ttnn.Tensor(x_pad, input_dtype).to(ttnn.TILE_LAYOUT).to(device, input_mem_config)
@@ -186,10 +179,8 @@ def test_update_cache_decode_program_cache(
         # Input is sharded
         compute_grid_size = device.compute_with_storage_grid_size()
         num_cores = num_users
-        shard_grid = ttnn.experimental.tensor.CoreRangeSet(
-            ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
-        )
-        input_shard_spec = ttnn.experimental.tensor.ShardSpec(
+        shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+        input_shard_spec = ttnn.ShardSpec(
             shard_grid,
             [
                 xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
@@ -198,8 +189,8 @@ def test_update_cache_decode_program_cache(
             ttnn.ShardOrientation.ROW_MAJOR,
             False,
         )
-        input_mem_config = ttnn.experimental.tensor.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.experimental.tensor.BufferType.L1, input_shard_spec
+        input_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
         )
         sharded_low = xt.to(device, input_mem_config)
         dummy_tensors.append(sharded_low)
@@ -230,10 +221,8 @@ def run_test_tensor_index_update_cache_decode(
     # Input is sharded
     compute_grid_size = device.compute_with_storage_grid_size()
     num_cores = num_users
-    shard_grid = ttnn.experimental.tensor.CoreRangeSet(
-        ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
-    )
-    input_shard_spec = ttnn.experimental.tensor.ShardSpec(
+    shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+    input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
             xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
@@ -242,15 +231,13 @@ def run_test_tensor_index_update_cache_decode(
         ttnn.ShardOrientation.ROW_MAJOR,
         False,
     )
-    input_mem_config = ttnn.experimental.tensor.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.experimental.tensor.BufferType.L1, input_shard_spec
-    )
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
     xt = xt.to(device, input_mem_config)
 
     # Create arbitrary update indices
     cache_idxs = [cache_idx + i * 17 for i in range(num_users)]
     logger.info(f"cache_idxs: {cache_idxs}")
-    cache_idxs_tt = ttnn.Tensor(torch.tensor(cache_idxs), ttnn.experimental.tensor.DataType.INT32).to(device)
+    cache_idxs_tt = ttnn.Tensor(torch.tensor(cache_idxs), ttnn.int32).to(device)
 
     cachett = ttnn.experimental.paged_update_cache(cachett, xt, update_idxs_tensor=cache_idxs_tt)
 
@@ -372,10 +359,8 @@ def run_test_paged_update_cache_decode(
     # Input is sharded
     compute_grid_size = device.compute_with_storage_grid_size()
     num_cores = num_users
-    shard_grid = ttnn.experimental.tensor.CoreRangeSet(
-        ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
-    )
-    input_shard_spec = ttnn.experimental.tensor.ShardSpec(
+    shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+    input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
             xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
@@ -384,9 +369,7 @@ def run_test_paged_update_cache_decode(
         ttnn.ShardOrientation.ROW_MAJOR,
         False,
     )
-    input_mem_config = ttnn.experimental.tensor.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.experimental.tensor.BufferType.L1, input_shard_spec
-    )
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
     xt = xt.to(device, input_mem_config)
 
     # Create arbitrary update indices
@@ -394,8 +377,8 @@ def run_test_paged_update_cache_decode(
     # Arbitrary user is "dropped", to test skipping in kernel
     cache_idxs[num_users // 2] = -1
     # logger.info(f"cache_idxs: {cache_idxs}")
-    cache_idxs_tt = ttnn.Tensor(torch.tensor(cache_idxs), ttnn.experimental.tensor.DataType.INT32).to(device)
-    page_table_tt = ttnn.Tensor(page_table, ttnn.experimental.tensor.DataType.INT32).to(device)
+    cache_idxs_tt = ttnn.Tensor(torch.tensor(cache_idxs), ttnn.int32).to(device)
+    page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
 
     cachett = ttnn.experimental.paged_update_cache(
         cachett, xt, update_idxs_tensor=cache_idxs_tt, page_table=page_table_tt
@@ -504,10 +487,8 @@ def test_paged_update_cache_decode_program_caching(
         # Input is sharded
         compute_grid_size = device.compute_with_storage_grid_size()
         num_cores = num_users
-        shard_grid = ttnn.experimental.tensor.CoreRangeSet(
-            ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
-        )
-        input_shard_spec = ttnn.experimental.tensor.ShardSpec(
+        shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+        input_shard_spec = ttnn.ShardSpec(
             shard_grid,
             [
                 xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
@@ -516,8 +497,8 @@ def test_paged_update_cache_decode_program_caching(
             ttnn.ShardOrientation.ROW_MAJOR,
             False,
         )
-        input_mem_config = ttnn.experimental.tensor.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.experimental.tensor.BufferType.L1, input_shard_spec
+        input_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
         )
         sharded_low = xt.to(device, input_mem_config)
         dummy_tensors.append(sharded_low)
@@ -572,7 +553,7 @@ def run_test_paged_fill_cache(
     assert torch.allclose(paged_cache_back, cache)
 
     cachett = ttnn.Tensor(shuffled_page_cache, cache_dtype).to(ttnn.TILE_LAYOUT).to(device)
-    page_table_tt = ttnn.Tensor(page_table, ttnn.experimental.tensor.DataType.INT32).to(device)
+    page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
 
     # Update cache for every user
     for i in range(num_users):

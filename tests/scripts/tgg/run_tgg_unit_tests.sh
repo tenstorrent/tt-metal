@@ -1,5 +1,4 @@
-
-#/bin/bash
+#!/bin/bash
 set -eo pipefail
 
 run_tgg_tests() {
@@ -8,6 +7,7 @@ run_tgg_tests() {
 
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_galaxy --gtest_filter="GalaxyFixture.*:TGGFixture.*"
   ./build/test/tt_metal/unit_tests_galaxy --gtest_filter="GalaxyFixture.*:TGGFixture.*"
+  pytest -s tests/ttnn/multichip_unit_tests/test_mesh_device_TGG.py
 }
 
 main() {

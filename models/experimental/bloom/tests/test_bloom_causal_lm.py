@@ -12,10 +12,10 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 
 from loguru import logger
 import models.experimental.bloom.tt.bloom_causal_lm as bloom_causal_lm
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_blackhole
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_bloom_causal_lm(device):
     hugging_bloom_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
     hugging_bloom_reference_model.eval()

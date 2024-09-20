@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rotary_embedding_program_factory.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 // We pull RotaryEmbedding from it to get token_idx from an operation
 // this is a circulas dependency and should be fixed
@@ -25,7 +25,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     const Tensor &sin,
     Tensor &output,
     std::optional<uint32_t> token_idx,
-    DeviceComputeKernelConfig compute_kernel_config
+    ttnn::DeviceComputeKernelConfig compute_kernel_config
 ) {
     Program program{};
 
@@ -59,16 +59,16 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
 
     std::visit([&](auto&& compute_kernel_config) {
         using T = std::decay_t<decltype(compute_kernel_config)>;
-        if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+        if constexpr (std::is_same_v<T, ttnn::GrayskullComputeKernelConfig>) {
             TT_ASSERT(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
             math_fidelity = compute_kernel_config.math_fidelity;
             fp32_dest_acc_en = false;
-        } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+        } else if constexpr (std::is_same_v<T, ttnn::WormholeComputeKernelConfig>) {
             TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
             math_fidelity = compute_kernel_config.math_fidelity;
             fp32_dest_acc_en = input_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
         } else {
-            TT_FATAL("arch not supported");
+            TT_THROW("arch not supported");
         }
 
     }, compute_kernel_config);
@@ -107,7 +107,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
         row_major = true;
         std::tie(
             num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2) =
-            split_work_to_cores(compute_with_storage_grid_size, num_rows, row_major);
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows, row_major);
         num_input_tiles = 2 * Wt;
         num_output_tiles = num_input_tiles;
     }

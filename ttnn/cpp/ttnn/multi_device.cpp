@@ -8,16 +8,16 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "tt_metal/impl/device/device_mesh.hpp"
+#include "tt_metal/impl/device/mesh_device.hpp"
 
 namespace ttnn::multi_device {
 
-DeviceMesh open_device_mesh(const DeviceGrid& device_grid, const DeviceIds& device_ids, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues, DispatchCoreType dispatch_core_type) {
-    return DeviceMesh(device_grid, device_ids, l1_small_size, trace_region_size, num_command_queues, dispatch_core_type);
+std::shared_ptr<MeshDevice> open_mesh_device(const MeshShape& mesh_shape, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues, DispatchCoreType dispatch_core_type, const std::pair<size_t, size_t>& offset) {
+    return MeshDevice::create(mesh_shape, l1_small_size, trace_region_size, num_command_queues, dispatch_core_type, offset);
 }
 
-void close_device_mesh(DeviceMesh &multi_device) {
-    multi_device.close_devices();
+void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) {
+    mesh_device->close_devices();
 }
 
 std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor) {
@@ -57,7 +57,7 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards)
     // we want to use MultiDeviceHostStorage or MultiDeviceStorage
     StorageType storage_type = tensor_shards.at(0).storage_type();
     if (storage_type == StorageType::OWNED) {
-        std::vector<tt::tt_metal::Shape> shapes;
+        std::vector<tt::tt_metal::LegacyShape> shapes;
         std::vector<OwnedBuffer> host_owned_buffers;
         for (const auto &shard : tensor_shards) {
             host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
@@ -67,7 +67,7 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards)
         return Tensor(std::move(storage), tensor_shards.at(0).get_legacy_shape(), tensor_shards.at(0).get_dtype(),  tensor_shards.at(0).get_layout());
     } else {
         std::vector<int> ordered_device_ids;
-        std::unordered_map<int, tt::tt_metal::Shape> shapes;
+        std::unordered_map<int, tt::tt_metal::LegacyShape> shapes;
         std::unordered_map<int, DeviceBuffer> device_buffers;
         for (const auto &shard : tensor_shards) {
             Device* device = std::get<DeviceStorage>(shard.get_storage()).buffer->device();

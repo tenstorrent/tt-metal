@@ -4,8 +4,6 @@
 
 from typing import Tuple, Union, List
 
-import tt_lib as ttl
-
 import ttnn
 import ttnn.decorators
 
@@ -82,7 +80,7 @@ def _golden_function(input_tensor, dims, **_):
     return torch.permute(input_tensor, dims)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.data_movement.permute, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.permute, golden_function=_golden_function)
 
 
 def _golden_function(tensors, dim=0, **_):

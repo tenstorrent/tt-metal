@@ -7,7 +7,7 @@ from loguru import logger
 import torch
 import pytest
 from models.utility_functions import (
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
     skip_for_grayskull,
     is_grayskull,
     is_wormhole_b0,
@@ -51,7 +51,7 @@ def run_conv(
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_length]
     conv_weight_shape = [output_channels, input_channels // groups, kernel_size]
-    conv_bias_shape = [1, 1, output_channels]
+    conv_bias_shape = [1, 1, 1, output_channels]
     torch_input_tensor_ncl = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
     torch_input_tensor = torch.permute(torch_input_tensor_ncl, (0, 2, 1))
     torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
@@ -82,7 +82,9 @@ def run_conv(
         dtype=output_dtype,
         weights_dtype=weights_dtype,
         math_fidelity=math_fidelity,
-        height_sharding=use_1d_systolic_array,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        if use_1d_systolic_array
+        else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         input_channels_alignment=(16 if use_shallow_conv_variant else 32),
         deallocate_activation=deallocate_activation,
         fp32_dest_acc_enabled=fp32_accum,
@@ -116,7 +118,7 @@ def run_conv(
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
-    torch_output_tensor = ttnn.to_torch(tt_output_tensor)
+    torch_output_tensor = torch.Tensor(ttnn.to_torch(tt_output_tensor))
 
     # torch_output_tensor is in row major layout and NLC shape
     # NLC to NCL

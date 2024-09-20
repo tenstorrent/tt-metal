@@ -31,9 +31,9 @@ if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs
 @pytest.mark.parametrize(
     "kv_cache_len, expected_compile_time, expected_inference_time",
     (
-        (32, 6, 0.185),
-        (128, 6, 0.185),
-        (1024, 6, 0.185),
+        (32, 6, 0.09),
+        (128, 6, 0.09),
+        (1024, 11, 0.09),
     ),
 )
 def test_llama_model_perf(
@@ -101,12 +101,12 @@ def test_llama_model_perf(
     profiler.print()
     compile_and_iter_time = profiler.get("model_run_for_inference_0")
 
-    ttnn.experimental.device.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(device)
+    ttnn.synchronize_device(device)
 
     if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
         signpost("Model perf run")
 
-    profiler.clear()
     profiler.start(f"end_to_end_inference")
     run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos, generation_length)
     profiler.end(f"end_to_end_inference")
@@ -158,6 +158,9 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
 
         # Convert ttnn tensor to torch tensor
         profiler.start(f"result_wait_for_inference_{i}")
+        tt_out = ttnn.untilize(
+            tt_out, use_multicore=False
+        )  # multi-core OOMs (https://github.com/tenstorrent/tt-metal/issues/9022)
         tt_output_torch = ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
 
         profiler.end(f"model_run_for_inference_{i}")

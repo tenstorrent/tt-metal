@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/move/device/move_device_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
@@ -69,7 +69,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
     tt::tt_metal::Device *device = output.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_pages);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages);
 
     const auto num_dram_banks = device->num_banks(BufferType::DRAM);
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
@@ -129,7 +129,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
             num_pages_per_core = num_pages_per_core_group_2;
         } else {
-            TT_FATAL(false, "Core not in specified core ranges");
+            TT_THROW("Core not in specified core ranges");
         }
 
         bool is_controller = (i == 0);
@@ -199,7 +199,7 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
     auto input_layout = input.get_layout();
     TT_FATAL(
         input_layout == output.get_layout() && input_dtype == output.get_dtype() &&
-        shard_shape == output.shard_spec().value().shape && input_shape == output.get_legacy_shape());
+        shard_shape == output.shard_spec().value().shape && input_shape == output.get_legacy_shape(), "Error");
     const uint32_t src_cb_sharded = tt::CB::c_in0;
     const uint32_t dst_cb_sharded = tt::CB::c_in1;
     uint32_t tile_size_bytes = tile_size(cb_data_format);
