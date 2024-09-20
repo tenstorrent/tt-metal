@@ -27,7 +27,7 @@ from models.utility_functions import skip_for_grayskull, divup
 
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 68864, "trace_region_size": 423936}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 68864, "trace_region_size": 444416}], indirect=True)
 @pytest.mark.parametrize(
     "batch, groups, iterations",
     ((2, 1, 16),),
@@ -83,7 +83,7 @@ def test_unet_trace(
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 68864, "trace_region_size": 423936, "num_command_queues": 2}], indirect=True
+    "device_params", [{"l1_small_size": 68864, "trace_region_size": 442368, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations",
@@ -202,7 +202,7 @@ def buffer_address(tensor):
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 68864, "trace_region_size": 423936, "num_command_queues": 2}], indirect=True
+    "device_params", [{"l1_small_size": 68864, "trace_region_size": 442368, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations",
