@@ -79,8 +79,14 @@ runs:
           mkdir -p generated
           rm -rf tt_metal tt_eager
           ${{ inputs.run_args }}
-          chmod  -R $HOST_UID:$HOST_GID generated
-          chmod ugo+rwx -R generated
           cp -r generated/* /github_generated
-          ls -hal generated
           ls -hal /github_generated
+    - name: Delete in case generated files that were copied so that we don't have permissions issues
+      if: ${{ always() }}
+      shell: bash
+      run: |
+        if [ -d "generated" ]; then
+          chmod -R ${{ steps.prepare-for-artifacts.outputs.host-uid }}:${{ steps.prepare-for-artifacts.outputs.host-gid }} generated/
+          chmod u+w -R generated
+          ls -hal generated
+        fi
