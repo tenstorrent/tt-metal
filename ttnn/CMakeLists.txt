@@ -576,10 +576,11 @@ function(add_ttnn_sublibrary SUBLIBRARY_NAME)
     target_link_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
     use_precompiled_header(${SUBLIBRARY_NAME})
     set(PRECOMPILED_HEADER_TARGET "${PRECOMPILED_HEADER_TARGET}" PARENT_SCOPE)
-    target_compile_options(${SUBLIBRARY_NAME} PRIVATE -MP -Wno-int-to-pointer-cast -fno-var-tracking)
+    target_compile_options(${SUBLIBRARY_NAME} PRIVATE -MP -Wno-int-to-pointer-cast -fno-var-tracking -ffunction-sections)
     set_target_properties(${SUBLIBRARY_NAME} PROPERTIES  DEFINE_SYMBOL "")
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_compile_definitions(${SUBLIBRARY_NAME} PRIVATE DISABLE_NAMESPACE_STATIC_ASSERT)
+        target_link_options(${SUBLIBRARY_NAME} PRIVATE "-Wl,--gc-sections" "-Wl,--no-as-needed")
     endif()
     install(TARGETS ${SUBLIBRARY_NAME}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -607,6 +608,7 @@ target_compile_options(ttnn PUBLIC -MP -Wno-int-to-pointer-cast -fno-var-trackin
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_definitions(ttnn PUBLIC DISABLE_NAMESPACE_STATIC_ASSERT)
+    target_link_options(ttnn PUBLIC  "-Wl,--gc-sections" "-Wl,--no-as-needed")
 endif()
 
 target_include_directories(ttnn PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
