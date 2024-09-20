@@ -474,7 +474,7 @@ Pooling
    :template: function.rst
 
    ttnn.global_avg_pool2d
-   ttnn.MaxPool2d
+   ttnn.max_pool2d
 
 Vision
 ========

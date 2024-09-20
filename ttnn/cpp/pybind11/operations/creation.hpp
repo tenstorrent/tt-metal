@@ -20,7 +20,8 @@ namespace detail {
 
 template <typename creation_operation_t>
 void bind_full_operation(py::module& module, const creation_operation_t& operation) {
-    auto doc = R"doc(
+    auto doc = fmt::format(
+        R"doc(
         Creates a tensor of the specified shape and fills it with the specified value.
 
         Args:
@@ -33,7 +34,8 @@ void bind_full_operation(py::module& module, const creation_operation_t& operati
 
         Returns:
             ttnn.Tensor: A filled tensor.
-        )doc";
+        )doc",
+        operation.base_name());
 
     bind_registered_operation(
         module,
@@ -82,7 +84,7 @@ void bind_full_operation(py::module& module, const creation_operation_t& operati
 }
 
 template <typename creation_operation_t>
-void bind_full_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation, float value) {
+void bind_full_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation) {
     auto doc = fmt::format(
         R"doc(
         Creates a tensor with the specified shape and fills it with the value of {0}.
@@ -97,7 +99,7 @@ void bind_full_operation_with_hard_coded_value(py::module& module, const creatio
         Returns:
             ttnn.Tensor: A filled tensor.
         )doc",
-        value);
+        operation.base_name());
 
     bind_registered_operation(
         module,
@@ -121,7 +123,8 @@ void bind_full_operation_with_hard_coded_value(py::module& module, const creatio
 
 template <typename creation_operation_t>
 void bind_full_like_operation(py::module& module, const creation_operation_t& operation) {
-    auto doc = R"doc(
+    auto doc = fmt::format(
+        R"doc(
         Creates a tensor of the same shape as the input tensor and fills it with the specified value.
 
         Args:
@@ -134,7 +137,8 @@ void bind_full_like_operation(py::module& module, const creation_operation_t& op
 
         Returns:
             ttnn.Tensor: A filled tensor.
-        )doc";
+        )doc",
+        operation.base_name());
 
     bind_registered_operation(
         module,
@@ -183,7 +187,7 @@ void bind_full_like_operation(py::module& module, const creation_operation_t& op
 }
 
 template <typename creation_operation_t>
-void bind_full_like_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation, float value) {
+void bind_full_like_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation) {
     auto doc = fmt::format(
         R"doc(
         Creates a tensor of the same shape as the input tensor and fills it with the value of {0}.
@@ -198,7 +202,7 @@ void bind_full_like_operation_with_hard_coded_value(py::module& module, const cr
         Returns:
             ttnn.Tensor: A filled tensor.
         )doc",
-        value);
+        operation.base_name());
 
     bind_registered_operation(
         module,
@@ -333,15 +337,6 @@ void py_module(py::module& module) {
     detail::bind_full_like_operation(module, ttnn::full_like);
     detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::zeros_like);
     detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::ones_like);
-
-    // detail::bind_full_operation_with_hard_coded_value(module, ttnn::zeros, 0.0);
-    // detail::bind_full_operation_with_hard_coded_value(module, ttnn::ones, 1.0);
-    // detail::bind_full_operation_with_hard_coded_value(module, ttnn::empty, 0.0);
-
-    // detail::bind_full_like_operation(module, ttnn::full_like);
-    // detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::zeros_like, 0.0);
-    // detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::ones_like, 1.0);
-    // detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::empty_like, 0.0);
 
     detail::bind_arange_operation(module, ttnn::arange);
 

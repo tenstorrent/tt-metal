@@ -154,28 +154,29 @@ void py_module(py::module& module) {
 
         The behavior depends on the dimensionality of the tensors as follows:
 
-        - If both arguments are 2-dimensional, the matrix-matrix product is returned.
-        - If the first argument is 1-dimensional and the second argument is 2-dimensional,
-        a 1 is prepended to its dimension for the purpose of the matrix multiply.
-        After the matrix multiply, the prepended dimension is removed.
-        - If the first argument is 2-dimensional and the second argument is 1-dimensional,
-        the matrix-vector product is returned in 2 dimensions.
-        - If both arguments are at least 1-dimensional and at least one argument is
-        N-dimensional (where N > 2), then a batched matrix multiply is returned.  If the first
-        argument is 1-dimensional, a 1 is prepended to its dimension for the purpose of the
-        batched matrix multiply.  If the second argument is 1-dimensional, a
-        1 is appended to its dimension for the purpose of the batched matrix multiple.
+            - If both arguments are 2-dimensional, the matrix-matrix product is returned.
+            - If the first argument is 1-dimensional and the second argument is 2-dimensional,
+                a 1 is prepended to its dimension for the purpose of the matrix multiply.
+            - After the matrix multiply, the prepended dimension is removed.
+            - If the first argument is 2-dimensional and the second argument is 1-dimensional,
+                the matrix-vector product is returned in 2 dimensions.
+            - If both arguments are at least 1-dimensional and at least one argument is
+                N-dimensional (where N > 2), then a batched matrix multiply is returned.  If the first
+                argument is 1-dimensional, a 1 is prepended to its dimension for the purpose of the
+                batched matrix multiply.  If the second argument is 1-dimensional, a
+                1 is appended to its dimension for the purpose of the batched matrix multiple.
+
         The non-matrix (i.e. batch) dimensions must be broadcastable.
+
         The behaviour is the same as PyTorch, with the exception of two cases of batch dimensions:
 
             - The two batch dimensions are swapped. E.g. :math:`(j \times 1)` and :math:`(1 \times j)`
-                or :math:`(1 \times j)` and :math:`(j \times 1)`
+                or :math:`(1 \times j)` and :math:`(j \times 1)`.
             - When a batch dimension is implicitly extended then the two patch dimensions are swapped.
                 E.g.  :math:`(j \times 1)` and :math:`(j)` which is treated as
-                :math:`(j \times 1)` and :math:`(1 \times j)`
-
-        - In order to leverage sharded matmul implementations we can shard both :attr:`input_tensor_a` and :attr:`input_tensor_b`. The sharding strategy used will be according
-        to the sharding strategy on the respective tensor. A sharded 1D matmul can be either HEIGHT or WIDTH sharded, 2D matmuls can be block sharded.
+                :math:`(j \times 1)` and :math:`(1 \times j)`.
+            - In order to leverage sharded matmul implementations we can shard both :attr:`input_tensor_a` and :attr:`input_tensor_b`. The sharding strategy used will be according
+                to the sharding strategy on the respective tensor. A sharded 1D matmul can be either HEIGHT or WIDTH sharded, 2D matmuls can be block sharded.
 
         Note that the broadcasting logic only looks at the batch dimensions when determining if the inputs
         are broadcastable, and not the matrix dimensions. For example, if :attr:`input_tensor_a` is a
@@ -191,7 +192,7 @@ void py_module(py::module& module) {
             input_tensor_b (ttnn.Tensor): the second tensor to be multiplied. Needs to be on the device.
 
         Keyword Args:
-            memory_config(ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using ttnn.DRAM_MEMORY_CONFIG
+            memory_config(ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using ttnn.DRAM_MEMORY_CONFIG.
             dtype (ttnn.DataType): the data type of the output tensor. Defaults to `None`.
             core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             program_config (ttnn.MatmulProgramConfig): the program configuration for the matmul operation. Defaults to `None`.

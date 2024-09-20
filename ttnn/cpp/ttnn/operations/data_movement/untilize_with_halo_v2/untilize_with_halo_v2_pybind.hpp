@@ -19,22 +19,22 @@ void bind_untilize_with_halo_v2(py::module& module) {
 
             Untilizes input tiled data to row major format and constructs halo'd output shards.
 
-            Args:
-                input_tensor (ttnn.Tensor): the input tensor.
-                padding_config (ttnn.Tensor): Padding config tensor.
-                local_config (ttnn.Tensor): Local config tensor.
-                remote_config (ttnn.Tensor): Remote config tensor.
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+            padding_config (ttnn.Tensor): Padding config tensor.
+            local_config (ttnn.Tensor): Local config tensor.
+            remote_config (ttnn.Tensor): Remote config tensor.
 
-            Keyword Args:
-                pad_val (int, optional): pad value.
-                ncores_nhw (int, optional): Number of cores per NHW..
-                max_out_nsticks_per_core (int, optional): Max output nsticks per core.
-                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-                remote_read (bool, optional): Remote read.  Defaults to `False`.
-                ncores_nhw (bool, optional): Transpose mcast.  Defaults to `False`.
-                queue_id (int, optional): command queue id. Defaults to `0`.
-            Returns:
-                ttnn.Tensor: the output tensor.
+        Keyword Args:
+            pad_val (int, optional): pad value.
+            ncores_nhw (int, optional): Number of cores per NHW..
+            max_out_nsticks_per_core (int, optional): Max output nsticks per core.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            remote_read (bool, optional): Remote read.  Defaults to `False`.
+            transpose_mcast (bool, optional): Transpose mcast.  Defaults to `False`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
+        Returns:
+            ttnn.Tensor: the output tensor.
 
         )doc";
 

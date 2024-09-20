@@ -156,19 +156,19 @@ void device_module(py::module& m_device) {
         py::arg("dispatch_core_type") = tt::tt_metal::DispatchCoreType::WORKER);
     m_device.def(
         "CreateDevices",
-<<<<<<< HEAD
         [](std::vector<int> device_ids, uint8_t num_command_queues, size_t l1_small_size, size_t trace_region_size, tt::tt_metal::DispatchCoreType dispatch_core_type) {
             return tt::tt_metal::detail::CreateDevices(device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_type);
-=======
-        [](std::vector<int> device_ids,
-           uint8_t num_hw_cqs,
-           size_t l1_small_size,
-           size_t trace_region_size,
-           tt::tt_metal::DispatchCoreType dispatch_core_type) {
-            return tt::tt_metal::detail::CreateDevices(
-                device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type);
         },
         R"doc(
+        Creates an instance of TT device.
+
+        +------------------+------------------------+---------------------+------------------------------+----------+
+        | Argument         | Description            | Data type           | Valid range                  | Required |
+        +==================+========================+=====================+==============================+==========+
+        | device_id        | Device index           | int                 |                              | Yes      |
+        +------------------+------------------------+---------------------+------------------------------+----------+
+    )doc",
+        py::arg("device_ids"),
         py::arg("num_command_queues") = 1,
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
@@ -279,7 +279,6 @@ void device_module(py::module& m_device) {
     m_device.def(
         "pad_to_tile_shape",
         [](const std::array<uint32_t, 4>& unpadded_shape,
-<<<<<<< HEAD
         bool pad_c = false,
         bool pad_n = false,
         bool pad_h = true,
@@ -288,38 +287,6 @@ void device_module(py::module& m_device) {
         });
 
     m_device.def("EnablePersistentKernelCache", &tt::tt_metal::detail::EnablePersistentKernelCache, R"doc(
-=======
-           bool pad_c = false,
-           bool pad_n = false,
-           bool pad_h = true,
-           bool pad_w = true) -> tt::tt_metal::Shape {
-            return ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-                unpadded_shape, pad_c, pad_n, pad_h, pad_w);
-        },
-        py::arg("unpadded_shape"),
-        py::arg("pad_c"),
-        py::arg("pad_n"),
-        py::arg("pad_h"),
-        py::arg("pad_w"),
-        R"doc(
-        Returns shape padded to tile shape.
-
-        Args:
-            unpadded_shape (ttnn.Shape): Shape to pad.
-            pad_c (bool): Whether to pad C dimension.
-            pad_n (bool): Whether to pad N dimension.
-            pad_h (bool): Whether to pad H dimension.
-            pad_w (bool): Whether to pad W dimension.
-
-        Returns:
-            ttnn.Shape: Padded shape.
-
-        Note:
-            This functionality is planned for deprecation in the future.
-        )doc");
-
-        m_device.def("EnablePersistentKernelCache", &tt::tt_metal::detail::EnablePersistentKernelCache, R"doc(
->>>>>>> #11531: Autogenerate rst stub files for ops, add summary table on API page.
         Enable kernel compilation cache to be persistent across runs. When this is called, kernels will not be compiled if the output binary path exists.
     )doc");
         m_device.def("DisablePersistentKernelCache", &tt::tt_metal::detail::DisablePersistentKernelCache, R"doc(
