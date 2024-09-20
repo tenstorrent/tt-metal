@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import random
 import ttnn
 from tests.sweep_framework.utils import gen_shapes
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
