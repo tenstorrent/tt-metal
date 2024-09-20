@@ -11,6 +11,8 @@ from models.utility_functions import torch_random
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
 
+random.seed(0)
+
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
@@ -39,7 +41,12 @@ def run(
     *,
     device,
 ) -> list:
-    torch_input_tensor_a = torch_random(input_shape, -100, 100, dtype=torch.float16)
+    data_seed = random.randint(0, 20000000)
+    torch.manual_seed(data_seed)
+
+    torch_input_tensor_a = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+    )(input_shape)
     torch_output_tensor = torch.nn.functional.relu(torch_input_tensor_a)
 
     input_tensor_a = ttnn.from_torch(

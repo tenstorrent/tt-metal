@@ -51,8 +51,12 @@ def run(
     *,
     device,
 ) -> list:
-    torch_input_tensor_a = torch_random(input_shape, -100, 100, dtype=torch.bfloat16)
-    torch_input_tensor_b = torch_random(input_shape, -100, 100, dtype=torch.bfloat16)
+    torch_input_tensor_a = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+    )(input_shape)
+    torch_input_tensor_b = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
+    )(input_shape)
 
     torch_output_tensor = torch.sub(torch_input_tensor_a, torch_input_tensor_b)
 

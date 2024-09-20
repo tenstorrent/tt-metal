@@ -52,17 +52,9 @@ def run(
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
-    torch_input_tensor_a = torch_random(input_shape, -100, 100, dtype=torch.float32)
-
-    if input_a_dtype == ttnn.bfloat16:
-        torch_input_tensor_a = torch_input_tensor_a.to(torch.bfloat16)
-
-    elif input_a_dtype == ttnn.bfloat8_b:
-        tt_tensor = ttnn.from_torch(
-            torch_input_tensor_a, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=None, memory_config=None
-        )
-
-        torch_input_tensor_a = ttnn.to_torch(tt_tensor)
+    torch_input_tensor_a = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+    )(input_shape)
 
     low, high = gen_low_high_scalars()
 

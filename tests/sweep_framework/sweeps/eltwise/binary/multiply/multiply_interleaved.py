@@ -55,28 +55,12 @@ def run(
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
-    torch_input_tensor_a = torch_random(input_shape, -100, 100, dtype=torch.float32)
-    torch_input_tensor_b = torch_random(input_shape, -100, 100, dtype=torch.float32)
-
-    if input_a_dtype == ttnn.bfloat16:
-        torch_input_tensor_a = torch_input_tensor_a.to(torch.bfloat16)
-
-    elif input_a_dtype == ttnn.bfloat8_b:
-        tt_tensor = ttnn.from_torch(
-            torch_input_tensor_a, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=None, memory_config=None
-        )
-
-        torch_input_tensor_a = ttnn.to_torch(tt_tensor)
-
-    if input_b_dtype == ttnn.bfloat16:
-        torch_input_tensor_b = torch_input_tensor_b.to(torch.bfloat16)
-
-    elif input_b_dtype == ttnn.bfloat8_b:
-        tt_tensor = ttnn.from_torch(
-            torch_input_tensor_b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=None, memory_config=None
-        )
-
-        torch_input_tensor_b = ttnn.to_torch(tt_tensor)
+    torch_input_tensor_a = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+    )(input_shape)
+    torch_input_tensor_b = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
+    )(input_shape)
 
     torch_output_tensor = torch.mul(torch_input_tensor_a, torch_input_tensor_b)
 
