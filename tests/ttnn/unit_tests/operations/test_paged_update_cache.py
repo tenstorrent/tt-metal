@@ -6,9 +6,8 @@ import torch
 import pytest
 import ttnn
 from loguru import logger
-from models.utility_functions import nearest_32, pad_by_zero
+from models.utility_functions import nearest_32, pad_by_zero, skip_for_grayskull
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
-from models.utility_functions import is_grayskull
 
 
 def run_test_update_cache_decode(
@@ -106,7 +105,7 @@ def run_test_update_cache_decode(
     assert eq_cache and eq_update
 
 
-@pytest.mark.skipif(is_grayskull(), reason="Grayskull does not support paged cache")
+@skip_for_grayskull("Grayskull does not support paged cache")
 @pytest.mark.parametrize("check_memory", [False])
 @pytest.mark.parametrize("share_cache", [True, False])
 @pytest.mark.parametrize("head_dim", [128])
@@ -196,14 +195,14 @@ def test_update_cache_decode(
         check_zero(sharded_high)
 
 
-@pytest.mark.skipif(is_grayskull(), reason="Grayskull does not support paged cache")
+@skip_for_grayskull("Grayskull does not support paged cache")
 @pytest.mark.parametrize("head_dim", [128])
 @pytest.mark.parametrize("max_seq_len", [2048])
 @pytest.mark.parametrize("num_users", [32])
 @pytest.mark.parametrize("num_heads", [1])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cache_idx", [127, 1057])
-@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 def test_update_cache_decode_program_cache(
     cache_idx,
     head_dim,
@@ -325,7 +324,7 @@ def run_test_tensor_index_update_cache_decode(
 @pytest.mark.parametrize("num_heads", [1])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cache_idx", [0, 1, 127, 1057])
-@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 def test_tensor_index_update_cache_decode(
     cache_idx,
     head_dim,
@@ -342,14 +341,14 @@ def test_tensor_index_update_cache_decode(
     )
 
 
-@pytest.mark.skipif(is_grayskull(), reason="Grayskull does not support paged cache")
+@skip_for_grayskull("Grayskull does not support paged cache")
 @pytest.mark.parametrize("head_dim", [128])
 @pytest.mark.parametrize("max_seq_len", [2048])
 @pytest.mark.parametrize("num_users", [32])
 @pytest.mark.parametrize("num_heads", [1])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cache_idx", [127, 1057])
-@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 def test_tensor_index_update_cache_decode_program_cache(
     cache_idx,
     head_dim,
@@ -477,7 +476,7 @@ def run_test_paged_update_cache_decode(
     assert eq_cache and eq_update
 
 
-# @pytest.mark.skip("Test case covered by others")
+@skip_for_grayskull("Grayskull does not support paged cache")
 @pytest.mark.parametrize("block_size", [64, 128], ids=["block64", "block128"])
 @pytest.mark.parametrize("head_dim", [128])
 @pytest.mark.parametrize("max_seq_len", [2048])
@@ -503,7 +502,7 @@ def test_paged_update_cache_decode(
     )
 
 
-@pytest.mark.skipif(is_grayskull(), reason="Grayskull does not support paged cache")
+@skip_for_grayskull("Grayskull does not support paged cache")
 @pytest.mark.parametrize("block_size", [64, 128], ids=["block64", "block128"])
 @pytest.mark.parametrize("head_dim", [128])
 @pytest.mark.parametrize("max_seq_len", [2048])
@@ -511,7 +510,7 @@ def test_paged_update_cache_decode(
 @pytest.mark.parametrize("num_heads", [1])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cache_idx", [127, 1057])
-@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 def test_paged_update_cache_decode_program_caching(
     cache_idx,
     block_size,
@@ -634,6 +633,7 @@ def run_test_paged_fill_cache(
 
 
 @pytest.mark.skip("Test case covered by others")
+@skip_for_grayskull("Grayskull does not support paged cache")
 @pytest.mark.parametrize("block_size", [64, 128], ids=["block64", "block128"])
 @pytest.mark.parametrize("head_dim", [128])
 @pytest.mark.parametrize("user_seq_len", [128, 160, 1984, 2048])
@@ -658,7 +658,7 @@ def test_paged_fill_cache(
     )
 
 
-@pytest.mark.skipif(is_grayskull(), reason="Grayskull does not support paged cache")
+@skip_for_grayskull("Grayskull does not support paged cache")
 @pytest.mark.parametrize("block_size", [64, 128], ids=["block64", "block128"])
 @pytest.mark.parametrize("head_dim", [128])
 @pytest.mark.parametrize("user_seq_len", [128, 160, 1984, 2048])

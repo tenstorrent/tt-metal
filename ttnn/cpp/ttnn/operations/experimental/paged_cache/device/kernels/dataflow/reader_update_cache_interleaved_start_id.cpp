@@ -36,7 +36,7 @@ void kernel_main() {
     constexpr uint32_t page_table_cb_id = get_compile_time_arg_val(18);
 
     const uint32_t St = get_compile_time_arg_val(19);
-    uint32_t semaphore_addr   = get_semaphore(get_compile_time_arg_val(20));  // semaphore for reciever
+    uint32_t semaphore_addr   = get_semaphore(get_compile_time_arg_val(20));  // semaphore for receiver
 
     constexpr uint32_t head_offset_t = Wt * St;
 
