@@ -77,11 +77,25 @@ ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst)
     MATH(( llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(idst) ));
 }
 
+/**
+ * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for transpose_wh_dest to be executed correctly.
+ */
 ALWI void transpose_wh_dest_init_short()
 {
     MATH(( llk_math_transpose_dest_init() ));
 }
 
+/**
+ * Performs a 32x32 in place transpose operation *B[w,h] = A[h,w]* on a tile in the DST register at idst.
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                             | Type     | Valid Range                                    | Required |
+ * |----------------|---------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST REG to transpose           | uint32_t | Must be less than the acquired size of DST REG | True     |
+ */
 ALWI void transpose_wh_dest(uint32_t idst)
 {
     UNPACK(( llk_unpack_set_srcb_dummy_valid() ));
