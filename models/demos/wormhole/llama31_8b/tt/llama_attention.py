@@ -118,7 +118,7 @@ class TtLlamaAttention(nn.Module):
                     -1,
                 ),
                 device=self.devices[i],
-                memory_config=wo_mem_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,  # TODO: wo dram sharded matmul errors// wo_mem_config,
                 dtype=self.dtype,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 cache_file_name=cache_name("wo"),
