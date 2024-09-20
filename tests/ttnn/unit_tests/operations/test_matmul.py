@@ -7,7 +7,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_grayskull, is_wormhole_b0, is_grayskull, is_blackhole
+from models.utility_functions import skip_for_grayskull, is_wormhole_b0, is_grayskull, is_blackhole, run_for_wormhole_b0
 
 
 def find_max_subblock(out_block_h, out_block_w):
@@ -48,6 +48,7 @@ def test_tiny_tiles(device, n, c, h, w, tile_h, tile_w):
     assert_with_pcc(torch_input_tensor, output_tensor, 1)
 
 
+@run_for_wormhole_b0()
 @pytest.mark.parametrize("b", [8])
 @pytest.mark.parametrize("h", [4])
 @pytest.mark.parametrize("m", [256])
@@ -146,6 +147,7 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
     return padded_number
 
 
+@run_for_wormhole_b0()
 @pytest.mark.parametrize("k", [8192])
 @pytest.mark.parametrize("n", [1280])
 @pytest.mark.parametrize("has_bias", [False, True])
@@ -276,6 +278,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(device, k, n, has_bias, grid_size, ti
     assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
+@run_for_wormhole_b0()
 @pytest.mark.parametrize("m", [1536])
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [3072])
@@ -400,6 +403,7 @@ def test_matmul_2d_tiny_tile(device, m, k, n, has_bias, grid_size, tile_h, tile_
     assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
+@run_for_wormhole_b0()
 @pytest.mark.parametrize("m", [256])
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [1024])

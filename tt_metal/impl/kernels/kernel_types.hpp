@@ -25,28 +25,24 @@ struct DataMovementConfig {
     // Each unique combination of defines will produce a unique compiled instantiation
     // This file is then automatically included in the generated compiled kernel files
     std::map<std::string, std::string> defines;
-    // tile shape needs to be baked into kernel binary so that it won't re-use the previous binary with wrong tile shape
-    std::vector<std::array<uint32_t, 2>> tile_shapes;
 };
 
 struct ReaderDataMovementConfig : public DataMovementConfig {
-    ReaderDataMovementConfig(std::vector<uint32_t> compile_args = {}, std::map<std::string, std::string> defines = {}, std::vector<std::array<uint32_t, 2>> tile_shapes = {}) :
+    ReaderDataMovementConfig(std::vector<uint32_t> compile_args = {}, std::map<std::string, std::string> defines = {}) :
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = detail::GetPreferredNOCForDRAMRead(tt::Cluster::instance().arch()),
             .compile_args = compile_args,
-            .defines = defines,
-            .tile_shapes = tile_shapes} {}
+            .defines = defines} {}
 };
 
 struct WriterDataMovementConfig : public DataMovementConfig {
-    WriterDataMovementConfig(std::vector<uint32_t> compile_args = {}, std::map<std::string, std::string> defines = {}, std::vector<std::array<uint32_t, 2>> tile_shapes = {}) :
+    WriterDataMovementConfig(std::vector<uint32_t> compile_args = {}, std::map<std::string, std::string> defines = {}) :
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = detail::GetPreferredNOCForDRAMWrite(tt::Cluster::instance().arch()),
             .compile_args = compile_args,
-            .defines = defines,
-            .tile_shapes = tile_shapes} {}
+            .defines = defines} {}
 };
 
 struct ComputeConfig {
@@ -59,8 +55,6 @@ struct ComputeConfig {
     // Each unique combination of defines will produce a unique compiled instantiation
     // This file is then automatically included in the generated compiled kernel files
     std::map<std::string, std::string> defines;
-    // tile shape needs to be baked into kernel binary so that it won't re-use the previous binary with wrong tile shape
-    std::vector<std::array<uint32_t, 2>> tile_shapes;
 };
 
 struct EthernetConfig {
@@ -71,8 +65,6 @@ struct EthernetConfig {
     // Each unique combination of defines will produce a unique compiled instantiation
     // This file is then automatically included in the generated compiled kernel files
     std::map<std::string, std::string> defines;
-    // tile shape needs to be baked into kernel binary so that it won't re-use the previous binary with wrong tile shape
-    std::vector<std::array<uint32_t, 2>> tile_shapes;
 
 };
 

@@ -877,8 +877,8 @@ void pytensor_module(py::module &m_tensor) {
         .def(
             py::init<>([](const py::object &tensor,
                             std::optional<DataType> data_type,
-                            const std::optional<Tile> &tile,
-                            const std::unordered_map<std::string, std::string> &strategy) {
+                            const std::unordered_map<std::string, std::string> &strategy,
+                            const std::optional<Tile> &tile) {
                 if (py::isinstance<py::list>(tensor)) {
                     return detail::convert_python_tensors_to_tt_tensors(tensor, data_type, tile, strategy);
                 }
@@ -886,8 +886,8 @@ void pytensor_module(py::module &m_tensor) {
             }),
             py::arg("tensor"),
             py::arg("data_type") = std::nullopt,
-            py::arg("tile") = std::nullopt,
             py::arg("strategy") = std::unordered_map<std::string, std::string>(),
+            py::arg("tile") = std::nullopt,
             py::return_value_policy::move,
             R"doc(
                 +--------------+------------------------+

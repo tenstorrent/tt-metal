@@ -656,8 +656,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
             .compile_args = in0_sender_compile_time_args,
-            .defines = mm_kernel_in0_sender_define,
-            .tile_shapes = {in0_tile.get_tile_shape(), output_tile.get_tile_shape()}});
+            .defines = mm_kernel_in0_sender_define});
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
@@ -667,8 +666,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
             .compile_args = in1_sender_writer_compile_time_args,
-            .defines = mm_kernel_in1_sender_writer_defines,
-            .tile_shapes = {in1_tile.get_tile_shape(), output_tile.get_tile_shape()}});
+            .defines = mm_kernel_in1_sender_writer_defines});
 
     // Compute kernel compile time args
     uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
@@ -709,8 +707,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
-            .defines = mm_kernel_defines,
-            .tile_shapes = {in0_tile.get_tile_shape(), in1_tile.get_tile_shape(), output_tile.get_tile_shape()}});
+            .defines = mm_kernel_defines});
 
     log_debug(LogOp, "in1_single_tile_size: {}", in1_single_tile_size);
 

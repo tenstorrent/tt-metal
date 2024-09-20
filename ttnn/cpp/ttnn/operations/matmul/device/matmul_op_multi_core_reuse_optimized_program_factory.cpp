@@ -182,8 +182,7 @@ operation::ProgramWithCallbacks create_program(
         all_cores,
         ReaderDataMovementConfig(
             reader_compile_time_args,
-            mm_kernel_in0_reader_defines,
-            {in0_tile.get_tile_shape()}));
+            mm_kernel_in0_reader_defines));
 
     KernelHandle mm_kernel_in1_reader_writer_id = tt_metal::CreateKernel(
         program,
@@ -191,8 +190,7 @@ operation::ProgramWithCallbacks create_program(
         all_cores,
         WriterDataMovementConfig(
             reader_writer_compile_time_args,
-            mm_kernel_in1_reader_writer_defines,
-            {in1_tile.get_tile_shape(), output_tile.get_tile_shape()}));
+            mm_kernel_in1_reader_writer_defines));
 
     vector<uint32_t> compute_kernel_args_group_1 = {
         in0_block_w,             // in0_block_w
@@ -234,8 +232,7 @@ operation::ProgramWithCallbacks create_program(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args_group_1,
-            .defines = mm_kernel_defines,
-            .tile_shapes = {in0_tile.get_tile_shape(), in1_tile.get_tile_shape(), output_tile.get_tile_shape()}});
+            .defines = mm_kernel_defines});
     if (!core_group_2.ranges().empty()) {
         vector<uint32_t> compute_kernel_args_group_2 = {
             in0_block_w,             // in0_block_w
@@ -265,8 +262,7 @@ operation::ProgramWithCallbacks create_program(
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .math_approx_mode = math_approx_mode,
                 .compile_args = compute_kernel_args_group_2,
-                .defines = mm_kernel_defines,
-                .tile_shapes = {in0_tile.get_tile_shape(), in1_tile.get_tile_shape(), output_tile.get_tile_shape()}});
+                .defines = mm_kernel_defines});
     }
 
     // Create circular buffers

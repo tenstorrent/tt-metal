@@ -387,8 +387,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
             .compile_args = in0_sender_compile_time_args,
-            .defines = mm_kernel_in0_sender_writer_defines,
-            .tile_shapes = {in0_tile.get_tile_shape()}});
+            .defines = mm_kernel_in0_sender_writer_defines});
 
     KernelHandle mm_kernel_in0_mcast_cores_without_work_and_in_receiver_grid_id = 0;
     KernelHandle mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id = 0;
@@ -405,8 +404,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = in0_noc,
                     .compile_args = in0_sender_compile_time_args,
-                    .defines = mm_kernel_in0_sender_writer_defines,
-                    .tile_shapes = {in0_tile.get_tile_shape()}});
+                    .defines = mm_kernel_in0_sender_writer_defines});
         }
         if (in0_mcast_cores_without_work_and_not_in_receiver_grid.num_cores() > 0) {
             in0_sender_compile_time_args[0] = 0;  // core_has_output_block_work
@@ -420,8 +418,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = in0_noc,
                     .compile_args = in0_sender_compile_time_args,
-                    .defines = mm_kernel_in0_sender_writer_defines,
-                    .tile_shapes = {in0_tile.get_tile_shape()}});
+                    .defines = mm_kernel_in0_sender_writer_defines});
         }
     }
 
@@ -434,8 +431,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_noc,
-                .compile_args = in0_receiver_compile_time_args,
-                .tile_shapes = {in0_tile.get_tile_shape()}});
+                .compile_args = in0_receiver_compile_time_args});
     }
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
@@ -446,8 +442,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
             .compile_args = in1_sender_writer_compile_time_args,
-            .defines = mm_kernel_in1_sender_writer_defines,
-            .tile_shapes = {in1_tile.get_tile_shape(), output_tile.get_tile_shape()}});
+            .defines = mm_kernel_in1_sender_writer_defines});
 
     // Compute kernel compile time args
 
@@ -493,8 +488,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
-            .defines = mm_kernel_defines,
-            .tile_shapes = {in0_tile.get_tile_shape(), in1_tile.get_tile_shape(), output_tile.get_tile_shape()}});
+            .defines = mm_kernel_defines});
 
     // Create circular buffers
     uint32_t src0_cb_index = 0;
@@ -1144,8 +1138,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
             .compile_args = in0_sender_compile_time_args,
-            .defines = mm_kernel_in0_sender_defines,
-            .tile_shapes = {in0_tile.get_tile_shape()}});
+            .defines = mm_kernel_in0_sender_defines});
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
@@ -1155,8 +1148,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
             .compile_args = in1_sender_writer_compile_time_args,
-            .defines = mm_kernel_in1_sender_writer_defines,
-            .tile_shapes = {in1_tile.get_tile_shape(), output_tile.get_tile_shape()}});
+            .defines = mm_kernel_in1_sender_writer_defines});
 
     KernelHandle mm_kernel_in1_receiver_writer_id = 0;
     if (in1_mcast_receivers.num_cores() > 0) {
@@ -1169,8 +1161,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = in1_noc,
                 .compile_args = in1_receiver_writer_compile_time_args,
-                .defines = mm_kernel_in1_receiver_writer_defines,
-                .tile_shapes = {in1_tile.get_tile_shape(), output_tile.get_tile_shape()}});
+                .defines = mm_kernel_in1_receiver_writer_defines});
     }
 
     // Compute kernel compile time args
@@ -1219,8 +1210,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
-            .defines = mm_kernel_defines,
-            .tile_shapes = {in0_tile.get_tile_shape(), in1_tile.get_tile_shape(), output_tile.get_tile_shape()}});
+            .defines = mm_kernel_defines});
 
     // Create circular buffers
     uint32_t src0_cb_index = 0;

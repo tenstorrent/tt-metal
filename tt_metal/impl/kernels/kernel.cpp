@@ -25,8 +25,7 @@ Kernel::Kernel(
     const std::string &kernel_path_file_name,
     const CoreRangeSet &core_range_set,
     const std::vector<uint32_t> &compile_args,
-    const std::map<std::string, std::string> &defines,
-    const std::vector<std::array<uint32_t, 2>>& tile_shapes) :
+    const std::map<std::string, std::string> &defines) :
     watcher_kernel_id_(watcher_register_kernel(kernel_path_file_name)),
     kernel_path_file_name_(kernel_path_file_name),
     core_range_set_(core_range_set),
@@ -34,8 +33,7 @@ Kernel::Kernel(
     max_runtime_args_per_core_(0),
     core_with_max_runtime_args_({0, 0}),
     compile_time_args_(compile_args),
-    defines_(defines),
-    tile_shapes_(tile_shapes) {
+    defines_(defines) {
 
     size_t max_x = 0, max_y = 0;
     for (auto core_range : this->core_range_set_.ranges()) {
@@ -164,19 +162,12 @@ std::string ComputeKernel::config_hash() const {
 }
 
 std::string Kernel::compute_hash() const {
-    std::vector<std::string> formatted_tile_shapes;
-    formatted_tile_shapes.reserve(tile_shapes_.size());
-    for (const auto& shape : tile_shapes_) {
-        formatted_tile_shapes.push_back(fmt::format("{}_{}", shape[0], shape[1]));
-    }
     return fmt::format(
-        "{}_{}_{}_{}_{}",
+        "{}_{}_{}_{}",
         std::hash<std::string>{}(this->kernel_path_file_name_),
         fmt::join(this->compile_time_args_, "_"),
         KernelDefinesHash{}(this->defines_),
-        fmt::join(formatted_tile_shapes, "_"),
-        this->config_hash()
-    );
+        this->config_hash());
 }
 
 std::vector<uint32_t> &Kernel::runtime_args(const CoreCoord &logical_core) {

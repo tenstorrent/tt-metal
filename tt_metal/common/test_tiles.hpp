@@ -10,6 +10,8 @@
 
 #include <cstdint>
 #include <vector>
+#include <optional>
+#include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "math.hpp"
@@ -27,10 +29,10 @@ std::vector<T> convert_to_tile_layout(
     const std::optional<const std::vector<uint32_t>>& face_shape = std::nullopt) {
     ZoneScoped;
     std::vector<T> result;
-    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : 32;
-    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : 32;
-    auto face_H = face_shape.has_value() ? face_shape.value()[0] : 16;
-    auto face_W = face_shape.has_value() ? face_shape.value()[1] : 16;
+    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
+    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
+    auto face_H = face_shape.has_value() ? face_shape.value()[0] : tt::constants::FACE_HEIGHT;
+    auto face_W = face_shape.has_value() ? face_shape.value()[1] : tt::constants::FACE_WIDTH;
     auto tile_HW = tile_H * tile_W;
     auto face_HW = face_H * face_W;
     TT_ASSERT(data.size() / tile_HW > 0);
@@ -80,10 +82,10 @@ std::vector<T> convert_to_flat_layout(
     const std::optional<const std::vector<uint32_t>>& face_shape = std::nullopt) {
     ZoneScoped;
     std::vector<T> result;
-    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : 32;
-    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : 32;
-    auto face_H = face_shape.has_value() ? face_shape.value()[0] : 16;
-    auto face_W = face_shape.has_value() ? face_shape.value()[1] : 16;
+    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
+    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
+    auto face_H = face_shape.has_value() ? face_shape.value()[0] : tt::constants::FACE_HEIGHT;
+    auto face_W = face_shape.has_value() ? face_shape.value()[1] : tt::constants::FACE_WIDTH;
     auto tile_HW = tile_H * tile_W;
     auto face_HW = face_H * face_W;
     auto num_faces_row = tile_W / face_W;
@@ -113,8 +115,8 @@ std::vector<T> convert_to_flat_layout(
 template <typename T, template <typename...> typename BufferType>
 inline std::vector<T> untilize_nchw(const BufferType<T>& in, const std::vector<std::uint32_t>& shape, const std::optional<std::vector<uint32_t>>& tile_shape = std::nullopt) {
     ZoneScoped;
-    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : 32;
-    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : 32;
+    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
+    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
 
     TT_ASSERT(shape[shape.size() - 2] % tile_H == 0 && shape[shape.size() - 1] % tile_W == 0);
 
@@ -163,8 +165,8 @@ inline std::vector<T> tilize_nchw(const BufferType<T>& in_rowmajor, const std::v
         batch_size *= shape[i];
     }
     int input_volume = batch_size * H * W;
-    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : 32;
-    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : 32;
+    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
+    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
     int OH = round_up_to_tile(H, tile_H);
     int OW = round_up_to_tile(W, tile_W);
     std::vector<T> tilized_result;

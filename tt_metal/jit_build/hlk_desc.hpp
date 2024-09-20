@@ -302,6 +302,11 @@ struct std::hash<tt::tt_hlk_desc>
         }
         tt::utils::hash_combine(hash_value, hash<MathFidelity>{}(obj.get_hlk_math_fidelity()));
         tt::utils::hash_combine(hash_value, hash<bool>{}(obj.get_hlk_math_approx_mode()));
+        for (int i = 0; i < 32; i++)
+        {
+            tt::utils::hash_combine(hash_value, hash<uint32_t>{}(obj.get_buf_tile_r_dim(i)));
+            tt::utils::hash_combine(hash_value, hash<uint32_t>{}(obj.get_buf_tile_c_dim(i)));
+        }
 
         // Get hash for hlk_args here
         void *hlk_args = obj.get_hlk_args();
