@@ -946,11 +946,13 @@ void bind_unary_composite_floats(py::module& module, const unary_operation_t& op
 }
 
 template <typename unary_operation_t>
-void bind_unary_composite_operation(py::module& module, const unary_operation_t& operation) {
+void bind_unary_composite_operation(py::module& module, const unary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
         R"doc({0}(input_tensor: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
 
-            Applies {0} to :attr:`input_tensor` element-wise.
+            Applies {0} to :attr:`input_tensor` element-wise .
+
+            {2}
 
             .. math::
                 {0}(\\mathrm{{input\\_tensor}}_i)
@@ -969,7 +971,8 @@ void bind_unary_composite_operation(py::module& module, const unary_operation_t&
                 >>> output = {1}(tensor)
         )doc",
         operation.base_name(),
-        operation.python_fully_qualified_name());
+        operation.python_fully_qualified_name(),
+        description);
 
     bind_registered_operation(
         module,
@@ -987,7 +990,7 @@ void bind_unary_composite_operation(py::module& module, const unary_operation_t&
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = ttnn::DefaultQueueId});
 }
 
 
@@ -1410,13 +1413,13 @@ void py_module(py::module& module) {
     detail::bind_unary_composite(module, ttnn::sinh, R"doc(Performs sinh function on :attr:`input_tensor`.)doc", "[supported range -88 to 88]");
     detail::bind_unary_composite(module, ttnn::softsign, R"doc(Performs softsign function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::swish, R"doc(Performs swish function on :attr:`input_tensor`.)doc");
-    detail::bind_unary_composite(module, ttnn::trunc, R"doc(Performs trunc function on :attr:`input_tensor`, not supported for grayskull.)doc");
     detail::bind_unary_composite(module, ttnn::var_hw, R"doc(Performs var_hw function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::std_hw, R"doc(Performs std_hw function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::normalize_hw, R"doc(Performs normalize_hw function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::logical_not_, R"doc(Performs logical_not inplace function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::normalize_global, R"doc(Performs normalize_global function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::frac, R"doc(Performs frac function on :attr:`input_tensor`.)doc");
+    detail::bind_unary_composite_operation(module, ttnn::trunc, R"doc(Not supported for grayskull.)doc");
 
     detail::bind_unary_composite_floats_with_default(
         module,
