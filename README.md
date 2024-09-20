@@ -95,3 +95,17 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metalium/lates
 - [CNNs on TT Architectures](./tech_reports/CNNs/ttcnn.md) (updated Sept 6th)
 - [Ethernet and Multichip Basics](./tech_reports/CCL/CclDeveloperGuide.md) (Updated Sept 12th)
 - [Blackhole Bring-Up Prgramming Guide](./tech_reports/Blackhole/BlackholeBringUpProgrammingGuide.md) (Updated Sept 12th)
+
+## TT-Metalium Programming Examples
+- [hello_world_compute](./tech_reports/prog_examples/hello_world_compute/hello_world_compute.md)
+- [hello_world_datamovement](./tech_reports/prog_examples/hello_world_data_movement/hello_world_data_movement.md)
+- [shard_data_rm](./tech_reports/prog_examples/shard_data_rm/shard_data_rm.md)
+- [pad_multi_core](./tech_reports/prog_examples/pad_multi_core/pad_multi_core.md)
+- [add_2_integers_in_compute](./tech_reports/prog_examples/add_2_integers_in_compute/add_2_integers_in_compute.md)
+- [add_2_integers_in_riscv](./tech_reports/prog_examples/add_2_integers_in_riscv/add_2_integers_in_riscv.md)
+- [dram_loopback](./tech_reports/prog_examples/dram_loopback/dram_loopback.md)
+- [eltwise_sfpu](./tech_reports/prog_examples/eltwise_sfpu/eltwise_sfpu.md)
+- [eltwise_binary](./tech_reports/prog_examples/eltwise_binary/eltwise_binary.md)
+- [matmul_single_core](./tech_reports/prog_examples/matmul_single_core/matmul_single_core.md)
+- [matmul_multi_core](./tech_reports/prog_examples/matmul_multi_core/matmul_multi_core.md)
+- [matmul_multi_core_optimized](./tech_reports/prog_examples/matmul_multi_core_optimized/matmul_multi_core_optimized.md)
