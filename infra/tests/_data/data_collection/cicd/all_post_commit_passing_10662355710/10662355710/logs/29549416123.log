@@ -1,0 +1,200 @@
+﻿2024-09-02T07:01:59.0192400Z Current runner version: '2.319.1'
+2024-09-02T07:01:59.0217095Z ##[group]Operating System
+2024-09-02T07:01:59.0217696Z Ubuntu
+2024-09-02T07:01:59.0218152Z 22.04.4
+2024-09-02T07:01:59.0218476Z LTS
+2024-09-02T07:01:59.0218789Z ##[endgroup]
+2024-09-02T07:01:59.0219247Z ##[group]Runner Image
+2024-09-02T07:01:59.0219675Z Image: ubuntu-22.04
+2024-09-02T07:01:59.0220047Z Version: 20240825.1.0
+2024-09-02T07:01:59.0221113Z Included Software: https://github.com/actions/runner-images/blob/ubuntu22/20240825.1/images/ubuntu/Ubuntu2204-Readme.md
+2024-09-02T07:01:59.0222536Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu22%2F20240825.1
+2024-09-02T07:01:59.0223386Z ##[endgroup]
+2024-09-02T07:01:59.0223853Z ##[group]Runner Image Provisioner
+2024-09-02T07:01:59.0224343Z 2.0.384.1
+2024-09-02T07:01:59.0224640Z ##[endgroup]
+2024-09-02T07:01:59.0239634Z ##[group]GITHUB_TOKEN Permissions
+2024-09-02T07:01:59.0241431Z Actions: read
+2024-09-02T07:01:59.0241870Z Contents: read
+2024-09-02T07:01:59.0242544Z Metadata: read
+2024-09-02T07:01:59.0243051Z Pages: write
+2024-09-02T07:01:59.0243485Z ##[endgroup]
+2024-09-02T07:01:59.0246721Z Secret source: Actions
+2024-09-02T07:01:59.0247290Z Prepare workflow directory
+2024-09-02T07:01:59.0868981Z Prepare all required actions
+2024-09-02T07:01:59.1028830Z Getting action download info
+2024-09-02T07:01:59.2658024Z Download action repository 'actions/checkout@v4' (SHA:692973e3d937129bcbf40652eb9f2f61becf3332)
+2024-09-02T07:01:59.3701508Z Download action repository 'actions/setup-python@v5.0.0' (SHA:0a5c61591373683505ea898e09a3ea4f39ef2b9c)
+2024-09-02T07:01:59.6768568Z Uses: tenstorrent/tt-metal/.github/workflows/all-static-checks.yaml@refs/heads/main (a9bcd03b1775ab989aebab822ec2e4f821abac41)
+2024-09-02T07:01:59.6771185Z Complete job name: static-checks / check-spdx-licenses
+2024-09-02T07:01:59.7706624Z ##[group]Run actions/checkout@v4
+2024-09-02T07:01:59.7707244Z with:
+2024-09-02T07:01:59.7707638Z   repository: tenstorrent/tt-metal
+2024-09-02T07:01:59.7708429Z   token: ***
+2024-09-02T07:01:59.7708857Z   ssh-strict: true
+2024-09-02T07:01:59.7709254Z   ssh-user: git
+2024-09-02T07:01:59.7709708Z   persist-credentials: true
+2024-09-02T07:01:59.7710171Z   clean: true
+2024-09-02T07:01:59.7710577Z   sparse-checkout-cone-mode: true
+2024-09-02T07:01:59.7711118Z   fetch-depth: 1
+2024-09-02T07:01:59.7711530Z   fetch-tags: false
+2024-09-02T07:01:59.7711929Z   show-progress: true
+2024-09-02T07:01:59.7712375Z   lfs: false
+2024-09-02T07:01:59.7712741Z   submodules: false
+2024-09-02T07:01:59.7713163Z   set-safe-directory: true
+2024-09-02T07:01:59.7713631Z ##[endgroup]
+2024-09-02T07:02:00.0153852Z Syncing repository: tenstorrent/tt-metal
+2024-09-02T07:02:00.0156447Z ##[group]Getting Git version info
+2024-09-02T07:02:00.0157330Z Working directory is '/home/runner/work/tt-metal/tt-metal'
+2024-09-02T07:02:00.0158725Z [command]/usr/bin/git version
+2024-09-02T07:02:00.0159435Z git version 2.46.0
+2024-09-02T07:02:00.0162448Z ##[endgroup]
+2024-09-02T07:02:00.0180868Z Temporarily overriding HOME='/home/runner/work/_temp/4310c94c-e5bb-4d9b-bfbd-e53a0d652421' before making global git config changes
+2024-09-02T07:02:00.0183683Z Adding repository directory to the temporary git global config as a safe directory
+2024-09-02T07:02:00.0186326Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/tt-metal/tt-metal
+2024-09-02T07:02:00.0189522Z Deleting the contents of '/home/runner/work/tt-metal/tt-metal'
+2024-09-02T07:02:00.0191541Z ##[group]Initializing the repository
+2024-09-02T07:02:00.0192676Z [command]/usr/bin/git init /home/runner/work/tt-metal/tt-metal
+2024-09-02T07:02:00.0276399Z hint: Using 'master' as the name for the initial branch. This default branch name
+2024-09-02T07:02:00.0277948Z hint: is subject to change. To configure the initial branch name to use in all
+2024-09-02T07:02:00.0279883Z hint: of your new repositories, which will suppress this warning, call:
+2024-09-02T07:02:00.0281258Z hint:
+2024-09-02T07:02:00.0282309Z hint: 	git config --global init.defaultBranch <name>
+2024-09-02T07:02:00.0283661Z hint:
+2024-09-02T07:02:00.0284396Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2024-09-02T07:02:00.0285628Z hint: 'development'. The just-created branch can be renamed via this command:
+2024-09-02T07:02:00.0286458Z hint:
+2024-09-02T07:02:00.0286881Z hint: 	git branch -m <name>
+2024-09-02T07:02:00.0287773Z Initialized empty Git repository in /home/runner/work/tt-metal/tt-metal/.git/
+2024-09-02T07:02:00.0298441Z [command]/usr/bin/git remote add origin https://github.com/tenstorrent/tt-metal
+2024-09-02T07:02:00.0337463Z ##[endgroup]
+2024-09-02T07:02:00.0339205Z ##[group]Disabling automatic garbage collection
+2024-09-02T07:02:00.0340806Z [command]/usr/bin/git config --local gc.auto 0
+2024-09-02T07:02:00.0373832Z ##[endgroup]
+2024-09-02T07:02:00.0376357Z ##[group]Setting up auth
+2024-09-02T07:02:00.0381848Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2024-09-02T07:02:00.0416019Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2024-09-02T07:02:00.0792501Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2024-09-02T07:02:00.0826401Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2024-09-02T07:02:00.1082314Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2024-09-02T07:02:00.1137878Z ##[endgroup]
+2024-09-02T07:02:00.1138791Z ##[group]Fetching the repository
+2024-09-02T07:02:00.1151493Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +a9bcd03b1775ab989aebab822ec2e4f821abac41:refs/remotes/origin/main
+2024-09-02T07:02:01.9952301Z From https://github.com/tenstorrent/tt-metal
+2024-09-02T07:02:01.9953972Z  * [new ref]         a9bcd03b1775ab989aebab822ec2e4f821abac41 -> origin/main
+2024-09-02T07:02:01.9975926Z ##[endgroup]
+2024-09-02T07:02:01.9976616Z ##[group]Determining the checkout info
+2024-09-02T07:02:01.9977993Z ##[endgroup]
+2024-09-02T07:02:01.9982890Z [command]/usr/bin/git sparse-checkout disable
+2024-09-02T07:02:02.0024063Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2024-09-02T07:02:02.0052867Z ##[group]Checking out the ref
+2024-09-02T07:02:02.0057678Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2024-09-02T07:02:02.5387433Z Switched to a new branch 'main'
+2024-09-02T07:02:02.5388603Z branch 'main' set up to track 'origin/main'.
+2024-09-02T07:02:02.5424511Z ##[endgroup]
+2024-09-02T07:02:02.5462608Z [command]/usr/bin/git log -1 --format='%H'
+2024-09-02T07:02:02.5486416Z 'a9bcd03b1775ab989aebab822ec2e4f821abac41'
+2024-09-02T07:02:02.5827553Z ##[group]Run actions/setup-python@v5.0.0
+2024-09-02T07:02:02.5828149Z with:
+2024-09-02T07:02:02.5828428Z   cache: pip
+2024-09-02T07:02:02.5828862Z   cache-dependency-path: infra/requirements-infra.txt
+2024-09-02T07:02:38.0519979Z [90mNot an Espressif copyright notice ./ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.hpp:1[0m
+2024-09-02T07:02:38.0521188Z [90mNot an Espressif copyright notice ./tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_erfinv.h:1[0m
+2024-09-02T07:02:38.0522609Z [90mNot an Espressif copyright notice ./ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/multi_core/layernorm_post_all_gather_op_multi_core.cpp:1[0m
+2024-09-02T07:02:38.0523898Z [90mNot an Espressif copyright notice ./models/demos/grayskull/functional_bloom/demo/demo_causal_lm.py:1[0m
+2024-09-02T07:02:38.0525094Z [90mNot an Espressif copyright notice ./ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_h_sharded_optimised.cpp:1[0m
+2024-09-02T07:02:38.0526204Z [90m"./ttnn/visualizer/templates/report_layout.html" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0527094Z [90mNot an Espressif copyright notice ./models/demos/t3000/llama2_70b/tt/llama_generation.py:1[0m
+2024-09-02T07:02:38.0527997Z [90mNot an Espressif copyright notice ./tt_metal/include/compute_kernel_api/eltwise_unary/elu.h:1[0m
+2024-09-02T07:02:38.0529029Z [90m"./models/experimental/grok/rotmat.ipynb" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0529940Z [90mNot an Espressif copyright notice ./tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_common_api.h:1[0m
+2024-09-02T07:02:38.0530848Z [90mNot an Espressif copyright notice ./ttnn/cpp/ttnn/operations/loss/loss_pybind.cpp:1[0m
+2024-09-02T07:02:38.0531632Z [90m"./docs/source/common/_static/add.svg" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0532627Z [90mNot an Espressif copyright notice ./ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc.cpp:1[0m
+2024-09-02T07:02:38.0533704Z [90mNot an Espressif copyright notice ./ttnn/cpp/ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp:1[0m
+2024-09-02T07:02:38.0534767Z [90m"./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/run_pgm_dispatch_rta.sh" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0536364Z [90m"./tests/ttnn/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_working/wormhole/ttnn_normalize_hw_test.yaml" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0537759Z [90m"./tests/ttnn/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_working/wormhole/ttnn_empty_test.yaml" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0538992Z [90mNot an Espressif copyright notice ./tests/ttnn/sweep_tests/sweeps/sweeps/log1p.py:1[0m
+2024-09-02T07:02:38.0540004Z [90mNot an Espressif copyright notice ./ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_norm/moreh_norm_w/moreh_norm_w.cpp:1[0m
+2024-09-02T07:02:38.0540959Z [90m"./docs/source/ttnn/ttnn/ttnn/ltz.rst" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0542138Z [90m"./tests/ttnn/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_broken/grayskull/ttnn_eltwise_softmax_in_place_test.yaml" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0543423Z [90mNot an Espressif copyright notice ./tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_floor_div.py:1[0m
+2024-09-02T07:02:38.0544530Z [90mNot an Espressif copyright notice ./ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk.cpp:1[0m
+2024-09-02T07:02:38.0545666Z [90mNot an Espressif copyright notice ./tests/ttnn/integration_tests/stable_diffusion/test_transformer_2d_model_new_conv.py:1[0m
+2024-09-02T07:02:38.0546820Z [90mNot an Espressif copyright notice ./models/experimental/deit/tests/test_deit_for_image_classification_with_teacher.py:1[0m
+2024-09-02T07:02:38.0547827Z [90m"./docs/source/ttnn/ttnn/ttnn/repeat_bw.rst" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0548641Z [90mNot an Espressif copyright notice ./tests/ttnn/unit_tests/test_tutorials.py:1[0m
+2024-09-02T07:02:38.0549379Z [90mNot an Espressif copyright notice ./ttnn/ttnn/operations/ternary.py:1[0m
+2024-09-02T07:02:38.0550261Z [90mNot an Espressif copyright notice ./ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean/moreh_mean_op.cpp:1[0m
+2024-09-02T07:02:38.0551578Z [90m"./tests/tt_eager/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_working/wormhole/pytorch_eltwise_heaviside_test.yaml" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0552765Z [90mNot an Espressif copyright notice ./tests/tt_metal/tt_metal/test_matmul_single_tile_bfp8b.cpp:1[0m
+2024-09-02T07:02:38.0553633Z [90m"./tt_metal/programming_examples/CMakeLists.txt" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0554575Z [90mNot an Espressif copyright notice ./ttnn/cpp/ttnn/operations/data_movement/repeat/device/repeat_op.hpp:1[0m
+2024-09-02T07:02:38.0555864Z [90mNot an Espressif copyright notice ./ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/writer_unary_interleaved_input_cols_batched.cpp:1[0m
+2024-09-02T07:02:38.0557308Z [90m"./tests/ttnn/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_working/wormhole/ttnn_matmul_test.yaml" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0558538Z [90m"./docs/source/ttnn/ttnn/ttnn/square.rst" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0559634Z [90mNot an Espressif copyright notice ./ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp:1[0m
+2024-09-02T07:02:38.0560843Z [90mNot an Espressif copyright notice ./models/experimental/functional_whisper/reference/torch_functional_whisper.py:1[0m
+2024-09-02T07:02:38.0561803Z [90mNot an Espressif copyright notice ./models/experimental/stable_diffusion/sd_utils.py:1[0m
+2024-09-02T07:02:38.0563072Z [90m"./tests/ttnn/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_working/grayskull/ttnn_eltwise_subtract_and_apply_activation__test.yaml" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0564356Z [90mNot an Espressif copyright notice ./tests/ttnn/integration_tests/falcon7b/test_falcon_attention.py:1[0m
+2024-09-02T07:02:38.0565526Z [90m"./tests/tt_eager/python_api_testing/sweep_tests/test_configs/tensor_tests/pytorch_unpad_from_tile_test.yaml" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0566690Z [90mNot an Espressif copyright notice ./models/experimental/stable_diffusion/tests/test_transformers.py:1[0m
+2024-09-02T07:02:38.0567795Z [90mNot an Espressif copyright notice ./ttnn/cpp/ttnn/operations/transformer/concatenate_heads/concatenate_heads_pybind.cpp:1[0m
+2024-09-02T07:02:38.0569299Z [90m"./tests/tt_eager/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_working/wormhole/pytorch_eltwise_add_unary_test.yaml" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0570746Z [90m"./tests/ttnn/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_broken/grayskull/ttnn_nextafter.yaml" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0571824Z [90mNot an Espressif copyright notice ./tests/ttnn/sweep_tests/sweeps/sweeps/addcdiv.py:1[0m
+2024-09-02T07:02:38.0573111Z [90mNot an Espressif copyright notice ./tt_metal/include/compute_kernel_api/eltwise_unary/softplus.h:1[0m
+2024-09-02T07:02:38.0574367Z [90m"./tests/ttnn/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_working/wormhole/ttnn_eltwise_hardtanh_test.yaml" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0576110Z [90m"./tests/tt_eager/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_working/wormhole/pytorch_backward_eltwise_sub_test.yaml" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0577609Z [90m"./tests/tt_eager/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_working/wormhole/pytorch_eltwise_sqrt_test.yaml" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0578716Z [90mNot an Espressif copyright notice ./tests/ttnn/sweep_tests/sweeps/sweeps/geglu.py:1[0m
+2024-09-02T07:02:38.0788230Z [90mNot an Espressif copyright notice ./ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/dataflow/reader_rotary_embedding_llama_interleaved_start_id.cpp:1[0m
+2024-09-02T07:02:38.0790098Z [90mNot an Espressif copyright notice ./models/experimental/efficientnet/tt/efficientnet_conv.py:1[0m
+2024-09-02T07:02:38.0791672Z [90m"./tests/ttnn/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_working/wormhole/ttnn_backward_erf_test.yaml" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0793468Z [90mNot an Espressif copyright notice ./ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/layernorm_distributed_pybind.cpp:1[0m
+2024-09-02T07:02:38.0794621Z [90mNot an Espressif copyright notice ./setup.py:1[0m
+2024-09-02T07:02:38.0795454Z [90mNot an Espressif copyright notice ./tests/ttnn/unit_tests/operations/test_math.py:1[0m
+2024-09-02T07:02:38.0796636Z [90mNot an Espressif copyright notice ./models/experimental/deit/tests/test_deit_patch_embeddings.py:1[0m
+2024-09-02T07:02:38.0798223Z [90m"./tests/ttnn/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_broken/grayskull/ttnn_eltwise_asinh_test.yaml" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0799697Z [90m"./docs/source/tt-metalium/tt_metal/apis/kernel_apis/compute/cos_tile.rst" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0800789Z [90mNot an Espressif copyright notice ./tests/tt_eager/python_api_testing/unit_testing/misc/test_nlp_concat_heads.py:1[0m
+2024-09-02T07:02:38.0801961Z [90mNot an Espressif copyright notice ./tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_power.h:1[0m
+2024-09-02T07:02:38.0803368Z [90mNot an Espressif copyright notice ./ttnn/cpp/ttnn/operations/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_pybind.cpp:1[0m
+2024-09-02T07:02:38.0804684Z [90mNot an Espressif copyright notice ./tt_metal/hw/ckernels/grayskull/metal/llk_api/llk_sfpu/ckernel_sfpu_topk.h:1[0m
+2024-09-02T07:02:38.0805981Z [90m"./tests/ttnn/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_broken/grayskull/ttnn_eltwise_rad2deg_test.yaml" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0807087Z [90mNot an Espressif copyright notice ./tt_metal/common/metal_soc_descriptor.cpp:1[0m
+2024-09-02T07:02:38.0808219Z [90m"./tests/ttnn/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_working/wormhole/ttnn_eltwise_lez_test.yaml" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0809324Z [90m"./ttnn/cpp/ttnn/operations/ccl/README.md" is not of a supported type! Skipping.[0m
+2024-09-02T07:02:38.0810314Z [90mNot an Espressif copyright notice ./models/demos/wormhole/mamba/reference/model.py:1[0m
+2024-09-02T07:02:38.0811452Z [90mNot an Espressif copyright notice ./ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_softmax_backward/kernels/moreh_softmax_backward_h_large.cpp:1[0m
+2024-09-02T07:02:38.0812583Z [90mNot an Espressif copyright notice ./models/experimental/swin/tests/test_tt_swin_attention.py:1[0m
+2024-09-02T07:02:38.0813569Z [90mNot an Espressif copyright notice ./tests/tt_metal/tt_metal/unit_tests_common/dprint/test_mute_print_server.cpp:1[0m
+2024-09-02T07:02:38.0814623Z [90mNot an Espressif copyright notice ./ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.hpp:1[0m
+2024-09-02T07:02:38.0815998Z [90mNot an Espressif copyright notice ./tests/tt_metal/tt_metal/perf_microbenchmark/old/noc/test_noc_read_local_l1.cpp:1[0m
+2024-09-02T07:02:38.0817003Z [90mNot an Espressif copyright notice ./models/experimental/squeezenet/reference/squeezenet.py:1[0m
+2024-09-02T07:02:38.0818034Z [90mNot an Espressif copyright notice ./tests/tt_metal/tt_metal/unit_tests_fast_dispatch/common/command_queue_fixture.hpp:1[0m
+2024-09-02T07:02:38.0819137Z [90mNot an Espressif copyright notice ./models/demos/wormhole/stable_diffusion/tt/ttnn_functional_embeddings.py:1[0m
+2024-09-02T07:02:38.0820312Z [90mNot an Espressif copyright notice ./ttnn/cpp/ttnn/operations/embedding_backward/device/embedding_backward_device_operation.hpp:1[0m
+2024-09-02T07:02:38.0821582Z [90mNot an Espressif copyright notice ./ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/nlp_concat_heads.cpp:1[0m
+2024-09-02T07:02:38.0822240Z 
+2024-09-02T07:02:38.0822524Z Additional information about this hook and copyright headers may be found here:
+2024-09-02T07:02:38.0823361Z https://docs.espressif.com/projects/esp-idf/en/latest/esp32/contribute/copyright-guide.html
+2024-09-02T07:02:38.0823855Z 
+2024-09-02T07:02:38.0824026Z [92mSuccessfully processed 6809 files.[0m
+2024-09-02T07:02:38.0951175Z Post job cleanup.
+2024-09-02T07:02:38.2334203Z ##[warning]Cache paths are empty. Please check the previous logs and make sure that the python version is specified
+2024-09-02T07:02:38.2452437Z Post job cleanup.
+2024-09-02T07:02:38.3423184Z [command]/usr/bin/git version
+2024-09-02T07:02:38.3459941Z git version 2.46.0
+2024-09-02T07:02:38.3506092Z Temporarily overriding HOME='/home/runner/work/_temp/9d2d1742-f5ba-4339-8437-8b99e1a2ff0b' before making global git config changes
+2024-09-02T07:02:38.3507848Z Adding repository directory to the temporary git global config as a safe directory
+2024-09-02T07:02:38.3519728Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/tt-metal/tt-metal
+2024-09-02T07:02:38.3555005Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2024-09-02T07:02:38.3587520Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2024-09-02T07:02:38.3840329Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2024-09-02T07:02:38.3862372Z http.https://github.com/.extraheader
+2024-09-02T07:02:38.3874361Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2024-09-02T07:02:38.3910817Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2024-09-02T07:02:38.4398315Z Cleaning up orphan processes
