@@ -44,3 +44,4 @@ ignore:  # You can also select ignoring files here
     - eevenv/
     - built/
     - models/demos/t3000/llama2_70b/reference/
+    - infra/
