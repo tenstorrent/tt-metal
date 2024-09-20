@@ -1,0 +1,200 @@
+﻿2024-09-02T07:02:00.4771748Z Current runner version: '2.319.1'
+2024-09-02T07:02:00.4795312Z ##[group]Operating System
+2024-09-02T07:02:00.4795921Z Ubuntu
+2024-09-02T07:02:00.4796400Z 22.04.4
+2024-09-02T07:02:00.4796735Z LTS
+2024-09-02T07:02:00.4797776Z ##[endgroup]
+2024-09-02T07:02:00.4798300Z ##[group]Runner Image
+2024-09-02T07:02:00.4798753Z Image: ubuntu-22.04
+2024-09-02T07:02:00.4799136Z Version: 20240825.1.0
+2024-09-02T07:02:00.4800200Z Included Software: https://github.com/actions/runner-images/blob/ubuntu22/20240825.1/images/ubuntu/Ubuntu2204-Readme.md
+2024-09-02T07:02:00.4801631Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu22%2F20240825.1
+2024-09-02T07:02:00.4802473Z ##[endgroup]
+2024-09-02T07:02:00.4802932Z ##[group]Runner Image Provisioner
+2024-09-02T07:02:00.4803415Z 2.0.384.1
+2024-09-02T07:02:00.4803735Z ##[endgroup]
+2024-09-02T07:02:00.4818512Z ##[group]GITHUB_TOKEN Permissions
+2024-09-02T07:02:00.4820120Z Actions: read
+2024-09-02T07:02:00.4820686Z Contents: read
+2024-09-02T07:02:00.4821212Z Metadata: read
+2024-09-02T07:02:00.4821815Z Pages: write
+2024-09-02T07:02:00.4822166Z ##[endgroup]
+2024-09-02T07:02:00.4825212Z Secret source: Actions
+2024-09-02T07:02:00.4825808Z Prepare workflow directory
+2024-09-02T07:02:00.5452235Z Prepare all required actions
+2024-09-02T07:02:00.5609808Z Getting action download info
+2024-09-02T07:02:00.7849962Z Download action repository 'actions/checkout@v4' (SHA:692973e3d937129bcbf40652eb9f2f61becf3332)
+2024-09-02T07:02:00.8832959Z Download action repository 'psf/black@23.10.1' (SHA:744d23b34800c06e10272149b70752396e90eeb8)
+2024-09-02T07:02:02.0655774Z Uses: tenstorrent/tt-metal/.github/workflows/all-static-checks.yaml@refs/heads/main (a9bcd03b1775ab989aebab822ec2e4f821abac41)
+2024-09-02T07:02:02.0658473Z Complete job name: static-checks / check-black
+2024-09-02T07:02:02.1592207Z ##[group]Run actions/checkout@v4
+2024-09-02T07:02:02.1592825Z with:
+2024-09-02T07:02:02.1593368Z   repository: tenstorrent/tt-metal
+2024-09-02T07:02:02.1594142Z   token: ***
+2024-09-02T07:02:02.1594575Z   ssh-strict: true
+2024-09-02T07:02:02.1595086Z   ssh-user: git
+2024-09-02T07:02:02.1595516Z   persist-credentials: true
+2024-09-02T07:02:02.1595992Z   clean: true
+2024-09-02T07:02:02.1596505Z   sparse-checkout-cone-mode: true
+2024-09-02T07:02:02.1597435Z   fetch-depth: 1
+2024-09-02T07:02:02.1597837Z   fetch-tags: false
+2024-09-02T07:02:02.1598392Z   show-progress: true
+2024-09-02T07:02:02.1598859Z   lfs: false
+2024-09-02T07:02:02.1599210Z   submodules: false
+2024-09-02T07:02:02.1599720Z   set-safe-directory: true
+2024-09-02T07:02:02.1600217Z ##[endgroup]
+2024-09-02T07:02:02.3751785Z Syncing repository: tenstorrent/tt-metal
+2024-09-02T07:02:02.3754071Z ##[group]Getting Git version info
+2024-09-02T07:02:02.3755086Z Working directory is '/home/runner/work/tt-metal/tt-metal'
+2024-09-02T07:02:02.3756599Z [command]/usr/bin/git version
+2024-09-02T07:02:02.3762413Z git version 2.46.0
+2024-09-02T07:02:02.3788569Z ##[endgroup]
+2024-09-02T07:02:02.3814252Z Temporarily overriding HOME='/home/runner/work/_temp/d62dadc8-82c6-4cff-86f7-a3d15bb8359b' before making global git config changes
+2024-09-02T07:02:02.3817139Z Adding repository directory to the temporary git global config as a safe directory
+2024-09-02T07:02:02.3820514Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/tt-metal/tt-metal
+2024-09-02T07:02:02.3857487Z Deleting the contents of '/home/runner/work/tt-metal/tt-metal'
+2024-09-02T07:02:02.3861470Z ##[group]Initializing the repository
+2024-09-02T07:02:02.3866505Z [command]/usr/bin/git init /home/runner/work/tt-metal/tt-metal
+2024-09-02T07:02:02.3948317Z hint: Using 'master' as the name for the initial branch. This default branch name
+2024-09-02T07:02:02.3950081Z hint: is subject to change. To configure the initial branch name to use in all
+2024-09-02T07:02:02.3951917Z hint: of your new repositories, which will suppress this warning, call:
+2024-09-02T07:02:02.3953511Z hint:
+2024-09-02T07:02:02.3954485Z hint: 	git config --global init.defaultBranch <name>
+2024-09-02T07:02:02.3956028Z hint:
+2024-09-02T07:02:02.3956761Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2024-09-02T07:02:02.3958177Z hint: 'development'. The just-created branch can be renamed via this command:
+2024-09-02T07:02:02.3959100Z hint:
+2024-09-02T07:02:02.3959516Z hint: 	git branch -m <name>
+2024-09-02T07:02:02.3960591Z Initialized empty Git repository in /home/runner/work/tt-metal/tt-metal/.git/
+2024-09-02T07:02:02.3965867Z [command]/usr/bin/git remote add origin https://github.com/tenstorrent/tt-metal
+2024-09-02T07:02:02.4002947Z ##[endgroup]
+2024-09-02T07:02:02.4004444Z ##[group]Disabling automatic garbage collection
+2024-09-02T07:02:02.4007877Z [command]/usr/bin/git config --local gc.auto 0
+2024-09-02T07:02:02.4037914Z ##[endgroup]
+2024-09-02T07:02:02.4039498Z ##[group]Setting up auth
+2024-09-02T07:02:02.4045881Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2024-09-02T07:02:02.4078110Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2024-09-02T07:02:02.4429404Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2024-09-02T07:02:02.4460989Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2024-09-02T07:02:02.4693662Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2024-09-02T07:02:02.4737204Z ##[endgroup]
+2024-09-02T07:02:02.4738128Z ##[group]Fetching the repository
+2024-09-02T07:02:02.4746023Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +a9bcd03b1775ab989aebab822ec2e4f821abac41:refs/remotes/origin/main
+2024-09-02T07:02:04.2333991Z From https://github.com/tenstorrent/tt-metal
+2024-09-02T07:02:04.2334816Z  * [new ref]         a9bcd03b1775ab989aebab822ec2e4f821abac41 -> origin/main
+2024-09-02T07:02:04.2362514Z ##[endgroup]
+2024-09-02T07:02:04.2363297Z ##[group]Determining the checkout info
+2024-09-02T07:02:04.2365527Z ##[endgroup]
+2024-09-02T07:02:04.2370762Z [command]/usr/bin/git sparse-checkout disable
+2024-09-02T07:02:04.2411705Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2024-09-02T07:02:04.2438675Z ##[group]Checking out the ref
+2024-09-02T07:02:04.2442239Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2024-09-02T07:02:04.7735727Z Switched to a new branch 'main'
+2024-09-02T07:02:04.7736699Z branch 'main' set up to track 'origin/main'.
+2024-09-02T07:02:04.7762147Z ##[endgroup]
+2024-09-02T07:02:04.7805683Z [command]/usr/bin/git log -1 --format='%H'
+2024-09-02T07:02:04.7828907Z 'a9bcd03b1775ab989aebab822ec2e4f821abac41'
+2024-09-02T07:02:04.8104470Z ##[group]Run psf/black@23.10.1
+2024-09-02T07:02:04.8104779Z with:
+2024-09-02T07:02:04.8105011Z   options: --check --diff
+2024-09-02T07:02:04.8105277Z   src: .
+2024-09-02T07:02:02.3861470Z ##[group]Initializing the repository
+2024-09-02T07:02:02.3866505Z [command]/usr/bin/git init /home/runner/work/tt-metal/tt-metal
+2024-09-02T07:02:02.3948317Z hint: Using 'master' as the name for the initial branch. This default branch name
+2024-09-02T07:02:02.3950081Z hint: is subject to change. To configure the initial branch name to use in all
+2024-09-02T07:02:02.3951917Z hint: of your new repositories, which will suppress this warning, call:
+2024-09-02T07:02:02.3953511Z hint:
+2024-09-02T07:02:02.3954485Z hint: 	git config --global init.defaultBranch <name>
+2024-09-02T07:02:02.3956028Z hint:
+2024-09-02T07:02:02.3956761Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2024-09-02T07:02:02.3958177Z hint: 'development'. The just-created branch can be renamed via this command:
+2024-09-02T07:02:02.3959100Z hint:
+2024-09-02T07:02:02.3959516Z hint: 	git branch -m <name>
+2024-09-02T07:02:02.3960591Z Initialized empty Git repository in /home/runner/work/tt-metal/tt-metal/.git/
+2024-09-02T07:02:02.3965867Z [command]/usr/bin/git remote add origin https://github.com/tenstorrent/tt-metal
+2024-09-02T07:02:02.4002947Z ##[endgroup]
+2024-09-02T07:02:02.4004444Z ##[group]Disabling automatic garbage collection
+2024-09-02T07:02:02.4007877Z [command]/usr/bin/git config --local gc.auto 0
+2024-09-02T07:02:02.4037914Z ##[endgroup]
+2024-09-02T07:02:02.4039498Z ##[group]Setting up auth
+2024-09-02T07:02:02.4045881Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2024-09-02T07:02:02.4078110Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2024-09-02T07:02:02.4429404Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2024-09-02T07:02:02.4460989Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2024-09-02T07:02:02.4693662Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2024-09-02T07:02:02.4737204Z ##[endgroup]
+2024-09-02T07:02:02.4738128Z ##[group]Fetching the repository
+2024-09-02T07:02:02.4746023Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +a9bcd03b1775ab989aebab822ec2e4f821abac41:refs/remotes/origin/main
+2024-09-02T07:02:04.2333991Z From https://github.com/tenstorrent/tt-metal
+2024-09-02T07:02:04.2334816Z  * [new ref]         a9bcd03b1775ab989aebab822ec2e4f821abac41 -> origin/main
+2024-09-02T07:02:04.2362514Z ##[endgroup]
+2024-09-02T07:02:04.2363297Z ##[group]Determining the checkout info
+2024-09-02T07:02:04.2365527Z ##[endgroup]
+2024-09-02T07:02:04.2370762Z [command]/usr/bin/git sparse-checkout disable
+2024-09-02T07:02:04.2411705Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2024-09-02T07:02:04.2438675Z ##[group]Checking out the ref
+2024-09-02T07:02:04.2442239Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2024-09-02T07:02:04.7735727Z Switched to a new branch 'main'
+2024-09-02T07:02:04.7736699Z branch 'main' set up to track 'origin/main'.
+2024-09-02T07:02:04.7762147Z ##[endgroup]
+2024-09-02T07:02:04.7805683Z [command]/usr/bin/git log -1 --format='%H'
+2024-09-02T07:02:04.7828907Z 'a9bcd03b1775ab989aebab822ec2e4f821abac41'
+2024-09-02T07:02:04.8104470Z ##[group]Run psf/black@23.10.1
+2024-09-02T07:02:04.8104779Z with:
+2024-09-02T07:02:04.8105011Z   options: --check --diff
+2024-09-02T07:02:04.8105277Z   src: .
+2024-09-02T07:02:04.8105478Z   jupyter: false
+2024-09-02T07:02:04.8105714Z   summary: true
+2024-09-02T07:02:04.8105939Z ##[endgroup]
+2024-09-02T07:02:04.8389382Z ##[group]Run # Even when black fails, do not close the shell
+2024-09-02T07:02:04.8389980Z [36;1m# Even when black fails, do not close the shell[0m
+2024-09-02T07:02:04.8390387Z [36;1mset +e[0m
+2024-09-02T07:02:04.8390609Z [36;1m[0m
+2024-09-02T07:02:04.8390874Z [36;1mif [ "$RUNNER_OS" == "Windows" ]; then[0m
+2024-09-02T07:02:04.8391228Z [36;1m  runner="python"[0m
+2024-09-02T07:02:04.8391496Z [36;1melse[0m
+2024-09-02T07:02:04.8391730Z [36;1m  runner="python3"[0m
+2024-09-02T07:02:04.8391998Z [36;1mfi[0m
+2024-09-02T07:02:04.8392199Z [36;1m[0m
+2024-09-02T07:02:04.8392513Z [36;1mout=$(${runner} $GITHUB_ACTION_PATH/action/main.py)[0m
+2024-09-02T07:02:04.8392953Z [36;1mexit_code=$?[0m
+2024-09-02T07:02:04.8393218Z [36;1m[0m
+2024-09-02T07:02:04.8393487Z [36;1m# Display the raw output in the step[0m
+2024-09-02T07:02:04.8394077Z [36;1mecho "${out}"[0m
+2024-09-02T07:02:04.8394327Z [36;1m[0m
+2024-09-02T07:02:04.8394557Z [36;1mif [ "true" == "true" ]; then[0m
+2024-09-02T07:02:04.8394963Z [36;1m  # Display the Markdown output in the job summary[0m
+2024-09-02T07:02:04.8395435Z [36;1m  echo "\`\`\`python" >> $GITHUB_STEP_SUMMARY[0m
+2024-09-02T07:02:04.8395854Z [36;1m  echo "${out}" >> $GITHUB_STEP_SUMMARY[0m
+2024-09-02T07:02:04.8396256Z [36;1m  echo "\`\`\`" >> $GITHUB_STEP_SUMMARY[0m
+2024-09-02T07:02:04.8396665Z [36;1mfi[0m
+2024-09-02T07:02:04.8397094Z [36;1m[0m
+2024-09-02T07:02:04.8397381Z [36;1m# Exit with the exit-code returned by Black[0m
+2024-09-02T07:02:04.8397749Z [36;1mexit ${exit_code}[0m
+2024-09-02T07:02:04.8591909Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-02T07:02:04.8592414Z env:
+2024-09-02T07:02:04.8592743Z   INPUT_OPTIONS: --check --diff
+2024-09-02T07:02:04.8593116Z   INPUT_SRC: .
+2024-09-02T07:02:04.8593405Z   INPUT_JUPYTER: false
+2024-09-02T07:02:04.8593718Z   INPUT_BLACK_ARGS: 
+2024-09-02T07:02:04.8594018Z   INPUT_VERSION: 
+2024-09-02T07:02:04.8594309Z   pythonioencoding: utf-8
+2024-09-02T07:02:04.8594636Z ##[endgroup]
+2024-09-02T07:02:24.2221562Z Installing black[colorama]==23.10.1...
+2024-09-02T07:02:24.2222661Z Skipping .ipynb files as Jupyter dependencies are not installed.
+2024-09-02T07:02:24.2223829Z You can fix this by running ``pip install "black[jupyter]"``
+2024-09-02T07:02:24.2225476Z All done! ✨ 🍰 ✨
+2024-09-02T07:02:24.2226224Z 1374 files would be left unchanged.
+2024-09-02T07:02:24.2331129Z Post job cleanup.
+2024-09-02T07:02:24.3295667Z [command]/usr/bin/git version
+2024-09-02T07:02:24.3331902Z git version 2.46.0
+2024-09-02T07:02:24.3373590Z Temporarily overriding HOME='/home/runner/work/_temp/8128f705-597c-42c2-93a5-92edadef7d17' before making global git config changes
+2024-09-02T07:02:24.3375216Z Adding repository directory to the temporary git global config as a safe directory
+2024-09-02T07:02:24.3386454Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/tt-metal/tt-metal
+2024-09-02T07:02:24.3423545Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2024-09-02T07:02:24.3455207Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2024-09-02T07:02:24.3700990Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2024-09-02T07:02:24.3722932Z http.https://github.com/.extraheader
+2024-09-02T07:02:24.3735618Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2024-09-02T07:02:24.3767449Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2024-09-02T07:02:24.4240424Z Cleaning up orphan processes

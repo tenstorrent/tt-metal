@@ -12,16 +12,6 @@ from loguru import logger
 from infra.data_collection import junit_xml_utils, pydantic_models
 
 
-WORKFLOW_OUTPUTS_DIR_ = pathlib.Path("generated/cicd").resolve()
-
-
-def get_workflow_outputs_dir():
-    workflow_outputs_dir = WORKFLOW_OUTPUTS_DIR_.resolve()
-    assert workflow_outputs_dir.is_dir()
-    assert workflow_outputs_dir.exists()
-    return workflow_outputs_dir
-
-
 def get_workflow_run_uuids_to_test_reports_paths_(workflow_outputs_dir, workflow_run_id: int):
     artifacts_dir = workflow_outputs_dir / str(workflow_run_id) / "artifacts"
 
