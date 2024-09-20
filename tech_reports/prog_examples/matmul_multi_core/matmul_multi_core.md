@@ -1,6 +1,4 @@
----
-title: Matmul (Multi Core)
----
+# Matmul (Multi Core)
 
 We\'ll build a program that will perform matmul operations on two
 tensors with equal-size inner dimension on as many cores as possible on
@@ -23,12 +21,13 @@ To build and execute, you may use the following commands. Note that we
 include the necessary environment variables here, but you may possibly
 need more depending on the most up-to-date installation methods.
 
+```bash
     export ARCH_NAME=<arch name>
     export TT_METAL_HOME=<this repo dir>
     ./build_metal.sh
     ./build/programming_examples/matmul_multi_core
-
-# Accessing all the cores
+```
+## Accessing all the cores
 
 We first must get information on the layout of the entire chip. This
 means the grid of cores and its x/y dimensions in number of cores.
@@ -39,7 +38,7 @@ uint32_t num_cores_x = compute_with_storage_grid_size.x;
 uint32_t num_cores_y = compute_with_storage_grid_size.y;
 ```
 
-# Splitting the work across cores
+## Splitting the work across cores
 
 We need to split the work across multiple cores. This means figuring out
 how many tiles each core will use to compute the matmul.
@@ -71,7 +70,7 @@ This means we will need to be careful when it comes programming each set
 of cores. We also need to account for the case where we can evenly
 distribute work, meaning the second set will be empty.
 
-# Using different kernels for reader/writer
+## Using different kernels for reader/writer
 
 We use more complex reader/writer kernels to feed our compute engine.
 
@@ -94,7 +93,7 @@ auto writer_id = tt_metal::CreateKernel(
     tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 ```
 
-# Compute kernel args
+## Compute kernel args
 
 We need to account for the fact that we may two separate groups of cores
 that require different arguments for tile count.
@@ -131,7 +130,7 @@ if (!core_group_2.ranges().empty()) {
 }
 ```
 
-# Reader/writer kernel runtime args
+## Reader/writer kernel runtime args
 
 Here, we introduce the concept of looping over all cores to apply an
 API.
@@ -181,7 +180,7 @@ for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
 }
 ```
 
-# Conclusion
+## Conclusion
 
 Those are all the major changes that we made in order to upgrade our
 single core matmul example into one that will use as many cores as

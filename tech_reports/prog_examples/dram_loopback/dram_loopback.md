@@ -1,6 +1,4 @@
----
-title: DRAM Loopback
----
+# DRAM Loopback
 
 We will build a program in TT-Metal that will simply copy data from one
 DRAM buffer to another, using the compute engine and an intermediate L1
@@ -20,7 +18,7 @@ need more depending on the most up-to-date installation methods.
     ./build_metal.sh
     ./build/programming_examples/loopback
 
-# Silicon accelerator setup
+## Silicon accelerator setup
 
 ``` cpp
 constexpr int device_id = 0;
@@ -29,7 +27,7 @@ Device *device = CreateDevice(device_id);
 
 We instantiate a device to control our `GRAYSKULL` type accelerator.
 
-# Program pre-compilation setup
+## Program pre-compilation setup
 
 ``` cpp
 CommandQueue& cq = detail::GetCommandQueue(device);
@@ -43,7 +41,7 @@ commands for asynchronous reads/writes/program management.
 Next, we create a `Program` to be run on our Grayskull accelerator. This
 is how we\'ll be keeping track of things in our session with the device.
 
-# Building a data movement kernel
+## Building a data movement kernel
 
 Declare a kernel for data movement. We\'ll use a pre-written kernel that
 copies data from one place to another.
@@ -61,7 +59,7 @@ KernelHandle dram_copy_kernel_id = CreateKernel(
 );
 ```
 
-# Create buffers in DRAM and L1
+## Create buffers in DRAM and L1
 
 Next, we need to declare buffers that we will use during execution. We
 will need
@@ -104,7 +102,7 @@ Buffer output_dram_buffer = CreateBuffer(dram_config);
 const uint32_t output_dram_buffer_addr = output_dram_buffer.address();
 ```
 
-# Sending real data into DRAM
+## Sending real data into DRAM
 
 ``` cpp
 std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
@@ -117,7 +115,7 @@ tensor.
 
 We use a non-blocking call so we can continue setting up our program.
 
-# Setting runtime arguments for the data movement kernel
+## Setting runtime arguments for the data movement kernel
 
 ``` cpp
 const std::vector<uint32_t> runtime_args = {
@@ -149,7 +147,7 @@ particular kernel, we have to provide:
 -   The location of the output DRAM buffer\'s channel on the NOC
 -   The size of the buffers
 
-# Running the program
+## Running the program
 
 ``` cpp
 EnqueueProgram(cq, program, false);
@@ -159,7 +157,7 @@ Finish(cq);
 Now we finally launch our program. The `Finish` call waits for the
 program to return a finished status.
 
-# Launch and verify output
+## Launch and verify output
 
 Then we can finally read back the data from the output buffer and assert
 that it matches what we sent!
@@ -174,7 +172,7 @@ pass &= input_vec == result_vec;
 We use a blocking call this time because we want to get all the data
 before doing a comparison.
 
-# Validation and teardown
+## Validation and teardown
 
 ``` cpp
 pass &= CloseDevice(device);

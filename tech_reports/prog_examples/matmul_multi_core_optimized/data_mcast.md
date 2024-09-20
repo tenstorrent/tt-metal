@@ -1,6 +1,4 @@
----
-title: Data Multicasting in [matmul_multicore_reuse_mcast]{.title-ref}
----
+# Data Multicasting in [matmul_multicore_reuse_mcast]{.title-ref}
 
 **Note**: This example only works on Grayskull.
 
@@ -16,7 +14,7 @@ the coregrid\'s edges, and cascade work core-to-core dynamically. A fun
 tidbit: \"torrent\" in Tenstorrent pays homage to this concept of tensor
 computation flowing like an ultra fast stream of water.
 
-# Additional Compile-Time Argument
+## Additional Compile-Time Argument
 
 We introduced an out_block_num_tiles parameter in our reuse example, yet
 in our mcast example, we leverage it at compile time to navigate the
@@ -32,7 +30,7 @@ out_block_tiles // out_block_num_tiles
 log_info(tt::LogVerif, " -- out_block_tiles= {} --", out_block_tiles);
 ```
 
-# Configuring Core Ranges for Tile Distribution
+## Configuring Core Ranges for Tile Distribution
 
 We can define our coregrid from any upper-left corner and define its
 range with any height and width that our problem calls for. The cores
@@ -138,7 +136,7 @@ kernels:
     in1 sender+writer
     in1 receiver+writer
 
-# Circular Buffer Creation for CoreGrid
+## Circular Buffer Creation for CoreGrid
 
 Recall in our data reuse example, we created our L1 circular buffers for
 all the cores like so:
@@ -159,7 +157,7 @@ In fact, you can instantiate circular buffers on any one of these three
 options: `const std::variant<CoreCoord, CoreRange, CoreRangeSet>`.
 Please refer to the CircularBuffers page for further details.
 
-# Multicast Reader/Writer Kernel Setup
+## Multicast Reader/Writer Kernel Setup
 
 In datareuse, we spawned reader and writer kernels per core. In mcast,
 we have desginated core ranges (or more generally speaking, \"groups\"),
@@ -224,7 +222,7 @@ mcast scheme.
     in0_mcast_dest_noc_end_x
     in0_mcast_dest_noc_end_y
 
-# New Compute Kernel: Fused Bias Addition and Activation Functions
+## New Compute Kernel: Fused Bias Addition and Activation Functions
 
 Like all the examples preceeding, we call our compute kernel as usual,
 except here we introduce a new one called
@@ -285,7 +283,7 @@ d.  **Handling Partial Results**
     > }
     > ```
 
-# Semaphores
+## Semaphores
 
 To cleanly coordinate the distribution and processing of in0 and in1
 tiles in our mcast strategy, we should introduce semaphores. Without
@@ -306,7 +304,7 @@ auto in1_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, 
 auto in1_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 ```
 
-# Kernel Runtime Arguments
+## Kernel Runtime Arguments
 
 Recall that we just desginated NCRISCs to handle our DRAM-\>CoreGrid L1
 data movement. METALIUM lets us pass in a buffer of tensors and

@@ -1,11 +1,10 @@
----
-title: Eltwise binary
----
+# Eltwise binary
+
 
 We now build a program that will perform eltwise binary operations on a
 some equal-sized tensors.
 
-We\'ll go through any new code section by section. This builds on top of
+We'll go through any new code section by section. This builds on top of
 previous examples. Note that we have this exact, full example program in
 `tt_metal/programming_examples/eltwise_binary/eltwise_binary.cpp`, so
 you can follow along.
@@ -14,12 +13,13 @@ To build and execute, you may use the following commands. Note that we
 include the necessary environment variables here, but you may possibly
 need more depending on the most up-to-date installation methods.
 
+```bash
     export ARCH_NAME=<arch name>
     export TT_METAL_HOME=<this repo dir>
     ./build_metal.sh
     ./build/programming_examples/eltwise_binary
-
-# New buffers
+```
+## New buffers
 
 In terms of DRAM buffers, We just need a new buffer for a 2nd source,
 because we have two source tensors (vectors).
@@ -52,7 +52,7 @@ We will create two input circular buffers to accommodate our two input
 tensors, and an output one for the result of the eltwise binary
 operation.
 
-# Compute kernel declaration and compile-time defines
+## Compute kernel declaration and compile-time defines
 
 ``` cpp
 KernelHandle eltwise_binary_kernel_id = CreateKernel(
@@ -73,7 +73,7 @@ We will declare what kind of compute kernel we\'re using and further
 specify we want to use the `add_tiles` eltwise binary op, for eltwise
 adding.
 
-# Extra source tensor
+## Extra source tensor
 
 ``` cpp
 constexpr float val_to_add = -1.0f;
@@ -85,7 +85,7 @@ detail::WriteToBuffer(src1_dram_buffer, src1_vec);
 In this program, we have a second source tensor. We will be adding this
 to the first source tensor.
 
-# Conclusion
+## Conclusion
 
 Those are the additional steps for getting eltwise binary operations up
 and running on the compute engine. We essentially repeat the same

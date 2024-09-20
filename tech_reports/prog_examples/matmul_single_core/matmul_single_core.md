@@ -1,8 +1,6 @@
----
-title: Matmul (Single Core)
----
+# Matmul (Single Core)
 
-We\'ll build a program that will perform matmul operations on two
+We'll build a program that will perform matmul operations on two
 tensors with equal-size inner dimension. We will then go through
 specific sections of the program.
 
@@ -12,13 +10,14 @@ The full example program is in
 To build and execute, you may use the following commands. Note that we
 include the necessary environment variables here, but you may possibly
 need more depending on the most up-to-date installation methods.
-
+```bash
     export ARCH_NAME=<arch name>
     export TT_METAL_HOME=<this repo dir>
     ./build_metal.sh
     ./build/programming_examples/matmul_single_core
+```
 
-# Host Code
+## Host Code
 
 The initial level of host-side code can broken up into sections:
 
@@ -64,7 +63,7 @@ We are keeping all code details with specific host API calls inside
 `matmul_single_core`, allowing for calling consecutive functions in the
 main function.
 
-# Main blocks in matmul_single_core function
+## Main blocks in matmul_single_core function
 
 We will go through sections of the `matmul_single_core` function:
 
@@ -75,7 +74,7 @@ We will go through sections of the `matmul_single_core` function:
 -   Program launch and reading data from DRAM output buffer to result
     vector
 
-# Create Program, Enqueue initialization, and core range definition
+## Create Program, Enqueue initialization, and core range definition
 
 We want a just a single core, so we will restrict the core range to be
 just one core at (0, 0).
@@ -86,7 +85,7 @@ Program program{};
 CoreRange core({0, 0}, {0, 0});
 ```
 
-# Create DRAM buffers & Circular buffers
+## Create DRAM buffers & Circular buffers
 
 In terms of DRAM buffers, we need two source buffers and one destination
 buffer.
@@ -160,7 +159,7 @@ tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig
 auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 ```
 
-# Compile-time kernels arguments
+## Compile-time kernels arguments
 
 We have to declare some compile-time arguments for read/write kernels.
 Some default parameters here will suffice.
@@ -181,7 +180,7 @@ vector<uint32_t> compute_args = {
 };
 ```
 
-# Compute kernel declaration and compile-time defines
+## Compute kernel declaration and compile-time defines
 
 We\'re using a special reader kernel to take in data from DRAM into L1,
 and a special writer kernel to write out results from the compute engine
@@ -208,7 +207,7 @@ auto matmul_single_core_kernel_id = tt_metal::CreateComputeKernel(
 );
 ```
 
-# Runtime arguments and program launch
+## Runtime arguments and program launch
 
 We will now set runtime arguments for the reader and writer kernels to
 run the matmul operation on a single core and a single tile at a time.
@@ -235,7 +234,7 @@ EnqueueProgram(cq, program, false);
 EnqueueReadBuffer(cq, dst_dram_buffer, output.data(), true);
 ```
 
-# Conclusion
+## Conclusion
 
 Those are the additional steps for getting `matmul_single_core`
 operations up and running on the compute engine. To see a more

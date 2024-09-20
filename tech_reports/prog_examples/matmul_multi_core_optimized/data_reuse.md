@@ -1,11 +1,9 @@
----
-title: Data Reuse in [matmul_multicore_reuse]{.title-ref}
----
+# Data Reuse in [matmul_multicore_reuse]{.title-ref}
 
-# Fine-Grained Block Size Control
+## Fine-Grained Block Size Control
 
 Advanced matrix dimension controls are found in the Programming
-Example\'s matmul_common directory, namely Block Matrix Multiply Ops
+Example's matmul_common directory, namely Block Matrix Multiply Ops
 (bmm_op.hpp). Including this header allows us advanced dynamic means of
 defining and retrieving matrix parameters. Our matmul kernels that work
 out-of-the-box perform on row-major and tile-major layouts, so you have
@@ -49,7 +47,7 @@ constexpr std::array<std::tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {
 }};
 ```
 
-# Intermediate Circular Buffer Configuration
+## Intermediate Circular Buffer Configuration
 
 In addition to our double-buffer config, we introduce a third circular
 buffer denoted as `interm0_cb_index`. Out of the 32 possible circular
@@ -72,7 +70,7 @@ CircularBufferConfig cb_output_config = CircularBufferConfig(out_CB_size, output
 auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 ```
 
-# Stride Kernel Arguments
+## Stride Kernel Arguments
 
 The runtime arguments for the read, write, and compute kernels are set
 up in a certain way to employ data reuse through the intermediate
@@ -276,7 +274,7 @@ c.  **Wrapping Up the Intermediate Buffer**:
     >     the cycle of reuse, so now we free up the space in the
     >     intermediate circular buffer with `cb_pop_front(...)`.
 
-# Conclusion
+## Conclusion
 
 Those are the additional steps for getting `matmul_multicore_data_reuse`
 operations up and running on the compute engine. To see a more

@@ -1,11 +1,9 @@
----
-title: Eltwise SFPU
----
+# Eltwise SFPU
 
 We now build a program that will perform an eltwise SFPU unary operation
 on a single tensor.
 
-We\'ll go through any new code section by section. This builds on top of
+We'll go through any new code section by section. This builds on top of
 previous examples. Note that we have this exact, full example program in
 `tt_metal/programming_examples/eltwise_sfpu/eltwise_sfpu.cpp`, so you
 can follow along.
@@ -19,7 +17,7 @@ need more depending on the most up-to-date installation methods.
     ./build_metal.sh
     ./build/programming_examples/eltwise_sfpu
 
-# Circular buffers for data movement to/from compute engine
+## Circular buffers for data movement to/from compute engine
 
 The number of buffers we\'re using in DRAM will stay the same. However,
 we need to declare some circular buffers to enable data transfer between
@@ -40,7 +38,7 @@ CBHandle cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_con
 We will create one input circular buffers to accommodate our input
 tensor, and an output one for the result of the eltwise sfpu operation.
 
-# Compile-time compute kernel arguments
+## Compile-time compute kernel arguments
 
 ``` cpp
 std::vector<uint32_t> compute_kernel_args = {
@@ -55,7 +53,7 @@ default parameters here will suffice.
 These two parameters essentially tell the kernel how much data we\'ll be
 moving in one invocation.
 
-# Compute kernel declaration and compile-time defines
+## Compute kernel declaration and compile-time defines
 
 ``` cpp
 const std::map<std::string, std::string> sfpu_defines = {
@@ -83,7 +81,7 @@ to control what kind of op we\'re using. In this case, we need to use
 into the kernel C++ kernel files and `SFPU_OP_CHAIN_0` to declare which
 device compute API functions to use.
 
-# Extra runtime arguments for reader/writer
+## Extra runtime arguments for reader/writer
 
 ``` cpp
 SetRuntimeArgs(
@@ -106,7 +104,7 @@ from the compute engine back to the destination DRAM buffer.
 That means two sets of runtime arguments for data movement kernels. In
 the DRAM loopback example, we only had a single data movement kernel.
 
-# Conclusion
+## Conclusion
 
 Those are the additional steps for getting eltwise sfpu operations up
 and running on the compute engine. For some complicated compute, please
