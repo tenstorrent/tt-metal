@@ -44,18 +44,8 @@ jobs:
       matrix:
         os: ["ubuntu-20.04"]
         test-group:
-          - name: ttnn group 1
-            cmd: pytest tests/ttnn/unit_tests -xv --splits 6 --group 1 -m "not disable_fast_runtime_mode"
           - name: ttnn group 2
             cmd: pytest tests/ttnn/unit_tests -xv --splits 6 --group 2 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 3
-            cmd: pytest tests/ttnn/unit_tests -xv --splits 6 --group 3 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 4
-            cmd: pytest tests/ttnn/unit_tests -xv --splits 6 --group 4 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 5
-            cmd: pytest tests/ttnn/unit_tests -xv --splits 6 --group 5 -m "not disable_fast_runtime_mode"
-          - name: ttnn group 6
-            cmd: pytest tests/ttnn/unit_tests -xv --splits 6 --group 6 -m "not disable_fast_runtime_mode"
           - name: ttnn fast runtime off
             cmd: pytest tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
             fast_runtime_mode_off: true
@@ -68,7 +58,7 @@ jobs:
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on:
       - ${{ inputs.runner-label }}
-      - "in-service"
+      - "issue-12891"
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - uses: actions/download-artifact@v4
