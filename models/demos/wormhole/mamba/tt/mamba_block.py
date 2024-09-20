@@ -196,8 +196,8 @@ class TtMambaBlock(torch.nn.Module):
 
             for i in range(0, 4):
                 slice_start = (0, 0, x_ssm.shape[2] - (4 - i), 0)
-                slice_end = (0, 0, x_ssm.shape[2] - (4 - i), self.args.d_inner - 1)
-                entry = ttnn.slice(x_ssm, ttnn.Shape(slice_start), ttnn.Shape(slice_end))
+                slice_end = (1, 1, (x_ssm.shape[2] - (4 - i)) + 1, self.args.d_inner)
+                entry = ttnn.slice(x_ssm, slice_start, slice_end)
                 self.convolution_cache.set(self.configs["current_user"], i, entry)
                 ttnn.deallocate(entry)
 

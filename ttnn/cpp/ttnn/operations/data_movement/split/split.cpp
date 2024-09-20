@@ -44,7 +44,7 @@ namespace detail {
 
         for (int i = 0; i < num_splits; i++) {
             auto start = i*chunk_len;
-            auto end = start + chunk_len - 1;
+            auto end = start + chunk_len;
 
             std::vector<uint32_t> start_shape(preproc_shape.size(), 0);
             start_shape[dim] = start;
@@ -54,14 +54,14 @@ namespace detail {
                 if (j == dim) {
                     end_shape[j] = end;
                 } else {
-                    end_shape[j] = preproc_shape[j] - 1;
+                    end_shape[j] = preproc_shape[j];
                 }
             }
 
             Tensor output_chunk = ttnn::slice(preprocessed,
-                                              tt::tt_metal::LegacyShape(start_shape),
-                                              tt::tt_metal::LegacyShape(end_shape),
-                                              std::nullopt,
+                                              start_shape,
+                                              end_shape,
+                                              std::vector<uint32_t>(end_shape.size(), 1),
                                               mem_config);
             if (input_rank < 4) {
                 output_chunk = ttnn::squeeze_from_4D(output_chunk, input_rank);

@@ -202,7 +202,7 @@ def test_time_sharded_attnention_hwb(
         v_slice = ttnn.slice(
             reference_value_layer,
             (0, (i * heads_per_slice), 0, 0),
-            (0, (i * heads_per_slice) + (heads_per_slice - 1), seq_len - 1, 63),
+            (1, (i * heads_per_slice) + (heads_per_slice), seq_len, 64),
             memory_config=dram_interleaved_memory_config,
         )
 
@@ -339,7 +339,7 @@ def test_time_sharded_attnention(
         k_slice = ttnn.slice(
             reference_key_layer_transposed,
             (0, (i * heads_per_slice), 0, 0),
-            (0, (i * heads_per_slice) + (heads_per_slice - 1), 63, seq_len - 1),
+            (1, (i * heads_per_slice) + (heads_per_slice), 64, seq_len),
             memory_config=l1_interleaved_memory_config,
         )
         mm_slice = ttnn.matmul(
@@ -376,7 +376,7 @@ def test_time_sharded_attnention(
         v_slice = ttnn.slice(
             reference_value_layer,
             (0, (i * heads_per_slice), 0, 0),
-            (0, (i * heads_per_slice) + (heads_per_slice - 1), seq_len - 1, 63),
+            (1, (i * heads_per_slice) + (heads_per_slice), seq_len, 64),
             memory_config=l1_interleaved_memory_config,
         )
         mm_slice = ttnn.matmul(

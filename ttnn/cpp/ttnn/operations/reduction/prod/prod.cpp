@@ -99,6 +99,7 @@ Tensor ProdOperation::invoke(const Tensor& input_a, bool all_dimensions, int64_t
     }
     Tensor result = prod_nc(temp, dim, output_mem_config);
     // Permute and unpad result for dim 2,3
+    auto step = std::vector<uint32_t>({1, 1, 1, 1});
     if (dim == 0 || dim == 1 || dim == -4 || dim == -3) {
         return result;
     } else if (dim == 2 || dim == -2) {
@@ -106,8 +107,8 @@ Tensor ProdOperation::invoke(const Tensor& input_a, bool all_dimensions, int64_t
         Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
         tt::tt_metal::LegacyShape input_shape = input_a.get_legacy_shape();
         std::vector<uint32_t> start_index = {0, 0, 0, 0};
-        std::vector<uint32_t> end_index = {input_shape[0] - 1, input_shape[1] - 1, 0, input_shape[3] - 1};
-        return ttnn::slice(DefaultQueueId, required, start_index, end_index);
+        std::vector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[3]};
+        return ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);
     } else {  // dim 3
         // permute
         std::vector<int64_t> after_permute_dims = {1, 2, 0, 3};
@@ -115,8 +116,8 @@ Tensor ProdOperation::invoke(const Tensor& input_a, bool all_dimensions, int64_t
         // unpad
         tt::tt_metal::LegacyShape input_shape = input_a.get_legacy_shape();
         std::vector<uint32_t> start_index = {0, 0, 0, 0};
-        std::vector<uint32_t> end_index = {input_shape[0] - 1, input_shape[1] - 1, 0, input_shape[2] - 1};
-        Tensor new_unpad_tensor = ttnn::slice(DefaultQueueId, required, start_index, end_index);
+        std::vector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[2]};
+        Tensor new_unpad_tensor = ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);
         // permute back
         after_permute_dims = {0, 1, 3, 2};
         Tensor res_host = ttnn::permute(new_unpad_tensor, after_permute_dims, output_mem_config);

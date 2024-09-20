@@ -335,7 +335,7 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Le
     std::vector<uint32_t> output_tensor_end{};
     for (auto index = 0; index < input_tensor.get_legacy_shape().rank(); index++) {
         output_tensor_start.push_back(0);
-        output_tensor_end.push_back(output_tensor_shape[index] - 1);
+        output_tensor_end.push_back(output_tensor_shape[index]);
     }
     auto output = input_tensor.unpad(output_tensor_start, output_tensor_end);
     output = tt::tt_metal::set_tensor_id(output);

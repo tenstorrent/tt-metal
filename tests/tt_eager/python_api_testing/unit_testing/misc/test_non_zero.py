@@ -69,7 +69,7 @@ def test_indexed_slice(seed, B, b, tt_dtype, device):
     assert num_non_zeros == B - b
 
     a_pt = (
-        ttnn.slice(indices_tt, (0, 0, 0, 0), (0, 0, 0, num_non_zeros - 1), memory_config=mem_config)
+        ttnn.slice(indices_tt, (0, 0, 0, 0), (1, 1, 1, num_non_zeros), memory_config=mem_config)
         .cpu()
         .to(ttnn.ROW_MAJOR_LAYOUT)
         .to_torch()

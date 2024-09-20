@@ -302,7 +302,7 @@ def gen_tensor_unpad_args(
     assert len(input_shapes[0]) == 4
     test_args = {}
     output_tensor_start = [random.randint(0, input_shapes[0][i] - 1) for i in range(4)]
-    output_tensor_end = [random.randint(output_tensor_start[i], input_shapes[0][i] - 1) for i in range(4)]
+    output_tensor_end = [random.randint(output_tensor_start[i] + 1, input_shapes[0][i]) for i in range(4)]
 
     test_args.update(
         {
@@ -917,8 +917,10 @@ def gen_unpad_args(
         if input_info is not None:
             if input_info["layout"][0] == ttnn.ROW_MAJOR_LAYOUT:
                 output_tensor_start = [0, 0, 0, 0]
-                output_tensor_end = [random.randrange(output_tensor_start[i], input_shapes[0][i], 1) for i in range(4)]
-                if output_tensor_end[-1] % 2 == 0:
+                output_tensor_end = [
+                    random.randrange(output_tensor_start[i] + 1, input_shapes[0][i], 1) for i in range(4)
+                ]
+                if output_tensor_end[-1] % 2 != 0:
                     output_tensor_end[-1] += 1
                 input_info.update(
                     {
@@ -928,9 +930,11 @@ def gen_unpad_args(
                 )
             elif input_info["layout"][0] == ttnn.TILE_LAYOUT:
                 output_tensor_start = [0, 0, 0, 0]
-                output_tensor_end = [random.randrange(output_tensor_start[i], input_shapes[0][i], 1) for i in range(4)]
-                output_tensor_end[-2] = max(nearest_32(output_tensor_end[-2]), 32) - 1
-                output_tensor_end[-1] = max(nearest_32(output_tensor_end[-1]), 32) - 1
+                output_tensor_end = [
+                    random.randrange(output_tensor_start[i] + 1, input_shapes[0][i], 1) for i in range(4)
+                ]
+                output_tensor_end[-2] = max(nearest_32(output_tensor_end[-2]), 32)
+                output_tensor_end[-1] = max(nearest_32(output_tensor_end[-1]), 32)
                 input_info.update(
                     {
                         "output_tensor_start": output_tensor_start,

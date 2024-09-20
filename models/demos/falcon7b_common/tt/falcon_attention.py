@@ -618,7 +618,7 @@ class TtFalconAttentionDecode(nn.Module):
         key_layer = ttnn.slice(
             layer_past[0],
             [0, 0, 0, 0],
-            [batch - 1, 0, nearest_32(layer_past_len + 1) - 1, self.head_dim - 1],
+            [batch, 1, nearest_32(layer_past_len + 1), self.head_dim],
             memory_config=self.model_config["K_CACHE_SLICE_OUTPUT_MEMCFG"],
         )
 
@@ -747,7 +747,7 @@ class TtFalconAttentionDecode(nn.Module):
         value_layer = ttnn.slice(
             layer_past[1],
             [0, 0, 0, 0],
-            [batch - 1, 0, nearest_32(layer_past_len + 1) - 1, self.head_dim - 1],
+            [batch, 1, nearest_32(layer_past_len + 1), self.head_dim],
             memory_config=self.model_config["V_CACHE_SLICE_OUTPUT_MEMCFG"],
         )
         if self.model_config["l1_sharded"]:
@@ -800,10 +800,10 @@ class TtFalconAttentionDecode(nn.Module):
                 attn_output,
                 [0, 0, 0, 0],
                 [
-                    attn_output_shape[0] - 1,
-                    self.num_heads - 1,
-                    attn_output_shape[2] - 1,
-                    attn_output_shape[3] - 1,
+                    attn_output_shape[0],
+                    self.num_heads,
+                    attn_output_shape[2],
+                    attn_output_shape[3],
                 ],
                 memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
             )

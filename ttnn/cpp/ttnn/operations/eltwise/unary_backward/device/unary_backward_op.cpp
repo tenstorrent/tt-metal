@@ -1486,14 +1486,15 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     }
     // all_dimensions = False
     Tensor updated_grad = prod_result;
+    auto step = std::vector<uint32_t>({1, 1, 1, 1});
     if (prod_result.get_legacy_shape().without_padding() != grad.get_legacy_shape()) {
         if (dim == 3 || dim == -1) {
             std::vector<int64_t> after_permute_dims = {0, 3, 1, 2};
             Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
             std::vector<uint32_t> start_index = {0, 0, 0, 0};
             std::vector<uint32_t> end_index = {
-                grad.get_legacy_shape()[0] - 1, 0, grad.get_legacy_shape()[1] - 1, grad.get_legacy_shape()[2] - 1};
-            Tensor new_slice_tensor = ttnn::slice(DefaultQueueId, required, start_index, end_index);
+            grad.get_legacy_shape()[0], 1, grad.get_legacy_shape()[1], grad.get_legacy_shape()[2]};
+            Tensor new_slice_tensor = ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);
             after_permute_dims = {0, 2, 3, 1};
             updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
             if(updated_grad.storage_type() != StorageType::DEVICE && updated_grad.storage_type() != StorageType::MULTI_DEVICE) {
@@ -1506,8 +1507,8 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
             Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
             std::vector<uint32_t> start_index = {0, 0, 0, 0};
             std::vector<uint32_t> end_index = {
-                grad.get_legacy_shape()[0] - 1, 0, grad.get_legacy_shape()[1] - 1, grad.get_legacy_shape()[3] - 1};
-            Tensor new_slice_tensor = ttnn::slice(DefaultQueueId, required, start_index, end_index);
+            grad.get_legacy_shape()[0], 1, grad.get_legacy_shape()[1], grad.get_legacy_shape()[3]};
+            Tensor new_slice_tensor = ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);
             updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
             if(updated_grad.get_layout()==Layout::ROW_MAJOR){
                 updated_grad = ttnn::operations::unary_backward::change_layout_to_tile(updated_grad, output_memory_config);
@@ -1553,11 +1554,12 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
         if (reciprocal_input.get_legacy_shape()[1] % 32 != 0) {
             std::vector<uint32_t> start_index = {0, 0, 0, 0};
             std::vector<uint32_t> end_index = {
-                input.get_legacy_shape()[0] - 1,
-                input.get_legacy_shape()[1] - 1,
-                input.get_legacy_shape()[2] - 1,
-                input.get_legacy_shape()[3] - 1};
-            grad_result = ttnn::slice(DefaultQueueId, result, start_index, end_index);
+                input.get_legacy_shape()[0],
+                input.get_legacy_shape()[1],
+                input.get_legacy_shape()[2],
+                input.get_legacy_shape()[3]};
+            auto step = std::vector<uint32_t>({1,1,1,1});
+            grad_result = ttnn::slice(DefaultQueueId, result, start_index, end_index, step, std::nullopt);
         }
         grad_tensor.emplace_back(grad_result);
         return grad_tensor;
@@ -1587,11 +1589,11 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     if (reciprocal_input.get_legacy_shape()[0] % 32 != 0) {
         std::vector<uint32_t> start_index = {0, 0, 0, 0};
         std::vector<uint32_t> end_index = {
-            input.get_legacy_shape()[0] - 1,
-            input.get_legacy_shape()[1] - 1,
-            input.get_legacy_shape()[2] - 1,
-            input.get_legacy_shape()[3] - 1};
-        grad_result = ttnn::slice(DefaultQueueId, result, start_index, end_index);
+            input.get_legacy_shape()[0],
+            input.get_legacy_shape()[1],
+            input.get_legacy_shape()[2],
+            input.get_legacy_shape()[3]};
+        grad_result = ttnn::slice(DefaultQueueId, result, start_index, end_index, step, std::nullopt);
     }
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;

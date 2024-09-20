@@ -76,8 +76,7 @@ void SliceDeviceOperation::validate_with_output_tensors(
     TT_FATAL(input_tensor_a.get_legacy_shape().rank() == this->slice_start.rank() && this->slice_start.rank() == this->slice_end.rank(), "Error");
     for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
         TT_FATAL(this->slice_start[i] < input_tensor_a.get_legacy_shape()[i], "Error");
-        TT_FATAL(this->slice_end[i] < input_tensor_a.get_legacy_shape()[i], "Error");
-
+        TT_FATAL(this->slice_end[i] <= input_tensor_a.get_legacy_shape()[i], "Ends {} must be less than or equal to the shape of the tensor {}", this->slice_end[i], input_tensor_a.get_legacy_shape()[i]);
         // Check if start shape is <= end shape
         TT_FATAL(this->slice_start[i] <= this->slice_end[i], "Error");
     }
@@ -91,6 +90,7 @@ void SliceDeviceOperation::validate_with_output_tensors(
         TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Strided slice is only supported for row major layout");
         TT_FATAL(!input_tensor_a.is_sharded(), "Strided slice is not supported for sharded tensor");
         TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Strided slice is only supported for BFLOAT16");
+        TT_FATAL(this->step.value().size() == this->slice_end.rank(), "Number of steps {} must match number of ends/starts {}", this->step.value().size(), this->slice_end.rank());
     }
     if (input_tensor_a.get_layout() == Layout::TILE) {
         TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
@@ -122,16 +122,13 @@ std::vector<tt::tt_metal::LegacyShape> SliceDeviceOperation::compute_output_shap
     out_shape.reserve(rank);
     if (!step.has_value()) {
         for (uint32_t i = 0; i < rank; i++) {
-            out_shape.push_back(this->slice_end[i] - this->slice_start[i] + 1);
+            out_shape.push_back(this->slice_end[i] - this->slice_start[i]);
         }
     }
     else {
+
         auto output_dim_i = [this] (size_t i) {
-            int res = 0;
-            for (int j = this->slice_start[i]; j < this->slice_end[i] + 1; j+=this->step.value()[i]) {
-                res++;
-            }
-            return res;
+            return (this->slice_end[i] - this->slice_start[i] + this->step.value()[i] - 1) / this->step.value()[i];
         };
         for (uint32_t i = 0; i < rank; i++) {
             out_shape.push_back(output_dim_i(i));

@@ -76,7 +76,7 @@ class MambaConv:
             split_size = self.config.input_channels // self.config.channels_split_factor
             for i in range(self.config.channels_split_factor):
                 slice_start = ttnn.Shape((0, 0, 0, i * split_size))
-                slice_end = ttnn.Shape((0, self.config.input_length - 1, 0, (i + 1) * split_size - 1))
+                slice_end = ttnn.Shape((1, self.config.input_length, 1, (i + 1) * split_size))
                 input_tensor_splits.append(ttnn.slice(input_tensor, slice_start, slice_end))
             ttnn.deallocate(input_tensor)
             return input_tensor_splits

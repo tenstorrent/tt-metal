@@ -418,7 +418,7 @@ class TtLlamaModel_galaxy:
         norm_out = ttnn.slice(
             norm_out,
             [0, 0, seq_len - 32, 0],
-            [0, 0, seq_len - 1, dmodel - 1],
+            [1, 1, seq_len, dmodel],
         )
 
         ### Each device does an LM head fracture

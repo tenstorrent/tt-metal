@@ -368,7 +368,7 @@ class TtFalconMLPDecode(nn.Module):
             hidden_states = ttnn.slice(
                 hidden_states,
                 [0, 0, 0, 0],
-                [0, 0, batch_size - 1, self.hidden_size - 1],
+                [1, 1, batch_size, self.hidden_size],
                 memory_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
             )
 
