@@ -264,7 +264,7 @@ std::vector<DataFormat> get_unpack_dst_formats(
         } else if (int_fpu_en) {
             unpack_dst_format.push_back(src_format);
         } else {
-            if (!preserve_fp32_precision.empty() && en_unpack_tf32 && preserve_fp32_precision[i] != PreserveFP32Target::Disabled) {
+            if (input_formats[i] == DataFormat::Float32 && !preserve_fp32_precision.empty() && preserve_fp32_precision[i] != PreserveFP32Target::Disabled) {
                 TT_FATAL(preserve_fp32_precision[i] == PreserveFP32Target::DEST, "preserve_fp32_precision is only available when unpack target is DEST register");
                 unpack_dst_format.push_back(get_single_unpack_dst_format(input_formats[i], pack_format, DataFormat::Float32));
             } else {
@@ -273,7 +273,7 @@ std::vector<DataFormat> get_unpack_dst_formats(
         }
     }
     for (int i=0 ; i<NUM_OPERANDS ; i++) {
-        if (!preserve_fp32_precision.empty() && en_unpack_tf32 && preserve_fp32_precision[NUM_OPERANDS+i] != PreserveFP32Target::Disabled) {
+        if (param_formats[i] == DataFormat::Float32 && !preserve_fp32_precision.empty() && preserve_fp32_precision[NUM_OPERANDS+i] != PreserveFP32Target::Disabled) {
             TT_FATAL(preserve_fp32_precision[NUM_OPERANDS+i] == PreserveFP32Target::DEST, "preserve_fp32_precision is only available when unpack target is DEST register");
             unpack_dst_format.push_back(get_single_unpack_dst_format(param_formats[i], pack_format, DataFormat::Float32));
         } else {
@@ -281,7 +281,7 @@ std::vector<DataFormat> get_unpack_dst_formats(
         }
     }
     for (int i=0 ; i<NUM_OPERANDS ; i++) {
-        if (!preserve_fp32_precision.empty() && en_unpack_tf32 && preserve_fp32_precision[3*NUM_OPERANDS+i] != PreserveFP32Target::Disabled) {
+        if (intermed_formats[i] == DataFormat::Float32 && !preserve_fp32_precision.empty() && preserve_fp32_precision[3*NUM_OPERANDS+i] != PreserveFP32Target::Disabled) {
             TT_FATAL(preserve_fp32_precision[3*NUM_OPERANDS+i] == PreserveFP32Target::DEST, "preserve_fp32_precision is only available when unpack target is DEST register");
             unpack_dst_format.push_back(get_single_unpack_dst_format(intermed_formats[i], pack_format, DataFormat::Float32));
         } else {
