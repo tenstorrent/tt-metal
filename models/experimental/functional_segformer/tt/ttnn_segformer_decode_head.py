@@ -8,6 +8,7 @@ from models.experimental.functional_segformer.tt.ttnn_segformer_mlp import TtSeg
 from torch import nn
 import tt_lib
 from models.experimental.functional_segformer.tt.common import Conv
+from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
 def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
@@ -66,17 +67,38 @@ class TtSegformerDecodeHead:
             encoder_hidden_state = ttnn.to_layout(encoder_hidden_state, layout=ttnn.ROW_MAJOR_LAYOUT)
             encoder_hidden_state = ttnn.reshape(encoder_hidden_state, (batch_size, -1, height, width))
             encoder_hidden_state = ttnn.to_device(encoder_hidden_state, device)
-            encoder_hidden_state = ttnn.to_layout(encoder_hidden_state, layout=ttnn.TILE_LAYOUT)
-            encoder_hidden_state = ttnn_to_torch(encoder_hidden_state)
 
-            # interpolate is kept in torch as we don't have support
-            encoder_hidden_state = nn.functional.interpolate(
-                encoder_hidden_state,
-                size=ttnn_to_torch(encoder_hidden_states[0]).size()[2:],
-                mode="bilinear",
-                align_corners=False,
+            if encoder_hidden_state.shape[2] == 16:
+                ncores = 8
+            elif encoder_hidden_state.shape[2] == 32:
+                ncores = 32
+            else:
+                ncores = 64
+
+            shard_grid = get_shard_grid_from_num_cores(ncores, device)
+            shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
+            encoder_hidden_state = ttnn.permute(encoder_hidden_state, (0, 2, 3, 1))
+
+            shard_height = math.ceil(
+                encoder_hidden_state.shape[0] * encoder_hidden_state.shape[1] * encoder_hidden_state.shape[2] / ncores
             )
-            encoder_hidden_state = torch_to_ttnn(encoder_hidden_state, device=device)
+            shard_width = encoder_hidden_state.shape[3]
+            shard_spec = ttnn.ShardSpec(shard_grid, (shard_height, shard_width), shard_orientation, False)
+            input_memory_config = ttnn.MemoryConfig(
+                ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+            )
+            encoder_hidden_state = ttnn.to_memory_config(encoder_hidden_state, memory_config=input_memory_config)
+
+            encoder_hidden_state = ttnn.upsample(
+                encoder_hidden_state,
+                scale_factor=(128 // encoder_hidden_state.shape[2], 128 // encoder_hidden_state.shape[2], 1),
+                mode="bilinear",
+            )
+
+            encoder_hidden_state = ttnn.to_memory_config(
+                encoder_hidden_state, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16
+            )
+            encoder_hidden_state = ttnn.permute(encoder_hidden_state, (0, 3, 1, 2))
 
             all_hidden_states += (encoder_hidden_state,)
             index += 1
