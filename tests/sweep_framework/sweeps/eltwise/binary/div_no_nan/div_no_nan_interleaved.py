@@ -44,8 +44,6 @@ parameters = {
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_shape,
-    accurate_mode,
-    round_mode,
     input_a_dtype,
     input_b_dtype,
     input_a_layout,

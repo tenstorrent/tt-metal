@@ -128,6 +128,4 @@ def run(
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
-    e2e_perf = f"{input_b_dtype}, {input_c_dtype}"
-
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
