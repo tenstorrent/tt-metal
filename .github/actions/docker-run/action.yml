@@ -86,7 +86,7 @@ runs:
       shell: bash
       run: |
         if [ -d "generated" ]; then
-          chmod -R ${{ steps.prepare-for-artifacts.outputs.host-uid }}:${{ steps.prepare-for-artifacts.outputs.host-gid }} generated/
-          chmod u+w -R generated
+          sudo chmod -R ${{ steps.prepare-for-artifacts.outputs.host-uid }}:${{ steps.prepare-for-artifacts.outputs.host-gid }} generated/
+          sudo chmod u+w -R generated
           ls -hal generated
         fi
