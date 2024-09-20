@@ -30,7 +30,7 @@ on:
           - eltwise.binary.div.div_interleaved
           - eltwise.binary.div_no_nan.div_no_nan_interleaved
           - eltwise.binary.logical_or.logical_or_interleaved
-          - eltwise.composite.binary.addalpha.subalpha_interleaved
+          - eltwise.composite.binary.addalpha.addalpha_interleaved
           - eltwise.composite.binary.subalpha.subalpha_interleaved
           - eltwise.ternary.addcmul.addcmul_interleaved
           - eltwise.ternary.addcdiv.addcdiv_interleaved
