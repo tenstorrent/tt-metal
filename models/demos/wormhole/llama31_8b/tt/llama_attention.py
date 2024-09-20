@@ -22,7 +22,6 @@ class TtLlamaAttention(nn.Module):
         dtype,
         configuration,
         rot_mat,
-        start_pos,
     ):
         super().__init__()
 
@@ -36,7 +35,6 @@ class TtLlamaAttention(nn.Module):
         self.max_seq_len = configuration.max_seq_len
         self.max_batch_size = configuration.max_batch_size
         self.n_kv_heads = configuration.n_kv_heads
-        self.start_pos = start_pos
 
         self.n_local_heads = self.n_heads // self.num_devices
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices
@@ -215,19 +213,13 @@ class TtLlamaAttention(nn.Module):
     def forward_decode(
         self,
         xs: List[ttnn.Tensor],
-        current_pos: int,
-        attn_masks: Optional[List[ttnn.Tensor]] = None,
+        current_pos,
+        current_pos_attn,
         rot_mat=None,
     ) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, hidden_dim)
-        start_pos: the length of the KV cache. Same as current token's index.
-        attn_mask: (seq_len, n_heads, batch, cache_len + seqlen
         """
-        self.start_pos += 1
-        padded_layer_past_len = min(nearest_32(self.start_pos), self.sliding_window)
-        layer_slice = min((self.start_pos), self.sliding_window)
-
         dense_outputs = []
         for i in range(self.num_devices):
             x = xs[i]
@@ -259,15 +251,15 @@ class TtLlamaAttention(nn.Module):
             # Reshape and rotary embeddings
             ###
             (
-                q_heads_pre_rot,  # [seqlen, n_heads, bsz, head_dim]
-                k_heads_pre_rot,  # [seqlen, n_kv_heads, bsz, head_dim]
-                v_heads,  # [seqlen, n_kv_heads, bsz, head_dim]
-            ) = ttnn.experimental.nlp_create_qkv_heads(
+                q_heads_pre_rot_1BQD,
+                k_heads_pre_rot_1BKD,
+                v_heads_1BKD,
+            ) = ttnn.experimental.nlp_create_qkv_heads_decode(
                 xqkv_fused,
                 num_heads=self.n_local_heads,
                 num_kv_heads=self.n_local_kv_heads,
                 transpose_k_heads=False,
-                memory_config=self.model_config["QKV_HEADS_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
             )
 
             ttnn.deallocate(xqkv_fused)
@@ -275,20 +267,20 @@ class TtLlamaAttention(nn.Module):
             # Update rotary matrix on device
             rotary_mat = rot_mat
 
-            q_heads = ttnn.linear(
-                q_heads_pre_rot,
+            q_heads_1BQD = ttnn.linear(
+                q_heads_pre_rot_1BQD,
                 rotary_mat,
-                # program_config=self.q_heads_program_config,
+                program_config=self.model_config["ROT_MAT_BMM_PROGCFG"],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config,
                 dtype=ttnn.bfloat16,
             )
 
-            k_heads = ttnn.linear(
-                k_heads_pre_rot,
+            k_heads_1BKD = ttnn.linear(
+                k_heads_pre_rot_1BKD,
                 rotary_mat,
-                # program_config=self.k_heads_program_config,
-                memory_config=self.model_config["QV_ROT_EMB_OUTPUT_MEMCFG"],
+                program_config=self.model_config["ROT_MAT_BMM_PROGCFG"],
+                memory_config=k_heads_pre_rot_1BKD.memory_config(),
                 compute_kernel_config=self.compute_kernel_config,
                 dtype=self.dtype,
             )
@@ -305,18 +297,18 @@ class TtLlamaAttention(nn.Module):
             # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
             # v_heads [seqlen, n_kv_heads, bsz, head_dim]
             # keys, [max_batch_size, n_kv_heads // self.num_devices, sliding_window, head_dim]
-            ttnn.kv_cache.update_cache_for_token_(keys, k_heads, current_pos)
-            ttnn.kv_cache.update_cache_for_token_(values, v_heads, current_pos)
+            ttnn.experimental.paged_update_cache(keys, k_heads_1BKD, current_pos)
+            ttnn.experimental.paged_update_cache(values, v_heads_1BKD, current_pos)
             self.layer_past_list[i] = [keys, values]
 
             ttnn.deallocate(k_heads)
             ttnn.deallocate(v_heads)
 
             attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode_gqa(
-                q_heads,
+                q_heads_1BQD,
                 keys,
                 values,
-                [current_pos for _ in range(self.max_batch_size * self.n_kv_heads)],
+                current_pos_attn,
                 scale=self.scale,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
@@ -349,7 +341,7 @@ class TtLlamaAttention(nn.Module):
         else:
             return dense_outputs
 
-    def forward_prefill(self, xs_11SH, attn_masks, rot_mats, transformation_mats, user_id: int = 0):
+    def forward_prefill(self, xs_11SH, rot_mats, transformation_mats, user_id: int = 0):
         seq_len = xs_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         wqkv = self.wqkv_list[0]
@@ -479,9 +471,9 @@ class TtLlamaAttention(nn.Module):
         return [output_11SH]
 
     def forward(
-        self, xs, current_pos, attn_masks=None, rot_mats=None, transformation_mats=None, user_id=0, mode="decode"
+        self, xs, current_pos, current_pos_attn=None, rot_mats=None, transformation_mats=None, user_id=0, mode="decode"
     ):
         if mode == "prefill":
-            return self.forward_prefill(xs[0], attn_masks[0], rot_mats, transformation_mats, user_id)
+            return self.forward_prefill(xs[0], rot_mats, transformation_mats, user_id)
         else:
-            return self.forward_decode(xs, current_pos, attn_masks, rot_mats)
+            return self.forward_decode(xs, current_pos, current_pos_attn, rot_mats)
