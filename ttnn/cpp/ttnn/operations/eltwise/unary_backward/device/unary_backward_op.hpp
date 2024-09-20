@@ -14,7 +14,6 @@ namespace ttnn::operations::unary_backward {
 
 enum class UnaryBackwardOpType {
     DIV_BW,
-    RDIV_BW,
     MULTIGAMMALN_BW,
     ADD_BW,
     EQ_BW,
@@ -124,8 +123,6 @@ std::vector<Tensor> _log_bw( const Tensor& grad, const Tensor& input, const std:
 
 std::vector<Tensor> _add_bw( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 std::vector<Tensor> _eq_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-
-std::vector<Tensor> _rdiv_bw( const Tensor& grad, const Tensor& input, float scalar, string round_mode = "None", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config);
 
@@ -480,13 +477,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::SUB_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config ) {
         return _sub_bw(grad, input, scalar, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::RDIV_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, string round_mode, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _rdiv_bw(grad, input, scalar, round_mode, output_mem_config);
     }
 };
 

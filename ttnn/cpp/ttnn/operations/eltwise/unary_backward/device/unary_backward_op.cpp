@@ -101,7 +101,7 @@ std::vector<Tensor> ExecuteUnaryBackwardSoftplus::invoke(
     return grad_tensor;
 }
 
-std::vector<Tensor> _rdiv_bw(
+std::vector<Tensor> ExecuteUnaryBackwardRdiv::invoke(
     const Tensor& grad, const Tensor& input, float scalar, string round_mode, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
