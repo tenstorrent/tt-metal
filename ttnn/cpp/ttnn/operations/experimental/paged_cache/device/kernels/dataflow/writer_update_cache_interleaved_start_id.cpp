@@ -34,7 +34,7 @@ void kernel_main() {
     constexpr uint32_t page_table_cb_id = get_compile_time_arg_val(15);
 
     constexpr uint32_t St = get_compile_time_arg_val(16);
-    uint32_t semaphore_addr   = get_semaphore(get_compile_time_arg_val(17));  // semaphore for reciever
+    uint32_t semaphore_addr   = get_semaphore(get_compile_time_arg_val(17));  // semaphore for receiver
     constexpr uint32_t head_offset_t = Wt * St;
 
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
