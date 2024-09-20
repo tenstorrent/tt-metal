@@ -248,7 +248,10 @@ class TtLlamaModel_optimized:
             else:
                 cache_idxs = start_pos.to(dtype=torch.int64)
 
-            rot_mat = get_rotation_mat(self.rot_emb, cache_idxs, seq_len, batch=batch)
+            rot_cache_idxs = torch.maximum(
+                cache_idxs, torch.tensor(0, dtype=torch.int64)
+            )  # Ensure position indices are non-negative
+            rot_mat = get_rotation_mat(self.rot_emb, rot_cache_idxs, seq_len, batch=batch)
             assert rot_mat.size() == (1, batch, self.head_dim, self.head_dim)
 
             rot_mats = ttnn.as_tensor(

@@ -66,8 +66,8 @@ void kernel_main() {
     }
     // Get cur_pos
     uint32_t cur_pos = 0;
-    // using 4294967295 (end of uint32 range) as a flag to indicate that cur_pos is not provided as a list
-    if (cur_pos_arg!=4294967295){
+    // using UINT32_MAX as a flag to indicate that cur_pos is not provided as a list
+    if (cur_pos_arg != UINT32_MAX){
         cur_pos = cur_pos_arg;
     }
     else {
@@ -87,6 +87,13 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
         cur_pos = index_ptr[cur_batch];
     }
+
+    if (cur_pos == UINT32_MAX) {
+        // cur_pos of -1 indicates that the user should be skipped
+        return;
+    }
+    const uint32_t valid_seq_len_tiles = (cur_pos + 1 + 32 - 1) / 32;
+
     volatile tt_l1_ptr uint32_t* page_table_ptr;
     if constexpr (is_paged_attention) {
         constexpr uint32_t cb_id_page_table = tt::CB::dataflow1;
@@ -259,14 +266,15 @@ void kernel_main() {
             for (uint32_t col = 0; col < DHt; ++col) {
                 uint32_t k_tile_id = k_start_tile_id + col;
                 for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
-                    noc_async_read_tile(k_tile_id, k_reader, k_write_ptr);
+                    if (row <= valid_seq_len_tiles) {
+                        noc_async_read_tile(k_tile_id, k_reader, k_write_ptr);
+                        if (++barrier_count == barrier_threshold) {
+                            noc_async_read_barrier();
+                            barrier_count = 0;
+                        }
+                    }
                     k_tile_id += DHt;
                     k_write_ptr += k_tile_bytes;
-
-                    if (++barrier_count == barrier_threshold) {
-                        noc_async_read_barrier();
-                        barrier_count = 0;
-                    }
                 }
             }
             noc_async_read_barrier();
@@ -278,14 +286,17 @@ void kernel_main() {
             uint32_t v_write_ptr = get_write_ptr(cb_v_in);
             barrier_count = 0;
             uint32_t v_tile_id = v_start_tile_id;
-            for (uint32_t tile = 0; tile < k_chunk_tiles; ++tile) {
-                noc_async_read_tile(v_tile_id, v_reader, v_write_ptr);
-                v_tile_id++;
-                v_write_ptr += v_tile_bytes;
-
-                if (++barrier_count == barrier_threshold) {
-                    noc_async_read_barrier();
-                    barrier_count = 0;
+            for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
+                for (uint32_t col = 0; col < DHt; ++col) {
+                    if (row <= valid_seq_len_tiles) {
+                        noc_async_read_tile(v_tile_id, v_reader, v_write_ptr);
+                        if (++barrier_count == barrier_threshold) {
+                            noc_async_read_barrier();
+                            barrier_count = 0;
+                        }
+                    }
+                    v_tile_id++;
+                    v_write_ptr += v_tile_bytes;
                 }
             }
             noc_async_read_barrier();

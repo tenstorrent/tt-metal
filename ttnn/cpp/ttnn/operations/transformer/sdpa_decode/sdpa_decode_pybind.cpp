@@ -26,6 +26,7 @@ void py_bind_sdpa_decode(py::module &module) {
         "output: [1 x b x pnh x dh]"
 
         "Accepts a `SDPAMultiCoreProgramConfig` which specifies the grid size and chunk tiles in the K/V/Mask sequence lengths (Q chunk tiles is not used). The op parallelizes over `b` and K/V/Mask's `s` dimension."
+        "If a position is given as (-1), compute for the corresponding index in the batch is skipped."
         )doc";
 
     using OperationType = decltype(ttnn::transformer::scaled_dot_product_attention_decode);
