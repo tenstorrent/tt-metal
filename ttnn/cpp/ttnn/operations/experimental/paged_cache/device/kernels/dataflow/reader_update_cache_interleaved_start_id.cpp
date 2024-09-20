@@ -11,6 +11,7 @@ void kernel_main() {
     const uint32_t index_tensor_addr = get_arg_val<uint32_t>(2);
     const uint32_t my_batch_idx = get_arg_val<uint32_t>(3);
     const uint32_t page_table_tensor_addr = get_arg_val<uint32_t>(4);
+    const bool wait_to_start_signal = get_arg_val<uint32_t>(5) == 1;
 
     constexpr bool cache_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t cache_cb_id = get_compile_time_arg_val(1);
@@ -33,6 +34,11 @@ void kernel_main() {
     constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(16);
     constexpr uint32_t page_table_is_dram = get_compile_time_arg_val(17) == 1;
     constexpr uint32_t page_table_cb_id = get_compile_time_arg_val(18);
+
+    const uint32_t St = get_compile_time_arg_val(19);
+    uint32_t semaphore_addr   = get_semaphore(get_compile_time_arg_val(20));  // semaphore for receiver
+
+    constexpr uint32_t head_offset_t = Wt * St;
 
     // Kick off compute
     cb_reserve_back(input_cb_id, Wt);
@@ -102,15 +108,27 @@ void kernel_main() {
         }
     }
 
-    cb_reserve_back(cache_cb_id, Wt);
-    if (!skip_update) {
-        uint32_t cache_l1_write_addr = get_write_ptr(cache_cb_id);
-        for (uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
-            noc_async_read_tile(curr_cache_id, s0, cache_l1_write_addr);
-            cache_l1_write_addr += cache_tile_bytes;
-        }
-
-        noc_async_read_barrier();
+    if (wait_to_start_signal) {
+        // wait for signal to start pushing tensor
+        volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_addr);
+        noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, 1);
+        noc_semaphore_set(in0_receiver_semaphore_addr_ptr, 0);
     }
-    cb_push_back(cache_cb_id, Wt );
+
+    for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
+        cb_reserve_back(cache_cb_id, Wt);
+        if (!skip_update) {
+            uint32_t cache_l1_write_addr = get_write_ptr(cache_cb_id);
+            for (uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
+                noc_async_read_tile(curr_cache_id, s0, cache_l1_write_addr);
+                cache_l1_write_addr += cache_tile_bytes;
+            }
+
+            noc_async_read_barrier();
+        }
+        cb_push_back(cache_cb_id, Wt );
+
+        cache_id += head_offset_t;
+    }
+
 }
