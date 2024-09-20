@@ -298,8 +298,6 @@ void kernel_main() {
                     v_write_ptr += v_tile_bytes;
                 }
             }
-            // for (uint32_t tile = 0; tile < k_chunk_tiles; ++tile) {
-            // }
             noc_async_read_barrier();
             cb_push_back(cb_v_in, k_chunk_tiles);
             v_start_tile_id += k_chunk_tiles;
