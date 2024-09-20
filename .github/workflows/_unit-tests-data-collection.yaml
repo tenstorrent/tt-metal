@@ -1,0 +1,29 @@
+name: "[internal] Data collection tools unit tests"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "main"
+
+jobs:
+  build-and-test-data-collection:
+    strategy:
+      matrix:
+        python-version: [3.8]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Output (safe) pipeline values
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+          cache-dependency-path: 'infra/requirements-infra.txt'
+      - name: Install infra dependencies
+        run: pip install -r infra/requirements-infra.txt
+      - name: Create JSON
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        working-directory: ${{ github.workspace }}/infra
+        run: pytest tests
