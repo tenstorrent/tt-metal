@@ -16,27 +16,52 @@ on:
         type: boolean
         default: false
         description: "Build with tracy enabled"
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04-amd64"
+      build-docker:
+        required: false
+        type: boolean
+        default: true
+        description: "Build docker image"
   workflow_dispatch:
     inputs:
+      build-docker:
+        required: false
+        type: boolean
+        default: true
+        description: "Build docker image"
       arch:
         required: false
         type: string
         default: '["grayskull", "wormhole_b0"]'
       build-type:
         required: false
-        type: choice
-        options:
-          - Release
-          - Debug
-          - RelWithDebInfo
-          - CI
+        type: string
+        default: "Release"
       tracy:
         required: false
         type: boolean
         default: false
         description: "Build with tracy enabled"
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04-amd64"
+
+
 jobs:
+  build-docker-image:
+    if: ${{ inputs.build-docker == true }}
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+    with:
+      os: ${{ inputs.os }}
+
   build-artifact:
+    needs: build-docker-image
+    if: always()
     strategy:
       matrix:
         arch: ${{ fromJson(inputs.arch || '["grayskull", "wormhole_b0", "blackhole"]') }}
@@ -54,14 +79,33 @@ jobs:
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+          echo "RUNNER_UID=$(id -u)" >> $GITHUB_ENV
+          echo "RUNNER_GID=$(id -g)" >> $GITHUB_ENV
       - name: Update submodules
         run: |
           git submodule update --init --recursive
+      - name: Generate docker tag
+        id: generate-docker-tag
+        uses: ./.github/actions/generate-docker-tag
+        with:
+          image: ${{ inputs.os }}
       - name: Build tt-metal and libs
-        run: |
-          nice -n 19 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }}
-          nice -n 19 cmake --build build --target tests
-          nice -n 19 cmake --build build --target install
+        uses: addnab/docker-run-action@v3
+        with:
+          image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
+          options: |
+            -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
+            -v ${{ github.workspace }}:${{ github.workspace }}
+            -v /etc/passwd:/etc/passwd:ro
+            -v /etc/shadow:/etc/shadow:ro
+            -v /etc/bashrc:/etc/bashrc:ro
+            -e ARCH_NAME=${{ matrix.arch }}
+            -w ${{ github.workspace }}
+          run: |
+            nice -n 19 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }}
+            nice -n 19 cmake --build build --target tests
+            nice -n 19 cmake --build build --target install
+
       - name: 'Tar files'
         run: tar -cvf ttm_${{ matrix.arch }}.tar build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools runtime
       - name: 'Upload Artifact'
