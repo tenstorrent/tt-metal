@@ -9,8 +9,8 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.test_all_gather import (
-    run_all_gather_impl,
-    run_all_gather_sharded,
+    run_all_gather_on_n300_impl,
+    run_all_gather_sharded_n300,
 )
 
 
@@ -50,7 +50,7 @@ def test_all_gather_on_n300_post_commit(
     function_level_defaults,
     enable_async,
 ):
-    run_all_gather_impl(
+    run_all_gather_on_n300_impl(
         all_devices,
         num_devices,
         input_shape,
@@ -64,7 +64,6 @@ def test_all_gather_on_n300_post_commit(
         all_gather_operation=ttnn.all_gather,
         num_iters=num_iters,
         enable_async=enable_async,
-        isN300=True,
     )
 
 
@@ -114,7 +113,7 @@ def test_all_gather_sharded_n300_post_commit(
     function_level_defaults,
     enable_async,
 ):
-    run_all_gather_sharded(
+    run_all_gather_sharded_n300(
         all_devices,
         num_devices,
         input_shape,
@@ -131,5 +130,4 @@ def test_all_gather_sharded_n300_post_commit(
         function_level_defaults,
         all_gather_operation=ttnn.all_gather,
         enable_async=enable_async,
-        isN300=True,
     )
