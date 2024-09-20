@@ -28,7 +28,9 @@ void bind_normalization_rmsnorm_pre_all_gather_operation(py::module& module) {
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("dtype") = DataType::BFLOAT16,
-            py::arg("compute_kernel_config") = std::nullopt});
+            py::arg("compute_kernel_config") = std::nullopt,
+            py::arg("program_config") = std::nullopt,
+            py::arg("memory_config") = std::nullopt});
 }
 
 void bind_normalization_rmsnorm_post_all_gather_operation(py::module& module) {
@@ -47,7 +49,8 @@ void bind_normalization_rmsnorm_post_all_gather_operation(py::module& module) {
             py::arg("weight") = std::nullopt,
             py::arg("bias") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("compute_kernel_config") = std::nullopt});
+            py::arg("compute_kernel_config") = std::nullopt,
+            py::arg("program_config") = std::nullopt});
 }
 
 void bind_normalization_rms_norm_distributed(py::module& module) {
