@@ -89,12 +89,10 @@ struct kernel_config_msg_t {
     volatile uint8_t mode;                   // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;
     volatile uint8_t enables;
-    volatile uint8_t max_cb_index;
     volatile uint8_t dispatch_core_x;
     volatile uint8_t dispatch_core_y;
     volatile uint8_t exit_erisc_kernel;
-    volatile uint8_t pad1;
-    volatile uint16_t pad2;
+    volatile uint32_t cb_mask;
 } __attribute__((packed));
 
 struct go_msg_t {

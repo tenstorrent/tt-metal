@@ -4,6 +4,7 @@
 
 /** @file @brief Main firmware code */
 
+#include <bits/floatn-common.h>
 #include <unistd.h>
 
 #include <cstdint>
@@ -358,6 +359,7 @@ int main() {
 
     mailboxes->launch.go.run = RUN_MSG_DONE;
 
+
     while (1) {
         init_sync_registers();
         reset_ncrisc_with_iram();
@@ -392,7 +394,17 @@ int main() {
             // Run the BRISC kernel
             WAYPOINT("R");
             if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
-                setup_cb_read_write_interfaces(cb_l1_base, num_cbs_to_early_init, mailboxes->launch.kernel_config.max_cb_index, true, true, false);
+                uint8_t max_cb_index = calculate_max_cb_index(mailboxes->launch.kernel_config.cb_mask);
+
+                // demo: https://godbolt.org/z/GdTdqT3WE
+                // benchmark: https://quick-bench.com/q/4CI2jfBP5tNW-jS7V4lAvxm6XH4
+                // TODO Move this code into the setup_cb_read_write_interfaces
+                CBSet cbset(mailboxes->launch.kernel_config.cb_mask);
+                std::for_each(cbset.begin(), cbset.end(), [](int cb_index) {
+                    // cb_index set can be used
+                });
+
+                setup_cb_read_write_interfaces(cb_l1_base, num_cbs_to_early_init, max_cb_index, true, true, false);
                 kernel_init();
                 RECORD_STACK_USAGE();
             } else {

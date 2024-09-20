@@ -51,7 +51,8 @@ struct KernelGroup {
         kernel_id_array_t kernel_ids,
         bool erisc_is_idle,
         int last_cb_index,
-        const CoreRangeSet &new_ranges);
+        const CoreRangeSet &new_ranges,
+        uint32_t cb_mask);
 
     uint32_t get_programmable_core_type_index() const;
 
