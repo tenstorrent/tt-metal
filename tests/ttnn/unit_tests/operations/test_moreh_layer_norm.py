@@ -11,7 +11,7 @@ import ttnn
 from models.utility_functions import comp_allclose
 from loguru import logger
 
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
+from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
@@ -21,11 +21,15 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
 from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 
 
+def create_tt_tensor(tensor: torch.Tensor, dtype, device, layout):
+    return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device)
+
+
 def to_cpu(npu_tensor, shape, *, cpu_layout=ttnn.ROW_MAJOR_LAYOUT):
     if npu_tensor is None:
         return None
-    if not isinstance(shape, (list, tuple)):
-        shape = tuple(shape)
+    if not isinstance(shape, (list,)):
+        shape = list(shape)
 
     unpad_shape = copy.copy(shape)
     if shape == []:
@@ -57,13 +61,13 @@ def to_npu(
     if len(cpu_tensor.shape) == 0:
         cpu_tensor = cpu_tensor.reshape([1, 1])
 
-    npu_tensor = ttnn.Tensor(cpu_tensor, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+    npu_tensor = create_tt_tensor(cpu_tensor, npu_dtype, device, npu_layout)
     return npu_tensor
 
 
 def torch_layernorm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None):
     normalized_shape = input.shape[-normalized_dims:]
-    mean_rstd_dims = tuple(range(-normalized_dims, 0))
+    mean_rstd_dims = list(range(-normalized_dims, 0))
 
     mean = input.clone().mean(dim=mean_rstd_dims, keepdim=True)
     var = ((input.clone() - mean) ** 2).mean(dim=mean_rstd_dims)
@@ -141,7 +145,7 @@ def tt_layernorm(
     npu_rstd = to_npu(cpu_rstd, device)
 
     # Forward
-    npu_output, npu_mean, npu_rstd = ttnn.experimental.operations.primary.moreh_layernorm(
+    npu_output, npu_mean, npu_rstd = ttnn.operations.moreh.layer_norm(
         npu_input,
         normalized_dims,
         eps,
@@ -188,7 +192,7 @@ def tt_layernorm_backward(
     npu_gamma = to_npu(gamma, device)
 
     # mean, rstd
-    mean_rstd_dims = tuple(range(-normalized_dims, 0))
+    mean_rstd_dims = list(range(-normalized_dims, 0))
 
     mean = input.clone().mean(dim=mean_rstd_dims, keepdim=True)
     var = ((input.clone() - mean) ** 2).mean(dim=mean_rstd_dims, keepdim=True)
@@ -214,7 +218,7 @@ def tt_layernorm_backward(
         npu_beta_grad = to_npu(cpu_beta_grad, device)
 
     # Backward
-    _, npu_gamma_grad, _ = ttnn.experimental.operations.primary.moreh_layernorm_backward(
+    _, npu_gamma_grad, _ = ttnn.operations.moreh.layer_norm_backward(
         npu_output_grad,
         npu_input,
         npu_mean,
@@ -259,6 +263,37 @@ def make_input_tensors(input_shape, normalized_dims, elementwise_affine, do_back
     # beta
     cpu_beta = None
     if elementwise_affine:
+        cpu_beta = torch.rand(gamma_beta_shape, dtype=cpu_dtype) * 2 - 1.05
+
+    # output_grad
+    cpu_output_grad = None
+    if do_backward:
+        cpu_output_grad = torch.randint(-2, 3, output_grad_shape, dtype=cpu_dtype)
+
+    return cpu_input, cpu_gamma, cpu_beta, cpu_output_grad
+
+
+def make_input_tensors_gamma_or_beta(input_shape, normalized_dims, gamma_or_beta, do_backward=False):
+    # output_grad_shape
+    output_grad_shape = input_shape
+
+    # gamma_beta_shape
+    gamma_beta_shape = input_shape[-normalized_dims:]
+
+    # dtype
+    cpu_dtype = torch.bfloat16
+
+    # input
+    cpu_input = torch.randint(-2, 3, input_shape, dtype=cpu_dtype)
+
+    # gamma
+    cpu_gamma = None
+    if gamma_or_beta:
+        cpu_gamma = torch.rand(gamma_beta_shape, dtype=cpu_dtype) * 2 - 1.05
+
+    # beta
+    cpu_beta = None
+    if not gamma_or_beta:
         cpu_beta = torch.rand(gamma_beta_shape, dtype=cpu_dtype) * 2 - 1.05
 
     # output_grad
@@ -377,6 +412,60 @@ def run_moreh_layernorm_backward(
         assert actual_beta_grad is None
 
 
+def run_moreh_layernorm_backward_with_gamma_or_beta(
+    input_shape_normalized_dims, gamma_or_beta, eps, device, compute_kernel_options=None
+):
+    input_shape, normalized_dims = input_shape_normalized_dims
+
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
+
+    cpu_input, cpu_gamma, cpu_beta, cpu_output_grad = make_input_tensors_gamma_or_beta(
+        input_shape, normalized_dims, gamma_or_beta, do_backward=True
+    )
+
+    # expected
+    expected_input_grad, expected_gamma_grad, expected_beta_grad = torch_layernorm_backward(
+        cpu_input, cpu_output_grad, normalized_dims=normalized_dims, eps=eps, gamma=cpu_gamma, beta=cpu_beta
+    )
+
+    # actual
+    actual_input_grad, actual_gamma_grad, actual_beta_grad = tt_layernorm_backward(
+        cpu_input,
+        cpu_output_grad,
+        normalized_dims=normalized_dims,
+        eps=eps,
+        gamma=cpu_gamma,
+        beta=cpu_beta,
+        device=device,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+    # Set rtol and atol and pcc for gradients
+    rtol = 0.1
+    atol = 0.5
+
+    # Check input_grad
+    pig, oig = comp_allclose(expected_input_grad, actual_input_grad, rtol=rtol, atol=atol)
+    logger.debug(f"input_grad's {oig}")
+    assert pig
+
+    # Check gamma_grad
+    if expected_gamma_grad is not None:
+        pgg, ogg = comp_allclose(expected_gamma_grad, actual_gamma_grad, rtol=rtol, atol=atol)
+        logger.debug(f"gamma_grad's {ogg}")
+        assert pgg
+    else:
+        assert actual_gamma_grad is None
+
+    # Check beta_grad
+    if expected_beta_grad is not None:
+        pbg, obg = comp_allclose(expected_beta_grad, actual_beta_grad, rtol=rtol, atol=atol)
+        logger.debug(f"beta_grad's {obg}")
+        assert pbg
+    else:
+        assert actual_beta_grad is None
+
+
 @skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
 @pytest.mark.parametrize("eps", [1e-5], ids=["1e-5"])
 @pytest.mark.parametrize(
@@ -418,6 +507,28 @@ def test_moreh_layernorm(input_shape_normalized_dims, elementwise_affine, eps, d
 def test_moreh_layernorm_backward(input_shape_normalized_dims, elementwise_affine, eps, device):
     torch.manual_seed(2023)
     run_moreh_layernorm_backward(input_shape_normalized_dims, elementwise_affine, eps, device)
+
+
+@skip_for_blackhole("Mismatching on BH, see #12349")
+@skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
+@pytest.mark.parametrize("eps", [1e-5], ids=["1e-5"])
+@pytest.mark.parametrize(
+    "gamma_or_beta",
+    [False, True],
+    ids=["gamma_or_beta=False", "gamma_or_beta=True"],
+)
+@pytest.mark.parametrize(
+    "input_shape_normalized_dims",
+    [
+        ([20, 30], 2),  # test 2d
+        ([2, 20, 30], 1),  # test 3d
+        ([6, 2 * TILE_HEIGHT, 2 * TILE_WIDTH], 2),  # test 3d
+        ([5, 2, 3, 4, TILE_HEIGHT + 13, TILE_WIDTH + 13], 3),  # test 6d
+    ],
+)
+def test_moreh_layernorm_backward_with_gamma_or_beta(input_shape_normalized_dims, gamma_or_beta, eps, device):
+    torch.manual_seed(2023)
+    run_moreh_layernorm_backward_with_gamma_or_beta(input_shape_normalized_dims, gamma_or_beta, eps, device)
 
 
 @skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
@@ -481,6 +592,7 @@ def test_moreh_layernorm_callback(input_shape_normalized_dims, elementwise_affin
     torch.manual_seed(2023)
     for _ in range(2):
         run_moreh_layernorm(input_shape_normalized_dims, elementwise_affine, eps, device)
+    assert device.num_program_cache_entries() == 1
 
 
 @skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
@@ -502,6 +614,7 @@ def test_moreh_layernorm_backward_callback(
     torch.manual_seed(2023)
     for _ in range(2):
         run_moreh_layernorm_backward(input_shape_normalized_dims, elementwise_affine, eps, device)
+    assert device.num_program_cache_entries() == (2 if elementwise_affine else 1)
 
 
 @skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
