@@ -21,12 +21,19 @@ __ldm_start = DEFINED(__fw_export_ldm_end) ? __fw_export_ldm_end : ORIGIN(REGION
   FW must align to 32 byte boundary so Kernel begins aligned to meet noc
     alignment constraints
 */
-#if LD_TARGET == IERISC
-__padding = 31;
-__alignment = 32;
+
+#if defined (TYPE_FIRMWARE)
+#if defined (TARGET_IERISC)
+__padding = MEM_IERISC_KERNEL_ALIGNMENT - 4;
+__alignment = MEM_IERISC_KERNEL_ALIGNMENT;
+#else
+__padding = MEM_TENSIX_KERNEL_ALIGNMENT - 4;
+__alignment = MEM_TENSIX_KERNEL_ALIGNMENT;
 #endif
+#else
 __padding = 0;
-__alignment = 16;
+__alignment = 4;
+#endif
 
 OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
 	      "elf32-littleriscv")
@@ -72,6 +79,10 @@ SECTIONS
   PROVIDE (_etext = .);
   PROVIDE (etext = .);
   __fw_export_end_text = DEFINED(__fw_export_end_text) ? __fw_export_end_text : .;
+
+#if defined(TYPE_KERNEL)
+  __kernel_init_local_l1_base = .;
+#endif
 
   PROVIDE(__global_pointer$ = ORIGIN(REGION_DATA) + 0x7f0);
   .ldm_data __ldm_start :

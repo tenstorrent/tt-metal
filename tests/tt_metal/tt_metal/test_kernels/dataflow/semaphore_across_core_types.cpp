@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "debug/dprint.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
     constexpr ProgrammableCoreType eth_core_type = static_cast<ProgrammableCoreType>(get_compile_time_arg_val(0));

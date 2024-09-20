@@ -95,7 +95,7 @@ int main() {
     WAYPOINT("I");
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
     uint32_t *local_mem_ptr = (uint32_t *)__ldm_data_start;
-    uint32_t *l1_data_ptr = (uint32_t *)MEM_IERISC_INIT_LOCAL_L1_BASE;
+    uint32_t *l1_data_ptr = (uint32_t *)MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH;
     uint32_t heartbeat = 0;
     for (int32_t i = 0; i < num_words; i++) {
         local_mem_ptr[i] = l1_data_ptr[i];

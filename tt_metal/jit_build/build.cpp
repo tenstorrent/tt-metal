@@ -220,7 +220,11 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, int which, bo
                 this->srcs_.push_back("tt_metal/hw/firmware/src/brisck.cc");
             }
 
-            this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/brisc.ld ";
+            if (this->is_fw_) {
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/firmware_brisc.ld ";
+            } else {
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/kernel_brisc.ld ";
+            }
 
             break;
 
@@ -238,7 +242,11 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, int which, bo
                 this->srcs_.push_back("tt_metal/hw/firmware/src/ncrisck.cc");
             }
 
-            this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/ncrisc.ld ";
+            if (this->is_fw_) {
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/firmware_ncrisc.ld ";
+            } else {
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/kernel_ncrisc.ld ";
+            }
 
             break;
     }
@@ -287,7 +295,11 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, int which, bool is_fw) 
             this->defines_ += "-DNAMESPACE=chlkc_unpack ";
             this->defines_ += "-DCOMPILE_FOR_TRISC=0 ";
 
-            this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/trisc0.ld ";
+            if (this->is_fw_) {
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/firmware_trisc0.ld ";
+            } else {
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/kernel_trisc0.ld ";
+            }
 
             break;
 
@@ -298,7 +310,11 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, int which, bool is_fw) 
             this->defines_ += "-DNAMESPACE=chlkc_math ";
             this->defines_ += "-DCOMPILE_FOR_TRISC=1 ";
 
-            this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/trisc1.ld ";
+            if (this->is_fw_) {
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/firmware_trisc1.ld ";
+            } else {
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/kernel_trisc1.ld ";
+            }
 
             break;
 
@@ -309,7 +325,11 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, int which, bool is_fw) 
             this->defines_ += "-DNAMESPACE=chlkc_pack ";
             this->defines_ += "-DCOMPILE_FOR_TRISC=2 ";
 
-            this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/trisc2.ld ";
+            if (this->is_fw_) {
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/firmware_trisc2.ld ";
+            } else {
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/kernel_trisc2.ld ";
+            }
 
             break;
     }
@@ -391,7 +411,13 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw
                 this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisck.cc");
             }
             this->lflags_ = env_.lflags_ + "-Os ";
-            this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/ierisc.ld ";
+
+            if (this->is_fw_) {
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/firmware_ierisc.ld ";
+            } else {
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/kernel_ierisc.ld ";
+            }
+
             break;
     }
     this->process_defines_at_compile = true;

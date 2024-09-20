@@ -262,7 +262,7 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) 
         if (active_eth_cores.find(logical_core_from_ethernet_core(phys_core)) != active_eth_cores.end()) {
             if (not llrt::OptionsG.get_skip_loading_fw()) {
                 int eriscv_id = build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 0;
-                ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""));
+                ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""), eriscv_id);
                 uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, eriscv_id);
                 log_debug(LogDevice, "ERISC fw binary size: {} in bytes", kernel_size16 * 16);
                 llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
@@ -272,7 +272,7 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) 
             tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), phys_core));
             if (not llrt::OptionsG.get_skip_loading_fw()) {
                 int eriscv_id = build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 1;
-                ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""));
+                ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""), eriscv_id);
                 uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, eriscv_id);
                 log_debug(LogDevice, "ERISC fw binary size: {} in bytes", kernel_size16 * 16);
                 llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
@@ -283,7 +283,7 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) 
         llrt::program_risc_startup_addr(this->id(), phys_core);
         for (int riscv_id = 0; riscv_id < 5; riscv_id++) {
             ll_api::memory binary_mem =
-                llrt::get_risc_binary(firmware_build_states_[riscv_id]->get_target_out_path(""));
+                llrt::get_risc_binary(firmware_build_states_[riscv_id]->get_target_out_path(""), riscv_id);
             uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, riscv_id);
             if (riscv_id == 1) {
                 launch_msg->kernel_config.ncrisc_kernel_size16 = kernel_size16;
