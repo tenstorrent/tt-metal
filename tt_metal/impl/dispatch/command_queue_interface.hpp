@@ -413,7 +413,6 @@ class SystemMemoryManager {
             // Prefetch queue acts as the sync mechanism to ensure that issue queue has space to write, so issue queue
             // must be as large as the max amount of space the prefetch queue can specify Plus 1 to handle wrapping Plus
             // 1 to allow us to start writing to issue queue before we reserve space in the prefetch queue
-            std::cout<<"issue queue size = "<<this->get_issue_queue_size(cq_id)<<" Max pfc size = "<< dispatch_constants::get(core_type, num_hw_cqs).max_prefetch_command_size()<<std::endl;
             TT_FATAL(
                 dispatch_constants::get(core_type, num_hw_cqs).max_prefetch_command_size() *
                     (dispatch_constants::get(core_type, num_hw_cqs).prefetch_q_entries() + 2) <=

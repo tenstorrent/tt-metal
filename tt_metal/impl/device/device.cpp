@@ -771,7 +771,6 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 }
                 if (is_tunnel_start) {
                     auto &demux_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX][0]);
-                    //auto &mux_settings = std::get<1>(device_worker_variants[DispatchWorkerType::MUX][0]);
 
                     compile_args[4 + return_vc] = packet_switch_4B_pack(demux_settings.worker_physical_core.x,
                                         demux_settings.worker_physical_core.y,
@@ -781,18 +780,17 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     compile_args[15 + return_vc * 2] = demux_settings.cb_size_bytes >> 4; // 9: remote_receiver_queue_size_words return vc
                     uint32_t arg_index = 34;
                     for (auto&[mux_core, mux_settings] : device_worker_variants[DispatchWorkerType::MUX]) {
-                    uint32_t mux_output_q_id_start = mux_settings.semaphores.size();
-                    uint32_t connections_remaining = mux_settings.semaphores.size();
-                    for (uint32_t i = 0; i < connections_remaining; i++) {
-                        compile_args[arg_index++] = packet_switch_4B_pack(mux_settings.worker_physical_core.x,
-                                            mux_settings.worker_physical_core.y,
-                                            mux_output_q_id_start + i, // mux output queue id
-                                            (uint32_t)DispatchRemoteNetworkType::NOC0); // 10: remote_sender fwd vcs
-                    }
+                        uint32_t mux_output_q_id_start = mux_settings.semaphores.size();
+                        uint32_t connections_remaining = mux_settings.semaphores.size();
+                        for (uint32_t i = 0; i < connections_remaining; i++) {
+                            compile_args[arg_index++] = packet_switch_4B_pack(mux_settings.worker_physical_core.x,
+                                                mux_settings.worker_physical_core.y,
+                                                mux_output_q_id_start + i, // mux output queue id
+                                                (uint32_t)DispatchRemoteNetworkType::NOC0); // 10: remote_sender fwd vcs
+                        }
                     }
                 } else {
                     auto &mux_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::MUX_D][0]);
-                    //auto &demux_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX_D][0]);
                     uint32_t prefetch_d_count = device_worker_variants[DispatchWorkerType::PREFETCH_D].size();
                     compile_args[4 + return_vc] = packet_switch_4B_pack(mux_d_settings.worker_physical_core.x,
                                         mux_d_settings.worker_physical_core.y,
@@ -801,21 +799,21 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                                         (uint32_t)DispatchRemoteNetworkType::NOC0); // 5: remote_receiver return vc
                     compile_args[14 + return_vc * 2] = (mux_d_settings.cb_start_address + mux_d_settings.semaphores.size() * mux_d_settings.cb_size_bytes) >> 4; // 8: remote_receiver_queue_start_addr_words return vc
                     compile_args[15 + return_vc * 2] = mux_d_settings.cb_size_bytes >> 4; // 9: remote_receiver_queue_size_words return vc
-// 3, 2, 1
-// 6, 4, 2
+
                     uint32_t arg_index = 34;
-                    uint32_t connections_remaining = fwd_vc_count;
-                    uint32_t local_fanout = prefetch_d_count;
+                    uint32_t local_fanout = 1;
+                    uint32_t vcs_per_demux_d = fwd_vc_count + prefetch_d_count - ((fwd_vc_count + prefetch_d_count) / 2);
+
                     for (auto&[demux_d_core, demux_d_settings] : device_worker_variants[DispatchWorkerType::DEMUX_D]) {
-                        uint32_t demux_d_output_q_id_start = std::min(connections_remaining + local_fanout, MAX_SWITCH_FAN_IN);
-                        for (uint32_t i = local_fanout; i < MAX_SWITCH_FAN_IN && connections_remaining; i++) {
+                        uint32_t demux_d_output_q_id_start = vcs_per_demux_d;
+                        for (uint32_t i = local_fanout; i < vcs_per_demux_d; i++) {
                             compile_args[arg_index++] = packet_switch_4B_pack(demux_d_settings.worker_physical_core.x,
                                                 demux_d_settings.worker_physical_core.y,
                                                 demux_d_output_q_id_start + i, // demux output queue id. 0=> demux input, 1=> demux_d output to local Prefetch D, 2=> demux_d output to tunneler (to next tunnel stop)
                                                 (uint32_t)DispatchRemoteNetworkType::NOC0); // 10: remote_sender fwd vcs
-                            connections_remaining--;
                         }
-                        local_fanout = 0;
+                        vcs_per_demux_d = (fwd_vc_count + prefetch_d_count) / 2;
+                        local_fanout = prefetch_d_count - 1;
                     }
                 }
 
@@ -836,54 +834,52 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
             }
             case DispatchWorkerType::DEMUX:
             {
-                //TT_ASSERT(device_worker_variants[DispatchWorkerType::DEMUX].size() == 1, "Unexpected number of ethernet tunnelers.");
                 if (device_worker_variants[DispatchWorkerType::DEMUX].size() == 1) {
-                auto &tunneler_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE][0]);
-                auto &demux_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX][0]);
-                auto &dispatch_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH][0]);
+                    auto &tunneler_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE][0]);
+                    auto &demux_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX][0]);
+                    auto &dispatch_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH][0]);
 
-                auto &compile_args = demux_settings.compile_args;
-                compile_args.resize(30);
+                    auto &compile_args = demux_settings.compile_args;
+                    compile_args.resize(30);
 
-                compile_args[0] = 0xD1; // 0: endpoint_id_start_index
-                compile_args[1] = demux_settings.cb_start_address >> 4; // 1: rx_queue_start_addr_words
-                compile_args[2] = demux_settings.cb_size_bytes >> 4; // 2: rx_queue_size_words
-                compile_args[3] = device_worker_variants[DispatchWorkerType::DISPATCH].size(); // 3: demux_fan_out
+                    compile_args[0] = 0xD1; // 0: endpoint_id_start_index
+                    compile_args[1] = demux_settings.cb_start_address >> 4; // 1: rx_queue_start_addr_words
+                    compile_args[2] = demux_settings.cb_size_bytes >> 4; // 2: rx_queue_size_words
+                    compile_args[3] = device_worker_variants[DispatchWorkerType::DISPATCH].size(); // 3: demux_fan_out
 
-                uint32_t arg_index = 4;
-                for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::DISPATCH]) {
-                    compile_args[arg_index++] = packet_switch_4B_pack((uint32_t)settings.worker_physical_core.x,
-                                                                    (uint32_t)settings.worker_physical_core.y,
-                                                                    0,
-                                                                    (uint32_t)DispatchRemoteNetworkType::NOC0); // 4,5,6,7: remote_tx_x_info
-                }
-                arg_index = 8;
-                for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::DISPATCH]) {
-                    compile_args[arg_index++] = settings.cb_start_address >> 4; // 8, 10, 12, 14: remote_tx_queue_start_addr_words x
-                    compile_args[arg_index++] = settings.cb_size_bytes >> 4; // 9, 11, 13, 15: remote_tx_queue_size_words x
-                }
-                compile_args[16] = tunneler_settings.worker_physical_core.x; // 16: remote_rx_x
-                compile_args[17] = tunneler_settings.worker_physical_core.y; // 17: remote_rx_y
-                compile_args[18] = tunneler_settings.vc_count * 2 - 1; // 18: remote_rx_queue_id
-                compile_args[19] = (uint32_t)DispatchRemoteNetworkType::NOC0; // 19: tx_network_type
-                uint32_t dest_map_array[4] = {0, 1, 2, 3};
-                uint64_t dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
-                compile_args[20] = (uint32_t)(dest_endpoint_output_map >> 32); // 20: dest_endpoint_output_map_hi
-                compile_args[21] = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF); // 21: dest_endpoint_output_map_lo
-                compile_args[22] = 0; // 22: test_results_addr (disabled)
-                compile_args[23] = 0; // 23: test_results_size (disabled)
-                compile_args[24] = 0; // 24: timeout_cycles
-                compile_args[25] = 0xF; // 25: output_depacketize_mask
-                arg_index = 26;
-                uint32_t demux_sem = demux_settings.producer_semaphore_id;
-                for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::DISPATCH]) {
-                     // 26, 27, 28, 29: output x depacketize info:
-                    compile_args[arg_index++] = packet_switch_4B_pack(settings.cb_log_page_size,
-                                                                        settings.consumer_semaphore_id, // downstream sem
-                                                                        demux_sem++,    // local sem
-                                                                        1); // remove header
-                }
-
+                    uint32_t arg_index = 4;
+                    for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::DISPATCH]) {
+                        compile_args[arg_index++] = packet_switch_4B_pack((uint32_t)settings.worker_physical_core.x,
+                                                                        (uint32_t)settings.worker_physical_core.y,
+                                                                        0,
+                                                                        (uint32_t)DispatchRemoteNetworkType::NOC0); // 4,5,6,7: remote_tx_x_info
+                    }
+                    arg_index = 8;
+                    for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::DISPATCH]) {
+                        compile_args[arg_index++] = settings.cb_start_address >> 4; // 8, 10, 12, 14: remote_tx_queue_start_addr_words x
+                        compile_args[arg_index++] = settings.cb_size_bytes >> 4; // 9, 11, 13, 15: remote_tx_queue_size_words x
+                    }
+                    compile_args[16] = tunneler_settings.worker_physical_core.x; // 16: remote_rx_x
+                    compile_args[17] = tunneler_settings.worker_physical_core.y; // 17: remote_rx_y
+                    compile_args[18] = tunneler_settings.vc_count * 2 - 1; // 18: remote_rx_queue_id
+                    compile_args[19] = (uint32_t)DispatchRemoteNetworkType::NOC0; // 19: tx_network_type
+                    uint32_t dest_map_array[4] = {0, 1, 2, 3};
+                    uint64_t dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
+                    compile_args[20] = (uint32_t)(dest_endpoint_output_map >> 32); // 20: dest_endpoint_output_map_hi
+                    compile_args[21] = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF); // 21: dest_endpoint_output_map_lo
+                    compile_args[22] = 0; // 22: test_results_addr (disabled)
+                    compile_args[23] = 0; // 23: test_results_size (disabled)
+                    compile_args[24] = 0; // 24: timeout_cycles
+                    compile_args[25] = 0xF; // 25: output_depacketize_mask
+                    arg_index = 26;
+                    uint32_t demux_sem = demux_settings.producer_semaphore_id;
+                    for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::DISPATCH]) {
+                        // 26, 27, 28, 29: output x depacketize info:
+                        compile_args[arg_index++] = packet_switch_4B_pack(settings.cb_log_page_size,
+                                                                            settings.consumer_semaphore_id, // downstream sem
+                                                                            demux_sem++,    // local sem
+                                                                            1); // remove header
+                    }
                 } else if (device_worker_variants[DispatchWorkerType::DEMUX].size() == 3) {
                     //Galaxy 2CQ requires three demux cores. tunneler->1x2->1x4(2x)->Dispatch(8x)
                     auto &tunneler_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE][0]);
@@ -928,140 +924,177 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     compile_args[20] = (uint32_t)(dest_endpoint_output_map >> 32); // 20: dest_endpoint_output_map_hi
                     compile_args[21] = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF); // 21: dest_endpoint_output_map_lo
 
-
                     uint32_t demux_1_fanout = device_worker_variants[DispatchWorkerType::DISPATCH].size() / 2;
-                    compile_args = demux_1_settings.compile_args;
-                    compile_args.resize(30);
+                    auto &demux_1_compile_args = demux_1_settings.compile_args;
+                    demux_1_compile_args.resize(30);
 
-                    compile_args[0] = 0xD1; // 0: endpoint_id_start_index
-                    compile_args[1] = demux_1_settings.cb_start_address >> 4; // 1: rx_queue_start_addr_words
-                    compile_args[2] = demux_1_settings.cb_size_bytes >> 4; // 2: rx_queue_size_words
-                    compile_args[3] = demux_1_fanout; // 3: demux_fan_out
+                    demux_1_compile_args[0] = 0xD1; // 0: endpoint_id_start_index
+                    demux_1_compile_args[1] = demux_1_settings.cb_start_address >> 4; // 1: rx_queue_start_addr_words
+                    demux_1_compile_args[2] = demux_1_settings.cb_size_bytes >> 4; // 2: rx_queue_size_words
+                    demux_1_compile_args[3] = demux_1_fanout; // 3: demux_fan_out
 
                     for (int i = 0; i < demux_1_fanout; i++) {
-                    //for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::DISPATCH]) {
                         auto &settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH][i]);
-                        compile_args[4 + i] = packet_switch_4B_pack((uint32_t)settings.worker_physical_core.x,
+                        demux_1_compile_args[4 + i] = packet_switch_4B_pack((uint32_t)settings.worker_physical_core.x,
                                                                         (uint32_t)settings.worker_physical_core.y,
                                                                         0,
                                                                         (uint32_t)DispatchRemoteNetworkType::NOC0); // 4,5,6,7: remote_tx_x_info
 
-                    //for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::DISPATCH]) {
-                        compile_args[8 + i * 2] = settings.cb_start_address >> 4; // 8, 10, 12, 14: remote_tx_queue_start_addr_words x
-                        compile_args[9 + i * 2] = settings.cb_size_bytes >> 4; // 9, 11, 13, 15: remote_tx_queue_size_words x
+                        demux_1_compile_args[8 + i * 2] = settings.cb_start_address >> 4; // 8, 10, 12, 14: remote_tx_queue_start_addr_words x
+                        demux_1_compile_args[9 + i * 2] = settings.cb_size_bytes >> 4; // 9, 11, 13, 15: remote_tx_queue_size_words x
                     }
-                    compile_args[16] = demux_settings.worker_physical_core.x; // 16: remote_rx_x
-                    compile_args[17] = demux_settings.worker_physical_core.y; // 17: remote_rx_y
-                    compile_args[18] = 1; // 18: remote_rx_queue_id
-                    compile_args[19] = (uint32_t)DispatchRemoteNetworkType::NOC0; // 19: tx_network_type
+                    demux_1_compile_args[16] = demux_settings.worker_physical_core.x; // 16: remote_rx_x
+                    demux_1_compile_args[17] = demux_settings.worker_physical_core.y; // 17: remote_rx_y
+                    demux_1_compile_args[18] = 1; // 18: remote_rx_queue_id
+                    demux_1_compile_args[19] = (uint32_t)DispatchRemoteNetworkType::NOC0; // 19: tx_network_type
                     uint32_t dest_map_array[4] = {0, 1, 2, 3};
                     dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
-                    compile_args[20] = (uint32_t)(dest_endpoint_output_map >> 32); // 20: dest_endpoint_output_map_hi
-                    compile_args[21] = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF); // 21: dest_endpoint_output_map_lo
-                    compile_args[22] = 0; // 22: test_results_addr (disabled)
-                    compile_args[23] = 0; // 23: test_results_size (disabled)
-                    compile_args[24] = 0; // 24: timeout_cycles
-                    compile_args[25] = 0xF >> (4 - demux_1_fanout); // 25: output_depacketize_mask
+                    demux_1_compile_args[20] = (uint32_t)(dest_endpoint_output_map >> 32); // 20: dest_endpoint_output_map_hi
+                    demux_1_compile_args[21] = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF); // 21: dest_endpoint_output_map_lo
+                    demux_1_compile_args[22] = 0; // 22: test_results_addr (disabled)
+                    demux_1_compile_args[23] = 0; // 23: test_results_size (disabled)
+                    demux_1_compile_args[24] = 0; // 24: timeout_cycles
+                    demux_1_compile_args[25] = 0xF >> (4 - demux_1_fanout); // 25: output_depacketize_mask
 
                     uint32_t demux_sem = demux_1_settings.producer_semaphore_id;
                     for (int i = 0; i < demux_1_fanout; i++) {
-                    //for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::DISPATCH]) {
                         // 26, 27, 28, 29: output x depacketize info:
                         auto &settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH][i]);
-                        compile_args[26] = packet_switch_4B_pack(settings.cb_log_page_size,
+                        demux_1_compile_args[26 + i] = packet_switch_4B_pack(settings.cb_log_page_size,
                                                                             settings.consumer_semaphore_id, // downstream sem
                                                                             demux_sem++,    // local sem
                                                                             1); // remove header
                     }
 
                     uint32_t demux_2_fanout = device_worker_variants[DispatchWorkerType::DISPATCH].size() / 2;
-                    compile_args = demux_2_settings.compile_args;
-                    compile_args.resize(30);
+                    auto &demux_2_compile_args = demux_2_settings.compile_args;
+                    demux_2_compile_args.resize(30);
 
-                    compile_args[0] = 0xD1 + demux_1_fanout; // 0: endpoint_id_start_index
-                    compile_args[1] = demux_2_settings.cb_start_address >> 4; // 1: rx_queue_start_addr_words
-                    compile_args[2] = demux_2_settings.cb_size_bytes >> 4; // 2: rx_queue_size_words
-                    compile_args[3] = demux_2_fanout; // 3: demux_fan_out
+                    demux_2_compile_args[0] = 0xD1 + demux_1_fanout; // 0: endpoint_id_start_index
+                    demux_2_compile_args[1] = demux_2_settings.cb_start_address >> 4; // 1: rx_queue_start_addr_words
+                    demux_2_compile_args[2] = demux_2_settings.cb_size_bytes >> 4; // 2: rx_queue_size_words
+                    demux_2_compile_args[3] = demux_2_fanout; // 3: demux_fan_out
 
                     for (int i = 0; i < demux_2_fanout; i++) {
-                    //for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::DISPATCH]) {
                         auto &settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH][i + demux_1_fanout]);
-                        compile_args[4 + i] = packet_switch_4B_pack((uint32_t)settings.worker_physical_core.x,
+                        demux_2_compile_args[4 + i] = packet_switch_4B_pack((uint32_t)settings.worker_physical_core.x,
                                                                         (uint32_t)settings.worker_physical_core.y,
                                                                         0,
                                                                         (uint32_t)DispatchRemoteNetworkType::NOC0); // 4,5,6,7: remote_tx_x_info
 
-                    //for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::DISPATCH]) {
-                        compile_args[8 + i * 2] = settings.cb_start_address >> 4; // 8, 10, 12, 14: remote_tx_queue_start_addr_words x
-                        compile_args[9 + i * 2] = settings.cb_size_bytes >> 4; // 9, 11, 13, 15: remote_tx_queue_size_words x
+                        demux_2_compile_args[8 + i * 2] = settings.cb_start_address >> 4; // 8, 10, 12, 14: remote_tx_queue_start_addr_words x
+                        demux_2_compile_args[9 + i * 2] = settings.cb_size_bytes >> 4; // 9, 11, 13, 15: remote_tx_queue_size_words x
                     }
-                    compile_args[16] = demux_settings.worker_physical_core.x; // 16: remote_rx_x
-                    compile_args[17] = demux_settings.worker_physical_core.y; // 17: remote_rx_y
-                    compile_args[18] = 2; // 18: remote_rx_queue_id
-                    compile_args[19] = (uint32_t)DispatchRemoteNetworkType::NOC0; // 19: tx_network_type
+                    demux_2_compile_args[16] = demux_settings.worker_physical_core.x; // 16: remote_rx_x
+                    demux_2_compile_args[17] = demux_settings.worker_physical_core.y; // 17: remote_rx_y
+                    demux_2_compile_args[18] = 2; // 18: remote_rx_queue_id
+                    demux_2_compile_args[19] = (uint32_t)DispatchRemoteNetworkType::NOC0; // 19: tx_network_type
                     dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
-                    compile_args[20] = (uint32_t)(dest_endpoint_output_map >> 32); // 20: dest_endpoint_output_map_hi
-                    compile_args[21] = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF); // 21: dest_endpoint_output_map_lo
-                    compile_args[22] = 0; // 22: test_results_addr (disabled)
-                    compile_args[23] = 0; // 23: test_results_size (disabled)
-                    compile_args[24] = 0; // 24: timeout_cycles
-                    compile_args[25] = 0xF >> (4 - demux_2_fanout); // 25: output_depacketize_mask
+                    demux_2_compile_args[20] = (uint32_t)(dest_endpoint_output_map >> 32); // 20: dest_endpoint_output_map_hi
+                    demux_2_compile_args[21] = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF); // 21: dest_endpoint_output_map_lo
+                    demux_2_compile_args[22] = 0; // 22: test_results_addr (disabled)
+                    demux_2_compile_args[23] = 0; // 23: test_results_size (disabled)
+                    demux_2_compile_args[24] = 0; // 24: timeout_cycles
+                    demux_2_compile_args[25] = 0xF >> (4 - demux_2_fanout); // 25: output_depacketize_mask
 
                     demux_sem = demux_2_settings.producer_semaphore_id;
                     for (int i = 0; i < demux_2_fanout; i++) {
-                    //for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::DISPATCH]) {
                         // 26, 27, 28, 29: output x depacketize info:
                         auto &settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH][i + demux_1_fanout]);
-                        compile_args[26] = packet_switch_4B_pack(settings.cb_log_page_size,
+                        demux_2_compile_args[26 + i] = packet_switch_4B_pack(settings.cb_log_page_size,
                                                                             settings.consumer_semaphore_id, // downstream sem
                                                                             demux_sem++,    // local sem
                                                                             1); // remove header
                     }
 
                 } else {
-                    TT_ASSERT(0, "Unsupported DEMUX core count {}", device_worker_variants[DispatchWorkerType::DEMUX].size());
+                    TT_ASSERT(false, "Unsupported DEMUX core count {}", device_worker_variants[DispatchWorkerType::DEMUX].size());
                 }
                 break;
             }
             case DispatchWorkerType::DISPATCH:
             {
                 uint32_t num_dispatchers = device_worker_variants[DispatchWorkerType::DISPATCH].size();
-                TT_ASSERT(device_worker_variants[DispatchWorkerType::DEMUX].size() == 1, "Cannot have more than one Demux.");
-                auto demux_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX][0]);
-                TT_ASSERT(num_dispatchers == demux_settings.semaphores.size(), "Demux does not have required number of semaphores for Dispatchers. Exptected = {}. Found = {}", num_dispatchers, demux_settings.semaphores.size());
-                uint32_t demux_sem = demux_settings.producer_semaphore_id;
-                uint32_t dispatch_idx = 0;
-                for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::DISPATCH]) {
-                    auto prefetch_h_settings = std::get<1>(device_worker_variants[DispatchWorkerType::PREFETCH][dispatch_idx]);
-                    auto prefetch_physical_core = prefetch_h_settings.worker_physical_core;
-                    auto dispatch_core_type = settings.dispatch_core_type;
-                    settings.upstream_cores.push_back(demux_settings.worker_physical_core);
-                    settings.downstream_cores.push_back(tt_cxy_pair(0, 0, 0));
-                    settings.compile_args.resize(22);
-                    auto& compile_args = settings.compile_args;
-                    compile_args[0] = settings.cb_start_address;
-                    compile_args[1] = settings.cb_log_page_size;
-                    compile_args[2] = settings.cb_pages;
-                    compile_args[3] = settings.consumer_semaphore_id;
-                    compile_args[4] = demux_sem++;
-                    compile_args[5] = dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS;
-                    compile_args[6] = 0; //unused prefetch_sync_sem
-                    compile_args[7] = settings.command_queue_start_addr;
-                    compile_args[8] = settings.completion_queue_start_addr;
-                    compile_args[9] = settings.completion_queue_size;
-                    compile_args[10] = dispatch_constants::DISPATCH_BUFFER_BASE; // unused
-                    compile_args[11] = (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages(); // unused
-                    compile_args[12] = 0; // unused: local ds semaphore
-                    compile_args[13] = 0; // unused: remote ds semaphore
-                    compile_args[14] = 0; // preamble size
-                    compile_args[15] = true,    // split_prefetcher
-                    compile_args[16] = NOC_XY_ENCODING(prefetch_physical_core.x, prefetch_physical_core.y),
-                    compile_args[17] = prefetch_h_settings.producer_semaphore_id, // sem_id on prefetch_h that dispatch_d is meant to increment, to resume sending of cmds post exec_buf stall
-                    compile_args[18] = dispatch_constants::get(dispatch_core_type).mux_buffer_pages(num_hw_cqs), // XXXX should this be mux pages?
-                    compile_args[19] = settings.num_compute_cores;
-                    compile_args[20] = false; // is_dram_variant
-                    compile_args[21] = true; // is_host_variant
-                    dispatch_idx++;
+                if (num_dispatchers == 1 || num_dispatchers == 2) {
+                    TT_ASSERT(device_worker_variants[DispatchWorkerType::DEMUX].size() == 1, "Cannot have more than one Demux.");
+                    auto demux_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX][0]);
+                    TT_ASSERT(num_dispatchers == demux_settings.semaphores.size(), "Demux does not have required number of semaphores for Dispatchers. Exptected = {}. Found = {}", num_dispatchers, demux_settings.semaphores.size());
+                    uint32_t demux_sem = demux_settings.producer_semaphore_id;
+                    uint32_t dispatch_idx = 0;
+                    for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::DISPATCH]) {
+                        auto prefetch_h_settings = std::get<1>(device_worker_variants[DispatchWorkerType::PREFETCH][dispatch_idx]);
+                        auto prefetch_physical_core = prefetch_h_settings.worker_physical_core;
+                        auto dispatch_core_type = settings.dispatch_core_type;
+                        settings.upstream_cores.push_back(demux_settings.worker_physical_core);
+                        settings.downstream_cores.push_back(tt_cxy_pair(0, 0, 0));
+                        settings.compile_args.resize(22);
+                        auto& compile_args = settings.compile_args;
+                        compile_args[0] = settings.cb_start_address;
+                        compile_args[1] = settings.cb_log_page_size;
+                        compile_args[2] = settings.cb_pages;
+                        compile_args[3] = settings.consumer_semaphore_id;
+                        compile_args[4] = demux_sem++;
+                        compile_args[5] = dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS;
+                        compile_args[6] = 0; //unused prefetch_sync_sem
+                        compile_args[7] = settings.command_queue_start_addr;
+                        compile_args[8] = settings.completion_queue_start_addr;
+                        compile_args[9] = settings.completion_queue_size;
+                        compile_args[10] = dispatch_constants::DISPATCH_BUFFER_BASE; // unused
+                        compile_args[11] = (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages(); // unused
+                        compile_args[12] = 0; // unused: local ds semaphore
+                        compile_args[13] = 0; // unused: remote ds semaphore
+                        compile_args[14] = 0; // preamble size
+                        compile_args[15] = true,    // split_prefetcher
+                        compile_args[16] = NOC_XY_ENCODING(prefetch_physical_core.x, prefetch_physical_core.y),
+                        compile_args[17] = prefetch_h_settings.producer_semaphore_id, // sem_id on prefetch_h that dispatch_d is meant to increment, to resume sending of cmds post exec_buf stall
+                        compile_args[18] = dispatch_constants::get(dispatch_core_type).mux_buffer_pages(num_hw_cqs), // XXXX should this be mux pages?
+                        compile_args[19] = settings.num_compute_cores;
+                        compile_args[20] = false; // is_dram_variant
+                        compile_args[21] = true; // is_host_variant
+                        dispatch_idx++;
+                    }
+                } else if (num_dispatchers == 4 || num_dispatchers == 8) {
+                    TT_ASSERT(device_worker_variants[DispatchWorkerType::DEMUX].size() == 3, "Insufficient Demux cores. Expected = 3. Found = {}", device_worker_variants[DispatchWorkerType::DEMUX].size());
+                    uint32_t dispatch_idx = 0;
+                    uint32_t demux_fanout = num_dispatchers / 2;
+                    for (int i = 1; i < 3; i++) {
+                        auto demux_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX][i]);
+                        TT_ASSERT(demux_fanout == demux_settings.semaphores.size(), "Demux does not have required number of semaphores for Dispatchers. Exptected = {}. Found = {}", num_dispatchers / 2, demux_settings.semaphores.size());
+                        uint32_t demux_sem = demux_settings.producer_semaphore_id;
+                        for (int d = 0; d < demux_fanout; d++) {
+                            auto &settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH][dispatch_idx]);
+                            auto prefetch_h_settings = std::get<1>(device_worker_variants[DispatchWorkerType::PREFETCH][dispatch_idx]);
+                            auto prefetch_physical_core = prefetch_h_settings.worker_physical_core;
+                            auto dispatch_core_type = settings.dispatch_core_type;
+                            settings.upstream_cores.push_back(demux_settings.worker_physical_core);
+                            settings.downstream_cores.push_back(tt_cxy_pair(0, 0, 0));
+                            settings.compile_args.resize(22);
+                            auto& compile_args = settings.compile_args;
+                            compile_args[0] = settings.cb_start_address;
+                            compile_args[1] = settings.cb_log_page_size;
+                            compile_args[2] = settings.cb_pages;
+                            compile_args[3] = settings.consumer_semaphore_id;
+                            compile_args[4] = demux_sem++;
+                            compile_args[5] = dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS;
+                            compile_args[6] = 0; //unused prefetch_sync_sem
+                            compile_args[7] = settings.command_queue_start_addr;
+                            compile_args[8] = settings.completion_queue_start_addr;
+                            compile_args[9] = settings.completion_queue_size;
+                            compile_args[10] = dispatch_constants::DISPATCH_BUFFER_BASE; // unused
+                            compile_args[11] = (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages(); // unused
+                            compile_args[12] = 0; // unused: local ds semaphore
+                            compile_args[13] = 0; // unused: remote ds semaphore
+                            compile_args[14] = 0; // preamble size
+                            compile_args[15] = true,    // split_prefetcher
+                            compile_args[16] = NOC_XY_ENCODING(prefetch_physical_core.x, prefetch_physical_core.y),
+                            compile_args[17] = prefetch_h_settings.producer_semaphore_id, // sem_id on prefetch_h that dispatch_d is meant to increment, to resume sending of cmds post exec_buf stall
+                            compile_args[18] = dispatch_constants::get(dispatch_core_type).mux_buffer_pages(num_hw_cqs), // XXXX should this be mux pages?
+                            compile_args[19] = settings.num_compute_cores;
+                            compile_args[20] = false; // is_dram_variant
+                            compile_args[21] = true; // is_host_variant
+                            dispatch_idx++;
+                        }
+                    }
                 }
                 break;
             }
@@ -1070,25 +1103,33 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 bool is_tunnel_end = device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE].size() == 0;
                 TT_ASSERT(device_worker_variants[DispatchWorkerType::US_TUNNELER_LOCAL].size() == 1, "Unexpected number of ethernet tunnelers.");
                 auto &tunneler_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_LOCAL][0]);
-                auto &demux_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX_D][0]);
                 auto &mux_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::MUX_D][0]);
                 uint32_t fwd_vc_count = tunneler_settings.vc_count - 1;
                 uint32_t return_vc = fwd_vc_count;
+                uint32_t local_tunneler_vcs_connected = 0;
                 auto &compile_args = tunneler_settings.compile_args;
+
+                uint32_t num_demux_d = device_worker_variants[DispatchWorkerType::DEMUX_D].size();
+                uint32_t vcs_per_demux_d = num_demux_d == 1 ? fwd_vc_count : fwd_vc_count - (fwd_vc_count / 2);
+
                 compile_args.resize(48);
                 compile_args[0] = 0xDACADACA; // 0: endpoint_id_start_index
                 compile_args[1] = tunneler_settings.vc_count; // tunnel_lanes. 1 => Unidirectional. 2 => Bidirectional.
                 compile_args[2] = tunneler_settings.cb_start_address >> 4; // 2: rx_queue_start_addr_words
                 compile_args[3] = tunneler_settings.cb_size_bytes >> 4; // 3: rx_queue_size_words
 
-                for (int i = 0; i < fwd_vc_count; i++) {
-                compile_args[4 + i] = packet_switch_4B_pack(demux_d_settings.worker_physical_core.x,
-                                    demux_d_settings.worker_physical_core.y,
-                                    i, // input queue id of DEMUX_D
-                                    (uint32_t)DispatchRemoteNetworkType::NOC0); // 4: remote_receiver_0_info
+                for (auto&[core, demux_d_settings] : device_worker_variants[DispatchWorkerType::DEMUX_D]) {
+                    for (int i = 0; i < vcs_per_demux_d; i++) {
+                        compile_args[4 + i + local_tunneler_vcs_connected] = packet_switch_4B_pack(demux_d_settings.worker_physical_core.x,
+                                            demux_d_settings.worker_physical_core.y,
+                                            i, // input queue id of DEMUX_D
+                                            (uint32_t)DispatchRemoteNetworkType::NOC0); // 4: remote_receiver_0_info
 
-                compile_args[14 + i * 2] = (demux_d_settings.cb_start_address + i * demux_d_settings.cb_size_bytes) >> 4; // 14 - 32: remote_receiver_queue_start_addr_words fwd vcs
-                compile_args[15 + i * 2] = demux_d_settings.cb_size_bytes >> 4; // 15 - 33: remote_receiver_queue_size_words fwd vcs
+                        compile_args[14 + (i + local_tunneler_vcs_connected) * 2] = (demux_d_settings.cb_start_address + i * demux_d_settings.cb_size_bytes) >> 4; // 14 - 32: remote_receiver_queue_start_addr_words fwd vcs
+                        compile_args[15 + (i + local_tunneler_vcs_connected) * 2] = demux_d_settings.cb_size_bytes >> 4; // 15 - 33: remote_receiver_queue_size_words fwd vcs
+                    }
+                    local_tunneler_vcs_connected += vcs_per_demux_d;
+                    vcs_per_demux_d = fwd_vc_count - vcs_per_demux_d;
                 }
 
                 compile_args[4 + return_vc] = packet_switch_4B_pack(tunneler_settings.eth_partner_physical_core.x,
@@ -1103,10 +1144,10 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 }
 
                 for (int i = 0; i < fwd_vc_count; i++) {
-                compile_args[34 + i] = packet_switch_4B_pack(tunneler_settings.eth_partner_physical_core.x,
-                                    tunneler_settings.eth_partner_physical_core.y,
-                                    tunneler_settings.vc_count + i, // queue id of remote eth tunneler sender
-                                    (uint32_t)DispatchRemoteNetworkType::ETH); // 10: remote_sender fwd vcs
+                    compile_args[34 + i] = packet_switch_4B_pack(tunneler_settings.eth_partner_physical_core.x,
+                                        tunneler_settings.eth_partner_physical_core.y,
+                                        tunneler_settings.vc_count + i, // queue id of remote eth tunneler sender
+                                        (uint32_t)DispatchRemoteNetworkType::ETH); // 10: remote_sender fwd vcs
                 }
                 compile_args[34 + return_vc] = packet_switch_4B_pack(mux_d_settings.worker_physical_core.x,
                                     mux_d_settings.worker_physical_core.y,
@@ -1119,7 +1160,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     auto &us_tunneler_remote_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE][0]);
                     auto mux_d_sender = us_tunneler_remote_settings.worker_physical_core;
                     compile_args[47] = (return_vc << 24) | ((us_tunneler_remote_settings.vc_count * 2 - 1) << 16) | (mux_d_sender.y << 8) | (mux_d_sender.x);
-                    log_debug(tt::LogMetal, "Tunner Inner Device {} will send done to {}", tunneler_settings.worker_physical_core.str(), mux_d_sender.str());
+                    log_debug(tt::LogMetal, "Tunnelr Inner Device {} will send done to {}", tunneler_settings.worker_physical_core.str(), mux_d_sender.str());
                 }
 
                 break;
@@ -1130,82 +1171,120 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 if (!is_tunnel_end) {
                     TT_ASSERT(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE].size() == 1, "Unexpected number of ethernet tunnelers.");
                 }
-                TT_ASSERT(device_worker_variants[DispatchWorkerType::DEMUX_D].size() == 1, "Unexpected number of device demux.");
 
                 auto &tunneler_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_LOCAL][0]);
-                auto &demux_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX_D][0]);
-
-                TT_ASSERT(demux_d_settings.tunnel_stop > 0 && demux_d_settings.tunnel_stop <= 4, "Invalid Demux D tunnel stop.");
                 uint32_t fwd_vc_count = tunneler_settings.vc_count - 1;
                 uint32_t return_vc = fwd_vc_count;
 
-                auto &compile_args = demux_d_settings.compile_args;
-                compile_args.resize(36);
+                uint32_t num_demux_d = device_worker_variants[DispatchWorkerType::DEMUX_D].size();
+                uint32_t num_prefetch_d = device_worker_variants[DispatchWorkerType::PREFETCH_D].size();
+                uint32_t num_prefetch_d_per_demux_d = num_demux_d == 1 ? num_prefetch_d : 1;
+                uint32_t vcs_per_demux_d = num_demux_d == 1 ? fwd_vc_count : fwd_vc_count - (fwd_vc_count / 2);
+                uint32_t prefetch_d_connected = 0;
+                uint32_t local_tunneler_vcs_connected = 0;
+                uint32_t remote_tunneler_vcs_connected = 0;
 
-                compile_args[0] = 0xB1; // 0: endpoint_id_start_index
-                compile_args[1] = demux_d_settings.cb_start_address >> 4; // 1: rx_queue_start_addr_words
-                compile_args[2] = demux_d_settings.cb_size_bytes >> 4; // 2: rx_queue_size_words
-                compile_args[3] = fwd_vc_count; // 3: demux_fan_out
+                for (auto&[core, demux_d_settings] : device_worker_variants[DispatchWorkerType::DEMUX_D]) {
 
-                uint32_t demux_output_idx = 0;
-                uint32_t demux_output_cb_info_idx = 0;
-                // Tie DEMUX_D outputs to DEMUX_D output queues (prefetch_d and remote tunnel inputs) and set output CB parameters
-                for (const auto& prefetch_d_settings : device_worker_variants[DispatchWorkerType::PREFETCH_D]) {
-                    auto prefetch_d_setting = std::get<1>(prefetch_d_settings);
-                    compile_args[4 + demux_output_idx] = packet_switch_4B_pack(prefetch_d_setting.worker_physical_core.x,
-                                                        prefetch_d_setting.worker_physical_core.y,
-                                                        0, // prefetch_d input queue id
-                                                        (uint32_t)DispatchRemoteNetworkType::NOC0); // 4: remote_tx_0_info
-                    compile_args[8 + demux_output_cb_info_idx] = prefetch_d_setting.cb_start_address >> 4;
-                    compile_args[8 + demux_output_cb_info_idx + 1] = prefetch_d_setting.cb_size_bytes >> 4;
-                    demux_output_idx++;
-                    demux_output_cb_info_idx += 2;
+                    if (demux_d_settings.tunnel_stop == 1 && demux_d_settings.vc_count <= 3) {
+                        // N300/T3K 1 - 2 CQs
+                        TT_ASSERT(device_worker_variants[DispatchWorkerType::DEMUX_D].size() == 1, "Unexpected number of device demux.");
+                    } else if ( is_tunnel_end && demux_d_settings.vc_count == 2) {
+                        // TG/TGG 1 CQ, last tunnel chip
+                        TT_ASSERT(device_worker_variants[DispatchWorkerType::DEMUX_D].size() == 1, "Unexpected number of device demux.");
+                    } else {
+                        // TG/TGG 1 - 2 CQ all tunnel chips
+                        TT_ASSERT(device_worker_variants[DispatchWorkerType::DEMUX_D].size() == 2, "Unexpected number of device demux.");
+                    }
+
+                    TT_ASSERT(demux_d_settings.tunnel_stop > 0 && demux_d_settings.tunnel_stop <= 4, "Invalid Demux D tunnel stop.");
+
+                    auto &compile_args = demux_d_settings.compile_args;
+                    compile_args.resize(36);
+
+                    compile_args[0] = 0xB1; // 0: endpoint_id_start_index
+                    compile_args[1] = demux_d_settings.cb_start_address >> 4; // 1: rx_queue_start_addr_words
+                    compile_args[2] = demux_d_settings.cb_size_bytes >> 4; // 2: rx_queue_size_words
+                    compile_args[3] = vcs_per_demux_d; // 3: demux_fan_out
+
+                    uint32_t demux_output_idx = 0;
+                    uint32_t demux_output_cb_info_idx = 0;
+                    // Tie DEMUX_D outputs to DEMUX_D output queues (prefetch_d and remote tunnel inputs) and set output CB parameters
+                    for (int p = 0; p < num_prefetch_d_per_demux_d; p++) {
+                    //for (const auto& prefetch_d_settings : device_worker_variants[DispatchWorkerType::PREFETCH_D]) {
+                    //    auto prefetch_d_setting = std::get<1>(prefetch_d_settings);
+                        auto prefetch_d_setting = std::get<1>(device_worker_variants[DispatchWorkerType::PREFETCH_D][p + prefetch_d_connected]);
+                        compile_args[4 + demux_output_idx] = packet_switch_4B_pack(prefetch_d_setting.worker_physical_core.x,
+                                                            prefetch_d_setting.worker_physical_core.y,
+                                                            0, // prefetch_d input queue id
+                                                            (uint32_t)DispatchRemoteNetworkType::NOC0); // 4: remote_tx_0_info
+                        compile_args[8 + demux_output_cb_info_idx] = prefetch_d_setting.cb_start_address >> 4;
+                        compile_args[8 + demux_output_cb_info_idx + 1] = prefetch_d_setting.cb_size_bytes >> 4;
+                        demux_output_idx++;
+                        demux_output_cb_info_idx += 2;
+                    }
+
+                    vcs_per_demux_d -= demux_output_idx;
+                    if (!is_tunnel_end) {
+                        auto &us_tunneler_remote_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE][0]);
+                        //TT_ASSERT(fwd_vc_count == us_tunneler_remote_settings.vc_count - 1, "Forward VC count mismatch between DEMUX_D and US_TUNNELER_REMOTE");
+                        for (int i = 0; i < vcs_per_demux_d; i++) {
+                            compile_args[4 + demux_output_idx + i] = packet_switch_4B_pack((uint32_t)us_tunneler_remote_settings.worker_physical_core.x,
+                                                                (uint32_t)us_tunneler_remote_settings.worker_physical_core.y,
+                                                                remote_tunneler_vcs_connected,
+                                                                (uint32_t)DispatchRemoteNetworkType::NOC0); // 5: remote_tx_1_info
+                            compile_args[8 + (demux_output_idx + i) * 2] = (us_tunneler_remote_settings.cb_start_address + remote_tunneler_vcs_connected * us_tunneler_remote_settings.cb_size_bytes) >> 4;    // 10: remote_tx_queue_start_addr_words 1
+                            compile_args[9 + (demux_output_idx + i) * 2] = us_tunneler_remote_settings.cb_size_bytes >> 4;   // 11: remote_tx_queue_size_words 1
+                            remote_tunneler_vcs_connected++;
+                        }
+                    } else {
+                        TT_ASSERT(vcs_per_demux_d == 0, "Unhandled Forward VCs encountered.");
+                    }
+
+                    //reset vcs per demux d to demux fanout.
+                    //need to connect local tunneler ports to demux ports.
+                    vcs_per_demux_d = compile_args[3];
+                    for (int i = 0; i < vcs_per_demux_d; i++) {
+                        compile_args[16 + i] = packet_switch_4B_pack(tunneler_settings.worker_physical_core.x,
+                                                tunneler_settings.worker_physical_core.y,
+                                                tunneler_settings.vc_count + local_tunneler_vcs_connected++,
+                                                (uint32_t)DispatchRemoteNetworkType::NOC0); // 16: remote_rx_0_info
+                    }
+
+                    uint32_t dest_map_array[4] = {1, 1, 1, 1}; // needs to be based on tunnel stop.
+                    dest_map_array[demux_d_settings.tunnel_stop-1] = 0;
+                    uint64_t dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
+                    compile_args[20] = (uint32_t)(dest_endpoint_output_map >> 32); // 20: dest_endpoint_output_map_hi
+                    compile_args[21] = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF); // 21: dest_endpoint_output_map_lo
+                    compile_args[22] = 0; // 22: test_results_addr (disabled)
+                    compile_args[23] = 0; // 23: test_results_size (disabled)
+                    compile_args[24] = 0; // 24: timeout_cycles
+                    compile_args[25] = 0; // 25: output_depacketize_mask
+                    // Update output_depacketize_mask based on num prefetch_d cores (local demux_d outputs)
+                    for (int prefetch_d_idx = 0; prefetch_d_idx < num_prefetch_d_per_demux_d; prefetch_d_idx++) compile_args[25] |= (1 << (prefetch_d_idx));
+                    // Set downstream and local sem ids, based on number of demux outputs
+                    uint32_t demux_output_sem_idx = 0;
+                    uint32_t demux_sem = demux_d_settings.producer_semaphore_id;
+                    //for (const auto& prefetch_d_settings : device_worker_variants[DispatchWorkerType::PREFETCH_D]) {
+                    for (int p = 0; p < num_prefetch_d_per_demux_d; p++) {
+                        auto prefetch_d_setting = std::get<1>(device_worker_variants[DispatchWorkerType::PREFETCH_D][p + prefetch_d_connected]);
+                        //auto prefetch_d_setting = std::get<1>(prefetch_d_settings);
+                        compile_args[26 + demux_output_sem_idx] = packet_switch_4B_pack(prefetch_d_setting.cb_log_page_size,
+                                                                            prefetch_d_setting.consumer_semaphore_id, // downstream sem
+                                                                            demux_sem++,    // local sem
+                                                                            0); // remove header
+                        demux_output_sem_idx++;
+                    }
+                    prefetch_d_connected += num_prefetch_d_per_demux_d;
+                    vcs_per_demux_d = fwd_vc_count / 2;
+                    num_prefetch_d_per_demux_d = device_worker_variants[DispatchWorkerType::PREFETCH_D].size() - num_prefetch_d_per_demux_d;
                 }
 
-                fwd_vc_count -= demux_output_idx;
+                TT_ASSERT(device_worker_variants[DispatchWorkerType::PREFETCH_D].size() == prefetch_d_connected, "Found unconnected DEMUX_D to PREFETCH_D ports.");
+                TT_ASSERT(fwd_vc_count == local_tunneler_vcs_connected, "Found unconnected forward VCs between US_TUNNELER_LOCAL and DEMUX_D");
                 if (!is_tunnel_end) {
                     auto &us_tunneler_remote_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE][0]);
-                    TT_ASSERT(fwd_vc_count == us_tunneler_remote_settings.vc_count - 1, "Forward VC count mismatch between DEMUX_D and US_TUNNELER_REMOTE");
-                    for (int i = 0; i < fwd_vc_count; i++) {
-                        compile_args[4 + demux_output_idx + i] = packet_switch_4B_pack((uint32_t)us_tunneler_remote_settings.worker_physical_core.x,
-                                                            (uint32_t)us_tunneler_remote_settings.worker_physical_core.y,
-                                                            i,
-                                                            (uint32_t)DispatchRemoteNetworkType::NOC0); // 5: remote_tx_1_info
-                        compile_args[8 + (demux_output_idx + i) * 2] = (us_tunneler_remote_settings.cb_start_address + i * us_tunneler_remote_settings.cb_size_bytes) >> 4;    // 10: remote_tx_queue_start_addr_words 1
-                        compile_args[9 + (demux_output_idx + i) * 2] = us_tunneler_remote_settings.cb_size_bytes >> 4;   // 11: remote_tx_queue_size_words 1
-                    }
-                } else {
-                    TT_ASSERT(fwd_vc_count == 0, "Unhandled Forward VCs encountered.");
-                }
-
-                for (int i = 0; i < tunneler_settings.vc_count - 1; i++) {
-                compile_args[16 + i] = packet_switch_4B_pack(tunneler_settings.worker_physical_core.x,
-                                        tunneler_settings.worker_physical_core.y,
-                                        tunneler_settings.vc_count + i,
-                                        (uint32_t)DispatchRemoteNetworkType::NOC0); // 16: remote_rx_0_info
-                }
-
-                uint32_t dest_map_array[4] = {1, 1, 1, 1}; // needs to be based on tunnel stop.
-                dest_map_array[demux_d_settings.tunnel_stop-1] = 0;
-                uint64_t dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
-                compile_args[20] = (uint32_t)(dest_endpoint_output_map >> 32); // 20: dest_endpoint_output_map_hi
-                compile_args[21] = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF); // 21: dest_endpoint_output_map_lo
-                compile_args[22] = 0; // 22: test_results_addr (disabled)
-                compile_args[23] = 0; // 23: test_results_size (disabled)
-                compile_args[24] = 0; // 24: timeout_cycles
-                compile_args[25] = 0; // 25: output_depacketize_mask
-                // Update output_depacketize_mask based on num prefetch_d cores (local demux_d outputs)
-                for (int prefetch_d_idx = 0; prefetch_d_idx < device_worker_variants[DispatchWorkerType::PREFETCH_D].size(); prefetch_d_idx++) compile_args[25] |= (1 << (prefetch_d_idx));
-                // Set downstream and local sem ids, based on number of demux outputs
-                uint32_t demux_output_sem_idx = 0;
-                uint32_t demux_sem = demux_d_settings.producer_semaphore_id;
-                for (const auto& prefetch_d_settings : device_worker_variants[DispatchWorkerType::PREFETCH_D]) {
-                    auto prefetch_d_setting = std::get<1>(prefetch_d_settings);
-                    compile_args[26 + demux_output_sem_idx] = packet_switch_4B_pack(prefetch_d_setting.cb_log_page_size,
-                                                                        prefetch_d_setting.consumer_semaphore_id, // downstream sem
-                                                                        demux_sem++,    // local sem
-                                                                        0); // remove header
-                    demux_output_sem_idx++;
+                    TT_ASSERT((us_tunneler_remote_settings.vc_count - 1) == remote_tunneler_vcs_connected, "Found unconnected forward VCs between DEMUX_D and US_TUNNELER_REMOTE");
                 }
                 break;
             }
@@ -1213,13 +1292,22 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
             {
 
                 uint32_t num_prefetchers = device_worker_variants[DispatchWorkerType::PREFETCH_D].size();
-                TT_ASSERT(device_worker_variants[DispatchWorkerType::DEMUX_D].size() == 1, "Cannot have more than one Demux D.");
-                auto demux_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX_D][0]);
+                uint32_t num_demux_d = device_worker_variants[DispatchWorkerType::DEMUX_D].size();
 
-                TT_ASSERT(num_prefetchers == demux_d_settings.semaphores.size(), "Demux D does not have required number of semaphores for Prefetcher D. Exptected = {}. Found = {}", num_prefetchers, demux_d_settings.semaphores.size());
                 int prefetch_d_idx = 0;
-                uint32_t demux_sem = demux_d_settings.producer_semaphore_id;
+                int demux_d_idx = 0;
+                std::vector<uint32_t>demux_sem(num_demux_d, 0);
+                for (int i = 0; i < num_demux_d; i++) {
+                    auto demux_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX_D][i]);
+                    demux_sem[i] = demux_d_settings.producer_semaphore_id;
+                }
+
                 for (auto&[core, prefetch_d_settings] : device_worker_variants[DispatchWorkerType::PREFETCH_D]) {
+                    TT_ASSERT(demux_d_idx < num_demux_d , "Demux D index out of bounds. Max = {}. Found = {}", num_demux_d - 1, demux_d_idx);
+                    auto demux_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX_D][demux_d_idx]);
+                    if (num_demux_d == 1) {
+                        TT_ASSERT(num_prefetchers == demux_d_settings.semaphores.size(), "Demux D does not have required number of semaphores for Prefetcher D. Exptected = {}. Found = {}", num_prefetchers, demux_d_settings.semaphores.size());
+                    }
                     auto dispatch_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH_D][prefetch_d_idx]); // 1 to 1 mapping bw prefetch_d and dispatch_d
                     auto dispatch_core_type = prefetch_d_settings.dispatch_core_type;
                     prefetch_d_settings.upstream_cores.push_back(demux_d_settings.worker_physical_core);
@@ -1250,12 +1338,17 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     compile_args[15] = 0; //prefetch_sync_sem
                     compile_args[16] = prefetch_d_settings.cb_pages; // prefetch_d only
                     compile_args[17] = prefetch_d_settings.consumer_semaphore_id; // prefetch_d only
-                    compile_args[18] = demux_sem++; //prefetch_downstream_cb_sem, // prefetch_d only
+                    compile_args[18] = demux_sem[demux_d_idx]; //prefetch_downstream_cb_sem, // prefetch_d only
                     compile_args[19] = prefetch_d_settings.cb_log_page_size;
                     compile_args[20] = dispatch_constants::PREFETCH_D_BUFFER_BLOCKS; // prefetch_d only
                     compile_args[21] = true;  // is_dram_variant
                     compile_args[22] = false; // is_host_variant
                     prefetch_d_idx++; // move on to next prefetcher
+                    if (num_demux_d == 1) {
+                        demux_sem[demux_d_idx]++;
+                    } else {
+                        demux_d_idx++;
+                    }
                 }
                 break;
             }
@@ -1512,25 +1605,26 @@ void Device::setup_tunnel_for_remote_devices() {
 
                     tt_cxy_pair demux_location = dispatch_core_manager::instance().demux_core(device_id, channel, 0);
                     settings.worker_physical_core = tt_cxy_pair(demux_location.chip, get_physical_core_coordinate(demux_location, dispatch_core_type));
+                    settings.semaphores.clear();
                     settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_demux.cpp";
                     settings.cb_start_address = L1_UNRESERVED_BASE;
                     settings.cb_size_bytes = 0x10000;
                     tunnel_core_allocations[DEMUX].push_back(std::make_tuple(demux_location, settings));
-                    if (num_prefetchers == 8) {
-                        tt_cxy_pair demux_location = dispatch_core_manager::instance().demux_core(device_id, channel, 1);
-                        settings.worker_physical_core = tt_cxy_pair(demux_location.chip, get_physical_core_coordinate(demux_location, dispatch_core_type));
-                        settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_demux.cpp";
-                        settings.cb_start_address = L1_UNRESERVED_BASE;
-                        settings.cb_size_bytes = 0x10000;
-                        tunnel_core_allocations[DEMUX].push_back(std::make_tuple(demux_location, settings));
 
-                        demux_location = dispatch_core_manager::instance().demux_core(device_id, channel, 2);
-                        settings.worker_physical_core = tt_cxy_pair(demux_location.chip, get_physical_core_coordinate(demux_location, dispatch_core_type));
-                        settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_demux.cpp";
-                        settings.cb_start_address = L1_UNRESERVED_BASE;
-                        settings.cb_size_bytes = 0x10000;
-                        tunnel_core_allocations[DEMUX].push_back(std::make_tuple(demux_location, settings));
-                    }
+                    settings.semaphores = std::vector<uint32_t>(num_prefetchers / 2);
+                    demux_location = dispatch_core_manager::instance().demux_core(device_id, channel, 1);
+                    settings.worker_physical_core = tt_cxy_pair(demux_location.chip, get_physical_core_coordinate(demux_location, dispatch_core_type));
+                    settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_demux.cpp";
+                    settings.cb_start_address = L1_UNRESERVED_BASE;
+                    settings.cb_size_bytes = 0x10000;
+                    tunnel_core_allocations[DEMUX].push_back(std::make_tuple(demux_location, settings));
+
+                    demux_location = dispatch_core_manager::instance().demux_core(device_id, channel, 2);
+                    settings.worker_physical_core = tt_cxy_pair(demux_location.chip, get_physical_core_coordinate(demux_location, dispatch_core_type));
+                    settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_demux.cpp";
+                    settings.cb_start_address = L1_UNRESERVED_BASE;
+                    settings.cb_size_bytes = 0x10000;
+                    tunnel_core_allocations[DEMUX].push_back(std::make_tuple(demux_location, settings));
 
                 }
 /*
@@ -1602,8 +1696,12 @@ void Device::setup_tunnel_for_remote_devices() {
             settings.producer_semaphore_id = 0;
             settings.cb_start_address = L1_UNRESERVED_BASE;
             settings.cb_size_bytes = 0x8000;
+            if (tunnel.size() > 2) {
+                settings.semaphores.resize(1);
+            }
             tunnel_core_allocations[DEMUX_D].push_back(std::make_tuple(demux_d_location, settings));
-            if (demux_vcs > MAX_SWITCH_FAN_IN) {
+            if (tunnel.size() > 2 && demux_vcs > 1) {
+                //TG/TGG 1-2 CQs
                 demux_d_location = dispatch_core_manager::instance().demux_d_core(device_id, channel, 1);
                 settings.worker_physical_core = tt_cxy_pair(demux_d_location.chip, get_physical_core_coordinate(demux_d_location, dispatch_core_type));
                 settings.kernel_file = "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp";
@@ -1959,26 +2057,27 @@ void Device::compile_command_queue_programs() {
                 true
             );
 
-            auto [demux_core, demux_settings] = mmio_device_worker_variants[DispatchWorkerType::DEMUX][0];
-            for (auto sem : demux_settings.semaphores) {
-                //size of semaphores vector is number of needed semaphores on the core.
-                //Value of each vector entry is the initialization value for the semaphore.
-                tt::tt_metal::CreateSemaphore(*mmio_command_queue_program_ptr, demux_core, sem, demux_settings.dispatch_core_type);
+            for (auto [demux_core, demux_settings] : mmio_device_worker_variants[DispatchWorkerType::DEMUX]) {
+                for (auto sem : demux_settings.semaphores) {
+                    //size of semaphores vector is number of needed semaphores on the core.
+                    //Value of each vector entry is the initialization value for the semaphore.
+                    tt::tt_metal::CreateSemaphore(*mmio_command_queue_program_ptr, demux_core, sem, demux_settings.dispatch_core_type);
+                }
+                configure_kernel_variant(
+                    *mmio_command_queue_program_ptr,
+                    demux_settings.kernel_file,
+                    demux_settings.compile_args,
+                    demux_core,
+                    CoreCoord{0, 0},
+                    demux_settings.dispatch_core_type,
+                    CoreCoord{0, 0},
+                    CoreCoord{0, 0},
+                    std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
+                    my_noc_index, // Only one Demux - use NOC for CQ 0
+                    my_noc_index,
+                    my_noc_index
+                );
             }
-            configure_kernel_variant(
-                *mmio_command_queue_program_ptr,
-                demux_settings.kernel_file,
-                demux_settings.compile_args,
-                demux_core,
-                CoreCoord{0, 0},
-                demux_settings.dispatch_core_type,
-                CoreCoord{0, 0},
-                CoreCoord{0, 0},
-                std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
-                my_noc_index, // Only one Demux - use NOC for CQ 0
-                my_noc_index,
-                my_noc_index
-            );
             cq_id = 0;
             for (auto [dispatch_core, dispatch_settings] : mmio_device_worker_variants[DispatchWorkerType::DISPATCH]) {
                 for (auto sem : dispatch_settings.semaphores) {
@@ -2043,26 +2142,27 @@ void Device::compile_command_queue_programs() {
             );
         }
 
-        auto [demux_d_core, demux_d_settings] = device_worker_variants[DispatchWorkerType::DEMUX_D][0];
-        for (auto sem : demux_d_settings.semaphores) {
-            //size of semaphores vector is number of needed semaphores on the core.
-            //Value of each vector entry is the initialization value for the semaphore.
-            tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, demux_d_core, sem, demux_d_settings.dispatch_core_type);
+        for (auto [demux_d_core, demux_d_settings] : device_worker_variants[DispatchWorkerType::DEMUX_D]){
+            for (auto sem : demux_d_settings.semaphores) {
+                //size of semaphores vector is number of needed semaphores on the core.
+                //Value of each vector entry is the initialization value for the semaphore.
+                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, demux_d_core, sem, demux_d_settings.dispatch_core_type);
+            }
+            configure_kernel_variant(
+                *command_queue_program_ptr,
+                demux_d_settings.kernel_file,
+                demux_d_settings.compile_args,
+                demux_d_core,
+                CoreCoord{0, 0},
+                demux_d_settings.dispatch_core_type,
+                CoreCoord{0, 0},
+                CoreCoord{0, 0},
+                std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
+                my_noc_index, // Only one Demux - use NOC for CQ 0
+                my_noc_index,
+                my_noc_index
+            );
         }
-        configure_kernel_variant(
-            *command_queue_program_ptr,
-            demux_d_settings.kernel_file,
-            demux_d_settings.compile_args,
-            demux_d_core,
-            CoreCoord{0, 0},
-            demux_d_settings.dispatch_core_type,
-            CoreCoord{0, 0},
-            CoreCoord{0, 0},
-            std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
-            my_noc_index, // Only one Demux - use NOC for CQ 0
-            my_noc_index,
-            my_noc_index
-        );
         uint32_t cq_id = 0;
         for (auto [prefetch_d_core, prefetch_d_settings] : device_worker_variants[DispatchWorkerType::PREFETCH_D]) {
             for (auto sem : prefetch_d_settings.semaphores) {
