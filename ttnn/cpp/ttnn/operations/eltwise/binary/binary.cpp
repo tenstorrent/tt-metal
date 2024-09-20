@@ -7,6 +7,7 @@
 
 #include "device/binary_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
@@ -120,6 +121,12 @@ auto preprocess_inputs(
     };
     repeat_smaller(input_tensor_a, input_tensor_b);
     repeat_smaller(input_tensor_b, input_tensor_a);
+
+    if (binary_op_type == BinaryOpType::DIV_FAST)
+    {
+        Tensor t_one =  ttnn::ones_like(input_tensor_a);
+        input_tensor_b = ttnn::multiply(t_one, input_tensor_b);
+    }
 
     return [](const auto &input_tensor_a, const auto &input_tensor_b) {
         if constexpr (detail::is_associative(binary_op_type)) {
