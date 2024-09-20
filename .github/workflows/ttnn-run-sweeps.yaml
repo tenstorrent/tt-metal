@@ -25,6 +25,9 @@ on:
           - eltwise.unary.ceil.ceil_interleaved
           - eltwise.unary.trunc.trunc_interleaved
           - eltwise.unary.floor.floor_interleaved
+          - eltwise.unary.exp.exp_interleaved
+          - eltwise.unary.exp2.exp2_interleaved
+          - eltwise.unary.tanh.tanh_interleaved
           - eltwise.binary.subtract.subtract_interleaved
           - eltwise.binary.multiply.multiply_interleaved
           - eltwise.binary.div.div_interleaved
