@@ -52,8 +52,8 @@ runs:
         mkdir -p ${{ github.workspace }}/generated
         # So cp works later even if no artifacts generated
         touch ${{ github.workspace }}/generated/.keep
-        echo "host-uid=$(echo $UID)" >> "$GITHUB_OUTPUT"
-        echo "host-gid=$(echo $GID)" >> "$GITHUB_OUTPUT"
+        echo "host-uid=$(id -u)" >> "$GITHUB_OUTPUT"
+        echo "host-gid=$(id -g)" >> "$GITHUB_OUTPUT"
     - uses: addnab/docker-run-action@v3
       with:
         shell: bash
