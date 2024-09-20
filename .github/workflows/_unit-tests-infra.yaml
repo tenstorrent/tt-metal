@@ -1,14 +1,17 @@
-name: "[internal] Data collection tools unit tests"
+name: "[internal] Infra tools unit tests"
 
 on:
   workflow_dispatch:
-  push:
+  pull_request:
     branches:
       - "main"
-      - "rkim/12885-data-tests"
+    paths:
+      - "infra/**"
+  schedule:
+    - cron: "0 */6 * * *"
 
 jobs:
-  build-and-test-data-collection:
+  build-and-test-infra:
     strategy:
       matrix:
         python-version: [3.8]
