@@ -393,7 +393,7 @@ std::vector<Tensor> _sigmoid_bw(
 std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardRsqrt::invoke(uint8_t queue_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;
     if(!input_grad.has_value()){
-        input_grad = ttnn::zeros_like(grad);
+        input_grad = ttnn::empty_like(grad);
     }
     float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
@@ -415,8 +415,8 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardRsqrt::invoke(uint8
     return result;
 }
 
-std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardRsqrt::invoke(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-    return ExecuteUnaryBackwardRsqrt::invoke(DefaultQueueId, grad, input, output_mem_config);
+std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardRsqrt::invoke(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
+    return ExecuteUnaryBackwardRsqrt::invoke(DefaultQueueId, grad, input, output_mem_config, input_grad);
 }
 
 std::vector<std::optional<Tensor>> ExecuteUnaryBackwardNeg::invoke(uint8_t queue_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
@@ -426,6 +426,10 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardNeg::invoke(uint8_t queue
     return result;
 }
 
+std::vector<std::optional<Tensor>> ExecuteUnaryBackwardNeg::invoke(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
+    return ExecuteUnaryBackwardNeg::invoke(DefaultQueueId, grad, input, output_mem_config, input_grad);
+}
+
 std::vector<Tensor> _relu_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = ttnn::multiply(ttnn::gtz(input, output_mem_config), grad, std::nullopt, output_mem_config);
@@ -433,18 +437,19 @@ std::vector<Tensor> _relu_bw(const Tensor& grad, const Tensor& input, const std:
     return grad_tensor;
 }
 
+// fill_bw:
+// name: fill.Scalar(Tensor self, Scalar value) -> Tensor
+// self: zeros_like(grad)
+// result: at::fill(self_t, 0)
 std::vector<std::optional<Tensor>> ExecuteUnaryBackwardFill::invoke(uint8_t queue_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
     std::vector<std::optional<Tensor>> result = {std::nullopt};
-    input_grad = input_grad.value_or(ttnn::zeros_like(input));
-
-    Tensor val = grad;
-    val = ttnn::sum(val);
-    Tensor result_val = ttnn::full_like(grad, 0.0f);
-    ttnn::add(queue_id, result_val, val, std::nullopt, output_mem_config, input_grad);
-
-    result[0] = input_grad;
+    result[0] = input_grad.has_value() ? ttnn::zeros_like(grad, std::nullopt, std::nullopt, std::nullopt, std::nullopt, input_grad) : ttnn::zeros_like(grad);
     return result;
+}
+
+std::vector<std::optional<Tensor>> ExecuteUnaryBackwardFill::invoke(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
+    return ExecuteUnaryBackwardFill::invoke(DefaultQueueId, grad, input, output_mem_config, input_grad);
 }
 
 std::vector<Tensor> _hardsigmoid_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
@@ -1354,7 +1359,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardGelu::invoke(
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;
     if(!input_grad.has_value()){
-        input_grad = ttnn::zeros_like(grad);
+        input_grad = ttnn::empty_like(grad);
     }
 
     auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
@@ -1404,8 +1409,9 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardGelu::invoke(
     const Tensor& grad,
     const Tensor& input,
     string approximate,
-    const std::optional<MemoryConfig>& output_mem_config) {
-        return ExecuteUnaryBackwardGelu::invoke(DefaultQueueId, grad, input, approximate, output_mem_config);
+    const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> input_grad) {
+        return ExecuteUnaryBackwardGelu::invoke(DefaultQueueId, grad, input, approximate, output_mem_config, input_grad);
 }
 
 std::vector<Tensor> _repeat_bw(

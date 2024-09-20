@@ -815,7 +815,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardMul::invoke(
     uint8_t queue_id, const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;
      if(!input_grad.has_value()){
-        input_grad = ttnn::zeros_like(grad);
+        input_grad = ttnn::empty_like(grad);
     }
     ttnn::multiply(queue_id, grad, scalar, std::nullopt, output_mem_config, input_grad);
     result.push_back(input_grad);
