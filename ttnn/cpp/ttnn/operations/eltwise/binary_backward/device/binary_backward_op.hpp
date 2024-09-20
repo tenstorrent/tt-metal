@@ -25,8 +25,6 @@ enum class BinaryBackwardOpType {
     BIAS_GELU_BW,
     MIN_BW,
     MAX_BW,
-    DIV_BW,
-    MUL_BW,
     REMAINDER_BW,
     FMOD_BW,
 };
@@ -41,9 +39,6 @@ std::vector<Tensor> _logaddexp2_bw( const Tensor& grad, const Tensor& input, con
 std::vector<Tensor> _squared_difference_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 template <bool>
 std::vector<Tensor> _min_or_max_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
-
-std::vector<ttnn::Tensor> _div_bw( const Tensor& grad, const Tensor& input, const Tensor& other, string round_mode = "None" , const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-
 std::vector<std::optional<ttnn::Tensor>> _eq_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad, std::optional<Tensor> other_grad);
 
 // OpHandler struct template
@@ -114,11 +109,5 @@ struct OpHandler<BinaryBackwardOpType::MAX_BW> {
     }
 };
 
-template <>
-struct OpHandler<BinaryBackwardOpType::DIV_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, string round_mode, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _div_bw(grad, input, other, round_mode, output_mem_config);
-    }
-};
 
 }  // namespace ttnn::operations::binary_backward
