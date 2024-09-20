@@ -22,7 +22,7 @@ jobs:
           cache-dependency-path: 'infra/requirements-infra.txt'
       - name: Install infra dependencies
         run: pip install -r infra/requirements-infra.txt
-      - name: Create JSON
+      - name: Test
         env:
           PYTHONPATH: ${{ github.workspace }}
         working-directory: ${{ github.workspace }}/infra
