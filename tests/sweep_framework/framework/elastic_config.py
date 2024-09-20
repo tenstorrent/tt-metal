@@ -4,7 +4,7 @@
 
 import os
 from elasticsearch import Elasticsearch
-from sweeps_logger import sweeps_logger as logger
+from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
 
 ELASTIC_CORP_URL = "http://yyz-elk:9200"
 ELASTIC_CLOUD_URL = "http://172.27.28.43:9200"

@@ -8,7 +8,7 @@ import argparse
 import pathlib
 import os
 import sys
-from elastic_config import *
+from tests.sweep_framework.framework.elastic_config import *
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(

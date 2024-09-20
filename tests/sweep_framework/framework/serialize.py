@@ -4,8 +4,8 @@
 
 from ttnn import *
 import tt_lib
-from statuses import VectorValidity
-from sweeps_logger import sweeps_logger as logger
+from tests.sweep_framework.framework.statuses import VectorValidity
+from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
 
 
 def serialize(object, warnings=[]):
