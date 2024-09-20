@@ -381,6 +381,30 @@ struct ExecuteBackwardRsub {
 
 };
 
+struct ExecuteBackwardConcat {
+    static std::vector<std::optional<Tensor>> invoke(
+        uint8_t queue_id,
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        int dim,
+        const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt,
+        std::optional<Tensor> other_grad = std::nullopt);
+
+    static std::vector<std::optional<Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        int dim,
+        const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt,
+        std::optional<Tensor> other_grad = std::nullopt);
+
+};
+
 }  // operations::binary
 
 constexpr auto atan2_bw = ttnn::register_operation<"ttnn::atan2_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::ATAN2_BW>>();
@@ -402,7 +426,7 @@ constexpr auto rsub_bw = ttnn::register_operation<
     "ttnn::rsub_bw",
     operations::binary_backward::ExecuteBackwardRsub>();
 
-constexpr auto concat_bw = ttnn::register_operation<"ttnn::concat_bw", operations::binary_backward::ExecuteBinaryBackwardIntDefault<operations::binary_backward::BinaryBackwardOpType::CONCAT_BW>>();
+constexpr auto concat_bw = ttnn::register_operation<"ttnn::concat_bw", operations::binary_backward::ExecuteBackwardConcat>();
 
 constexpr auto mul_bw = ttnn::register_operation<"ttnn::mul_bw", operations::binary_backward::ExecuteBackwardMul>();
 

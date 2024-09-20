@@ -159,7 +159,7 @@ Tensor AutoFormat::format_output_tensor(
             if ((formatted_output.get_layout() == Layout::TILE && AutoFormat::legal_tile_shape(shape)) ||
                 (formatted_output.get_layout() == Layout::ROW_MAJOR && AutoFormat::legal_rm_shape(shape))) {
                 formatted_output = ttnn::slice(
-                    0,
+                    DefaultQueueId,
                     formatted_output,
                     std::vector<uint32_t>({0, 0, 0, 0}),
                     std::vector<uint32_t>({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),
@@ -186,7 +186,7 @@ Tensor AutoFormat::format_output_tensor(
                 formatted_output.get_layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE &&
                 AutoFormat::legal_tile_shape(shape)) {
                 formatted_output = ttnn::slice(
-                    0,
+                    DefaultQueueId,
                     formatted_output,
                     std::vector<uint32_t>({0, 0, 0, 0}),
                     std::vector<uint32_t>({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),

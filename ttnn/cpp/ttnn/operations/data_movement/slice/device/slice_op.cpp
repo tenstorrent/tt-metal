@@ -81,7 +81,11 @@ void SliceDeviceOperation::validate_with_output_tensors(
         // Check if start shape is <= end shape
         TT_FATAL(this->slice_start[i] <= this->slice_end[i], "Error");
     }
-
+    if(!output_tensors.empty() && output_tensors[0].has_value()){
+        const auto output_shape_required = this->compute_output_shapes(input_tensors)[0];
+        const auto& out_tensor = output_tensors[0].value();
+        TT_FATAL(out_tensor.get_legacy_shape() == output_shape_required, "The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape());
+    }
     auto output_tensor_shape = this->compute_output_shapes(input_tensors)[0];
     if (step.has_value()) { // if all ones modify before passing in to function
         TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Strided slice is only supported for row major layout");
@@ -139,6 +143,9 @@ std::vector<tt::tt_metal::LegacyShape> SliceDeviceOperation::compute_output_shap
 
 std::vector<Tensor> SliceDeviceOperation::create_output_tensors(
     const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
+    if (!output_tensors.empty() && output_tensors[0].has_value()) {
+        return {output_tensors[0].value()};
+    }
     const auto &input_tensor_a = input_tensors.at(0);
     const auto shapes = compute_output_shapes(input_tensors);
 

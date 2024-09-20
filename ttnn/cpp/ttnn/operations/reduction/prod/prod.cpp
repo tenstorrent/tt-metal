@@ -12,6 +12,7 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "tt_numpy/functions.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/common/constants.hpp"
 
 namespace ttnn::operations::reduction {
 
@@ -106,7 +107,7 @@ Tensor ProdOperation::invoke(const Tensor& input_a, bool all_dimensions, int64_t
         tt::tt_metal::LegacyShape input_shape = input_a.get_legacy_shape();
         std::vector<uint32_t> start_index = {0, 0, 0, 0};
         std::vector<uint32_t> end_index = {input_shape[0] - 1, input_shape[1] - 1, 0, input_shape[3] - 1};
-        return ttnn::slice(0, required, start_index, end_index, std::nullopt, std::nullopt);
+        return ttnn::slice(DefaultQueueId, required, start_index, end_index);
     } else {  // dim 3
         // permute
         std::vector<int64_t> after_permute_dims = {1, 2, 0, 3};
@@ -115,7 +116,7 @@ Tensor ProdOperation::invoke(const Tensor& input_a, bool all_dimensions, int64_t
         tt::tt_metal::LegacyShape input_shape = input_a.get_legacy_shape();
         std::vector<uint32_t> start_index = {0, 0, 0, 0};
         std::vector<uint32_t> end_index = {input_shape[0] - 1, input_shape[1] - 1, 0, input_shape[2] - 1};
-        Tensor new_unpad_tensor = ttnn::slice(0, required, start_index, end_index, std::nullopt, std::nullopt);
+        Tensor new_unpad_tensor = ttnn::slice(DefaultQueueId, required, start_index, end_index);
         // permute back
         after_permute_dims = {0, 1, 3, 2};
         Tensor res_host = ttnn::permute(new_unpad_tensor, after_permute_dims, output_mem_config);

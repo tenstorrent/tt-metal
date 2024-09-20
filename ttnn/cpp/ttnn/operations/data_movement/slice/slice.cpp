@@ -8,6 +8,7 @@
 #include "device/slice_op.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/common/constants.hpp"
 
 
 namespace ttnn::operations::data_movement {
@@ -18,7 +19,8 @@ ttnn::Tensor SliceOperation::invoke(
     tt::tt_metal::LegacyShape output_tensor_start,
     tt::tt_metal::LegacyShape output_tensor_end,
     const std::optional<tt::tt_metal::LegacyShape> step,
-    const std::optional<MemoryConfig>& memory_config_arg) {
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<Tensor>& optional_output_tensor) {
     std::optional<tt::tt_metal::LegacyShape> modified_step = step;
     if (modified_step.has_value()) {
         if (std::all_of(modified_step->begin(), modified_step->end(), [](int32_t s) { return s == 1; })) {
@@ -41,7 +43,7 @@ ttnn::Tensor SliceOperation::invoke(
         }
     }
     else {
-        auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
+        auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config_arg.value_or(input_tensor.memory_config());
         // TODO: Generalize this early exit of slice for other cases
         auto& input_tensor_shape = input_tensor.get_legacy_shape();
         if (input_tensor.is_sharded() && input_tensor.memory_config() == memory_config &&
@@ -73,7 +75,7 @@ ttnn::Tensor SliceOperation::invoke(
         }
 
         return operation::run(
-                   SliceDeviceOperation{output_tensor_start, output_tensor_end, modified_step, memory_config}, {input_tensor}, {}, {}, queue_id)
+                   SliceDeviceOperation{output_tensor_start, output_tensor_end, modified_step, memory_config}, {input_tensor}, {}, {optional_output_tensor}, queue_id)
             .at(0);
 
     }
@@ -84,8 +86,9 @@ ttnn::Tensor SliceOperation::invoke(
     tt::tt_metal::LegacyShape output_tensor_start,
     tt::tt_metal::LegacyShape output_tensor_end,
     const std::optional<tt::tt_metal::LegacyShape> step,
-    const std::optional<MemoryConfig>& memory_config_arg) {
-    return invoke(0, input_tensor, output_tensor_start, output_tensor_end, step, memory_config_arg);
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return invoke(DefaultQueueId, input_tensor, output_tensor_start, output_tensor_end, step, memory_config_arg, optional_output_tensor);
 }
 
 ttnn::Tensor SliceOperation::invoke(
@@ -94,14 +97,16 @@ ttnn::Tensor SliceOperation::invoke(
     tt::tt_metal::Array1D output_tensor_start,
     tt::tt_metal::Array1D output_tensor_end,
     const std::optional<tt::tt_metal::Array1D> step,
-    const std::optional<MemoryConfig>& memory_config_arg) {
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<Tensor>& optional_output_tensor) {
     return invoke(
         queue_id,
         input_tensor,
         tt::tt_metal::LegacyShape(output_tensor_start),
         tt::tt_metal::LegacyShape(output_tensor_end),
         step.has_value() ? std::optional<tt::tt_metal::LegacyShape>(tt::tt_metal::LegacyShape(step.value())) : std::nullopt,
-        memory_config_arg);
+        memory_config_arg,
+        optional_output_tensor);
 }
 
 ttnn::Tensor SliceOperation::invoke(
@@ -110,14 +115,16 @@ ttnn::Tensor SliceOperation::invoke(
     tt::tt_metal::Array4D output_tensor_start,
     tt::tt_metal::Array4D output_tensor_end,
     const std::optional<tt::tt_metal::Array4D> step,
-    const std::optional<MemoryConfig>& memory_config_arg) {
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<Tensor>& optional_output_tensor) {
     return invoke(
         queue_id,
         input_tensor,
         tt::tt_metal::LegacyShape(output_tensor_start),
         tt::tt_metal::LegacyShape(output_tensor_end),
         step.has_value() ? std::optional<tt::tt_metal::LegacyShape>(tt::tt_metal::LegacyShape(step.value())) : std::nullopt,
-        memory_config_arg);
+        memory_config_arg,
+        optional_output_tensor);
 }
 
 ttnn::Tensor SliceOperation::invoke(
@@ -125,8 +132,9 @@ ttnn::Tensor SliceOperation::invoke(
     tt::tt_metal::Array4D output_tensor_start,
     tt::tt_metal::Array4D output_tensor_end,
     const std::optional<tt::tt_metal::Array4D> step,
-    const std::optional<MemoryConfig>& memory_config_arg) {
-    return invoke(DefaultQueueId, input_tensor, output_tensor_start, output_tensor_end, step, memory_config_arg);
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return invoke(DefaultQueueId, input_tensor, output_tensor_start, output_tensor_end, step, memory_config_arg, optional_output_tensor);
 }
 
 ttnn::Tensor SliceOperation::invoke(
@@ -134,7 +142,7 @@ ttnn::Tensor SliceOperation::invoke(
     tt::tt_metal::Array4D output_tensor_start,
     tt::tt_metal::Array4D output_tensor_end,
     const std::optional<tt::tt_metal::Array4D> step) {
-    return invoke(DefaultQueueId, input_tensor, output_tensor_start, output_tensor_end, step, std::nullopt);
+    return invoke(DefaultQueueId, input_tensor, output_tensor_start, output_tensor_end, step, std::nullopt, std::nullopt);
 }
 
 }  // namespace operations

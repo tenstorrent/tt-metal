@@ -16,38 +16,43 @@ struct SliceOperation {
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::LegacyShape output_tensor_start,
         tt::tt_metal::LegacyShape output_tensor_end,
-        const std::optional<tt::tt_metal::LegacyShape> step,
-        const std::optional<MemoryConfig>& memory_config_arg);
+        const std::optional<tt::tt_metal::LegacyShape> step = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::LegacyShape output_tensor_start,
         tt::tt_metal::LegacyShape output_tensor_end,
-        const std::optional<tt::tt_metal::LegacyShape> step,
-        const std::optional<MemoryConfig>& memory_config_arg);
+        const std::optional<tt::tt_metal::LegacyShape> step = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::Array1D output_tensor_start,
         tt::tt_metal::Array1D output_tensor_end,
-        const std::optional<tt::tt_metal::Array1D> step,
-        const std::optional<MemoryConfig>& memory_config_arg);
+        const std::optional<tt::tt_metal::Array1D> step = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::Array4D output_tensor_start,
         tt::tt_metal::Array4D output_tensor_end,
-        const std::optional<tt::tt_metal::Array4D> step,
-        const std::optional<MemoryConfig>& memory_config_arg);
+        const std::optional<tt::tt_metal::Array4D> step = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::Array4D output_tensor_start,
         tt::tt_metal::Array4D output_tensor_end,
-        const std::optional<tt::tt_metal::Array4D> step,
-        const std::optional<MemoryConfig>& memory_config_arg);
+        const std::optional<tt::tt_metal::Array4D> step = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,

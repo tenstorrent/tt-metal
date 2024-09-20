@@ -532,8 +532,8 @@ std::vector<Tensor> split_tensor_for_glu(const Tensor& input_a, int32_t dim, con
     std::vector<uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
     std::vector<uint32_t> e_b = {inshape[0] - 1, inshape[1] - 1, inshape[2] - 1, inshape[3] - 1};
 
-    Tensor t_a = ttnn::slice(0, input_a, s_a, e_a, std::nullopt, output_mem_config);
-    Tensor t_b = ttnn::slice(0, input_a, s_b, e_b, std::nullopt, output_mem_config);
+    Tensor t_a = ttnn::slice(DefaultQueueId, input_a, s_a, e_a, std::nullopt, output_mem_config);
+    Tensor t_b = ttnn::slice(DefaultQueueId, input_a, s_b, e_b, std::nullopt, output_mem_config);
 
     t_split.emplace_back(t_a);
     t_split.emplace_back(t_b);

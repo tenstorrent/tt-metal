@@ -7,7 +7,7 @@
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "tt_metal/common/constants.hpp"
-#include "ttnn/cpp/ttnn/common/constants.hpp"
+#include "ttnn/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -1493,7 +1493,7 @@ std::vector<Tensor> _prod_bw(
             std::vector<uint32_t> start_index = {0, 0, 0, 0};
             std::vector<uint32_t> end_index = {
                 grad.get_legacy_shape()[0] - 1, 0, grad.get_legacy_shape()[1] - 1, grad.get_legacy_shape()[2] - 1};
-            Tensor new_slice_tensor = ttnn::slice(0, required, start_index, end_index, std::nullopt, std::nullopt);
+            Tensor new_slice_tensor = ttnn::slice(DefaultQueueId, required, start_index, end_index);
             after_permute_dims = {0, 2, 3, 1};
             updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
             if(updated_grad.storage_type() != StorageType::DEVICE && updated_grad.storage_type() != StorageType::MULTI_DEVICE) {
@@ -1507,7 +1507,7 @@ std::vector<Tensor> _prod_bw(
             std::vector<uint32_t> start_index = {0, 0, 0, 0};
             std::vector<uint32_t> end_index = {
                 grad.get_legacy_shape()[0] - 1, 0, grad.get_legacy_shape()[1] - 1, grad.get_legacy_shape()[3] - 1};
-            Tensor new_slice_tensor = ttnn::slice(0, required, start_index, end_index, std::nullopt, std::nullopt);
+            Tensor new_slice_tensor = ttnn::slice(DefaultQueueId, required, start_index, end_index);
             updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
             if(updated_grad.get_layout()==Layout::ROW_MAJOR){
                 updated_grad = ttnn::operations::unary_backward::change_layout_to_tile(updated_grad, output_memory_config);
@@ -1557,7 +1557,7 @@ std::vector<Tensor> _prod_bw(
                 input.get_legacy_shape()[1] - 1,
                 input.get_legacy_shape()[2] - 1,
                 input.get_legacy_shape()[3] - 1};
-            grad_result = ttnn::slice(0, result, start_index, end_index, std::nullopt, std::nullopt);
+            grad_result = ttnn::slice(DefaultQueueId, result, start_index, end_index);
         }
         grad_tensor.emplace_back(grad_result);
         return grad_tensor;
@@ -1591,7 +1591,7 @@ std::vector<Tensor> _prod_bw(
             input.get_legacy_shape()[1] - 1,
             input.get_legacy_shape()[2] - 1,
             input.get_legacy_shape()[3] - 1};
-        grad_result = ttnn::slice(0, result, start_index, end_index, std::nullopt, std::nullopt);
+        grad_result = ttnn::slice(DefaultQueueId, result, start_index, end_index);
     }
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
