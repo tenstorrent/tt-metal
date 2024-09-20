@@ -377,7 +377,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
 
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
-
+    // Special handling for tensors of W=16 and H%32==0
+    // In this case skip untilizing on compute and in writer kernel just copy face0 and face2,
+    // and skip face1 and face3.
+    bool unpad_tensor_w_16 = output.get_legacy_shape()[-1] == 16 && output.get_legacy_shape()[-2] % TILE_HEIGHT == 0;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
@@ -439,7 +442,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         input_cb_data_format,
         src_sharded ? a.buffer() : nullptr);
 
-    uint32_t num_output_tiles = out_sharded ? ntiles_per_batch * 2 : ntiles_per_block * 2;
+    uint32_t num_output_tiles = out_sharded ? (unpad_tensor_w_16 ? 16 : ntiles_per_batch * 2) : ntiles_per_block * 2;
     auto [output_cb_index, cb_output] =
         create_cb(tt::CB::c_out0, program, all_cores, output_single_tile_size, num_output_tiles, output_cb_data_format);
 
@@ -475,8 +478,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         vector<uint32_t> writer_ct_args = {(uint32_t)output_cb_index, (uint32_t)sharded_output_cb_index};
         unary_writer_kernel_id = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
-            "writer_unary_unpad_batch_rows_sharded.cpp",
+            unpad_tensor_w_16 ? "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
+                           "writer_unary_unpad_width_16_sharded.cpp"
+                         : "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
+                           "writer_unary_unpad_batch_rows_sharded.cpp",
             all_cores,
             WriterDataMovementConfig(writer_ct_args));
     } else {
@@ -499,7 +504,11 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
 
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
+    if (unpad_tensor_w_16) {
+        // Use copy compute kernel just for a potential data type conversion.
+        compute_kernel = "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp";
+        compute_args[0] = (uint32_t)num_input_tiles;  // per_core_tile_cnt
+    } else if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     } else {
@@ -520,13 +529,18 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     std::vector<CoreCoord> cores;
 
     if (out_sharded) {
-        vector<uint32_t> writer_rt_args = {
-            num_output_rows_unpadded,
-            ntiles_per_batch,
-            out_shard_spec.shape[0] / batch,
-            shard_spec.shape[1] * output.element_size(),
-            block_row_size,
-            batch};
+        vector<uint32_t> writer_rt_args;
+        if (unpad_tensor_w_16) {
+            writer_rt_args = {num_output_rows_unpadded, num_input_tiles};
+        } else {
+            writer_rt_args = {
+                num_output_rows_unpadded,
+                ntiles_per_batch,
+                out_shard_spec.shape[0] / batch,
+                shard_spec.shape[1] * output.element_size(),
+                block_row_size,
+                batch};
+        }
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, all_cores, writer_rt_args);
     } else {
         uint32_t tile_start_id = 0;
