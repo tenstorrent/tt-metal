@@ -36,11 +36,6 @@ enum class UnaryBackwardOpType {
     SIGMOID_BW,
     RELU_BW,
     LOGIT_BW,
-    HARDSHRINK_BW,
-    SOFTSHRINK_BW,
-    LEAKY_RELU_BW,
-    ELU_BW,
-    CELU_BW,
     RPOW_BW,
     FLOOR_BW,
     ROUND_BW,
@@ -61,7 +56,6 @@ enum class UnaryBackwardOpType {
     CEIL_BW,
     SOFTSIGN_BW,
     COSH_BW,
-    LOGITEPS_BW,
     LOG2_BW,
     SIGN_BW,
     DIV_NO_NAN_BW,
@@ -131,13 +125,6 @@ std::vector<Tensor> _log_bw( const Tensor& grad, const Tensor& input, const std:
 
 std::vector<Tensor> _add_bw( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 std::vector<Tensor> _eq_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-
-std::vector<Tensor> _hardshrink_bw( const Tensor& grad, const Tensor& input, float lambd = 0.5, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-std::vector<Tensor> _softshrink_bw( const Tensor& grad, const Tensor& input, float lambd = 0.5, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-std::vector<Tensor> _leaky_relu_bw( const Tensor& grad, const Tensor& input, float negative_slope = 0.01, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-std::vector<Tensor> _elu_bw( const Tensor& grad, const Tensor& input, float alpha = 1.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-std::vector<Tensor> _celu_bw( const Tensor& grad, const Tensor& input, float aplha = 1.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-std::vector<Tensor> _logiteps_bw( const Tensor& grad, const Tensor& input, float eps = 0.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 std::vector<Tensor> _rdiv_bw( const Tensor& grad, const Tensor& input, float scalar, string round_mode = "None", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
@@ -411,48 +398,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::POLYGAMMA_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, int n, const std::optional<MemoryConfig>& output_mem_config ) {
         return _polygamma_bw(grad, input, n, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::HARDSHRINK_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float lambd, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _hardshrink_bw(grad, input, lambd, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::SOFTSHRINK_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float lambd, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _softshrink_bw(grad, input, lambd, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::LEAKY_RELU_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float negative_slope, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _leaky_relu_bw(grad, input, negative_slope, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::ELU_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _elu_bw(grad, input, alpha, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::CELU_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _celu_bw(grad, input, alpha, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::LOGITEPS_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float eps, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _logiteps_bw(grad, input, eps, output_mem_config);
     }
 };
 
