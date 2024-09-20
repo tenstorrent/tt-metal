@@ -212,7 +212,7 @@ constexpr static std::int32_t GET_TILE_SIZE(uint format) {
     };
 }
 
-template <uint32_t tile_hw = 1024, uint32_t num_faces = 4>
+template <uint32_t tile_hw = 1024>
 FORCE_INLINE constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint index) {
     constexpr uint8_t datum_shift = (tile_hw == 1024) ? 10 :
                                     (tile_hw == 512)  ? 9  :
@@ -337,12 +337,12 @@ constexpr inline std::int32_t get_tile_size(const std::int32_t operand) {
 
 constexpr inline uint32_t get_tile_hw(const std::int32_t operand) {
     std::uint32_t input = operand;
-    return unpack_tile_r_dim[input] * unpack_tile_c_dim[input];
+    return (uint32_t)unpack_tile_r_dim[input] * (uint32_t)unpack_tile_c_dim[input];
 }
 
 constexpr inline uint32_t get_tile_num_faces(const std::int32_t operand) {
     std::uint32_t input = operand;
-    return unpack_tile_num_faces[input];
+    return (uint32_t)unpack_tile_num_faces[input];
 }
 
 constexpr inline DataFormat get_dataformat(const std::int32_t operand) {
@@ -910,7 +910,7 @@ struct InterleavedPow2AddrGen {
     }
 };
 
-template <bool DRAM, uint32_t tile_hw = 1024, uint32_t num_faces = 4>
+template <bool DRAM, uint32_t tile_hw = 1024>
 struct InterleavedAddrGenFast {
     uint32_t bank_base_address;  // Base address for the whole tensor.
     // TODO: Remove page_size from argument list. This can be derived from data_format
@@ -919,7 +919,7 @@ struct InterleavedAddrGenFast {
 
     FORCE_INLINE
     uint32_t get_addr(const uint32_t id, const uint32_t bank_offset_index, const uint32_t bank_index, const uint32_t offset = 0) const {
-        return MUL_WITH_TILE_SIZE<tile_hw, num_faces>((uint)this->data_format, bank_offset_index) + this->bank_base_address + offset + interleaved_addr_gen::get_bank_offset<DRAM>(bank_index);
+        return MUL_WITH_TILE_SIZE<tile_hw>((uint)this->data_format, bank_offset_index) + this->bank_base_address + offset + interleaved_addr_gen::get_bank_offset<DRAM>(bank_index);
     }
 
     FORCE_INLINE
@@ -1108,8 +1108,8 @@ FORCE_INLINE std::uint64_t get_noc_addr(const uint32_t id, const InterleavedPow2
     return s.get_noc_addr(id, offset);
 }
 
-template <bool DRAM, uint32_t tile_hw, uint32_t num_faces>
-FORCE_INLINE std::uint64_t get_noc_addr(const uint32_t id, const InterleavedAddrGenFast<DRAM, tile_hw, num_faces>& s, uint32_t offset = 0) {
+template <bool DRAM, uint32_t tile_hw>
+FORCE_INLINE std::uint64_t get_noc_addr(const uint32_t id, const InterleavedAddrGenFast<DRAM, tile_hw>& s, uint32_t offset = 0) {
     /*
         Alternative API for getting the noc address when we are reading using a swizzled
         layout. This version assumes bank unit size can be arbitrary size. Use
@@ -1134,9 +1134,9 @@ FORCE_INLINE void noc_async_read_page(
     s.noc_async_read_page(id, dst_local_l1_addr, offset);
 }
 
-template <bool DRAM, uint32_t tile_hw, uint32_t num_faces>
+template <bool DRAM, uint32_t tile_hw>
 FORCE_INLINE void noc_async_read_tile(
-    const uint32_t id, const InterleavedAddrGenFast<DRAM, tile_hw, num_faces>& s, std::uint32_t dst_local_l1_addr, uint32_t offset = 0) {
+    const uint32_t id, const InterleavedAddrGenFast<DRAM, tile_hw>& s, std::uint32_t dst_local_l1_addr, uint32_t offset = 0) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
@@ -1185,9 +1185,9 @@ void noc_async_write(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr
     }
 }
 
-template <bool DRAM, uint32_t tile_hw, uint32_t num_faces>
+template <bool DRAM, uint32_t tile_hw>
 FORCE_INLINE void noc_async_write_tile(
-    const uint32_t id, const InterleavedAddrGenFast<DRAM, tile_hw, num_faces>& s, std::uint32_t src_local_l1_addr) {
+    const uint32_t id, const InterleavedAddrGenFast<DRAM, tile_hw>& s, std::uint32_t src_local_l1_addr) {
     s.noc_async_write_tile(id, src_local_l1_addr);
 }
 

@@ -1453,6 +1453,14 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                         mem_config,
                         output_tile)};
                 } else {
+                    TT_FATAL(in0_tile_shape[0] == TILE_HEIGHT and in0_tile_shape[1] == TILE_WIDTH,
+                                "matmul with non-optimized program config does not support tiny tile");
+                    TT_FATAL(in1_tile_shape[0] == TILE_HEIGHT and in1_tile_shape[1] == TILE_WIDTH,
+                                "matmul with non-optimized program config does not support tiny tile");
+                    if (this->output_tile.has_value()) {
+                        TT_FATAL(this->output_tile->get_tile_shape()[0] == TILE_HEIGHT and this->output_tile->get_tile_shape()[1] == TILE_WIDTH,
+                                    "matmul with non-optimized program config does not support tiny tile");
+                    }
                     TT_THROW("Unsupported op for output sharding");
                     return {};
                 }

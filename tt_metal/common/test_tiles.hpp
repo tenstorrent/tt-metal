@@ -16,8 +16,8 @@
 
 enum TensorLayout {
     LIN_ROW_MAJOR = 0, // standard element-wise row-major
-    TILED32_SWIZZLED = 1, // row-major of tiles 32x32, each tile is row-major-swizzled
-    TILED32_4FACES = 2,  // rowm major of tiles 32x32, each tile is 4 faces, each face is row-major, faces are swizzled
+    TILED_SWIZZLED = 1, // row-major of tiles, each tile is row-major-swizzled
+    TILED_NFACES = 2,  // rowm major of tiles, each tile is N (N = 1, 2, or 4) faces, each face is row-major, faces are swizzled
 };
 
 template <class T, template <typename...> typename BufferType>
@@ -224,8 +224,8 @@ inline std::vector<T> convert_layout(
     const std::optional<const std::vector<uint32_t>>& face_shape = std::nullopt) {
     ZoneScoped;
     switch (inL) {
-        case TILED32_SWIZZLED:
-            if (outL == TILED32_4FACES) {
+        case TILED_SWIZZLED:
+            if (outL == TILED_NFACES) {
                 return convert_to_tile_layout<T>(inp, tile_shape, face_shape);
             } else if (outL == LIN_ROW_MAJOR) {
                 return untilize_nchw<T>(inp, shape, tile_shape);
@@ -233,19 +233,19 @@ inline std::vector<T> convert_layout(
                 TT_ASSERT(false && "Unsupported conversion.");
         break;
         case LIN_ROW_MAJOR:
-            if (outL == TILED32_SWIZZLED) {
+            if (outL == TILED_SWIZZLED) {
                 return tilize_nchw<T>(inp, shape, tile_shape);
-            } else if (outL == TILED32_4FACES) {
-                auto swiz32 = convert_layout<T>(inp, shape, inL, TILED32_SWIZZLED, tile_shape, face_shape);
-                return convert_layout<T>(swiz32, shape, TILED32_SWIZZLED, outL, tile_shape, face_shape);
+            } else if (outL == TILED_NFACES) {
+                auto swiz32 = convert_layout<T>(inp, shape, inL, TILED_SWIZZLED, tile_shape, face_shape);
+                return convert_layout<T>(swiz32, shape, TILED_SWIZZLED, outL, tile_shape, face_shape);
             } else
                 TT_ASSERT(false && "Unsupported conversion.");
         break;
-        case TILED32_4FACES:
-            if (outL == TILED32_SWIZZLED) {
+        case TILED_NFACES:
+            if (outL == TILED_SWIZZLED) {
                 return convert_to_flat_layout<T>(inp, tile_shape, face_shape);
             } else if (outL == LIN_ROW_MAJOR) {
-                auto swiz32 = convert_layout<T>(inp, shape, inL, TILED32_SWIZZLED, tile_shape, face_shape);
+                auto swiz32 = convert_layout<T>(inp, shape, inL, TILED_SWIZZLED, tile_shape, face_shape);
                 return untilize_nchw<T>(swiz32, shape, tile_shape);
             } else {
                 TT_ASSERT(false && "Unsupported conversion");
