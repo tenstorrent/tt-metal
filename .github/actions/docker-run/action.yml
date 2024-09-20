@@ -81,6 +81,7 @@ runs:
           ${{ inputs.run_args }}
           cp -r generated/* /github_generated
           ls -hal /github_generated
+          kasdhjfjkashfjkashfjkasdhf
     - name: Delete in case generated files that were copied so that we don't have permissions issues
       if: ${{ always() }}
       shell: bash
