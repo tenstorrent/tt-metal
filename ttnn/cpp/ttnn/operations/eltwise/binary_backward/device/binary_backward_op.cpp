@@ -456,40 +456,60 @@ std::vector<ttnn::Tensor> ExecuteBackwardAssign::invoke(
     return grad_tensor;
 }
 
-std::vector<Tensor> _concat_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, int dim, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    std::vector<uint32_t> start_index = {0, 0, 0, 0};
-    std::vector<uint32_t> end_index = {
-        input.get_legacy_shape()[0] - 1,
-        input.get_legacy_shape()[1] - 1,
-        input.get_legacy_shape()[2] - 1,
-        input.get_legacy_shape()[3] - 1};
+std::vector<std::optional<Tensor>> ExecuteBackwardConcat::invoke(
+    uint8_t queue_id, const Tensor& grad, const Tensor& input, const Tensor& other, int dim, const std::vector<bool> &are_required_outputs, const std::optional<MemoryConfig> &memory_config, std::optional<Tensor> input_grad, std::optional<Tensor> other_grad) {
+    std::vector<std::optional<Tensor>> grad_tensor = {std::nullopt, std::nullopt};
 
-    Tensor grad_a = ttnn::slice(0, grad, start_index, end_index, std::nullopt, std::nullopt);
-    grad_tensor.emplace_back(grad_a);
+    preallocated_tensors_check(input_grad, other_grad, input, other, {are_required_outputs[0], are_required_outputs[1]});
 
-    std::vector<uint32_t> start_index_2 = {0, 0, 0, 0};
-    if (dim == 0) {
-        start_index_2 = {input.get_legacy_shape()[0], 0, 0, 0};
-    } else if (dim == 1) {
-        start_index_2 = {0, input.get_legacy_shape()[1], 0, 0};
-    } else if (dim == 2) {
-        start_index_2 = {
-            0, 0, input.get_legacy_shape()[2], 0};
-    } else if (dim == 3) {
-        start_index_2 = {0, 0, 0, input.get_legacy_shape()[3]};
+    if(are_required_outputs[0]){
+        std::vector<uint32_t> start_index = {0, 0, 0, 0};
+        std::vector<uint32_t> end_index = {
+            input.get_legacy_shape()[0] - 1,
+            input.get_legacy_shape()[1] - 1,
+            input.get_legacy_shape()[2] - 1,
+            input.get_legacy_shape()[3] - 1};
+
+        ttnn::slice(queue_id, grad, start_index, end_index, std::nullopt, std::nullopt, input_grad);
+        grad_tensor[0] = input_grad;
     }
-    std::vector<uint32_t> end_index_2 = {
-        grad.get_legacy_shape()[0] - 1,
-        grad.get_legacy_shape()[1] - 1,
-        grad.get_legacy_shape()[2] - 1,
-        grad.get_legacy_shape()[3] - 1};
-    Tensor grad_b = ttnn::slice(0, grad, start_index_2, end_index_2, std::nullopt, std::nullopt);
-    grad_tensor.emplace_back(grad_b);
+
+    if(are_required_outputs[1]){
+        std::vector<uint32_t> start_index_2 = {0, 0, 0, 0};
+        if (dim == 0) {
+            start_index_2 = {input.get_legacy_shape()[0], 0, 0, 0};
+        } else if (dim == 1) {
+            start_index_2 = {0, input.get_legacy_shape()[1], 0, 0};
+        } else if (dim == 2) {
+            start_index_2 = {
+                0, 0, input.get_legacy_shape()[2], 0};
+        } else if (dim == 3) {
+            start_index_2 = {0, 0, 0, input.get_legacy_shape()[3]};
+        }
+        std::vector<uint32_t> end_index_2 = {
+            grad.get_legacy_shape()[0] - 1,
+            grad.get_legacy_shape()[1] - 1,
+            grad.get_legacy_shape()[2] - 1,
+            grad.get_legacy_shape()[3] - 1};
+        ttnn::slice(queue_id, grad, start_index_2, end_index_2, std::nullopt, std::nullopt, other_grad);
+        grad_tensor[1] = other_grad;
+    }
 
     return grad_tensor;
 }
+
+std::vector<std::optional<Tensor>> ExecuteBackwardConcat::invoke(
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& other,
+    int dim,
+    const std::vector<bool> &are_required_outputs,
+    const std::optional<MemoryConfig> &memory_config,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+    return ExecuteBackwardConcat::invoke(ttnn::DefaultQueueId, grad, input, other, dim, are_required_outputs, memory_config, input_grad, other_grad);
+}
+
 
 std::vector<Tensor> _binary_comp_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
