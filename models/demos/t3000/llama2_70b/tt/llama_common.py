@@ -120,7 +120,7 @@ def should_skip_model_load():
     return skip_model_load
 
 
-def setup_llama_env(llama_version="llama3", batch=32, seq_len=1, n_devices=8, max_batch_size=32, max_context_len=4096):
+def setup_llama_env(llama_version="llama3", max_batch_size=32, max_context_len=4096):
     if os.getenv("CI") == "true":
         if llama_version == "llama3":
             ckpt_dir = "/mnt/MLPerf/tt_dnn-models/llama-3/llama-3-70b-repacked/"
@@ -176,9 +176,6 @@ def setup_llama_env(llama_version="llama3", batch=32, seq_len=1, n_devices=8, ma
 
     model_config = get_model_config(
         llama_version=llama_version,
-        batch=batch,
-        seq_len=seq_len,
-        num_devices=n_devices,
         max_batch_size=max_batch_size,
         max_context_len=max_context_len,
     )
@@ -192,7 +189,7 @@ def check_mesh_device(t3k_mesh_device, model_config):
         model_config["NUM_DEVICES"],
     )
 
-    compute_grid_size = t3k_mesh_device.get_device(0).compute_with_storage_grid_size()
+    compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
     assert not (
         compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]
     ), ("Requires grid size of at least %d to run", model_config["MAX_GRID_SIZE"])
@@ -370,7 +367,8 @@ def get_rotation_mat_prefill(rot_mat, start_pos, seqlen, batch):
 
 
 def get_rotation_mat(rot_mat, start_pos, seqlen, batch):
-    # position_ids = torch.ones(seqlen, batch, dtype=torch.long) * start_pos
+    if isinstance(start_pos, int):
+        start_pos = torch.ones(seqlen, batch, dtype=torch.long) * start_pos
     position_ids = start_pos.view(seqlen, batch)
     rot_emb = gather_rotary_emb(rot_mat, position_ids)
     return rot_emb

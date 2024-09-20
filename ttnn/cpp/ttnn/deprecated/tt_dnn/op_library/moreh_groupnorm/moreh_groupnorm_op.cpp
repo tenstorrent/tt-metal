@@ -71,7 +71,7 @@ void MorehGroupNorm::validate_with_output_tensors(
     }
 }
 
-std::vector<Shape> MorehGroupNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehGroupNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     using namespace tt::constants;
     // mean, rstd (1, 1, N, num_groups)
     const auto output_shape = input_tensors.at(0).get_legacy_shape();
@@ -87,7 +87,7 @@ std::vector<Shape> MorehGroupNorm::compute_output_shapes(const std::vector<Tenso
     mean_rstd_padding[2] = Padding::PadDimension{0, TILE_HEIGHT - (N % TILE_HEIGHT)};
     mean_rstd_padding[3] = Padding::PadDimension{0, TILE_WIDTH - (num_groups % TILE_WIDTH)};
 
-    Shape mean_rstd_shape(mean_rstd_origin_shape, mean_rstd_padding);
+    tt::tt_metal::LegacyShape mean_rstd_shape(mean_rstd_origin_shape, mean_rstd_padding);
     return {output_shape, mean_rstd_shape, mean_rstd_shape};
 }
 

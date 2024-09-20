@@ -43,7 +43,7 @@ def get_devices(test_module):
         return default_device()
 
 
-def gather_single_test_perf(device):
+def gather_single_test_perf(device, test_passed):
     if not isinstance(device, ttnn.Device):
         print("SWEEPS: Multi-device perf is not supported. Failing.")
         return None
@@ -51,7 +51,12 @@ def gather_single_test_perf(device):
     opPerfData = get_device_data_generate_report(
         PROFILER_LOGS_DIR, None, None, None, export_csv=False, cleanup_device_log=True
     )
-    if len(opPerfData) != 1:
+    if not test_passed:
+        return None
+    elif opPerfData == []:
+        print("SWEEPS: No profiling data available. Ensure you are running with the profiler build.")
+        return None
+    elif len(opPerfData) > 1:
         print("SWEEPS: Composite op detected in device perf measurement. Composite op perf is not supported. Failing.")
         return None
     else:
@@ -64,7 +69,7 @@ def run(test_module, input_queue, output_queue):
         device, device_name = next(device_generator)
         print(f"SWEEPS: Opened device configuration, {device_name}.")
     except AssertionError as e:
-        output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None])
+        output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None, None])
         return
     try:
         while True:
@@ -81,8 +86,8 @@ def run(test_module, input_queue, output_queue):
             except Exception as e:
                 status, message = False, str(e)
                 e2e_perf = None
-            if MEASURE_DEVICE_PERF and status:
-                perf_result = gather_single_test_perf(device)
+            if MEASURE_DEVICE_PERF:
+                perf_result = gather_single_test_perf(device, status)
                 output_queue.put([status, message, e2e_perf, perf_result])
             else:
                 output_queue.put([status, message, e2e_perf, None])

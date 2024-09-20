@@ -17,7 +17,7 @@
 
 #include "dev_msgs.h"
 
-#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_STATUS)
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_WAYPOINT)
 #include <cstddef>
 
 template <size_t N, size_t... Is>

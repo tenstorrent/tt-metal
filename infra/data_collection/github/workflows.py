@@ -5,8 +5,9 @@
 import pathlib
 from datetime import datetime
 from functools import partial
+from typing import List
 
-from toolz.dicttoolz import keymap
+from loguru import logger
 
 from infra.data_collection import junit_xml_utils, pydantic_models
 
@@ -52,12 +53,18 @@ def search_for_uuid_in_log_file_(log_file):
     return None
 
 
-def get_workflow_run_uuids_to_github_job_ids_(workflow_outputs_dir, workflow_run_id: int):
+def get_github_job_ids_to_workflow_run_uuids_(workflow_outputs_dir, workflow_run_id: int):
+    """
+    We know we can get a proper mapping of github_job_id -> uuid because based on anecdotal testing,
+    it seems that the same GitHub job ID does not repeat for attempted runs, but because artifacts
+    carry over, uuid will repeat. We want to ensure that the set of github_job_ids is fully captured, and
+    it doesn't matter if the full set of uuids is.
+    """
     logs_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
 
     log_files = logs_dir.glob("*.log")
 
-    workflow_run_uuids_to_github_job_ids = {}
+    github_job_ids_to_workflow_run_uuids = {}
     for log_file in log_files:
         artifact_uuid_name = search_for_uuid_in_log_file_(log_file)
         if artifact_uuid_name:
@@ -65,35 +72,69 @@ def get_workflow_run_uuids_to_github_job_ids_(workflow_outputs_dir, workflow_run
             github_job_id = log_file.name.replace(".log", "")
             assert github_job_id.isnumeric(), f"{github_job_id}"
             github_job_id = int(github_job_id)
-            workflow_run_uuids_to_github_job_ids[uuid] = github_job_id
-    return workflow_run_uuids_to_github_job_ids
+            github_job_ids_to_workflow_run_uuids[github_job_id] = uuid
+    return github_job_ids_to_workflow_run_uuids
 
 
-def get_github_job_id_to_test_reports(workflow_outputs_dir, workflow_run_id: int):
+def get_github_job_id_to_test_reports(workflow_outputs_dir, workflow_run_id: int, github_job_ids: List[int]):
     workflow_run_uuids_to_test_report_paths = get_workflow_run_uuids_to_test_reports_paths_(
         workflow_outputs_dir, workflow_run_id
     )
 
-    workflow_run_uuids_to_github_job_ids = get_workflow_run_uuids_to_github_job_ids_(
+    github_job_ids_to_workflow_run_uuids = get_github_job_ids_to_workflow_run_uuids_(
         workflow_outputs_dir, workflow_run_id
     )
 
-    get_github_job_id_from_uuid = lambda uuid_: workflow_run_uuids_to_github_job_ids[uuid_]
-    github_job_id_to_test_reports = keymap(get_github_job_id_from_uuid, workflow_run_uuids_to_test_report_paths)
+    github_job_id_to_test_reports = {}
+    for github_job_id in github_job_ids:
+        # It's possible the upload didn't go through, but if the test report
+        # for a uuid exists, then that means the test must have printed a uuid
+        # Unless the log file itself is gone because it's a stale pipeline
+
+        # It could be a good idea to throw an exception for either continue
+        # step in this loop and have the caller handle it. The key reason to do
+        # that in our case would be to potentially snuff out infrastructure
+        # issues and surface that at the job level.
+
+        if github_job_id not in github_job_ids_to_workflow_run_uuids:
+            """
+            The potential infra failure is: internal error or logs were never pushed up because the runner died
+            """
+            logger.warning(
+                f"No uuid was found for job {github_job_id}, meaning either the log file is not present or it doesn't have a uuid printed"
+            )
+            continue
+
+        uuid = github_job_ids_to_workflow_run_uuids[github_job_id]
+
+        if uuid not in workflow_run_uuids_to_test_report_paths:
+            logger.warning(
+                f"uuid {uuid} for job {github_job_id} does not have a matching test report path, usually meaning the report doesn't exist"
+            )
+            continue
+
+        github_job_id_to_test_reports[github_job_id] = workflow_run_uuids_to_test_report_paths[uuid]
 
     return github_job_id_to_test_reports
 
 
-def get_pydantic_test_from_pytest_testcase(testcase, default_timestamp=datetime.now()):
+def get_pydantic_test_from_pytest_testcase_(testcase, default_timestamp=datetime.now()):
     skipped = junit_xml_utils.get_pytest_testcase_is_skipped(testcase)
     failed = junit_xml_utils.get_pytest_testcase_is_failed(testcase)
-    success = not failed
+    error = junit_xml_utils.get_pytest_testcase_is_error(testcase)
+    success = not (failed or error)
 
     error_message = None
+
+    # Error is a scarier thing than failure because it means there's an infra error, expose that first
     if failed:
         error_message = junit_xml_utils.get_pytest_failure_message(testcase)
 
-    if not skipped:
+    if error:
+        error_message = junit_xml_utils.get_pytest_error_message(testcase)
+
+    # Error at the beginning of a test can prevent pytest from recording timestamps at all
+    if not (skipped or error):
         properties = junit_xml_utils.get_pytest_testcase_properties(testcase)
         test_start_ts = datetime.strptime(properties["start_timestamp"], "%Y-%m-%dT%H:%M:%S")
         test_end_ts = datetime.strptime(properties["end_timestamp"], "%Y-%m-%dT%H:%M:%S")
@@ -156,7 +197,7 @@ def get_tests_from_test_report_path(test_report_path):
         testsuite = report_root[0]
         default_timestamp = datetime.strptime(testsuite.attrib["timestamp"], "%Y-%m-%dT%H:%M:%S.%f")
 
-        get_pydantic_test = partial(get_pydantic_test_from_pytest_testcase, default_timestamp=default_timestamp)
+        get_pydantic_test = partial(get_pydantic_test_from_pytest_testcase_, default_timestamp=default_timestamp)
 
         return list(map(get_pydantic_test, testsuite))
     else:

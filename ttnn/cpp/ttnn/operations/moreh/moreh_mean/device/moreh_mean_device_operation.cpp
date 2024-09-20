@@ -76,7 +76,7 @@ MorehMeanOperation::shape_return_value_t MorehMeanOperation::compute_output_shap
             output_shape.value[dim] = 1;
         }
 
-        return Shape(tt::tt_metal::Shape(output_shape.value, padding));
+        return Shape(tt::tt_metal::LegacyShape(output_shape.value, padding));
     }
 
     std::vector<uint32_t> shape;
@@ -97,7 +97,7 @@ MorehMeanOperation::shape_return_value_t MorehMeanOperation::compute_output_shap
     }
 
     auto padding = Padding(pad_dimensions, input_padding.pad_value());
-    return Shape(tt::tt_metal::Shape(shape, padding));
+    return Shape(tt::tt_metal::LegacyShape(shape, padding));
 }
 
 MorehMeanOperation::tensor_return_value_t MorehMeanOperation::create_output_tensors(

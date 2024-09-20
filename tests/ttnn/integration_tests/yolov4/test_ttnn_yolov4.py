@@ -14,7 +14,6 @@ import pytest
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_yolov4(device, reset_seeds, model_location_generator):
-    pytest.skip("bias_shape.without_padding()[-1] == b_shape[-1] issue for conv")
     model_path = model_location_generator("models", model_subdir="Yolo")
 
     if model_path == "models":

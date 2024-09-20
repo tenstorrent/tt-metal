@@ -253,7 +253,7 @@ void test_bert() {
         "qa_head_bias",
         ttnn::reshape(
             tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}, Layout::TILE).to(device, dram_memory_config),
-            ttnn::Shape{tt::tt_metal::Shape{{1, 1, 1, TILE_WIDTH}, {1, 1, TILE_HEIGHT, TILE_WIDTH}}}));
+            ttnn::Shape{tt::tt_metal::LegacyShape{{1, 1, 1, TILE_WIDTH}, {1, 1, TILE_HEIGHT, TILE_WIDTH}}}));
 
     auto run_bert = [&]() {
         tt::log_debug(tt::LogTest, "run_bert started");

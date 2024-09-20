@@ -53,7 +53,8 @@
 #define MEM_L1_BARRIER 12
 #define MEM_MAILBOX_BASE 16
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_END (MEM_MAILBOX_BASE + 1356)
+#define MEM_MAILBOX_SIZE 5 * 4 * 512 + 4 * 32 + 1600
+#define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_IERISC_MAILBOX_BASE 1024
 #define MEM_IERISC_MAILBOX_END (MEM_IERISC_MAILBOX_BASE + 128)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)

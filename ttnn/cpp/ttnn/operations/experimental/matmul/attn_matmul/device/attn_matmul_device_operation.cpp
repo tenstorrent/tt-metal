@@ -63,7 +63,7 @@ void AttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_tensor
     }
 }
 
-std::vector<tt::tt_metal::Shape> AttnMatmulDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> AttnMatmulDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     // input_a: [q_len, q_heads, batch, head_dim]
     // input_b: [batch, kv_heads, head_dim, kv_len]
     // intermediate: [q_heads, batch, batch, kv_len]
@@ -78,7 +78,7 @@ std::vector<tt::tt_metal::Shape> AttnMatmulDeviceOperation::compute_output_shape
         N = this->num_tokens.value();
     }
 
-    return {tt::tt_metal::Shape{1, ashape[1], ashape[2], N}};
+    return {tt::tt_metal::LegacyShape{1, ashape[1], ashape[2], N}};
 }
 
 std::vector<Tensor> AttnMatmulDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {

@@ -16,15 +16,15 @@
 
 using namespace tt::constants;
 
-namespace tt {
-namespace tt_metal {
+namespace ttnn::operations::upsample {
+using namespace tt;
 
-operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor& output, uint32_t scale_factor_h, uint32_t scale_factor_w) {
+operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor& output, const uint32_t scale_factor_h, const uint32_t scale_factor_w) {
     Program program = CreateProgram();
     Device *device = input.device();
 
-    DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
-    DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
     // NOTE: input is assumed to have channels last format: {N, H, W, C}, {N, 1, H * W, C}, {1, 1, N * H * W, C}
     // NOTE: Bfp8_b/TILE is not yet supported
@@ -180,5 +180,4 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace ttnn::operations::upsample

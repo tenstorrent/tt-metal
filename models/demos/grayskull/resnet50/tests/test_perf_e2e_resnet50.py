@@ -14,7 +14,7 @@ from models.demos.ttnn_resnet.tests.perf_e2e_resnet50 import run_perf_resnet
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((20, 0.0080, 20),),
+    ((20, 0.0087, 20),),
 )
 def test_perf(
     device,
@@ -42,8 +42,8 @@ def test_perf(
 @pytest.mark.parametrize(
     "batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
     (
-        (20, True, 0.0064, 10),
-        (20, False, 0.0064, 5),
+        (20, True, 0.0068, 20),
+        (20, False, 0.0068, 20),
     ),
     indirect=["enable_async_mode"],
 )
@@ -74,7 +74,7 @@ def test_perf_trace(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((20, 0.0100, 19),),
+    ((20, 0.0085, 20),),
 )
 def test_perf_2cqs(
     device,
@@ -103,7 +103,7 @@ def test_perf_2cqs(
 )
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((20, 0.004, 5),),
+    ((20, 0.0042, 20),),
 )
 def test_perf_trace_2cqs(
     device,

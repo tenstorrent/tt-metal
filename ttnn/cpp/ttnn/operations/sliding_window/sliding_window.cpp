@@ -26,7 +26,13 @@ bool SlidingWindowConfig::has_parallel_config() const {
 Shape SlidingWindowConfig::get_output_shape() const {
     uint32_t output_h = (input_hw.first + 2 * pad_hw.first - window_hw.first - (dilation_hw.first - 1) * (window_hw.first - 1 )) / stride_hw.first + 1;
     uint32_t output_w = (input_hw.second + 2 * pad_hw.second - window_hw.second - (dilation_hw.second - 1) * (window_hw.second - 1 )) / stride_hw.second + 1;
-    log_debug(tt::LogOp, "SlidingWindowConfig::output_size: {} {} {}", batch_size, output_h, output_w);
+    if(is_bilinear){
+        //for bilinear input and output should be same.. and kernel size is 2x2
+        // we need neighboring width in the output tensor
+        output_h = input_hw.first;
+        output_w = input_hw.second;
+    }
+    log_debug(tt::LogOp, "output_size: {} {} {}", batch_size, output_h, output_w);
     return Shape( std::vector<uint32_t>{batch_size, output_h, output_w, 0});
 }
 
@@ -90,6 +96,9 @@ std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(c
     uint32_t dilated_window_w = config.window_hw.second + (config.dilation_hw.second - 1) * (config.window_hw.second - 1 );
     uint32_t halo_with_pad_len = (dilated_window_h - 1) * padded_input_w + dilated_window_w - 1;
 
+    if(config.is_bilinear){
+        halo_with_pad_len = (config.window_hw.first) * padded_input_w;
+    }
     uint32_t output_index_start = 0;
     for (uint32_t core = 0; core < num_cores; ++ core) {
         uint32_t output_index_end = std::min(output_index_start + output_shard_h, max_index) - 1;
@@ -372,7 +381,6 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(const std::
             // this core has no output
             continue;
         }
-        // TT_ASSERT(output_shard_start < op_trace_metadata.size());
         TT_ASSERT(input_shard_start == op_trace_metadata[output_shard_start]);
         std::vector<uint16_t> local_top_left_indices;
         for(size_t i = output_shard_start; i < output_shard_end + 1; i++) {
@@ -383,7 +391,7 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(const std::
     if (pad_tile) {
         // Pad indices to tile-multiple
         for(size_t i = 0; i < sharded_input_top_left_indices.size(); i++) {
-            uint32_t extend_with_zeroes = sharded_input_top_left_indices[i].size() % 32;
+            uint32_t extend_with_zeroes = (32 - sharded_input_top_left_indices[i].size() % 32) % 32;
             if (extend_with_zeroes > 0) {
                 std::vector<uint16_t> extend_v(extend_with_zeroes, 0);
                 sharded_input_top_left_indices[i].insert(sharded_input_top_left_indices[i].end(), extend_v.begin(), extend_v.end());

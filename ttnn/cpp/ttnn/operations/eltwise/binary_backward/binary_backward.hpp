@@ -144,18 +144,76 @@ struct ExecuteBackwardBiasGelu {
 
 };
 
+struct ExecuteBackwardLT {
+    static std::vector<std::optional<Tensor>> invoke(
+        uint8_t queue_id,
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const Tensor &other_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        std::optional<Tensor> input_grad = std::nullopt,
+        std::optional<Tensor> other_grad = std::nullopt);
+
+    static std::vector<std::optional<Tensor>> invoke(
+        uint8_t queue_id,
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float other,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt);
+
+    static std::vector<std::optional<Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const Tensor &other_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        std::optional<Tensor> input_grad = std::nullopt,
+        std::optional<Tensor> other_grad = std::nullopt);
+
+    static std::vector<std::optional<Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float other,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt);
+};
+
 struct ExecuteBackwardAdd {
-    static std::vector<Tensor> invoke(
+    static std::vector<std::optional<Tensor>> invoke(
+        uint8_t queue_id,
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         float scalar,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt);
 
-    static std::vector<Tensor> invoke(
+    static std::vector<std::optional<Tensor>> invoke(
+        uint8_t queue_id,
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+        const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt,
+        std::optional<Tensor> other_grad = std::nullopt);
+
+    static std::vector<std::optional<Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float scalar,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt);
+
+    static std::vector<std::optional<Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt,
+        std::optional<Tensor> other_grad = std::nullopt);
 
     static std::vector<ComplexTensor> invoke(
         const ComplexTensor &grad_tensor_arg,
@@ -189,15 +247,17 @@ struct ExecuteBackwardSub {
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         float scalar,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
-
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt);
 
     static std::vector<std::optional<Tensor>> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
         const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt,
+        std::optional<Tensor> other_grad = std::nullopt);
 
     static std::vector<ComplexTensor> invoke(
         const ComplexTensor &grad_tensor_arg,
@@ -209,19 +269,43 @@ struct ExecuteBackwardSub {
 };
 
 struct ExecuteBackwardDiv  {
-    static std::vector<Tensor> invoke(
+    static std::vector<std::optional<Tensor>> invoke(
+        uint8_t queue_id,
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         float scalar,
         string round_mode = "None",
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt);
 
-    static std::vector<Tensor> invoke(
+    static std::vector<std::optional<Tensor>> invoke(
+        uint8_t queue_id,
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         const Tensor &other_tensor_arg,
         string round_mode = "None",
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+        const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt,
+        std::optional<Tensor> other_grad = std::nullopt);
+
+    static std::vector<std::optional<Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float scalar,
+        string round_mode = "None",
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt);
+
+    static std::vector<std::optional<Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const Tensor &other_tensor_arg,
+        string round_mode = "None",
+        const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt,
+        std::optional<Tensor> other_grad = std::nullopt);
 
     static std::vector<ComplexTensor> invoke(
         const ComplexTensor &grad_tensor_arg,
@@ -302,7 +386,9 @@ struct ExecuteBackwardSubAlpha {
         const Tensor &input_tensor_b_arg,
         float alpha,
         const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt,
+        std::optional<Tensor> other_grad = std::nullopt);
 
 };
 
@@ -322,7 +408,33 @@ struct ExecuteBackwardRsub {
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
         const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt,
+        std::optional<Tensor> other_grad = std::nullopt);
+
+};
+
+struct ExecuteBackwardConcat {
+    static std::vector<std::optional<Tensor>> invoke(
+        uint8_t queue_id,
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        int dim,
+        const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt,
+        std::optional<Tensor> other_grad = std::nullopt);
+
+    static std::vector<std::optional<Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        int dim,
+        const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt,
+        std::optional<Tensor> other_grad = std::nullopt);
 
 };
 
@@ -347,7 +459,7 @@ constexpr auto rsub_bw = ttnn::register_operation<
     "ttnn::rsub_bw",
     operations::binary_backward::ExecuteBackwardRsub>();
 
-constexpr auto concat_bw = ttnn::register_operation<"ttnn::concat_bw", operations::binary_backward::ExecuteBinaryBackwardIntDefault<operations::binary_backward::BinaryBackwardOpType::CONCAT_BW>>();
+constexpr auto concat_bw = ttnn::register_operation<"ttnn::concat_bw", operations::binary_backward::ExecuteBackwardConcat>();
 
 constexpr auto mul_bw = ttnn::register_operation<"ttnn::mul_bw", operations::binary_backward::ExecuteBackwardMul>();
 
@@ -361,6 +473,10 @@ constexpr auto addalpha_bw = ttnn::register_operation<
     "ttnn::addalpha_bw",
     operations::binary_backward::ExecuteAddalphaBW>();
 
+constexpr auto lt_bw = ttnn::register_operation<
+    "ttnn::lt_bw",
+    operations::binary_backward::ExecuteBackwardLT>();
+
 constexpr auto add_bw = ttnn::register_operation<
     "ttnn::add_bw",
     operations::binary_backward::ExecuteBackwardAdd>();
@@ -369,7 +485,9 @@ constexpr auto sub_bw = ttnn::register_operation<
     "ttnn::sub_bw",
     operations::binary_backward::ExecuteBackwardSub>();
 
-constexpr auto div_bw = ttnn::register_operation<"ttnn::div_bw", operations::binary_backward::ExecuteBackwardDiv>();
+constexpr auto div_bw = ttnn::register_operation<
+    "ttnn::div_bw",
+    operations::binary_backward::ExecuteBackwardDiv>();
 
 constexpr auto remainder_bw = ttnn::register_operation<
     "ttnn::remainder_bw",

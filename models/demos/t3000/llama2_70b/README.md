@@ -56,29 +56,32 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
 4. **Run the performance test:**
 
     The above demo does not achieve peak performance because we log outputs to the screen. The following perf test will print an accurate end-to-end throughput number.
-    For best performance numbers, we recommend building `tt-metal` with `CONFIG=Release` env var, and ensuring the host's CPU frequency governors are set to `performance`.
+    For best performance, ensure that tt-metal is built in release mode (default), and ensure the host's CPU frequency governors are set to `performance` -- instructions for setting the frequency governor vary by machine.
+    This performance test runs with sequence length 128 and batch size 32.
     ```bash
     pytest -svv models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_perf_host[wormhole_b0-True-device_params0-gen128-llama2]
     ```
 
 ## Details
 
-- **Batch Size:** Supports batch size 16 and 32.
+Supported context lengths and batch sizes for the Llama2-70B demo are as follows:
+
+| Context Length | Max Batch Size |
+|----------------|------------|
+| 2k             | 32         |
+
 - **Input File:** Uses `./demo/data/multi_prompt.json`.
 - **Model Configuration:** Utilizes a pretrained model.
 - **Hardware Requirements:** Runs on an 8-chip T3000 machine using tensor parallelism. The host machine must have at least 512 GB of memory.
-- **Model Functionality:**
-    - The demo can run in `decode_only` mode in which we use decode mode to consume the context one token at a time, or `prefill_decode` mode in which we prefill the context and then decode.
-
 - **Demo arguments:**
     - `context: [short_context, long_context]`: Select between short context (batch 32, sequence_length 2k) and long context (batch 16, sequence length 8k)
     - `ground_truth: [check_disabled, check_enabled]`: Enable or disable ground truth checking, used for testing
     - `sampling: [greedy, sampling]`: Select between greedy decoding and top-k/top-p sampling
     - `implementation: [tt-70b-T3000]`: Run the 70B model on the Tenstorrent backend
     - `num_layers: [1L, 2L, 10L, 80L]`: Select 80L to run the full model
-    - `decode_only: [decode_only, prefill_decode]`: Use `decode_only`. Alternately, choose `prefill_decode` to enable prefill-decode mode
+    - `decode_only: [decode_only, prefill_decode]`: Use `prefill_decode`. Alternately, `decode_only` implements prefill via decode.
     - `trace_mode: [trace_mode_on, trace_mode_off]`: Use `trace_mode_on`. Alternately, choose `trace_mode_off` to disable trace mode
     - `chat: [text_completion, chat_completion]`: Run in text_completion mode for the pretrained model or chat_completion for the finetuned model
-    - `llama_version: [llama2]`: Select the Llama2 model
+    - `llama_version: [llama3, llama2]`: Select the Llama2 model
 
 Ensure you follow these guidelines to successfully run the Llama2-70B demo.

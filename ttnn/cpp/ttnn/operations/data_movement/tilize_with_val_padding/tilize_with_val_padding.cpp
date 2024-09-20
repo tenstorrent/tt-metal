@@ -13,7 +13,7 @@ namespace ttnn::operations::data_movement {
 ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
     uint8_t queue_id,
     const ttnn::Tensor &input_tensor,
-    const tt::tt_metal::Shape &output_tensor_shape,
+    const tt::tt_metal::LegacyShape &output_tensor_shape,
     float pad_value,
     const std::optional<MemoryConfig> &memory_config,
     std::optional<DataType> output_dtype,
@@ -34,7 +34,7 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
 
 ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
     const ttnn::Tensor &input_tensor,
-    const tt::tt_metal::Shape &output_tensor_shape,
+    const tt::tt_metal::LegacyShape &output_tensor_shape,
     float pad_value,
     const std::optional<MemoryConfig> &memory_config,
     std::optional<DataType> output_dtype,

@@ -396,6 +396,14 @@ all_binary_ops = [
         "name": "ttnn.divide",
     },
     {
+        "op": ttnn.div,
+        "name": "ttnn.div",
+    },
+    {
+        "op": ttnn.div_no_nan,
+        "name": "ttnn.div_no_nan",
+    },
+    {
         "op": ttnn.hypot,
         "name": "ttnn.hypot",
     },
@@ -1873,6 +1881,10 @@ all_unary_ops = [
         "name": "ttnn.ones_like",
     },
     {
+        "op": ttnn.empty_like,
+        "name": "ttnn.empty_like",
+    },
+    {
         "op": zeros,
         "name": "ttnn.zeros",
     },
@@ -2156,13 +2168,6 @@ all_unary_ops = [
     {
         "op": argmax_dim_3,
         "name": "ttnn.argmax_dim_3",
-        "shape_func": argmax_shape_func,
-        "layout": "ROW_MAJOR",
-        "num_repeats": 2,
-    },
-    {
-        "op": argmax_dim_2,
-        "name": "ttnn.argmax_dim_2",
         "shape_func": argmax_shape_func,
         "layout": "ROW_MAJOR",
         "num_repeats": 2,

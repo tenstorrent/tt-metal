@@ -64,10 +64,6 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
         TT_FATAL(cur_pos_shape[0] == B, "cur_pos must have batch size equal to Q");
         TT_FATAL(page_table_shape[0] == B, "page_table must have hidden size equal to Q");
 
-        const auto max_num_blocks_per_seq = page_table_shape[1];
-        TT_FATAL(B * max_num_blocks_per_seq == k_shape[0], "Paged K cache must have dim0= B * max_num_blocks_per_seq");
-        TT_FATAL(B * max_num_blocks_per_seq == v_shape[0], "Paged V cache must have dim0= B * max_num_blocks_per_seq");
-
         TT_FATAL(k_shape[1] == 1 && v_shape[1] == 1, "Paged attention only supports 1 head");
         TT_FATAL(k_shape[2] == v_shape[2], "K and V must have same block size");
         TT_FATAL(k_shape[3] == v_shape[3] && k_shape[3] == q_shape[3], "Q, K, V must have same hidden size");
@@ -118,7 +114,7 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
         this->compute_kernel_config);
 }
 
-std::vector<tt::tt_metal::Shape> ScaledDotProductAttentionDecode::compute_output_shapes(
+std::vector<tt::tt_metal::LegacyShape> ScaledDotProductAttentionDecode::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     return {input_tensors.at(0).get_legacy_shape()};
 }
@@ -160,7 +156,8 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
         scale,
         this->compute_kernel_config,
         this->program_config,
-        this->k_chunk_size);
+        this->k_chunk_size,
+        false);
 }
 
 operation::Hash ScaledDotProductAttentionDecode::compute_program_hash(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {

@@ -16,7 +16,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import setup_llama_env, check
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    ((32, 1, 0.9994), (1, 128, 0.9996), (1, 2048, 0.9996), (1, 8192, 0.9996)),
+    ((32, 1, 0.9994), (1, 128, 0.998), (1, 2048, 0.998), (1, 8192, 0.998)),
     ids=("decode", "prefill_128", "prefill_2k", "prefill_8k"),
 )
 @pytest.mark.parametrize(
@@ -51,8 +51,6 @@ def test_LlamaMLP_inference_t3000(
 
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,
-        batch=batch,
-        seq_len=seq_len,
         max_batch_size=max_batch_size,
         max_context_len=max_context_len,
     )

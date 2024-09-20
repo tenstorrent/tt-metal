@@ -62,7 +62,7 @@ void MorehAdamW::validate_with_output_tensors(
     }
 }
 
-std::vector<Shape> MorehAdamW::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehAdamW::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     auto output_shape = input_tensors.at(0).get_legacy_shape();
     return {output_shape, output_shape, output_shape, output_shape};
 }

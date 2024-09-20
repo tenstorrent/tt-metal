@@ -406,3 +406,117 @@ def test_slice_negative_ends(layout, dim, ends, device):
 
     ttnn_output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_output, ttnn_output, 0.99)
+
+
+@pytest.mark.parametrize(
+    "input_shape, input_start, input_ends",
+    (
+        ((1, 1, 1, 256), (0, 0, 0, 0), (1, 1, 1, -1)),
+        ((1, 256), (0, 0), (-1, 256)),
+        ((1, 512), (0, 0), (-1, 512)),
+        ((1, 512), (0, 0), (1, 256)),
+    ),
+)
+@pytest.mark.parametrize(
+    "layout",
+    (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+)
+def test_slice_bert(input_shape, input_start, input_ends, layout, device):
+    if layout == ttnn.TILE_LAYOUT:
+        torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
+    else:
+        torch_input = torch.randn(input_shape, dtype=torch.float32)
+        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.float32, layout=layout)
+
+    if len(input_shape) == 4:
+        torch_output = torch_input[
+            input_start[0] : input_ends[0],
+            input_start[1] : input_ends[1],
+            input_start[2] : input_ends[2],
+            input_start[3] : input_ends[3],
+        ]
+        ttnn_output = ttnn_input[
+            input_start[0] : input_ends[0],
+            input_start[1] : input_ends[1],
+            input_start[2] : input_ends[2],
+            input_start[3] : input_ends[3],
+        ]
+    elif len(input_shape) == 2:
+        torch_output = torch_input[input_start[0] : input_ends[0], input_start[1] : input_ends[1]]
+        ttnn_output = ttnn_input[input_start[0] : input_ends[0], input_start[1] : input_ends[1]]
+
+    ttnn_output = ttnn.to_torch(ttnn_output)
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
+
+
+@pytest.mark.xfail(reason="2D slices and negative ends are not supported in ttnn.slice path")
+@pytest.mark.parametrize(
+    "input_shape, input_start, input_ends",
+    (
+        ((1, 1, 1, 256), (0, 0, 0, 0), (1, 1, 1, -1)),
+        ((1, 256), (0, 0), (-1, 1)),
+        ((1, 512), (0, 0), (-1, 1)),
+        ((1, 512), (0, 0), (1, 256)),
+    ),
+)
+@pytest.mark.parametrize(
+    "layout",
+    (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+)
+def test_ttnn_slice_bert(input_shape, input_start, input_ends, layout, device):
+    if layout == ttnn.TILE_LAYOUT:
+        torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
+    else:
+        torch_input = torch.randn(input_shape, dtype=torch.float32)
+        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.float32, layout=layout)
+
+    if len(input_shape) == 4:
+        torch_output = torch_input[
+            input_start[0] : input_ends[0],
+            input_start[1] : input_ends[1],
+            input_start[2] : input_ends[2],
+            input_start[3] : input_ends[3],
+        ]
+    elif len(input_shape) == 2:
+        torch_output = torch_input[input_start[0] : input_ends[0], input_start[1] : input_ends[1]]
+
+    ttnn_output = ttnn.slice(ttnn_input, list(input_start), list(input_ends))
+
+    ttnn_output = ttnn.to_torch(ttnn_output)
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
+
+
+def test_slice_output_tensor_rm(device):
+    torch_input = torch.ones(1, 3, 640, 640)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16)
+    torch_zeros = torch.zeros(1, 3, 320, 320)
+    ttnn_output = ttnn.from_torch(torch_zeros, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+    torch_output = torch_input[..., ::2, ::2]  # torch_output shape: [1, 3, 320, 320]
+
+    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    ttnn.slice(ttnn_input, [0, 0, 0, 0], [0, 2, 319, 319], output_tensor=ttnn_output)
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
+
+
+def test_slice_output_tensor_tile(device):
+    torch_input = torch.ones(1, 3, 640, 640)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    torch_zeros = torch.zeros(1, 3, 320, 320)
+    ttnn_output = ttnn.from_torch(
+        torch_zeros, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    torch_output = torch_input[..., ::2, ::2]  # torch_output shape: [1, 3, 320, 320]
+
+    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    ttnn.slice(ttnn_input, [0, 0, 0, 0], [0, 2, 319, 319], output_tensor=ttnn_output)
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
