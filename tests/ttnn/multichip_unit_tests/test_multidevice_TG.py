@@ -1485,3 +1485,91 @@ def test_visualize_mesh_device_with_tensor_col_major(mesh_device):
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
     ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
+
+
+def rms_norm(x, gamma, eps):
+    return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * gamma
+
+
+@pytest.mark.parametrize("input_width", [8192])
+@pytest.mark.parametrize("input_height", [32])
+@pytest.mark.parametrize("eps", [1e-5])
+@pytest.mark.parametrize("core_grid", [(4, 8)])
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_sharded_distributed_layernorm(mesh_device, input_width, input_height, core_grid, eps):
+    rows, cols = mesh_device.shape
+    input_shape = (1, 1, input_height, input_width)
+    gamma_shape = (1, 1, 1, input_width)
+
+    input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    gamma = torch.randn(gamma_shape, dtype=torch.bfloat16)
+
+    torch_output_tensor = rms_norm(input_tensor, gamma, eps=eps)
+
+    input_mem_config = ttnn.create_sharded_memory_config(
+        shape=(1, 1, input_shape[-2], input_width // cols),
+        core_grid=ttnn.CoreGrid(y=core_grid[0], x=core_grid[1]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+    )
+
+    tt_input_tensor = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=input_mem_config,
+        mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(None, 3)),
+    )
+
+    tt_weights = ttnn.from_torch(
+        gamma,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(None, 3)),
+    )
+
+    sharded_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[core_grid[1], core_grid[0]],
+        subblock_w=((input_width // cols) // (core_grid[0] * core_grid[1])) // 32,
+        block_h=1,
+        block_w=((input_width // cols) // (core_grid[0] * core_grid[1])) // 32,
+        inplace=False,
+    )
+    tt_stats = ttnn.rms_norm_pre_all_gather(tt_input_tensor, program_config=sharded_program_config)
+
+    gathered_stats_sharded_memory_config = ttnn.create_sharded_memory_config(
+        shape=[1, 1, input_height, input_height * cols],
+        core_grid=ttnn.CoreGrid(y=1, x=1),
+        strategy=ttnn.ShardStrategy.WIDTH,
+    )
+
+    tt_stats = ttnn.line_all_gather(
+        tt_stats,
+        3,
+        num_links=1,
+        cluster_axis=1,
+        mesh_device=mesh_device,
+        memory_config=gathered_stats_sharded_memory_config,
+    )
+
+    tt_output_tensor = ttnn.rms_norm_post_all_gather(
+        tt_input_tensor,
+        epsilon=eps,
+        weight=tt_weights,
+        program_config=sharded_program_config,
+        memory_config=input_mem_config,
+        stats=tt_stats,
+    )
+
+    tt_stats.deallocate(True)
+
+    tt_output_tensor = ttnn.to_torch(
+        tt_output_tensor, mesh_composer=ConcatMesh2dToTensor(mesh_device, mesh_shape=(rows, cols), dims=(1, 3))
+    )
+    tt_output_tensor = tt_output_tensor[:, 1].unsqueeze(0)
+
+    is_pass, output_pcc = comp_pcc(torch_output_tensor, tt_output_tensor, pcc=0.999)
+
+    assert is_pass, f"PCC value: {output_pcc}"
