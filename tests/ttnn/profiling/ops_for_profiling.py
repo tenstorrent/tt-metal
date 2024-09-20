@@ -1186,10 +1186,10 @@ def ttnn_slice(x):
     shape = x.get_legacy_shape()
 
     output_tensor_end = (
-        shape[0] - 1,
-        shape[1] - 1,
-        shape[2] - 33,
-        shape[3] - 33,
+        shape[0],
+        shape[1],
+        shape[2] - 32,
+        shape[3] - 32,
     )
 
     ttnn.slice(x, (0, 0, 0, 0), output_tensor_end)

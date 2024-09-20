@@ -28,7 +28,6 @@ def _golden_function(input_tensor: ttnn.Tensor, slices):
 )
 def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
     input_rank = len(input_tensor.shape)
-    input_layout = input_tensor.layout
 
     if isinstance(slices, int):
         slices = (slice(None, slices, None),)
@@ -66,47 +65,15 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
             raise RuntimeError(f"Too many slices for tensor of rank {input_rank}")
 
     if input_rank <= 4:
-        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-
-        while len(slices) != 4:
-            slices = (slice(None, None, None),) + slices
         slice_start = [_slice.start if _slice.start is not None else 0 for _slice in slices]
         slice_end = [
-            (max(input_tensor.shape[index] + _slice.stop, 1) if _slice.stop < 0 else _slice.stop)
-            if _slice.stop is not None
-            else input_tensor.shape[index]
-            for index, _slice in enumerate(slices)
+            _slice.stop if _slice.stop is not None else input_tensor.shape[i] for i, _slice in enumerate(slices)
         ]
         slice_step = [_slice.step if _slice.step is not None else 1 for _slice in slices]
 
-        padded_slice_end = list(slice_end)
-        if input_layout == ttnn.TILE_LAYOUT:
-            padded_slice_end[-1] = int(math.ceil((slice_end[-1]) / ttnn.TILE_SIZE)) * ttnn.TILE_SIZE
-            padded_slice_end[-2] = int(math.ceil((slice_end[-2]) / ttnn.TILE_SIZE)) * ttnn.TILE_SIZE
+        output = ttnn.slice(input_tensor, slice_start, slice_end, slice_step)
 
-        if list(padded_slice_end) == list(input_tensor.shape.with_tile_padding()) and (slice_step is None):
-            output = input_tensor
-        else:
-            padded_slice_end_minus_1 = [x - 1 for x in padded_slice_end]
-            if any([x < 0 for x in padded_slice_end_minus_1]):
-                raise RuntimeError("ttnn.Tensor.__getitem__: cannot return a scalar!")
-
-            if ttnn.is_tensor_storage_on_device(input_tensor):
-                output = ttnn.slice(input_tensor, slice_start, padded_slice_end_minus_1, slice_step)
-            else:
-                if any([x != 1 for x in slice_step]):
-                    raise NotImplementedError("ttnn.Tensor.__getitem__: step is not supported for host tensor!")
-                input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-                output = input_tensor.unpad(slice_start, padded_slice_end_minus_1)
-                output = ttnn.to_layout(output, input_layout)
-        output_shape = [
-            0
-            if slices[i].stop is not None and slices[i].stop + input_tensor.shape[i] == slices[i].start
-            else len(range(start, end, step))
-            for i, (start, end, step) in enumerate(zip(slice_start, slice_end, slice_step))
-        ][-input_rank:]
-        padded_output_shape = list(output.shape.with_tile_padding())[-input_rank:]
-        return ttnn.reshape(output, shape=ttnn.Shape(output_shape, padded_output_shape))
+        return output
 
     raise NotImplementedError
 
