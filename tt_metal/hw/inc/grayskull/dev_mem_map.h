@@ -101,8 +101,9 @@
 #define MEM_TRISC2_STACK_BASE (MEM_LOCAL_BASE + MEM_TRISC_LOCAL_SIZE - MEM_TRISC2_STACK_SIZE)
 
 /////////////
-// Alignment restrictions needed in linker scripts
-#define MEM_TENSIX_KERNEL_ALIGNMENT 16
+// Padding/alignment restrictions needed in linker scripts
+// Note we pad then align so, for example, erisc can keep space between fw/kernels
+#define MEM_TENSIX_KERNEL_PAD 12
 
 
 /////////////
@@ -115,4 +116,4 @@
 #define MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH 0
 #define MEM_IERISC_STACK_SIZE 0
 
-#define MEM_IERISC_KERNEL_ALIGNMENT 32
+#define MEM_IERISC_KERNEL_PAD 0

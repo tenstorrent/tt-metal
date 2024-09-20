@@ -24,16 +24,15 @@ __ldm_start = DEFINED(__fw_export_ldm_end) ? __fw_export_ldm_end : ORIGIN(REGION
 
 #if defined (TYPE_FIRMWARE)
 #if defined (TARGET_IERISC)
-__padding = MEM_IERISC_KERNEL_ALIGNMENT - 4;
-__alignment = MEM_IERISC_KERNEL_ALIGNMENT;
+#define MEM_PAD MEM_IERISC_KERNEL_PAD
 #else
-__padding = MEM_TENSIX_KERNEL_ALIGNMENT - 4;
-__alignment = MEM_TENSIX_KERNEL_ALIGNMENT;
+#define MEM_PAD MEM_TENSIX_KERNEL_PAD
 #endif
 #else
-__padding = 0;
-__alignment = 4;
+#define MEM_PAD 0
 #endif
+
+#define MEM_ALIGN MEM_PAD + 4
 
 OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
 	      "elf32-littleriscv")
@@ -72,8 +71,8 @@ SECTIONS
     *(l1_data_noinit)
   } > REGION_CODE
 
-  . += __padding;
-  . = ALIGN(__alignment);
+  . += MEM_PAD;
+  . = ALIGN(MEM_ALIGN);
 
   PROVIDE (__etext = .);
   PROVIDE (_etext = .);
