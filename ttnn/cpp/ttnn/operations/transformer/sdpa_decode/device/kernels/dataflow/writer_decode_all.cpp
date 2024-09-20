@@ -277,8 +277,8 @@ void kernel_main() {
     }
     // Get cur_pos
     uint32_t cur_pos = 0;
-    // using 4294967295 (end of uint32 range) as a flag to indicate that cur_pos is not provided as a list
-    if (cur_pos_arg!=4294967295){
+    // using UINT32_MAX as a flag to indicate that cur_pos is not provided as a list
+    if (cur_pos_arg != UINT32_MAX){
         cur_pos = cur_pos_arg;
     }
     else {
@@ -289,7 +289,7 @@ void kernel_main() {
         cur_pos = index_ptr[cur_batch];
     }
 
-    if (cur_pos == (uint32_t) -1) {
+    if (cur_pos == UINT32_MAX) {
         // cur_pos of -1 indicates that the user should be skipped
         return;
     }
