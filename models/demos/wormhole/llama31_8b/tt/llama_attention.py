@@ -301,6 +301,16 @@ class TtLlamaAttention(nn.Module):
             ttnn.deallocate(k_heads)
             ttnn.deallocate(v_heads)
 
+            # Reshape such that true unpadded batch is tracked in shape
+            q_heads_shape = q_heads.shape
+            q_heads = ttnn.reshape(
+                q_heads,
+                ttnn.Shape(
+                    (1, q_heads_shape[1], self.max_batch_size, q_heads_shape[3]),
+                    (1, q_heads_shape[1], 32, q_heads_shape[3]),
+                ),
+            )
+
             attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode_gqa(
                 q_heads,
                 keys,
