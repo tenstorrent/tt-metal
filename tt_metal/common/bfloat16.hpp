@@ -396,8 +396,13 @@ inline bool packed_uint32_t_vector_comparison(
         float b2 = bs.second.to_float();
 
         if (not (comparison_function(a1, b1) and comparison_function(a2, b2)))  {
-            if (argfail)
+            if (argfail) {
                 *argfail = i;
+                std::cout << "a1 = " << std::hex << a1 << std::endl;
+                std::cout << "b1 = " << std::hex << b1 << std::endl;
+                std::cout << "a2 = " << std::hex << a2 << std::endl;
+                std::cout << "b2 = " << std::hex << b2 << std::endl;
+            }
             return false;
         }
     }

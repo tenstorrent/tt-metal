@@ -34,8 +34,14 @@ void MAIN {
             acquire_dst(tt::DstMode::Half);
             for(uint32_t ht = 0; ht < Ht; ++ht) {
                 cb_wait_front(tt::CB::c_in0, onetile);
+#if (MATH_ONLY == 1)
+                UNPACK(( llk_unpack_AB(tt::CB::c_in0, tt::CB::c_in2, 0, 0) ));
+                // REDUCE_OP is expected to come from add_define
+                reduce_tile_math(reduce_dst_idx);
+#elif (MATH_ONLY == 0)
                 // REDUCE_OP is expected to come from add_define
                 reduce_tile(tt::CB::c_in0, tt::CB::c_in2, 0, 0, reduce_dst_idx);
+#endif
                 cb_pop_front(tt::CB::c_in0, onetile);
             }
 
