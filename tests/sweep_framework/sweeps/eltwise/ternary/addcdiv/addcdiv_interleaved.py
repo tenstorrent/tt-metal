@@ -3,11 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Optional, Tuple
+from functools import partial
 
 import torch
 import random
 import ttnn
 from tests.sweep_framework.utils import gen_shapes
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
@@ -25,6 +27,19 @@ random.seed(0)
 parameters = {
     "nightly": {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 8),
+        "input_a_dtype": [ttnn.bfloat16],
+        "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_c_dtype": [ttnn.bfloat16],
+        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_b_layout": [ttnn.TILE_LAYOUT],
+        "input_c_layout": [ttnn.TILE_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "input_c_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    },
+    "xfail": {
+        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 8),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_c_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -37,6 +52,13 @@ parameters = {
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
+
+
+# TO-DO: Create an issue on this, since these constrictions are not mentioned in the documentation
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    if test_vector["input_a_dtype"] == ttnn.bfloat8_b:
+        return True, "Input_tensor_a doesn't support bfloat8_b"
+    return False, None
 
 
 # This is the run instructions for the test, defined by the developer.
@@ -65,40 +87,19 @@ def run(
     torch_input_tensor_b = torch_random(input_shape, -100, 100, dtype=torch.float32)
     torch_input_tensor_c = torch_random(input_shape, -100, 100, dtype=torch.float32)
 
-    # TO-DO define a function in utils.py to handle type conversion
-    if input_a_dtype == ttnn.bfloat16:
-        torch_input_tensor_a = torch_input_tensor_a.to(torch.bfloat16)
-
-    elif input_a_dtype == ttnn.bfloat8_b:
-        tt_tensor = ttnn.from_torch(
-            torch_input_tensor_a, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=None, memory_config=None
-        )
-
-        torch_input_tensor_a = ttnn.to_torch(tt_tensor)
-
-    if input_b_dtype == ttnn.bfloat16:
-        torch_input_tensor_b = torch_input_tensor_b.to(torch.bfloat16)
-
-    elif input_b_dtype == ttnn.bfloat8_b:
-        tt_tensor = ttnn.from_torch(
-            torch_input_tensor_b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=None, memory_config=None
-        )
-
-        torch_input_tensor_b = ttnn.to_torch(tt_tensor)
-
-    if input_c_dtype == ttnn.bfloat16:
-        torch_input_tensor_c = torch_input_tensor_c.to(torch.bfloat16)
-
-    elif input_c_dtype == ttnn.bfloat8_b:
-        tt_tensor = ttnn.from_torch(
-            torch_input_tensor_c, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=None, memory_config=None
-        )
-
-        torch_input_tensor_c = ttnn.to_torch(tt_tensor)
+    torch_input_tensor_a = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+    )(input_shape)
+    torch_input_tensor_b = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
+    )(input_shape)
+    torch_input_tensor_c = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_c_dtype
+    )(input_shape)
 
     scalar = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
 
-    torch_output_tensor = torch.addcmul(torch_input_tensor_a, torch_input_tensor_b, torch_input_tensor_c, value=scalar)
+    torch_output_tensor = torch.addcdiv(torch_input_tensor_a, torch_input_tensor_b, torch_input_tensor_c, value=scalar)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -125,10 +126,12 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.addcmul(
+    output_tensor = ttnn.addcdiv(
         input_tensor_a, input_tensor_b, input_tensor_c, value=scalar, memory_config=output_memory_config
     )
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
+
+    e2e_perf = f"{input_b_dtype}, {input_c_dtype}"
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
