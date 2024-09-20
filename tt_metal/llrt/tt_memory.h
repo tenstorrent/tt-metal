@@ -23,7 +23,7 @@ class memory {
 
  private:
   static constexpr uint32_t initial_data_space_ = 0x400;
-  static constexpr uint32_t initial_span_space_ = 8;
+  static constexpr uint32_t initial_span_space_ = 4;
 
   struct span {
       // Note: the offset of the data for a span in data_ is generated on the
@@ -61,6 +61,8 @@ public:
   // Iterate over spans_ to act on data_ (eg., to device)
   void process_spans(const std::function<void (std::vector<uint32_t>::const_iterator, uint64_t addr, uint32_t len)>& callback) const;
   void process_spans(const std::function<void (std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback);
+
+  void pack_data_into_text(std::uint64_t text_start, std::uint64_t data_start);
 };
 
 }  // namespace ll_api
