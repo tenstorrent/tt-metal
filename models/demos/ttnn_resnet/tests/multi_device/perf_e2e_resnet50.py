@@ -457,5 +457,7 @@ def run_perf_resnet(
         inference_time_cpu=cpu_time,
     )
 
-    logger.info(f"{model_name} {comments} inference time (avg): {inference_time_avg}")
+    logger.info(
+        f"{model_name} {comments} inference time (avg): {inference_time_avg}, FPS: {batch_size/inference_time_avg}"
+    )
     logger.info(f"{model_name} compile time: {compile_time}")

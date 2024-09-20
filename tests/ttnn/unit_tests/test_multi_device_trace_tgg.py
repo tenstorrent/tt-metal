@@ -18,7 +18,7 @@ NUM_TRACE_LOOPS = int(os.getenv("NUM_TRACE_LOOPS", 15))
 @pytest.mark.parametrize(
     "shape", [(1, 1, 512, 512), (1, 1, 32, 32), (1, 3, 32, 32), (1, 1, 256, 256), (1, 3, 512, 512), (1, 3, 128, 128)]
 )
-@pytest.mark.parametrize("mesh_device", [pytest.param((16, 4), id="16x4_grid")], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 8), id="8x8_grid")], indirect=True)
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("enable_multi_cq", [False])  # To be toggled when Galaxy supports Multi-CQ
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 60000}], indirect=True)
@@ -119,7 +119,7 @@ def test_multi_device_single_trace(mesh_device, shape, enable_async, enable_mult
     "shape",
     [(1, 1, 256, 256), (1, 1, 512, 512), (1, 1, 32, 32), (1, 3, 32, 32)],
 )
-@pytest.mark.parametrize("mesh_device", [pytest.param((16, 4), id="16x4_grid")], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 8), id="8x8_grid")], indirect=True)
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("enable_multi_cq", [False])  # To be toggled when Galaxy supports Multi-CQ
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)

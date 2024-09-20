@@ -24,7 +24,7 @@ from models.demos.ttnn_resnet.tests.multi_device.resnet50_performant import (
 @pytest.mark.parametrize("enable_async_mode", [True], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
-    ((16, 4),),
+    ((8, 8),),
     indirect=True,
 )
 def test_run_resnet50_inference(
@@ -56,7 +56,7 @@ def test_run_resnet50_inference(
 @pytest.mark.parametrize("enable_async_mode", [True], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
-    ((16, 4),),
+    ((8, 8),),
     indirect=True,
 )
 def test_run_resnet50_trace_inference(
