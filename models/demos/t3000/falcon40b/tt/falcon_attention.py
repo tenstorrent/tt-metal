@@ -489,10 +489,10 @@ class TtFalconAttention:
             layer_past[0],
             [0, 0, 0, 0],
             [
-                batch - 1,
-                self.num_kv_heads // self.num_devices - 1,
-                padded_layer_past_len - 1,
-                self.head_dim - 1,
+                batch,
+                self.num_kv_heads // self.num_devices,
+                padded_layer_past_len,
+                self.head_dim,
             ],
             memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
@@ -553,10 +553,10 @@ class TtFalconAttention:
             layer_past[1],
             [0, 0, 0, 0],
             [
-                batch - 1,
-                self.num_kv_heads // self.num_devices - 1,
-                padded_layer_past_len - 1,
-                self.head_dim - 1,
+                batch,
+                self.num_kv_heads // self.num_devices,
+                padded_layer_past_len,
+                self.head_dim,
             ],
             memory_config=self.model_config["DEFAULT_MEMCFG"],
         )

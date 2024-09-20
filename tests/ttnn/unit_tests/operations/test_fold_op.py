@@ -135,7 +135,7 @@ def pad_and_fold_with_permute_and_reshape_on_device(
     activation_pyt_padded = ttnn.slice(
         activation_pyt_padded,
         (0, 0, 0, 0),
-        (n - 1, target_h - 1, target_w - 1, c - 1),
+        (n, target_h, target_w, c),
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
@@ -241,7 +241,7 @@ def pad_and_fold_with_permute_and_reshape_on_device_sharded(device, tt_input_ten
     tt_output_tensor = ttnn.slice(
         tt_output_tensor,
         (0, 0, 0, 0),
-        (n - 1, target_h - 1, target_w - 1, c - 1),
+        (n, target_h, target_w, c),
         memory_config=slice_sharded_memory_config,
     )
     print("output " + str(tt_output_tensor.shape))

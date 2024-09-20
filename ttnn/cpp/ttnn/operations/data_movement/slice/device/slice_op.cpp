@@ -76,17 +76,21 @@ void SliceDeviceOperation::validate_with_output_tensors(
     TT_FATAL(input_tensor_a.get_legacy_shape().rank() == this->slice_start.rank() && this->slice_start.rank() == this->slice_end.rank(), "Error");
     for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
         TT_FATAL(this->slice_start[i] < input_tensor_a.get_legacy_shape()[i], "Error");
-        TT_FATAL(this->slice_end[i] < input_tensor_a.get_legacy_shape()[i], "Error");
-
+        TT_FATAL(this->slice_end[i] <= input_tensor_a.get_legacy_shape()[i], "Ends {} must be less than or equal to the shape of the tensor {}", this->slice_end[i], input_tensor_a.get_legacy_shape()[i]);
         // Check if start shape is <= end shape
         TT_FATAL(this->slice_start[i] <= this->slice_end[i], "Error");
     }
-
+    if(!output_tensors.empty() && output_tensors[0].has_value()){
+        const auto output_shape_required = this->compute_output_shapes(input_tensors)[0];
+        const auto& out_tensor = output_tensors[0].value();
+        TT_FATAL(out_tensor.get_legacy_shape() == output_shape_required, "The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape());
+    }
     auto output_tensor_shape = this->compute_output_shapes(input_tensors)[0];
     if (step.has_value()) { // if all ones modify before passing in to function
         TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Strided slice is only supported for row major layout");
         TT_FATAL(!input_tensor_a.is_sharded(), "Strided slice is not supported for sharded tensor");
         TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Strided slice is only supported for BFLOAT16");
+        TT_FATAL(this->step.value().size() == this->slice_end.rank(), "Number of steps {} must match number of ends/starts {}", this->step.value().size(), this->slice_end.rank());
     }
     if (input_tensor_a.get_layout() == Layout::TILE) {
         TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
@@ -118,16 +122,13 @@ std::vector<tt::tt_metal::LegacyShape> SliceDeviceOperation::compute_output_shap
     out_shape.reserve(rank);
     if (!step.has_value()) {
         for (uint32_t i = 0; i < rank; i++) {
-            out_shape.push_back(this->slice_end[i] - this->slice_start[i] + 1);
+            out_shape.push_back(this->slice_end[i] - this->slice_start[i]);
         }
     }
     else {
+
         auto output_dim_i = [this] (size_t i) {
-            int res = 0;
-            for (int j = this->slice_start[i]; j < this->slice_end[i] + 1; j+=this->step.value()[i]) {
-                res++;
-            }
-            return res;
+            return (this->slice_end[i] - this->slice_start[i] + this->step.value()[i] - 1) / this->step.value()[i];
         };
         for (uint32_t i = 0; i < rank; i++) {
             out_shape.push_back(output_dim_i(i));
@@ -139,6 +140,9 @@ std::vector<tt::tt_metal::LegacyShape> SliceDeviceOperation::compute_output_shap
 
 std::vector<Tensor> SliceDeviceOperation::create_output_tensors(
     const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
+    if (!output_tensors.empty() && output_tensors[0].has_value()) {
+        return {output_tensors[0].value()};
+    }
     const auto &input_tensor_a = input_tensors.at(0);
     const auto shapes = compute_output_shapes(input_tensors);
 

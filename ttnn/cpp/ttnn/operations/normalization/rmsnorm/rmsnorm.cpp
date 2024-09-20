@@ -28,7 +28,7 @@ ttnn::Tensor ExecuteRMSNorm::invoke(
                     .program_config = program_config.value_or(LayerNormDefaultProgramConfig{}),
                     .compute_kernel_config = kernel_config_val},
                 {input_tensor},
-                {residual_input_tensor, weight, bias}).at(0);
+                {residual_input_tensor, weight, bias, std::nullopt}).at(0);
 }
 
 }  // namespace ttnn::operations::normalization

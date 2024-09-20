@@ -48,6 +48,7 @@ void kernel_main() {
     constexpr uint32_t block_size_t = get_compile_time_arg_val(13);
     constexpr uint32_t log2_page_table_page_size = get_compile_time_arg_val(14);
     constexpr uint32_t page_table_page_size = get_compile_time_arg_val(15);
+    constexpr uint32_t Bkv = get_compile_time_arg_val(16);
 
     const uint32_t q_addr  = get_arg_val<uint32_t>(0);
     const uint32_t k_addr  = get_arg_val<uint32_t>(1);
@@ -195,8 +196,8 @@ void kernel_main() {
     };
 
     // Offset for current batch
-    const uint32_t k_batch_offset = cur_batch * St * DHt;
-    const uint32_t v_batch_offset = cur_batch * St * DHt;
+    const uint32_t k_batch_offset = (cur_batch % Bkv) * St * DHt;
+    const uint32_t v_batch_offset = (cur_batch % Bkv) * St * DHt;
 
     // Then, read K, V, Mask k_chunk_tiles at a time
     const uint32_t k_chunk_offset = k_chunk_start * Sk_chunk_t * DHt;

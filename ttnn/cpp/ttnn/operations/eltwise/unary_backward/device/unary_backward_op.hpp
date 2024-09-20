@@ -13,8 +13,6 @@
 namespace ttnn::operations::unary_backward {
 
 enum class UnaryBackwardOpType {
-    HARDTANH_BW,
-    SOFTPLUS_BW,
     DIV_BW,
     RDIV_BW,
     MULTIGAMMALN_BW,
@@ -76,7 +74,6 @@ enum class UnaryBackwardOpType {
     DEG2RAD_BW,
     POLYGAMMA_BW,
     REPEAT_BW,
-    PROD_BW,
 };
 
 std::vector<Tensor> _acos_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
@@ -132,9 +129,6 @@ std::vector<Tensor> _floor_bw( const Tensor& grad, const Tensor& input, const st
 std::vector<Tensor> _round_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _log_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 
-std::vector<Tensor> _softplus_bw( const Tensor& grad, const Tensor& input, float beta = 1.0, float threshold = 20.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-std::vector<Tensor> _hardtanh_bw( const Tensor& grad, const Tensor& input, float min = -1.0, float max = 1.0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-
 std::vector<Tensor> _add_bw( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 std::vector<Tensor> _eq_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
@@ -148,20 +142,11 @@ std::vector<Tensor> _logiteps_bw( const Tensor& grad, const Tensor& input, float
 std::vector<Tensor> _rdiv_bw( const Tensor& grad, const Tensor& input, float scalar, string round_mode = "None", const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 std::vector<Tensor> _repeat_bw(const Tensor& grad, const Tensor& input, const tt::tt_metal::LegacyShape& shape, const std::optional<MemoryConfig>& output_mem_config);
-
-std::vector<Tensor> _prod_bw( const Tensor& grad, const Tensor& input, bool all_dimensions = true, int64_t dim = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config);
 
 // OpHandler struct template
 template <UnaryBackwardOpType OpType>
 struct OpHandler;
-
-template <>
-struct OpHandler<UnaryBackwardOpType::HARDTANH_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float min, float max, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _hardtanh_bw(grad, input, min, max, output_mem_config);
-    }
-};
 
 template <>
 struct OpHandler<UnaryBackwardOpType::RPOW_BW> {
@@ -556,13 +541,6 @@ struct OpHandler<UnaryBackwardOpType::SUB_BW> {
 };
 
 template <>
-struct OpHandler<UnaryBackwardOpType::SOFTPLUS_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float beta, float threshold, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _softplus_bw(grad, input, beta, threshold, output_mem_config);
-    }
-};
-
-template <>
 struct OpHandler<UnaryBackwardOpType::RDIV_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, string round_mode, const std::optional<MemoryConfig>& output_mem_config ) {
         return _rdiv_bw(grad, input, scalar, round_mode, output_mem_config);
@@ -573,13 +551,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::REPEAT_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const tt::tt_metal::LegacyShape& shape, const std::optional<MemoryConfig>& output_mem_config ) {
         return _repeat_bw(grad, input, shape, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::PROD_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, bool all_dimensions, int64_t dim, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _prod_bw(grad, input, all_dimensions, dim, output_mem_config);
     }
 };
 

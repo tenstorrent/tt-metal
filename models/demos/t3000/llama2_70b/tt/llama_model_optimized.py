@@ -413,7 +413,7 @@ class TtLlamaModel_optimized:
             norm_out_replicated = ttnn.slice(
                 norm_out_replicated,
                 (0, 0, last_token_tile * 32, 0),
-                (0, 0, (last_token_tile + 1) * 32 - 1, dmodel - 1),
+                (1, 1, (last_token_tile + 1) * 32, dmodel),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             pc_lm_head = (
