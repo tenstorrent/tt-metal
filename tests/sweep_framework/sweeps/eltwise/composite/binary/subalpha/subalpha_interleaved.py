@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Optional, Tuple
+from functools import partial
 
 import torch
 import random
