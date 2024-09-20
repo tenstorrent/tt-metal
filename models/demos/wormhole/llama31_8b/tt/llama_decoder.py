@@ -10,13 +10,12 @@ from models.common.rmsnorm import RMSNorm
 
 
 class TtTransformerBlock(torch.nn.Module):
-    def __init__(self, args, device, dtype, state_dict, layer_num, weight_cache_path, rot_mat, start_pos):
+    def __init__(self, args, device, dtype, state_dict, layer_num, weight_cache_path):
         super().__init__()
 
         self.state_dict = state_dict
         self.device = device
         self.num_devices = 1
-        self.start_pos = start_pos
 
         self.args = args
         self.hidden_size = args.dim
@@ -41,8 +40,6 @@ class TtTransformerBlock(torch.nn.Module):
             layer_num=layer_num,
             dtype=dtype,
             configuration=args,
-            rot_mat=rot_mat,
-            start_pos=start_pos,
         )
         self.feed_forward = TtLlamaMLP(
             device=device,
@@ -75,8 +72,8 @@ class TtTransformerBlock(torch.nn.Module):
     def forward(
         self,
         x: ttnn.Tensor,
-        current_pos: int,
-        attn_masks: Optional[ttnn.Tensor] = None,
+        current_pos,
+        current_pos_attn,
         rot_mat=None,
         transformation_mats=None,
         user_id=0,
@@ -87,11 +84,11 @@ class TtTransformerBlock(torch.nn.Module):
         else:
             skip_mem_cfg = self.model_config["DEC_SKIP_OUTPUT_MEMCFG"]
         attn_norm = self.attention_norm(x)
-        # Attention module expects a list of inputs, attn masks (multi-device support)
+        # Attention module expects a list of inputs (multi-device support)
         r = self.attention.forward(
             [attn_norm],
             current_pos,
-            [attn_masks],
+            current_pos_attn,
             rot_mat,
             transformation_mats,
             user_id,

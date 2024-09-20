@@ -21,7 +21,6 @@ class TtLlamaAttention(nn.Module):
         layer_num,
         dtype,
         configuration,
-        rot_mat,
     ):
         super().__init__()
 
@@ -47,8 +46,6 @@ class TtLlamaAttention(nn.Module):
 
         self.model_config = configuration.get_model_config()
         self.compute_kernel_config = configuration.get_compute_kernel_config()
-
-        self.rot_mat = rot_mat  # Rotational matrix in the form of a list of 8K tensors [1,1,head_dim,head_dim] for positional embedding on device
 
         layer_name = f"layers.{layer_num}.attention"
         if configuration.dummy_weights:
@@ -235,7 +232,7 @@ class TtLlamaAttention(nn.Module):
                 wqkv,
                 memory_config=self.model_config["XQKV_MM_OUTPUT_MEMCFG"],
                 compute_kernel_config=self.compute_kernel_config,
-                dtype=self.dtype,
+                dtype=ttnn.bfloat16,
                 core_grid=self.grid_size,
             )
 
@@ -258,7 +255,6 @@ class TtLlamaAttention(nn.Module):
                 xqkv_fused,
                 num_heads=self.n_local_heads,
                 num_kv_heads=self.n_local_kv_heads,
-                transpose_k_heads=False,
                 memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
             )
 
@@ -282,11 +278,11 @@ class TtLlamaAttention(nn.Module):
                 program_config=self.model_config["ROT_MAT_BMM_PROGCFG"],
                 memory_config=k_heads_pre_rot_1BKD.memory_config(),
                 compute_kernel_config=self.compute_kernel_config,
-                dtype=self.dtype,
+                dtype=ttnn.bfloat16,
             )
 
-            ttnn.deallocate(q_heads_pre_rot)
-            ttnn.deallocate(k_heads_pre_rot)
+            ttnn.deallocate(q_heads_pre_rot_1BQD)
+            ttnn.deallocate(k_heads_pre_rot_1BKD)
 
             ###
             # KV update
@@ -297,28 +293,19 @@ class TtLlamaAttention(nn.Module):
             # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
             # v_heads [seqlen, n_kv_heads, bsz, head_dim]
             # keys, [max_batch_size, n_kv_heads // self.num_devices, sliding_window, head_dim]
-            ttnn.experimental.paged_update_cache(keys, k_heads_1BKD, current_pos)
-            ttnn.experimental.paged_update_cache(values, v_heads_1BKD, current_pos)
+            ttnn.experimental.paged_update_cache(keys, k_heads_1BKD, update_idxs_tensor=current_pos)
+            ttnn.experimental.paged_update_cache(values, v_heads_1BKD, update_idxs_tensor=current_pos)
             self.layer_past_list[i] = [keys, values]
 
-            ttnn.deallocate(k_heads)
-            ttnn.deallocate(v_heads)
-
-            # Reshape such that true unpadded batch is tracked in shape
-            q_heads_shape = q_heads.shape
-            q_heads = ttnn.reshape(
-                q_heads,
-                ttnn.Shape(
-                    (1, q_heads_shape[1], self.max_batch_size, q_heads_shape[3]),
-                    (1, q_heads_shape[1], 32, q_heads_shape[3]),
-                ),
-            )
+            ttnn.deallocate(k_heads_1BKD)
+            ttnn.deallocate(v_heads_1BKD)
 
             attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode_gqa(
                 q_heads_1BQD,
                 keys,
                 values,
-                current_pos_attn,
+                cur_pos_tensor=current_pos_attn,
+                transpose_q=False,
                 scale=self.scale,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],

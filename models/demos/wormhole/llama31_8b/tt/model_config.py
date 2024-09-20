@@ -35,9 +35,11 @@ class TtModelArgs:
     sliding_window = 8192 * 4
 
     # Default folder location for weights and cached files
-    DEFAULT_CKPT_DIR = os.getenv("LLAMA_CKPT_DIR", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B/")
-    DEFAULT_TOKENIZER_PATH = os.getenv("LLAMA_TOKENIZER_PATH", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B/")
-    DEFAULT_CACHE_PATH = os.getenv("LLAMA_CACHE_PATH", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B/")
+    DEFAULT_CKPT_DIR = os.getenv("LLAMA_CKPT_DIR", "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/")
+    DEFAULT_TOKENIZER_PATH = os.getenv(
+        "LLAMA_TOKENIZER_PATH", "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/"
+    )
+    DEFAULT_CACHE_PATH = os.getenv("LLAMA_CACHE_PATH", "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/")
 
     OP_KEYS = (
         # Embedding
@@ -377,6 +379,10 @@ class TtModelArgs:
                 fp32_dest_acc_en=False,
                 packer_l1_acc=False,
             )
+            self.model_config["HEIGHT_SHARDED_MEMCFG"] = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1
+            )
+
             # Useful core grid based on batch size
             if self.max_batch_size == 32:
                 core_grid_by_batch = ttnn.CoreGrid(y=4, x=8)
@@ -392,6 +398,18 @@ class TtModelArgs:
                 core_grid_by_batch = ttnn.CoreGrid(y=1, x=1)
             else:
                 raise ValueError(f"Batch size {self.max_batch_size} not supported")
+            if self.max_batch_size == 32:
+                grid_by_batch = (8, 4)
+            elif self.max_batch_size == 16:
+                grid_by_batch = (8, 2)
+            elif self.max_batch_size == 8:
+                grid_by_batch = (8, 1)
+            elif self.max_batch_size == 4:
+                grid_by_batch = (4, 1)
+            elif self.max_batch_size == 2:
+                grid_by_batch = (2, 1)
+            elif self.max_batch_size == 1:
+                grid_by_batch = (1, 1)
 
             self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32, 128),
@@ -399,6 +417,14 @@ class TtModelArgs:
                 strategy=ttnn.ShardStrategy.HEIGHT,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
+            )
+            self.model_config["ROT_MAT_BMM_PROGCFG"] = ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=grid_by_batch,
+                in0_block_w=4,
+                out_subblock_h=1,
+                out_subblock_w=4,
+                per_core_M=1,
+                per_core_N=4,
             )
 
     def weight_cache_path(self, dtype):

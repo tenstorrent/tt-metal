@@ -162,7 +162,7 @@ def get_rotation_mat(dhead, end, start_pos, seqlen, batch):
     return rot_emb
 
 
-def prepare_inputs_ttnn(x, current_pos, hidden_size, sliding_window, device):
+def prepare_inputs_ttnn(x, hidden_size, device):
     """
     Prepare inputs for decode mode. Assume that current token is at
     start_pos, and KV cache has valid data up to start_pos.
@@ -197,8 +197,6 @@ def prepare_inputs_ttnn(x, current_pos, hidden_size, sliding_window, device):
         x = ttnn.permute(x, (1, 2, 0, 3))  # [seq_len, 1, batch, hidden_dim]
     elif len(x.shape) == 4:
         pass  # already in [seq_len, 1, batch, hidden_dim]
-
-    current = current_pos % sliding_window
 
     # expected shapes:
     # x: (seq_len, 1, batch, hidden_dim)
@@ -328,19 +326,6 @@ def prepare_inputs_ttnn_prefill(x_bsh, device):
 
     x_1BSH = x_bsh.unsqueeze(0)
 
-    # Attention mask
-    attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
-    attn_mask_torch = torch.triu(attn_mask, diagonal=1)
-    attn_mask = attn_mask_torch.view(1, 1, seq_len, seq_len).expand(8, 1, seq_len, seq_len)
-
-    attn_mask = ttnn.from_torch(
-        attn_mask,
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
     # input goes to L1
     xs_1BSH = ttnn.from_torch(
         x_1BSH,
@@ -349,7 +334,7 @@ def prepare_inputs_ttnn_prefill(x_bsh, device):
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    return xs_1BSH, attn_mask, attn_mask_torch
+    return xs_1BSH
 
 
 def get_single_rot_mat(dhead, device, start_pos=0, theta: float = 500000.0, use_scaled=True):
