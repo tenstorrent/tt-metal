@@ -122,15 +122,23 @@ void bind_binary_backward_int_default(py::module& module, const binary_backward_
                const ttnn::Tensor& input_tensor_a,
                const ttnn::Tensor& input_tensor_b,
                int parameter,
-               const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
-                return self(grad_tensor, input_tensor_a, input_tensor_b, parameter, memory_config);
+               const std::vector<bool>& are_required_outputs,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& input_grad,
+               const std::optional<ttnn::Tensor>& other_grad,
+               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>>  {
+                return self(grad_tensor, input_tensor_a, input_tensor_b, parameter, are_required_outputs, memory_config, input_grad, other_grad);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::arg(parameter_name.c_str()) = parameter_value,
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt}
+            py::arg("are_required_outputs") = std::vector<bool>{true, true},
+            py::arg("memory_config") = std::nullopt,
+            py::arg("input_a_grad") = std::nullopt,
+            py::arg("input_b_grad") = std::nullopt,
+            py::arg("queue_id") = ttnn::DefaultQueueId}
     );
 }
 
