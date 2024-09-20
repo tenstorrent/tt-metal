@@ -130,11 +130,12 @@ inline void debug_sanitize_post_noc_addr_and_hang(
         v[noc_id].invalid = invalid;
     }
 
-    // Update launch msg to show that we've exited.
+#if defined(COMPILE_FOR_ERISC)
+    // Update launch msg to show that we've exited. This is required so that the next run doesn't think there's a kernel
+    // still running and try to make it exit.
     tt_l1_ptr launch_msg_t *launch_msg = GET_MAILBOX_ADDRESS_DEV(launch);
     launch_msg->go.run = RUN_MSG_DONE;
 
-#if defined(COMPILE_FOR_ERISC)
     // For erisc, we can't hang the kernel/fw, because the core doesn't get restarted when a new
     // kernel is written. In this case we'll do an early exit back to base FW.
     internal_::disable_erisc_app();
