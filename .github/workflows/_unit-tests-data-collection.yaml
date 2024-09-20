@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - "main"
+      - "rkim/12885-data-tests"
 
 jobs:
   build-and-test-data-collection:
