@@ -76,12 +76,11 @@ runs:
         run: |
           cp -r /github_workspace/* /usr/app/
           cd /usr/app/
-          mkdir -p generated
+          cp -r /github_generated generated/
           rm -rf tt_metal tt_eager
           ${{ inputs.run_args }}
           cp -r generated/* /github_generated
           ls -hal /github_generated
-          kasdhjfjkashfjkashfjkasdhf
     - name: Delete in case generated files that were copied so that we don't have permissions issues
       if: ${{ always() }}
       shell: bash
