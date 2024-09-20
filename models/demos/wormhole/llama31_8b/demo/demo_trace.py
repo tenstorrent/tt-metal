@@ -287,18 +287,16 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
         op_event = ttnn.create_event(device)
         write_event = ttnn.create_event(device)
 
-        current_pos = ttnn.from_torch(
-            torch.tensor(decoding_pos, dtype=torch.int32) - 2, device=device, dtype=ttnn.int32
-        )
+        current_pos = ttnn.from_torch(torch.tensor(decoding_pos, dtype=torch.int32), device=device, dtype=ttnn.int32)
         current_pos_attn = ttnn.from_torch(
-            torch.tensor(decoding_pos * 8, dtype=torch.int32) - 2, device=device, dtype=ttnn.int32
+            torch.tensor(decoding_pos * 8, dtype=torch.int32), device=device, dtype=ttnn.int32
         )
 
         # Compile
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
         tt_out = tt_model(decode_input, current_pos, current_pos_attn, rot_mat=current_rot_mat)
         tt_out_rm = ttnn.untilize(tt_out, use_multicore=True)
-        tt_out_tok_rm = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True)
+        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
         new_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         current_rot_mat = ttnn.copy(new_rot_mat, current_rot_mat)
         ttnn.plus_one(current_pos)
@@ -310,13 +308,24 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
         tt_out = tt_model(decode_input, current_pos, current_pos_attn, rot_mat=current_rot_mat)
         tt_out_rm = ttnn.untilize(tt_out, use_multicore=True)
-        tt_out_tok_rm = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True)
+        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
         new_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         current_rot_mat = ttnn.copy(new_rot_mat, current_rot_mat)
         ttnn.plus_one(current_pos)
         ttnn.plus_one(current_pos_attn)
 
         ttnn.end_trace_capture(device, trace_id, cq_id=0)
+
+        current_pos_reset = ttnn.from_torch(torch.tensor(decoding_pos, dtype=torch.int32), dtype=ttnn.int32)
+        current_pos_attn_reset = ttnn.from_torch(torch.tensor(decoding_pos * 8, dtype=torch.int32), dtype=ttnn.int32)
+        tt_out_tok_reset = ttnn.from_torch(
+            torch.nn.functional.pad(pt_out_batched.unsqueeze(0).unsqueeze(0).unsqueeze(0), (0, 31), "constant", 0),
+            dtype=ttnn.uint32,
+        )
+
+        ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos)
+        ttnn.copy_host_to_device_tensor(current_pos_attn_reset, current_pos_attn)
+        ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
 
         # Start decoding
         iteration = 0
@@ -334,7 +343,8 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
 
             # Write to host
             ttnn.wait_for_event(1, op_event)
-            tt_output_torch = ttnn.to_torch(tt_out_tok.cpu(blocking=False, cq_id=1))[0, 0, 0, :batch_size]
+            tt_output_torch = ttnn.to_torch(tt_out_tok.cpu(blocking=True, cq_id=1))[0, 0, 0, :batch_size]
+            print(tt_output_torch)
             ttnn.record_event(1, write_event)
 
             # Save output token to print out later

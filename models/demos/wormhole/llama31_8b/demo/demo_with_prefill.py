@@ -14,7 +14,6 @@ from models.demos.wormhole.llama31_8b.tt.llama_common import (
     prepare_inputs_ttnn,
     sample,
     get_single_rot_mat,
-    cache_attention,
     get_prefill_rot_mat,
     prepare_inputs_ttnn_prefill,
     get_rot_transformation_mat,
@@ -197,9 +196,6 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
         start_pos=0,
     )
     logger.info(f"caching attention for {prefill_seq_len} prefill tokens + {max_generated_tokens} generated tokens")
-    profiler.start("cache_attention")
-    cache_attention(device, state_dict, model_args, current_rot_mat, dtype, prefill_seq_len + max_generated_tokens)
-    profiler.end("cache_attention")
 
     # Load TTNN Llama3.1 model
     logger.info("Loading weights to device...")
@@ -211,8 +207,6 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         layers=list(range(model_args.n_layers)),
-        rot_mat=rot_emb_matrix_list,
-        start_pos=generation_start_pos,
     )
     tt_embd = TtLlamaEmbedding(
         device=device,
@@ -276,14 +270,14 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
             for batch_id in range(batch_size):
                 if batch_id == 0:  # First user prefill also accounts for compile time
                     profiler.start(f"compile_prefill", iteration=batch_idx)
-                prefill_input, attn_mask, _ = prepare_inputs_ttnn_prefill(
+                prefill_input = prepare_inputs_ttnn_prefill(
                     pt_prefill_input[batch_id],
                     device,
                 )
                 tt_out = tt_model(
                     prefill_input,
                     0,  # Current position
-                    attn_mask,
+                    None,
                     rot_mats_prefill,
                     transformation_mats,
                     user_id=batch_id,
@@ -295,14 +289,14 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
             # Do another prefill run if batch_size == 1, to correctly measure inference prefill time
             if batch_size == 1:
                 for batch_id in range(batch_size):
-                    prefill_input, attn_mask, _ = prepare_inputs_ttnn_prefill(
+                    prefill_input = prepare_inputs_ttnn_prefill(
                         pt_prefill_input[batch_id],
                         device,
                     )
                     tt_out = tt_model(
                         prefill_input,
                         0,  # Current position
-                        attn_mask,
+                        0,
                         rot_mats_prefill,
                         transformation_mats,
                         user_id=batch_id,
@@ -346,20 +340,23 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
                 current_pos = curr_pos
                 decode_input = pt_encoded_input
             else:
-                decode_input, current_pos = prepare_inputs_ttnn(
+                decode_input = prepare_inputs_ttnn(
                     pt_encoded_input,
-                    curr_pos,
                     model_args.dim,
-                    model_args.sliding_window,
                     tt_model.device,
                 )
+            current_pos_tensor = ttnn.from_torch(torch.tensor([curr_pos] * batch_size), device=device, dtype=ttnn.int32)
+            current_pos_attn_tensor = ttnn.from_torch(
+                torch.tensor([curr_pos] * batch_size * 8), device=device, dtype=ttnn.int32
+            )
+
             profiler.end(f"prepare_input_decode", iteration=batch_idx)
 
             profiler.start(f"decode_and_argmax", iteration=batch_idx)
             # Run ttnn llama3.1 model
-            tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
+            tt_out = tt_model(decode_input, current_pos_tensor, current_pos_attn_tensor, rot_mat=current_rot_mat)
             tt_out = ttnn.untilize(
-                tt_out, use_multicore=False
+                tt_out, use_multicore=True
             )  # multi-core OOMs (https://github.com/tenstorrent/tt-metal/issues/9022)
             tt_output_torch = (
                 ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[:batch_size, :, :]
@@ -518,7 +515,6 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
         "weight_loading": profiler.get_duration("weight_loading"),
         "preprocess_prefill_inputs": profiler.get_duration("preprocess_prefill_inputs"),
         "loading_weights_to_device": profiler.get_duration("loading_weights_to_device"),
-        "cache_attention": profiler.get_duration("cache_attention"),
         "prepare_rot_mat_for_prefill": profiler.get_duration("prepare_rot_mat_for_prefill"),
         "prepare_input_decode": profiler.get_duration("prepare_input_decode"),
         "decode_and_argmax": profiler.get_duration("decode_and_argmax"),

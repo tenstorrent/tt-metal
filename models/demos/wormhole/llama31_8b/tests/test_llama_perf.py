@@ -81,8 +81,6 @@ def test_llama_model_perf(
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         layers=list(range(model_args.n_layers)),
-        rot_mat=None,
-        start_pos=generation_start_pos,
     )
     # Load TTNN embedding module
     tt_embd = TtLlamaEmbedding(
@@ -144,23 +142,24 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
         current_pos = generation_start_pos + i
         pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
         tt_decode_input = pt_decode_input
-        decode_input, pos = prepare_inputs_ttnn(
+        decode_input = prepare_inputs_ttnn(
             tt_decode_input,
-            current_pos,
             tt_model.args.dim,
-            tt_model.args.sliding_window,
             tt_model.device,
+        )
+
+        current_pos_tensor = ttnn.from_torch(torch.tensor([current_pos] * batch), device=device, dtype=ttnn.int32)
+        current_pos_attn_tensor = ttnn.from_torch(
+            torch.tensor([current_pos] * batch * 8), device=device, dtype=ttnn.int32
         )
 
         # Run TT model
         profiler.start(f"model_run_for_inference_{i}")
-        tt_out = tt_model(decode_input, pos, rot_mat=current_rot_mat)
+        tt_out = tt_model(decode_input, current_pos_tensor, current_pos_attn_tensor, rot_mat=current_rot_mat)
 
         # Convert ttnn tensor to torch tensor
         profiler.start(f"result_wait_for_inference_{i}")
-        tt_out = ttnn.untilize(
-            tt_out, use_multicore=False
-        )  # multi-core OOMs (https://github.com/tenstorrent/tt-metal/issues/9022)
+        tt_out = ttnn.untilize(tt_out, use_multicore=True)
         tt_output_torch = ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
 
         profiler.end(f"model_run_for_inference_{i}")

@@ -209,10 +209,7 @@ def prepare_inputs_ttnn(x, hidden_size, device):
         x = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     else:  # Convert the row major layout from embedding back to tile layout
         x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
-    return (
-        x,
-        current,
-    )
+    return x
 
 
 # Sample logits from a distribution
