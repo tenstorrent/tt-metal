@@ -7,6 +7,7 @@ from typing import List
 import torch
 import ttnn
 from ttnn import ShardTensorToMesh
+from models.utility_functions import nearest_32
 
 
 class TtLlamaMLP_optimized:
@@ -48,9 +49,9 @@ class TtLlamaMLP_optimized:
         w2_str = f"{self.layer_name}.feed_forward.w2.weight"
         w3_str = f"{self.layer_name}.feed_forward.w3.weight"
 
-        w1_dram_shard_str = f"{self.layer_name}.feed_forward.w1_dram_shard.weight"
-        w2_dram_shard_str = f"{self.layer_name}.feed_forward.w2_dram_shard_reduce.weight"
-        w3_dram_shard_str = f"{self.layer_name}.feed_forward.w3_dram_shard.weight"
+        w1_dram_shard_str = f"{self.layer_name}.feed_forward.w1_dram_shard_unpad.weight"
+        w2_dram_shard_str = f"{self.layer_name}.feed_forward.w2_dram_shard_reduce_unpad.weight"
+        w3_dram_shard_str = f"{self.layer_name}.feed_forward.w3_dram_shard_unpad.weight"
 
         w1_dtype = ttnn.bfloat4_b
         w2_dtype = ttnn.bfloat8_b
@@ -59,17 +60,13 @@ class TtLlamaMLP_optimized:
         padded_w1 = None
         padded_w2 = None
         padded_w3 = None
+        # Do padding
+        H = 8 * 1024
+        H4 = 28 * 1024
         if not self.read_cache:
-            # Do padding
-            H = 8 * 1024
-            PADDED_H4 = 32 * 1024
-            H4 = 28 * 1024
-            padded_w1 = torch.zeros(1, 1, H, PADDED_H4)
-            padded_w2 = torch.zeros(1, 1, PADDED_H4, H)
-            padded_w3 = torch.zeros(1, 1, H, PADDED_H4)
-            padded_w1[:, :, :, :H4] = self.state_dict[w1_str].transpose(-2, -1)
-            padded_w2[:, :, :H4, :] = self.state_dict[w2_str].transpose(-2, -1)
-            padded_w3[:, :, :, :H4] = self.state_dict[w3_str].transpose(-2, -1)
+            padded_w1 = self.state_dict[w1_str].transpose(-2, -1).view(1, 1, H, H4)
+            padded_w2 = self.state_dict[w2_str].transpose(-2, -1).view(1, 1, H4, H)
+            padded_w3 = self.state_dict[w3_str].transpose(-2, -1).view(1, 1, H, H4)
 
         # w1: 8k x 4k. width-sharded on 12 banks, 4224 over 12 banks.
         device = self.mesh_device.get_device(0)
@@ -82,7 +79,7 @@ class TtLlamaMLP_optimized:
             }
         )
 
-        w3_shard_shape = (8192, 4224 // 12)  # padded cols to divide by 12
+        w3_shard_shape = (H, nearest_32(H4 // self.model_config["NUM_DEVICES"] // 12))  # padded cols to divide by 12
         w3_shard_spec = ttnn.ShardSpec(weight_grid, w3_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
         w3_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, w3_shard_spec)
 
@@ -96,7 +93,10 @@ class TtLlamaMLP_optimized:
             cache_file_name=self.cache_path / w1_dram_shard_str,
         )
 
-        w2_shard_shape = (4096, 8448 // 12)  # expand dim is 32k / 8 chips padded
+        w2_shard_shape = (
+            H4 // self.model_config["NUM_DEVICES"],
+            nearest_32(H // 12),
+        )  # expand dim is 32k / 8 chips padded
         w2_shard_spec = ttnn.ShardSpec(weight_grid, w2_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
         w2_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
         self.w2 = ttnn.as_tensor(
@@ -201,8 +201,6 @@ class TtLlamaMLP_optimized:
         return hidden_states_reduced
 
     def decode_forward(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
-        hidden_states = []
-
         w1_out = ttnn.matmul(
             x,
             self.w1,
@@ -244,7 +242,7 @@ class TtLlamaMLP_optimized:
             scatter_dim=3,
             math_op=ttnn.ReduceType.Sum,
             num_links=1,
-            memory_config=self.model_config["RESIDUAL_ADD_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["RESIDUAL_16_CORES_OUTPUT_MEMCFG"],
         )
         hidden_states.deallocate(True)
         return hidden_states_reduced
