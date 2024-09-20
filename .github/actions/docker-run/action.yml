@@ -62,12 +62,12 @@ runs:
         options: |
           --rm
           -v ${{ github.workspace }}:/github_workspace:ro
-          -v ${{ github.workspace }}/generated:/github_generated
+          # -v ${{ github.workspace }}/generated:/github_generated
           --net=host
           ${{ inputs.docker_opts }}
           -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
-          -e HOST_UID=$UID
-          -e HOST_GID=$GID
+          -e HOST_UID=$(echo $UID)
+          -e HOST_GID=$(echo $GID)
           -e PYTHONPATH=/usr/app
           ${{ inputs.device }}
         run: |
@@ -77,6 +77,7 @@ runs:
           rm -rf tt_metal tt_eager
           ${{ inputs.run_args }}
           chmod ugo+rwx -R generated
-          chmod  -R $HOST_UID:$HOST_GID /generated
-          cp -r generated/* /github_generated
-          ls -hal /github_generated
+          chmod  -R $HOST_UID:$HOST_GID generated
+          # cp -r generated/* /github_generated
+          ls -hal generated
+          # ls -hal /github_generated
