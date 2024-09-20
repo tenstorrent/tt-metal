@@ -22,6 +22,7 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
+using namespace tt::test_utils;
 using namespace constants;
 
 namespace unit_tests::compute::reduce {
@@ -29,23 +30,59 @@ namespace unit_tests::compute::reduce {
 enum ReduceDim : uint8_t {
     H = 0,
     W = 1,
-    HW =2
+    HW = 2
 };
 
+enum ReduceType : uint8_t {
+    SUM = 0,
+    AVG = 1,
+    MAX = 2
+};
 struct ReduceConfig {
     bool short_init = false;
     std::vector<uint32_t> shape;
     ReduceDim reduce_dim;
-    bool do_max;
+    ReduceType reduce_type = ReduceType::SUM;
     float data_gen_rand_max;
     int data_gen_seed;
     float data_gen_offset;
     float atol;
     float rtol;
-    std::function<std::vector<uint16_t>(const std::vector<uint16_t>&, const std::vector<uint32_t>&, float, bool, bool)> golden_function;
+    std::function<std::vector<uint16_t>(const std::vector<uint16_t>&, const std::vector<uint32_t>&, float, uint8_t, bool)> golden_function;
     std::vector<uint32_t> result_shape;
     bool math_only_reduce = false;
+    bool fp32_dest_acc_en = false;
+    MathFidelity math_fidelity = MathFidelity::HiFi4;
 };
+
+float get_scaler(const ReduceConfig &test_config) {
+    uint32_t H = test_config.shape[2];
+    uint32_t W = test_config.shape[3];
+    // If PoolType is MAX or SUM, then the operation is determined by PoolType,
+    // but the scaler is 1
+    if (test_config.reduce_type != ReduceType::AVG) {
+        return 1.0f;
+    } else {
+        // If PoolType is AVG, the scaler depends on PoolDim, but the op is SUM
+        switch (test_config.reduce_dim) {
+            case ReduceDim::H:  return (1.0f / H);
+            case ReduceDim::W:  return (1.0f / W);
+            case ReduceDim::HW: return (1.0f / (H * W));
+            default: { TT_THROW("Unsupported ReduceDim={}", test_config.reduce_dim); break; }
+        }
+    }
+}
+
+void set_math_fid_masks_binary(uint16_t &srca_fid_mask, uint16_t &srcb_fid_mask, MathFidelity math_fidelity = MathFidelity::HiFi4) {
+    auto arch = get_arch_from_string(get_env_arch_name());
+    switch (math_fidelity) {
+        case MathFidelity::HiFi4:
+        case MathFidelity::HiFi3: { break; }
+        case MathFidelity::HiFi2: { srcb_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE;; break; }
+        case MathFidelity::LoFi: { srca_fid_mask = 0xFFF8; srcb_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE; break; }
+        default: { TT_THROW("Unsupported MathFidelity={}", math_fidelity); break; }
+    }
+}
 
 void add_reader_writer_kernels(tt_metal::Program &program, const CoreCoord &logical_core, const ReduceConfig &test_config, std::shared_ptr<tt_metal::Buffer> src_dram_buffer, std::shared_ptr<tt_metal::Buffer> dst_dram_buffer) {
     uint32_t W = test_config.shape[3], H = test_config.shape[2], NC = test_config.shape[1]*test_config.shape[0];
@@ -54,8 +91,7 @@ void add_reader_writer_kernels(tt_metal::Program &program, const CoreCoord &logi
     uint32_t Wt = W/TILE_WIDTH;
     uint32_t Ht = H/TILE_HEIGHT;
     uint32_t num_tensor_tiles = NC*H*W / (TILE_WIDTH*TILE_HEIGHT);
-    float scaler = (test_config.do_max or test_config.reduce_dim == ReduceDim::HW) ? 1.0f : (test_config.reduce_dim == ReduceDim::H ? 1.0f/H : 1.0f/W);
-
+    float scaler = get_scaler(test_config);
     switch (test_config.reduce_dim) {
         case ReduceDim::H: {
             bfloat16 bfloat_scaler_value = bfloat16(scaler);
@@ -100,8 +136,8 @@ void add_reader_writer_kernels(tt_metal::Program &program, const CoreCoord &logi
 
             break;
         }
-        case ReduceDim::W:
-        case ReduceDim::HW: {
+        case ReduceDim::HW: {scaler = sqrt(scaler);} // Needed because AVG pool multiplies twice by the scaler
+        case ReduceDim::W: {
             auto unary_reader_kernel = tt_metal::CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_reduce.cpp",
@@ -193,7 +229,8 @@ void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig
             TT_THROW("Unsupported reduce dim!");
     }
 
-    float scaler = (test_config.do_max or test_config.reduce_dim == ReduceDim::HW) ? 1.0f : (test_config.reduce_dim == ReduceDim::H ? 1.0f/H : 1.0f/W);
+    float scaler = get_scaler(test_config);
+
     uint32_t num_tensor_tiles = NC*H*W / (TILE_WIDTH*TILE_HEIGHT);
     uint32_t divisor = test_config.reduce_dim == ReduceDim::W ? Wt : Ht;
     TT_FATAL(num_tensor_tiles%divisor == 0, "Error");
@@ -256,20 +293,19 @@ void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig
     };
 
     std::map<string, string> reduce_defines = {
-        {"REDUCE_OP", test_config.do_max ? "PoolType::MAX" : "PoolType::SUM"},
         {"REDUCE_DIM", get_reduce_dim_define_string(test_config.reduce_dim)}
     };
-
+    switch (test_config.reduce_type) {
+        case ReduceType::SUM: {reduce_defines["REDUCE_OP"] = "PoolType::SUM"; break;}
+        case ReduceType::AVG: {reduce_defines["REDUCE_OP"] = "PoolType::AVG"; break;}
+        case ReduceType::MAX: {reduce_defines["REDUCE_OP"] = "PoolType::MAX"; break;}
+    }
     if (test_config.short_init)
     {
         reduce_defines["SHORT_INIT"] = "1";
     }
-
-    if (test_config.math_only_reduce) {
-        reduce_defines["MATH_ONLY"] = "1";
-    } else {
-        reduce_defines["MATH_ONLY"] = "0";
-    }
+    reduce_defines["MATH_ONLY"] = test_config.math_only_reduce ? "1" : "0";
+    reduce_defines["DST_ACCUM_MODE"] = test_config.fp32_dest_acc_en ? "1" : "0";
 
     std::string compute_kernel_name = get_compute_kernel_name(test_config.reduce_dim);
 
@@ -277,8 +313,10 @@ void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig
         program,
         compute_kernel_name,
         core,
-        tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = reduce_defines}
-    );
+        tt_metal::ComputeConfig{.math_fidelity = test_config.math_fidelity,
+                                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                                .compile_args = compute_kernel_args,
+                                .defines = reduce_defines});
 
     auto seed = std::chrono::system_clock::now().time_since_epoch().count();
 
@@ -298,20 +336,30 @@ void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig
     auto comparison_function = [&](float a, float b) {
         float maxabs = fmaxf(fabsf(a), fabsf(b));
         float absdiff = fabsf(a - b);
-        auto result = (absdiff <= test_config.atol) || absdiff < test_config.rtol * maxabs;
+        auto result = (absdiff <= test_config.atol) || (absdiff <= test_config.rtol * maxabs);
         return result;
     };
 
-    // recover a linear view of input vector for consumption by gold_ function
     auto u16_src0_vec = u16_from_u32_vector(src_vec);
+    if (test_config.reduce_type == ReduceType::AVG) {
+        uint16_t srca_fid_mask = 0xFFFF;
+        uint16_t srcb_fid_mask = 0xFFFF;
+        set_math_fid_masks_binary(srca_fid_mask, srcb_fid_mask, test_config.math_fidelity);
+        uint32_t uint32_scaler = *reinterpret_cast<uint32_t*>(&scaler);
+        uint32_scaler &= (0xFFFFFFFF & (srcb_fid_mask << 16));
+        scaler = *reinterpret_cast<float*>(&uint32_scaler);
+        for (auto i = 0; i < u16_src0_vec.size(); i++) {
+            u16_src0_vec[i] = u16_src0_vec[i] & srca_fid_mask;
+        }
+    }
+    // recover a linear view of input vector for consumption by gold_ function
     std::vector<uint16_t> src_linear = convert_layout<uint16_t>(u16_src0_vec, test_config.shape, TensorLayout::TILED32_4FACES, TensorLayout::LIN_ROW_MAJOR);
-    std::vector<uint16_t> gold_reduced = test_config.golden_function(src_linear, test_config.shape, scaler, test_config.do_max ? true : false, true); // result is uint16_t untilized
+    std::vector<uint16_t> gold_reduced = test_config.golden_function(src_linear, test_config.shape, scaler, uint8_t(test_config.reduce_type), true); // result is uint16_t untilized
 
     // Tilize from row major and convert to pairs (uint32_t)
     auto gold_4f_u32 = u32_from_u16_vector(convert_layout<uint16_t>(gold_reduced, test_config.result_shape, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES));
 
     bool pass = packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);
-
     if (!pass)
         log_error(LogTest, "Failure position={}", argfail);
 
@@ -320,6 +368,8 @@ void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig
 
 } // namespace unit_tests::compute::reduce
 
+using namespace unit_tests::compute::reduce;
+
 TEST_F(DeviceFixture, ComputeReduceH) {
     if (this->arch_ != tt::ARCH::BLACKHOLE) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
@@ -327,81 +377,187 @@ TEST_F(DeviceFixture, ComputeReduceH) {
     }
     std::vector<uint32_t> shape = {1, 3, 19*TILE_HEIGHT, 17*TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], TILE_HEIGHT, shape[3]};
-    for (bool do_max : {false, true}) {
-        unit_tests::compute::reduce::ReduceConfig test_config = {
-            .shape = shape,
-            .reduce_dim = unit_tests::compute::reduce::ReduceDim::H,
-            .do_max = do_max,
-            .data_gen_rand_max = 10.0f,
-            .data_gen_seed = 0x1234,
-            .data_gen_offset = -4.5f,
-            .atol = 1e-2f,
-            .rtol = 0.06f,
-            .golden_function = unit_tests::compute::gold_reduce_h,
-            .result_shape = result_shape
-        };
-        unit_tests::compute::reduce::run_single_core_reduce_program(this->devices_.at(0), test_config);
+    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
+        // MathFidelity : {0, 2, 3, 4}; so skip value 1
+        if (math_fid == 1) continue;
+        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
+            for (bool fp32_dest_acc_en : {true, false}) {
+                log_info(LogTest, "MathFid = {}, ReduceType = {}, FP32DestAcc = {}", math_fid, reduce_type, fp32_dest_acc_en);
+                ReduceConfig test_config = {
+                    .shape = shape,
+                    .reduce_dim = ReduceDim::H,
+                    .reduce_type = ReduceType(reduce_type),
+                    .data_gen_rand_max = 10.0f,
+                    .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
+                    .data_gen_offset = -10.0f,
+                    .atol = 1e-2f,
+                    .rtol = 0.08f,
+                    .golden_function = unit_tests::compute::gold_reduce_h,
+                    .result_shape = result_shape,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .math_fidelity = MathFidelity(math_fid),
+                };
+                run_single_core_reduce_program(this->devices_.at(0), test_config);
+            }
+        }
     }
 }
 
 TEST_F(DeviceFixture, ComputeReduceW) {
     std::vector<uint32_t> shape = {1, 3, 17*TILE_HEIGHT, 19*TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
-    for (bool do_max : {false, true}) {
-        unit_tests::compute::reduce::ReduceConfig test_config = {
-            .shape = shape,
-            .reduce_dim = unit_tests::compute::reduce::ReduceDim::W,
-            .do_max = do_max,
-            .data_gen_rand_max = 1.0f,
-            .data_gen_seed = 0x1234,
-            .data_gen_offset = 0.0f,
-            .atol = 0.20f,
-            .rtol = 0.10f,
-            .golden_function = unit_tests::compute::gold_reduce_w,
-            .result_shape = result_shape
-        };
-        unit_tests::compute::reduce::run_single_core_reduce_program(this->devices_.at(0), test_config);
+    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
+        // MathFidelity : {0, 2, 3, 4}; so skip value 1
+        if (math_fid == 1) continue;
+        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
+            for (bool fp32_dest_acc_en : {true, false}) {
+                if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) continue;
+                log_info(LogTest, "MathFid = {}, ReduceType = {}, FP32DestAcc = {}", math_fid, reduce_type, fp32_dest_acc_en);
+                ReduceConfig test_config = {
+                    .shape = shape,
+                    .reduce_dim = ReduceDim::W,
+                    .reduce_type = ReduceType(reduce_type),
+                    .data_gen_rand_max = 10.0f,
+                    .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
+                    .data_gen_offset = -10.0f,
+                    .atol = 1e-2f,
+                    .rtol = 0.08f,
+                    .golden_function = unit_tests::compute::gold_reduce_w,
+                    .result_shape = result_shape,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .math_fidelity = MathFidelity(math_fid),
+                };
+                run_single_core_reduce_program(this->devices_.at(0), test_config);
+            }
+        }
     }
 }
 
 TEST_F(DeviceFixture, ComputeReduceHW) {
     std::vector<uint32_t> shape = {1, 2, 7*TILE_HEIGHT, 5*TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], 32, 32};
-    for (bool do_max : {false, true}) {
-        unit_tests::compute::reduce::ReduceConfig test_config = {
-            .shape = shape,
-            .reduce_dim = unit_tests::compute::reduce::ReduceDim::HW,
-            .do_max = do_max,
-            .data_gen_rand_max = 1.0f,
-            .data_gen_seed = 0x1234,
-            .data_gen_offset = -0.48f,
-            .atol = 1e-2f,
-            .rtol = 0.06f,
-            .golden_function = unit_tests::compute::gold_reduce_hw,
-            .result_shape = result_shape
-        };
-        unit_tests::compute::reduce::run_single_core_reduce_program(this->devices_.at(0), test_config);
+    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
+        // MathFidelity : {0, 2, 3, 4}; so skip value 1
+        if (math_fid == 1) continue;
+        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
+            for (bool fp32_dest_acc_en : {true, false}) {
+                // Currently fp32 dest unsupported with reduce scalar
+                if (fp32_dest_acc_en) continue;
+                log_info(LogTest, "MathFid = {}, ReduceType = {}, FP32DestAcc = {}", math_fid, reduce_type, fp32_dest_acc_en);
+                ReduceConfig test_config = {
+                    .shape = shape,
+                    .reduce_dim = ReduceDim::HW,
+                    .reduce_type = ReduceType(reduce_type),
+                    .data_gen_rand_max = 10.0f,
+                    .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
+                    .data_gen_offset = -10.0f,
+                    .atol = 1e-2f,
+                    .rtol = 0.08f,
+                    .golden_function = unit_tests::compute::gold_reduce_hw,
+                    .result_shape = result_shape,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .math_fidelity = MathFidelity(math_fid)
+                };
+                run_single_core_reduce_program(this->devices_.at(0), test_config);
+            }
+        }
+    }
+}
+
+TEST_F(DeviceFixture, ComputeReduceHMathOnly) {
+    if (this->arch_ != tt::ARCH::BLACKHOLE) {
+        // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
+        GTEST_SKIP();
+    }
+    std::vector<uint32_t> shape = {1, 3, 19*TILE_HEIGHT, 17*TILE_WIDTH};
+    std::vector<uint32_t> result_shape = {shape[0], shape[1], TILE_HEIGHT, shape[3]};
+    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
+        // MathFidelity : {0, 2, 3, 4}; so skip value 1
+        if (math_fid == 1) continue;
+        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
+            for (bool fp32_dest_acc_en : {true, false}) {
+                log_info(LogTest, "MathFid = {}, ReduceType = {}, FP32DestAcc = {}", math_fid, reduce_type, fp32_dest_acc_en);
+                ReduceConfig test_config = {
+                    .shape = shape,
+                    .reduce_dim = ReduceDim::H,
+                    .reduce_type = ReduceType(reduce_type),
+                    .data_gen_rand_max = 10.0f,
+                    .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
+                    .data_gen_offset = -10.0f,
+                    .atol = 1e-2f,
+                    .rtol = 0.08f,
+                    .golden_function = unit_tests::compute::gold_reduce_h,
+                    .result_shape = result_shape,
+                    .math_only_reduce = true,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .math_fidelity = MathFidelity(math_fid)
+                };
+                run_single_core_reduce_program(this->devices_.at(0), test_config);
+            }
+        }
     }
 }
 
 TEST_F(DeviceFixture, ComputeReduceWMathOnly) {
     std::vector<uint32_t> shape = {1, 3, 17*TILE_HEIGHT, 19*TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
-    for (bool do_max : {false, true}) {
-        unit_tests::compute::reduce::ReduceConfig test_config = {
-            .shape = shape,
-            .reduce_dim = unit_tests::compute::reduce::ReduceDim::W,
-            .do_max = do_max,
-            .data_gen_rand_max = 1.0f,
-            .data_gen_seed = 0x1234,
-            .data_gen_offset = 0.0f,
-            .atol = 0.20f,
-            .rtol = 0.10f,
-            .golden_function = unit_tests::compute::gold_reduce_w,
-            .result_shape = result_shape,
-            .math_only_reduce = true
-        };
-        unit_tests::compute::reduce::run_single_core_reduce_program(this->devices_.at(0), test_config);
+    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
+        // MathFidelity : {0, 2, 3, 4}; so skip value 1
+        if (math_fid == 1) continue;
+        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
+            for (bool fp32_dest_acc_en : {true, false}) {
+                if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) continue;
+                log_info(LogTest, "MathFid = {}, ReduceType = {}, FP32DestAcc = {}", math_fid, reduce_type, fp32_dest_acc_en);
+                ReduceConfig test_config = {
+                    .shape = shape,
+                    .reduce_dim = ReduceDim::W,
+                    .reduce_type = ReduceType(reduce_type),
+                    .data_gen_rand_max = 10.0f,
+                    .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
+                    .data_gen_offset = -10.0f,
+                    .atol = 1e-2f,
+                    .rtol = 0.08f,
+                    .golden_function = unit_tests::compute::gold_reduce_w,
+                    .result_shape = result_shape,
+                    .math_only_reduce = true,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .math_fidelity = MathFidelity(math_fid)
+                };
+                run_single_core_reduce_program(this->devices_.at(0), test_config);
+            }
+        }
+    }
+}
+
+TEST_F(DeviceFixture, ComputeReduceHWMathOnly) {
+    std::vector<uint32_t> shape = {1, 2, 7*TILE_HEIGHT, 5*TILE_WIDTH};
+    std::vector<uint32_t> result_shape = {shape[0], shape[1], 32, 32};
+    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
+        // MathFidelity : {0, 2, 3, 4}; so skip value 1
+        if (math_fid == 1) continue;
+        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
+            for (bool fp32_dest_acc_en : {true, false}) {
+                // Currently fp32 dest unsupported with reduce scalar
+                if (fp32_dest_acc_en) continue;
+                log_info(LogTest, "MathFid = {}, ReduceType = {}, FP32DestAcc = {}", math_fid, reduce_type, fp32_dest_acc_en);
+                ReduceConfig test_config = {
+                    .shape = shape,
+                    .reduce_dim = ReduceDim::HW,
+                    .reduce_type = ReduceType(reduce_type),
+                    .data_gen_rand_max = 10.0f,
+                    .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
+                    .data_gen_offset = -10.0f,
+                    .atol = 1e-2f,
+                    .rtol = 0.08f,
+                    .golden_function = unit_tests::compute::gold_reduce_hw,
+                    .result_shape = result_shape,
+                    .math_only_reduce = true,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .math_fidelity = MathFidelity(math_fid)
+                };
+                run_single_core_reduce_program(this->devices_.at(0), test_config);
+            }
+        }
     }
 }
 
@@ -412,62 +568,92 @@ TEST_F(DeviceFixture, ComputeReduceHShortInit) {
     }
     std::vector<uint32_t> shape = {1, 3, 19*TILE_HEIGHT, 17*TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], TILE_HEIGHT, shape[3]};
-    for (int do_max = 0; do_max <= 1; do_max++) {
-        unit_tests::compute::reduce::ReduceConfig test_config = {
-            .short_init = true,
-            .shape = shape,
-            .reduce_dim = unit_tests::compute::reduce::ReduceDim::H,
-            .do_max = do_max,
-            .data_gen_rand_max = 10.0f,
-            .data_gen_seed = 0x1234,
-            .data_gen_offset = -4.5f,
-            .atol = 1e-2f,
-            .rtol = 0.06f,
-            .golden_function = unit_tests::compute::gold_reduce_h,
-            .result_shape = result_shape
-        };
-        unit_tests::compute::reduce::run_single_core_reduce_program(this->devices_.at(0), test_config);
+    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
+        // MathFidelity : {0, 2, 3, 4}; so skip value 1
+        if (math_fid == 1) continue;
+        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
+            for (bool fp32_dest_acc_en : {true, false}) {
+                log_info(LogTest, "MathFid = {}, ReduceType = {}, FP32DestAcc = {}", math_fid, reduce_type, fp32_dest_acc_en);
+                ReduceConfig test_config = {
+                    .short_init = true,
+                    .shape = shape,
+                    .reduce_dim = ReduceDim::H,
+                    .reduce_type = ReduceType(reduce_type),
+                    .data_gen_rand_max = 10.0f,
+                    .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
+                    .data_gen_offset = -10.0f,
+                    .atol = 1e-2f,
+                    .rtol = 0.08f,
+                    .golden_function = unit_tests::compute::gold_reduce_h,
+                    .result_shape = result_shape,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .math_fidelity = MathFidelity(math_fid)
+                };
+                run_single_core_reduce_program(this->devices_.at(0), test_config);
+            }
+        }
     }
 }
 
 TEST_F(DeviceFixture, ComputeReduceWShortInit) {
     std::vector<uint32_t> shape = {1, 3, 17*TILE_HEIGHT, 19*TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
-    for (int do_max = 0; do_max <= 1; do_max++) {
-        unit_tests::compute::reduce::ReduceConfig test_config = {
-            .short_init = true,
-            .shape = shape,
-            .reduce_dim = unit_tests::compute::reduce::ReduceDim::W,
-            .do_max = do_max,
-            .data_gen_rand_max = 1.0f,
-            .data_gen_seed = 0x1234,
-            .data_gen_offset = 0.0f,
-            .atol = 0.20f,
-            .rtol = 0.10f,
-            .golden_function = unit_tests::compute::gold_reduce_w,
-            .result_shape = result_shape
-        };
-        unit_tests::compute::reduce::run_single_core_reduce_program(this->devices_.at(0), test_config);
+    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
+        // MathFidelity : {0, 2, 3, 4}; so skip value 1
+        if (math_fid == 1) continue;
+        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
+            for (bool fp32_dest_acc_en : {true, false}) {
+                if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) continue;
+                log_info(LogTest, "MathFid = {}, ReduceType = {}, FP32DestAcc = {}", math_fid, reduce_type, fp32_dest_acc_en);
+                ReduceConfig test_config = {
+                    .short_init = true,
+                    .shape = shape,
+                    .reduce_dim = ReduceDim::W,
+                    .reduce_type = ReduceType(reduce_type),
+                    .data_gen_rand_max = 10.0f,
+                    .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
+                    .data_gen_offset = -10.0f,
+                    .atol = 1e-2f,
+                    .rtol = 0.08f,
+                    .golden_function = unit_tests::compute::gold_reduce_w,
+                    .result_shape = result_shape,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .math_fidelity = MathFidelity(math_fid)
+                };
+                run_single_core_reduce_program(this->devices_.at(0), test_config);
+            }
+        }
     }
 }
 
 TEST_F(DeviceFixture, ComputeReduceHWShortInit) {
     std::vector<uint32_t> shape = {1, 2, 7*TILE_HEIGHT, 5*TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], 32, 32};
-    for (int do_max = 0; do_max <= 1; do_max++) {
-        unit_tests::compute::reduce::ReduceConfig test_config = {
-            .short_init = true,
-            .shape = shape,
-            .reduce_dim = unit_tests::compute::reduce::ReduceDim::HW,
-            .do_max = do_max,
-            .data_gen_rand_max = 1.0f,
-            .data_gen_seed = 0x1234,
-            .data_gen_offset = -0.48f,
-            .atol = 1e-2f,
-            .rtol = 0.06f,
-            .golden_function = unit_tests::compute::gold_reduce_hw,
-            .result_shape = result_shape
-        };
-        unit_tests::compute::reduce::run_single_core_reduce_program(this->devices_.at(0), test_config);
+    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
+        // MathFidelity : {0, 2, 3, 4}; so skip value 1
+        if (math_fid == 1) continue;
+        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
+            for (bool fp32_dest_acc_en : {true, false}) {
+                // Currently fp32 dest unsupported with reduce scalar
+                if (fp32_dest_acc_en) continue;
+                log_info(LogTest, "MathFid = {}, ReduceType = {}, FP32DestAcc = {}", math_fid, reduce_type, fp32_dest_acc_en);
+                ReduceConfig test_config = {
+                    .short_init = true,
+                    .shape = shape,
+                    .reduce_dim = ReduceDim::HW,
+                    .reduce_type = ReduceType(reduce_type),
+                    .data_gen_rand_max = 10.0f,
+                    .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
+                    .data_gen_offset = -10.0f,
+                    .atol = 1e-2f,
+                    .rtol = 0.08f,
+                    .golden_function = unit_tests::compute::gold_reduce_hw,
+                    .result_shape = result_shape,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .math_fidelity = MathFidelity(math_fid)
+                };
+                run_single_core_reduce_program(this->devices_.at(0), test_config);
+            }
+        }
     }
 }

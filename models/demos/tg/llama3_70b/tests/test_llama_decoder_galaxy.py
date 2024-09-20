@@ -102,14 +102,14 @@ class PytorchLlamaDecoderModel(torch.nn.Module):
         return result
 
 
-def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
+def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode):
     assert len(x.size()) == 3
     batch, seq_len, hidden_size = x.shape
 
     cache_name = lambda name: llama_decoder_model.cache_path / (
         f"{'llama3_' if llama_decoder_model.llama3 else ''}{name}"
     )
-    if llama_decoder_model.model_config["LLM_MODE"] == "decode":
+    if mode == "decode":
         assert seq_len == 1, "Only supporting decode mode"
         x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
 
@@ -162,7 +162,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
 
         attn_masks = None
 
-    elif llama_decoder_model.model_config["LLM_MODE"] == "prefill":
+    elif mode == "prefill":
         x = x.unsqueeze(1)  # [batch, seq_len, hidden_dim] -> [batch, 1, seq_len, hidden_dim]
 
         xs = ttnn.from_torch(
@@ -286,8 +286,10 @@ def run_test_LlamaDecoder_inference(
         cache_path=cache_path,
     )
 
+    mode = "decode" if seq_len == 1 else "prefill"
+
     all_tests_pass, all_pccs = True, []
-    if model_config["LLM_MODE"] == "prefill":
+    if mode == "prefill":
         generation_start_pos = 0
         generation_length = 1
     else:
@@ -301,7 +303,7 @@ def run_test_LlamaDecoder_inference(
         start_pos = generation_start_pos + i
 
         # PyTorch output --------------------------------------------------------------------
-        if model_config["LLM_MODE"] == "prefill":
+        if mode == "prefill":
             x_input, start_pos, freqs_cis, attn_mask = pytorch_LlamaDecoder_model.prepare_inputs_prefill(
                 pt_inp, start_pos
             )
@@ -317,15 +319,10 @@ def run_test_LlamaDecoder_inference(
 
         # TT hardware execution -------------------------------------------------------------
         x_input, start_pos, rot_mat, attn_mask = tt_llama_decoder_prepare_inputs(
-            tt_LlamaDecoder_model, tt_input, start_pos
+            tt_LlamaDecoder_model, tt_input, start_pos, mode=mode
         )
 
-        tt_out = tt_LlamaDecoder_model(
-            x_input,
-            rot_mat,
-            start_pos,
-            attn_mask,
-        )
+        tt_out = tt_LlamaDecoder_model(x_input, rot_mat, start_pos, attn_mask, mode=mode)
 
         tt_out = ttnn.to_torch(
             tt_out, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(3, 1), cluster_shape=cluster_shape)
@@ -374,7 +371,7 @@ def run_test_LlamaDecoder_inference(
         generation_start_pos,
         generation_length,
         seq_len,
-        model_config["LLM_MODE"] == "prefill",
+        mode == "prefill",
         pcc,
     )
     all_tests_pass = all_tests_pass and cache_test_pass
@@ -439,8 +436,6 @@ def test_LlamaDecoder_inference(
 
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,
-        batch=batch,
-        seq_len=seq_len,
         max_batch_size=max_batch_size,
         max_context_len=max_context_len,
     )

@@ -28,6 +28,8 @@
 #include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial_pybind.hpp"
 #include "ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial_pybind.hpp"
 #include "ttnn/operations/data_movement/reshape/reshape_pybind.hpp"
+#include "ttnn/operations/data_movement/unsqueeze/unsqueeze_pybind.hpp"
+#include "ttnn/operations/data_movement/squeeze/squeeze_pybind.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded_pybind.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved_pybind.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/reshard_pybind.hpp"
@@ -61,6 +63,8 @@ void py_module(py::module& module) {
     bind_fill_rm(module);
     py_bind_repeat(module);
     py_bind_reshape(module);
+    py_bind_unsqueeze(module);
+    py_bind_squeeze(module);
     detail::bind_indexed_fill(module);
     bind_fold_operation(module);
     py_bind_sharded_to_interleaved_partial(module);

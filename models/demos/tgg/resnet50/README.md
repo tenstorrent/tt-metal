@@ -15,6 +15,9 @@ ResNet50 is a deep convolutional neural network architecture with 50 layers, des
 
 ### TGG
 #### End-to-End Performance
-+ For end-to-end performance, run `pytest models/demos/tgg/resnet50/tests/test_perf_e2e_resnet.py::test_perf_trace`.
++ For end-to-end performance, run
+```python
+  pytest models/demos/tgg/resnet50/tests/test_perf_e2e_resnet.py::test_perf_trace`
+```
 + This will generate a CSV with the timings and throughputs.
 + **Expected end-to-end perf**: For batch = 16 per device, or batch 1024 in total, it is about `122,800 fps` currently. This may vary machine to machine.

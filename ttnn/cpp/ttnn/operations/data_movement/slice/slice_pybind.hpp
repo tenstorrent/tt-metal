@@ -50,8 +50,9 @@ void bind_slice(py::module& module) {
                 const tt::tt_metal::Array4D & slice_end,
                 const std::optional<tt::tt_metal::Array4D> &step,
                 const std::optional<ttnn::MemoryConfig>& memory_config,
+                const std::optional<Tensor>& optional_output_tensor,
                 uint8_t queue_id) {
-                    return self(queue_id, input_tensor, slice_start, slice_end, step, memory_config);
+                    return self(queue_id, input_tensor, slice_start, slice_end, step, memory_config, optional_output_tensor);
                 },
                 py::arg("input_tensor"),
                 py::arg("slice_start"),
@@ -59,6 +60,7 @@ void bind_slice(py::module& module) {
                 py::arg("step") = std::nullopt,
                 py::kw_only(),
                 py::arg("memory_config") = std::nullopt,
+                py::arg("output_tensor") = std::nullopt,
                 py::arg("queue_id") = 0,
                 }
         );
