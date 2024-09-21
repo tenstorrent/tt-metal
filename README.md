@@ -110,7 +110,7 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metalium/lates
 - [Dram Loopback Data Movement](./tech_reports/prog_examples/dram_loopback/dram_loopback.md)
 ### Eltwise
 - [Eltwise Unary OP in Vector Engine (SFPU)](./tech_reports/prog_examples/eltwise_sfpu/eltwise_sfpu.md)
-- [Eltwise Binary OP in MAtrix Engine (FPU)](./tech_reports/prog_examples/eltwise_binary/eltwise_binary.md)
+- [Eltwise Binary OP in Matrix Engine (FPU)](./tech_reports/prog_examples/eltwise_binary/eltwise_binary.md)
 ### Matmul
 - [Matmul OP on a Single_core](./tech_reports/prog_examples/matmul_single_core/matmul_single_core.md)
 - [Matmul OP on Multi_core (Basic)](./tech_reports/prog_examples/matmul_multi_core/matmul_multi_core.md)
