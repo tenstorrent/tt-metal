@@ -28,12 +28,12 @@ jobs:
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Install dependencies
-        if: ${{ matrix.build.runs-on != 'build' }}
+        if: ${{ !contains(matrix.build.runs-on, 'build') && !contains(matrix.build.runs-on, 'in-service') }}
         uses: ./.github/actions/install-metal-deps
         with:
           os: ${{ matrix.build.os }}
       - name: Install dev dependencies
-        if: ${{ matrix.build.runs-on != 'build' }}
+        if: ${{ !contains(matrix.build.runs-on, 'build') && !contains(matrix.build.runs-on, 'in-service') }}
         uses: ./.github/actions/install-metal-dev-deps
         with:
           os: ${{ matrix.build.os }}
