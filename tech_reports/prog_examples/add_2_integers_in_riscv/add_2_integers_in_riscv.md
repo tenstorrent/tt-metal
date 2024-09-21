@@ -3,7 +3,7 @@
 RISC-V processors 1 and 5 of a Tensix core are used for data movement, yet also have basic computing capabilities. In this example, we will build a TT-Metalium program to add two integers using these processors.
 
 We'll go through this code section by section. Note that we have this exact, full example program in
-[tt_metal/programming_examples/add_2_integers_in_compute/add_2_integers_in_riscv.cpp](../../../tt_metal/programming_examples/add_2_integers_in_compute/add_2_integers_in_riscv.cpp),
+[tt_metal/programming_examples/add_2_integers_in_riscv/add_2_integers_in_riscv.cpp](../../../tt_metal/programming_examples/add_2_integers_in_riscv/add_2_integers_in_riscv.cpp),
 so you can follow along.
 
 To build and execute, you may use the following commands. Note that we include the necessary environment variables here, but you may possibly need more depending on the most up-to-date installation methods.

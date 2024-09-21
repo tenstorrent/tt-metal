@@ -1,4 +1,4 @@
-# Data Reuse in [matmul_multicore_reuse]{.title-ref}
+# Data Reuse in [matmul_multicore_reuse]
 
 ## Fine-Grained Block Size Control
 
