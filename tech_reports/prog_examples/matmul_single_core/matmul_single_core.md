@@ -3,7 +3,7 @@
 We'll build a program that will perform matmul operations on two tensors with equal-size inner dimension. We will then go through specific sections of the program.
 
 The full example program is in
-[tt_metal/programming_examples/matmul_single_core/matmul_single_core.cpp](../../../tt_metal/programming_examples/matmul_single_core/matmul_single_core.cpp)
+[matmul_single_core.cpp](../../../tt_metal/programming_examples/matmul_single_core/matmul_single_core.cpp)
 
 To build and execute, you may use the following commands. Note that we include the necessary environment variables here, but you may possibly need more depending on the most up-to-date installation methods.
 

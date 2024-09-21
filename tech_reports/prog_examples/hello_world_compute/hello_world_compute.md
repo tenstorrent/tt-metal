@@ -3,7 +3,7 @@
 We will build a simple program in TT-Metal that will set up a void compute kernel and place it on a given device, core, and RISC-V processor. In this example, there will be nothing for the kernel to compute; the focus will be on the general setup for a compute kernel.
 
 We'll go through this code section by section. The full example program is at:
-[tt_metal/programming_examples/hello_world_compute_kernel/hello_world_compute_kernel.cpp](../../../tt_metal/programming_examples/hello_world_compute_kernel/hello_world_compute_kernel.cpp)
+[hello_world_compute_kernel.cpp](../../../tt_metal/programming_examples/hello_world_compute_kernel/hello_world_compute_kernel.cpp)
 so you can follow along.
 
 To build and execute, you may use the following commands. Note that we include the necessary environment variables here, but you may possibly need more depending on the most up-to-date installation methods.
@@ -69,7 +69,7 @@ void MAIN {
 }
 ```
 
-Our kernel function, which is defined in [tt_metal/programming_examples/hello_world_compute_kernel/kernels/compute/void_compute_kernel.cpp](../../../tt_metal/programming_examples/hello_world_compute_kernel/kernels/compute/void_compute_kernel.cpp),
+Our kernel function, which is defined in [void_compute_kernel.cpp](../../../tt_metal/programming_examples/hello_world_compute_kernel/kernels/compute/void_compute_kernel.cpp),
 contains just a single `DPRINT` statement to indicate that the compute kernel has executed. Note that in order to print from the compute kernel, `DPRINT_MATH()` must be used.
 
 ## Configure and execute program on device

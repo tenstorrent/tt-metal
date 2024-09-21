@@ -4,7 +4,7 @@ We will build a program in TT-Metal that will simply copy data from one
 DRAM buffer to another, using the compute engine and an intermediate L1
 buffer to do so. We call this concept \"loopback\".
 
-We\'ll go through this code section by section. Note that we have this exact, full example program in [tt_metal/programming_examples/loopback/loopback.cpp](../../../tt_metal/programming_examples/loopback/loopback.cpp), so you can follow along.
+We\'ll go through this code section by section. Note that we have this exact, full example program in [loopback.cpp](../../../tt_metal/programming_examples/loopback/loopback.cpp), so you can follow along.
 
 To build and execute, you may use the following commands. Note that we include the necessary environment variables here, but you may possibly need more depending on the most up-to-date installation methods.
 

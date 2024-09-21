@@ -3,7 +3,7 @@
 This example will build a simple program in TT-Metal that will demonstrate how to set up a data movement kernel and place it on a given device, core, and RISC-V processor.
 
 We'll go through this code section by section. Note that we have this exact, full example program in
-[tt_metal/programming_examples/hello_world_datamovement_kernel/hello_world_datamovement_kernel.cpp](../../../tt_metal/programming_examples/hello_world_datamovement_kernel/hello_world_datamovement_kernel.cpp),
+[hello_world_datamovement_kernel.cpp](../../../tt_metal/programming_examples/hello_world_datamovement_kernel/hello_world_datamovement_kernel.cpp),
 so you can follow along.
 
 To build and execute, you may use the following commands. Note that we include the necessary environment variables here, but you may possibly need more depending on the most up-to-date installation methods.
@@ -69,7 +69,7 @@ void kernel_main() {
 ```
 
 The kernel function, defined in
-[tt_metal/programming_examples/hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp](../../../tt_metal/programming_examples/hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp),
+[void_dataflow_kernel.cpp](../../../tt_metal/programming_examples/hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp),
 simply prints two statements from each of the RISC-V processors involved with data movement. This kernel is designed to be basic in order to focus on the data movement kernel setup itself.
 
 ## Configure and execute program on device

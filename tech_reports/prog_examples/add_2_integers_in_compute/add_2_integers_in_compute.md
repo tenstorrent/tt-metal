@@ -3,7 +3,7 @@
 In this example, we will build a TT-Metal program that will add two vectors containing integers together, using data movement and compute kernels.
 
 This program can be found in
-[tt_metal/programming_examples/add_2_integers_in_compute/add_2_integers_in_compute.cpp](../../../tt_metal/programming_examples/add_2_integers_in_compute/add_2_integers_in_compute.cpp).
+[add_2_integers_in_compute.cpp](../../../tt_metal/programming_examples/add_2_integers_in_compute/add_2_integers_in_compute.cpp).
 
 To build and execute, you may use the following commands. Note that we include the necessary environment variables here, but you may possibly need more depending on the most up-to-date installation methods.
 
