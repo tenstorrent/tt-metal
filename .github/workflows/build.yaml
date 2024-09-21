@@ -10,7 +10,7 @@ jobs:
       matrix:
         build: [
           {type: Debug, cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ubuntu-20.04, os: ubuntu-20.04},
-          {type: RelWithDebInfo,  cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: build, os: ubuntu-20.04},
+          {type: RelWithDebInfo,  cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: [build, in-service], os: ubuntu-20.04},
           # {type: Debug, cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ubuntu-22.04},
           # {type: RelWithDebInfo,  cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ubuntu-22.04},
           # {type: Release,  cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ubuntu-22.04},
@@ -46,7 +46,7 @@ jobs:
           cmake --build build --target tests
       - name: Check disk space
         run: |
-          df -h      
+          df -h
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
