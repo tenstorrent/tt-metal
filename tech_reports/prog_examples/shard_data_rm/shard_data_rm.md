@@ -1,7 +1,7 @@
 # Data Sharding (Multicore)
 
 In this example, we will implement a simple TT-Metalium program to demonstrate how sharding works for untilized data. The code for this program can be found in
-[tt_metal/programming_examples/sharding/shard_data_rm.cpp](../../../tt_metal/programming_examples/sharding/shard_data_rm.cpp).
+[shard_data_rm.cpp](../../../tt_metal/programming_examples/sharding/shard_data_rm.cpp).
 
 The following commands will build and execute the code for this example.
 Environment variables may be modified based on the latest
