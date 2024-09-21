@@ -137,6 +137,11 @@ struct ExecuteRdiv {
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 
+struct ExecuteUnaryAdd1 {
+    static Tensor invoke(
+        const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt);
+};
+
 }  // namespace unary
 }  // namespace operations
 
@@ -192,6 +197,9 @@ constexpr auto pow = ttnn::register_operation_with_auto_launch_op<
 constexpr auto tanhshrink = ttnn::register_operation_with_auto_launch_op<
     "ttnn::tanhshrink",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::TANHSHRINK>>();
+constexpr auto add1 = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::add1",
+    operations::unary::ExecuteUnaryAdd1>();
 constexpr auto deg2rad = ttnn::register_operation_with_auto_launch_op<
     "ttnn::deg2rad",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::DEG2RAD>>();

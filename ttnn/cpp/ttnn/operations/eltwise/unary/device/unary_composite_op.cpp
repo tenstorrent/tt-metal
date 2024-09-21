@@ -40,6 +40,16 @@ Tensor _tanhshrink(const Tensor& x, const std::optional<MemoryConfig>& output_me
     return result;
 }
 
+Tensor ExecuteUnaryAdd1::invoke(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+
+    auto x = input;
+    if(x.get_layout() == Layout::ROW_MAJOR){
+        x = ttnn::to_layout(x, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
+    }
+    Tensor result = ttnn::add_sfpu(x, 1.0f, output_mem_config);
+    return result;
+}
+
 // power - floating point exponent
 Tensor _power(uint8_t queue_id, const Tensor& input_a, float exponent, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
     TT_FATAL(exponent >= 0.0f, "works for positive exponents only");
