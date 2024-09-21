@@ -59,10 +59,10 @@ def tt_guide(noise_pred, guidance_scale):  # will return latents
         noise_pred,
         [1, 0, 0, 0],
         [
-            noise_pred.shape[0] - 1,
-            noise_pred.shape[1] - 1,
-            noise_pred.shape[2] - 1,
-            noise_pred.shape[3] - 1,
+            noise_pred.shape[0],
+            noise_pred.shape[1],
+            noise_pred.shape[2],
+            noise_pred.shape[3],
         ],
     )
     noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
