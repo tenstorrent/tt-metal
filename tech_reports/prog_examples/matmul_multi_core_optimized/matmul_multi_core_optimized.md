@@ -1,11 +1,6 @@
 # Matmul (Multi Core Optimized)
 
-The Tensix core architecture's secret weapon is its full user control
-over memory workload spread, core communication style, novel block
-matmul kernels, and compute patterns. In this section, we will harness
-real power through 3 shiny optimizations, each building off one another:
-data reuse, data multicast, and multidimensional systolic arrays (coming
-soon).
+The Tensix core architecture's secret weapon is its full user control over memory workload spread, core communication style, novel block matmul kernels, and compute patterns. In this section, we will harness real power through 3 shiny optimizations, each building off one another: data reuse, data multicast, and multidimensional systolic arrays (coming soon).
 
 ```bash
     export ARCH_NAME=<arch name>
