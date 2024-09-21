@@ -1,17 +1,11 @@
 # Eltwise binary
 
 
-We now build a program that will perform eltwise binary operations on a
-some equal-sized tensors.
+We now build a program that will perform eltwise binary operations on a some equal-sized tensors.
 
-We'll go through any new code section by section. This builds on top of
-previous examples. Note that we have this exact, full example program in
-`tt_metal/programming_examples/eltwise_binary/eltwise_binary.cpp`, so
-you can follow along.
+We'll go through any new code section by section. This builds on top of previous examples. Note that we have this exact, full example program in [tt_metal/programming_examples/eltwise_binary/eltwise_binary.cpp](../../../tt_metal/programming_examples/eltwise_binary/eltwise_binary.cpp), so you can follow along.
 
-To build and execute, you may use the following commands. Note that we
-include the necessary environment variables here, but you may possibly
-need more depending on the most up-to-date installation methods.
+To build and execute, you may use the following commands. Note that we include the necessary environment variables here, but you may possibly need more depending on the most up-to-date installation methods.
 
 ```bash
     export ARCH_NAME=<arch name>
@@ -21,11 +15,9 @@ need more depending on the most up-to-date installation methods.
 ```
 ## New buffers
 
-In terms of DRAM buffers, We just need a new buffer for a 2nd source,
-because we have two source tensors (vectors).
+In terms of DRAM buffers, We just need a new buffer for a 2nd source, because we have two source tensors (vectors).
 
-We already have set the circular buffers needed for compute data
-communication.
+We already have set the circular buffers needed for compute data communication.
 
 ``` cpp
 constexpr uint32_t src0_cb_index = CB::c_in0;
@@ -48,9 +40,7 @@ CircularBufferConfig cb_output_config = CircularBufferConfig(input_cb_size, {{ou
 CBHandle cb_output = CreateCircularBuffer(program, core, cb_output);
 ```
 
-We will create two input circular buffers to accommodate our two input
-tensors, and an output one for the result of the eltwise binary
-operation.
+We will create two input circular buffers to accommodate our two input tensors, and an output one for the result of the eltwise binary operation.
 
 ## Compute kernel declaration and compile-time defines
 
@@ -69,9 +59,7 @@ KernelHandle eltwise_binary_kernel_id = CreateKernel(
 );
 ```
 
-We will declare what kind of compute kernel we\'re using and further
-specify we want to use the `add_tiles` eltwise binary op, for eltwise
-adding.
+We will declare what kind of compute kernel we\'re using and further specify we want to use the `add_tiles` eltwise binary op, for eltwise adding.
 
 ## Extra source tensor
 
@@ -82,15 +70,8 @@ std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(dram_buffer_
 detail::WriteToBuffer(src1_dram_buffer, src1_vec);
 ```
 
-In this program, we have a second source tensor. We will be adding this
-to the first source tensor.
+In this program, we have a second source tensor. We will be adding this to the first source tensor.
 
 ## Conclusion
 
-Those are the additional steps for getting eltwise binary operations up
-and running on the compute engine. We essentially repeat the same
-process to chain together two operations, with one DRAM read in the
-middle to get the intermediate result and hold it in a DRAM buffer. For
-an example involving matrix multiplication on a single core, please
-refer to the `Matmul single
-core example<MatMul_Single_Core example>`{.interpreted-text role="ref"}.
+Those are the additional steps for getting eltwise binary operations upmand running on the compute engine. We essentially repeat the same process to chain together two operations, with one DRAM read in the middle to get the intermediate result and hold it in a DRAM buffer. For an example involving matrix multiplication on a single core, please refer to the `Matmul single core` example.

@@ -1,15 +1,12 @@
 # Matmul (Single Core)
 
-We'll build a program that will perform matmul operations on two
-tensors with equal-size inner dimension. We will then go through
-specific sections of the program.
+We'll build a program that will perform matmul operations on two tensors with equal-size inner dimension. We will then go through specific sections of the program.
 
 The full example program is in
-`tt_metal/programming_examples/matmul_single_core/matmul_single_core.cpp`
+[tt_metal/programming_examples/matmul_single_core/matmul_single_core.cpp](../../../tt_metal/programming_examples/matmul_single_core/matmul_single_core.cpp)
 
-To build and execute, you may use the following commands. Note that we
-include the necessary environment variables here, but you may possibly
-need more depending on the most up-to-date installation methods.
+To build and execute, you may use the following commands. Note that we include the necessary environment variables here, but you may possibly need more depending on the most up-to-date installation methods.
+
 ```bash
     export ARCH_NAME=<arch name>
     export TT_METAL_HOME=<this repo dir>
@@ -22,12 +19,9 @@ need more depending on the most up-to-date installation methods.
 The initial level of host-side code can broken up into sections:
 
 -   Create Device
--   Set input and output vector variables, using the user-defined
-    parameters (M, N, K, B)
--   Tilizing the input vector, and untilizing the device output to
-    vector (row-major layout)
--   Call `matmul_single_core()` program and retrieve output results
-    (details in next section)
+-   Set input and output vector variables, using the user-defined parameters (M, N, K, B)
+-   Tilizing the input vector, and untilizing the device output to vector (row-major layout)
+-   Call `matmul_single_core()` program and retrieve output results (details in next section)
 -   Validate the device computation results vs. golden results on cpu
 -   Close Device
 
@@ -59,9 +53,7 @@ untilize(result_vec, M, N);
 CloseDevice(device);
 ```
 
-We are keeping all code details with specific host API calls inside
-`matmul_single_core`, allowing for calling consecutive functions in the
-main function.
+We are keeping all code details with specific host API calls inside `matmul_single_core`, allowing for calling consecutive functions in the main function.
 
 ## Main blocks in matmul_single_core function
 
@@ -71,13 +63,11 @@ We will go through sections of the `matmul_single_core` function:
 -   Create DRAM buffers based on input and output vectors
 -   Create L1 Circular buffers
 -   Kernels declarations and related compile and runtime arguments
--   Program launch and reading data from DRAM output buffer to result
-    vector
+-   Program launch and reading data from DRAM output buffer to result vector
 
 ## Create Program, Enqueue initialization, and core range definition
 
-We want a just a single core, so we will restrict the core range to be
-just one core at (0, 0).
+We want a just a single core, so we will restrict the core range to be just one core at (0, 0).
 
 ``` cpp
 CommandQueue& cq = detail::GetCommandQueue(device);
@@ -87,8 +77,7 @@ CoreRange core({0, 0}, {0, 0});
 
 ## Create DRAM buffers & Circular buffers
 
-In terms of DRAM buffers, we need two source buffers and one destination
-buffer.
+In terms of DRAM buffers, we need two source buffers and one destination buffer.
 
 ``` cpp
 // MN = MK*KN
@@ -135,10 +124,7 @@ uint32_t src1_addr = src1_dram_buffer.address();
 uint32_t dst_addr = dst_dram_buffer.address();
 ```
 
-We need to declare three circular buffers to enable data transfer
-between the reader, compute, and writer engines. Input tiles count is 2
-because although the computation is a single tile process, we want to
-get a performance boost by double buffering..
+We need to declare three circular buffers to enable data transfer between the reader, compute, and writer engines. Input tiles count is 2 because although the computation is a single tile process, we want to get a performance boost by double buffering..
 
 ``` cpp
 uint32_t src0_cb_index = CB::c_in0; //0
@@ -182,9 +168,7 @@ vector<uint32_t> compute_args = {
 
 ## Compute kernel declaration and compile-time defines
 
-We\'re using a special reader kernel to take in data from DRAM into L1,
-and a special writer kernel to write out results from the compute engine
-back to the destination DRAM buffer.
+We're using a special reader kernel to take in data from DRAM into L1, and a special writer kernel to write out results from the compute engine back to the destination DRAM buffer.
 
 ``` cpp
 auto reader_id = tt_metal::CreateDataMovementKernel(
@@ -209,8 +193,7 @@ auto matmul_single_core_kernel_id = tt_metal::CreateComputeKernel(
 
 ## Runtime arguments and program launch
 
-We will now set runtime arguments for the reader and writer kernels to
-run the matmul operation on a single core and a single tile at a time.
+We will now set runtime arguments for the reader and writer kernels to run the matmul operation on a single core and a single tile at a time.
 
 ``` cpp
 tt_metal::SetRuntimeArgs(
@@ -224,8 +207,7 @@ tt_metal::SetRuntimeArgs(
 );
 ```
 
-Launch program, enqueue & read in output buffer result into the host
-vector.
+Launch program, enqueue & read in output buffer result into the host vector.
 
 ``` cpp
 EnqueueWriteBuffer(cq, src0_dram_buffer, a.data(), false);
@@ -236,9 +218,5 @@ EnqueueReadBuffer(cq, dst_dram_buffer, output.data(), true);
 
 ## Conclusion
 
-Those are the additional steps for getting `matmul_single_core`
-operations up and running on the compute engine. To see a more
-complicated example using as many cores as possible, please refer to the
-`Matmul
-multi-core example<MatMul_Multi_Core example>`{.interpreted-text
-role="ref"}.
+Those are the additional steps for getting `matmul_single_core` operations up and running on the compute engine. To see a more complicated example using as many cores as possible, please refer to the
+`Matmul multi-core` example.
