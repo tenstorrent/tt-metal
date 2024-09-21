@@ -14,6 +14,10 @@ from models.utility_functions import nearest_32
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, ParameterDict
 
 
+def nearest_16(x):
+    return math.ceil(x / 16) * 16
+
+
 def determine_num_cores_for_upsample(nhw: int, width: int, max_cores=64) -> int:
     gcd_nhw_width = math.gcd(nhw, width)
     cores = nhw // gcd_nhw_width
@@ -514,7 +518,7 @@ class UNet:
                 self.downblock1.conv1.batch_size
                 * self.downblock1.conv1.input_height
                 * self.downblock1.conv1.input_width,
-                nearest_32(self.downblock1.conv1.in_channels),
+                nearest_16(self.downblock1.conv1.in_channels),
             ],
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,

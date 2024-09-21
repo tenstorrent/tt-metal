@@ -277,8 +277,8 @@ void kernel_main() {
     }
     // Get cur_pos
     uint32_t cur_pos = 0;
-    // using 4294967295 (end of uint32 range) as a flag to indicate that cur_pos is not provided as a list
-    if (cur_pos_arg!=4294967295){
+    // using UINT32_MAX as a flag to indicate that cur_pos is not provided as a list
+    if (cur_pos_arg != UINT32_MAX){
         cur_pos = cur_pos_arg;
     }
     else {
@@ -287,6 +287,11 @@ void kernel_main() {
         uint32_t index_cb_ptr = get_read_ptr(cb_index_id);
         volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
         cur_pos = index_ptr[cur_batch];
+    }
+
+    if (cur_pos == UINT32_MAX) {
+        // cur_pos of -1 indicates that the user should be skipped
+        return;
     }
     // Sequence length assignment
     auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(cur_pos, cur_batch, core_num, num_cores_per_batch, k_chunk_size);

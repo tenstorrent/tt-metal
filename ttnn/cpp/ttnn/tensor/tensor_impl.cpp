@@ -1260,11 +1260,11 @@ Tensor unpad(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_tenso
     for (auto i = 0; i < input_shape.rank(); i++) {
         // Check if tensor start and end indices are within input tensor shape
         TT_ASSERT(output_tensor_start[i] < input_shape[i]);
-        TT_ASSERT(output_tensor_end[i] < input_shape[i]);
-        // Check if start shape is <= end shape
-        TT_ASSERT(output_tensor_start[i] <= output_tensor_end[i]);
+        TT_ASSERT(output_tensor_end[i] <= input_shape[i]);
+        // Check if start shape is < end shape
+        TT_ASSERT(output_tensor_start[i] < output_tensor_end[i]);
         // Figure out output tensor shape
-        output_shape.push_back(output_tensor_end[i] - output_tensor_start[i] + 1);
+        output_shape.push_back(output_tensor_end[i] - output_tensor_start[i]);
     }
 
     auto unpad = [&input_shape, &input_strides, &output_shape, &output_tensor_start, &output_tensor_end](
@@ -1275,7 +1275,7 @@ Tensor unpad(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_tenso
         auto output_buffer = owned_buffer::create<T>(compute_volume(output_shape));
 
         std::function<void(std::size_t)> unpad_from_tile = [&](std::size_t dim) -> void {
-            for (auto i = output_tensor_start[dim]; i <= output_tensor_end[dim]; i++) {
+            for (auto i = output_tensor_start[dim]; i < output_tensor_end[dim]; i++) {
                 input_indices[dim] = i;
                 if (dim == input_shape.rank() - 1) {
                     auto flat_input_index = compute_flat_input_index(input_indices, input_strides);
