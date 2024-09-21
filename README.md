@@ -95,3 +95,24 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metalium/lates
 - [CNNs on TT Architectures](./tech_reports/CNNs/ttcnn.md) (updated Sept 6th)
 - [Ethernet and Multichip Basics](./tech_reports/CCL/CclDeveloperGuide.md) (Updated Sept 12th)
 - [Blackhole Bring-Up Prgramming Guide](./tech_reports/Blackhole/BlackholeBringUpProgrammingGuide.md) (Updated Sept 12th)
+
+## TT-Metalium Programming Examples
+### Hello World
+- [Hello World! Compute Kernel](./tech_reports/prog_examples/hello_world_compute/hello_world_compute.md)
+- [Hello World! Data Movement Kernel](./tech_reports/prog_examples/hello_world_data_movement/hello_world_data_movement.md)
+### Add Integers  
+- [Add 2 Integers in Baby RiscV](./tech_reports/prog_examples/add_2_integers_in_riscv/add_2_integers_in_riscv.md)
+- [Add 2 Integers in Compute Kernel](./tech_reports/prog_examples/add_2_integers_in_compute/add_2_integers_in_compute.md)
+### Simple Tensor Manipulation 
+- [Sharded Data Movement Kernel](./tech_reports/prog_examples/shard_data_rm/shard_data_rm.md)
+- [Padding Kernel in Multi Core](./tech_reports/prog_examples/pad_multi_core/pad_multi_core.md)
+### DRAM Data Movement
+- [Dram Loopback Data Movement](./tech_reports/prog_examples/dram_loopback/dram_loopback.md)
+### Eltwise
+- [Eltwise Unary OP in Vector Engine (SFPU)](./tech_reports/prog_examples/eltwise_sfpu/eltwise_sfpu.md)
+- [Eltwise Binary OP in MAtrix Engine (FPU)](./tech_reports/prog_examples/eltwise_binary/eltwise_binary.md)
+### Matmul
+- [Matmul OP on a Single_core](./tech_reports/prog_examples/matmul_single_core/matmul_single_core.md)
+- [Matmul OP on Multi_core (Basic)](./tech_reports/prog_examples/matmul_multi_core/matmul_multi_core.md)
+- [Matmul Multi_core Reuse (Optimized)](./tech_reports/prog_examples/matmul_multi_core_optimized/data_reuse.md)
+- [Matmul Multi_core Multi-Cast (Optimized)](./tech_reports/prog_examples/matmul_multi_core_optimized/data_mcast.md)
