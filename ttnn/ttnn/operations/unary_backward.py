@@ -831,14 +831,14 @@ def _golden_function(grad_tensor, input_tensor, sizes, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.repeat_bw, golden_function=_golden_function)
 
 
-def _golden_function(grad_tensor, input_tensor, *args, **kwargs):
+def _golden_function(grad_tensor, input_tensor, *args, value=2.0, **kwargs):
     import torch
 
-    pyt_y = torch.zeros_like(grad_tensor)
-    grad_sum = grad_tensor.sum()
-    pyt_y.fill_(grad_sum)
+    input_tensor.retain_grad()
+    pyt_y = torch.fill(input_tensor, value)
+    pyt_y.backward(gradient=grad_tensor)
 
-    return [pyt_y]
+    return [input_tensor.grad]
 
 
 ttnn.attach_golden_function(ttnn.fill_bw, golden_function=_golden_function)
