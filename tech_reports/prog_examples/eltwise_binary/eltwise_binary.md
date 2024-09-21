@@ -3,7 +3,7 @@
 
 We now build a program that will perform eltwise binary operations on a some equal-sized tensors.
 
-We'll go through any new code section by section. This builds on top of previous examples. Note that we have this exact, full example program in [tt_metal/programming_examples/eltwise_binary/eltwise_binary.cpp](../../../tt_metal/programming_examples/eltwise_binary/eltwise_binary.cpp), so you can follow along.
+We'll go through any new code section by section. This builds on top of previous examples. Note that we have this exact, full example program in [eltwise_binary.cpp](../../../tt_metal/programming_examples/eltwise_binary/eltwise_binary.cpp), so you can follow along.
 
 To build and execute, you may use the following commands. Note that we include the necessary environment variables here, but you may possibly need more depending on the most up-to-date installation methods.
 

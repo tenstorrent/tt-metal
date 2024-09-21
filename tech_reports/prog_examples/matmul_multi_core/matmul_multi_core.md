@@ -9,7 +9,7 @@ In terms of API usage, there isn\'t much change. We will discuss the specific ch
 
 All important ways we use the API different are in the new `matmul_multi_core` function.
 
-The full example program is in [tt_metal/programming_examples/matmul_multi_core/matmul_multi_core.cpp](../../../tt_metal/programming_examples/matmul_multi_core/matmul_multi_core.cpp)
+The full example program is in [matmul_multi_core.cpp](../../../tt_metal/programming_examples/matmul_multi_core/matmul_multi_core.cpp)
 
 To build and execute, you may use the following commands. Note that we include the necessary environment variables here, but you may possibly need more depending on the most up-to-date installation methods.
 

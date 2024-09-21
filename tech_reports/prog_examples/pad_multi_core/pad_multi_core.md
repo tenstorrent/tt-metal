@@ -11,7 +11,7 @@ In this example, we will implement a basic TT-Metalium program for padding an in
 7. Dispatch program to device for execution.
 8. Close device.
 
-The code for this program can be found in [tt_metal/programming_examples/pad/pad_multi_core.cpp](../../../tt_metal/programming_examples/pad/pad_multi_core.cpp).
+The code for this program can be found in [pad_multi_core.cpp](../../../tt_metal/programming_examples/pad/pad_multi_core.cpp).
 
 The following commands will build and execute the code for this example. Environment variables may be modified based on the latest specifications.
 ```bash
