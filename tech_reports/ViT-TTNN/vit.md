@@ -6,7 +6,8 @@ Authors: Vishal Shenoy, Mohamed Bahnas
   - [1. Overview](#1-overview)
   - [2. ViT TT-NN Optimization Techniques](#2-vit-tt-nn-optimization-techniques)
     - [2.1 Sharding on all relevant OPs](#21-sharding-on-all-relevant-ops)
-    - [2.2 Transformer optimizations](#22-transformer-optimizations)
+    - [2.2 Matmul sharding variants](#22-matmul-sharding-variants) 
+    - [2.3 Transformer optimizations](#23-transformer-optimizations)
   - [3. ViT TT-NN Code Structure](#3-vit-tt-nn-code-structure)
     - [3.1 Top-level modules](#31-top-level-modules)
     - [3.2 Embeddings module](#32-embeddings-module)
@@ -44,7 +45,6 @@ The implemented optimization techniques in TT-NN compared to the conventional fl
 ![Sharding Concept](images/sharding_concept.png) 
   - Illustrative example 
 ![Sharding Example](images/sharding_example.png)   
-
 ### 2.2 Matmul sharding variants
 #### 2.2.1 Matmul Reuse (BMM)
 The batch Matmul(BMM) Reuse case used in ViT model is in the Multi-head Self Attenttion module, where both inputs (in0 and in1) as well as the output are height sharded. There no mutli-case (mcast) technique applied on the inputs here. Each core will be respsonsible for the Matmul of single head of one image of the batch.
@@ -59,7 +59,7 @@ Worth to mention that in some cases it may be better to implement the Column_Maj
 The other Reuse Mcast case (not used in ViT) is the height sharded on in0, while in1 is still interleaved, as shown in the figure.
 ![Mcast Height](images/height_mcast.png)
 
-### 2.2 Transformer optimizations
+### 2.3 Transformer optimizations
   - Merging Q,K,V Linear operations in one large OP for higher utilization of Tensix computation power.
   - Customized tensor manipulation operations that are highly optimized as Transformer-based OPs in TT-NN.
   - Pre-processing of model weights, to apply the data format conversion as well as merging and transposing to match the OP configuration.
