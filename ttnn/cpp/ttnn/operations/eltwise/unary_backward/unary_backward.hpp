@@ -37,28 +37,22 @@ struct ExecuteUnaryBackwardThreshold {
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
-template <UnaryBackwardOpType unary_backward_op_type>
-struct ExecuteUnaryBackwardFloat {
+#define DEFINE_UNARY_BACKWARD_OPERATION_WITH_FLOAT(op_name) \
+struct ExecuteUnaryBackward##op_name { \
+    static std::vector<Tensor> invoke( \
+        const Tensor &grad_tensor_arg, \
+        const Tensor &input_tensor_arg, \
+        float scalar, \
+        const std::optional<MemoryConfig> &memory_config = std::nullopt); \
+};
+
+struct ExecuteUnaryBackwardPolygamma {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
-        float scalar,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, scalar, output_memory_config);
-        }
-
-    static std::vector<Tensor> invoke(
-        const Tensor &grad_tensor_arg,
-        const Tensor &input_tensor_a_arg,
-        const Tensor &input_tensor_b_arg,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
-        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, output_memory_config);
-        }
-
+        int scalar,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
-
 
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardWoFloat {
@@ -311,6 +305,8 @@ DEFINE_UNARY_BACKWARD_OPERATION_WITH_1_DEFAULT_FLOAT(Elu)
 DEFINE_UNARY_BACKWARD_OPERATION_WITH_1_DEFAULT_FLOAT(Celu)
 DEFINE_UNARY_BACKWARD_OPERATION_WITH_1_DEFAULT_FLOAT(Logiteps)
 
+DEFINE_UNARY_BACKWARD_OPERATION_WITH_FLOAT(DivNoNan)
+DEFINE_UNARY_BACKWARD_OPERATION_WITH_FLOAT(Rpow)
 }  // operations::unary
 
 constexpr auto threshold_bw = ttnn::register_operation<
@@ -348,18 +344,15 @@ constexpr auto acosh_bw = ttnn::register_operation<
 
 constexpr auto rpow_bw = ttnn::register_operation<
     "ttnn::rpow_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloat<
-        operations::unary_backward::UnaryBackwardOpType::RPOW_BW>>();
+    operations::unary_backward::ExecuteUnaryBackwardRpow>();
 
 constexpr auto div_no_nan_bw = ttnn::register_operation<
     "ttnn::div_no_nan_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloat<
-        operations::unary_backward::UnaryBackwardOpType::DIV_NO_NAN_BW>>();
+    operations::unary_backward::ExecuteUnaryBackwardDivNoNan>();
 
 constexpr auto polygamma_bw = ttnn::register_operation<
     "ttnn::polygamma_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloat<
-        operations::unary_backward::UnaryBackwardOpType::POLYGAMMA_BW>>();
+    operations::unary_backward::ExecuteUnaryBackwardPolygamma>();
 
 //ExecuteUnaryBackwardOp : get_function_type1
 constexpr auto acos_bw = ttnn::register_operation<
