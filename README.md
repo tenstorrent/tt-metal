@@ -49,7 +49,6 @@
 | [ResNet-50 (224x224) (data parallel)](./models/demos/tgg/resnet50)          | 1024  | [Two Galaxies](https://tenstorrent.com/hardware/galaxy)  | 128,800 | 448,000    |             |
 | [ViT](./models/demos/grayskull/vit)                                         | 9     | [e150](https://tenstorrent.com/hardware/grayskull)       | 1,360   | 2,000      |             |
 | [Stable Diffusion 1.4 (512x512)](./models/demos/wormhole/stable_diffusion)  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.167   | 0.3        |             |
-| [ unet ](./models/experimental/functional_unet)  | 2     | [n150](https://tenstorrent.com/hardware/wormhole)        | 329   | 1000        |             |
 
 ## NLPs
 | Model                                               | Batch | Hardware                                           | sen/sec   | Target sen/sec | Release     |
