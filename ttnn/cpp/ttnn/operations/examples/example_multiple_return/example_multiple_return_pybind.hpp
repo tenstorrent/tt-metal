@@ -7,8 +7,9 @@
 #include <pybind11/pybind11.h>
 
 namespace py = pybind11;
+
 namespace ttnn::operations::examples {
 
-void py_module(py::module& module);
+void bind_example_multiple_return_operation(py::module& module);
 
 }  // namespace ttnn::operations::examples

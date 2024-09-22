@@ -39,3 +39,37 @@ def test_composite_example(device, height, width):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
+
+
+@pytest.mark.parametrize("height", [64])
+@pytest.mark.parametrize("width", [128])
+def test_example_multiple_return(device, height, width):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((height, width), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output1, output2 = ttnn.prim.example_multiple_return(input_tensor)
+    output_tensor1 = ttnn.to_torch(output1)
+    output_tensor2 = ttnn.to_torch(output2)
+
+    assert_with_pcc(torch_output_tensor, output_tensor1, 0.99)
+    assert_with_pcc(torch_output_tensor, output_tensor2, 0.99)
+
+
+@pytest.mark.parametrize("height", [64])
+@pytest.mark.parametrize("width", [128])
+def test_composite_example_multiple_return(device, height, width):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((height, width), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output1, output2 = ttnn.composite_example_multiple_return(input_tensor)
+    output_tensor1 = ttnn.to_torch(output1)
+    output_tensor2 = ttnn.to_torch(output2)
+
+    assert_with_pcc(torch_output_tensor, output_tensor1, 0.99)
+    assert_with_pcc(torch_output_tensor, output_tensor2, 0.99)
