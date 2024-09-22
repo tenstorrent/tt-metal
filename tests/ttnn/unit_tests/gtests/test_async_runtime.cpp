@@ -9,7 +9,7 @@
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum.hpp"
 #include "common/bfloat16.hpp"
 #include "ttnn/async_runtime.hpp"
-#include "tt_numpy/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 #include "tt_metal/impl/event/event.hpp"
 #include <cmath>
 
@@ -40,7 +40,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
         host_data[i] = bfloat16(static_cast<float>(1));
     }
     // Create golden data using tt_eager APIs
-    Tensor np_tensor = tt::numpy::full<float>(input_shape.value, static_cast<float>(1), DataType::BFLOAT16)
+    Tensor np_tensor = ttnn::numpy::full<float>(input_shape.value, static_cast<float>(1), DataType::BFLOAT16)
                            .to(Layout::TILE)
                            .to(device);
     std::vector<int64_t> reduce_dims = {3};

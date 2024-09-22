@@ -15,7 +15,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_numpy/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 
 /*
 
