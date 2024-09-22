@@ -45,6 +45,20 @@ The implemented optimization techniques in TT-NN compared to the conventional fl
   - Illustrative example 
 ![Sharding Example](images/sharding_example.png)   
 
+### 2.2 Matmul sharding variants
+#### 2.2.1 Matmul Reuse (BMM)
+The batch Matmul(BMM) Reuse case used in ViT model is in the Multi-head Self Attenttion module, where both inputs (in0 and in1) as well as the output are height sharded. There no mutli-case (mcast) technique applied on the inputs here. Each core will be respsonsible for the Matmul of single head of one image of the batch.
+![BMM Height](images/bmm_height.png) 
+#### 2.2.2 Matmul Reuse Mcast (2D)
+The Reuse Mcast case used in ViT model is the block sharded Matmul cases in QKV generation as well as the Feed-Forward Network.
+The implemented config is Block sharded as Row_Major, where the in0 outer dimension (M) is sharded along the y-axis of the core grid. On the inner dimension of in0, the sharded slices are mcasted along the x-direction of the core grid. The mcast process is done in turn from one core to all other cores in the row, so the whole inner dimension of in0 exists per each core during its Matmul operation. 
+The in1 is interleaved (on L1 or DRAM) and its slices along the N (outer) dimension are mcasted along the cores in the same column, where each slide has the full inner dimension (K). This is aligned with the previously mentioned mcast of in0 slices.
+Worth to mention that in some cases it may be better to implement the Column_Major (and mcast transposed = True) config, where the in0 M dimension is sharded along the x-axis of the core as shown in the figure. All the mcast techniques in the Column_Major will be transposed with respect to the Row_Major config mentioned in the previous paragraph.
+![Mcast Block](images/block_mcast.png)
+#### 2.2.3 Matmul Reuse Mcast (1D)
+The other Reuse Mcast case (not used in ViT) is the height sharded on in0, while in1 is still interleaved, as shown in the figure.
+![Mcast Height](images/height_mcast.png)
+
 ### 2.2 Transformer optimizations
   - Merging Q,K,V Linear operations in one large OP for higher utilization of Tensix computation power.
   - Customized tensor manipulation operations that are highly optimized as Transformer-based OPs in TT-NN.
@@ -369,14 +383,9 @@ query_key_value = ttnn.linear(
 ```
 ![input](images/qkvlinear.png)
 
-
 **Alternative Sharding Config - Transposed (COL_MAJOR)**:
-
 - Worth to mention that the implemented sharded blocks are arranged in `ROW_MAJOR` and `transpose_mcast=False`.
 - Based on the available core grid (in other devices), it may be optimum to transpose the block placement (i.e. Y|X vs X|Y) and the settings will be `COLUMN_MAJOR` and `transpose_mcast=True`
-  
-![input1](images/SH_RM_CM.png)
-![input2](images/qkvlinear_CM.png)
 
 #### 4.4.2 Splitting into Q-K-V
 The input embeddings are then split into **Query** (Q), **Key** (K), and **Value** (V) matrices. This is done by projecting the input embeddings into three separate matrices. Each matrix has a size of:
@@ -444,7 +453,7 @@ attention_probs = ttnn.transformer.attention_softmax_(attention_scores,
 ),
 ```
 
-**Attention Diagram**:
+**Matmul Sharding (Reuse / BMM) Diagram**:
 
 ![attn](images/attention.png)
 
@@ -480,7 +489,7 @@ context_layer = ttnn.matmul(attention_probs, value,
 )
 ```
 
-**Diagram**:
+**Matmul Sharding (Reuse / BMM) Diagram**:
 
 ![attn](images/value.png)
 
