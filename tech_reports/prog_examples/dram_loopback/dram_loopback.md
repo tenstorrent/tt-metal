@@ -13,7 +13,7 @@ To build and execute, you may use the following commands. Note that we include t
     ./build_metal.sh
     ./build/programming_examples/loopback
 
-## Silicon accelerator setup
+## Device setup
 
 ``` cpp
 constexpr int device_id = 0;

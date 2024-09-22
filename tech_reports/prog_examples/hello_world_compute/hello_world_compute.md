@@ -2,9 +2,7 @@
 
 We will build a simple program in TT-Metal that will set up a void compute kernel and place it on a given device, core, and RISC-V processor. In this example, there will be nothing for the kernel to compute; the focus will be on the general setup for a compute kernel.
 
-We'll go through this code section by section. The full example program is at:
-[hello_world_compute_kernel.cpp](../../../tt_metal/programming_examples/hello_world_compute_kernel/hello_world_compute_kernel.cpp)
-so you can follow along.
+We'll go through this code section by section. The full example program is at [hello_world_compute_kernel.cpp](../../../tt_metal/programming_examples/hello_world_compute_kernel/hello_world_compute_kernel.cpp)
 
 To build and execute, you may use the following commands. Note that we include the necessary environment variables here, but you may possibly need more depending on the most up-to-date installation methods.
 
@@ -14,7 +12,7 @@ To build and execute, you may use the following commands. Note that we include t
     ./build_metal.sh
     ./build/programming_examples/hello_world_compute_kernel
 ```
-## Silicon accelerator setup
+## Device setup
 
 ``` cpp
 constexpr CoreCoord core = {0, 0};
