@@ -1483,7 +1483,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     if (all_dimensions == true) {
         Tensor temp =
             ttnn::multiply(prod_result, grad, std::nullopt, output_memory_config);  // result is stored in the first position
-        Tensor fill_tensor = tt::numpy::fill_first_val_into_tensor<::bfloat16>(
+        Tensor fill_tensor = numpy::fill_first_val_into_tensor<::bfloat16>(
             temp, temp.get_dtype(), temp.get_layout(), temp.device(), output_memory_config);
         Tensor all_dimension_result =
             ttnn::multiply(ttnn::reciprocal(input, output_memory_config), fill_tensor, std::nullopt, output_memory_config);

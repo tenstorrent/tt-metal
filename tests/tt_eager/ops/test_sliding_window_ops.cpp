@@ -11,7 +11,7 @@
 #include "ttnn/operations/sliding_window/reference_sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/deprecated/tt_numpy/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 #include "ttnn/tensor/types.hpp"
 
 using tt::tt_metal::LegacyShape;
@@ -378,9 +378,9 @@ int main() {
         tt::tt_metal::LegacyShape filter_tensor_shape = {config.window_hw.first, config.window_hw.second};
 
         Tensor input_padded_tensor =
-            tt::numpy::random::random(input_tensor_shape, DataType::BFLOAT16).to(Layout::ROW_MAJOR).cpu();
+            ttnn::numpy::random::random(input_tensor_shape, DataType::BFLOAT16).to(Layout::ROW_MAJOR).cpu();
         Tensor filter_tensor =
-            tt::numpy::random::random(filter_tensor_shape, DataType::BFLOAT16).to(Layout::ROW_MAJOR).cpu();
+            ttnn::numpy::random::random(filter_tensor_shape, DataType::BFLOAT16).to(Layout::ROW_MAJOR).cpu();
         auto input_padded_tensor_buf = owned_buffer::get_as<bfloat16>(input_padded_tensor);
         auto filter_tensor_buf = owned_buffer::get_as<bfloat16>(filter_tensor);
 

@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/pool/avgpool/avg_pool.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-#include "tt_numpy/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 #include "common/constants.hpp"
@@ -17,7 +17,7 @@ using tt::tt_metal::LegacyShape;
 
 Tensor run_avg_pool_2d_resnet(tt::tt_metal::LegacyShape& tensor_shape, Device* device) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
-    auto input_tensor = tt::numpy::random::random(tensor_shape, DataType::BFLOAT16);
+    auto input_tensor = ttnn::numpy::random::random(tensor_shape, DataType::BFLOAT16);
     auto padded_input_shape = AutoFormat::pad_to_tile_shape(tensor_shape, false, false);
     Tensor padded_input_tensor = input_tensor;
     if (!AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape)) {

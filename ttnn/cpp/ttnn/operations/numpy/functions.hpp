@@ -15,17 +15,17 @@
 #include <ttnn/tensor/tensor_impl.hpp>
 #include "ttnn/cpp/ttnn/common/constants.hpp"
 
-namespace tt {
+namespace ttnn {
 
 namespace numpy {
 
-using tt_metal::DataType;
-using tt_metal::Device;
-using tt_metal::Layout;
-using tt_metal::MemoryConfig;
-using tt_metal::OwnedStorage;
-using tt_metal::StorageType;
-using tt_metal::Tensor;
+using tt::tt_metal::DataType;
+using tt::tt_metal::Device;
+using tt::tt_metal::Layout;
+using tt::tt_metal::MemoryConfig;
+using tt::tt_metal::OwnedStorage;
+using tt::tt_metal::StorageType;
+using tt::tt_metal::Tensor;
 namespace detail {
 
 template <typename T>
@@ -40,7 +40,7 @@ constexpr static DataType get_data_type() {
         return DataType::UINT32;
     } else if constexpr (std::is_same_v<T, float>) {
         return DataType::FLOAT32;
-    } else if constexpr (std::is_same_v<T, bfloat16>) {
+    } else if constexpr (std::is_same_v<T, ::bfloat16>) {
         return DataType::BFLOAT16;
     } else {
         TT_THROW("Unsupported DataType!");
@@ -72,7 +72,7 @@ static Tensor full(
     }
 
         constexpr DataType data_type = detail::get_data_type<T>();
-        auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
+        auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(shape));
         std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
 
         if(!optional_output_tensor.has_value()){
@@ -129,8 +129,8 @@ static Tensor full_impl(
             return detail::full<float>(queue_id, shape, float(value), layout, device, output_mem_config, optional_output_tensor);
         }
         case DataType::BFLOAT16: {
-            return detail::full<bfloat16>(
-                queue_id, shape, bfloat16(static_cast<float>(value)), layout, device, output_mem_config, optional_output_tensor);
+            return detail::full<::bfloat16>(
+                queue_id, shape, ::bfloat16(static_cast<float>(value)), layout, device, output_mem_config, optional_output_tensor);
         }
         default: TT_THROW("Unsupported DataType!");
     }
@@ -229,15 +229,15 @@ static Tensor arange(
     // Current implementation restrictions
     TT_ASSERT(step > 0, "Step must be greater than 0");
     TT_ASSERT(start < stop, "Start must be less than step");
-    auto size = div_up((stop - start), step);
+    auto size = tt::div_up((stop - start), step);
     if (size % 2 != 0) {
         size++;
     }
-    auto owned_buffer = tt_metal::owned_buffer::create<T>(size);
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(size);
 
     auto index = 0;
     for (auto value = start; value < stop; value += step) {
-        if constexpr (std::is_same_v<T, bfloat16>) {
+        if constexpr (std::is_same_v<T, ::bfloat16>) {
             owned_buffer[index++] = T(static_cast<float>(value));
         } else {
             owned_buffer[index++] = static_cast<T>(value);
@@ -260,7 +260,7 @@ static Tensor index_trilu(
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     // Current implementation restrictions
-    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(shape));
 
     auto index = 0;
     auto rank = shape.rank();
@@ -273,7 +273,7 @@ static Tensor index_trilu(
         for (int32_t y = 0; y < shape[penultimate]; y++) {
             for (int32_t x = 0; x < shape[ultimate]; x++) {
                 int32_t value = (IS_UPPER) ? (x >= (y + diag)) : (y >= (x - diag));
-                if constexpr (std::is_same_v<T, bfloat16>) {
+                if constexpr (std::is_same_v<T, ::bfloat16>) {
                     owned_buffer[index + y * shape[ultimate] + x] = T(static_cast<float>(value));
                 } else {
                     owned_buffer[index + y * shape[ultimate] + x] = static_cast<T>(value);
@@ -297,7 +297,7 @@ static Tensor index_width(
     Device* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(shape));
     std::fill(owned_buffer.begin(), owned_buffer.end(), -std::numeric_limits<float>::infinity());
     auto& up_shape = shape.without_padding();
     auto index = 0;
@@ -333,7 +333,7 @@ static Tensor index_height(
     Device* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(shape));
     std::fill(owned_buffer.begin(), owned_buffer.end(), -std::numeric_limits<float>::infinity());
     auto& up_shape = shape.without_padding();
     auto index = 0;
@@ -369,7 +369,7 @@ static Tensor index_all(
     Device* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(shape));
     std::fill(owned_buffer.begin(), owned_buffer.end(), -std::numeric_limits<float>::infinity());
     auto& up_shape = shape.without_padding();
     auto index = 0;
@@ -405,7 +405,7 @@ static Tensor mask_padded_input(
     Device* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(padded_shape));
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(padded_shape));
 
     auto index = 0;
     auto rank = padded_shape.rank();
@@ -441,7 +441,7 @@ static Tensor fill_first_val_into_tensor(
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     const tt::tt_metal::LegacyShape& s_a = input_tensor.get_legacy_shape();
-    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(s_a));  // ouput
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(s_a));  // ouput
     auto device_buffer = input_tensor.device_buffer();
     uint32_t size_in_bytes = device_buffer->size();
     vector<T> data_vec;
@@ -455,7 +455,7 @@ static Tensor fill_first_val_into_tensor(
     }
     auto input_buffer = owned_buffer::create<T>(std::move(data_vec));
     const tt::tt_metal::LegacyShape input_tensor_strides = input_tensor.strides();
-    for (uint32_t i = 0; i < tt_metal::compute_volume(s_a); i++) {
+    for (uint32_t i = 0; i < tt::tt_metal::compute_volume(s_a); i++) {
         owned_buffer[i] = input_buffer[0];
     }
     auto output = Tensor(OwnedStorage{owned_buffer}, s_a, data_type, layout).to(layout);
@@ -474,7 +474,7 @@ static Tensor prod_result_computation_GS(
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     const tt::tt_metal::LegacyShape& s_a = input_tensor.get_legacy_shape();
-    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(s_a));  // ouput
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(s_a));  // ouput
     auto device_buffer = input_tensor.device_buffer();
     uint32_t size_in_bytes = device_buffer->size();
     vector<T> data_vec;
@@ -523,7 +523,7 @@ static Tensor prod_result_computation_WH_B0(
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     const tt::tt_metal::LegacyShape& s_a = input_tensor.get_legacy_shape();
-    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(s_a));  // ouput
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(s_a));  // ouput
     auto device_buffer = input_tensor.device_buffer();
     uint32_t size_in_bytes = device_buffer->size();
     vector<T> data_vec;
@@ -575,7 +575,7 @@ static Tensor index_channel(
     Device* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(shape));
     std::fill(owned_buffer.begin(), owned_buffer.end(), -std::numeric_limits<float>::infinity());
     auto& up_shape = shape.without_padding();
     auto index = 0;
@@ -611,7 +611,7 @@ static Tensor index_batch(
     Device* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(shape));
     std::fill(owned_buffer.begin(), owned_buffer.end(), -std::numeric_limits<float>::infinity());
     auto& up_shape = shape.without_padding();
     auto index = 0;
@@ -704,7 +704,7 @@ template <typename T>
 static Tensor uniform(T low, T high, const tt::tt_metal::LegacyShape& shape, const Layout layout = Layout::ROW_MAJOR) {
     constexpr DataType data_type = detail::get_data_type<T>();
 
-    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(shape));
 
     if constexpr (std::is_same_v<T, uint32_t>) {
         auto rand_value = std::bind(std::uniform_int_distribution<T>(low, high), RANDOM_GENERATOR);
@@ -716,11 +716,11 @@ static Tensor uniform(T low, T high, const tt::tt_metal::LegacyShape& shape, con
         for (auto index = 0; index < owned_buffer.size(); index++) {
             owned_buffer[index] = rand_value();
         }
-    } else if constexpr (std::is_same_v<T, bfloat16>) {
+    } else if constexpr (std::is_same_v<T, ::bfloat16>) {
         auto rand_value =
             std::bind(std::uniform_real_distribution<float>(low.to_float(), high.to_float()), RANDOM_GENERATOR);
         for (auto index = 0; index < owned_buffer.size(); index++) {
-            owned_buffer[index] = bfloat16(rand_value());
+            owned_buffer[index] = ::bfloat16(rand_value());
         }
     }
 
@@ -734,7 +734,7 @@ static Tensor random(
         case DataType::UINT16: return uniform(uint16_t(0), uint16_t(1), shape, layout);
         case DataType::UINT32: return uniform(0u, 1u, shape, layout);
         case DataType::FLOAT32: return uniform(0.0f, 1.0f, shape, layout);
-        case DataType::BFLOAT16: return uniform(bfloat16(0.0f), bfloat16(1.0f), shape, layout);
+        case DataType::BFLOAT16: return uniform(::bfloat16(0.0f), ::bfloat16(1.0f), shape, layout);
         default: TT_THROW("Unsupported DataType!");
     };
 }
@@ -753,7 +753,7 @@ static bool nearly_equal(float a, float b, float epsilon = 1e-5f, float abs_thre
 }
 
 template <typename... Args>
-static bool nearly_equal(bfloat16 a, bfloat16 b, Args... args) {
+static bool nearly_equal(::bfloat16 a, ::bfloat16 b, Args... args) {
     return nearly_equal(a.to_float(), b.to_float(), args...);
 }
 }  // namespace detail
@@ -768,8 +768,8 @@ static bool allclose(const Tensor& tensor_a, const Tensor& tensor_b, Args... arg
         return false;
     }
 
-    auto tensor_a_buffer = tt_metal::owned_buffer::get_as<DataType>(tensor_a);
-    auto tensor_b_buffer = tt_metal::owned_buffer::get_as<DataType>(tensor_b);
+    auto tensor_a_buffer = tt::tt_metal::owned_buffer::get_as<DataType>(tensor_a);
+    auto tensor_b_buffer = tt::tt_metal::owned_buffer::get_as<DataType>(tensor_b);
 
     for (int index = 0; index < tensor_a_buffer.size(); index++) {
         if (not detail::nearly_equal(tensor_a_buffer[index], tensor_b_buffer[index], args...)) {
@@ -780,4 +780,4 @@ static bool allclose(const Tensor& tensor_a, const Tensor& tensor_b, Args... arg
 }
 
 }  // namespace numpy
-}  // namespace tt
+}  // namespace ttnn

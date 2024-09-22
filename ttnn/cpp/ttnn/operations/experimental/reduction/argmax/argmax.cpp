@@ -19,7 +19,7 @@ Tensor create_mask(const Tensor& input_a, const std::optional<MemoryConfig>& out
     if (padded_shape == unpadded_shape)
         return input_a;
     float t_inf = -std::numeric_limits<float>::infinity();
-    Tensor masked_input = tt::numpy::mask_padded_input<::bfloat16>(padded_shape, unpadded_shape, DataType::BFLOAT16);
+    Tensor masked_input = numpy::mask_padded_input<::bfloat16>(padded_shape, unpadded_shape, DataType::BFLOAT16);
     masked_input = ttnn::where(masked_input, input_a, t_inf, output_mem_config.value());
     return masked_input;
 }
@@ -47,12 +47,12 @@ Tensor ArgmaxOperation::invoke(const Tensor& input_t, int64_t _dim, bool all, co
                     bool is_width = (dim == (input_shape.rank() - 1));
                     Tensor max_val = ttnn::max(input_a, (int)dim, true, output_memory_config);
                     Tensor max_tensor = ttnn::zeros_like(input_a);
-                    Tensor tindex = tt::numpy::index_width<::bfloat16>(
+                    Tensor tindex = numpy::index_width<::bfloat16>(
                         input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_memory_config);
                     if (is_width) {
                         max_tensor = ttnn::add(max_tensor, max_val, std::nullopt, output_memory_config);
                     } else {
-                        tindex = tt::numpy::index_height<::bfloat16>(
+                        tindex = numpy::index_height<::bfloat16>(
                             input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_memory_config);
                         max_tensor = ttnn::add(max_tensor, max_val, std::nullopt, output_memory_config);
                     }
@@ -89,10 +89,10 @@ Tensor ArgmaxOperation::invoke(const Tensor& input_t, int64_t _dim, bool all, co
                     concat_out = ttnn::reshape(concat_out, input_a.get_shape());
                     Tensor cmp_results = ttnn::eq(input_a, concat_out, std::nullopt, output_memory_config);
                     concat_out.deallocate();
-                    Tensor tindex = tt::numpy::index_channel<::bfloat16>(
+                    Tensor tindex = numpy::index_channel<::bfloat16>(
                         input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_memory_config);
                     if (!is_channel) {
-                        tindex = tt::numpy::index_batch<::bfloat16>(
+                        tindex = numpy::index_batch<::bfloat16>(
                             input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_memory_config);
                     }
                     tindex = tindex.to(input_a.device());
@@ -114,7 +114,7 @@ Tensor ArgmaxOperation::invoke(const Tensor& input_t, int64_t _dim, bool all, co
             }
             // TODO: Fix the index generation code. With the fix the code will work for argmax that return entire
             // maximum value index
-            Tensor tindex = tt::numpy::index_all<::bfloat16>(
+            Tensor tindex = numpy::index_all<::bfloat16>(
                 input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_memory_config);
             Tensor max_val = ttnn::max(input_a, std::nullopt, true, output_memory_config);
             Tensor max_tensor = ttnn::zeros_like(input_a);

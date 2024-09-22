@@ -14,7 +14,7 @@
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_norm_backward/moreh_norm_backward_op.hpp"
 #include "tt_metal/common/work_split.hpp"
-#include "ttnn/deprecated/tt_numpy/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -124,7 +124,7 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
     auto [floored_p_minus_one, decimal_minus_one, p_minus_one_is_negative] =
         get_floored_p_and_decimal_and_p_is_negative(p - 1.0f);
 
-    TT_ASSERT(tt::numpy::detail::nearly_equal(decimal_minus_one, decimal));
+    TT_ASSERT(ttnn::numpy::detail::nearly_equal(decimal_minus_one, decimal));
 
     for (auto i = 0; i < input_grad_rank; ++i) {
         log_debug(LogOp, "need_bcast_dim [{}] = {}", i, need_bcast_dim[i]);

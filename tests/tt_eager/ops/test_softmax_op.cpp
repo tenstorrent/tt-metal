@@ -5,7 +5,7 @@
 #include "tt_metal/host_api.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
-#include "ttnn/deprecated/tt_numpy/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -16,7 +16,7 @@ using namespace tt::tt_metal;
 using namespace constants;
 
 void run_softmax(Device* device, tt::tt_metal::LegacyShape shape) {
-    Tensor input_tensor = tt::numpy::random::random(shape).to(Layout::TILE).to(device);
+    Tensor input_tensor = ttnn::numpy::random::random(shape).to(Layout::TILE).to(device);
     Tensor device_output_tensor = ttnn::softmax_in_place(input_tensor);
     Tensor output_tensor = device_output_tensor.cpu();
 }
