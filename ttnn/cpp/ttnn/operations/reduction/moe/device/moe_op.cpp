@@ -29,7 +29,7 @@ void MoeDeviceOperation::validate_with_output_tensors(
     TT_FATAL(expert_shape[-2] == 32, "Expert shape inner dim must be equal to 32, got {}", expert_shape[-2]);
 }
 
-std::vector<tt::tt_metal::Shape> MoeDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MoeDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto input_shape = input_tensor.get_legacy_shape();
     return {ttnn::Shape(std::array<uint32_t, 4>{input_shape[0], input_shape[1], input_shape[2], 1},std::array<uint32_t, 4>{input_shape[0], input_shape[1], input_shape[2], 32}).value };

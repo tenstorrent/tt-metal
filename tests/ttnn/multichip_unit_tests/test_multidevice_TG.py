@@ -31,6 +31,8 @@ from models.utility_functions import nearest_32
     indirect=True,
 )
 def test_galaxy_matmul_1d_fracture(mesh_device):
+    torch.manual_seed(1234)
+
     act_pt = torch.randn(1, 1, 32, 8192)
     weights_pt = torch.randn(1, 1, 8192, 32768)
     act = ttnn.from_torch(
@@ -89,14 +91,14 @@ def test_galaxy_matmul_1d_fracture(mesh_device):
         pytest.param(128, 52 * 1024, 16 * 1024, ttnn.bfloat8_b, id="Llama3-405B_prefill_seq128_FF2"),
         pytest.param(256, 16 * 1024, 52 * 1024, ttnn.bfloat4_b, id="Llama3-405B_prefill_seq256_FF1"),
         pytest.param(256, 52 * 1024, 16 * 1024, ttnn.bfloat8_b, id="Llama3-405B_prefill_seq256_FF2"),
-        # pytest.param(
-        #     512, 16 * 1024, 52 * 1024, ttnn.bfloat4_b, id="Llama3-405B_prefill_seq512_FF1"
-        # ),  # PCC check failed, PCC: -0.00014127559109112134, see issue 10936
+        pytest.param(512, 16 * 1024, 52 * 1024, ttnn.bfloat4_b, id="Llama3-405B_prefill_seq512_FF1"),
         pytest.param(512, 52 * 1024, 16 * 1024, ttnn.bfloat8_b, id="Llama3-405B_prefill_seq512_FF2"),
     ],
 )
 # Llama FF1, FF2, FF3 in MLP with dram interleaved weights
 def test_galaxy_matmul_2d_fracture(M, K, N, weights_dtype, mesh_shape, mesh_device):
+    torch.manual_seed(1234)
+
     act_pt = torch.randn(1, 1, M, K)
     weights_pt = torch.randn(1, 1, K, N)
 
@@ -146,6 +148,16 @@ def test_galaxy_matmul_2d_fracture(M, K, N, weights_dtype, mesh_shape, mesh_devi
         act,
         weights,
         dtype=ttnn.bfloat16,
+        # program_config=ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        #     compute_with_storage_grid_size=(8,8),
+        #     in0_block_w=1,
+        #     out_subblock_h=1,
+        #     out_subblock_w=1,
+        #     per_core_M=2,
+        #     per_core_N=26,
+        #     transpose_mcast=False,
+        #     fused_activation=None,
+        # ), # if M == 512 and N == 52 * 1024 else None, # use specific ProgramConfig to avoid PCC issue
         compute_kernel_config=compute_kernel_lofi,
         memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if M == 32 else ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -171,6 +183,8 @@ def test_galaxy_matmul_2d_fracture(M, K, N, weights_dtype, mesh_shape, mesh_devi
 )
 # Llama FF1, FF2, FF3 in MLP with dram sharded weights
 def test_galaxy_matmul_2d_fracture_dram_sharded(M, K, N, weights_dtype, mesh_shape, mesh_device):
+    torch.manual_seed(1234)
+
     act_pt = torch.randn(1, 1, M, K)
     weights_pt = torch.randn(1, 1, K, N)
 
@@ -210,9 +224,7 @@ def test_galaxy_matmul_2d_fracture_dram_sharded(M, K, N, weights_dtype, mesh_sha
         {
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(
-                    mesh_device.get_device(0).dram_grid_size().x - 1, mesh_device.get_device(0).dram_grid_size().y - 1
-                ),
+                ttnn.CoreCoord(mesh_device.dram_grid_size().x - 1, mesh_device.dram_grid_size().y - 1),
             )
         }
     )
@@ -268,6 +280,8 @@ def test_galaxy_matmul_2d_fracture_dram_sharded(M, K, N, weights_dtype, mesh_sha
 )
 # Llama FF1 * FF3 in MLP
 def test_galaxy_eltwise_mul_2d_fracture(M, N, mesh_shape, mesh_device):
+    torch.manual_seed(1234)
+
     FF1_pt = torch.randn(1, 1, M, N)
     FF3_pt = torch.randn(1, 1, M, N)
 
@@ -316,6 +330,8 @@ def test_galaxy_eltwise_mul_2d_fracture(M, N, mesh_shape, mesh_device):
 )
 # Llama residual add
 def test_galaxy_eltwise_add(M, N, mesh_device):
+    torch.manual_seed(1234)
+
     residual_pt = torch.randn(1, 1, M, N)
     attn_output_pt = torch.randn(1, 1, M, N)
 
@@ -396,6 +412,8 @@ def test_galaxy_eltwise_add(M, N, mesh_device):
 )
 # Llama attention matmuls
 def test_galaxy_attn_matmul(M, N, head_dim, num_heads, mesh_shape, mesh_device):
+    torch.manual_seed(1234)
+
     act_pt = torch.randn(1, 1, M, N)
     weights_pt = torch.randn(1, 1, N, head_dim * num_heads)
 
@@ -491,6 +509,8 @@ def num_to_corerange(total_max_cores):
 def test_galaxy_nlp_create_heads_decode(
     batch, seq_len, head_dim, n_local_heads, n_local_kv_heads, is_multicore, mesh_device
 ):
+    torch.manual_seed(1234)
+
     total_heads = n_local_heads + n_local_kv_heads * 2
     qkv_heads_pt = torch.rand(1, seq_len, batch, head_dim * total_heads)
     total_max_cores = total_heads * head_dim // 32 if is_multicore else 1  # 40 for llama3-70B; 72 for llama3-405B
@@ -576,6 +596,8 @@ def test_galaxy_nlp_create_heads_decode(
 )
 # Llama rotary matmul (decode only)
 def test_galaxy_rotary_matmul(batch, seq_len, head_dim, n_local_heads, n_local_kv_heads, mesh_device):
+    torch.manual_seed(1234)
+
     q_heads_pt = torch.rand(
         seq_len, batch, max(n_local_heads, 32), head_dim
     )  # Unpad batch=32 to 8 for each column group
@@ -694,6 +716,8 @@ class TestUpdateCache:
     def test_fill_cache(
         self, seq_len, head_dim, max_seq_len, num_users, num_heads, input_dtype, mesh_device, use_program_cache
     ):
+        torch.manual_seed(1234)
+
         cache_dtype = input_dtype
         input_shape = [1, num_heads, seq_len, head_dim]
         cache_shape = [num_users, num_heads, max_seq_len, head_dim]
@@ -711,7 +735,7 @@ class TestUpdateCache:
 
             xt = x
 
-            compute_grid_size = mesh_device.get_device(0).compute_with_storage_grid_size()
+            compute_grid_size = mesh_device.compute_with_storage_grid_size()
             num_cores = min(seq_len // 32 * num_heads, 32)  # Always use max 32 cores for testing
             mesh_shape = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
             input_shard_spec = ttnn.ShardSpec(
@@ -760,6 +784,8 @@ class TestUpdateCache:
         mesh_device,
         use_program_cache,
     ):
+        torch.manual_seed(1234)
+
         if num_users > 32 or (num_users + batch_offset) > 32:
             pytest.skip("Batch offset is only used when num_users < 32 and batch_offset + num_users <= 32")
         input_shape = [num_users, num_heads, 1, head_dim]
@@ -783,7 +809,7 @@ class TestUpdateCache:
             x_new = torch.cat((x_new, torch.zeros(32 - num_users - batch_offset, num_heads, 1, head_dim)), dim=0)
             assert x_new.shape[0] == 32, f"Expected x.shape[0] to be 32, got {x_new.shape[0]}"
         xt = x_new.permute(2, 1, 0, 3)
-        compute_grid_size = mesh_device.get_device(0).compute_with_storage_grid_size()
+        compute_grid_size = mesh_device.compute_with_storage_grid_size()
         num_cores = min(max(num_users, 32) // 32 * num_heads, compute_grid_size.x * compute_grid_size.y)
         mesh_shape = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
         input_shard_spec = ttnn.ShardSpec(
@@ -865,7 +891,7 @@ def run_test_sdpa_decode_single_iter(
     sharded_in=False,
     sharded_out=False,
 ):
-    compute_grid_size = mesh_device.get_device(0).compute_with_storage_grid_size()
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
         pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
 
@@ -1019,6 +1045,8 @@ def test_sdpa_decode_sharded(mesh_device, b, nh, nkv, s, d, dtype, grid_size, q_
 def test_galaxy_nlp_concat_heads_decode(
     batch, seq_len, head_dim, n_local_heads, n_local_kv_heads, padded_local_heads, mesh_device
 ):
+    torch.manual_seed(1234)
+
     concat_head_input = torch.rand(seq_len, batch, padded_local_heads, head_dim)
 
     mesh_shape = ttnn.CoreRangeSet({num_to_corerange(batch)})
@@ -1079,6 +1107,8 @@ def rmsnorm(x, gamma, beta, eps):
     ids=["Llama3-70B-decode", "Llama3-405B-decode"],
 )
 def test_galaxy_layernorm(M, N, mesh_device):
+    torch.manual_seed(1234)
+
     layernorm_input = torch.rand(1, 1, M, N) * 2 - 0.95
     norm_weights = torch.rand(1, 1, N // 32, 32) * 2 - 1
     norm_eps = 1e-05
@@ -1455,3 +1485,91 @@ def test_visualize_mesh_device_with_tensor_col_major(mesh_device):
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
     ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
+
+
+def rms_norm(x, gamma, eps):
+    return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * gamma
+
+
+@pytest.mark.parametrize("input_width", [8192])
+@pytest.mark.parametrize("input_height", [32])
+@pytest.mark.parametrize("eps", [1e-5])
+@pytest.mark.parametrize("core_grid", [(4, 8)])
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_sharded_distributed_layernorm(mesh_device, input_width, input_height, core_grid, eps):
+    rows, cols = mesh_device.shape
+    input_shape = (1, 1, input_height, input_width)
+    gamma_shape = (1, 1, 1, input_width)
+
+    input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    gamma = torch.randn(gamma_shape, dtype=torch.bfloat16)
+
+    torch_output_tensor = rms_norm(input_tensor, gamma, eps=eps)
+
+    input_mem_config = ttnn.create_sharded_memory_config(
+        shape=(1, 1, input_shape[-2], input_width // cols),
+        core_grid=ttnn.CoreGrid(y=core_grid[0], x=core_grid[1]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+    )
+
+    tt_input_tensor = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=input_mem_config,
+        mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(None, 3)),
+    )
+
+    tt_weights = ttnn.from_torch(
+        gamma,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(None, 3)),
+    )
+
+    sharded_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[core_grid[1], core_grid[0]],
+        subblock_w=((input_width // cols) // (core_grid[0] * core_grid[1])) // 32,
+        block_h=1,
+        block_w=((input_width // cols) // (core_grid[0] * core_grid[1])) // 32,
+        inplace=False,
+    )
+    tt_stats = ttnn.rms_norm_pre_all_gather(tt_input_tensor, program_config=sharded_program_config)
+
+    gathered_stats_sharded_memory_config = ttnn.create_sharded_memory_config(
+        shape=[1, 1, input_height, input_height * cols],
+        core_grid=ttnn.CoreGrid(y=1, x=1),
+        strategy=ttnn.ShardStrategy.WIDTH,
+    )
+
+    tt_stats = ttnn.line_all_gather(
+        tt_stats,
+        3,
+        num_links=1,
+        cluster_axis=1,
+        mesh_device=mesh_device,
+        memory_config=gathered_stats_sharded_memory_config,
+    )
+
+    tt_output_tensor = ttnn.rms_norm_post_all_gather(
+        tt_input_tensor,
+        epsilon=eps,
+        weight=tt_weights,
+        program_config=sharded_program_config,
+        memory_config=input_mem_config,
+        stats=tt_stats,
+    )
+
+    tt_stats.deallocate(True)
+
+    tt_output_tensor = ttnn.to_torch(
+        tt_output_tensor, mesh_composer=ConcatMesh2dToTensor(mesh_device, mesh_shape=(rows, cols), dims=(1, 3))
+    )
+    tt_output_tensor = tt_output_tensor[:, 1].unsqueeze(0)
+
+    is_pass, output_pcc = comp_pcc(torch_output_tensor, tt_output_tensor, pcc=0.999)
+
+    assert is_pass, f"PCC value: {output_pcc}"

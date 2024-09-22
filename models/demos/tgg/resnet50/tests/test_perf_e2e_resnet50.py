@@ -18,7 +18,7 @@ from models.utility_functions import run_for_wormhole_b0
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    ((16, 4),),
+    ((8, 8),),
     indirect=True,
 )
 def test_perf(
@@ -53,7 +53,7 @@ def test_perf(
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    ((16, 4),),
+    ((8, 8),),
     indirect=True,
 )
 def test_perf_trace(

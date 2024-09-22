@@ -2807,7 +2807,7 @@ def empty(
     output_mem_config,
     **kwargs,
 ):
-    t1 = ttnn.empty(shape=x.shape, memory_config=output_mem_config)
+    t1 = ttnn.empty(x.shape, dtype, layout, device, output_mem_config)
 
     result = ttnn_tensor_to_torch(t1)
     return ttnn_tensor_to_torch(t1)

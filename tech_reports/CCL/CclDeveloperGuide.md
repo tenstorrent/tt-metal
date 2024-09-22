@@ -80,7 +80,7 @@ The current stacks look like the following:
 
 The Ethernet subsystem, including the link and phy are at the lowest level.
 
-Above thise are APIs to direct write to Ethernet command queue registers, which can be used to initiate ethernet transactions and change message modes (raw vs packet for example).
+Above this are APIs to direct write to Ethernet command queue registers, which can be used to initiate ethernet transactions and change message modes (raw vs packet for example).
 
 The third level is the ethernet dataflow API which lets the user initiate writes over the ethernet link. These APIs are similar to the noc async APIs in that commands are issued to command buffers and dispatched at some later, unknown time.
 
@@ -88,12 +88,15 @@ The fourth level is the Erisc datamover which encapsulates many common pieces of
 
 Finally, higher level operations are implemented.
 
+## CCL Orchestration
+At the TT-NN layer, orchestration APIs exist to perform higher level collective and multichip operations. For example, a user can specify that they wish to run independent all-gather operations along all the rows or columns of a mesh that their multichip tensor is distributed across. The ["Programming Mesh of Devices with TT-NN"](../Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md) provides further details.
+
 # Multichip Topologies and Connectivity {#multichip-topologies-and-connectivity}
 
 Starting with the Wormhole architecture, Tenstorrent offers multi-chip functionality where two or more Wormhole chips can be connected together. Tenstorrent’s scaleout strategy enables Wormhole and later chips to communicate directly with each other,  
 It doesn’t require:
 
-1)  a host CPU as an intermediary   
+1) a host CPU as an intermediary   
 2) or a switch (such as NVSwitch)  
 3) or a network card (such as Infiniband NIC)  
    

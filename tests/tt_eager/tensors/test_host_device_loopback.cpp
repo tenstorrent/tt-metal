@@ -11,7 +11,7 @@
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_numpy/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 
 using namespace tt;
 using namespace tt_metal;
@@ -20,9 +20,9 @@ using namespace constants;
 
 bool test_single_tile_single_dram_bank_loopback(Device *device) {
     bool pass = true;
-    Shape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+    tt::tt_metal::LegacyShape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
 
-    Tensor host_a = tt::numpy::random::random(single_tile_shape).to(Layout::TILE);
+    Tensor host_a = ttnn::numpy::random::random(single_tile_shape).to(Layout::TILE);
     Tensor device_a = host_a.to(device);
     Tensor loopbacked_a = device_a.cpu();
     auto host_a_data = owned_buffer::get_as<bfloat16>(host_a);
@@ -34,9 +34,9 @@ bool test_single_tile_single_dram_bank_loopback(Device *device) {
 
 bool test_multi_tile_multi_dram_bank_loopback(Device *device) {
     bool pass = true;
-    Shape multi_tile_shape = {1, 1, 4*TILE_HEIGHT, 3*TILE_WIDTH};
+    tt::tt_metal::LegacyShape multi_tile_shape = {1, 1, 4*TILE_HEIGHT, 3*TILE_WIDTH};
 
-    Tensor host_a = tt::numpy::random::random(multi_tile_shape).to(Layout::TILE);
+    Tensor host_a = ttnn::numpy::random::random(multi_tile_shape).to(Layout::TILE);
     Tensor device_a = host_a.to(device);
     Tensor loopbacked_a = device_a.cpu();
     auto host_a_data = owned_buffer::get_as<bfloat16>(host_a);

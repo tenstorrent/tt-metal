@@ -5,7 +5,6 @@
 import torch
 
 import ttnn
-import ttnn.experimental.tensor as tt_tensor
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 
@@ -78,7 +77,7 @@ def run(N, H, W, C, shard_strategy, stride_h, stride_w, *, device):
         memory_config=memory_config,
     )
 
-    output = tt_tensor.fold(input_tensor, stride_h, stride_w)
+    output = ttnn.fold(input_tensor, stride_h, stride_w)
     output = ttnn.to_torch(output)
 
     return check_with_pcc(torch_output, output, 0.999)

@@ -14,7 +14,7 @@
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_norm_backward/moreh_norm_backward_op.hpp"
 #include "tt_metal/common/work_split.hpp"
-#include "ttnn/deprecated/tt_numpy/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -36,7 +36,7 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
 }
 
 
-void get_tensor_dim(std::vector<uint32_t> &dim, const Shape& shape) {
+void get_tensor_dim(std::vector<uint32_t> &dim, const tt::tt_metal::LegacyShape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -56,7 +56,7 @@ void get_tensor_dim(std::vector<uint32_t> &dim, const Shape& shape) {
     }
 }
 
-Shape get_output_grad_shape(const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keep_batch_dim) {
+tt::tt_metal::LegacyShape get_output_grad_shape(const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keep_batch_dim) {
     if (keep_batch_dim) {
         return output_grad.get_legacy_shape();
     }
@@ -75,7 +75,7 @@ Shape get_output_grad_shape(const Tensor &output_grad, const Tensor &input_grad,
         }
     }
 
-    return Shape(shape, padding);
+    return tt::tt_metal::LegacyShape(shape, padding);
 }
 
 }  // namespace
@@ -124,7 +124,7 @@ operation::ProgramWithCallbacks moreh_norm_backward_(
     auto [floored_p_minus_one, decimal_minus_one, p_minus_one_is_negative] =
         get_floored_p_and_decimal_and_p_is_negative(p - 1.0f);
 
-    TT_ASSERT(tt::numpy::detail::nearly_equal(decimal_minus_one, decimal));
+    TT_ASSERT(ttnn::numpy::detail::nearly_equal(decimal_minus_one, decimal));
 
     for (auto i = 0; i < input_grad_rank; ++i) {
         log_debug(LogOp, "need_bcast_dim [{}] = {}", i, need_bcast_dim[i]);

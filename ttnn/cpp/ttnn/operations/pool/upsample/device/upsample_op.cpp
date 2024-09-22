@@ -13,8 +13,8 @@
 #include "tt_metal/common/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace ttnn::operations::upsample {
+using namespace tt;
 
 void UpSample::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
@@ -25,12 +25,16 @@ void UpSample::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Input tensor data type should be BFLOAT16");
     if (input_tensor_a.memory_config().is_sharded()) {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == output_mem_config_.memory_layout, "Input tensor memory layout should be same as output tensor memory layout");
-        TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Input tensor memory layout should be HEIGHT or BLOCK sharded");
-        TT_FATAL(input_tensor_a.buffer()->buffer_type() == tt_metal::BufferType::L1, "Input buffer should be sharded in L1");
+        if(mode_ == "nearest")
+            TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Input tensor memory layout should be HEIGHT or BLOCK sharded");
+        else if(mode_ == "bilinear")
+            TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Input tensor memory layout should be HEIGHT sharded");
+        TT_FATAL(mode_ == "bilinear" || mode_ == "nearest", "Upsample only supports bilinear or nearest mode");
+        TT_FATAL(input_tensor_a.buffer()->buffer_type() == tt::tt_metal::BufferType::L1, "Input buffer should be sharded in L1");
     }
 }
 
-std::vector<Shape> UpSample::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> UpSample::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     // NOTE1: data is packed in { N, H , W, C }
     // NOTE2: Mapping it into in 2D format should be {N*H*W, C}
     // NOTE3: Assuming output data type is same as input
@@ -42,7 +46,7 @@ std::vector<Shape> UpSample::compute_output_shapes(const std::vector<Tensor> &in
     uint32_t out_w = input_shape[2] * scale_factor_w_;
     uint32_t out_c = input_shape[3];
     const auto out_dims = std::vector<uint32_t>({ out_n, out_h, out_w, out_c }); //in the NHWC format
-    auto out_shape = Shape{out_dims};
+    auto out_shape = tt::tt_metal::LegacyShape{out_dims};
 
     return {out_shape};
 }
@@ -94,9 +98,19 @@ std::vector<Tensor> UpSample::create_output_tensors(const std::vector<Tensor> &i
     Tensor& output_tensor_0 = output_tensors.at(0);
     switch (get_parallelization_strategy(input_tensors)) {
         case UpSampleParallelizationStrategy::MULTI_CORE:
-            return upsample_multi_core(input_tensor_0, output_tensor_0, scale_factor_h_, scale_factor_w_);
+            if (mode_ == "bilinear") {
+                return bilinear_multi_core(input_tensor_0, output_tensor_0, scale_factor_h_, scale_factor_w_, this->compute_kernel_config_);
+            } else if(mode_ == "nearest") {
+                return upsample_multi_core(input_tensor_0, output_tensor_0, scale_factor_h_, scale_factor_w_);
+            } else {
+                TT_THROW("Unsupported mode");
+            }
         case UpSampleParallelizationStrategy::SINGLE_CORE:
-            return upsample_single_core(input_tensor_0, output_tensor_0, scale_factor_h_, scale_factor_w_);
+            if(mode_ == "nearest")
+                return upsample_single_core(input_tensor_0, output_tensor_0, scale_factor_h_, scale_factor_w_);
+            else{
+                TT_THROW("Unsupported mode");
+            }
     };
     return upsample_single_core(input_tensor_0, output_tensor_0, scale_factor_h_, scale_factor_w_);
 }
@@ -109,15 +123,4 @@ UpSampleParallelizationStrategy UpSample::get_parallelization_strategy(const std
     return UpSampleParallelizationStrategy::SINGLE_CORE;
 }
 
-Tensor upsample(const Tensor &input,
-                int scale_factor_h,
-                int scale_factor_w,
-                const MemoryConfig& out_mem_config) {
-    return operation::run_without_autoformat(UpSample{scale_factor_h,
-                                                      scale_factor_w,
-                                                      out_mem_config},
-                                              {input}).at(0);
-}
-
-} // namespace tt_metal
-} // namespace tt
+} // namespace ttnn::operations::upsample

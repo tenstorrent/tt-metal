@@ -19,7 +19,7 @@
 namespace ttnn::operations::data_movement {
 
 std::vector<Tensor> fold_with_transpose_(
-    uint8_t queue_id, const Tensor& input, const std::optional<const tt::tt_metal::Shape>& output_shape, uint32_t stride_h, uint32_t stride_w, uint32_t pad_c, uint32_t pad_h, uint32_t pad_w) {
+    uint8_t queue_id, const Tensor& input, const std::optional<const tt::tt_metal::LegacyShape>& output_shape, uint32_t stride_h, uint32_t stride_w, uint32_t pad_c, uint32_t pad_h, uint32_t pad_w) {
 
     using namespace tt::constants;
     Device * device;
@@ -92,8 +92,9 @@ std::vector<Tensor> fold_with_transpose_(
         // slice
         n = output_shape.value()[0], w = output_shape.value()[1], h = output_shape.value()[2], c = output_shape.value()[3];
         tt::tt_metal::Array4D slice_output_tensor_start = {0, 0, 0, 0};
-        tt::tt_metal::Array4D slice_output_tensor_end = {n - 1, w - 1, h - 1, c - 1};
-        auto slice_output = ttnn::slice(transpose_hc_output2, slice_output_tensor_start, slice_output_tensor_end, std::nullopt, L1_mem_config);
+        tt::tt_metal::Array4D slice_output_tensor_end = {n, w, h, c};
+        tt::tt_metal::Array4D step = {1, 1, 1, 1};
+        auto slice_output = ttnn::slice(transpose_hc_output2, slice_output_tensor_start, slice_output_tensor_end, step, L1_mem_config);
 
         output_tensors.emplace_back(slice_output);
 
@@ -131,7 +132,7 @@ ttnn::MemoryConfig create_sharded_memory_config(ttnn::Shape tensor_shape, CoreCo
 }
 
 std::vector<Tensor> fold_with_transpose_sharded_(
-    uint8_t queue_id, const Tensor& input, const std::optional<const tt::tt_metal::Shape>& output_shape, uint32_t stride_h, uint32_t stride_w, uint32_t pad_c, uint32_t pad_h, uint32_t pad_w, CoreCoord grid_size, const std::optional<MemoryConfig> override_memory_config) {
+    uint8_t queue_id, const Tensor& input, const std::optional<const tt::tt_metal::LegacyShape>& output_shape, uint32_t stride_h, uint32_t stride_w, uint32_t pad_c, uint32_t pad_h, uint32_t pad_w, CoreCoord grid_size, const std::optional<MemoryConfig> override_memory_config) {
 
     using namespace tt::constants;
     Device * device;
@@ -243,18 +244,19 @@ std::vector<Tensor> fold_with_transpose_sharded_(
 
     std::vector<Tensor> output_tensors;
     // override output shape
+    auto steps = tt::tt_metal::Array4D({1, 1, 1, 1});
     if (output_shape.has_value()) {
         // slice
         n = output_shape.value()[0], h = output_shape.value()[1], w = output_shape.value()[2], c = output_shape.value()[3];
         tt::tt_metal::Array4D slice_output_tensor_start = {0, 0, 0, 0};
-        tt::tt_metal::Array4D slice_output_tensor_end = {n - 1, h - 1, w - 1, c - 1};
+        tt::tt_metal::Array4D slice_output_tensor_end = {n, h, w, c};
         auto slice_mem_config = create_sharded_memory_config(
             ttnn::Shape(tt::tt_metal::Array4D{n, h, w, c}),
             grid_size,
             shard_spec.orientation,
             override_memory_config
         );
-        tt_output_tensor = ttnn::slice(tt_output_tensor, slice_output_tensor_start, slice_output_tensor_end, std::nullopt, slice_mem_config);
+        tt_output_tensor = ttnn::slice(tt_output_tensor, slice_output_tensor_start, slice_output_tensor_end, steps, slice_mem_config);
 
         output_tensors.emplace_back(tt_output_tensor);
 
@@ -263,14 +265,14 @@ std::vector<Tensor> fold_with_transpose_sharded_(
         // slice
         n = slice_output_shape[0], h = slice_output_shape[1], w = slice_output_shape[2], c = slice_output_shape[3];
         tt::tt_metal::Array4D slice_output_tensor_start = {0, 0, 0, 0};
-        tt::tt_metal::Array4D slice_output_tensor_end = {n - 1, h - 1, w - 1, c - 1};
+        tt::tt_metal::Array4D slice_output_tensor_end = {n, h, w, c};
         auto slice_mem_config = create_sharded_memory_config(
             ttnn::Shape(tt::tt_metal::Array4D{n, h, w, c}),
             grid_size,
             shard_spec.orientation,
             override_memory_config
         );
-        tt_output_tensor = ttnn::slice(tt_output_tensor, slice_output_tensor_start, slice_output_tensor_end, std::nullopt, slice_mem_config);
+        tt_output_tensor = ttnn::slice(tt_output_tensor, slice_output_tensor_start, slice_output_tensor_end, steps, slice_mem_config);
 
         output_tensors.emplace_back(tt_output_tensor);
 
@@ -285,7 +287,7 @@ Tensor FoldOperation::invoke(uint8_t queue_id,
                                  uint32_t stride_h,
                                  uint32_t stride_w,
                                  bool use_transpose_as_fold,
-                                 const std::optional<const tt::tt_metal::Shape> &output_shape,
+                                 const std::optional<const tt::tt_metal::LegacyShape> &output_shape,
                                  uint32_t pad_c,
                                  uint32_t pad_h,
                                  uint32_t pad_w,
@@ -309,7 +311,7 @@ Tensor FoldOperation::invoke(const ttnn::Tensor &input_tensor,
                                  uint32_t stride_h,
                                  uint32_t stride_w,
                                  bool use_transpose_as_fold,
-                                 const std::optional<const tt::tt_metal::Shape> &output_shape,
+                                 const std::optional<const tt::tt_metal::LegacyShape> &output_shape,
                                  uint32_t pad_c,
                                  uint32_t pad_h,
                                  uint32_t pad_w,

@@ -72,7 +72,6 @@ void reduce_c() {
     }
 
    reduce_revert_delta<reduce_dim>(out_cb);
-   UNPACK(tensix_sync()); // Workaround for issue #9370
 }
 
 void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {

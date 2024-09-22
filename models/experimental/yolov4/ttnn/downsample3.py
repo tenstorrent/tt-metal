@@ -130,9 +130,17 @@ class Down3:
         output_tensor = self.conv4(device, output_tensor)
         output_tensor = ttnn.mish(output_tensor)
 
-        output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
-        output_tensor_left = ttnn.sharded_to_interleaved(output_tensor_left, ttnn.L1_MEMORY_CONFIG)
-        output_tensor = ttnn.concat([output_tensor, output_tensor_left], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
+        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+        output_tensor_left = ttnn.to_layout(output_tensor_left, layout=ttnn.ROW_MAJOR_LAYOUT)
+        output_sharded_memory_config = ttnn.create_sharded_memory_config(
+            [32, 256],
+            core_grid=output_tensor_left.memory_config().shard_spec.grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+        output_tensor = ttnn.concat(
+            [output_tensor, output_tensor_left], dim=3, memory_config=output_sharded_memory_config
+        )
         ttnn.deallocate(output_tensor_left)
 
         output_tensor = self.conv5(device, output_tensor)

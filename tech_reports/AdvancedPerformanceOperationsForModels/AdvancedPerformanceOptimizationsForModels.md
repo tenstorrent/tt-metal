@@ -2,29 +2,24 @@
 
 ## Contents
 
-1. [Metal Trace](#1-metal-trace)
-
-    1.1 [Overview](#11-overview)
-
-    1.2 [APIs](#12-apis)
-
-    1.3 [Programming Examples](#13-programming-examples)
-
-2. [Multiple Command Queues](#2-multiple-command-queues)
-
-    2.1 [Overview](#21-overview)
-
-    2.2 [APIs](#22-apis)
-
-    2.3 [Programming Examples](#23-programming-examples)
-
-3. [Putting Trace and Multiple Command Queues Together](#3-putting-trace-and-multiple-command-queues-together)
-
-    3.1 [Overview](#31-overview)
-
-    3.2 [APIs](#32-apis)
-
-    3.3 [Programming Examples](#33-programming-examples)
+- [1. Metal Trace](#1-metal-trace)
+  - [1.1 Overview](#11-overview)
+  - [1.2 APIs](#12-apis)
+  - [1.3 Programming Examples](#13-programming-examples)
+    - [1.3.1 Trace with Persistent DRAM Input](#131-trace-with-persistent-dram-input)
+    - [1.3.2 Trace with Non-Persistent L1 Input](#132-trace-with-non-persistent-l1-input)
+- [2. Multiple Command Queues](#2-multiple-command-queues)
+  - [2.1 Overview](#21-overview)
+  - [2.2 APIs](#22-apis)
+  - [2.3 Programming Examples](#23-programming-examples)
+    - [2.3.1 Ops and Output Readback on CQ 0, Input Writes on CQ 1](#231-ops-and-output-readback-on-cq-0-input-writes-on-cq-1)
+    - [2.3.2 Ops on CQ 0, Input Writes and Output Readback on CQ 1](#232-ops-on-cq-0-input-writes-and-output-readback-on-cq-1)
+- [3. Putting Trace and Multiple Command Queues Together](#3-putting-trace-and-multiple-command-queues-together)
+  - [3.1 Overview](#31-overview)
+  - [3.2 APIs](#32-apis)
+  - [3.3 Programming Examples](#33-programming-examples)
+    - [3.3.1 Trace with Non-Persistent L1 Input, Ops and Output Readback on CQ 0, Input Writes on CQ 1](#331-trace-with-non-persistent-l1-input-ops-and-output-readback-on-cq-0-input-writes-on-cq-1)
+    - [3.3.2 Trace with Non-Persistent L1 Input, Ops on CQ 0, Input Writes and Output Readback on CQ 1](#332-trace-with-non-persistent-l1-input-ops-on-cq-0-input-writes-and-output-readback-on-cq-1)
 
 ## 1. Metal Trace
 
@@ -75,6 +70,8 @@ In addition, since trace requires the addresses of the used tensors to be the sa
 
 ### 1.3 Programming Examples
 
+#### 1.3.1 Trace With Persistent DRAM Input
+
 Normally for performance we try to allocate tensors in L1, but many models are not able to fit in L1 if we keep the input tensor in L1 memory. The easiest way to work around this is that we can allocate our input in DRAM so that we can keep the tensor persistent in memory, then run an operation to move it to L1. For performance, we’d expect to allocate the input as DRAM sharded and move it to L1 sharded using the reshard operation. A more complex technique that allows us to still run with our input in L1 is to allow the input tensor to be deallocated, and then reallocating and ensuring it is allocated at the same address at the end of the trace. Both techniques will be demonstrated below.
 
 Trace only supports capturing and executing operations, and not other commands such as reading/writing tensors. This also means that to capture the trace of a sequence of operations, we must run with program cache and have already compiled the target operations before we capture them.
@@ -104,6 +101,9 @@ ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
 host_output_tensor = output_tensor.cpu(blocking=False)
 
 ```
+
+#### 1.3.2 Trace with Non-Persistent L1 Input
+
 Below is a more advanced example where our input tensor is in L1 and we allow it to be deallocated since the model doesn't fit in L1 if it was persistent, but we will reallocate it at the same address at the end of trace capture to enable having the input in L1 for the trace.
 
 ```py
@@ -182,6 +182,8 @@ In addition, for our example of using one command queue only for writing inputs,
 
 ### 2.3 Programming Examples
 
+#### 2.3.1 Ops and Output Readback on CQ 0, Input Writes on CQ 1
+
 Normally for performance we try to allocate tensors in L1, but many models are not able to fit in L1 if we keep the input tensor in L1 memory. To work around this, we can allocate our input in DRAM so that we can keep the tensor persistent in memory, then run an operation to move it to L1. For performance, we’d expect to allocate the input as DRAM sharded and move it to L1 sharded using the reshard operation.
 
 For using 2 command queues where one is just for writes, and one for running programs and reading, we will need to create and use 2 events.
@@ -222,6 +224,99 @@ for iter in range(0, 2):
 
 ```
 
+#### 2.3.2 Ops on CQ 0, Input Writes and Output Readback on CQ 1
+
+For using 2 command queues where one is for reads and writes, and one for running programs, we will need 2 persistent tensors, one for the input, and one for the output.
+We will also need to create and use 4 events for this setup. This is useful for when we can overlap reads and writes with op execution, such as when op time dominates over read/write time.
+The first event we use is an event to signal that the write has completed on command queue 1. This event will be waited on by command queue 0 so that it only executes operations after the write has completed. The second event we have is for signaling that command queue 0 has consumed the input tensor, and that it is okay for command queue 1 to overwrite it with new data. This is waited on by command queue 1 before it writes the next input. The third event is used to signal that command queue 0 has finished running its ops and that command queue 1 can read the data. The fourth even is used to signal that command queue 1 has finished reading the output, and command queue 0 can overwrite it.
+
+When putting reads and writes on the same CQ, we don't want to just write our input tensor, then stall waiting for the output, as this means we have basically blocked CQ 1 until the model has finished running.
+Instead we can restructure the loop so that we write the first input outside the loop. Then in the loop we run the model, and then enqueue the next write before we enqueue the readback of the current output.
+This way CQ1 will always have started/finished writing the next input and allows overlapping the read of the current output with the next iteration of the model.
+
+```py
+# This example uses 1 CQ for writing inputs and reading outputs (CQ 1), and one CQ for executing programs (CQ 0)
+
+# Create the event for signalling when the first operation is completed. This is the consumer of the input tensor so once this is completed, we can issue the next write
+first_op_event = ttnn.create_event(device)
+# Create the event for when input write is completed. This is used to signal that the input tensor can be read/consumed
+write_event = ttnn.create_event(device)
+# Create the event for signalling when the last operation is completed. This is the producer of the otuput tensor so once this is completed, we can issue the next read
+last_op_event = ttnn.create_event(device)
+# Create the event for when output read is completed. This is used to signal that the output tensor can be overwritten
+read_event = ttnn.create_event(device)
+
+# Allocate our persistent input tensor
+input_dram_tensor = ttnn.allocate_tensor_on_device(input_shape, input_dtype, input_layout, device, input_sharded_dram_mem_config)
+# Allocate our persistent output tensor
+output_dram_tensor = ttnn.allocate_tensor_on_device(output_shape, output_dtype, output_layout, device, output_sharded_dram_mem_config)
+
+# Dummy record an op event on CQ 0 since we wait on this first in the loop
+ttnn.record_event(0, first_op_event)
+# Dummy record a read event on CQ 1 since we wait on this first in the loop
+ttnn.record_event(1, read_event)
+
+outputs = []
+
+# Stall CQ 1 for the input tensor consumer (CQ 0) to signal it has finished so we can start overwriting the previous input tensor with the new one
+ttnn.wait_for_event(1, first_op_event)
+# Write the next input tensor on CQ 1
+ttnn.copy_host_to_device_tensor(host_tensor, input_dram_tensor, cq_id=1)
+# Signal that the write has finished on CQ 1
+ttnn.record_event(1, write_event)
+
+for iter in range(0, 2):
+    # Make CQ 0 stall until CQ 1 has signalled that the write has finished
+    ttnn.wait_for_event(0, write_event)
+    # Run the first operation of the model on CQ 0
+    input_l1_tensor = ttnn.to_memory_config(input_dram_tensor, sharded_l1_mem_config)
+    # Signal to the producer (CQ 1) that CQ 0 is finished with the input and it can be overwritten
+    ttnn.record_event(0, first_op_event)
+    # Run the rest of the model and issue output readback on the default CQ (0)
+    output_tensor = run_model(input_l1_tensor)
+    # Make CQ 0 stall until CQ 1 has signalled that the read has finished
+    ttnn.wait_for_event(0, read_event)
+    # Run the last operation of the model on CQ 0
+    output_dram_tensor = ttnn.reshard(output_tensor, output_sharded_dram_mem_config, output_dram_tensor)
+    # Signal that the model has finished on CQ 0
+    ttnn.record_event(0, last_op_event)
+
+    # Stall CQ 1 for the input tensor consumer (CQ 0) to signal it has finished so we can start overwriting the previous input tensor with the new one
+    ttnn.wait_for_event(1, first_op_event)
+    # Write the next input tensor on CQ 1
+    ttnn.copy_host_to_device_tensor(host_tensor, input_dram_tensor, cq_id=1)
+    # Signal that the write has finished on CQ 1
+    ttnn.record_event(1, write_event)
+
+    # Make CQ 1 stall until CQ 0 has signalled that the model has finished
+    ttnn.wait_for_event(1, last_op_event)
+    outputs.append(output_dram_tensor.cpu(blocking=False, cq_id=1))
+    # Signal that the read has finished on CQ 1
+    ttnn.record_event(1, read_event)
+
+# Make CQ 0 stall until CQ 1 has signalled that the write has finished
+ttnn.wait_for_event(0, write_event)
+# Run the first operation of the model on CQ 0
+input_l1_tensor = ttnn.to_memory_config(input_dram_tensor, sharded_l1_mem_config)
+# Signal to the producer (CQ 1) that CQ 0 is finished with the input and it can be overwritten
+ttnn.record_event(0, first_op_event)
+# Run the rest of the model and issue output readback on the default CQ (0)
+output_tensor = run_model(input_l1_tensor)
+# Make CQ 0 stall until CQ 1 has signalled that the read has finished
+ttnn.wait_for_event(0, read_event)
+# Run the last operation of the model on CQ 0
+output_dram_tensor = ttnn.reshard(output_tensor, output_sharded_dram_mem_config, output_dram_tensor)
+# Signal that the model has finished on CQ 0
+ttnn.record_event(0, last_op_event)
+
+# Make CQ 1 stall until CQ 0 has signalled that the model has finished
+ttnn.wait_for_event(1, last_op_event)
+outputs.append(output_dram_tensor.cpu(blocking=False, cq_id=1))
+# Signal that the read has finished on CQ 1
+ttnn.record_event(1, read_event)
+
+```
+
 ## 3. Putting Trace and Multiple Command Queues Together
 
 ### 3.1 Overview
@@ -242,6 +337,8 @@ When combining these two optimizations, there are a few things we need to be awa
 Refer to [1.2 Metal Trace APIs](#12-apis) and [2.2 Multiple Command Queues APIs](#22-apis) for the required APIs.
 
 ### 3.3 Programming Examples
+
+#### 3.3.1 Trace with Non-Persistent L1 Input, Ops and Output Readback on CQ 0, Input Writes on CQ 1
 
 The following example shows using 2 cqs with trace, where we use CQ 1 only for writing inputs, and CQ 0 for running programs/reading outputs.
 We use a persistent DRAM tensor to write our input, and we make the input to our trace as an L1 tensor which is the output of the first op.
@@ -313,10 +410,144 @@ for iter in range(0, 2):
     ttnn.wait_for_event(0, write_event)
     # Run the first operation of the model on CQ 0
     # Note here that we are writing to our persisent input tensor in place to reuse the address
-    input_l1_tensor = ttnn.to_memory_config(input_dram_tensor, sharded_l1_mem_config, input_l1_tensor)
+    input_l1_tensor = ttnn.reshard(input_dram_tensor, sharded_l1_mem_config, input_l1_tensor)
     # Signal to the producer (CQ 1) that CQ 0 is finished with the input and it can be overwritten
     ttnn.record_event(0, op_event)
     # Run the rest of the model and issue output readback on the default CQ (0)
     ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
     outputs.append(output_tensor.cpu(blocking=False))
+```
+
+#### 3.3.2 Trace with Non-Persistent L1 Input, Ops on CQ 0, Input Writes and Output Readback on CQ 1
+
+The following example shows using 2 cqs with trace, where we use CQ 1 for writing inputs and reading outputs, and CQ 0 only for running programs.
+We use a persistent DRAM tensor to write our input, and we make the input to our trace as an L1 tensor which is the output of the first op.
+We also use a persistent DRAM tensor to write/read our output.
+
+```py
+# This example uses 1 CQ for writing inputs and reading outputs (CQ 1), and one CQ for executing programs (CQ 0)
+
+# Create the event for signalling when the first operation is completed. This is the consumer of the input tensor so once this is completed, we can issue the next write
+first_op_event = ttnn.create_event(device)
+# Create the event for when input write is completed. This is used to signal that the input tensor can be read/consumed
+write_event = ttnn.create_event(device)
+# Create the event for signalling when the last operation is completed. This is the producer of the otuput tensor so once this is completed, we can issue the next read
+last_op_event = ttnn.create_event(device)
+# Create the event for when output read is completed. This is used to signal that the output tensor can be overwritten
+read_event = ttnn.create_event(device)
+
+# Allocate our persistent input tensor
+input_dram_tensor = ttnn.allocate_tensor_on_device(shape, dtype, layout, device, sharded_dram_mem_config)
+
+# Dummy record an op event on CQ 0 since we wait on this first in the loop
+ttnn.record_event(0, first_op_event)
+# Dummy record a read event on CQ 1 since we wait on this first in the loop
+ttnn.record_event(1, read_event)
+
+# First run to compile the model
+# Stall CQ 1 for the input tensor consumer (CQ 0) to signal it has finished so we can start overwriting the previous input tensor with the new one
+ttnn.wait_for_event(1, first_op_event)
+# Write the next input tensor on CQ 1
+ttnn.copy_host_to_device_tensor(host_tensor, input_dram_tensor, cq_id=1)
+# Signal that the write has finished on CQ 1
+ttnn.record_event(1, write_event)
+# Make CQ 0 stall until CQ 1 has signalled that the write has finished
+ttnn.wait_for_event(0, write_event)
+# Run the first operation of the model on CQ 0
+input_l1_tensor = ttnn.to_memory_config(input_dram_tensor, input_sharded_l1_mem_config)
+# Signal to the producer (CQ 1) that CQ 0 is finished with the input and it can be overwritten
+ttnn.record_event(0, first_op_event)
+# Run the rest of the model on the default CQ (0)
+output_tensor = run_model(input_l1_tensor)
+# Make CQ 0 stall until CQ 1 has signalled that the read has finished
+ttnn.wait_for_event(0, read_event)
+# Run the last operation of the model on CQ 0
+output_dram_tensor = ttnn.reshard(output_tensor, output_sharded_dram_mem_config)
+# Signal that the model has finished on CQ 0
+ttnn.record_event(0, last_op_event)
+
+# Capture the trace of the model
+ttnn.wait_for_event(1, op_event)
+ttnn.copy_host_to_device_tensor(host_tensor, input_dram_tensor, cq_id=1)
+ttnn.record_event(1, write_event)
+ttnn.wait_for_event(0, write_event)
+input_l1_tensor = ttnn.to_memory_config(input_dram_tensor, sharded_l1_mem_config)
+ttnn.record_event(0, op_event)
+# Record the address of the input tensor to trace so that we can validate we allocated our input tensor at the right address
+input_trace_addr = input_l1_tensor.buffer_address()
+shape = input_l1_tensor.shape
+dtype = input_l1_tensor.dtype
+layout = input_l1_tensor.layout
+# Deallocate the previous output tensor here so that we will allocate our input tensor at the right address afterwards
+output_tensor.deallocate(force=True)
+tid = ttnn.begin_trace_capture(device, cq_id=0)
+# It is important that we keep the output tensor on device returned here, so that we have the output tensor and associated address to read from after executing trace
+output_tensor = run_model(input_l1_tensor)
+
+# Try allocating our persistent input tensor here and verifying it matches the address that trace captured
+input_l1_tensor = ttnn.allocate_tensor_on_device(shape, dtype, layout, device, sharded_l1_mem_config)
+assert input_trace_addr == input_l1_tensor.buffer_address()
+
+ttnn.end_trace_capture(device, tid, cq_id=0)
+
+outputs = []
+
+# Stall CQ 1 for the input tensor consumer (CQ 0) to signal it has finished so we can start overwriting the previous input tensor with the new one
+ttnn.wait_for_event(1, first_op_event)
+# Write the next input tensor on CQ 1
+ttnn.copy_host_to_device_tensor(host_tensor, input_dram_tensor, cq_id=1)
+# Signal that the write has finished on CQ 1
+ttnn.record_event(1, write_event)
+
+for iter in range(0, 2):
+    # Make CQ 0 stall until CQ 1 has signalled that the write has finished
+    ttnn.wait_for_event(0, write_event)
+    # Run the first operation of the model on CQ 0
+    # Note here that we are writing to our persisent input tensor in place to reuse the address
+    input_l1_tensor = ttnn.reshard(input_dram_tensor, sharded_l1_mem_config, input_l1_tensor)
+    # Signal to the producer (CQ 1) that CQ 0 is finished with the input and it can be overwritten
+    ttnn.record_event(0, first_op_event)
+    # Run the rest of the model on the default CQ (0)
+    ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+    # Make CQ 0 stall until CQ 1 has signalled that the read has finished
+    ttnn.wait_for_event(0, read_event)
+    # Run the last operation of the model on CQ 0
+    output_dram_tensor = ttnn.reshard(output_tensor, output_sharded_dram_mem_config, output_dram_tensor)
+    # Signal that the model has finished on CQ 0
+    ttnn.record_event(0, last_op_event)
+
+    # Stall CQ 1 for the input tensor consumer (CQ 0) to signal it has finished so we can start overwriting the previous input tensor with the new one
+    ttnn.wait_for_event(1, first_op_event)
+    # Write the next input tensor on CQ 1
+    ttnn.copy_host_to_device_tensor(host_tensor, input_dram_tensor, cq_id=1)
+    # Signal that the write has finished on CQ 1
+    ttnn.record_event(1, write_event)
+
+    # Make CQ 1 stall until CQ 0 has signalled that the model has finished
+    ttnn.wait_for_event(1, last_op_event)
+    outputs.append(output_dram_tensor.cpu(blocking=False, cq_id=1))
+    # Signal that the read has finished on CQ 1
+    ttnn.record_event(1, read_event)
+
+# Make CQ 0 stall until CQ 1 has signalled that the write has finished
+ttnn.wait_for_event(0, write_event)
+# Run the first operation of the model on CQ 0
+# Note here that we are writing to our persisent input tensor in place to reuse the address
+input_l1_tensor = ttnn.reshard(input_dram_tensor, sharded_l1_mem_config, input_l1_tensor)
+# Signal to the producer (CQ 1) that CQ 0 is finished with the input and it can be overwritten
+ttnn.record_event(0, first_op_event)
+# Run the rest of the model on the default CQ (0)
+ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+# Make CQ 0 stall until CQ 1 has signalled that the read has finished
+ttnn.wait_for_event(0, read_event)
+# Run the last operation of the model on CQ 0
+output_dram_tensor = ttnn.reshard(output_tensor, output_sharded_dram_mem_config, output_dram_tensor)
+# Signal that the model has finished on CQ 0
+ttnn.record_event(0, last_op_event)
+
+# Make CQ 1 stall until CQ 0 has signalled that the model has finished
+ttnn.wait_for_event(1, last_op_event)
+outputs.append(output_dram_tensor.cpu(blocking=False, cq_id=1))
+# Signal that the read has finished on CQ 1
+ttnn.record_event(1, read_event)
 ```

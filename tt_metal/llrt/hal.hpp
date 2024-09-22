@@ -37,7 +37,8 @@ enum class HalMemAddrType : uint8_t {
     PROFILER = 4,
     KERNEL_CONFIG = 5,
     UNRESERVED = 6,
-    COUNT = 7
+    CORE_INFO = 7,
+    COUNT = 8
 };
 
 using DeviceAddr = std::uint64_t;
@@ -54,10 +55,11 @@ class HalCoreInfoType {
     std::uint32_t proc_count_; // eventually a vector of attributes?
     std::vector<DeviceAddr> mem_map_bases_;
     std::vector<uint32_t> mem_map_sizes_;
+    bool supports_cbs_;
 
   public:
     HalCoreInfoType(HalProgrammableCoreType programmable_core_type, CoreType core_type, uint32_t core_proc_count,
-        const std::vector<DeviceAddr>& mem_map_bases, const std::vector<uint32_t>& mem_map_sizes);
+        const std::vector<DeviceAddr>& mem_map_bases, const std::vector<uint32_t>& mem_map_sizes, bool supports_cbs);
 
     template <typename T = DeviceAddr>
     T get_dev_addr(HalMemAddrType addr_type) const;
@@ -104,6 +106,8 @@ class Hal {
     template <typename T = DeviceAddr>
     T get_dev_addr(uint32_t programmable_core_type_index, HalMemAddrType addr_type) const;
     uint32_t get_dev_size(HalProgrammableCoreType programmable_core_type, HalMemAddrType addr_type) const;
+
+    bool get_supports_cbs(uint32_t programmable_core_type_index) const;
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const {
@@ -135,6 +139,10 @@ inline uint32_t Hal::get_dev_size(HalProgrammableCoreType programmable_core_type
     uint32_t index = static_cast<std::underlying_type<HalProgrammableCoreType>::type>(programmable_core_type);
     TT_ASSERT(index < this->core_info_.size());
     return this->core_info_[index].get_dev_size(addr_type);
+}
+
+inline bool Hal::get_supports_cbs(uint32_t programmable_core_type_index) const {
+    return this->core_info_[programmable_core_type_index].supports_cbs_;
 }
 
 extern Hal hal;

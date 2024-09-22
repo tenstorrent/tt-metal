@@ -13,6 +13,7 @@
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
+#include "unary.hpp"
 
 namespace py = pybind11;
 
@@ -945,11 +946,13 @@ void bind_unary_composite_floats(py::module& module, const unary_operation_t& op
 }
 
 template <typename unary_operation_t>
-void bind_unary_composite_operation(py::module& module, const unary_operation_t& operation) {
+void bind_unary_composite_operation(py::module& module, const unary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
         R"doc({0}(input_tensor: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
 
-            Applies {0} to :attr:`input_tensor` element-wise.
+            Applies {0} to :attr:`input_tensor` element-wise .
+
+            {2}
 
             .. math::
                 {0}(\\mathrm{{input\\_tensor}}_i)
@@ -968,7 +971,8 @@ void bind_unary_composite_operation(py::module& module, const unary_operation_t&
                 >>> output = {1}(tensor)
         )doc",
         operation.base_name(),
-        operation.python_fully_qualified_name());
+        operation.python_fully_qualified_name(),
+        description);
 
     bind_registered_operation(
         module,
@@ -986,7 +990,7 @@ void bind_unary_composite_operation(py::module& module, const unary_operation_t&
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = ttnn::DefaultQueueId});
 }
 
 
@@ -1233,6 +1237,60 @@ void bind_unary_operation_with_diag(py::module& module, const unary_operation_t&
 }
 
 
+template <typename unary_operation_t>
+void bind_dropout(py::module& module, const unary_operation_t& operation) {
+    auto doc = fmt::format(
+        R"doc({0}(input_tensor: ttnn.Tensor, *, seed: uint32_t, probability: float, scale: float, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+
+            Applies {0} to :attr:`input_tensor` element-wise.
+
+            .. math::
+                {0}(\\mathrm{{input\\_tensor}}_i)
+
+            Args:
+                * :attr:`input_tensor`
+
+            Keyword Args:
+                * :attr:`seed` (uint32_t): seed used for RNG
+                * :attr:`probability` (float): Dropout probability. In average total_elems * probability elements will be zero out.
+                * :attr:`scale` (float): Scales output tensor. In general scale == 1.0/(1.0-probability)
+                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
+                * :attr:`queue_id` (Optional[uint8]): command queue id
+
+            Example:
+
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = {1}(tensor, seed=42, probability=0.2, scale= 1.0/(1.0 - probability))
+        )doc",
+        ttnn::dropout.base_name(),
+        ttnn::dropout.python_fully_qualified_name());
+
+    bind_registered_operation(
+        module,
+        ttnn::dropout,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input,
+               const uint32_t seed,
+               const float probability,
+               const float scale,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<Tensor>& output_tensor,
+               const uint8_t queue_id) {
+                return self(queue_id, input, seed, probability, scale, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("seed"),
+            py::arg("probability"),
+            py::arg("scale"),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = 0});
+}
+
 }  // namespace detail
 
 void py_module(py::module& module) {
@@ -1330,6 +1388,7 @@ void py_module(py::module& module) {
 
     // Other unaries (unary chain operations)
     detail::bind_softplus(module, ttnn::softplus);
+    detail::bind_dropout(module, ttnn::dropout);
     detail::bind_sigmoid_accurate(module, ttnn::sigmoid_accurate);
     detail::bind_unary_chain(module, ttnn::unary_chain);
     detail::bind_identity(module, ttnn::identity);
@@ -1354,13 +1413,13 @@ void py_module(py::module& module) {
     detail::bind_unary_composite(module, ttnn::sinh, R"doc(Performs sinh function on :attr:`input_tensor`.)doc", "[supported range -88 to 88]");
     detail::bind_unary_composite(module, ttnn::softsign, R"doc(Performs softsign function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::swish, R"doc(Performs swish function on :attr:`input_tensor`.)doc");
-    detail::bind_unary_composite(module, ttnn::trunc, R"doc(Performs trunc function on :attr:`input_tensor`, not supported for grayskull.)doc");
     detail::bind_unary_composite(module, ttnn::var_hw, R"doc(Performs var_hw function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::std_hw, R"doc(Performs std_hw function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::normalize_hw, R"doc(Performs normalize_hw function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::logical_not_, R"doc(Performs logical_not inplace function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::normalize_global, R"doc(Performs normalize_global function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::frac, R"doc(Performs frac function on :attr:`input_tensor`.)doc");
+    detail::bind_unary_composite_operation(module, ttnn::trunc, R"doc(Not supported for grayskull.)doc");
 
     detail::bind_unary_composite_floats_with_default(
         module,

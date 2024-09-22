@@ -15,17 +15,17 @@ from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs
         (torch.Size([1, 1, 1, 10])),
         (torch.Size([1, 1, 10, 20])),
         (torch.Size([1, 1, 30, 4])),
-        (torch.Size([1, 4, 3, 6])),
-        (torch.Size([5, 4, 3, 20])),
-        (torch.Size([2, 4, 3, 2])),
+        (torch.Size([1, 1, 3, 6])),
+        (torch.Size([1, 1, 3, 20])),
+        (torch.Size([1, 1, 3, 2])),
         (torch.Size([1, 1, 3, 8])),
         (torch.Size([1, 1, 1, 24])),
         (torch.Size([1, 1, 4, 8])),
-        (torch.Size([1, 2, 2, 8])),
-        (torch.Size([1, 2, 2, 4])),
+        (torch.Size([1, 1, 2, 8])),
+        (torch.Size([1, 1, 2, 4])),
     ),
 )
-@pytest.mark.parametrize("dim", (None,))
+@pytest.mark.parametrize("dim", (-1,))
 @pytest.mark.parametrize("memconfig", (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG))
 class TestArgmax:
     def test_argmax(self, input_shapes, dim, memconfig, device):

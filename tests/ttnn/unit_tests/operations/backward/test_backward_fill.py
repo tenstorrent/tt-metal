@@ -21,10 +21,9 @@ from tests.ttnn.unit_tests.operations.backward.utility_funcs import (
     ),
 )
 # Pytorch Reference
-# - name: fill.Tensor(Tensor self, Tensor value) -> Tensor
+# - name: fill.Scalar(Tensor self, Scalar value) -> Tensor
 #   self: zeros_like(grad)
-#   value: grad.sum()
-#   result: at::fill(self_t, value_t)
+#   result: at::fill(self_t, 0)
 def test_bw_fill(input_shapes, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)
@@ -34,7 +33,7 @@ def test_bw_fill(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.fill_bw)
     golden_tensor = golden_function(grad_data, in_data)
 
-    comp_pass = compare_all_close(tt_output_tensor_on_device, golden_tensor, atol=150, rtol=1e-6)
+    comp_pass = compare_all_close(tt_output_tensor_on_device, golden_tensor, atol=0, rtol=0)
     assert comp_pass
 
 
@@ -61,5 +60,5 @@ def test_bw_fill_opt_tensor(input_shapes, device):
     golden_tensor = golden_function(grad_data, in_data)
 
     tt_output_tensor_on_device = [input_grad]
-    comp_pass = compare_all_close(tt_output_tensor_on_device, golden_tensor, atol=150, rtol=1e-6)
+    comp_pass = compare_all_close(tt_output_tensor_on_device, golden_tensor, atol=0, rtol=0)
     assert comp_pass

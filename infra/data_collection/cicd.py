@@ -6,20 +6,30 @@ import json
 from pprint import pprint
 from loguru import logger
 
-from infra.data_collection.github.utils import get_pipeline_row_from_github_info, get_job_rows_from_github_info
+from infra.data_collection.github.utils import (
+    get_pipeline_row_from_github_info,
+    get_job_rows_from_github_info,
+    get_data_pipeline_datetime_from_datetime,
+)
 from infra.data_collection.github.workflows import (
-    get_workflow_outputs_dir,
     get_github_job_id_to_test_reports,
     get_tests_from_test_report_path,
 )
 from infra.data_collection import pydantic_models
 
 
+def get_cicd_json_filename(pipeline):
+    github_pipeline_start_ts = get_data_pipeline_datetime_from_datetime(pipeline.pipeline_start_ts)
+    github_pipeline_id = pipeline.github_pipeline_id
+    cicd_json_filename = f"pipeline_{github_pipeline_id}_{github_pipeline_start_ts}.json"
+    return cicd_json_filename
+
+
 def create_cicd_json_for_data_analysis(
+    workflow_outputs_dir,
     github_runner_environment,
     github_pipeline_json_filename,
     github_jobs_json_filename,
-    cicd_json_filename=None,
 ):
     with open(github_pipeline_json_filename) as github_pipeline_json_file:
         github_pipeline_json = json.load(github_pipeline_json_file)
@@ -34,19 +44,22 @@ def create_cicd_json_for_data_analysis(
     github_pipeline_id = raw_pipeline["github_pipeline_id"]
     github_pipeline_start_ts = raw_pipeline["pipeline_start_ts"]
 
-    if cicd_json_filename:
-        raise Exception("We don't currently support custom filenames for JSON output")
-    else:
-        cicd_json_filename = f"pipeline_{github_pipeline_id}_{github_pipeline_start_ts}.json"
+    github_job_ids = []
+    for raw_job in raw_jobs:
+        github_job_id = int(raw_job["github_job_id"])
+        github_job_ids.append(github_job_id)
 
-    workflow_outputs_dir = get_workflow_outputs_dir()
-
-    github_job_id_to_test_reports = get_github_job_id_to_test_reports(workflow_outputs_dir, github_pipeline_id)
+    github_job_id_to_test_reports = get_github_job_id_to_test_reports(
+        workflow_outputs_dir, github_pipeline_id, github_job_ids
+    )
 
     jobs = []
 
     for raw_job in raw_jobs:
         github_job_id = raw_job["github_job_id"]
+
+        logger.info(f"Processing raw GitHub job {github_job_id}")
+
         test_report_exists = github_job_id in github_job_id_to_test_reports
         if test_report_exists:
             test_report_path = github_job_id_to_test_reports[github_job_id]
@@ -68,9 +81,4 @@ def create_cicd_json_for_data_analysis(
         jobs=jobs,
     )
 
-    with open(cicd_json_filename, "w") as f:
-        f.write(pipeline.model_dump_json())
-
-    cicd_json_copy_filename = f"pipelinecopy_{github_pipeline_id}.json"
-    with open(cicd_json_copy_filename, "w") as f:
-        f.write(pipeline.model_dump_json())
+    return pipeline

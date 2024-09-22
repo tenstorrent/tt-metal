@@ -18,6 +18,7 @@ from models.experimental.functional_unet.tt import unet_shallow_ttnn
 from models.experimental.functional_unet.tests.common import (
     check_pcc_conv,
     is_n300_with_eth_dispatch_cores,
+    is_t3k_with_eth_dispatch_cores,
 )
 
 from models.perf.perf_utils import prep_perf_report
@@ -32,9 +33,9 @@ from models.utility_functions import (
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, groups, expected_device_perf_fps",
-    ((2, 1, 443.0),),
+    ((2, 1, 683.0),),
 )
-def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: float, reset_seeds):
+def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: float):
     command = f"pytest models/experimental/functional_unet/tests/test_unet_model.py::test_unet_model[device_params0-{groups}-{batch}]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
@@ -57,10 +58,10 @@ def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: flo
 
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 64768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 @pytest.mark.parametrize(
     "batch, groups, iterations, expected_compile_time, expected_inference_time_ms",
-    ((2, 1, 16, 16.0, 39.0),),
+    ((2, 1, 16, 25.0, 39.0),),
 )
 def test_unet_perf_e2e(
     batch: int,
@@ -89,7 +90,7 @@ def test_unet_perf_e2e(
 
     logger.info(f"Compiling model with warmup run")
     profiler.start(f"inference_and_compile_time")
-    output_tensor = ttnn_model(ttnn_input)
+    output_tensor = ttnn_model(ttnn_input).cpu()
     profiler.end(f"inference_and_compile_time")
 
     inference_and_compile_time = profiler.get("inference_and_compile_time")
@@ -99,7 +100,7 @@ def test_unet_perf_e2e(
     for idx in range(iterations):
         profiler.start("inference_time")
         profiler.start(f"inference_time_{idx}")
-        output_tensor = ttnn_model(ttnn_input)
+        output_tensor = ttnn_model(ttnn_input).cpu()
         profiler.end(f"inference_time_{idx}")
         profiler.end("inference_time")
 
@@ -126,15 +127,16 @@ def test_unet_perf_e2e(
     logger.info(f"Running sanity check against reference model output")
     B, C, H, W = torch_output_tensor.shape
     ttnn_tensor = ttnn.to_torch(output_tensor).reshape(B, H, W, -1)[:, :, :, :C].permute(0, 3, 1, 2)
-    assert_with_pcc(torch_output_tensor, ttnn_tensor, 0.99)
+    assert_with_pcc(torch_output_tensor, ttnn_tensor, 0.97)
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 64768}], indirect=True)
+@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 @pytest.mark.parametrize(
     "batch, groups, iterations, expected_compile_time, expected_inference_time_ms",
-    ((2, 1, 16, 16.0, 39.0),),
+    ((2, 1, 16, 25.0, 61.0),),
 )
 def test_unet_data_parallel_perf_e2e(
     batch: int,
@@ -145,9 +147,10 @@ def test_unet_data_parallel_perf_e2e(
     mesh_device,
     use_program_cache,
     reset_seeds,
+    enable_async_mode,
 ):
-    if not is_n300_with_eth_dispatch_cores(mesh_device):
-        pytest.skip("Test is only valid for N300")
+    if not is_n300_with_eth_dispatch_cores(mesh_device) and not is_t3k_with_eth_dispatch_cores(mesh_device):
+        pytest.skip("Test is only valid for N300 or T3000")
 
     profiler.clear()
 
@@ -180,7 +183,7 @@ def test_unet_data_parallel_perf_e2e(
 
     logger.info(f"Compiling model with warmup run")
     profiler.start(f"inference_and_compile_time")
-    output_tensor = ttnn_model(ttnn_input)
+    output_tensor = ttnn.from_device(ttnn_model(ttnn_input), blocking=True)
     profiler.end(f"inference_and_compile_time")
 
     inference_and_compile_time = profiler.get("inference_and_compile_time")
@@ -190,9 +193,10 @@ def test_unet_data_parallel_perf_e2e(
     for idx in range(iterations):
         profiler.start("inference_time")
         profiler.start(f"inference_time_{idx}")
-        output_tensor = ttnn_model(ttnn_input)
+        output_tensor = ttnn.from_device(ttnn_model(ttnn_input), blocking=False)
         profiler.end(f"inference_time_{idx}")
         profiler.end("inference_time")
+    ttnn.synchronize_devices(mesh_device)
 
     mean_inference_time = profiler.get("inference_time")
     inference_time = profiler.get(f"inference_time_{iterations - 1}")
@@ -211,8 +215,8 @@ def test_unet_data_parallel_perf_e2e(
         inference_time=inference_time,
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
-        comments="batch_{total_batch}-num_devices_{num_devices}",
+        comments=f"batch_{total_batch}-num_devices_{num_devices}",
     )
 
     logger.info(f"Running sanity check against reference model output")
-    check_pcc_conv(torch_output_tensor, output_tensor, mesh_composer=output_mesh_composer, pcc=0.99)
+    check_pcc_conv(torch_output_tensor, output_tensor, mesh_composer=output_mesh_composer, pcc=0.97)

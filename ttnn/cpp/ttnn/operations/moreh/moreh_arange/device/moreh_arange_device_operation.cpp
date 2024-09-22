@@ -59,7 +59,7 @@ MorehArangeOperation::shape_return_value_t MorehArangeOperation::compute_output_
         ceil((operation_attributes.end - operation_attributes.start) / operation_attributes.step));
 
     if (operation_attributes.untilize_out)
-        return ttnn::Shape(tt::tt_metal::Shape({num_elems}));
+        return ttnn::Shape(tt::tt_metal::LegacyShape({num_elems}));
 
     std::vector<uint32_t> output_size_vec = {
         tt::constants::TILE_HEIGHT, tt::round_up(num_elems, tt::constants::TILE_WIDTH)};
@@ -70,7 +70,7 @@ MorehArangeOperation::shape_return_value_t MorehArangeOperation::compute_output_
         Padding::PadDimension{.front = 0, .back = tt::round_up(num_elems, tt::constants::TILE_WIDTH) - num_elems});
     const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
 
-    return ttnn::Shape{tt::tt_metal::Shape(output_size_vec, padding)};
+    return ttnn::Shape{tt::tt_metal::LegacyShape(output_size_vec, padding)};
 };
 
 MorehArangeOperation::tensor_return_value_t MorehArangeOperation::create_output_tensors(
