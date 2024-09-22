@@ -12,7 +12,7 @@ specifications.
     ./build_metal.sh
     ./build/programming_examples/shard_data_rm
 ```
-# Accelerator setup
+# Device setup
 
 ``` cpp
 int device_id = 0;

@@ -20,7 +20,7 @@ The following commands will build and execute the code for this example. Environ
     ./build_metal.sh
     ./build/programming_examples/pad_multi_core
 ```
-## Accelerator setup
+## Device setup
 
 ``` cpp
 int device_id = 0;

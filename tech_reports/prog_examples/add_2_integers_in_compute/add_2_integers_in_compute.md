@@ -13,7 +13,7 @@ To build and execute, you may use the following commands. Note that we include t
     ./build_metal.sh
     ./build/programming_examples/add_2_integers_in_compute
 ```
-## Set up accelerator and program/collaboration mechanisms
+## Set up device and program/collaboration mechanisms
 
 ``` cpp
 Device *device = CreateDevice(0);

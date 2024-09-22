@@ -104,8 +104,8 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metalium/lates
 - [Add 2 Integers in Baby RiscV](./tech_reports/prog_examples/add_2_integers_in_riscv/add_2_integers_in_riscv.md)
 - [Add 2 Integers in Compute Kernel](./tech_reports/prog_examples/add_2_integers_in_compute/add_2_integers_in_compute.md)
 ### Simple Tensor Manipulation 
-- [Sharded Data Movement Kernel](./tech_reports/prog_examples/shard_data_rm/shard_data_rm.md)
-- [Padding Kernel in Multi Core](./tech_reports/prog_examples/pad_multi_core/pad_multi_core.md)
+- [Sharding](./tech_reports/prog_examples/shard_data_rm/shard_data_rm.md)
+- [Padding](./tech_reports/prog_examples/pad_multi_core/pad_multi_core.md)
 ### DRAM Data Movement
 - [Dram Loopback Data Movement](./tech_reports/prog_examples/dram_loopback/dram_loopback.md)
 ### Eltwise

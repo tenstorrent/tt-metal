@@ -15,10 +15,9 @@ To build and execute, you may use the following commands. Note that we include t
     ./build/programming_examples/hello_world_datamovement_kernel
 ```
 
-## Silicon accelerator setup
+## Device setup
 
 ``` cpp
-constexpr CoreCoord core = {0, 0};
 int device_id = 0;
 Device *device = CreateDevice(device_id);
 ```
@@ -39,6 +38,7 @@ Then, we obtain the device's `CommandQueue` in order to allow commands to be dis
 We will declare two data movement kernels, one for each of the two RISC-V processors involved in data movement (`RISCV_0` for RISC-V 1 and `RISCV_1` for RISC-V 5). The `DataMovementConfig` parameter specifies the configuration for data movement.
 
 ``` cpp
+constexpr CoreCoord core = {0, 0};
 KernelHandle void_dataflow_kernel_noc0_id = CreateKernel(
     program,
     "tt_metal/programming_examples/hello_world_datamovement_kernel/kernels/dataflow/void_dataflow_kernel.cpp",
