@@ -101,7 +101,7 @@ std::vector<Tensor> ExecuteUnaryBackwardSoftplus::invoke(
     return grad_tensor;
 }
 
-std::vector<Tensor> _rdiv_bw(
+std::vector<Tensor> ExecuteUnaryBackwardRdiv::invoke(
     const Tensor& grad, const Tensor& input, float scalar, string round_mode, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
@@ -591,7 +591,7 @@ std::vector<Tensor> _square_bw(const Tensor& grad, const Tensor& input, const st
     return grad_tensor;
 }
 
-std::vector<Tensor> _hardshrink_bw(
+std::vector<Tensor> ExecuteUnaryBackwardHardshrink::invoke(
     const Tensor& grad, const Tensor& input_tensor, float lambd, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor hardshrink_result = ttnn::hardshrink(input_tensor, lambd, output_mem_config);
@@ -603,7 +603,7 @@ std::vector<Tensor> _hardshrink_bw(
 
 // softshrink
 //  result: torch.where(self < -lambd, grad, torch.where(self > lambd, grad, torch.tensor(0.0)))
-std::vector<Tensor> _softshrink_bw(
+std::vector<Tensor> ExecuteUnaryBackwardSoftshrink::invoke(
     const Tensor& grad, const Tensor& input_tensor, float lambd, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = ttnn::where(
@@ -622,7 +622,7 @@ std::vector<Tensor> _softshrink_bw(
 
 // Leaky_Relu
 // result: torch.where(self > 0, grad_output, grad_output * negative_slope)
-std::vector<Tensor> _leaky_relu_bw(
+std::vector<Tensor> ExecuteUnaryBackwardLeakyRelu::invoke(
     const Tensor& grad, const Tensor& input, float negative_slope, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = where(
@@ -634,7 +634,7 @@ std::vector<Tensor> _leaky_relu_bw(
 
 // ELU
 // result : grad * (torch.where(input >= 0, 1, alpha * torch.exp(input)))
-std::vector<Tensor> _elu_bw(
+std::vector<Tensor> ExecuteUnaryBackwardElu::invoke(
     const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = where(
@@ -649,7 +649,7 @@ std::vector<Tensor> _elu_bw(
 
 // Celu
 // result: torch.where((input > 0), grad, grad * torch.exp(input / alpha))
-std::vector<Tensor> _celu_bw(
+std::vector<Tensor> ExecuteUnaryBackwardCelu::invoke(
     const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor div_result = ttnn::multiply(
@@ -1074,7 +1074,7 @@ std::vector<Tensor> _cosh_bw(const Tensor& grad, const Tensor& input, const std:
 // #             grad_output / (self * (1.0 - self)),
 // #             self.new_full((), float("nan")),
 // #         )
-std::vector<Tensor> _logiteps_bw(
+std::vector<Tensor> ExecuteUnaryBackwardLogiteps::invoke(
     const Tensor& grad, const Tensor& input, float eps, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     float low, high;
@@ -1414,7 +1414,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardGelu::invoke(
         return ExecuteUnaryBackwardGelu::invoke(DefaultQueueId, grad, input, approximate, output_mem_config, input_grad);
 }
 
-std::vector<Tensor> _repeat_bw(
+std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
     const Tensor& grad, const Tensor& input, const tt::tt_metal::LegacyShape& shape, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
