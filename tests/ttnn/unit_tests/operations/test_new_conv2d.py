@@ -1871,14 +1871,16 @@ def test_swin_s_conv(
 @pytest.mark.parametrize(
     "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, shard_layout, config_override, use_shallow_conv_variant",
     (
-        # mlp sub_module
-        # (1, 3, 32, 512, 512, 7, 7, 4, 4, 3, 3, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None, False),
-        # efficient selfattention sub_module
         (1, 32, 32, 128, 128, 8, 8, 8, 8, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
         (1, 64, 64, 64, 64, 4, 4, 4, 4, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
         (1, 256, 150, 128, 128, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
         (1, 32, 16, 64, 64, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
         (1, 96, 24, 32, 32, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
+        (1, 576, 576, 8, 8, 3, 3, 1, 1, 0, 0, 576, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None, False),
+        (1, 576, 576, 8, 8, 3, 3, 2, 2, 0, 0, 576, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None, False),
+        (1, 960, 960, 4, 4, 3, 3, 1, 1, 0, 0, 960, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None, False),
+        (1, 144, 24, 32, 32, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
+        (1, 144, 32, 16, 16, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
     ),
 )
 @pytest.mark.parametrize(
