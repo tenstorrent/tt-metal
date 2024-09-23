@@ -4,8 +4,42 @@
 
 
 import random
+from loguru import logger
 from itertools import product
 import torch
+import ttnn
+
+
+def tensor_to_dtype(x, dtype):
+    if dtype == ttnn.bfloat16:
+        x = x.to(torch.bfloat16)
+
+    elif dtype == ttnn.bfloat8_b:
+        tt_tensor = ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=None, memory_config=None)
+
+        x = ttnn.to_torch(tt_tensor)
+
+    elif dtype == ttnn.bfloat4_b:
+        tt_tensor = ttnn.from_torch(x, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=None, memory_config=None)
+
+        x = ttnn.to_torch(tt_tensor)
+
+    elif dtype == ttnn.uint16:
+        x = x.to(torch.int16)
+
+    elif dtype == ttnn.uint32:
+        x = x.to(torch.int32)
+
+    elif dtype == ttnn.int32:
+        x = x.to(torch.int32)
+
+    elif dtype == ttnn.float32:
+        pass
+
+    else:
+        logger.warning(f"Unknown dtype {dtype} passed to gen_func_with_cast_tt")
+
+    return x
 
 
 def gen_shapes(start_shape, end_shape, interval, num_samples="all"):
