@@ -6,7 +6,14 @@
 
 static constexpr int32_t MAX_NUM_DIMENSIONS = 8;
 
-inline uint32_t get_output_grad_tile(uint32_t idx, uint32_t rank, uint32_t* output_grad_dim, uint32_t* output_grad_stride, uint32_t* input_grad_dim, uint32_t* input_grad_stride, bool* need_bcast_dim) {
+inline uint32_t get_output_grad_tile(
+    uint32_t idx,
+    uint32_t rank,
+    uint32_t* output_grad_dim,
+    uint32_t* output_grad_stride,
+    uint32_t* input_grad_dim,
+    uint32_t* input_grad_stride,
+    bool* need_bcast_dim) {
     uint32_t cur_idx[MAX_NUM_DIMENSIONS];
 
     for (uint32_t i = 0; i < rank; ++i) {
@@ -22,7 +29,6 @@ inline uint32_t get_output_grad_tile(uint32_t idx, uint32_t rank, uint32_t* outp
 }
 
 void kernel_main() {
-
     // compile time args
     constexpr bool input_is_dram = (get_compile_time_arg_val(0) == 1);
     constexpr bool output_is_dram = (get_compile_time_arg_val(1) == 1);
@@ -32,7 +38,7 @@ void kernel_main() {
     // runtime args
     ArgFetcher arg_fetcher;
     const auto input_addr = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto output_addr =arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto output_addr = arg_fetcher.get_next_arg_val<uint32_t>();
     const auto output_grad_addr = arg_fetcher.get_next_arg_val<uint32_t>();
 
     const auto decimal = arg_fetcher.get_next_arg_val<uint32_t>();
@@ -41,29 +47,29 @@ void kernel_main() {
     const auto start_id = arg_fetcher.get_next_arg_val<uint32_t>();
 
     uint32_t output_grad_dim[MAX_NUM_DIMENSIONS];
-    for (uint32_t i = 0; i < input_grad_rank;++i) {
+    for (uint32_t i = 0; i < input_grad_rank; ++i) {
         output_grad_dim[i] = arg_fetcher.get_next_arg_val<uint32_t>();
     }
 
     uint32_t input_grad_dim[MAX_NUM_DIMENSIONS];
-    for (uint32_t i = 0; i < input_grad_rank;++i) {
+    for (uint32_t i = 0; i < input_grad_rank; ++i) {
         input_grad_dim[i] = arg_fetcher.get_next_arg_val<uint32_t>();
     }
 
     bool need_bcast_dim[MAX_NUM_DIMENSIONS];
-    for (uint32_t i = 0; i < input_grad_rank;++i) {
+    for (uint32_t i = 0; i < input_grad_rank; ++i) {
         need_bcast_dim[i] = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
     }
 
     uint32_t output_grad_stride[MAX_NUM_DIMENSIONS];
     output_grad_stride[0] = 1;
-    for (uint32_t i = 1; i < input_grad_rank;++i) {
+    for (uint32_t i = 1; i < input_grad_rank; ++i) {
         output_grad_stride[i] = output_grad_stride[i - 1] * output_grad_dim[i - 1];
     }
 
     uint32_t input_grad_stride[MAX_NUM_DIMENSIONS];
     input_grad_stride[0] = 1;
-    for (uint32_t i = 1; i < input_grad_rank;++i) {
+    for (uint32_t i = 1; i < input_grad_rank; ++i) {
         input_grad_stride[i] = input_grad_stride[i - 1] * input_grad_dim[i - 1];
     }
 
@@ -98,10 +104,10 @@ void kernel_main() {
 
     fill_cb_with_value(cb_id_decimal, decimal);
 
-
     for (uint32_t i = start_id; i < start_id + num_output_tiles; i++) {
         uint32_t input_tile_id = i;
-        auto read_tile_id = get_output_grad_tile(i, input_grad_rank, output_grad_dim, output_grad_stride, input_grad_dim, input_grad_stride, need_bcast_dim);
+        auto read_tile_id = get_output_grad_tile(
+            i, input_grad_rank, output_grad_dim, output_grad_stride, input_grad_dim, input_grad_stride, need_bcast_dim);
 
         cb_reserve_back(cb_id_input, 1);
         const auto input_l1_write_ptr = get_write_ptr(cb_id_input);

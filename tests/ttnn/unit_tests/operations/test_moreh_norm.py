@@ -9,7 +9,7 @@ import ttnn
 from models.utility_functions import comp_allclose, is_wormhole_b0
 from loguru import logger
 
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
+from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
@@ -24,24 +24,17 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
 
 def make_cpu_tensors(input_shape, dim, keepdim=False):
     torch_output_shape, _ = compute_output_shape(input_shape, dim, keepdim=keepdim)
-
-    # input
     cpu_input = torch.empty(input_shape, dtype=torch.float32).uniform_(-1, 1).requires_grad_()
-
-    # output_grad
     cpu_output_grad = torch.empty(torch_output_shape, dtype=torch.float32).uniform_(-1, 1)
-
     return cpu_input, cpu_output_grad
 
 
 def torch_norm(cpu_x, cpu_dy, *, p=2.0, dim=None, keepdim=False, do_backward=False):
     cpu_y = torch.norm(cpu_x, p=p, dim=dim, keepdim=keepdim)
-
     cpu_dx = None
     if do_backward:
         cpu_y.backward(cpu_dy)
         cpu_dx = cpu_x.grad
-
     return cpu_y, cpu_dx
 
 
@@ -57,18 +50,15 @@ def tt_norm(
     device=None,
 ):
     _, tt_output_shape = compute_output_shape(cpu_x.shape, dim, keepdim=keepdim)
-
     npu_x = to_npu(cpu_x.bfloat16(), device)
     if do_backward:
         npu_dy = to_npu(cpu_dy.reshape(tt_output_shape).bfloat16(), device)
-
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
-
     if do_backward:
         npu_y = to_npu(torch.norm(cpu_x, p=p, dim=dim, keepdim=keepdim).bfloat16().reshape(tt_output_shape), device)
     else:
         npu_y = to_npu(torch.empty(tt_output_shape), device)
-        ttnn.experimental.operations.primary.moreh_norm(
+        ttnn.operations.moreh.norm(
             npu_x, p=p, dim=dim, keepdim=keepdim, output=npu_y, compute_kernel_config=compute_kernel_config
         )
 
@@ -76,7 +66,7 @@ def tt_norm(
     if do_backward:
         npu_dx = to_npu(torch.empty_like(cpu_x), device)
 
-        ttnn.experimental.operations.primary.moreh_norm_backward(
+        ttnn.operations.moreh.norm_backward(
             npu_x,
             npu_y,
             npu_dy,
@@ -89,22 +79,16 @@ def tt_norm(
         npu_dx = to_cpu(npu_dx, list(cpu_x.shape))
 
     npu_y = to_cpu(npu_y, tt_output_shape)
-
     return npu_y, npu_dx
 
 
 def run_moreh_norm(input_shape, p, dim, rtol, atol, device, keepdim=False, compute_kernel_options=None):
     if dim in (None, [], [0, 1, 2, 3]) and p == 2.5 and is_wormhole_b0():
         pytest.skip("TODO: Check why comp_allclose result is poor on WH_B0.")
-
     check_dim(input_shape, dim, keepdim)
-
     cpu_x, cpu_dy = make_cpu_tensors(input_shape, dim, keepdim=keepdim)
 
-    # expected
     expected_y, _ = torch_norm(cpu_x, cpu_dy, p=p, dim=dim, keepdim=keepdim, do_backward=False)
-
-    # actual
     actual_y, _ = tt_norm(
         cpu_x,
         cpu_dy,
@@ -115,9 +99,8 @@ def run_moreh_norm(input_shape, p, dim, rtol, atol, device, keepdim=False, compu
         device=device,
         do_backward=False,
     )
-
-    # Check output
     actual_y = actual_y if keepdim else actual_y.reshape(expected_y.shape)
+
     pass_y, out_y = comp_allclose(expected_y, actual_y, rtol=rtol, atol=atol)
     logger.debug(f"output's {out_y}")
     assert pass_y
@@ -128,10 +111,7 @@ def run_moreh_norm_backward(input_shape, p, dim, rtol, atol, device, keepdim=Fal
 
     cpu_x, cpu_dy = make_cpu_tensors(input_shape, dim, keepdim=keepdim)
 
-    # expected
     _, expected_dx = torch_norm(cpu_x, cpu_dy, p=p, dim=dim, keepdim=keepdim, do_backward=True)
-
-    # actual
     _, actual_dx = tt_norm(
         cpu_x,
         cpu_dy,
@@ -142,10 +122,8 @@ def run_moreh_norm_backward(input_shape, p, dim, rtol, atol, device, keepdim=Fal
         do_backward=True,
     )
 
-    # Check input_grad
     pass_dx, out_dx = comp_allclose(expected_dx, actual_dx, rtol=rtol, atol=atol)
     logger.debug(f"input_grad's {out_dx}")
-
     assert pass_dx
 
 
@@ -197,9 +175,7 @@ def run_moreh_norm_backward(input_shape, p, dim, rtol, atol, device, keepdim=Fal
 @pytest.mark.parametrize("keepdim", [True, False], ids=["keepdim-true", "keepdim-flase"])
 def test_moreh_norm(input_shape, p, dim_rtol_atol, keepdim, device):
     torch.manual_seed(2024)
-
     dim, rtol, atol = dim_rtol_atol
-
     run_moreh_norm(input_shape, p, dim, rtol, atol, device, keepdim=keepdim)
 
 
@@ -221,9 +197,7 @@ def test_moreh_norm(input_shape, p, dim_rtol_atol, keepdim, device):
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_moreh_norm_compute_kernel_options(input_shape, p, dim_rtol_atol, compute_kernel_options, device):
     torch.manual_seed(2024)
-
     dim, rtol, atol = dim_rtol_atol
-
     run_moreh_norm(input_shape, p, dim, rtol, atol, device, compute_kernel_options=compute_kernel_options)
 
 
@@ -244,9 +218,7 @@ def test_moreh_norm_compute_kernel_options(input_shape, p, dim_rtol_atol, comput
 )
 def test_moreh_norm_callback(input_shape, p, dim_rtol_atol, device, use_program_cache):
     torch.manual_seed(2024)
-
     dim, rtol, atol = dim_rtol_atol
-
     for _ in range(2):
         run_moreh_norm(input_shape, p, dim, rtol, atol, device)
 
@@ -299,9 +271,7 @@ def test_moreh_norm_callback(input_shape, p, dim_rtol_atol, device, use_program_
 @pytest.mark.parametrize("keepdim", [True, False], ids=["keepdim-true", "keepdim-flase"])
 def test_moreh_norm_backward(input_shape, p, dim_rtol_atol, keepdim, device):
     torch.manual_seed(2024)
-
     dim, rtol, atol = dim_rtol_atol
-
     run_moreh_norm_backward(input_shape, p, dim, rtol, atol, device, keepdim=keepdim)
 
 
@@ -319,9 +289,7 @@ def test_moreh_norm_backward(input_shape, p, dim_rtol_atol, keepdim, device):
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_moreh_norm_backward_compute_kernel_options(input_shape, p, dim_rtol_atol, compute_kernel_options, device):
     torch.manual_seed(2024)
-
     dim, rtol, atol = dim_rtol_atol
-
     run_moreh_norm_backward(input_shape, p, dim, rtol, atol, device, compute_kernel_options=compute_kernel_options)
 
 
@@ -340,8 +308,6 @@ def test_moreh_norm_backward_compute_kernel_options(input_shape, p, dim_rtol_ato
 )
 def test_moreh_norm_backward_callback(input_shape, p, dim_rtol_atol, device, use_program_cache):
     torch.manual_seed(2024)
-
     dim, rtol, atol = dim_rtol_atol
-
     for _ in range(2):
         run_moreh_norm_backward(input_shape, p, dim, rtol, atol, device)

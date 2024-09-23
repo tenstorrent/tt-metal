@@ -225,9 +225,9 @@ Primary Operations
 
 .. autofunction:: tt_lib.operations.primary.moreh_groupnorm_backward
 
-.. autofunction:: tt_lib.operations.primary.moreh_norm
+.. autofunction:: ttnn.operations.moreh.norm
 
-.. autofunction:: tt_lib.operations.primary.moreh_norm_backward
+.. autofunction:: ttnn.operations.moreh.norm_backward
 
 Enums
 =====

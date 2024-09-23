@@ -23,8 +23,6 @@
 
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss_unreduced/moreh_nll_loss_unreduced_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_norm/moreh_norm_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_norm_backward/moreh_norm_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sgd/moreh_sgd_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_softmax_backward/moreh_softmax_backward_op.hpp"
@@ -218,36 +216,6 @@ void py_module(py::module& m_primary) {
         py::arg("memory_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a nll_loss_unreduced operation. Returns an output tensor.");
-
-    // moreh_norm
-    m_primary.def(
-        "moreh_norm",
-        &moreh_norm,
-        py::arg("input").noconvert(),
-        py::kw_only(),
-        py::arg("p").noconvert() = 2.0f,
-        py::arg("dim").noconvert() = std::nullopt,
-        py::arg("keepdim").noconvert() = false,
-        py::arg("output").noconvert() = std::nullopt,
-        py::arg("memory_config").noconvert() = std::nullopt,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs a moreh_norm operation.");
-
-    // moreh_norm_backward
-    m_primary.def(
-        "moreh_norm_backward",
-        &moreh_norm_backward,
-        py::arg("input").noconvert(),
-        py::arg("output").noconvert(),
-        py::arg("output_grad").noconvert(),
-        py::kw_only(),
-        py::arg("p").noconvert() = 2.0f,
-        py::arg("dim").noconvert() = std::nullopt,
-        py::arg("keepdim").noconvert() = false,
-        py::arg("input_grad").noconvert() = std::nullopt,
-        py::arg("memory_config").noconvert() = std::nullopt,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs a moreh_norm_backward operation.");
 
     m_primary.def(
         "moreh_layernorm",
