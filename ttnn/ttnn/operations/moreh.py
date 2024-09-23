@@ -6,6 +6,8 @@ import ttnn
 
 adam = ttnn._ttnn.operations.moreh.moreh_adam
 arange = ttnn._ttnn.operations.moreh.moreh_arange
+bmm = ttnn._ttnn.operations.moreh.moreh_bmm
+bmm_backward = ttnn._ttnn.operations.moreh.moreh_bmm_backward
 getitem = ttnn._ttnn.operations.moreh.moreh_getitem
 matmul = ttnn._ttnn.operations.moreh.moreh_matmul
 mean = ttnn._ttnn.operations.moreh.moreh_mean
