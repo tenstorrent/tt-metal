@@ -127,6 +127,24 @@ KernelHandle CreateKernel(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config);
 
+/**
+ * Creates a data movement kernel with no compile time arguments and adds it to the program.
+ *
+ * Return value: Kernel ID (uintptr_t)
+ *
+ * | Argument           | Description                                                                                                                          | Type                                                     | Valid Range | Required |
+ * |--------------------|--------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|-------------|----------|
+ * | program            | The program to which this kernel will be added to                                                                                    | Program &                                                |             | Yes      |
+ * | kernel_src_code    | Source code for kernel                                                                                                               | const std::string &                                      |             | Yes      |
+ * | core_spec          | Either a single logical core, a range of logical cores or a set of logical core ranges that indicate which cores kernel is placed on | const std::variant<CoreCoord, CoreRange, CoreRangeSet> & |             | Yes      |
+ * | config             | Config for data movement or compute kernel                                                                                           | const std::variant<DataMovementConfig,ComputeConfig,EthernetConfig> &   |             | No       |
+ */
+KernelHandle CreateKernelFromString(
+    Program &program,
+    const std::string &kernel_src_code,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config);
+
 // ==================================================
 //                  HOST API: buffers
 // ==================================================
