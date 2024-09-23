@@ -19,7 +19,7 @@
 enum TensorLayout {
     LIN_ROW_MAJOR = 0, // standard element-wise row-major
     TILED_SWIZZLED = 1, // row-major of tiles, each tile is row-major-swizzled
-    TILED_NFACES = 2,  // rowm major of tiles, each tile is N (N = 1, 2, or 4) faces, each face is row-major, faces are swizzled
+    TILED_NFACES = 2,  // row-major of tiles, each tile is N (N = 1, 2, or 4) faces, each face is row-major, faces are swizzled
 };
 
 template <class T, template <typename...> typename BufferType>
