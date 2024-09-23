@@ -63,7 +63,7 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     const auto data_tile_size = tt_metal::detail::TileSize(data_format);
     const auto intermed_tile_size = tt_metal::detail::TileSize(intermed_data_format);
 
-    const uint32_t available_L1 = device->l1_size_per_core() - L1_UNRESERVED_BASE;
+    const uint32_t available_L1 = device->l1_size_per_core() - device->get_base_allocator_addr(HalMemType::L1);
 
     uint32_t target_num_tile = 1;
     uint32_t weight_num_tile = weight_has_value ? div_up(channel_size, tt::constants::TILE_WIDTH) : 0;

@@ -186,7 +186,7 @@ inline uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
         device->bank_ids_from_logical_core(BufferType::L1, *device->compute_cores_.begin());
     std::optional<uint64_t> lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids[0]);
     uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
-    max_l1_space = max_l1_space - L1_UNRESERVED_BASE;
+    max_l1_space = max_l1_space - device->get_base_allocator_addr(HalMemType::L1);
     return max_l1_space;
 }
 

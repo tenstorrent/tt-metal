@@ -69,6 +69,8 @@ class BankManager {
     void init_allocator(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset);
 };
 
+DeviceAddr get_unreserved_base_address(const Allocator &allocator, const HalMemType &mem_type);
+
 // Functions used to initiate allocator and allocate buffers
 void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &alloc_config);
 

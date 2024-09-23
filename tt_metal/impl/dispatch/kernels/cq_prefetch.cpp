@@ -10,7 +10,6 @@
 //  - syncs w/ dispatcher via 2 semaphores, page_ready, page_done
 
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
-#include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "debug/dprint.h"
 

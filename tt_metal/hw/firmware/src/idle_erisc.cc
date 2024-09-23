@@ -22,7 +22,6 @@
 #include "generated_bank_to_noc_coord_mapping.h"
 #include "circular_buffer.h"
 #include "dataflow_api.h"
-#include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 
 #include "debug/watcher_common.h"
 #include "debug/waypoint.h"

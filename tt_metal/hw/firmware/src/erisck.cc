@@ -18,7 +18,6 @@
 #include "dataflow_api.h"
 #include "debug/dprint.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 #include <kernel_includes.hpp>
 
 

@@ -95,7 +95,7 @@ static inline Tensor move(uint8_t queue_id, const Tensor& input_tensor, const st
     }
 
     bool fits_in_cb =
-        (L1_UNRESERVED_BASE + size_per_l1_bank) <= (output_mem_config.buffer_type == tt::tt_metal::BufferType::L1
+        (output_tensor.device()->get_base_allocator_addr(HalMemType::L1) + size_per_l1_bank) <= (output_mem_config.buffer_type == tt::tt_metal::BufferType::L1
                                                         ? output_tensor.buffer()->address()
                                                         : output_tensor.device()->l1_size_per_core());
 

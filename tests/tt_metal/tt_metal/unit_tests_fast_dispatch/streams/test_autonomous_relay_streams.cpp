@@ -337,7 +337,7 @@ void build_and_run_autonomous_stream_test(
         CreateCircularBuffer(program, second_relay_core, relay_stream_buffer_cb_config);
     auto receiver_stream_buffer_cb = CreateCircularBuffer(program, receiver_core, receiver_stream_buffer_cb_config);
 
-    program.allocate_circular_buffers();
+    program.allocate_circular_buffers(device);
 
     uint32_t sender_stream_buffer_addr =
         tt_metal::detail::GetCircularBuffer(program, sender_stream_buffer_cb)->address();

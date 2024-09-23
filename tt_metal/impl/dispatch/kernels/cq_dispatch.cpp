@@ -13,7 +13,6 @@
 #include "debug/assert.h"
 #include "debug/dprint.h"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
-#include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 
@@ -47,8 +46,11 @@ constexpr uint32_t worker_mcast_grid = get_compile_time_arg_val(21);
 constexpr uint32_t mcast_go_signal_addr = get_compile_time_arg_val(22);
 constexpr uint32_t unicast_go_signal_addr = get_compile_time_arg_val(23);
 constexpr uint32_t distributed_dispatcher = get_compile_time_arg_val(24);
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(25);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(26);
+constexpr uint32_t host_completion_q_wr_ptr = get_compile_time_arg_val(25);
+constexpr uint32_t dev_completion_q_wr_ptr = get_compile_time_arg_val(26);
+constexpr uint32_t dev_completion_q_rd_ptr = get_compile_time_arg_val(27);
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(28);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(29);
 
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
@@ -113,11 +115,11 @@ static uint32_t unicast_only_cores[16];
 static int num_unicast_cores = -1; // Initialize to -1: Number of cores we need to unicast go signals to. Host will set this during init.
 
 FORCE_INLINE volatile uint32_t *get_cq_completion_read_ptr() {
-    return reinterpret_cast<volatile uint32_t *>(CQ_COMPLETION_READ_PTR);
+    return reinterpret_cast<volatile uint32_t *>(dev_completion_q_rd_ptr);
 }
 
 FORCE_INLINE volatile uint32_t *get_cq_completion_write_ptr() {
-    return reinterpret_cast<volatile uint32_t *>(CQ_COMPLETION_WRITE_PTR);
+    return reinterpret_cast<volatile uint32_t *>(dev_completion_q_wr_ptr);
 }
 
 FORCE_INLINE
@@ -151,11 +153,11 @@ void completion_queue_reserve_back(uint32_t num_pages) {
 // Note that this fn does not increment any counters
 FORCE_INLINE
 void notify_host_of_completion_queue_write_pointer() {
-    uint32_t completion_queue_write_ptr_addr = command_queue_base_addr + HOST_CQ_COMPLETION_WRITE_PTR;
+    uint32_t completion_queue_write_ptr_addr = command_queue_base_addr + host_completion_q_wr_ptr;
     uint32_t completion_wr_ptr_and_toggle = cq_write_interface.completion_fifo_wr_ptr | (cq_write_interface.completion_fifo_wr_toggle << 31);
     volatile tt_l1_ptr uint32_t* completion_wr_ptr_addr = get_cq_completion_write_ptr();
     completion_wr_ptr_addr[0] = completion_wr_ptr_and_toggle;
-    cq_noc_async_write_with_state<CQ_NOC_SnDL>(CQ_COMPLETION_WRITE_PTR, completion_queue_write_ptr_addr, 4);
+    cq_noc_async_write_with_state<CQ_NOC_SnDL>(dev_completion_q_wr_ptr, completion_queue_write_ptr_addr, 4);
 }
 
 FORCE_INLINE

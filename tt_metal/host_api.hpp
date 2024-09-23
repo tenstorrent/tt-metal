@@ -10,6 +10,7 @@
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/impl/kernels/runtime_args_data.hpp"
 #include "tt_metal/impl/program/program.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 /** @file */
 

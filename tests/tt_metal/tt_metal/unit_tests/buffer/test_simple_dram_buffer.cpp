@@ -47,7 +47,7 @@ namespace tt::test::buffer::detail {
 
 TEST_F(DeviceFixture, TestSimpleDramBufferReadOnlyLo) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        size_t lo_address = DRAM_UNRESERVED_BASE;
+        size_t lo_address = devices_.at(id)->get_base_allocator_addr(HalMemType::DRAM);
         ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), lo_address, 4));
         ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), lo_address, 8));
         ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), lo_address, 16));
@@ -69,7 +69,7 @@ TEST_F(DeviceFixture, TestSimpleDramBufferReadOnlyHi) {
 }
 TEST_F(DeviceFixture, TestSimpleDramBufferWriteOnlyLo) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        size_t lo_address = DRAM_UNRESERVED_BASE;
+        size_t lo_address = devices_.at(id)->get_base_allocator_addr(HalMemType::DRAM);
         ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), lo_address, 4));
         ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), lo_address, 8));
         ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), lo_address, 16));

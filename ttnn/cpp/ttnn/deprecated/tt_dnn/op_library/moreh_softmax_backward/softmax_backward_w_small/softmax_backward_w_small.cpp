@@ -39,7 +39,7 @@ bool is_moreh_softmax_backward_w_small_available(const Tensor &tensor) {
     cb_usage += 1 * tile_size;   // reduce
     cb_usage += 1 * tile_size;   // dy - sum
 
-    return (L1_UNRESERVED_BASE + cb_usage <= L1_512KB);
+    return (tensor.device()->get_base_allocator_addr(HalMemType::L1) + cb_usage <= L1_512KB);
 }
 
 operation::ProgramWithCallbacks moreh_softmax_backward_w_small(const Tensor &output, const Tensor &output_grad, const Tensor &input_grad, const CoreRange core_range, const MorehSoftmaxBackwardOp op, const ttnn::DeviceComputeKernelConfig compute_kernel_config) {

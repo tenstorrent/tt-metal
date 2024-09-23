@@ -122,8 +122,10 @@ void EnqueueReadBufferCommand::process() {
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
+    uint32_t dispatch_message_addr = dispatch_constants::get(
+        this->dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
     command_sequence.add_dispatch_wait_with_prefetch_stall(
-        true, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
+        true, dispatch_message_addr, this->expected_num_workers_completed);
 
     uint32_t padded_page_size = this->buffer.aligned_page_size();
     bool flush_prefetch = false;
@@ -287,7 +289,9 @@ void EnqueueWriteBufferCommand::process() {
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
     if (this->issue_wait) {
-        command_sequence.add_dispatch_wait(false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
+        uint32_t dispatch_message_addr = dispatch_constants::get(
+            this->dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
+        command_sequence.add_dispatch_wait(false, dispatch_message_addr, this->expected_num_workers_completed);
     }
 
     this->add_dispatch_write(command_sequence);
@@ -329,6 +333,8 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     this->device = device;
     this->dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
     this->packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(this->device);
+    this->dispatch_message_addr = dispatch_constants::get(
+        this->dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
     this->multicast_cores_launch_message_wptr = multicast_cores_launch_message_wptr;
     this->unicast_cores_launch_message_wptr = unicast_cores_launch_message_wptr;
 }
@@ -370,7 +376,7 @@ void EnqueueProgramCommand::assemble_stall_commands(bool prefetch_stall) {
         // Stall to allow binaries to commit to DRAM first
         // TODO: this can be removed for all but the first program run
         this->cached_program_command_sequences[program.id].stall_command_sequence.add_dispatch_wait_with_prefetch_stall(
-            true, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
+            true, this->dispatch_message_addr, this->expected_num_workers_completed);
     } else {
         // Wait command so previous program finishes
         constexpr uint32_t cached_cmd_sequence_sizeB =
@@ -379,7 +385,7 @@ void EnqueueProgramCommand::assemble_stall_commands(bool prefetch_stall) {
         this->cached_program_command_sequences[program.id].stall_command_sequence =
             HostMemDeviceCommand(cached_cmd_sequence_sizeB);
         this->cached_program_command_sequences[program.id].stall_command_sequence.add_dispatch_wait(
-            false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
+            false, this->dispatch_message_addr, this->expected_num_workers_completed);
     }
 }
 
@@ -1251,7 +1257,7 @@ void EnqueueProgramCommand::assemble_device_commands(
 
         // Wait Noc Write Barrier, wait for binaries/configs and launch_msg to be written to worker cores
         if (program.program_transfer_info.num_active_cores > 0) {
-            program_command_sequence.add_dispatch_wait(true, DISPATCH_MESSAGE_ADDR, 0, 0, false, false);
+            program_command_sequence.add_dispatch_wait(true, this->dispatch_message_addr, 0, 0, false, false);
         }
         DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
         if (this->device->dispatch_s_enabled()) {
@@ -1264,7 +1270,7 @@ void EnqueueProgramCommand::assemble_device_commands(
         run_program_go_signal.master_x = (uint8_t)this->dispatch_core.x;
         run_program_go_signal.master_y = (uint8_t)this->dispatch_core.y;
         uint32_t write_offset_bytes = program_command_sequence.write_offset_bytes();
-        program_command_sequence.add_dispatch_go_signal_mcast(this->expected_num_workers_completed, go_signal_mcast_flag, *reinterpret_cast<uint32_t*>(&run_program_go_signal), DISPATCH_MESSAGE_ADDR, dispatcher_for_go_signal);
+        program_command_sequence.add_dispatch_go_signal_mcast(this->expected_num_workers_completed, go_signal_mcast_flag, *reinterpret_cast<uint32_t*>(&run_program_go_signal), this->dispatch_message_addr, dispatcher_for_go_signal);
         cached_program_command_sequence.mcast_go_signal_cmd_ptr = &((CQDispatchCmd*) ((uint32_t*)program_command_sequence.data() + (write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t)))->mcast;
     } else {
         uint32_t i = 0;
@@ -1570,8 +1576,12 @@ void EnqueueRecordEventCommand::process() {
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
+    uint32_t dispatch_message_addr = dispatch_constants::get(
+        dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
+
     command_sequence.add_dispatch_wait(
-        this->write_barrier, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed, this->clear_count);
+        this->write_barrier, dispatch_message_addr, this->expected_num_workers_completed, this->clear_count);
 
     CoreType core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
@@ -1592,7 +1602,9 @@ void EnqueueRecordEventCommand::process() {
         event_payloads[cq_id] = {event_payload.data(), event_payload.size() * sizeof(uint32_t)};
     }
 
-    uint32_t address = this->command_queue_id == 0 ? CQ0_COMPLETION_LAST_EVENT : CQ1_COMPLETION_LAST_EVENT;
+    uint32_t completion_q0_last_event_addr = dispatch_constants::get(core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
+    uint32_t completion_q1_last_event_addr = dispatch_constants::get(core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
+    uint32_t address = this->command_queue_id == 0 ? completion_q0_last_event_addr : completion_q1_last_event_addr;
     const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(this->device);
     command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
         num_hw_cqs,
@@ -1637,8 +1649,11 @@ void EnqueueWaitForEventCommand::process() {
     void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+    uint32_t completion_q0_last_event_addr = dispatch_constants::get(this->dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
+    uint32_t completion_q1_last_event_addr = dispatch_constants::get(this->dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
+
     uint32_t last_completed_event_address =
-        sync_event.cq_id == 0 ? CQ0_COMPLETION_LAST_EVENT : CQ1_COMPLETION_LAST_EVENT;
+        sync_event.cq_id == 0 ? completion_q0_last_event_addr : completion_q1_last_event_addr;
 
     command_sequence.add_dispatch_wait(false, last_completed_event_address, sync_event.event_id, this->clear_count);
 
@@ -1699,8 +1714,11 @@ void EnqueueTraceCommand::process() {
     reset_launch_message_read_ptr_go_signal.signal = RUN_MSG_RESET_READ_PTR;
     reset_launch_message_read_ptr_go_signal.master_x = (uint8_t)this->dispatch_core.x;
     reset_launch_message_read_ptr_go_signal.master_y = (uint8_t)this->dispatch_core.y;
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+    uint32_t dispatch_message_addr = dispatch_constants::get(
+        dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
     // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
-    command_sequence.add_dispatch_go_signal_mcast(this->expected_num_workers_completed, go_signal_mcast_flag, *reinterpret_cast<uint32_t*>(&reset_launch_message_read_ptr_go_signal), DISPATCH_MESSAGE_ADDR, dispatcher_for_go_signal);
+    command_sequence.add_dispatch_go_signal_mcast(this->expected_num_workers_completed, go_signal_mcast_flag, *reinterpret_cast<uint32_t*>(&reset_launch_message_read_ptr_go_signal), dispatch_message_addr, dispatcher_for_go_signal);
     if (desc->num_traced_programs_needing_go_signal_multicast) {
         this->expected_num_workers_completed += device->num_worker_cores();
     }
@@ -1712,10 +1730,10 @@ void EnqueueTraceCommand::process() {
     // Clear the dispatch <--> worker semaphore, since trace starts at 0.
     if (this->device->distributed_dispatcher()) {
         command_sequence.add_dispatch_wait(
-            false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed, this->clear_count, false, true, 1);
+            false, dispatch_message_addr, this->expected_num_workers_completed, this->clear_count, false, true, 1);
     }
     command_sequence.add_dispatch_wait(
-        false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed, this->clear_count);
+        false, dispatch_message_addr, this->expected_num_workers_completed, this->clear_count);
 
     if (this->clear_count) {
         this->expected_num_workers_completed = 0;
@@ -2654,12 +2672,15 @@ void HWCommandQueue::record_begin(const uint32_t tid, std::shared_ptr<detail::Tr
     void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
+    uint32_t dispatch_message_addr = dispatch_constants::get(
+        dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
     if (this->device->distributed_dispatcher()) {
         // wait on dispatch_s before issuing counter reset
-        command_sequence.add_dispatch_wait(false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed, true, false, true, 1);
+        command_sequence.add_dispatch_wait(false, dispatch_message_addr, this->expected_num_workers_completed, true, false, true, 1);
     }
     // dispatch_d waits for latest non-zero counter from dispatch_s and then clears its local counter
-    command_sequence.add_dispatch_wait(false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed, true);
+    command_sequence.add_dispatch_wait(false, dispatch_message_addr, this->expected_num_workers_completed, true);
 
     this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->id);
     this->manager.fetch_queue_reserve_back(this->id);
@@ -2915,7 +2936,7 @@ void EnqueueProgramImpl(
 
     Device* device = cq.device();
     detail::CompileProgram(device, program);
-    program.allocate_circular_buffers();
+    program.allocate_circular_buffers(device);
     detail::ValidateCircularBufferRegion(program, device);
     cq.hw_command_queue().enqueue_program(program, blocking);
     // Program relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem

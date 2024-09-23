@@ -19,6 +19,7 @@
 #include "tools/profiler/common.hpp"
 #include "tools/profiler/profiler_state.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 
 namespace fs = std::filesystem;
 
@@ -105,7 +106,7 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch) {
     }
 
     if (tt::llrt::OptionsG.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
-        this->defines_ += "-DDEBUG_PRINT_ENABLED ";
+        this->defines_ += "-DDEBUG_PRINT_ENABLED -DL1_UNRESERVED_BASE=" + to_string(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalMemAddrType::UNRESERVED)) + " ";
     }
 
     if (tt::llrt::OptionsG.get_record_noc_transfers()) {
@@ -207,6 +208,9 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, int which, bo
                       "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io ";
 
     this->defines_ = env_.defines_;
+    uint32_t dispatch_message_addr =
+        dispatch_constants::get(CoreType::WORKER).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
+    this->defines_ += "-DDISPATCH_MESSAGE_ADDR=" + to_string(dispatch_message_addr) + " ";
 
     uint32_t l1_cache_disable_mask =
         tt::llrt::OptionsG.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
@@ -279,6 +283,9 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, int which, bool is_fw) 
     if ((l1_cache_disable_mask & debug_compute_mask) == debug_compute_mask) {
         this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
     }
+    uint32_t dispatch_message_addr =
+        dispatch_constants::get(CoreType::WORKER).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
+    this->defines_ += "-DDISPATCH_MESSAGE_ADDR=" + to_string(dispatch_message_addr) + " ";
 
     this->includes_ = env_.includes_ + "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/inc " + "-I" +
                       env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " + "-I" + env_.root_ +
@@ -362,6 +369,9 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw
     if ((l1_cache_disable_mask & tt::llrt::DebugHartFlags::RISCV_ER) == tt::llrt::DebugHartFlags::RISCV_ER) {
         this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
     }
+    uint32_t dispatch_message_addr =
+        dispatch_constants::get(CoreType::ETH).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
+    this->defines_ += "-DDISPATCH_MESSAGE_ADDR=" + to_string(dispatch_message_addr) + " ";
 
     switch (this->core_id_) {
         case 0: {

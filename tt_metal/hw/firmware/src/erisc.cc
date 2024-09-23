@@ -10,7 +10,6 @@
 #include "noc_parameters.h"
 #include "risc_attribs.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 #include "debug/watcher_common.h"
 
 extern "C" void ApplicationHandler(void);

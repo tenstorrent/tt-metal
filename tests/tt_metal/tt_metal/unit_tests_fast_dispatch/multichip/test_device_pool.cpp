@@ -6,7 +6,6 @@
 
 #include "tests/tt_metal/tt_metal/unit_tests/common/basic_fixture.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"

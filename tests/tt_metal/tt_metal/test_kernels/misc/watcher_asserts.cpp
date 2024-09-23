@@ -5,7 +5,6 @@
 #include <cstdint>
 #include "debug/assert.h"
 #include "debug/ring_buffer.h"
-#include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 
 /*
  * A test for the assert feature.

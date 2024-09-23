@@ -13,7 +13,6 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
-#include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -126,7 +125,7 @@ TEST_F(BasicFixture, SingleDeviceHarvestingPrints) {
 TEST_F(DeviceFixture, PingAllLegalDramChannels) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         {
-            size_t start_byte_address = DRAM_UNRESERVED_BASE;
+            size_t start_byte_address = devices_.at(id)->get_base_allocator_addr(HalMemType::DRAM);
             ASSERT_TRUE(unit_tests::basic::device::dram_ping(
                 devices_.at(id), 4, start_byte_address, devices_.at(id)->num_dram_channels()));
             ASSERT_TRUE(unit_tests::basic::device::dram_ping(
@@ -160,7 +159,7 @@ TEST_F(DeviceFixture, PingAllLegalDramChannels) {
 TEST_F(DeviceFixture, PingIllegalDramChannels) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto num_channels = devices_.at(id)->num_dram_channels() + 1;
-        size_t start_byte_address = DRAM_UNRESERVED_BASE;
+        size_t start_byte_address = devices_.at(id)->get_base_allocator_addr(HalMemType::DRAM);;
         ASSERT_ANY_THROW(unit_tests::basic::device::dram_ping(devices_.at(id), 4, start_byte_address, num_channels));
     }
 }
@@ -168,8 +167,7 @@ TEST_F(DeviceFixture, PingIllegalDramChannels) {
 TEST_F(DeviceFixture, PingAllLegalL1Cores) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         {
-            size_t start_byte_address = L1_UNRESERVED_BASE;  // FIXME: Should remove dependency on
-                                                             // hostdevcommon/common_runtime_address_map.h header.
+            size_t start_byte_address = devices_.at(id)->get_base_allocator_addr(HalMemType::L1);
             ASSERT_TRUE(unit_tests::basic::device::l1_ping(
                 devices_.at(id), 4, start_byte_address, devices_.at(id)->logical_grid_size()));
             ASSERT_TRUE(unit_tests::basic::device::l1_ping(
@@ -206,8 +204,7 @@ TEST_F(DeviceFixture, PingIllegalL1Cores) {
         auto grid_size = devices_.at(id)->logical_grid_size();
         grid_size.x++;
         grid_size.y++;
-        size_t start_byte_address = L1_UNRESERVED_BASE;  // FIXME: Should remove dependency on
-                                                         // hostdevcommon/common_runtime_address_map.h header.
+        size_t start_byte_address = devices_.at(id)->get_base_allocator_addr(HalMemType::L1);
         ASSERT_ANY_THROW(unit_tests::basic::device::l1_ping(devices_.at(id), 4, start_byte_address, grid_size));
     }
 }
@@ -236,7 +233,7 @@ TEST_F(DeviceFixture, ValidateKernelDoesNotTargetHarvestedCores) {
         tt_metal::Program program = tt_metal::CreateProgram();
         string kernel_name = "tests/tt_metal/tt_metal/test_kernels/misc/ping_legal_l1s.cpp";
         CoreCoord logical_target_core(0, 0);
-        uint32_t intermediate_l1_addr = L1_UNRESERVED_BASE;
+        uint32_t intermediate_l1_addr = devices_.at(id)->get_base_allocator_addr(HalMemType::L1);
         uint32_t size_bytes = host_input.size() * sizeof(uint32_t);
         tt_metal::KernelHandle kernel_id = tt_metal::CreateKernel(
             program,
@@ -290,8 +287,10 @@ TEST_F(DeviceFixture, TestL1ToPCIeAt16BAlignedAddress) {
     EXPECT_TRUE(device->is_mmio_capable());
     CoreCoord logical_core(0, 0);
 
-    uint32_t base_l1_src_address = L1_UNRESERVED_BASE + hal.get_alignment(HalMemType::L1);
-    uint32_t base_pcie_dst_address = CQ_START + hal.get_alignment(HalMemType::L1);
+    uint32_t base_l1_src_address = device->get_base_allocator_addr(HalMemType::L1) + hal.get_alignment(HalMemType::L1);
+    // This is a slow dispatch test dispatch core type is needed to query dispatch_constants
+    uint32_t base_pcie_dst_address =
+        dispatch_constants::get(CoreType::WORKER).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED) + hal.get_alignment(HalMemType::L1);
 
     uint32_t size_bytes = 2048 * 128;
     std::vector<uint32_t> src = generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, size_bytes / sizeof(uint32_t));

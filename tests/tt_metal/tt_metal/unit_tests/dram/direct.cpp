@@ -374,22 +374,24 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
 
 TEST_F(DeviceFixture, SingleCoreDirectDramReaderOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
+        uint32_t l1_unreserved_base = devices_.at(id)->get_base_allocator_addr(HalMemType::L1);
         ASSERT_TRUE(
-            unit_tests::dram::direct::reader_only(devices_.at(id), 1 * 1024, L1_UNRESERVED_BASE, CoreCoord(0, 0)));
+            unit_tests::dram::direct::reader_only(devices_.at(id), 1 * 1024, l1_unreserved_base, CoreCoord(0, 0)));
         ASSERT_TRUE(
-            unit_tests::dram::direct::reader_only(devices_.at(id), 2 * 1024, L1_UNRESERVED_BASE, CoreCoord(0, 0)));
+            unit_tests::dram::direct::reader_only(devices_.at(id), 2 * 1024, l1_unreserved_base, CoreCoord(0, 0)));
         ASSERT_TRUE(
-            unit_tests::dram::direct::reader_only(devices_.at(id), 16 * 1024, L1_UNRESERVED_BASE, CoreCoord(0, 0)));
+            unit_tests::dram::direct::reader_only(devices_.at(id), 16 * 1024, l1_unreserved_base, CoreCoord(0, 0)));
     }
 }
 TEST_F(DeviceFixture, SingleCoreDirectDramWriterOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
+        uint32_t l1_unreserved_base = devices_.at(id)->get_base_allocator_addr(HalMemType::L1);
         ASSERT_TRUE(
-            unit_tests::dram::direct::writer_only(devices_.at(id), 1 * 1024, L1_UNRESERVED_BASE, CoreCoord(0, 0)));
+            unit_tests::dram::direct::writer_only(devices_.at(id), 1 * 1024, l1_unreserved_base, CoreCoord(0, 0)));
         ASSERT_TRUE(
-            unit_tests::dram::direct::writer_only(devices_.at(id), 2 * 1024, L1_UNRESERVED_BASE, CoreCoord(0, 0)));
+            unit_tests::dram::direct::writer_only(devices_.at(id), 2 * 1024, l1_unreserved_base, CoreCoord(0, 0)));
         ASSERT_TRUE(
-            unit_tests::dram::direct::writer_only(devices_.at(id), 16 * 1024, L1_UNRESERVED_BASE, CoreCoord(0, 0)));
+            unit_tests::dram::direct::writer_only(devices_.at(id), 16 * 1024, l1_unreserved_base, CoreCoord(0, 0)));
     }
 }
 TEST_F(DeviceFixture, SingleCoreDirectDramReaderWriter) {

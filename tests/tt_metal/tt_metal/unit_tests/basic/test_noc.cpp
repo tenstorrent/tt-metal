@@ -153,6 +153,7 @@ TEST_F(DeviceFixture, DirectedStreamRegWriteRead) {
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_0}
         );
 
+        uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
         uint32_t value_to_write = 0x1234;
         for (uint32_t x = 0; x < logical_grid_size.x; x++) {
             for (uint32_t y = 0; y < logical_grid_size.y; y++) {
@@ -164,7 +165,7 @@ TEST_F(DeviceFixture, DirectedStreamRegWriteRead) {
 
                 tt_metal::SetRuntimeArgs(
                     program, kernel_id, logical_core,
-                    {worker_target_core.x, worker_target_core.y, stream_id, stream_reg, value_to_write, L1_UNRESERVED_BASE}
+                    {worker_target_core.x, worker_target_core.y, stream_id, stream_reg, value_to_write, l1_unreserved_base}
                 );
 
                 value_to_write++;
@@ -178,7 +179,7 @@ TEST_F(DeviceFixture, DirectedStreamRegWriteRead) {
             for (uint32_t y = 0; y < logical_grid_size.y; y++) {
                 CoreCoord logical_core(x, y);
                 std::vector<uint32_t> readback = {0xDEADBEEF};
-                tt_metal::detail::ReadFromDeviceL1(device, logical_core, L1_UNRESERVED_BASE, sizeof(uint32_t), readback);
+                tt_metal::detail::ReadFromDeviceL1(device, logical_core, l1_unreserved_base, sizeof(uint32_t), readback);
                 EXPECT_EQ(readback[0], expected_value_to_read);
                 expected_value_to_read++;
             }
