@@ -178,14 +178,14 @@ static std::string create_formats_array_string(std::string array_type, std::stri
 }
 
 static std::pair<std::vector<DataFormat>, std::vector<DataFormat>>
-generate_unpack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, std::vector<PreserveFP32Target> preserve_fp32_precision) {
+generate_unpack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, std::vector<UnpackToDestMode> unpack_to_dest_mode) {
 
     vector<DataFormat> src_formats = tt::get_unpack_src_formats(
         desc.input_buf_dataformat_arr, desc.param_buf_dataformat_arr, desc.intermediate_buf_dataformat_arr);
 
     vector<DataFormat> dst_formats = tt::get_unpack_dst_formats(
         desc.input_buf_dataformat_arr, desc.param_buf_dataformat_arr, desc.intermediate_buf_dataformat_arr,
-        desc.output_buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, preserve_fp32_precision);
+        desc.output_buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, unpack_to_dest_mode);
 
     TT_ASSERT(src_formats.size() == 24 && dst_formats.size() == 24,
         "There must be 8 unpack src/dst formats for each input, param, and intermediate operands.");
@@ -310,7 +310,7 @@ static void generate_data_format_descriptors(JitBuildOptions& options, const tt:
         desc.intermediate_buf_dataformat_arr);
 
     vector<DataFormat> unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs;
-    tie(unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs) = generate_unpack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.preserve_fp32_precision);
+    tie(unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs) = generate_unpack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.unpack_to_dest_mode);
 
     vector<DataFormat> pack_src_formats_all_cbs, pack_dst_formats_all_cbs;
     tie(pack_src_formats_all_cbs, pack_dst_formats_all_cbs) = generate_pack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, arch);

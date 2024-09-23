@@ -114,9 +114,9 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         num_tile_per_core  // per_core_block_size
     };
 
-    vector<PreserveFP32Target> preserve_fp32_precision(NUM_CIRCULAR_BUFFERS, PreserveFP32Target::Disabled);
+    vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
-        preserve_fp32_precision[in_cb_id] = PreserveFP32Target::DEST;
+        unpack_to_dest_mode[in_cb_id] = UnpackToDestMode::UnpackToDestFp32;
     }
 
     bool math_approx_mode = std::all_of(
@@ -129,7 +129,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
-            .preserve_fp32_precision = preserve_fp32_precision,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args_group_1,
             .defines = unary_defines});

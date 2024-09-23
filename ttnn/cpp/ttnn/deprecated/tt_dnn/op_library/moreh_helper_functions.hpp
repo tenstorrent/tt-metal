@@ -86,7 +86,7 @@ struct ComputeKernelArg {
 struct ComputeKernelConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
-    vector<PreserveFP32Target> preserve_fp32_precision;
+    vector<UnpackToDestMode> unpack_to_dest_mode;
     bool math_approx_mode = false;
     std::map<std::string, std::string> defines;
 };
@@ -99,7 +99,7 @@ struct ComputeKernelConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4,
     bool fp32_dest_acc_en = false,
     bool math_approx_mode = false,
-    vector<PreserveFP32Target> preserve_fp32_precision = {});
+    vector<UnpackToDestMode> unpack_to_dest_mode = {});
 
 [[maybe_unused]] KernelHandle CreateComputeKernel(
     Program &program,
@@ -109,7 +109,7 @@ struct ComputeKernelConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4,
     bool fp32_dest_acc_en = false,
     bool math_approx_mode = false,
-    vector<PreserveFP32Target> preserve_fp32_precision = {});
+    vector<UnpackToDestMode> unpack_to_dest_mode = {});
 
 [[maybe_unused]] std::vector<KernelHandle> CreateComputeKernel(
     Program &program, const std::string &file_name, std::vector<ComputeKernelArg> args, ComputeKernelConfig config);

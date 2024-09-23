@@ -238,11 +238,11 @@ std::vector<DataFormat> get_unpack_dst_formats(
     DataFormat output_formats[NUM_OPERANDS],
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
-    std::vector<PreserveFP32Target> preserve_fp32_precision,
+    std::vector<UnpackToDestMode> unpack_to_dest_mode,
     bool int_fpu_en)
 {
-    if (!preserve_fp32_precision.empty()) {
-        TT_FATAL(preserve_fp32_precision.size() == NUM_CIRCULAR_BUFFERS, "preserve_fp32_precision vector must have 32 elements");
+    if (!unpack_to_dest_mode.empty()) {
+        TT_FATAL(unpack_to_dest_mode.size() == NUM_CIRCULAR_BUFFERS, "unpack_to_dest_mode vector must have 32 elements");
     }
 
     DataFormat pack_format = get_pack_data_format(output_formats, intermed_formats);
@@ -264,8 +264,7 @@ std::vector<DataFormat> get_unpack_dst_formats(
         } else if (int_fpu_en) {
             unpack_dst_format.push_back(src_format);
         } else {
-            if (input_formats[i] == DataFormat::Float32 && !preserve_fp32_precision.empty() && preserve_fp32_precision[i] != PreserveFP32Target::Disabled) {
-                TT_FATAL(preserve_fp32_precision[i] == PreserveFP32Target::DEST, "preserve_fp32_precision is only available when unpack target is DEST register");
+            if (input_formats[i] == DataFormat::Float32 && !unpack_to_dest_mode.empty() && unpack_to_dest_mode[i] != UnpackToDestMode::Default) {
                 unpack_dst_format.push_back(get_single_unpack_dst_format(input_formats[i], pack_format, DataFormat::Float32));
             } else {
                 unpack_dst_format.push_back(get_single_unpack_dst_format(input_formats[i], pack_format, unpack_cond_dst_format));
@@ -273,16 +272,14 @@ std::vector<DataFormat> get_unpack_dst_formats(
         }
     }
     for (int i=0 ; i<NUM_OPERANDS ; i++) {
-        if (param_formats[i] == DataFormat::Float32 && !preserve_fp32_precision.empty() && preserve_fp32_precision[NUM_OPERANDS+i] != PreserveFP32Target::Disabled) {
-            TT_FATAL(preserve_fp32_precision[NUM_OPERANDS+i] == PreserveFP32Target::DEST, "preserve_fp32_precision is only available when unpack target is DEST register");
+        if (param_formats[i] == DataFormat::Float32 && !unpack_to_dest_mode.empty() && unpack_to_dest_mode[NUM_OPERANDS+i] != UnpackToDestMode::Default) {
             unpack_dst_format.push_back(get_single_unpack_dst_format(param_formats[i], pack_format, DataFormat::Float32));
         } else {
             unpack_dst_format.push_back(get_single_unpack_dst_format(param_formats[i], pack_format, unpack_cond_dst_format));
         }
     }
     for (int i=0 ; i<NUM_OPERANDS ; i++) {
-        if (intermed_formats[i] == DataFormat::Float32 && !preserve_fp32_precision.empty() && preserve_fp32_precision[3*NUM_OPERANDS+i] != PreserveFP32Target::Disabled) {
-            TT_FATAL(preserve_fp32_precision[3*NUM_OPERANDS+i] == PreserveFP32Target::DEST, "preserve_fp32_precision is only available when unpack target is DEST register");
+        if (intermed_formats[i] == DataFormat::Float32 && !unpack_to_dest_mode.empty() && unpack_to_dest_mode[3*NUM_OPERANDS+i] != UnpackToDestMode::Default) {
             unpack_dst_format.push_back(get_single_unpack_dst_format(intermed_formats[i], pack_format, DataFormat::Float32));
         } else {
             unpack_dst_format.push_back(get_single_unpack_dst_format(intermed_formats[i], pack_format, unpack_cond_dst_format));

@@ -105,8 +105,8 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    // set preserve_fp32_precision to the same value as fp32_dest_acc_en
-    vector<PreserveFP32Target> preserve_fp32_precision(NUM_CIRCULAR_BUFFERS, PreserveFP32Target::Disabled);
+    // set unpack_to_dest_mode to the same value as fp32_dest_acc_en
+    vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     auto compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/moreh_sum_nc.cpp";
     if (device->arch() == tt::ARCH::GRAYSKULL) {
@@ -121,7 +121,7 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode,
-        preserve_fp32_precision);
+        unpack_to_dest_mode);
 
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
@@ -134,7 +134,7 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
             math_fidelity,
             fp32_dest_acc_en,
             math_approx_mode,
-            preserve_fp32_precision);
+            unpack_to_dest_mode);
     }
 
     ////////////////////////////////////////////////////////////////////////////

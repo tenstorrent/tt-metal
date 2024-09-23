@@ -154,14 +154,14 @@ operation::ProgramWithCallbacks moreh_sum_h_impl(const Tensor &a, const Tensor &
         origin_H
     };
 
-    // set preserve_fp32_precision to the same value as fp32_dest_acc_en
-    // bool preserve_fp32_precision = fp32_dest_acc_en;
-    vector<PreserveFP32Target> preserve_fp32_precision(NUM_CIRCULAR_BUFFERS, PreserveFP32Target::Disabled);
+    // set unpack_to_dest_mode to the same value as fp32_dest_acc_en
+    // bool unpack_to_dest_mode = fp32_dest_acc_en;
+    vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     auto reduce_compute_kernel_group_1_id = tt_metal::CreateKernel(
         program,
         compute_kernel_name,
         core_group_1,
-        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .preserve_fp32_precision = preserve_fp32_precision, .math_approx_mode = math_approx_mode, .compile_args = compute_kernel_args_group_1, .defines = reduce_defines});
+        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = unpack_to_dest_mode, .math_approx_mode = math_approx_mode, .compile_args = compute_kernel_args_group_1, .defines = reduce_defines});
 
     if (!core_group_2.ranges().empty()) {
         vector<uint32_t> compute_kernel_args_group_2 = {
@@ -175,7 +175,7 @@ operation::ProgramWithCallbacks moreh_sum_h_impl(const Tensor &a, const Tensor &
             program,
             compute_kernel_name,
             core_group_2,
-            tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .preserve_fp32_precision = preserve_fp32_precision, .math_approx_mode = math_approx_mode, .compile_args = compute_kernel_args_group_2, .defines = reduce_defines});
+            tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = unpack_to_dest_mode, .math_approx_mode = math_approx_mode, .compile_args = compute_kernel_args_group_2, .defines = reduce_defines});
     }
 
     for (uint32_t i = 0, num_cols_read = 0; i < num_cores; i++) {

@@ -310,7 +310,7 @@ void ComputeKernel::set_build_options(JitBuildOptions &build_options) const {
     build_options.set_hlk_math_fidelity_all_cores(this->config_.math_fidelity);
     build_options.set_hlk_math_approx_mode_all_cores(this->config_.math_approx_mode);
     build_options.fp32_dest_acc_en = this->config_.fp32_dest_acc_en;
-    build_options.preserve_fp32_precision = this->config_.preserve_fp32_precision;
+    build_options.unpack_to_dest_mode = this->config_.unpack_to_dest_mode;
     build_options.hlk_defines = this->defines_;
 }
 

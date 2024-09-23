@@ -155,8 +155,8 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
         origin_W,
     };
 
-    // set preserve_fp32_precision to the same value as fp32_dest_acc_en
-    vector<PreserveFP32Target> preserve_fp32_precision(NUM_CIRCULAR_BUFFERS, PreserveFP32Target::Disabled);
+    // set unpack_to_dest_mode to the same value as fp32_dest_acc_en
+    vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     auto reduce_compute_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_name,
@@ -164,7 +164,7 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
-            .preserve_fp32_precision = preserve_fp32_precision,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args_group_1,
             .defines = reduce_defines});
@@ -184,7 +184,7 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .preserve_fp32_precision = preserve_fp32_precision,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .math_approx_mode = math_approx_mode,
                 .compile_args = compute_kernel_args_group_2,
                 .defines = reduce_defines});
