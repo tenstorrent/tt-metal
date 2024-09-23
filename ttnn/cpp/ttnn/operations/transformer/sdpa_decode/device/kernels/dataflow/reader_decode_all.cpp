@@ -14,16 +14,17 @@ constexpr uint32_t get_barrier_read_threshold() {
  }
 
 template<uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
-uint32_t virtual_seq_tile_id_to_physical_tile_id(uint32_t seq_tile_idx, volatile tt_l1_ptr const uint32_t* const page_table_ptr) {
+uint32_t virtual_seq_tile_id_to_physical_tile_id(uint32_t seq_tile_idx, uint32_t cur_head, volatile tt_l1_ptr const uint32_t* const page_table_ptr) {
     // Given some index in the sequence tiles in range [0, max_seq_len_t]
     // Return the physical tile id for that tile row
     constexpr uint32_t block_stride = num_heads * block_size_t * Wt;
+    const uint32_t head_offset = cur_head * block_size_t * Wt;
 
     const uint32_t virtual_block = seq_tile_idx / block_size_t;
     const uint32_t physical_block = page_table_ptr[virtual_block];
     const uint32_t block_row_offset = seq_tile_idx % block_size_t;
     const uint32_t block_offset = block_row_offset * Wt;
-    return physical_block * block_stride + block_offset;
+    return physical_block * block_stride + head_offset + block_offset;
 }
 
 void kernel_main() {
@@ -49,16 +50,22 @@ void kernel_main() {
     constexpr uint32_t log2_page_table_page_size = get_compile_time_arg_val(14);
     constexpr uint32_t page_table_page_size = get_compile_time_arg_val(15);
     constexpr uint32_t Bkv = get_compile_time_arg_val(16);
+    constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(17);
+    constexpr uint32_t num_output_cores = get_compile_time_arg_val(18);
 
-    const uint32_t q_addr  = get_arg_val<uint32_t>(0);
-    const uint32_t k_addr  = get_arg_val<uint32_t>(1);
-    const uint32_t v_addr  = get_arg_val<uint32_t>(2);
-    const uint32_t pos_addr  = get_arg_val<uint32_t>(3);
-    const uint32_t page_table_addr  = get_arg_val<uint32_t>(4);
-    const uint32_t cur_batch =  get_arg_val<uint32_t>(5);
-    const bool is_worker = get_arg_val<uint32_t>(6) == 1;
-    const uint32_t core_num = get_arg_val<uint32_t>(7);
-    const uint32_t cur_pos_arg = get_arg_val<uint32_t>(8);
+    uint32_t arg_idx = 0;
+    const uint32_t q_addr  = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t k_addr  = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t v_addr  = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t pos_addr  = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t page_table_addr  = get_arg_val<uint32_t>(arg_idx++);
+    const bool is_worker = get_arg_val<uint32_t>(arg_idx++) == 0;
+    const bool is_output_core = get_arg_val<uint32_t>(arg_idx++) == 1;
+    const uint32_t cur_head = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t core_num_in_output = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
 
     // idle core
     if (q_addr ==0){
@@ -110,12 +117,13 @@ void kernel_main() {
         page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
     }
     // Sequence length assignment
-    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(cur_pos, cur_batch, core_num, num_cores_per_batch, k_chunk_size);
-    tt_l1_ptr uint32_t * all_reducer_noc_x          = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
-    tt_l1_ptr uint32_t * all_reducer_noc_y          = (tt_l1_ptr uint32_t*)(get_arg_addr(9 + B));
+    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(cur_pos, cur_batch, core_num_in_reduce, num_cores_per_head, k_chunk_size);
+    tt_l1_ptr uint32_t * all_output_noc_x          = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx+=num_output_cores;
+    tt_l1_ptr uint32_t * all_output_noc_y          = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx++));
 
-    uint32_t reduce_core_noc_x = all_reducer_noc_x[cur_batch];
-    uint32_t reduce_core_noc_y = all_reducer_noc_y[cur_batch];
+    uint32_t output_core_noc_x = all_output_noc_x[cur_batch];
+    uint32_t output_core_noc_y = all_output_noc_y[cur_batch];
 
     if (k_chunk_start == k_chunk_end) {
         return; // early exit because no computes needs to be done
@@ -149,10 +157,10 @@ void kernel_main() {
 
     if constexpr(is_q_sharded){
         uint64_t q_read_addr;
-        if (is_worker){
-            q_read_addr = get_noc_addr(reduce_core_noc_x, reduce_core_noc_y, q_addr);
-        } else {
+        if (is_output_core){
             q_read_addr = get_noc_addr(q_addr);
+        } else {
+            q_read_addr = get_noc_addr(output_core_noc_x, output_core_noc_y, q_addr);
         }
         cb_reserve_back(cb_q_in, q_chunk_tiles);
         uint32_t q_write_ptr = get_write_ptr(cb_q_in);
@@ -195,18 +203,6 @@ void kernel_main() {
         .data_format = v_data_format
     };
 
-    // Offset for current batch
-    const uint32_t k_batch_offset = (cur_batch % Bkv) * St * DHt;
-    const uint32_t v_batch_offset = (cur_batch % Bkv) * St * DHt;
-
-    // Then, read K, V, Mask k_chunk_tiles at a time
-    const uint32_t k_chunk_offset = k_chunk_start * Sk_chunk_t * DHt;
-    const uint32_t v_chunk_offset = k_chunk_start * Sk_chunk_t * DHt;
-    const uint32_t mask_chunk_offset = k_chunk_start * Sk_chunk_t;
-    uint32_t k_start_tile_id = k_batch_offset + k_chunk_offset;
-    uint32_t v_start_tile_id = v_batch_offset + v_chunk_offset;
-
-
     if constexpr (is_paged_attention) {
         for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
 
@@ -218,7 +214,7 @@ void kernel_main() {
             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
                 uint32_t k_write_ptr_col = k_write_ptr + row*k_tile_bytes;
                 uint32_t virtual_k_tile_row_num = k_chunk_start_row_num + row;
-                uint32_t physical_k_tile_id = virtual_seq_tile_id_to_physical_tile_id<num_kv_heads, block_size_t, DHt>(virtual_k_tile_row_num, page_table_ptr);
+                uint32_t physical_k_tile_id = virtual_seq_tile_id_to_physical_tile_id<num_kv_heads, block_size_t, DHt>(virtual_k_tile_row_num, cur_head, page_table_ptr);
                 for (uint32_t col = 0; col < DHt; ++col) {
                     noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
                     physical_k_tile_id += 1; // Go to next tile in row
@@ -240,7 +236,7 @@ void kernel_main() {
 
             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
                 uint32_t virtual_v_tile_row_num = k_chunk_start_row_num + row;
-                uint32_t physical_v_tile_id = virtual_seq_tile_id_to_physical_tile_id<num_kv_heads, block_size_t, DHt>(virtual_v_tile_row_num, page_table_ptr);
+                uint32_t physical_v_tile_id = virtual_seq_tile_id_to_physical_tile_id<num_kv_heads, block_size_t, DHt>(virtual_v_tile_row_num, cur_head, page_table_ptr);
                 for (uint32_t col = 0; col < DHt; ++col) {
                     noc_async_read_tile(physical_v_tile_id, v_reader, v_write_ptr);
                     physical_v_tile_id += 1;
@@ -258,6 +254,18 @@ void kernel_main() {
         }
 
     } else {
+        // Offset for current batch
+        const uint32_t k_batch_offset = (cur_batch % Bkv) * num_kv_heads * St * DHt;
+        const uint32_t v_batch_offset = (cur_batch % Bkv) * num_kv_heads * St * DHt;
+        const uint32_t k_head_offset = cur_head * St * DHt;
+        const uint32_t v_head_offset = cur_head * St * DHt;
+
+        // Then, read K, V, Mask k_chunk_tiles at a time
+        const uint32_t k_chunk_offset = k_chunk_start * Sk_chunk_t * DHt;
+        const uint32_t v_chunk_offset = k_chunk_start * Sk_chunk_t * DHt;
+        uint32_t k_start_tile_id = k_batch_offset + k_head_offset + k_chunk_offset;
+        uint32_t v_start_tile_id = v_batch_offset + v_head_offset + v_chunk_offset;
+
         for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
             // Read K chunk transposed
             cb_reserve_back(cb_k_in, k_chunk_tiles);

@@ -328,4 +328,7 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, transpose_q,
             share_cache=share_cache,
         )
 
-    assert device.num_program_cache_entries() == 5
+    if transpose_q:
+        assert device.num_program_cache_entries() == 4
+    else:
+        assert device.num_program_cache_entries() == 1
