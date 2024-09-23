@@ -33,7 +33,7 @@ struct dispatch_constants {
 
     static const dispatch_constants &get(const CoreType &core_type, const uint32_t num_hw_cqs = 0) {
         static uint32_t hw_cqs = num_hw_cqs;
-        TT_FATAL(hw_cqs > 0);
+        TT_FATAL(hw_cqs > 0, "Command Queue is not initialized.");
         static dispatch_constants inst = dispatch_constants(core_type, hw_cqs);
         return inst;
     }
