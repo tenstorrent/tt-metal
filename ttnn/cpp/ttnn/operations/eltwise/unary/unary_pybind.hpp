@@ -259,7 +259,7 @@ void bind_unary_operation_with_float_parameter(
         {4}
 
         .. math::
-            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
+            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
@@ -319,7 +319,7 @@ void bind_unary_operation_with_integer_parameter(
         {4}
 
         .. math::
-            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
+            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
@@ -535,7 +535,7 @@ void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operatio
         Applies {0} to :attr:`input_tensor` element-wise.
 
         .. math::
-            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
+            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
@@ -1372,7 +1372,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::square, R"doc(\mathrm{{output\_tensor}}_i = square(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::tan, R"doc(\mathrm{{output\_tensor}}_i = tan(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::tanh, R"doc(\mathrm{{output\_tensor}}_i = tanh(\mathrm{{input\_tensor}}_i))doc");
-    detail::bind_unary_operation(module, ttnn::log_sigmoid, R"doc(\mathrm{{output\_tensor}}_i = log_sigmoid(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::log_sigmoid, R"doc(\mathrm{{output\_tensor}}_i = \verb|log_sigmoid|(\mathrm{{input\_tensor}}_i))doc");
 
     //  Unaries with fast_and_approximate_mode
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::exp,
