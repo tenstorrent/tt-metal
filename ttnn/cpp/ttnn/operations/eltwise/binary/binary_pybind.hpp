@@ -215,13 +215,13 @@ void bind_binary_composite(py::module& module, const binary_operation_t& operati
 }
 
 template <typename binary_operation_t>
-void bind_binary_composite_with_alpha(py::module& module, const binary_operation_t& operation, const std::string& description) {
+void bind_binary_composite_with_alpha(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math) {
     auto doc = fmt::format(
         R"doc(
             {2}
 
             .. math::
-                \mathrm{{output\_tensor}} = {0}(\mathrm{{input\_tensor\_a,input\_tensor\_b*alpha}}).
+                {3}
 
             Args:
                 input_tensor_a (ttnn.Tensor): the input tensor.
@@ -242,7 +242,8 @@ void bind_binary_composite_with_alpha(py::module& module, const binary_operation
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
-        description);
+        description,
+        math);
 
     bind_registered_operation(
         module,
@@ -898,12 +899,16 @@ void py_module(py::module& module) {
     detail::bind_binary_composite_with_alpha(
         module,
         ttnn::addalpha,
-        R"doc(Compute addalpha :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`.)doc");
+        R"doc(Compute addalpha :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`.)doc",
+        R"doc(\mathrm{{output\_tensor}} = (\mathrm{{input\_tensor\_a\ + input\_tensor\_b\ * \alpha}}).)doc"
+        );
 
     detail::bind_binary_composite_with_alpha(
         module,
         ttnn::subalpha,
-        R"doc(Compute subalpha :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
+        R"doc(Compute subalpha :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{{output\_tensor}} = (\mathrm{{input\_tensor\_a\ - input\_tensor\_b\ * \alpha}}).)doc"
+        );
 
     detail::bind_binary_composite_with_rtol_atol(
         module,
