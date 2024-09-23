@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_dot_backward_device_operation.hpp"
+
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -34,7 +35,6 @@ void grad_tensor_validate(const Tensor& tensor, const Tensor& grad_tensor) {
 
 void MorehDotBackwardOperation::validate(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-
     const auto& output_grad = tensor_args.output_grad;
     const auto& input = tensor_args.input;
     const auto& other = tensor_args.other;
@@ -69,13 +69,11 @@ void MorehDotBackwardOperation::validate(
 
 MorehDotBackwardOperation::shape_return_value_t MorehDotBackwardOperation::compute_output_shapes(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-
     return {};
 }
 
 MorehDotBackwardOperation::tensor_return_value_t MorehDotBackwardOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-
     return {};
 }
 
@@ -89,8 +87,7 @@ MorehDotBackwardOperation::invoke(
     const std::optional<MemoryConfig>& memory_config) {
     return {
         operation_attributes_t{memory_config.value_or(input.memory_config())},
-        tensor_args_t{output_grad, input, other, input_grad, other_grad}
-    };
+        tensor_args_t{output_grad, input, other, input_grad, other_grad}};
 }
 
-}
+}  // namespace ttnn::operations::moreh::moreh_dot_backward
