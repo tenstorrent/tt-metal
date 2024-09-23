@@ -171,7 +171,8 @@ void JitBuildState::finish_init() {
         if (this->target_name_ != "erisc") {
             this->link_objs_ += build_dir + "tmu-crt0.o ";
         }
-        if (this->target_name_ == "ncrisc" and ((this->env_.arch_ == tt::ARCH::GRAYSKULL or this->env_.arch_ == tt::ARCH::WORMHOLE_B0))) {
+        if (this->target_name_ == "ncrisc" and
+            ((this->env_.arch_ == tt::ARCH::GRAYSKULL or this->env_.arch_ == tt::ARCH::WORMHOLE_B0))) {
             this->link_objs_ += build_dir + "ncrisc-halt.o ";
         }
     } else {
@@ -196,7 +197,8 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, int which, bo
 
     this->defines_ = env_.defines_;
 
-    uint32_t l1_cache_disable_mask = tt::llrt::OptionsG.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
+    uint32_t l1_cache_disable_mask =
+        tt::llrt::OptionsG.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
 
     // TODO(pgk): build these once at init into built/libs!
     this->srcs_.push_back("tt_metal/hw/toolchain/substitutes.cpp");
@@ -264,8 +266,11 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, int which, bool is_fw) 
     this->cflags_ = env_.cflags_ + "-O3 ";
 
     this->defines_ = env_.defines_;
-    uint32_t l1_cache_disable_mask = tt::llrt::OptionsG.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
-    uint32_t debug_compute_mask = (tt::llrt::DebugHartFlags::RISCV_TR0 | tt::llrt::DebugHartFlags::RISCV_TR1 | tt::llrt::DebugHartFlags::RISCV_TR2);
+    uint32_t l1_cache_disable_mask =
+        tt::llrt::OptionsG.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
+    uint32_t debug_compute_mask =
+        (tt::llrt::DebugHartFlags::RISCV_TR0 | tt::llrt::DebugHartFlags::RISCV_TR1 |
+         tt::llrt::DebugHartFlags::RISCV_TR2);
     if ((l1_cache_disable_mask & debug_compute_mask) == debug_compute_mask) {
         this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
     }
@@ -348,7 +353,8 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw
                       "/metal/llk_io ";
 
     this->defines_ = env_.defines_;
-    uint32_t l1_cache_disable_mask = tt::llrt::OptionsG.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
+    uint32_t l1_cache_disable_mask =
+        tt::llrt::OptionsG.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
     if ((l1_cache_disable_mask & tt::llrt::DebugHartFlags::RISCV_ER) == tt::llrt::DebugHartFlags::RISCV_ER) {
         this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
     }
@@ -436,8 +442,6 @@ static void build_failure(const string& target_name, const string& op, const str
     }
     TT_THROW("{} build failed", target_name);
 }
-
-void JitBuildState::pre_compile(const string& kernel_in_path, const string& op_out_path) const {}
 
 void JitBuildState::compile_one(
     const string& log_file,
@@ -647,48 +651,29 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
     extract_zone_src_locations(log_file);
 }
 
-void jit_build(const JitBuildState& build, const JitBuildSettings* settings, const string& kernel_in_path) {
+void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
     ZoneScoped;
-
-    if (settings != nullptr) {
-        build.pre_compile(kernel_in_path, settings->get_full_kernel_name());
-    }
 
     build.build(settings);
 }
 
-void jit_build_set(const JitBuildStateSet& build_set, const JitBuildSettings* settings, const string& kernel_in_path) {
+void jit_build_set(const JitBuildStateSet& build_set, const JitBuildSettings* settings) {
     ZoneScoped;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < build_set.size(); ++i) {
         // Capture the necessary objects by reference
         auto& build = build_set[i];
-        launch_build_step(
-            [build, settings, &kernel_in_path] {
-                if (settings != nullptr) {
-                    build->pre_compile(kernel_in_path, settings->get_full_kernel_name());
-                }
-                build->build(settings);
-            },
-            events);
+        launch_build_step([build, settings] { build->build(settings); }, events);
     }
     sync_build_step(events);
 }
 
-void jit_build_subset(
-    const JitBuildStateSubset& build_subset, const JitBuildSettings* settings, const string& kernel_in_path) {
+void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSettings* settings) {
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < build_subset.size; ++i) {
         // Capture the necessary objects by reference
         auto& build = build_subset.build_ptr[i];
-        launch_build_step(
-            [build, settings, &kernel_in_path] {
-                if (settings != nullptr) {
-                    build->pre_compile(kernel_in_path, settings->get_full_kernel_name());
-                }
-                build->build(settings);
-            },
-            events);
+        launch_build_step([build, settings] { build->build(settings); }, events);
     }
     sync_build_step(events);
 }
