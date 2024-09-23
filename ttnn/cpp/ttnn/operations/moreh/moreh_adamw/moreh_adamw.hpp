@@ -11,7 +11,7 @@
 namespace ttnn::operations::moreh::moreh_adamw {
 
 struct MorehAdamw {
-    static std::vector<Tensor> invoke(
+    static std::vector<std::optional<Tensor>> invoke(
         const Tensor& param_in,
         const Tensor& grad,
         const Tensor& exp_avg_in,
