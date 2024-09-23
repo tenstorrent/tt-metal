@@ -29,6 +29,7 @@ std::vector<T> convert_to_tile_layout(
     const std::optional<const std::vector<uint32_t>>& face_shape = std::nullopt) {
     ZoneScoped;
     std::vector<T> result;
+    result.reserve(data.size());
     auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
     auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
     auto face_H = face_shape.has_value() ? face_shape.value()[0] : tt::constants::FACE_HEIGHT;
@@ -82,6 +83,7 @@ std::vector<T> convert_to_flat_layout(
     const std::optional<const std::vector<uint32_t>>& face_shape = std::nullopt) {
     ZoneScoped;
     std::vector<T> result;
+    result.reserve(data.size());
     auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
     auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
     auto face_H = face_shape.has_value() ? face_shape.value()[0] : tt::constants::FACE_HEIGHT;
@@ -130,13 +132,13 @@ inline std::vector<T> untilize_nchw(const BufferType<T>& in, const std::vector<s
     result.resize(batch_size * H * W);
     uint32_t linear = 0;
     for (auto batch_index = 0; batch_index < batch_size; batch_index++) {
-        for (int hs32 = 0; hs32 < H; hs32 += tile_H) {        // iterate over h with stride 32
-            for (int ws32 = 0; ws32 < W; ws32 += tile_W) {    // iterate over w with stride 32
-                for (int h32 = 0; h32 < tile_H; h32++) {      // hs32 + h32 = h
-                    for (int w32 = 0; w32 < tile_W; w32++) {  // ws32 + w32 = w
+        for (int hs = 0; hs < H; hs += tile_H) {        // iterate over h with stride 32
+            for (int ws = 0; ws < W; ws += tile_W) {    // iterate over w with stride 32
+                for (int ht = 0; ht < tile_H; ht++) {      // hs + ht = h
+                    for (int wt = 0; wt < tile_W; wt++) {  // ws + wt = w
                         T val = in[linear];
-                        auto w = w32 + ws32;
-                        auto h = h32 + hs32;
+                        auto w = wt + ws;
+                        auto h = ht + hs;
                         auto offs = w + h * W + batch_index * H * W;
                         result[offs] = val;
                         linear++;
@@ -174,12 +176,12 @@ inline std::vector<T> tilize_nchw(const BufferType<T>& in_rowmajor, const std::v
     std::fill(tilized_result.begin(), tilized_result.end(), 0);
     int out_index = 0;
     for (auto batch_index = 0; batch_index < batch_size; batch_index++) {
-        for (int hs32 = 0; hs32 < H; hs32 += tile_H) {
-            for (int ws32 = 0; ws32 < W; ws32 += tile_W) {
-                for (int h32 = 0; h32 < tile_H; h32++) {
-                    for (int w32 = 0; w32 < tile_W; w32++) {
-                        auto w = w32 + ws32;
-                        auto h = h32 + hs32;
+        for (int hs = 0; hs < H; hs += tile_H) {
+            for (int ws = 0; ws < W; ws += tile_W) {
+                for (int ht = 0; ht < tile_H; ht++) {
+                    for (int wt = 0; wt < tile_W; wt++) {
+                        auto w = wt + ws;
+                        auto h = ht + hs;
                         auto in_offs = w + h * W + batch_index * H * W;
                         auto val = (w >= W || h >= H || in_offs >= input_volume) ? 0 : in_rowmajor[in_offs];
                         int out_w = (out_index % OW);
