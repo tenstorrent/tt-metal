@@ -33,9 +33,10 @@ MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation
 
     const std::optional<const Tensor> max_exp_avg_sq_in = tensor_args.max_exp_avg_sq_in;
 
-    const Tensor& param_out = tensor_return_value.at(0);
-    const Tensor& exp_avg_out = tensor_return_value.at(1);
-    const Tensor& exp_avg_sq_out = tensor_return_value.at(2);
+    // It's guarantee that param_out, exp_avg_out, exp_avg_sq_out are created.
+    const Tensor& param_out = tensor_return_value.at(0).value();
+    const Tensor& exp_avg_out = tensor_return_value.at(1).value();
+    const Tensor& exp_avg_sq_out = tensor_return_value.at(2).value();
     const std::optional<const Tensor> max_exp_avg_sq_out =
         amsgrad ? std::optional<const Tensor>{tensor_return_value.at(3)} : std::nullopt;
 
@@ -250,11 +251,14 @@ void MorehAdamWDeviceOperation::MultiCore::override_runtime_arguments(
     const uint32_t max_exp_avg_sq_in_addr =
         tensor_args.max_exp_avg_sq_in.has_value() ? tensor_args.max_exp_avg_sq_in.value().buffer()->address() : 0;
 
-    const uint32_t param_out_addr = tensor_return_value.at(0).buffer()->address();
-    const uint32_t exp_avg_out_addr = tensor_return_value.at(1).buffer()->address();
-    const uint32_t exp_avg_sq_out_addr = tensor_return_value.at(2).buffer()->address();
+    const uint32_t param_out_addr =
+        tensor_return_value.at(0).has_value() ? tensor_return_value.at(0).value().buffer()->address() : 0;
+    const uint32_t exp_avg_out_addr =
+        tensor_return_value.at(1).has_value() ? tensor_return_value.at(1).value().buffer()->address() : 0;
+    const uint32_t exp_avg_sq_out_addr =
+        tensor_return_value.at(2).has_value() ? tensor_return_value.at(2).value().buffer()->address() : 0;
     const uint32_t max_exp_avg_sq_out_addr =
-        operation_attributes.amsgrad ? tensor_return_value.at(3).buffer()->address() : 0;
+        operation_attributes.amsgrad ? tensor_return_value.at(3).value().buffer()->address() : 0;
 
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

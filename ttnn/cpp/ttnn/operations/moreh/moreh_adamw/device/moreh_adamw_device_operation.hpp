@@ -43,7 +43,7 @@ struct MorehAdamWDeviceOperation {
 
     using shape_return_value_t = std::vector<ttnn::Shape>;
 
-    using tensor_return_value_t = std::vector<Tensor>;
+    using tensor_return_value_t = std::vector<std::optional<Tensor>>;
 
     struct MultiCore {
         struct shared_variables_t {

@@ -8,7 +8,7 @@
 
 namespace ttnn::operations::moreh::moreh_adamw {
 
-std::vector<Tensor> MorehAdamw::invoke(
+std::vector<std::optional<Tensor>> MorehAdamw::invoke(
     const Tensor& param_in,
     const Tensor& grad,
     const Tensor& exp_avg_in,
