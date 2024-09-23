@@ -29,6 +29,9 @@ on:
           - eltwise.unary.exp2.exp2_interleaved
           - eltwise.unary.expm1.expm1_interleaved
           - eltwise.unary.tanh.tanh_interleaved
+          - eltwise.unary.sign.sign_interleaved
+          - eltwise.unary.rad2deg.rad2deg_interleaved
+          - eltwise.unary.deg2rad.deg2rad_interleaved
           - eltwise.binary.subtract.subtract_interleaved
           - eltwise.binary.multiply.multiply_interleaved
           - eltwise.binary.div.div_interleaved
