@@ -35,7 +35,7 @@
 #include "dprint_buffer.h"
 #include "waypoint.h"
 
-#if defined(DEBUG_PRINT_ENABLED)
+#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
 #define DPRINT DebugPrinter()
 #else
 #define DPRINT if(0) DebugPrinter()
@@ -175,7 +175,7 @@ struct DebugPrinter {
     uint8_t* bufend() { return buf() + DPRINT_BUFFER_SIZE; }
 
     DebugPrinter() {
-#if defined(DEBUG_PRINT_ENABLED)
+#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
         if (*wpos() == DEBUG_PRINT_SERVER_STARTING_MAGIC) {
             // Host debug print server writes this value
             // we don't want to reset wpos/rpos to 0 unless this is the first time
@@ -264,7 +264,7 @@ void debug_print(DebugPrinter &dp, DebugPrintData data) {
 template<typename T>
 __attribute__((__noinline__))
 DebugPrinter operator <<(DebugPrinter dp, T val) {
-#if defined(DEBUG_PRINT_ENABLED) && !defined(PROFILE_KERNEL)
+#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF) && !defined(PROFILE_KERNEL)
     DebugPrintData data{
         .sz = DebugPrintTypeToSize<T>(val), // includes terminating 0 for char*
         .data_ptr = DebugPrintTypeAddr<T>(&val),

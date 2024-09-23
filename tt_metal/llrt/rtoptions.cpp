@@ -170,7 +170,8 @@ void RunTimeOptions::ParseWatcherEnv() {
         watcher_assert_str,
         watcher_pause_str,
         watcher_ring_buffer_str,
-        watcher_stack_usage_str};
+        watcher_stack_usage_str,
+        watcher_dispatch_str};
     for (std::string feature : all_features) {
         std::string env_var("TT_METAL_WATCHER_DISABLE_");
         env_var += feature;

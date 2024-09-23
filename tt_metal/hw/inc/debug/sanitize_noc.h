@@ -31,7 +31,7 @@
 #if (                                                                                          \
     defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
     defined(COMPILE_FOR_IDLE_ERISC)) &&                                                        \
-    (defined(WATCHER_ENABLED)) && (!defined(WATCHER_DISABLE_NOC_SANITIZE))
+    defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_NOC_SANITIZE) && !defined(FORCE_WATCHER_OFF)
 
 #include "watcher_common.h"
 
