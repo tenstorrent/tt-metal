@@ -20,7 +20,7 @@ from models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0
 
 
 class Emb(torch.nn.Module):
@@ -33,6 +33,7 @@ class Emb(torch.nn.Module):
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
+@skip_for_wormhole_b0("#12874: Flaky, seems to hang after verification, need to fix, otherwise seems fine")
 @pytest.mark.timeout(900)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(

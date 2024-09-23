@@ -1,0 +1,200 @@
+﻿2024-09-02T07:01:58.8771842Z Current runner version: '2.319.1'
+2024-09-02T07:01:58.8794493Z ##[group]Operating System
+2024-09-02T07:01:58.8795130Z Ubuntu
+2024-09-02T07:01:58.8795618Z 22.04.4
+2024-09-02T07:01:58.8795937Z LTS
+2024-09-02T07:01:58.8796270Z ##[endgroup]
+2024-09-02T07:01:58.8796746Z ##[group]Runner Image
+2024-09-02T07:01:58.8797142Z Image: ubuntu-22.04
+2024-09-02T07:01:58.8797551Z Version: 20240825.1.0
+2024-09-02T07:01:58.8798620Z Included Software: https://github.com/actions/runner-images/blob/ubuntu22/20240825.1/images/ubuntu/Ubuntu2204-Readme.md
+2024-09-02T07:01:58.8800276Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu22%2F20240825.1
+2024-09-02T07:01:58.8801126Z ##[endgroup]
+2024-09-02T07:01:58.8801605Z ##[group]Runner Image Provisioner
+2024-09-02T07:01:58.8802092Z 2.0.384.1
+2024-09-02T07:01:58.8802403Z ##[endgroup]
+2024-09-02T07:01:58.8817214Z ##[group]GITHUB_TOKEN Permissions
+2024-09-02T07:01:58.8818794Z Actions: read
+2024-09-02T07:01:58.8819364Z Contents: read
+2024-09-02T07:01:58.8819888Z Metadata: read
+2024-09-02T07:01:58.8820470Z Pages: write
+2024-09-02T07:01:58.8820819Z ##[endgroup]
+2024-09-02T07:01:58.8823908Z Secret source: Actions
+2024-09-02T07:01:58.8824508Z Prepare workflow directory
+2024-09-02T07:01:58.9442351Z Prepare all required actions
+2024-09-02T07:01:58.9598369Z Getting action download info
+2024-09-02T07:01:59.1170579Z Download action repository 'actions/checkout@v4' (SHA:692973e3d937129bcbf40652eb9f2f61becf3332)
+2024-09-02T07:01:59.3017938Z Uses: tenstorrent/tt-metal/.github/workflows/all-static-checks.yaml@refs/heads/main (a9bcd03b1775ab989aebab822ec2e4f821abac41)
+2024-09-02T07:01:59.3020750Z Complete job name: static-checks / check-doc
+2024-09-02T07:01:59.6170337Z ##[group]Run actions/checkout@v4
+2024-09-02T07:01:59.6170997Z with:
+2024-09-02T07:01:59.6171403Z   repository: tenstorrent/tt-metal
+2024-09-02T07:01:59.6172094Z   token: ***
+2024-09-02T07:01:59.6172589Z   ssh-strict: true
+2024-09-02T07:01:59.6172996Z   ssh-user: git
+2024-09-02T07:01:59.6173389Z   persist-credentials: true
+2024-09-02T07:01:59.6173945Z   clean: true
+2024-09-02T07:01:59.6174357Z   sparse-checkout-cone-mode: true
+2024-09-02T07:01:59.6174841Z   fetch-depth: 1
+2024-09-02T07:01:59.6175410Z   fetch-tags: false
+2024-09-02T07:01:59.6175836Z   show-progress: true
+2024-09-02T07:01:59.6176205Z   lfs: false
+2024-09-02T07:01:59.6176631Z   submodules: false
+2024-09-02T07:01:59.6177076Z   set-safe-directory: true
+2024-09-02T07:01:59.6177500Z ##[endgroup]
+2024-09-02T07:01:59.9009118Z Syncing repository: tenstorrent/tt-metal
+2024-09-02T07:01:59.9012215Z ##[group]Getting Git version info
+2024-09-02T07:01:59.9013543Z Working directory is '/home/runner/work/tt-metal/tt-metal'
+2024-09-02T07:01:59.9015449Z [command]/usr/bin/git version
+2024-09-02T07:01:59.9016327Z git version 2.46.0
+2024-09-02T07:01:59.9032523Z ##[endgroup]
+2024-09-02T07:01:59.9055386Z Temporarily overriding HOME='/home/runner/work/_temp/a30c7c8c-0a04-42aa-84fa-4e77af0f5fcb' before making global git config changes
+2024-09-02T07:01:59.9057976Z Adding repository directory to the temporary git global config as a safe directory
+2024-09-02T07:01:59.9060301Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/tt-metal/tt-metal
+2024-09-02T07:01:59.9101933Z Deleting the contents of '/home/runner/work/tt-metal/tt-metal'
+2024-09-02T07:01:59.9105472Z ##[group]Initializing the repository
+2024-09-02T07:01:59.9109150Z [command]/usr/bin/git init /home/runner/work/tt-metal/tt-metal
+2024-09-02T07:01:59.9188890Z hint: Using 'master' as the name for the initial branch. This default branch name
+2024-09-02T07:01:59.9190969Z hint: is subject to change. To configure the initial branch name to use in all
+2024-09-02T07:01:59.9192760Z hint: of your new repositories, which will suppress this warning, call:
+2024-09-02T07:01:59.9194003Z hint:
+2024-09-02T07:01:59.9195190Z hint: 	git config --global init.defaultBranch <name>
+2024-09-02T07:01:59.9196215Z hint:
+2024-09-02T07:01:59.9197258Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2024-09-02T07:01:59.9199999Z hint: 'development'. The just-created branch can be renamed via this command:
+2024-09-02T07:01:59.9201300Z hint:
+2024-09-02T07:01:59.9202016Z hint: 	git branch -m <name>
+2024-09-02T07:01:59.9203506Z Initialized empty Git repository in /home/runner/work/tt-metal/tt-metal/.git/
+2024-09-02T07:01:59.9207446Z [command]/usr/bin/git remote add origin https://github.com/tenstorrent/tt-metal
+2024-09-02T07:01:59.9246421Z ##[endgroup]
+2024-09-02T07:01:59.9247813Z ##[group]Disabling automatic garbage collection
+2024-09-02T07:01:59.9250434Z [command]/usr/bin/git config --local gc.auto 0
+2024-09-02T07:01:59.9281575Z ##[endgroup]
+2024-09-02T07:01:59.9282782Z ##[group]Setting up auth
+2024-09-02T07:01:59.9288308Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2024-09-02T07:01:59.9320496Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2024-09-02T07:01:59.9710626Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2024-09-02T07:01:59.9740591Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2024-09-02T07:01:59.9969501Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2024-09-02T07:02:00.0011825Z ##[endgroup]
+2024-09-02T07:02:00.0013235Z ##[group]Fetching the repository
+2024-09-02T07:02:00.0022261Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +a9bcd03b1775ab989aebab822ec2e4f821abac41:refs/remotes/origin/main
+2024-09-02T07:02:02.0347881Z From https://github.com/tenstorrent/tt-metal
+2024-09-02T07:02:02.0349076Z  * [new ref]         a9bcd03b1775ab989aebab822ec2e4f821abac41 -> origin/main
+2024-09-02T07:02:02.0380050Z ##[endgroup]
+2024-09-02T07:02:02.0381398Z ##[group]Determining the checkout info
+2024-09-02T07:02:02.0382649Z ##[endgroup]
+2024-09-02T07:02:02.0387483Z [command]/usr/bin/git sparse-checkout disable
+2024-09-02T07:02:02.0432820Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2024-09-02T07:02:02.0462653Z ##[group]Checking out the ref
+2024-09-02T07:02:02.0467332Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2024-09-02T07:02:02.5784156Z Switched to a new branch 'main'
+2024-09-02T07:02:02.5785734Z branch 'main' set up to track 'origin/main'.
+2024-09-02T07:02:02.5810662Z ##[endgroup]
+2024-09-02T07:02:02.5848093Z [command]/usr/bin/git log -1 --format='%H'
+2024-09-02T07:02:02.5871757Z 'a9bcd03b1775ab989aebab822ec2e4f821abac41'
+2024-09-02T07:02:02.6176391Z ##[group]Run sudo apt-get install -y aspell
+2024-09-02T07:02:02.6177051Z [36;1msudo apt-get install -y aspell[0m
+2024-09-02T07:02:02.6391305Z shell: /usr/bin/bash -e {0}
+2024-09-02T07:02:02.6391798Z ##[endgroup]
+2024-09-02T07:02:03.6608062Z Reading package lists...
+2024-09-02T07:02:10.8750261Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/compute/log_with_base_tile.rst
+2024-09-02T07:02:10.8795006Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.8802036Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/compute/ltz_tile.rst
+2024-09-02T07:02:10.8848745Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.8855398Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/noc_async_write_multicast.rst
+2024-09-02T07:02:10.8902140Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.8909613Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/noc_semaphore_inc.rst
+2024-09-02T07:02:10.8954936Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.8961910Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/noc_async_read.rst
+2024-09-02T07:02:10.9009017Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.9015671Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/noc_semaphore_set.rst
+2024-09-02T07:02:10.9062619Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.9069455Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/noc_async_write.rst
+2024-09-02T07:02:10.9114917Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.9122597Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/noc_semaphore_wait.rst
+2024-09-02T07:02:10.9169021Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.9175765Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/ordering.rst
+2024-09-02T07:02:10.9225444Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.9234153Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/noc_semaphore_set_multicast.rst
+2024-09-02T07:02:10.9284606Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.9291689Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/data_movement.rst
+2024-09-02T07:02:10.9338896Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.9346264Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/noc_async_write_barrier.rst
+2024-09-02T07:02:10.9391133Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.9399353Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/noc_async_read_barrier.rst
+2024-09-02T07:02:10.9445685Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.9452319Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/pack_unpack/packing_apis.rst
+2024-09-02T07:02:10.9498640Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.9505435Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/pack_unpack/pack_tile.rst
+2024-09-02T07:02:10.9553523Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.9560302Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/pack_unpack/unpack.rst
+2024-09-02T07:02:10.9606855Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.9613672Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/kernel_args/get_common_arg_addr.rst
+2024-09-02T07:02:10.9658322Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.9665745Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/kernel_args/get_compile_time_arg_val.rst
+2024-09-02T07:02:10.9710556Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.9718180Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/kernel_args/get_common_arg_val.rst
+2024-09-02T07:02:10.9763869Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.9770761Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/kernel_args/get_arg_addr.rst
+2024-09-02T07:02:10.9817879Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.9824821Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/kernel_args/kernel_args.rst
+2024-09-02T07:02:10.9869475Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.9877282Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/kernel_args/get_arg_val.rst
+2024-09-02T07:02:10.9926027Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.9933342Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/circular_buffers/circular_buffers.rst
+2024-09-02T07:02:10.9979261Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:10.9986073Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/circular_buffers/cb_reserve_back.rst
+2024-09-02T07:02:11.0032118Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:11.0040483Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/circular_buffers/cb_pop_front.rst
+2024-09-02T07:02:11.0085458Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:11.0091432Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/circular_buffers/cb_wait_front.rst
+2024-09-02T07:02:11.0139105Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:11.0145791Z Checking ./source/tt-metalium/tt_metal/apis/kernel_apis/circular_buffers/cb_push_back.rst
+2024-09-02T07:02:11.0191992Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:11.0199610Z Checking ./source/tt-metalium/tt_metal/examples/matmul_single_core.rst
+2024-09-02T07:02:11.0247491Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:11.0254488Z Checking ./source/tt-metalium/tt_metal/examples/eltwise_binary.rst
+2024-09-02T07:02:11.0300333Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:11.0306727Z Checking ./source/tt-metalium/tt_metal/examples/dram_loopback.rst
+2024-09-02T07:02:11.0351482Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:11.0358499Z Checking ./source/tt-metalium/tt_metal/examples/matmul_multi_core_optimizations/data_mcast.rst
+2024-09-02T07:02:11.0406498Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:11.0412790Z Checking ./source/tt-metalium/tt_metal/examples/matmul_multi_core_optimizations/data_reuse.rst
+2024-09-02T07:02:11.0457967Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:11.0464993Z Checking ./source/tt-metalium/tt_metal/examples/index.rst
+2024-09-02T07:02:11.0510945Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:11.0518686Z Checking ./source/tt-metalium/tt_metal/examples/matmul_multi_core_optimized.rst
+2024-09-02T07:02:11.0565248Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:11.0572202Z Checking ./source/tt-metalium/tt_metal/examples/matmul_multi_core.rst
+2024-09-02T07:02:11.0619790Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:11.0626806Z Checking ./source/tt-metalium/tt_metal/examples/eltwise_sfpu.rst
+2024-09-02T07:02:11.0673266Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:11.0681443Z Checking ./source/tt-metalium/index.rst
+2024-09-02T07:02:11.0727772Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:11.0734148Z Checking ./source/tt-metalium/tools/tt_gdb.rst
+2024-09-02T07:02:11.0781237Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:11.0788627Z Checking ./source/tt-metalium/tools/tracy_profiler.rst
+2024-09-02T07:02:11.0835078Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:11.0842681Z Checking ./source/tt-metalium/tools/kernel_print.rst
+2024-09-02T07:02:11.0888597Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:11.0896477Z Checking ./source/tt-metalium/tools/index.rst
+2024-09-02T07:02:11.0946238Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:11.0953120Z Checking ./source/tt-metalium/tools/device_program_profiler.rst
+2024-09-02T07:02:11.1000289Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:11.1005957Z Checking ./source/tt-metalium/tools/watcher.rst
+2024-09-02T07:02:11.1053197Z Error: /home/runner/work/tt-metal/tt-metal/docs/aspell-dictionary.pws: The word "TT-NN" is invalid. The character '-' (U+2D) may not appear in the middle of a word.
+2024-09-02T07:02:11.1059619Z ~/work/tt-metal/tt-metal
+2024-09-02T07:02:11.1144740Z Post job cleanup.
+2024-09-02T07:02:11.2062864Z [command]/usr/bin/git version
+2024-09-02T07:02:11.2099069Z git version 2.46.0
+2024-09-02T07:02:11.2140769Z Temporarily overriding HOME='/home/runner/work/_temp/c32e28bb-3306-43fa-976a-c63d8ab5e6a1' before making global git config changes
+2024-09-02T07:02:11.2142589Z Adding repository directory to the temporary git global config as a safe directory
+2024-09-02T07:02:11.2146357Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/tt-metal/tt-metal
+2024-09-02T07:02:11.2186533Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2024-09-02T07:02:11.2218006Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2024-09-02T07:02:11.2472110Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2024-09-02T07:02:11.2493416Z http.https://github.com/.extraheader
+2024-09-02T07:02:11.2505267Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2024-09-02T07:02:11.2539235Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2024-09-02T07:02:11.2999545Z Cleaning up orphan processes

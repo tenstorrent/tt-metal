@@ -39,4 +39,7 @@ prune docs/doxygen_build/
 prune docs/build/
 exclude .pre-commit-config.yaml
 
+# Some sources we want to exclude and not advertise
+prune ttnn/ttnn/examples/bert/
+
 recursive-include runtime *

@@ -138,12 +138,6 @@ void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(this->num_links > 0, "Error");
     TT_FATAL(this->num_links <= input_tensor.device()->compute_with_storage_grid_size().y, "Worker cores used by links are parallelizaed over rows");
     TT_FATAL(this->receiver_device_id.has_value() || this->sender_device_id.has_value(), "Error");
-    if (this->receiver_device_id == this->sender_device_id) {
-        TT_FATAL(input_tensor.device()->get_ethernet_sockets(this->receiver_device_id.value()).size() >= 2 * this->num_links, "2 Device all gather requires at least 2 eth connections per link");
-    } else {
-        TT_FATAL(this->topology == all_gather_op::Topology::Linear || (this->receiver_device_id.has_value() && input_tensor.device()->get_ethernet_sockets(this->receiver_device_id.value()).size() >= this->num_links), "All gather requires at least 1 eth connection per link between sender device {} and receiver device {}", this->sender_device_id, this->receiver_device_id);
-        TT_FATAL(this->topology == all_gather_op::Topology::Linear || (this->sender_device_id.has_value() &&input_tensor.device()->get_ethernet_sockets(this->sender_device_id.value()).size() >= this->num_links), "All gather requires at least 1 eth connection per link between sender device {} and receiver device {}", this->sender_device_id, this->receiver_device_id);
-    }
 
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
         input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
@@ -193,7 +187,7 @@ Tensor all_gather(
     all_gather_op::Topology topology = all_gather_op::Topology::Ring;
     auto devices = input_tensor.get_workers();
     uint32_t num_devices = devices.size();
-    if (num_devices == 1){
+    if (num_devices == 2){
         topology = all_gather_op::Topology::Linear;
     }
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};

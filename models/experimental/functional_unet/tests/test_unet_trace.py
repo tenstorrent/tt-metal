@@ -27,7 +27,7 @@ from models.utility_functions import skip_for_grayskull, divup
 
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 68864, "trace_region_size": 423936}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 68864, "trace_region_size": 444416}], indirect=True)
 @pytest.mark.parametrize(
     "batch, groups, iterations",
     ((2, 1, 16),),
@@ -75,15 +75,13 @@ def test_unet_trace(
     logger.info(f"Average model performance={iterations * batch / (end-start) : .2f} fps")
 
     logger.info(f"Running sanity check against reference model output")
-    B, C, H, W = torch_output_tensor.shape
-    ttnn_tensor = ttnn.to_torch(outputs[-1]).reshape(B, H, W, -1)[:, :, :, :C].permute(0, 3, 1, 2)
-    assert_with_pcc(torch_output_tensor, ttnn_tensor, 0.97)
+    check_pcc_conv(torch_output_tensor, outputs[-1], 0.97)
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 68864, "trace_region_size": 423936, "num_command_queues": 2}], indirect=True
+    "device_params", [{"l1_small_size": 68864, "trace_region_size": 442368, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations",
@@ -184,9 +182,7 @@ def test_unet_trace_2cq(
     ttnn.DumpDeviceProfiler(device)
 
     logger.info(f"Running sanity check against reference model output")
-    B, C, H, W = torch_output_tensor.shape
-    ttnn_tensor = ttnn.to_torch(outputs[-1]).reshape(B, H, W, -1)[:, :, :, :C].permute(0, 3, 1, 2)
-    assert_with_pcc(torch_output_tensor, ttnn_tensor, 0.97)
+    check_pcc_conv(torch_output_tensor, outputs[-1], 0.97)
 
     ttnn.release_trace(device, tid)
 
@@ -202,7 +198,7 @@ def buffer_address(tensor):
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 68864, "trace_region_size": 423936, "num_command_queues": 2}], indirect=True
+    "device_params", [{"l1_small_size": 68864, "trace_region_size": 442368, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations",
@@ -317,12 +313,6 @@ def test_unet_trace_2cq_multi_device(
     logger.info(f"Average model performance={iterations * total_batch / (end-start) : .2f} fps")
 
     logger.info(f"Running sanity check against reference model output")
-    B, C, H, W = torch_output_tensor.shape
-    ttnn_tensor = (
-        ttnn.to_torch(outputs[-1], mesh_composer=output_mesh_composer)
-        .reshape(B, H, W, -1)[:, :, :, :C]
-        .permute(0, 3, 1, 2)
-    )
-    assert_with_pcc(torch_output_tensor, ttnn_tensor, 0.97)
+    check_pcc_conv(torch_output_tensor, outputs[-1], 0.97, mesh_composer=output_mesh_composer)
 
     ttnn.release_trace(mesh_device, tid)

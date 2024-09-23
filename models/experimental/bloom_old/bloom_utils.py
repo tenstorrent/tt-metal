@@ -79,9 +79,7 @@ def create_padded_tensor(
 
 def create_unpadded_tensor(ttm_tensor, input_tensors_shape, input_tensor_start=[0, 0, 0, 0]):
     output_tensor_start = input_tensor_start
-    output_tensor_end = tuple(
-        input_tensor_start[i] + input_tensors_shape[i] - 1 for i in range(len(input_tensors_shape))
-    )
+    output_tensor_end = tuple(input_tensor_start[i] + input_tensors_shape[i] for i in range(len(input_tensors_shape)))
     ttm_tensor = ttm_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad(output_tensor_start, output_tensor_end)
 
     return ttm_tensor

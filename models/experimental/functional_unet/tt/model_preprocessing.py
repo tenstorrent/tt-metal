@@ -22,9 +22,7 @@ def create_unet_input_tensors(
         ttnn_input_tensor.shape[3],
     )
     if pad_input:
-        # Pad to 16 if grayskull run and 32 for wormhole
-        pad = 32 if device.arch() == ttnn.device.Arch.WORMHOLE_B0 else 16
-        hpad = 0  # 96*32*64
+        pad, hpad = 16, 0
         if ttnn_input_tensor.shape[-1] < pad or ttnn_input_tensor.shape[-2] < hpad:
             ttnn_input_tensor = torch.nn.functional.pad(
                 ttnn_input_tensor,
@@ -68,6 +66,8 @@ def create_unet_model_parameters(model: unet_shallow_torch.UNet, input_tensor: t
     parameters.c1["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 8 * 32}
     parameters.c1["use_split_reader"] = True
     parameters.c1["use_activation_double_buffer"] = True
+    parameters.c1["input_channels_alignment"] = 16
+
     parameters.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 8 * 32}
     parameters.c1_2["use_split_reader"] = True
     parameters.c1_2["use_activation_double_buffer"] = True

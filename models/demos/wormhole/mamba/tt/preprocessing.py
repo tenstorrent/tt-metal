@@ -33,8 +33,8 @@ def split_sequence_length(x: ttnn.Tensor, batch: int = 0, chunk_size: int = 32):
 
     for i in range(0, L, chunk_size):
         slice_start = (0, 0, batch, i)
-        slice_end = (0, 0, batch, i + chunk_size - 1)
-        yield ttnn.slice(x, ttnn.Shape(slice_start), ttnn.Shape(slice_end))
+        slice_end = (1, 1, batch + 1, i + chunk_size)
+        yield ttnn.slice(x, slice_start, slice_end)
 
 
 def select_chunk_size(sequence_length: int, max_chunk_size: int):
