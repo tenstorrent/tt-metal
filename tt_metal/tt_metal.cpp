@@ -248,7 +248,7 @@ namespace detail {
 bool WriteToDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, std::vector<uint32_t> &host_buffer)
 {
     bool pass = true;
-    TT_FATAL(address >= DRAM_UNRESERVED_BASE, "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!", DRAM_UNRESERVED_BASE);
+    TT_FATAL(address >= device->get_base_allocator_addr(HalMemType::DRAM), "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!", device->get_base_allocator_addr(HalMemType::DRAM));
     tt::Cluster::instance().write_dram_vec(host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address);
     return pass;
 }
@@ -726,7 +726,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
 
     auto device_id = device->id();
 
-    program.allocate_circular_buffers();
+    program.allocate_circular_buffers(device);
     detail::ValidateCircularBufferRegion(program, device);
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();

@@ -16,70 +16,71 @@ using namespace tt;
 
 int main(int argc, char **argv) {
 
-    constexpr uint32_t default_tx_x = 0;
-    constexpr uint32_t default_tx_y = 0;
-    constexpr uint32_t default_rx_x = 1;
-    constexpr uint32_t default_rx_y = 0;
-
-    constexpr uint32_t default_prng_seed = 0x100;
-    constexpr uint32_t default_total_data_kb = 16*1024;
-    constexpr uint32_t default_max_packet_size_words = 0x100;
-
-    constexpr uint32_t default_test_result_buf_addr = L1_UNRESERVED_BASE;
-    constexpr uint32_t default_test_result_buf_size = 1024;
-    constexpr uint32_t default_tx_queue_start_addr = L1_UNRESERVED_BASE + default_test_result_buf_size;
-    constexpr uint32_t default_tx_queue_size_bytes = 0x10000;
-    constexpr uint32_t default_rx_queue_start_addr = L1_UNRESERVED_BASE + 0x2000;
-    constexpr uint32_t default_rx_queue_size_bytes = 0x20000;
-
-    constexpr uint32_t default_timeout_mcycles = 1000;
-    constexpr uint32_t default_rx_disable_data_check = 0;
-
-    std::vector<std::string> input_args(argv, argv + argc);
-    if (test_args::has_command_option(input_args, "-h") ||
-        test_args::has_command_option(input_args, "--help")) {
-        log_info(LogTest, "Usage:");
-        log_info(LogTest, "  --prng_seed: PRNG seed, default = 0x{:x}", default_prng_seed);
-        log_info(LogTest, "  --total_data_kb: Total data in KB, default = {}", default_total_data_kb);
-        log_info(LogTest, "  --max_packet_size_words: Max packet size in words, default = 0x{:x}", default_max_packet_size_words);
-        log_info(LogTest, "  --tx_x: X coordinate of the TX core, default = {}", default_tx_x);
-        log_info(LogTest, "  --tx_y: Y coordinate of the TX core, default = {}", default_tx_y);
-        log_info(LogTest, "  --rx_x: X coordinate of the RX core, default = {}", default_rx_x);
-        log_info(LogTest, "  --rx_y: Y coordinate of the RX core, default = {}", default_rx_y);
-        log_info(LogTest, "  --tx_queue_start_addr: TX queue start address, default = 0x{:x}", default_tx_queue_start_addr);
-        log_info(LogTest, "  --tx_queue_size_bytes: TX queue size in bytes, default = 0x{:x}", default_tx_queue_size_bytes);
-        log_info(LogTest, "  --rx_queue_start_addr: RX queue start address, default = 0x{:x}", default_rx_queue_start_addr);
-        log_info(LogTest, "  --rx_queue_size_bytes: RX queue size in bytes, default = 0x{:x}", default_rx_queue_size_bytes);
-        log_info(LogTest, "  --test_result_buf_addr: Test results buffer address, default = 0x{:x}", default_test_result_buf_addr);
-        log_info(LogTest, "  --test_result_buf_size: Test results buffer size, default = {} bytes", default_test_result_buf_size);
-        log_info(LogTest, "  --timeout_mcycles: Timeout in MCycles, default = {}", default_timeout_mcycles);
-        log_info(LogTest, "  --rx_disable_data_check: Disable data check on RX, default = {}", default_rx_disable_data_check);
-        return 0;
-    }
-
-    uint32_t tx_x = test_args::get_command_option_uint32(input_args, "--tx_x", default_tx_x);
-    uint32_t tx_y = test_args::get_command_option_uint32(input_args, "--tx_y", default_tx_y);
-    uint32_t rx_x = test_args::get_command_option_uint32(input_args, "--rx_x", default_rx_x);
-    uint32_t rx_y = test_args::get_command_option_uint32(input_args, "--rx_y", default_rx_y);
-    uint32_t prng_seed = test_args::get_command_option_uint32(input_args, "--prng_seed", default_prng_seed);
-    uint32_t total_data_kb = test_args::get_command_option_uint32(input_args, "--total_data_kb", default_total_data_kb);
-    uint32_t max_packet_size_words = test_args::get_command_option_uint32(input_args, "--max_packet_size_words", default_max_packet_size_words);
-    uint32_t tx_queue_start_addr = test_args::get_command_option_uint32(input_args, "--tx_queue_start_addr", default_tx_queue_start_addr);
-    uint32_t tx_queue_size_bytes = test_args::get_command_option_uint32(input_args, "--tx_queue_size_bytes", default_tx_queue_size_bytes);
-    uint32_t rx_queue_start_addr = test_args::get_command_option_uint32(input_args, "--rx_queue_start_addr", default_rx_queue_start_addr);
-    uint32_t rx_queue_size_bytes = test_args::get_command_option_uint32(input_args, "--rx_queue_size_bytes", default_rx_queue_size_bytes);
-    uint32_t test_result_buf_addr = test_args::get_command_option_uint32(input_args, "--test_result_buf_addr", default_test_result_buf_addr);
-    uint32_t test_result_buf_size = test_args::get_command_option_uint32(input_args, "--test_result_buf_size", default_test_result_buf_size);
-    uint32_t timeout_mcycles = test_args::get_command_option_uint32(input_args, "--timeout_mcycles", default_timeout_mcycles);
-    uint32_t rx_disable_data_check = test_args::get_command_option_uint32(input_args, "--rx_disable_data_check", default_rx_disable_data_check);
-
-    assert(is_power_of_2(tx_queue_size_bytes) && (tx_queue_size_bytes >= 1024));
-    assert(is_power_of_2(rx_queue_size_bytes) && (rx_queue_size_bytes >= 1024));
-
     bool pass = true;
     try {
+        constexpr uint32_t default_tx_x = 0;
+        constexpr uint32_t default_tx_y = 0;
+        constexpr uint32_t default_rx_x = 1;
+        constexpr uint32_t default_rx_y = 0;
+
+        constexpr uint32_t default_prng_seed = 0x100;
+        constexpr uint32_t default_total_data_kb = 16*1024;
+        constexpr uint32_t default_max_packet_size_words = 0x100;
+
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
+        uint32_t default_test_result_buf_addr = l1_unreserved_base;
+        constexpr uint32_t default_test_result_buf_size = 1024;
+        uint32_t default_tx_queue_start_addr = l1_unreserved_base + default_test_result_buf_size;
+        constexpr uint32_t default_tx_queue_size_bytes = 0x10000;
+        uint32_t default_rx_queue_start_addr = l1_unreserved_base + 0x2000;
+        constexpr uint32_t default_rx_queue_size_bytes = 0x20000;
+
+        constexpr uint32_t default_timeout_mcycles = 1000;
+        constexpr uint32_t default_rx_disable_data_check = 0;
+
+        std::vector<std::string> input_args(argv, argv + argc);
+        if (test_args::has_command_option(input_args, "-h") ||
+            test_args::has_command_option(input_args, "--help")) {
+            log_info(LogTest, "Usage:");
+            log_info(LogTest, "  --prng_seed: PRNG seed, default = 0x{:x}", default_prng_seed);
+            log_info(LogTest, "  --total_data_kb: Total data in KB, default = {}", default_total_data_kb);
+            log_info(LogTest, "  --max_packet_size_words: Max packet size in words, default = 0x{:x}", default_max_packet_size_words);
+            log_info(LogTest, "  --tx_x: X coordinate of the TX core, default = {}", default_tx_x);
+            log_info(LogTest, "  --tx_y: Y coordinate of the TX core, default = {}", default_tx_y);
+            log_info(LogTest, "  --rx_x: X coordinate of the RX core, default = {}", default_rx_x);
+            log_info(LogTest, "  --rx_y: Y coordinate of the RX core, default = {}", default_rx_y);
+            log_info(LogTest, "  --tx_queue_start_addr: TX queue start address, default = 0x{:x}", default_tx_queue_start_addr);
+            log_info(LogTest, "  --tx_queue_size_bytes: TX queue size in bytes, default = 0x{:x}", default_tx_queue_size_bytes);
+            log_info(LogTest, "  --rx_queue_start_addr: RX queue start address, default = 0x{:x}", default_rx_queue_start_addr);
+            log_info(LogTest, "  --rx_queue_size_bytes: RX queue size in bytes, default = 0x{:x}", default_rx_queue_size_bytes);
+            log_info(LogTest, "  --test_result_buf_addr: Test results buffer address, default = 0x{:x}", default_test_result_buf_addr);
+            log_info(LogTest, "  --test_result_buf_size: Test results buffer size, default = {} bytes", default_test_result_buf_size);
+            log_info(LogTest, "  --timeout_mcycles: Timeout in MCycles, default = {}", default_timeout_mcycles);
+            log_info(LogTest, "  --rx_disable_data_check: Disable data check on RX, default = {}", default_rx_disable_data_check);
+            tt_metal::CloseDevice(device);
+            return 0;
+        }
+
+        uint32_t tx_x = test_args::get_command_option_uint32(input_args, "--tx_x", default_tx_x);
+        uint32_t tx_y = test_args::get_command_option_uint32(input_args, "--tx_y", default_tx_y);
+        uint32_t rx_x = test_args::get_command_option_uint32(input_args, "--rx_x", default_rx_x);
+        uint32_t rx_y = test_args::get_command_option_uint32(input_args, "--rx_y", default_rx_y);
+        uint32_t prng_seed = test_args::get_command_option_uint32(input_args, "--prng_seed", default_prng_seed);
+        uint32_t total_data_kb = test_args::get_command_option_uint32(input_args, "--total_data_kb", default_total_data_kb);
+        uint32_t max_packet_size_words = test_args::get_command_option_uint32(input_args, "--max_packet_size_words", default_max_packet_size_words);
+        uint32_t tx_queue_start_addr = test_args::get_command_option_uint32(input_args, "--tx_queue_start_addr", default_tx_queue_start_addr);
+        uint32_t tx_queue_size_bytes = test_args::get_command_option_uint32(input_args, "--tx_queue_size_bytes", default_tx_queue_size_bytes);
+        uint32_t rx_queue_start_addr = test_args::get_command_option_uint32(input_args, "--rx_queue_start_addr", default_rx_queue_start_addr);
+        uint32_t rx_queue_size_bytes = test_args::get_command_option_uint32(input_args, "--rx_queue_size_bytes", default_rx_queue_size_bytes);
+        uint32_t test_result_buf_addr = test_args::get_command_option_uint32(input_args, "--test_result_buf_addr", default_test_result_buf_addr);
+        uint32_t test_result_buf_size = test_args::get_command_option_uint32(input_args, "--test_result_buf_size", default_test_result_buf_size);
+        uint32_t timeout_mcycles = test_args::get_command_option_uint32(input_args, "--timeout_mcycles", default_timeout_mcycles);
+        uint32_t rx_disable_data_check = test_args::get_command_option_uint32(input_args, "--rx_disable_data_check", default_rx_disable_data_check);
+
+        assert(is_power_of_2(tx_queue_size_bytes) && (tx_queue_size_bytes >= 1024));
+        assert(is_power_of_2(rx_queue_size_bytes) && (rx_queue_size_bytes >= 1024));
 
         tt_metal::Program program = tt_metal::CreateProgram();
 

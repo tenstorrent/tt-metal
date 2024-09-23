@@ -240,7 +240,7 @@ TEST_F(CommonFixture, TestCBsAcrossWorkerEth) {
         // ETH core doesn't have CB
         EXPECT_TRUE(program.get_cb_size(device, core_coord, CoreType::ETH) == 0);
 
-        uint32_t cb_addr = L1_UNRESERVED_BASE;
+        uint32_t cb_addr = device->get_base_allocator_addr(HalMemType::L1);
         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
 
         bool addr_match_intermediate = cb_config_vector.at(intermediate_index) == ((cb_addr) >> 4);

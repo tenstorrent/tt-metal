@@ -55,7 +55,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
     uint32_t ntiles_per_block = ntiles/(ncores_x * ncores_y);
 
     //TODO increase block size to increase untilize performance, currently each untilize block is a single tile
-    //uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
+    //uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - a.device()->get_base_allocator_addr(HalMemType::L1);
     //uint32_t max_tiles = (max_l1_size / (input_single_tile_size + output_single_tile_size))/2;  // 2 CBs, double buffering each
     uint32_t max_tiles = 1;
 
@@ -294,7 +294,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     uint32_t nblocks = ceil((float)ntiles / ntiles_per_block);
     uint32_t block_size_nbytes = a.get_legacy_shape()[-1] * output.element_size();
 
-    uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
+    uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - a.device()->get_base_allocator_addr(HalMemType::L1);
     uint32_t max_tiles = (max_l1_size / (input_single_tile_size + output_single_tile_size));  // 2 CBs, double buffering each
 
     // TODO : currently multi_core parallelization on column only works for single tile height tensors.
@@ -714,7 +714,7 @@ operation::ProgramWithCallbacks untilize_single_core(
     uint32_t stick_s = a.get_legacy_shape()[-1];
     uint32_t num_tiles_in_row = stick_s / TILE_WIDTH;
     // Ensure we don't intrude into storage space
-    uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
+    uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - a.device()->get_base_allocator_addr(HalMemType::L1);
     uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size);  // 2 CBs
     // Currently need the number of tiles in a row to be divisible by tiles in a block
     uint32_t num_tiles_per_block = 1;

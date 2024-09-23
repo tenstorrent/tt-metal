@@ -222,12 +222,16 @@ int main(int argc, char **argv) {
         uint32_t hugepage_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel);
         uint32_t host_write_ptr = 0;
 
-        uint32_t reg_addr = dispatch_constants::PREFETCH_Q_BASE;
+        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
+        uint32_t prefetch_q_base = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+
+        uint32_t reg_addr = prefetch_q_base;
         uint32_t num_reg_entries = 128;
 
         std::vector<uint32_t> go_signal = {0};
         std::vector<uint32_t> done_signal = {1};
-        tt_metal::detail::WriteToDeviceL1(device, logical_core, L1_UNRESERVED_BASE, go_signal);
+        uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
+        tt_metal::detail::WriteToDeviceL1(device, logical_core, l1_unreserved_base, go_signal);
 
         // Application setup
         tt_metal::Program program = tt_metal::Program();
@@ -241,7 +245,7 @@ int main(int argc, char **argv) {
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = tt_metal::NOC::NOC_0,
-                .compile_args = {host_write_ptr, hugepage_size, kernel_read_size}});
+                .compile_args = {host_write_ptr, hugepage_size, kernel_read_size, l1_unreserved_base}});
 
         // Add 2 * alignment so that we have enough space when aligning the ptr
         // First add is for aligning to next aligned addr
@@ -334,7 +338,7 @@ int main(int argc, char **argv) {
                     memcpy_to_device<true>(host_mem_ptr, (uint8_t *)(start_ptr + src_data_offset), write_size_bytes);
                 }
 
-                uint32_t num_reg_writes = (reg_addr - dispatch_constants::PREFETCH_Q_BASE) / sizeof(uint32_t);
+                uint32_t num_reg_writes = (reg_addr - prefetch_q_base) / sizeof(uint32_t);
                 uint32_t val_to_write = data_written_bytes;
                 if (simulate_write_ptr_update) {
                     uint32_t num_write_ptr_updates = write_size_bytes / (32 * 1024);
@@ -342,9 +346,9 @@ int main(int argc, char **argv) {
                         tt::Cluster::instance().write_reg(
                             &val_to_write, tt_cxy_pair(device->id(), physical_core), reg_addr);
                         reg_addr += sizeof(uint32_t);
-                        num_reg_writes = (reg_addr - dispatch_constants::PREFETCH_Q_BASE) / sizeof(uint32_t);
+                        num_reg_writes = (reg_addr - prefetch_q_base) / sizeof(uint32_t);
                         if (num_reg_writes == num_reg_entries) {
-                            reg_addr = dispatch_constants::PREFETCH_Q_BASE;
+                            reg_addr = prefetch_q_base;
                         }
                     }
                 }
@@ -360,7 +364,7 @@ int main(int argc, char **argv) {
             }
 
             auto t_end = std::chrono::steady_clock::now();
-            tt_metal::detail::WriteToDeviceL1(device, logical_core, L1_UNRESERVED_BASE, done_signal);
+            tt_metal::detail::WriteToDeviceL1(device, logical_core, l1_unreserved_base, done_signal);
 
             t1.join();
 
