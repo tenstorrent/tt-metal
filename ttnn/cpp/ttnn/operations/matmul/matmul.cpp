@@ -103,7 +103,8 @@ Tensor MatmulOperation::invoke(
     const std::optional<const MatmulProgramConfig> program_config,
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const CoreGrid> core_grid) {
+    const std::optional<const CoreGrid> core_grid,
+    const std::optional<const Tile>& output_tile) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -124,7 +125,8 @@ Tensor MatmulOperation::invoke(
             get_fused_activation(activation),
             user_run_batched,
             transpose_a,
-            transpose_b},
+            transpose_b,
+            output_tile},
         /*queue_id=*/0);
 }
 
@@ -139,7 +141,8 @@ Tensor LinearOperation::invoke(
     const std::optional<const MatmulProgramConfig> program_config,
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const CoreGrid> core_grid) {
+    const std::optional<const CoreGrid> core_grid,
+    const std::optional<const Tile>& output_tile) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -162,7 +165,8 @@ Tensor LinearOperation::invoke(
             get_fused_activation(activation),
             /*user_run_batched=*/false,
             transpose_a,
-            transpose_b},
+            transpose_b,
+            output_tile},
         /*queue_id=*/0);
 }
 

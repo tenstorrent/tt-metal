@@ -164,6 +164,7 @@ struct Matmul {
     const bool user_run_batched = false;
     const bool transpose_a = false;
     const bool transpose_b = false;
+    const std::optional<const Tile> output_tile;
 
     void validate(
         const std::vector<Tensor> &input_tensors,

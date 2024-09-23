@@ -81,7 +81,6 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(10);
     constexpr uint32_t half_Wt = get_compile_time_arg_val(11);
 
-    binary_op_init_common(in_cb, cos_cb);
 
     cb_wait_front(scalar_cb, onetile);
 

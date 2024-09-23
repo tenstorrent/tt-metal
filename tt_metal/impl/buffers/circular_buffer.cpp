@@ -89,6 +89,13 @@ DataFormat CircularBuffer::data_format(uint32_t buffer_index) const {
     return this->config_.data_formats().at(buffer_index).value();
 }
 
+const std::optional<Tile>& CircularBuffer::tile(uint32_t buffer_index) const {
+    if (not this->uses_buffer_index(buffer_index)) {
+        TT_THROW("Cannot access tile dims for buffer index {} because circular buffer is not configured on that index", buffer_index);
+    }
+    return this->config_.tiles().at(buffer_index);
+}
+
 uint32_t CircularBuffer::address() const {
     if (not locally_allocated_address_.has_value() and not this->globally_allocated()) {
         TT_THROW("Circular buffer has not been allocated, cannot request address at this time!");

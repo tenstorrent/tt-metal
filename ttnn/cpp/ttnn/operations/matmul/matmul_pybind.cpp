@@ -246,7 +246,8 @@ void py_module(py::module& module) {
                const std::optional<const MatmulProgramConfig> program_config,
                const std::optional<const std::string>& activation,
                const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-               const std::optional<const ttnn::CoreGrid> core_grid) -> ttnn::Tensor {
+               const std::optional<const ttnn::CoreGrid> core_grid,
+               const std::optional<const Tile>& output_tile) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
                     input_tensor_b,
@@ -257,7 +258,8 @@ void py_module(py::module& module) {
                     program_config,
                     activation,
                     compute_kernel_config,
-                    core_grid);
+                    core_grid,
+                    output_tile);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
@@ -270,6 +272,7 @@ void py_module(py::module& module) {
             py::arg("activation") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("core_grid") = std::nullopt,
+            py::arg("output_tile") = std::nullopt,
         });
 
     bind_registered_operation(
@@ -314,7 +317,8 @@ void py_module(py::module& module) {
                const std::optional<const MatmulProgramConfig> program_config,
                const std::optional<const std::string>& activation,
                const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-               const std::optional<const ttnn::CoreGrid> core_grid) -> ttnn::Tensor {
+               const std::optional<const ttnn::CoreGrid> core_grid,
+               const std::optional<const Tile>& output_tile) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
                     input_tensor_b,
@@ -326,7 +330,8 @@ void py_module(py::module& module) {
                     program_config,
                     activation,
                     compute_kernel_config,
-                    core_grid);
+                    core_grid,
+                    output_tile);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
@@ -340,6 +345,7 @@ void py_module(py::module& module) {
             py::arg("activation") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("core_grid") = std::nullopt,
+            py::arg("output_tile") = std::nullopt,
         });
 }
 

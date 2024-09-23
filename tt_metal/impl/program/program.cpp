@@ -591,6 +591,37 @@ void Program::set_cb_data_fmt(Device *device, const std::vector<CoreRange> &crs,
     }
 }
 
+void Program::set_cb_tile_dims(Device *device, const std::vector<CoreRange> &crs, JitBuildOptions &build_options) const {
+    ZoneScoped;
+    for (const auto &logical_cr : crs) {
+        auto cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
+        for (const auto &circular_buffer : cbs_on_core) {
+            for (auto buffer_index : circular_buffer->buffer_indices()) {
+                auto tile = circular_buffer->tile(buffer_index);
+                if (tile.has_value()) {
+                    build_options.set_cb_tile_dims_all_cores(
+                        static_cast<CB>(buffer_index),
+                        tile->get_num_faces(),
+                        tile->get_partial_face(),
+                        tile->get_face_shape()[0],
+                        tile->get_narrow_tile(),
+                        tile->get_tile_shape()[0],
+                        tile->get_tile_shape()[1]);
+                    build_options.set_cb_tile_size_all_cores(
+                        static_cast<CB>(buffer_index),
+                        tile->get_tile_size(circular_buffer->data_format(buffer_index)));
+                } else {
+                    Tile t;
+                    build_options.set_cb_tile_size_all_cores(
+                        static_cast<CB>(buffer_index),
+                        t.get_tile_size(circular_buffer->data_format(buffer_index)));
+                }
+
+            }
+        }
+    }
+}
+
 void Program::invalidate_compile() {
     for (auto &[device_id, compile_needed] : compile_needed_) {
         compile_needed = true;
@@ -1018,6 +1049,7 @@ void Program::compile(Device *device, bool fd_bootloader_mode) {
                     JitBuildOptions build_options(device->build_env());
                     kernel->set_build_options(build_options);
                     this->set_cb_data_fmt(device, kernel->logical_coreranges(), build_options);
+                    this->set_cb_tile_dims(device, kernel->logical_coreranges(), build_options);
 
                     auto kernel_hash = KernelCompileHash(kernel, build_options, device->build_key());
                     std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
