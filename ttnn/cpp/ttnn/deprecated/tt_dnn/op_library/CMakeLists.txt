@@ -44,12 +44,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_matmul/multi_core/moreh_matmul_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_matmul/moreh_matmul_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_matmul_backward/moreh_matmul_backward_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_norm/moreh_norm_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_norm/moreh_norm_h/moreh_norm_h.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_norm/moreh_norm_w/moreh_norm_w.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_norm/moreh_norm_other/moreh_norm_other.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_norm_backward/moreh_norm_backward_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_norm_backward/moreh_norm_backward.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_dot/single_core/moreh_dot_op_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_dot/moreh_dot_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_dot_backward/single_core/moreh_dot_backward_op_single_core.cpp
