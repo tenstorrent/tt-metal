@@ -156,6 +156,7 @@ class RunTimeOptions {
     inline bool watcher_pause_disabled() { return watcher_feature_disabled(watcher_pause_str); }
     inline bool watcher_ring_buffer_disabled() { return watcher_feature_disabled(watcher_ring_buffer_str); }
     inline bool watcher_stack_usage_disabled() { return watcher_feature_disabled(watcher_stack_usage_str); }
+    inline bool watcher_dispatch_disabled() { return watcher_feature_disabled(watcher_dispatch_str); }
 
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
@@ -297,6 +298,7 @@ class RunTimeOptions {
     const std::string watcher_pause_str = "PAUSE";
     const std::string watcher_ring_buffer_str = "RING_BUFFER";
     const std::string watcher_stack_usage_str = "STACK_USAGE";
+    const std::string watcher_dispatch_str = "DISPATCH";
     std::set<std::string> watcher_disabled_features;
     bool watcher_feature_disabled(const std::string &name) {
         return watcher_disabled_features.find(name) != watcher_disabled_features.end();

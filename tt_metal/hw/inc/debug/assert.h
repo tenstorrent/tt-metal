@@ -6,7 +6,7 @@
 
 #include "watcher_common.h"
 
-#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
 
 void assert_and_hang(uint32_t line_num) {
     // Write the line number into the memory mailbox for host to read.

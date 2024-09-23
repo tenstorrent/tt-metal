@@ -7,7 +7,7 @@
 #include "watcher_common.h"
 
 // We don't control the stack size for active erisc, and share the stack with base FW, so don't implement for ERISC.
-#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_STACK_USAGE) && !defined(COMPILE_FOR_ERISC)
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_STACK_USAGE) && !defined(COMPILE_FOR_ERISC) && !defined(FORCE_WATCHER_OFF)
 
 #define STACK_DIRTY_PATTERN 0xBABABABA
 

@@ -8,7 +8,7 @@
 #include "waypoint.h"
 #include "debug/pause.h"
 
-#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_PAUSE)
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_PAUSE) && !defined(FORCE_WATCHER_OFF)
 
 void watcher_pause() {
     // Write the pause flag for this core into the memory mailbox for host to read.

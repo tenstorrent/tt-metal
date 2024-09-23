@@ -87,4 +87,9 @@ void DPrintServerClearLogFile();
 */
 void DPrintServerClearSignals();
 
+/**
+@brief Returns true if the DPRINT server reads any dispatch cores on a given device.
+*/
+bool DPrintServerReadsDispatchCores(tt::tt_metal::Device* device);
+
 } // namespace tt

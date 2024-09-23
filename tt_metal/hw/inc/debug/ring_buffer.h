@@ -13,7 +13,7 @@ constexpr static int16_t DEBUG_RING_BUFFER_STARTING_INDEX = -1;
 
 #include "dev_msgs.h"
 
-#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_RING_BUFFER)
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_RING_BUFFER) && !defined(FORCE_WATCHER_OFF)
 
 void push_to_ring_buffer(uint32_t val) {
     auto buf = GET_MAILBOX_ADDRESS_DEV(watcher.debug_ring_buf);
