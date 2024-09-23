@@ -440,7 +440,11 @@ class TtLlamaModel_optimized:
                     else self.model_config["PREFILL_LM_HEAD_MM_PROGCFG_128"]
                 )
             else:
-                pc_lm_head = None
+                pc_lm_head = (
+                    self.model_config["PREFILL_LLAMA3_LM_HEAD_MM_PROGCFG"]
+                    if self.llama3
+                    else self.model_config["PREFILL_LM_HEAD_MM_PROGCFG"]
+                )
 
         lm_head_out = ttnn.linear(
             norm_out_replicated,

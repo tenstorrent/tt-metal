@@ -377,7 +377,7 @@ class TtLlamaAttention_optimized:
             pc_qkv = self.model_config["PREFILL_FUSED_QKV_MM_PROGCFG_128"]
         else:
             # Use default program configs
-            pc_qkv = None
+            pc_qkv = self.model_config["PREFILL_FUSED_QKV_MM_PROGCFG"]
 
         fused_query_key_value = ttnn.linear(
             xs,
@@ -494,7 +494,7 @@ class TtLlamaAttention_optimized:
             pc_dense_out = self.model_config["PREFILL_SELFOUT_MM_PROGCFG_128"]
         else:
             # Use default program configs
-            pc_dense_out = None
+            pc_dense_out = self.model_config["PREFILL_SELFOUT_MM_PROGCFG"]
 
         attn_output = ttnn.linear(
             attn_output,
