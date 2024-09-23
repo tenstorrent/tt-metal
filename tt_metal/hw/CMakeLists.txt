@@ -82,7 +82,7 @@ add_custom_command(
 add_custom_command(
     OUTPUT tdma_xmov
     COMMAND ${CMAKE_COMMAND} -E make_directory ${HW_LIB_DIR}
-    COMMAND ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -Os -fno-tree-loop-distribute-patterns -c -o ${HW_LIB_DIR}/tdma_xmov.o ${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tdma_xmov.c
+    COMMAND ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_LIB_DIR}/tdma_xmov.o ${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tdma_xmov.c
     COMMENT "Building hw lib tdma_xmov.o"
     VERBATIM
 )
@@ -90,7 +90,7 @@ add_custom_command(
 add_custom_command(
     OUTPUT noc
     COMMAND ${CMAKE_COMMAND} -E make_directory ${HW_LIB_DIR}
-    COMMAND ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -Os -fno-tree-loop-distribute-patterns -c -o ${HW_LIB_DIR}/noc.o ${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/${ALIAS_ARCH_NAME}/noc.c
+    COMMAND ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_LIB_DIR}/noc.o ${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/${ALIAS_ARCH_NAME}/noc.c
     COMMENT "Building hw lib noc.o"
     VERBATIM
 )
