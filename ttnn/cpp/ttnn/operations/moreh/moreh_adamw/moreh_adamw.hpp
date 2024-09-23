@@ -31,12 +31,15 @@ struct MorehAdamw {
         const std::optional<const Tensor> exp_avg_sq_out,
         const std::optional<const Tensor> max_exp_avg_sq_out,
         const std::optional<ttnn::MemoryConfig>& memory_config,
-        std::optional<const DeviceComputeKernelConfig> compute_kernel_config);
+        const std::optional<const DeviceComputeKernelConfig> compute_kernel_config);
+
+    static std::vector<Tensor> create_async_output_tensors(
+        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs);
 };
 
 }  // namespace ttnn::operations::moreh::moreh_adamw
 
 namespace ttnn {
 constexpr auto moreh_adamw =
-    ttnn::register_operation<"ttnn::moreh_adamw", operations::moreh::moreh_adamw::MorehAdamw>();
+    ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_adamw", operations::moreh::moreh_adamw::MorehAdamw>();
 }  // namespace ttnn
