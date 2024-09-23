@@ -9,7 +9,7 @@ There are multiple scripts used to profile host dispatch time for operations in 
 It can be called with:
 
 ```
-pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile
+pytest tests/ttnn/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile
 ```
 
 In this case `host_overhead_profile` is the output folder.
