@@ -118,11 +118,10 @@ class TtLlamaAttention(nn.Module):
                     -1,
                 ),
                 device=self.devices[i],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,  # TODO: wo dram sharded matmul errors with wo_mem_config,
-                # memory_config=wo_mem_config,
+                memory_config=wo_mem_config,
                 dtype=self.dtype,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
-                cache_file_name=cache_name("wo"),
+                cache_file_name=cache_name("wo_sharded"),
             )
 
             cache_k = torch.zeros(
@@ -346,12 +345,14 @@ class TtLlamaAttention(nn.Module):
             dense_out = ttnn.linear(
                 attn_output_cat,
                 wo,
-                memory_config=self.model_config["ATTN_OUTPUT_MEMCFG"],
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=self.model_config["ATTN_OUTPUT_PROGCFG"],
                 compute_kernel_config=self.compute_kernel_config,
             )  # seqlen, 1, batch, hidden_size
 
             ttnn.deallocate(attn_output_cat)
+            # TODO: Update the rest of the model to take a width sharded tensor up to MLP to avoid sharded<->interleaved ops
+            dense_out = ttnn.sharded_to_interleaved(dense_out)
             dense_outputs.append(dense_out)
 
         # return the sum of the outputs

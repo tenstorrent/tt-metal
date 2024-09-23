@@ -140,16 +140,14 @@ class TtModelArgs:
                 q_chunk_size=256 if seqlen > 8192 * 2 else (128 if seqlen >= 8192 else 64),
                 k_chunk_size=256 if seqlen > 8192 * 2 else (128 if seqlen >= 8192 else 64),
             )
-            self.model_config["ATTN_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
-                in0_block_w=4,  # how much inner dim you take each time
-                out_subblock_h=1,  # Must be divisible by per_core_M
-                out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=1,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=2,  # N / TILE_WIDTH / Grid_Size
-                mcast_in0=True,
+            # in0: [32, 4096]
+            # in1: [4096, 4096]
+            self.model_config["ATTN_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                # grid_size = [4, 8] # nlp_concat_heads_decode has 32 heads, and 1x1 shards
+                in0_block_w=4,  # K(4096) / TILE_WIDTH(32) /grid_size(32)
+                per_core_M=1,  # M(32) / TILE_HEIGHT(32)
+                per_core_N=4,  # N(4096) / TILE_WIDTH(32) / grid_size(32)
                 fused_activation=None,
-                fuse_batch=True,
             )
 
             # in0: [B(seqlen//1024), 1024, 4096]
@@ -247,7 +245,7 @@ class TtModelArgs:
             self.model_config["DECODE_MLP_W2_PRG_CONFIG"] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
                 # Grid size = [8, 8]
                 in0_block_w=7,  # K(14336) / TILE_WIDTH(32) / Grid_Size(64)
-                per_core_M=1,  # M(1) / TILE_HEIGHT(32)
+                per_core_M=1,  # M(32) / TILE_HEIGHT(32)
                 per_core_N=2,  # N(4096) / TILE_WIDTH(32) / Grid_Size(64)
                 fused_activation=None,
             )
