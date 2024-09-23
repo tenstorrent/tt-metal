@@ -186,7 +186,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
     embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
 
     logger.info("Finished loading weights to device. Starting inference...")
-    max_generated_tokens = 12  # Maximum number of tokens to generate per user
+    max_generated_tokens = 120  # Maximum number of tokens to generate per user
     num_tokens_generated_decode = []
     for batch_idx, input_prompts in enumerate(batch_prompts):
         logger.info(f"Processing batch {batch_idx}")
@@ -280,7 +280,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
         current_rot_mat, rot_matrix = get_single_rot_mat(
             model_args.head_dim,
             device,
-            start_pos=prefill_seq_len - 2,
+            start_pos=decoding_pos[0] - 2,
         )
 
         # Create events
@@ -335,7 +335,6 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
 
         while users_decoding:
             iteration_time_start = time()
-
             # Execute trace
             ttnn.wait_for_event(0, write_event)
             ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
@@ -343,8 +342,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
 
             # Write to host
             ttnn.wait_for_event(1, op_event)
-            tt_output_torch = ttnn.to_torch(tt_out_tok.cpu(blocking=True, cq_id=1))[0, 0, 0, :batch_size]
-            print(tt_output_torch)
+            tt_output_torch = ttnn.to_torch(tt_out_tok.cpu(blocking=False, cq_id=1))[0, 0, 0, :batch_size]
             ttnn.record_event(1, write_event)
 
             # Save output token to print out later
@@ -363,21 +361,31 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
             tokens_per_second_per_user = 1 / iteration_time
 
             # Print out generated outputs for each user at the end of every iteration
-            # if not is_ci_env:
-            #     if len(user_input) == 1:
-            #         logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
-            #     else:
-            #         for user in range(batch_size):
-            #             text = "".join(tokenizer.decode(all_outputs[user]))
-            #             if len(text) > 100:
-            #                 text = "..." + text[-97:]
-            #             text = text.replace("\n", " ")
-            #             logger.info("[User {}] {}".format(user, text))
+            if not is_ci_env:
+                if len(user_input) == 1:
+                    logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
+                else:
+                    for user in range(batch_size):
+                        text = "".join(tokenizer.decode(all_outputs[user]))
+                        if len(text) > 100:
+                            text = "..." + text[-97:]
+                        text = text.replace("\n", " ")
+                        logger.info("[User {}] {}".format(user, text))
+
             # Always print perf at every iteration
             logger.info(
                 f"Iteration {iteration}: {1000*iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
             )
             iteration += 1
+
+            # Reset rotation matrix every 100 iterations
+            if iteration % 100 == 0:
+                current_rot_mat_reset, rot_matrix_reset = get_single_rot_mat(
+                    model_args.head_dim,
+                    device=None,
+                    start_pos=decoding_pos[0] + iteration,
+                )
+                ttnn.copy_host_to_device_tensor(current_rot_mat_reset, current_rot_mat)
 
             # Upper limit of generated tokens for each user (to avoid infinite generation in case eos is not seen)
             if iteration >= max_generated_tokens:
@@ -415,16 +423,16 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights, num_batches",
     [
-        # ("models/demos/wormhole/llama31_8b/demo/input_data_prefill_128.json", False, 1),
-        # ("models/demos/wormhole/llama31_8b/demo/input_data_prefill_128.json", False, 3),
+        ("models/demos/wormhole/llama31_8b/demo/input_data_prefill_128.json", False, 1),
+        ("models/demos/wormhole/llama31_8b/demo/input_data_prefill_128.json", False, 3),
         ("models/demos/wormhole/llama31_8b/demo/input_data_questions_prefill_128.json", True, 1),
-        # ("models/demos/wormhole/llama31_8b/demo/input_data_questions_prefill_128.json", True, 3),
+        ("models/demos/wormhole/llama31_8b/demo/input_data_questions_prefill_128.json", True, 3),
     ],
     ids=[
-        # "general_weights-1_batch",
-        # "general_weights-3_batch",
+        "general_weights-1_batch",
+        "general_weights-3_batch",
         "instruct_weights-1_batch",
-        # "instruct_weights-3_batch",
+        "instruct_weights-3_batch",
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 6283264, "num_command_queues": 2}], indirect=True)
