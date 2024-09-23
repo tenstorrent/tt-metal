@@ -7,6 +7,7 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/move/move.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/reshape/reshape.hpp"
 
 namespace ttnn::operations::core {
 
@@ -24,6 +25,12 @@ ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
                 // Page size depends on the width, so only modify the shape if the width is the same
                 if (tensor_shape.with_tile_padding()[-1] == shape.with_tile_padding()[-1]) {
                     return tensor.reshape(shape.value);
+                }
+                //Different page width, need to remake tensor
+                else {
+                    auto tensor_4d = unsqueeze_to_4D(tensor);
+                    const auto shape_4d = tensor_shape.to_rank<4>();
+                    return ttnn::reshape_on_device(tensor_4d, shape[0], shape[1], shape[2], shape[3], tensor.memory_config());
                 }
             } else {
                 return tensor.reshape(shape.value);
