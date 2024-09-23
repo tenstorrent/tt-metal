@@ -11,21 +11,13 @@ permissions:
   packages: write
 
 jobs:
-  build-docker-image:
-    uses: ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
   build-artifact:
-    needs: build-docker-image
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
-    with:
-      build-docker: false
   build-artifact-profiler:
-    needs: build-docker-image
     uses: ./.github/workflows/build-artifact.yaml
     with:
       tracy: true
-      build-docker: false
   single-card-demos:
     needs: build-artifact
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
