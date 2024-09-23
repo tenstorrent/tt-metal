@@ -1171,7 +1171,7 @@ def generate_config_sharded(
     return input_mem_config, output_mem_config
 
 
-def generate_tt_tensors(input_tensors, input_dtype, tensor_layout, devices, input_mem_config):
+def generate_tt_tensors(input_tensors, input_dtype, tensor_layout, mesh_device, input_mem_config):
     tt_input_tensors_dups = []
     tt_input_tensors = []
 
@@ -1220,7 +1220,7 @@ def compare_results(input_dtype, tt_out_tensor, unchunked_input_tensor, input_sh
 
 
 def run_all_gather_sharded(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -1234,24 +1234,16 @@ def run_all_gather_sharded(
     # num_cores,
     use_program_cache,
     function_level_defaults,
-    all_gather_operation,
+    all_gather_topology,
     enable_async,
     n_worker=None,
     n_buffer=None,
     num_iter=1,
     trace_mode=False,
 ):
-    if len(t3k_mesh_device.get_device_ids()) != 8:
-        pytest.skip("Not T3000!")
-
-    for device_id in t3k_mesh_device.get_device_ids():
-        t3k_mesh_device.get_device(device_id).enable_async(enable_async)
-
     unchunked_input_shape, unchunked_input_tensor, input_tensors = generate_input_tensor_sharded(
         input_shape, num_devices, dim
     )
-
-    devices = [t3k_mesh_device.get_device(t3k_mesh_device.get_device_ids()[i]) for i in range(num_devices)]
 
     # num_cores =
     # compute_grid_size = devices[0].compute_with_storage_grid_size()
@@ -1280,7 +1272,7 @@ def run_all_gather_sharded(
     ):
         pytest.skip("Unsupported test case")
 
-    input_tensor_mesh = generate_tt_tensors(input_tensors, input_dtype, tensor_layout, devices, input_mem_config)
+    input_tensor_mesh = generate_tt_tensors(input_tensors, input_dtype, tensor_layout, mesh_device, input_mem_config)
 
     if trace_mode:
         tt_out_tensor = run_with_trace(
