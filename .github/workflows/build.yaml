@@ -1,8 +1,7 @@
-name: "[internal] Build C++ binaries with all configs impl"
+name: "[post-commit] Build C++ binaries with all configs"
 
 on:
-  #TODO: If we want to run this via dispatch, will need to include build docker image workflow
-  #workflow_dispatch:
+  workflow_dispatch:
   workflow_call:
 
 jobs:
@@ -10,14 +9,14 @@ jobs:
     strategy:
       matrix:
         build: [
-          {type: Debug, cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ["build", "in-service"], os: ubuntu-20.04},
-          {type: RelWithDebInfo,  cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ["build", "in-service"], os: ubuntu-20.04},
-          #{type: Debug, cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ["build", "in-service"], os: ubuntu-22.04},
-          #{type: RelWithDebInfo,  cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ["build", "in-service"], os: ubuntu-22.04},
-          {type: Release,  cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ["build", "in-service"], os: ubuntu-22.04},
-          #{type: Debug, cxx_compiler: g++-12, c_compiler: gcc-12, runs-on: ["build", "in-service"], os: ubuntu-22.04},
-          #{type: RelWithDebInfo,  cxx_compiler: g++-12, c_compiler: gcc-12, runs-on: ["build", "in-service"], os: ubuntu-22.04},
-          {type: Release,  cxx_compiler: g++-12, c_compiler: gcc-12, runs-on: ["build", "in-service"], os: ubuntu-22.04},
+          {type: Debug, cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ubuntu-20.04, os: ubuntu-20.04},
+          {type: RelWithDebInfo,  cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: [build, in-service], os: ubuntu-20.04},
+          # {type: Debug, cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ubuntu-22.04},
+          # {type: RelWithDebInfo,  cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ubuntu-22.04},
+          # {type: Release,  cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ubuntu-22.04},
+          # {type: Debug, cxx_compiler: g++-12, c_compiler: gcc-12, runs-on: ubuntu-22.04, os: ubuntu-22.04},
+          # {type: RelWithDebInfo,  cxx_compiler: g++-12, c_compiler: gcc-12, runs-on: ubuntu-22.04, os: ubuntu-22.04},
+          {type: Release,  cxx_compiler: g++-12, c_compiler: gcc-12, runs-on: ubuntu-22.04, os: ubuntu-22.04},
         ]
         arch: [grayskull, wormhole_b0, blackhole]
     env:
@@ -28,24 +27,23 @@ jobs:
     name: ${{ matrix.build.type }} ${{ matrix.build.cxx_compiler }} ${{ matrix.arch }} ${{ matrix.build.os }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Install dependencies
+        if: ${{ !contains(matrix.build.runs-on, 'build') && !contains(matrix.build.runs-on, 'in-service') }}
+        uses: ./.github/actions/install-metal-deps
+        with:
+          os: ${{ matrix.build.os }}
+      - name: Install dev dependencies
+        if: ${{ !contains(matrix.build.runs-on, 'build') && !contains(matrix.build.runs-on, 'in-service') }}
+        uses: ./.github/actions/install-metal-dev-deps
+        with:
+          os: ${{ matrix.build.os }}
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-          echo "RUNNER_UID=$(id -u)" >> $GITHUB_ENV
-          echo "RUNNER_GID=$(id -g)" >> $GITHUB_ENV
       - name: Build C++ libraries and tests
-        uses: ./.github/actions/docker-run
-        with:
-          docker_username: ${{ github.actor }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_image_arch: ${{ inputs.arch }}
-          docker_opts: |
-            -e ARCH_NAME=${{ matrix.arch }}
-          docker_os_arch: ${{ matrix.build.os }}-amd64
-          run_args: |
-            nice -n 19 cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build.type }} -DCMAKE_CXX_COMPILER=${{ matrix.build.cxx_compiler }} -DCMAKE_C_COMPILER=${{ matrix.build.c_compiler }} -G Ninja
-            nice -n 19 cmake --build build --target tests
-
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build.type }} -DCMAKE_CXX_COMPILER=${{ matrix.build.cxx_compiler }} -DCMAKE_C_COMPILER=${{ matrix.build.c_compiler }} -G Ninja
+          cmake --build build --target tests
       - name: Check disk space
         run: |
           df -h
