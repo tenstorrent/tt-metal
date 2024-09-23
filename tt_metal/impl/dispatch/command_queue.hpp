@@ -243,6 +243,7 @@ class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
 
     const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping;
     const CoreCoord core;
+    const uint32_t page_size;
 
    public:
     EnqueueWriteShardedBufferCommand(
@@ -257,6 +258,7 @@ class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
         uint32_t bank_base_address,
         const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping,
         const CoreCoord& core,
+        uint32_t page_size,
         uint32_t padded_page_size,
         uint32_t dst_page_index = 0,
         std::optional<uint32_t> pages_to_write = std::nullopt) :
@@ -274,8 +276,8 @@ class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
             dst_page_index,
             pages_to_write),
         buffer_page_mapping(buffer_page_mapping),
-        core(core) {
-        ;
+        core(core),
+        page_size(page_size) {
     }
 };
 

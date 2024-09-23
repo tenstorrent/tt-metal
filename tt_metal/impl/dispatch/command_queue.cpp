@@ -251,21 +251,21 @@ void EnqueueWriteShardedBufferCommand::add_buffer_data(HugepageDeviceCommand& co
             if (host_page.has_value()) {
                 command_sequence.update_cmd_sequence(
                     dst_offset,
-                    (char*)this->src + host_page.value() * this->buffer.page_size(),
-                    this->buffer.page_size());
+                    (char*)this->src + this->buffer_page_mapping->host_page_to_host_offset_[*host_page],
+                    this->page_size);
             }
             dst_offset += this->padded_page_size;
         }
     } else {
-        if (this->buffer.page_size() != this->padded_page_size and this->buffer.page_size() != this->buffer.size()) {
-            uint32_t unpadded_src_offset = this->dst_page_index * this->buffer.page_size();
+        if (this->page_size != this->padded_page_size and this->page_size != this->buffer.size()) {
+            uint32_t unpadded_src_offset = this->dst_page_index * this->page_size;
             for (uint32_t i = 0; i < this->pages_to_write; ++i) {
                 command_sequence.add_data(
-                    (char*)this->src + unpadded_src_offset, this->buffer.page_size(), this->padded_page_size);
-                unpadded_src_offset += this->buffer.page_size();
+                    (char*)this->src + unpadded_src_offset, this->page_size, this->padded_page_size);
+                unpadded_src_offset += this->page_size;
             }
         } else {
-            uint32_t unpadded_src_offset = this->dst_page_index * this->buffer.page_size();
+            uint32_t unpadded_src_offset = this->dst_page_index * this->page_size;
             command_sequence.add_data((char*)this->src + unpadded_src_offset, data_size_bytes, data_size_bytes);
         }
     }
@@ -1784,23 +1784,23 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
     uint32_t src_page_index = 0;
 
     if (is_sharded(buffer.buffer_layout())) {
-        const bool width_split = buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape[1];
+        const bool width_split = buffer.shard_parameters().shape_in_pages()[1] != buffer.shard_parameters().tensor2d_shape()[1];
         const auto& buffer_page_mapping = width_split ? buffer.get_buffer_page_mapping() : nullptr;
 
         // Note that the src_page_index is the device page idx, not the host page idx
         // Since we read core by core we are reading the device pages sequentially
         const auto& cores = width_split ? buffer_page_mapping->all_cores_
                                         : corerange_to_cores(
-                                              buffer.shard_spec().grid(),
+                                              buffer.shard_parameters().grid(),
                                               buffer.num_cores(),
-                                              buffer.shard_spec().orientation() == ShardOrientation::ROW_MAJOR);
+                                              buffer.shard_parameters().orientation() == ShardOrientation::ROW_MAJOR);
         uint32_t num_total_pages = buffer.num_pages();
-        uint32_t max_pages_per_shard = buffer.shard_spec().size();
+        uint32_t max_pages_per_shard = buffer.shard_parameters().num_pages();
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
-            uint32_t num_pages_to_read;
+            uint32_t num_pages_to_read, page_size;
             if (width_split) {
                 num_pages_to_read =
-                    buffer_page_mapping->core_shard_shape_[core_id][0] * buffer.shard_spec().shape_in_pages()[1];
+                    buffer_page_mapping->core_shard_shape_[core_id][0] * buffer.shard_parameters().shape_in_pages()[1];
             } else {
                 num_pages_to_read = std::min(num_total_pages, max_pages_per_shard);
                 num_total_pages -= num_pages_to_read;
@@ -1814,9 +1814,11 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
                 if (width_split) {
                     uint32_t host_page = buffer_page_mapping->core_host_page_indices_[core_id][0];
                     src_page_index = buffer_page_mapping->host_page_to_dev_page_mapping_[host_page];
-                    unpadded_dst_offset = host_page * buffer.page_size();
+                    unpadded_dst_offset = buffer_page_mapping->host_page_to_host_offset_[host_page];
+                    page_size = buffer_page_mapping->core_unpadded_page_size_[core_id];
                 } else {
                     unpadded_dst_offset = src_page_index * buffer.page_size();
+                    page_size = buffer.page_size();
                 }
 
                 auto command = EnqueueReadShardedBufferCommand(
@@ -1835,7 +1837,7 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
                 this->issued_completion_q_reads.push(std::make_shared<detail::CompletionReaderVariant>(
                     std::in_place_type<detail::ReadBufferDescriptor>,
                     buffer.buffer_layout(),
-                    buffer.page_size(),
+                    page_size,
                     padded_page_size,
                     dst,
                     unpadded_dst_offset,
@@ -1926,38 +1928,40 @@ void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool 
     uint32_t dst_page_index = 0;
 
     if (is_sharded(buffer.buffer_layout())) {
-        const bool width_split = buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape[1];
+        const bool width_split = buffer.shard_parameters().shape_in_pages()[1] != buffer.shard_parameters().tensor2d_shape()[1];
         const auto& buffer_page_mapping = width_split ? buffer.get_buffer_page_mapping() : nullptr;
 
         const auto& cores = width_split ? buffer_page_mapping->all_cores_
                                         : corerange_to_cores(
-                                              buffer.shard_spec().grid(),
+                                              buffer.shard_parameters().grid(),
                                               buffer.num_cores(),
-                                              buffer.shard_spec().orientation() == ShardOrientation::ROW_MAJOR);
+                                              buffer.shard_parameters().orientation() == ShardOrientation::ROW_MAJOR);
         TT_FATAL(
             max_data_sizeB >= padded_page_size,
             "Writing padded page size > {} is currently unsupported for sharded tensors.",
             max_data_sizeB);
         uint32_t num_total_pages = buffer.num_pages();
-        uint32_t max_pages_per_shard = buffer.shard_spec().size();
+        uint32_t max_pages_per_shard = buffer.shard_parameters().num_pages();
 
         // Since we read core by core we are reading the device pages sequentially
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
             // Skip writing the padded pages along the bottom
             // Currently since writing sharded tensors uses write_linear, we write the padded pages on width
             // Alternative write each page row into separate commands, or have a strided linear write
-            uint32_t num_pages;
+            uint32_t num_pages, page_size;
             if (width_split) {
                 num_pages =
-                    buffer_page_mapping->core_shard_shape_[core_id][0] * buffer.shard_spec().shape_in_pages()[1];
+                    buffer_page_mapping->core_shard_shape_[core_id][0] * buffer.shard_parameters().shape_in_pages()[1];
                 if (num_pages == 0) {
                     continue;
                 }
                 dst_page_index =
                     buffer_page_mapping->host_page_to_dev_page_mapping_[buffer_page_mapping->core_host_page_indices_[core_id][0]];
+                page_size = buffer_page_mapping->core_unpadded_page_size_[core_id];
             } else {
                 num_pages = std::min(num_total_pages, max_pages_per_shard);
                 num_total_pages -= num_pages;
+                page_size = buffer.page_size();
             }
             uint32_t curr_page_idx_in_shard = 0;
             uint32_t bank_base_address = buffer.address();
@@ -1996,6 +2000,7 @@ void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool 
                         address,
                         buffer_page_mapping,
                         cores[core_id],
+                        page_size,
                         padded_page_size,
                         dst_page_index,
                         pages_to_write);
@@ -2375,7 +2380,7 @@ void HWCommandQueue::copy_into_user_space(
                         dev_page_id++;
                     }
                     if (host_page_id.has_value()) {
-                        dst_offset_bytes = *host_page_id * page_size;
+                        dst_offset_bytes = buffer_page_mapping->host_page_to_host_offset_[*host_page_id];
                     } else {
                         src_offset_bytes += src_offset_increment;
                         continue;
@@ -2385,7 +2390,7 @@ void HWCommandQueue::copy_into_user_space(
                     host_page_id = buffer_page_mapping->dev_page_to_host_page_mapping_[dev_page_id];
                     dev_page_id++;
                     if (host_page_id.has_value()) {
-                        dst_offset_bytes = *host_page_id * page_size;
+                        dst_offset_bytes = buffer_page_mapping->host_page_to_host_offset_[*host_page_id];
                     } else {
                         src_offset_bytes += src_offset_increment;
                         continue;
@@ -2401,8 +2406,7 @@ void HWCommandQueue::copy_into_user_space(
 
                 src_offset_bytes += src_offset_increment;
             }
-            dst_offset_bytes += num_bytes_to_copy;
-            contig_dst_offset = dst_offset_bytes;
+            contig_dst_offset = dst_offset_bytes + num_bytes_to_copy;
         }
         this->manager.completion_queue_pop_front(num_pages_xfered, this->id);
     }
@@ -2608,7 +2612,7 @@ void EnqueueAllocateBufferImpl(AllocBufferMetadata alloc_md) {
     if (is_sharded(buffer->buffer_layout())) {
         allocated_addr = allocator::allocate_buffer(
             *(buffer->device()->allocator_),
-            buffer->shard_spec().size() * buffer->num_cores() * buffer->page_size(),
+            buffer->shard_parameters().num_pages() * buffer->num_cores() * buffer->page_size(),
             buffer->page_size(),
             buffer->buffer_type(),
             alloc_md.bottom_up,

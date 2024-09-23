@@ -43,18 +43,39 @@ class BufferStressTestConfigSharded {
     TensorMemoryLayout mem_config = TensorMemoryLayout::HEIGHT_SHARDED;
     ShardOrientation shard_orientation = ShardOrientation::ROW_MAJOR;
     bool halo = false;
+    bool uneven = false;
 
-    BufferStressTestConfigSharded(std::array<uint32_t, 2> pages_per_core, std::array<uint32_t, 2> cores) :
-        max_num_pages_per_core(pages_per_core), max_num_cores(cores) {
-        this->num_pages_per_core = pages_per_core;
-        this->num_cores = cores;
+    BufferStressTestConfigSharded(std::array<uint32_t, 2> pages_per_core, std::array<uint32_t, 2> cores, bool uneven=false) :
+        max_num_pages_per_core(pages_per_core), num_pages_per_core(pages_per_core), max_num_cores(cores), num_cores(cores), uneven(uneven) {
     }
 
     std::array<uint32_t, 2> tensor2d_shape() {
-        return {num_pages_per_core[0] * num_cores[0], num_pages_per_core[1] * num_cores[1]};
+        auto shard_shape = this->shard_shape();
+        auto tensor_shape = shard_shape;
+        switch (mem_config) {
+            case TensorMemoryLayout::HEIGHT_SHARDED:
+                tensor_shape = {num_cores[0] * num_cores[1] * shard_shape[0], shard_shape[1]};
+                break;
+            case TensorMemoryLayout::WIDTH_SHARDED:
+                tensor_shape = {shard_shape[0], num_cores[0] * num_cores[1] * shard_shape[1]};
+                break;
+            case TensorMemoryLayout::BLOCK_SHARDED:
+                if (shard_orientation == ShardOrientation::ROW_MAJOR) {
+                    tensor_shape = {num_cores[1] * shard_shape[0], num_cores[0] * shard_shape[1]};
+                } else {
+                    tensor_shape = {num_cores[0] * shard_shape[0], num_cores[1] * shard_shape[1]};
+                }
+                break;
+            default:
+                TT_THROW("Invalid memory configuration");
+        }
+        if (uneven) {
+            tensor_shape[1] -= this->page_shape[1] / 2;
+        }
+        return tensor_shape;
     }
 
-    uint32_t num_pages() { return tensor2d_shape()[0] * tensor2d_shape()[1]; }
+    uint32_t num_pages() { return num_cores[0] * num_pages_per_core[0] * num_cores[1] * num_pages_per_core[1]; }
 
     std::array<uint32_t, 2> shard_shape() {
         return {num_pages_per_core[0] * page_shape[0], num_pages_per_core[1] * page_shape[1]};
@@ -66,13 +87,16 @@ class BufferStressTestConfigSharded {
     }
 
     ShardSpecBuffer shard_parameters() {
+        auto tensor_shape = this->tensor2d_shape();
         return ShardSpecBuffer(
             this->shard_grid(),
             this->shard_shape(),
             this->shard_orientation,
             this->halo,
+            this->mem_config,
             this->page_shape,
-            this->tensor2d_shape());
+            tensor_shape,
+            page_shape[0] * tensor_shape[1] * this->element_size);
     }
 
     uint32_t page_size() { return page_shape[0] * page_shape[1] * element_size; }
@@ -254,7 +278,14 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                 }
 
                 vector<uint32_t> res;
-                res.resize(buf_size / sizeof(uint32_t));
+                if (config.uneven) {
+                    auto shape = config.tensor2d_shape();
+                    uint32_t width = shape[1] * config.element_size;
+                    src.resize(shape[0] * width / sizeof(uint32_t));
+                    res.resize(shape[0] * width / sizeof(uint32_t));
+                } else {
+                    res.resize(buf_size / sizeof(uint32_t));
+                }
                 if (cq_read) {
                     EnqueueReadBuffer(cq, buf, res.data(), true);
                 } else {
@@ -706,6 +737,57 @@ TEST_F(CommandQueueSingleCardFixture, ShardedBufferL1ReadWrites) {
                                  1,
                              }) {
                             BufferStressTestConfigSharded config(num_pages, cores);
+                            config.seed = 0;
+                            config.num_iterations = num_iterations;
+                            config.mem_config = shard_strategy;
+                            config.page_shape = page_shape;
+                            tt::log_info(tt::LogTest, "Device: {} cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: {}, num_iterations: {}", device->id(), cores[0],cores[1], num_pages[0],num_pages[1], page_shape[0],page_shape[1], magic_enum::enum_name(shard_strategy).data(), num_iterations);
+                            local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
+                                device, device->command_queue(), config, BufferType::L1, false);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_F(CommandQueueSingleCardFixture, ShardedBufferL1UnevenReadWrites) {
+    std::map<std::string, std::vector<std::array<uint32_t, 2>>> test_params;
+
+    for (Device *device : devices_) {
+        // This test hangs on Blackhole A0 when using static VCs through static TLBs and there are large number of reads/writes issued
+        //  workaround is to use dynamic VC (implemented in UMD)
+        if (tt::Cluster::instance().is_galaxy_cluster()) {
+            test_params = {
+                {"cores",
+                 {{1, 1},
+                  {static_cast<uint32_t>(device->compute_with_storage_grid_size().x),
+                   static_cast<uint32_t>(device->compute_with_storage_grid_size().y)}}},
+                {"num_pages", {{3, 1}}},
+                {"page_shape", {{1, 32}}}};
+        } else {
+            test_params = {
+                {"cores",
+                 {
+                  {5, 3},
+                  {3, 5},
+                  {5, 5},
+                  {static_cast<uint32_t>(device->compute_with_storage_grid_size().x),
+                   static_cast<uint32_t>(device->compute_with_storage_grid_size().y)}}},
+                {"num_pages", {{7, 1}, {3, 1}, {67, 1}, {137, 1}}},
+                {"page_shape", {{1, 8}, {1, 120}, {1, 2048}}}};
+        }
+        for (const std::array<uint32_t, 2> cores : test_params.at("cores")) {
+            for (const std::array<uint32_t, 2> num_pages : test_params.at("num_pages")) {
+                for (const std::array<uint32_t, 2> page_shape : test_params.at("page_shape")) {
+                    for (const TensorMemoryLayout shard_strategy :
+                         {TensorMemoryLayout::WIDTH_SHARDED,
+                          TensorMemoryLayout::BLOCK_SHARDED}) {
+                        for (const uint32_t num_iterations : {
+                                 1,
+                             }) {
+                            BufferStressTestConfigSharded config(num_pages, cores, true);
                             config.seed = 0;
                             config.num_iterations = num_iterations;
                             config.mem_config = shard_strategy;

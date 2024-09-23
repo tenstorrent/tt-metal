@@ -404,6 +404,70 @@ def test_shard_with_corerangeset(
 
 
 @pytest.mark.parametrize(
+    "data_transfer_strategy",
+    [
+        (DirectReadWriteType.READ_ONLY),
+        (DirectReadWriteType.WRITE_ONLY),
+        (DirectReadWriteType.NONE),
+        (DirectReadWriteType.READ_WRITE),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_shape, input_shard_shape,  input_sharded_memory_config_args",
+    [
+        (
+            [1, 1, 32, 1000],
+            [32, 256],
+            dict(
+                core_grid=ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3)),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.WIDTH,
+            ),
+        ),
+        (
+            [1, 1, 120, 1000],
+            [32, 256],
+            dict(
+                core_grid=ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3)),
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.BLOCK,
+            ),
+        ),
+    ],
+)
+def test_uneven_shard(device, input_shape, input_shard_shape, input_sharded_memory_config_args, data_transfer_strategy):
+    torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+    input_shard_memory_config = ttnn.create_sharded_memory_config(
+        input_shard_shape, **input_sharded_memory_config_args, use_height_and_width_as_shard_shape=True
+    )
+
+    if data_transfer_strategy == DirectReadWriteType.READ_ONLY or data_transfer_strategy == DirectReadWriteType.NONE:
+        interleaved_input_tensor = ttnn.from_torch(
+            torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        # interleaved_to_sharded
+        sharded_input_tensor = ttnn.to_memory_config(interleaved_input_tensor, input_shard_memory_config)
+    else:
+        sharded_input_tensor = ttnn.from_torch(
+            torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_shard_memory_config
+        )
+    if data_transfer_strategy == DirectReadWriteType.WRITE_ONLY or data_transfer_strategy == DirectReadWriteType.NONE:
+        # sharded_to_interleaved
+        interleaved_output_tensor = ttnn.to_memory_config(sharded_input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+        output = ttnn.to_torch(interleaved_output_tensor)
+    else:
+        output = ttnn.to_torch(sharded_input_tensor)
+
+    assert_with_pcc(torch_input_tensor, output, 1.0)
+
+
+@pytest.mark.parametrize(
     "shape, strategy, orientation, core_grid",
     [
         ([1, 1, 1024, 1024], ttnn.ShardStrategy.WIDTH, ttnn.ShardOrientation.ROW_MAJOR, ttnn.CoreGrid(y=2, x=2)),

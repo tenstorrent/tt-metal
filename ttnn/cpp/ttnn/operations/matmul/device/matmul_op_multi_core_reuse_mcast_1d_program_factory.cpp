@@ -83,8 +83,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     uint32_t in0_shard_width_in_tiles = 0;
     uint32_t in0_shard_height_in_tiles = 0;
     if (in0_is_sharded) {
-        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / TILE_WIDTH;
-        in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / TILE_HEIGHT;
+        in0_shard_width_in_tiles = in0_buffer->shard_parameters().shape()[1] / TILE_WIDTH;
+        in0_shard_height_in_tiles = in0_buffer->shard_parameters().shape()[0] / TILE_HEIGHT;
         in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
     }
     uint32_t in2_CB_tiles = in2_block_tiles;
@@ -890,8 +890,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     uint32_t in0_shard_height_in_tiles = 0;
     uint32_t in0_shard_width_in_tiles = 0;
     if (in0_is_sharded) {
-        in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / TILE_HEIGHT;
-        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / TILE_WIDTH;
+        in0_shard_height_in_tiles = in0_buffer->shard_parameters().shape()[0] / TILE_HEIGHT;
+        in0_shard_width_in_tiles = in0_buffer->shard_parameters().shape()[1] / TILE_WIDTH;
         // NOTE: Criteria for extract_shard_sub_blocks is different from mcast in0
         // In the reader kernel, always need to copy to cb0 even for height=1 shards since we may not always do mcast
         // In mcast in0 sharded reader kernel, this is handled by mcast with loopback src

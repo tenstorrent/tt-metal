@@ -324,7 +324,7 @@ struct DeviceStorage {
 
         std::optional<ShardSpec> shard_spec = std::nullopt;
         if (is_sharded(this->buffer->buffer_layout())) {
-            shard_spec = this->buffer->shard_spec().tensor_shard_spec;
+            shard_spec = this->buffer->shard_parameters().shard_spec();
         }
         return MemoryConfig{
             .memory_layout = this->buffer->buffer_layout(),
@@ -555,7 +555,7 @@ struct MultiDeviceStorage {
         }
         std::optional<ShardSpec> shard_spec = std::nullopt;
         if (is_sharded(this->buffers.at(first_device_id)->buffer_layout())) {
-            shard_spec = this->buffers.at(first_device_id)->shard_spec().tensor_shard_spec;
+            shard_spec = this->buffers.at(first_device_id)->shard_parameters().shard_spec();
         }
         return MemoryConfig{
             .memory_layout = this->buffers.at(first_device_id)->buffer_layout(),
