@@ -32,14 +32,14 @@ Authors: Vishal Shenoy, Mohamed Bahnas
 
 ## 1. Overview
 
-The [Vision Transformer](https://arxiv.org/pdf/2010.11929) (ViT) is a transformer model that is utilized for vision procesing tasks. The ViT architecture in TT-NN leverages the self-attention mechanism, originally designed for NLP tasks, to process image data by treating each image as a sequence of patches. This walkthrough explains the key components of the ViT model and demonstrates how the Tenstorrent TT-NN library implements these components efficiently.
+The [Vision Transformer](https://arxiv.org/pdf/2010.11929) (ViT) is a transformer model that is utilized for vision processing tasks. The ViT architecture in TT-NN leverages the self-attention mechanism, originally designed for NLP tasks, to process image data by treating each image as a sequence of patches. This walkthrough explains the key components of the ViT model and demonstrates how the Tenstorrent TT-NN library implements these components efficiently.
 For more details on the architecture, please refer to the [References](#7-references).
 
 ## 2. ViT TT-NN Optimization Techniques
 
 The implemented optimization techniques in TT-NN compared to the conventional flow are:
 ### 2.1 Sharding on all relevant OPs
-  - Applying sharding techniques to harvest the optimum utilization of the computation OPs, by elminating the need for data movement inter-tensix-cores between the consecutive OPs. 
+  - Applying sharding techniques to harvest the optimum utilization of the computation OPs, by eliminating the need for data movement inter-tensix-cores between the consecutive OPs. 
   - For more details, please refer to the [related tech-report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md#42-sharding) 
   - Sharding Concepts
 ![Sharding Concept](images/sharding_concept.png) 
@@ -47,7 +47,7 @@ The implemented optimization techniques in TT-NN compared to the conventional fl
 ![Sharding Example](images/sharding_example.png)   
 ### 2.2 Matmul sharding variants
 #### 2.2.1 Matmul Reuse (BMM)
-The batch Matmul(BMM) Reuse case used in ViT model is in the Multi-head Self Attenttion module, where both inputs (in0 and in1) as well as the output are height sharded. There no mutli-case (mcast) technique applied on the inputs here. Each core will be respsonsible for the Matmul of single head of one image of the batch.
+The batch Matmul(BMM) Reuse case used in ViT model is in the Multi-head Self Attention module, where both inputs (in0 and in1) as well as the output are height sharded. There no multi-cast (mcast) technique applied on the inputs here. Each core will be responsible for the Matmul of single head of one image of the batch.
 ![BMM Height](images/bmm_height.png) 
 #### 2.2.2 Matmul Reuse Mcast (2D)
 The Reuse Mcast case used in ViT model is the block sharded Matmul cases in QKV generation as well as the Feed-Forward Network.
@@ -63,9 +63,9 @@ The other Reuse Mcast case (not used in ViT) is the height sharded on in0, while
   - Merging Q,K,V Linear operations in one large OP for higher utilization of Tensix computation power.
   - Customized tensor manipulation operations that are highly optimized as Transformer-based OPs in TT-NN.
   - Pre-processing of model weights, to apply the data format conversion as well as merging and transposing to match the OP configuration.
-  - Fusing GeLU OP with its perceding Linear OP
+  - Fusing GeLU OP with its preceding Linear OP
 
-    ![Multi-Head Attenion in TT-NN](images/mha_ttnn_1.png) 
+    ![Multi-Head Attention in TT-NN](images/mha_ttnn_1.png) 
   ![](images/mha_ttnn_2.png)  
 
 
@@ -119,7 +119,7 @@ def vit(
 ```
 
 ### 3.2 Embeddings module
-ViT Embeddings module includes: Patch + Position embeddings and Linear projection of flattended patches
+ViT Embeddings module includes: Patch + Position embeddings and Linear projection of flattened patches
 
 ```python
 def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=False):
@@ -137,7 +137,7 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
     folded_pixel_values = ttnn.to_memory_config(folded_pixel_values, memory_config=ttnn.L1_MEMORY_CONFIG)
     folded_pixel_values = ttnn.to_layout(folded_pixel_values, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
 
-    # linear projction of flattened patches
+    # linear projection of flattened patches
     patch_embedding_output = ttnn.linear(
         folded_pixel_values,
         parameters.projection.weight,
@@ -280,7 +280,7 @@ Where:
 - `dim` is the embedding dimension.
 
 ### 4.2 Sharding parametrization 
-The input and output of each OP is either sharded or interleaved, and there is a sharding config for each OP. Optimally, the consequtive OPs will have the same sharding scheme, so the intermediate results are stored in the local Tensix L1 to minimize the data movement between OPs.
+The input and output of each OP is either sharded or interleaved, and there is a sharding config for each OP. Optimally, the consecutive OPs will have the same sharding scheme, so the intermediate results are stored in the local Tensix L1 to minimize the data movement between OPs.
 Here are the parameters used in the OP sharding scheme:
 ```python
     core_grid = ttnn.CoreGrid(y=batch_size, x=12)
@@ -344,7 +344,7 @@ context_layer = ttnn.matmul(attention_probs, value)
 ```
 
 #### 4.4.1 Q,K,V Generation using the Fused Linear OP
-The encoder input is matrix-multiplied by the Q,K,V weights to generate the individual Query, Key, Value tensors. In the TT-NN implementation, the input is multiplied by the pre-fused weights to generate the merged 3 tensors that will be split in a following step. The fused linear operation objective is to maximize the utilization by increasing the workload that is computed simultaneously on the Tensic core grid.
+The encoder input is matrix-multiplied by the Q,K,V weights to generate the individual Query, Key, Value tensors. In the TT-NN implementation, the input is multiplied by the pre-fused weights to generate the merged 3 tensors that will be split in a following step. The fused linear operation objective is to maximize the utilization by increasing the workload that is computed simultaneously on the Tensix core grid.
 
 **Optimized Code**:
 
