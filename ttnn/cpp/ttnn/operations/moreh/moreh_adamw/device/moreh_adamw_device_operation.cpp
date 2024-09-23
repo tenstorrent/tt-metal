@@ -122,7 +122,7 @@ MorehAdamWDeviceOperation::invoke(
     const std::optional<const Tensor> exp_avg_sq_out,
     const std::optional<const Tensor> max_exp_avg_sq_out,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     return {
         operation_attributes_t{
             lr.value_or(0.001f),
@@ -133,7 +133,7 @@ MorehAdamWDeviceOperation::invoke(
             step.value_or(0),
             amsgrad.value_or(false),
             memory_config.value_or(param_in.memory_config()),
-            compute_kernel_config},
+            init_device_compute_kernel_config(param_in.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
         tensor_args_t{
             param_in,
             grad,

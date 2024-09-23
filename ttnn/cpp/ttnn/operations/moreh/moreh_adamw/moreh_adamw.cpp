@@ -28,7 +28,7 @@ std::vector<Tensor> MorehAdamw::invoke(
     const std::optional<const Tensor> exp_avg_sq_out,
     const std::optional<const Tensor> max_exp_avg_sq_out,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     return ttnn::prim::moreh_adamw(
         param_in,
         grad,
@@ -48,5 +48,15 @@ std::vector<Tensor> MorehAdamw::invoke(
         max_exp_avg_sq_out,
         memory_config,
         compute_kernel_config);
+}
+
+std::vector<Tensor> MorehAdamw::create_async_output_tensors(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
+    const auto& input_tensor = input_tensors.at(0);
+    return {
+        Tensor(operation::get_workers_for_op_output({input_tensor})),
+        Tensor(operation::get_workers_for_op_output({input_tensor})),
+        Tensor(operation::get_workers_for_op_output({input_tensor})),
+        Tensor(operation::get_workers_for_op_output({input_tensor}))};
 }
 }  // namespace ttnn::operations::moreh::moreh_adamw
