@@ -48,3 +48,19 @@ def gen_low_high_scalars(low=-100, high=100, dtype=torch.bfloat16):
         low, high = high, low
 
     return low, high
+
+
+def gen_rand_exclude_range(size, excluderange=None, low=0, high=100):
+    res = torch.Tensor(size=size).uniform_(low, high)
+    if excluderange is None:
+        return res
+
+    upper = excluderange[1]
+    lower = excluderange[0]
+    assert upper < high
+    assert lower > low
+
+    while torch.any((res > lower) & (res < upper)):
+        res = torch.where((res < lower) & (res > upper), res, random.uniform(low, high))
+
+    return res
