@@ -593,9 +593,9 @@ void Program::set_cb_data_fmt(Device *device, const std::vector<CoreRange> &crs,
 
 void Program::set_cb_tile_dims(Device *device, const std::vector<CoreRange> &crs, JitBuildOptions &build_options) const {
     ZoneScoped;
-    for (auto logical_cr : crs) {
+    for (const auto &logical_cr : crs) {
         auto cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
-        for (auto circular_buffer : cbs_on_core) {
+        for (const auto &circular_buffer : cbs_on_core) {
             for (auto buffer_index : circular_buffer->buffer_indices()) {
                 auto tile = circular_buffer->tile(buffer_index);
                 if (tile.has_value()) {
