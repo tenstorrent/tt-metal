@@ -13,3 +13,5 @@ jobs:
         with:
           dry-run: true
           days-before-branch-stale: 180 # Branches stale for ~6 months
+          ignore-unknown-authors: true
+          ignore-branches-with-open-prs: true
