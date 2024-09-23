@@ -46,9 +46,9 @@ def test_llama_model_inference(device, weights, layers, use_program_cache, reset
     # TODO: In the full model test, iterations 4 and 8 have lower PCCs of 0.9077 and 0.9593 respectively.
     pcc = 0.94 if layers == 1 else 0.97
     # In post-commit CI, also validate the final PCCs after 6 iterations
-    final_model_pcc = 0.9979
-    final_k_cache_pcc = 0.9995
-    final_v_cache_pcc = 0.9996
+    final_model_pcc = 0.9991
+    final_k_cache_pcc = 0.9997
+    final_v_cache_pcc = 0.9997
 
     iterations = 6 if layers == 1 else 9
 
