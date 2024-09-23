@@ -89,6 +89,14 @@ jobs:
         uses: ./.github/actions/generate-docker-tag
         with:
           image: ${{ inputs.os }}
+      - name: Docker login
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull docker image
+        run: docker pull ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
       - name: Build tt-metal and libs
         uses: addnab/docker-run-action@v3
         with:
