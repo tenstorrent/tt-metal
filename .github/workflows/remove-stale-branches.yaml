@@ -1,6 +1,7 @@
 on:
   schedule:
     - cron: "0 0 * * *" # Runs every night at midnight
+  workflow_dispatch: # Allows manual trigger
 
 jobs:
   remove-stale-branches:
@@ -9,4 +10,4 @@ jobs:
       - uses: fpicalausa/remove-stale-branches@v2.0.1
         with:
           dry-run: true
-          days-before-branch-stale: 365 # Branches stale for 1 year
+          days-before-branch-stale: 180 # Branches stale for ~6 months
