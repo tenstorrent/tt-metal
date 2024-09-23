@@ -169,6 +169,8 @@ struct DebugPrintServerContext {
     // Clears any raised signals (so they can be used again in a later run).
     void ClearSignals();
 
+    bool ReadsDispatchCores(Device* device) { return device_reads_dispatch_cores_[device]; }
+
     int GetNumAttachedDevices() { return device_to_core_range_.size(); }
 
     bool PrintHangDetected() { return server_killed_due_to_hang_; }
@@ -209,6 +211,8 @@ private:
     // A map from Device -> Core Range, which is used to determine which cores on which devices
     // to scan for print data. Also a lock for editing it.
     std::map<Device*, vector<CoreDescriptor>> device_to_core_range_;
+    std::map<Device*, bool> device_reads_dispatch_cores_;  // True if given device reads any dispatch cores. Used to
+                                                           // know whether dprint can be compiled out.
     std::mutex device_to_core_range_lock_;
 
     // Polls specified cores/harts on all attached devices and prints any new print data. This
@@ -589,6 +593,8 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
                 WriteInitMagic(device, phys_core, hart_index, true);
             }
         }
+        if (dispatch_cores.count(logical_core))
+            device_reads_dispatch_cores_[device] = true;
     }
 
     // Save this device + core range to the print server
@@ -1136,4 +1142,8 @@ void DPrintServerClearSignals() {
     if (DprintServerIsRunning())
         DebugPrintServerContext::inst->ClearSignals();
 }
+bool DPrintServerReadsDispatchCores(Device* device) {
+    return DprintServerIsRunning() && DebugPrintServerContext::inst->ReadsDispatchCores(device);
+}
+
 } // namespace tt

@@ -685,6 +685,12 @@ void Device::configure_kernel_variant(
         {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(NOC_0_Y(downstream_noc_index, grid_size.y, downstream_slave_physical_core.y))},
         {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
     };
+    if (llrt::OptionsG.watcher_dispatch_disabled()) {
+        defines["FORCE_WATCHER_OFF"] = "1";
+    }
+    if (!DPrintServerReadsDispatchCores(this)) {
+        defines["FORCE_DPRINT_OFF"] = "1";
+    }
     defines.insert(defines_in.begin(), defines_in.end());
 
     if (dispatch_core_type == CoreType::WORKER) {
