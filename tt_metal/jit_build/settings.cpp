@@ -47,6 +47,19 @@ namespace tt::tt_metal
         set_hlk_operand_dataformat_all_cores((HlkOperand)cb_id, data_format);
     }
 
+    void JitBuildOptions::set_cb_tile_dims_all_cores(CB cb_id, uint32_t num_faces, uint32_t partial_face, uint32_t face_r_dim, uint32_t narrow_tile, uint32_t tile_r_dim, uint32_t tile_c_dim) {
+        hlk_desc.set_buf_num_faces((int)cb_id, num_faces);
+        hlk_desc.set_buf_partial_face((int)cb_id, partial_face);
+        hlk_desc.set_buf_face_r_dim((int)cb_id, face_r_dim);
+        hlk_desc.set_buf_narrow_tile((int)cb_id, narrow_tile);
+        hlk_desc.set_buf_tile_r_dim((int)cb_id, tile_r_dim);
+        hlk_desc.set_buf_tile_c_dim((int)cb_id, tile_c_dim);
+    }
+
+    void JitBuildOptions::set_cb_tile_size_all_cores(CB cb_id, uint32_t tile_size) {
+        hlk_desc.set_buf_tile_size((int)cb_id, tile_size);
+    }
+
     void JitBuildOptions::set_hlk_operand_dataformat_all_cores(HlkOperand op_id, DataFormat data_format)
     {
         static_assert(HlkOperand::in7 == int(HlkOperand::param0)-1);

@@ -257,6 +257,7 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     cb_wait_front(in_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
 
+    #pragma GCC unroll 0
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst(tt::DstMode::Half);
         copy_tile(in_cb, i, 0/*dst*/);

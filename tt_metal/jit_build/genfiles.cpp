@@ -331,6 +331,52 @@ static void generate_data_format_descriptors(JitBuildOptions& options, const tt:
     emit_pack_data_formats(pack_data_format_descs, pack_src_formats_all_cbs, pack_dst_formats_all_cbs);
 }
 
+static std::string array_to_string(const uint32_t arr[]) {
+    std::string formats_string = "";
+    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+        formats_string += to_string((int)arr[i]) + ",";
+    }
+    return formats_string;
+}
+
+static void emit_unpack_tile_dims(std::string unpack_tile_dims_descs, tt_hlk_desc& desc) {
+    ofstream file_stream;
+    file_stream.open(unpack_tile_dims_descs);
+    file_stream << create_formats_array_string("constexpr uint8_t", "unpack_tile_num_faces", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_num_faces_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "unpack_partial_face", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_partial_face_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "unpack_tile_face_r_dim", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_face_r_dim_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "unpack_narrow_tile", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_narrow_tile_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "unpack_tile_r_dim", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_tile_r_dim_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "unpack_tile_c_dim", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_tile_c_dim_arr));
+    file_stream << create_formats_array_string("constexpr uint16_t", "unpack_tile_size", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_tile_size_arr));
+    file_stream.close();
+}
+
+static void emit_pack_tile_dims(std::string pack_tile_dims_descs, tt_hlk_desc& desc) {
+    ofstream file_stream;
+    file_stream.open(pack_tile_dims_descs);
+    file_stream << create_formats_array_string("constexpr uint8_t", "pack_tile_num_faces", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_num_faces_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "pack_partial_face", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_partial_face_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "pack_tile_face_r_dim", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_face_r_dim_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "pack_narrow_tile", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_narrow_tile_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "pack_tile_r_dim", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_tile_r_dim_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "pack_tile_c_dim", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_tile_c_dim_arr));
+    file_stream.close();
+}
+
+static void generate_tile_dims_descriptors(JitBuildOptions& options, const tt::ARCH arch) {
+    string out_file_name_base = "chlkc_";
+    string out_file_name_suffix = "_tile_dims.h";
+    string unpack_tile_dims_descs = options.path + out_file_name_base + "unpack" + out_file_name_suffix;
+    string pack_tile_dims_descs = options.path + out_file_name_base + "pack" + out_file_name_suffix;
+
+    // assuming all cores within a op have the same desc
+    tt_hlk_desc& desc = options.hlk_desc;
+
+    emit_unpack_tile_dims(unpack_tile_dims_descs, desc);
+    emit_pack_tile_dims(pack_tile_dims_descs, desc);
+}
+
 static void generate_dst_accum_mode_descriptor(JitBuildOptions& options) {
     string dst_accum_format_descriptor = options.path + "chlkc_dst_accum_mode.h";
 
@@ -381,10 +427,12 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env,
     fs::create_directories(options.path);
     try {
         std::thread td( [&]() { generate_data_format_descriptors(options, env.get_arch()); } );
+        std::thread tt( [&]() { generate_tile_dims_descriptors(options, env.get_arch()); } );
         std::thread tm( [&]() { generate_math_fidelity_descriptor(options); } );
         std::thread ta( [&]() { generate_math_approx_mode_descriptor(options); } );
         std::thread tf( [&]() { generate_dst_accum_mode_descriptor(options); } );
         td.join();
+        tt.join();
         tm.join();
         ta.join();
         tf.join();
