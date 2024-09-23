@@ -81,6 +81,10 @@ void tensor_mem_config_module_types(py::module& m_tensor) {
         Class defining core coordinate
     )doc");
 
+    py::class_<Tile>(m_tensor, "Tile", R"doc(
+        Class defining tile dims
+    )doc");
+
     py::class_<tt::tt_metal::LegacyShape>(m_tensor, "Shape", R"doc(
         Class defining tensor shape
     )doc");
@@ -127,6 +131,19 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def_readonly("x", &CoreCoord::x)
         .def_readonly("y", &CoreCoord::y);
     py::implicitly_convertible<std::tuple<std::size_t, std::size_t>, CoreCoord>();
+
+    auto py_tile = static_cast<py::class_<Tile>>(m_tensor.attr("Tile"));
+    py_tile.def(py::init<const std::array<uint32_t, 2>&>())
+        .def(py::init<>([](const std::array<uint32_t, 2>& tile) {
+            return Tile{tile};
+        }))
+        .def("__repr__", [](const Tile& self) {
+            return fmt::format("Tile with shape: [{}, {}]", self.get_tile_shape()[0], self.get_tile_shape()[1]);
+        })
+        .def_readonly("tile_shape", &Tile::tile_shape)
+        .def_readonly("face_shape", &Tile::face_shape)
+        .def_readonly("num_faces", &Tile::num_faces);
+    py::implicitly_convertible<std::array<uint32_t, 2>, Tile>();
 
     auto py_shape = static_cast<py::class_<tt::tt_metal::LegacyShape>>(m_tensor.attr("Shape"));
     py_shape.def(py::init<std::array<uint32_t, 4>>())
