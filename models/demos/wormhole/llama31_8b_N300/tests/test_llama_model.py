@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.demos.wormhole.llama31_8b.tt.llama_common import (
+from models.demos.wormhole.llama31_8b_N00.tt.llama_common import (
     precompute_freqs,
     get_single_rot_mat,
     prepare_inputs_ttnn,
@@ -14,8 +14,8 @@ from models.demos.wormhole.llama31_8b.tt.llama_common import (
     encode_prompt_llama_instruct,
     HostEmbedding,
 )
-from models.demos.wormhole.llama31_8b.tt.llama_model import TtTransformer
-from models.demos.wormhole.llama31_8b.tt.model_config import TtModelArgs
+from models.demos.wormhole.llama31_8b_N00.tt.llama_model import TtTransformer
+from models.demos.wormhole.llama31_8b_N00.tt.model_config import TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.utility_functions import (
@@ -36,7 +36,7 @@ from models.utility_functions import skip_for_grayskull
     ],
     ids=["quick", "full"],
 )
-def test_llama_model_inference(device, weights, layers, use_program_cache, reset_seeds):
+def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, reset_seeds):
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
 
@@ -54,7 +54,7 @@ def test_llama_model_inference(device, weights, layers, use_program_cache, reset
 
     instruct = True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
-    model_args = TtModelArgs(device, instruct=instruct, dummy_weights=dummy_weights)
+    model_args = TtModelArgs(mesh_device.get_devices()[0], instruct=instruct, dummy_weights=dummy_weights)
     model_args.n_layers = layers
     state_dict = model_args.load_state_dict()
 
@@ -83,14 +83,14 @@ def test_llama_model_inference(device, weights, layers, use_program_cache, reset
     # pre-compute the rotational embedding matrix and send to device
     current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
-        device,
+        mesh_device,
         start_pos=0,
     )
 
     # Load TTNN model
     tt_model = TtTransformer(
         args=model_args,
-        device=device,
+        device_mesh=mesh_device,
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
@@ -121,18 +121,28 @@ def test_llama_model_inference(device, weights, layers, use_program_cache, reset
         decode_input = prepare_inputs_ttnn(
             tt_decode_input,
             model_args.dim,
-            tt_model.device,
+            tt_model.device_mesh,
         )
-        current_pos_tensor = ttnn.from_torch(torch.tensor([current_pos] * batch), device=device, dtype=ttnn.int32)
+        current_pos_tensor = ttnn.from_torch(
+            torch.tensor([current_pos] * batch),
+            device=mesh_device,
+            dtype=ttnn.int32,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
         current_pos_attn_tensor = ttnn.from_torch(
-            torch.tensor([current_pos] * batch * 8), device=device, dtype=ttnn.int32
+            torch.tensor([current_pos] * batch * 4),
+            device=mesh_device,
+            dtype=ttnn.int32,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
         # Run TT model
         tt_out = tt_model(decode_input, current_pos_tensor, current_pos_attn_tensor, rot_mat=current_rot_mat)
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
-            ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[: model_args.max_batch_size, :, :]
+            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+            .permute(2, 1, 0, 3)
+            .squeeze(1)[: model_args.max_batch_size, :, :]
         )  # [seq, batch, hidden_dim]
 
         # Update rotation matrix for next iteration
@@ -196,7 +206,9 @@ def test_llama_model_inference(device, weights, layers, use_program_cache, reset
 
                     tt_layer_present = []
                     for layer_past in tt_model.layers[l].attention.layer_past_list[0]:
-                        tt_layer_present.append(ttnn.to_torch(layer_past))
+                        tt_layer_present.append(
+                            ttnn.to_torch(layer_past, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+                        )
 
                     for kv_cache, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
                         cache_length_to_check = min(

@@ -25,7 +25,7 @@ class TtLlamaAttention(nn.Module):
         super().__init__()
 
         self.state_dict = state_dict
-        self.device = device_mesh
+        self.device_mesh = device_mesh
         self.num_devices = 2
 
         self.hidden_size = configuration.dim
@@ -66,34 +66,40 @@ class TtLlamaAttention(nn.Module):
         self.wo_list = []
         self.layer_past_list = []
 
-        for i in range(self.num_devices):
+        for i in range(1):
             wqkv = ttnn.as_tensor(
                 torch.concat(
                     [
-                        torch.transpose(
-                            torch.chunk(self.state_dict[wq_str], self.num_devices)[i],
-                            -2,
-                            -1,
-                        ),
-                        torch.transpose(
-                            torch.chunk(self.state_dict[wk_str], self.num_devices)[i],
-                            -2,
-                            -1,
-                        ),
-                        torch.transpose(
-                            torch.chunk(self.state_dict[wv_str], self.num_devices)[i],
-                            -2,
-                            -1,
-                        ),
+                        torch.concat(
+                            [
+                                torch.transpose(
+                                    torch.chunk(self.state_dict[wq_str], self.num_devices)[i],
+                                    -2,
+                                    -1,
+                                ),
+                                torch.transpose(
+                                    torch.chunk(self.state_dict[wk_str], self.num_devices)[i],
+                                    -2,
+                                    -1,
+                                ),
+                                torch.transpose(
+                                    torch.chunk(self.state_dict[wv_str], self.num_devices)[i],
+                                    -2,
+                                    -1,
+                                ),
+                            ],
+                            dim=-1,
+                        )
+                        for i in range(self.num_devices)
                     ],
                     dim=-1,
                 ),
                 device=self.device_mesh,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.device_mesh, dim=2),
+                mesh_mapper=ttnn.ShardTensorToMesh(self.device_mesh, dim=-1),
                 dtype=self.dtype,
                 memory_config=self.model_config["ATTN_WEIGHTS_MEMCFG"],
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
-                cache_file_name=cache_name("wqkv"),
+                # cache_file_name=cache_name("wqkv"),
             )
 
             # wo: 4096 x 4096: width-sharded on 12 banks, 4224 over 12 banks.
@@ -109,22 +115,22 @@ class TtLlamaAttention(nn.Module):
             )
             wo = ttnn.as_tensor(
                 torch.transpose(
-                    torch.chunk(self.state_dict[wo_str], self.num_devices, dim=-1)[i],
+                    self.state_dict[wo_str],
                     -2,
                     -1,
                 ),
                 device=self.device_mesh,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.device_mesh, dim=2),
+                mesh_mapper=ttnn.ShardTensorToMesh(self.device_mesh, dim=-2),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,  # TODO: wo dram sharded matmul errors// wo_mem_config,
                 dtype=self.dtype,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
-                cache_file_name=cache_name("wo"),
+                # cache_file_name=cache_name("wo"),
             )
 
             cache_k = torch.zeros(
                 (
                     self.max_batch_size,
-                    self.n_kv_heads // self.num_devices,
+                    self.n_kv_heads,
                     self.sliding_window,
                     self.head_dim,
                 )
@@ -132,7 +138,7 @@ class TtLlamaAttention(nn.Module):
             cache_v = torch.zeros(
                 (
                     self.max_batch_size,
-                    self.n_kv_heads // self.num_devices,
+                    self.n_kv_heads,
                     self.sliding_window,
                     self.head_dim,
                 )
@@ -148,7 +154,7 @@ class TtLlamaAttention(nn.Module):
                 )
                 for lp in layer_past
             ]
-
+            print("SHAPES!", wqkv.shape, wo.shape, layer_past[0].shape, layer_past[1].shape)
             # add to the list
             self.wqkv_list.append(wqkv)
             self.wo_list.append(wo)
@@ -224,7 +230,7 @@ class TtLlamaAttention(nn.Module):
         x: (seq_len, 1, batch, hidden_dim)
         """
         dense_outputs = []
-        for i in range(self.num_devices):
+        for i in range(1):
             x = xs[i]
             wqkv = self.wqkv_list[i]
             wo = self.wo_list[i]
@@ -233,6 +239,17 @@ class TtLlamaAttention(nn.Module):
             ###
             # QKV matmuls
             ###
+            # pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            #     compute_with_storage_grid_size=(8, 8),
+            #     in0_block_w=1,  # how much inner dim you take each time
+            #     out_subblock_h=1,  # Must be divisible by per_core_M
+            #     out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            #     per_core_M=1,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            #     per_core_N=12,  # N / TILE_WIDTH / Grid_Size
+            #     mcast_in0=True,
+            #     fused_activation=None,
+            #     fuse_batch=True,
+            # )
             xqkv_fused = ttnn.linear(
                 x,
                 wqkv,
@@ -286,7 +303,6 @@ class TtLlamaAttention(nn.Module):
                 compute_kernel_config=self.compute_kernel_config,
                 dtype=ttnn.bfloat16,
             )
-
             ttnn.deallocate(q_heads_pre_rot_1BQD)
             ttnn.deallocate(k_heads_pre_rot_1BKD)
 
@@ -325,8 +341,7 @@ class TtLlamaAttention(nn.Module):
                 attn_output_11BH,
                 num_heads=self.n_local_heads,
             )
-            attn_output_cat = ttnn.reshape(attn_output_cat, ttnn.Shape((1, 1, 32, self.hidden_size)))
-
+            # attn_output_cat = ttnn.reshape(attn_output_cat, ttnn.Shape((1, 1, 32, self.hidden_size/self.num_devices)))
             dense_out = ttnn.linear(
                 attn_output_cat,
                 wo,
@@ -334,12 +349,11 @@ class TtLlamaAttention(nn.Module):
                 program_config=self.model_config["ATTN_OUTPUT_PROGCFG"],
                 compute_kernel_config=self.compute_kernel_config,
             )  # seqlen, 1, batch, hidden_size
-
             ttnn.deallocate(attn_output_cat)
             dense_outputs.append(dense_out)
 
         # All reduce
-        dense_out_gathered = ttnn.all_gather(dense_outputs, self.device_mesh, dim=1, num_links=4)
+        dense_out_gathered = ttnn.all_gather(dense_out, dim=1, num_links=4)
         dense_out_reduced = ttnn.experimental.fast_reduce_nc(dense_out_gathered, dim=1)
         return dense_out_reduced
 

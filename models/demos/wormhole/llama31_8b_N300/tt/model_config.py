@@ -35,11 +35,11 @@ class TtModelArgs:
     sliding_window = 8192 * 4
 
     # Default folder location for weights and cached files
-    DEFAULT_CKPT_DIR = os.getenv("LLAMA_CKPT_DIR", "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/")
+    DEFAULT_CKPT_DIR = os.getenv("LLAMA_CKPT_DIR", "/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct/")
     DEFAULT_TOKENIZER_PATH = os.getenv(
-        "LLAMA_TOKENIZER_PATH", "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/"
+        "LLAMA_TOKENIZER_PATH", "/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct/"
     )
-    DEFAULT_CACHE_PATH = os.getenv("LLAMA_CACHE_PATH", "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/")
+    DEFAULT_CACHE_PATH = os.getenv("LLAMA_CACHE_PATH", "/proj_sw/user_dev/llama3-data-cache/weight-cache-8b-instruct")
 
     OP_KEYS = (
         # Embedding
@@ -293,7 +293,7 @@ class TtModelArgs:
             # w2 = shard[14336, 352] -> [448, 44]
             self.model_config["DECODE_MLP_W2_PRG_CONFIG"] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
                 # Grid size = [8, 8]
-                in0_block_w=3,  # K = 4096 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+                in0_block_w=1,  # K = 7168 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
                 per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
                 per_core_N=2,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
                 fused_activation=None,

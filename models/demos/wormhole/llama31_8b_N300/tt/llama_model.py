@@ -17,7 +17,7 @@ class TtTransformer(nn.Module):
         self,
         args,
         dtype,
-        device,
+        device_mesh,
         state_dict,
         weight_cache_path,
         layers,
@@ -26,7 +26,7 @@ class TtTransformer(nn.Module):
         self.args = args
         self.vocab_size = args.vocab_size
         self.n_layers = args.n_layers
-        self.device = device
+        self.device_mesh = device_mesh
         self.dtype = dtype
         self.model_config = args.get_model_config()
         self.grid_size = self.args.max_grid_size
@@ -36,7 +36,7 @@ class TtTransformer(nn.Module):
             [
                 TtTransformerBlock(
                     args=args,
-                    device=device,
+                    device_mesh=device_mesh,
                     dtype=dtype,
                     state_dict=state_dict,
                     weight_cache_path=weight_cache_path,
@@ -46,7 +46,7 @@ class TtTransformer(nn.Module):
             ]
         )
         self.norm = RMSNorm(
-            device=device,
+            device=device_mesh,
             dim=args.dim,
             state_dict=state_dict,
             layer_num=None,
@@ -57,7 +57,8 @@ class TtTransformer(nn.Module):
 
         self.output_weight = ttnn.as_tensor(
             state_dict["output.weight"].permute(1, 0),
-            device=device,
+            device=device_mesh,
+            mesh_mapper=ttnn.ShardTensorToMesh(device_mesh, dim=-1),
             layout=ttnn.TILE_LAYOUT,
             dtype=dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

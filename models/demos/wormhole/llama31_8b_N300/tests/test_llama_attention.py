@@ -6,9 +6,13 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.demos.wormhole.llama31_8b.tt.llama_attention import TtLlamaAttention
-from models.demos.wormhole.llama31_8b.tt.model_config import TtModelArgs
-from models.demos.wormhole.llama31_8b.tt.llama_common import precompute_freqs, prepare_inputs_ttnn, get_single_rot_mat
+from models.demos.wormhole.llama31_8b_N300.tt.llama_attention import TtLlamaAttention
+from models.demos.wormhole.llama31_8b_N300.tt.model_config import TtModelArgs
+from models.demos.wormhole.llama31_8b_N300.tt.llama_common import (
+    precompute_freqs,
+    prepare_inputs_ttnn,
+    get_single_rot_mat,
+)
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
 from models.utility_functions import (
     comp_pcc,
@@ -18,11 +22,11 @@ from models.utility_functions import skip_for_grayskull
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
-def test_llama_attention_inference(device, use_program_cache, reset_seeds):
+def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
     pcc = 0.99
 
-    model_args = TtModelArgs(device)
+    model_args = TtModelArgs(mesh_device.get_devices()[0])
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -41,12 +45,12 @@ def test_llama_attention_inference(device, use_program_cache, reset_seeds):
     # pre-compute the rotational embedding matrix and send to device
     current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
-        device,
+        mesh_device,
         start_pos=0,
     )
 
     tt_model = TtLlamaAttention(
-        [device],
+        mesh_device,
         state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         layer_num=0,
@@ -61,15 +65,23 @@ def test_llama_attention_inference(device, use_program_cache, reset_seeds):
 
         tt_attention_input = pt_attention_input.clone()
         current_pos = generation_start_pos + i
-        current_pos_tensor = ttnn.from_torch(torch.tensor([current_pos] * batch), device=device, dtype=ttnn.int32)
+        current_pos_tensor = ttnn.from_torch(
+            torch.tensor([current_pos] * batch),
+            device=mesh_device,
+            dtype=ttnn.int32,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
         current_pos_attn_tensor = ttnn.from_torch(
-            torch.tensor([current_pos] * batch * 8), device=device, dtype=ttnn.int32
+            torch.tensor([current_pos] * batch * 4),
+            device=mesh_device,
+            dtype=ttnn.int32,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
         attention_input = prepare_inputs_ttnn(
             tt_attention_input,
             model_args.dim,
-            device,
+            mesh_device,
         )
 
         tt_out = tt_model([attention_input], current_pos_tensor, current_pos_attn_tensor, rot_mats=current_rot_mat)
@@ -77,8 +89,12 @@ def test_llama_attention_inference(device, use_program_cache, reset_seeds):
         assert isinstance(tt_out, list)
         tt_out = tt_out[0]
         tt_output_torch = (
-            ttnn.to_torch(tt_out).view(1, -1, 4096).permute(1, 0, 2)[: model_args.max_batch_size, :, :]
-        )  # [ batch, seq, hidden_dim]
+            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+            .view(1, -1, 4096)
+            .permute(1, 0, 2)[: model_args.max_batch_size, :, :],
+        )[
+            :, :1, :, :
+        ]  # [ batch, seq, hidden_dim]
 
         freqs_cis_i = freqs_cis[current_pos, :].unsqueeze(0)
         # positions = torch.tensor([current_pos])
@@ -109,7 +125,12 @@ def test_llama_attention_inference(device, use_program_cache, reset_seeds):
             # TT hardware execution -------------------------------------------------------------
             tt_layer_present = []
             for layer_past in tt_model.layer_past_list:
-                tt_layer_present.append([ttnn.to_torch(cache) for cache in layer_past])
+                tt_layer_present.append(
+                    [
+                        ttnn.to_torch(cache, mesh_composer == ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+                        for cache in layer_past
+                    ]
+                )
 
             tt_layer_present = tt_layer_present[0]
 

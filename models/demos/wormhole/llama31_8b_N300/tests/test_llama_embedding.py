@@ -6,22 +6,22 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.demos.wormhole.llama31_8b.tt.llama_embedding import TtLlamaEmbedding
-from models.demos.wormhole.llama31_8b.tt.model_config import TtModelArgs
+from models.demos.wormhole.llama31_8b_N00.tt.llama_embedding import TtLlamaEmbedding
+from models.demos.wormhole.llama31_8b_N00.tt.model_config import TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
-from models.demos.wormhole.llama31_8b.tt.llama_common import HostEmbedding
+from models.demos.wormhole.llama31_8b_N00.tt.llama_common import HostEmbedding
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
-def test_llama_embedding(device, use_program_cache, reset_seeds):
+def test_llama_embedding(mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat16
 
-    model_args = TtModelArgs(device)
+    model_args = TtModelArgs(mesh_device.get_devices()[0])
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
@@ -29,7 +29,7 @@ def test_llama_embedding(device, use_program_cache, reset_seeds):
     reference_emb.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
 
     tt_emb = TtLlamaEmbedding(
-        device=device,
+        device_mesh=mesh_device,
         args=model_args,
         weight_cache_path=model_args.weight_cache_path(dtype),
         state_dict=state_dict,
@@ -41,9 +41,15 @@ def test_llama_embedding(device, use_program_cache, reset_seeds):
     reference_output = reference_emb(pt_input)
     logger.info(f"reference_output: {reference_output.shape}")
 
-    tt_input = ttnn.from_torch(pt_input, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_input = ttnn.from_torch(
+        pt_input,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
     tt_output = tt_emb(tt_input)
-    tt_output_torch = ttnn.to_torch(tt_output)
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0]
     logger.info(f"tt_output_torch: {tt_output_torch.shape}")
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)

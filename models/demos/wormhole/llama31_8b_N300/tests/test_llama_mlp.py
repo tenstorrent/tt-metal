@@ -54,7 +54,6 @@ def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seed
         dtype=dtype,
         model_config=model_args.get_model_config(),
     )
-    # exit()
     torch_input = torch.randn(1, 1, seq_len, 4096)
     reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(

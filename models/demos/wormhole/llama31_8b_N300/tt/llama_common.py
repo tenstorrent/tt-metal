@@ -162,7 +162,7 @@ def get_rotation_mat(dhead, end, start_pos, seqlen, batch):
     return rot_emb
 
 
-def prepare_inputs_ttnn(x, hidden_size, device):
+def prepare_inputs_ttnn(x, hidden_size, mesh_device):
     """
     Prepare inputs for decode mode. Assume that current token is at
     start_pos, and KV cache has valid data up to start_pos.
@@ -206,7 +206,13 @@ def prepare_inputs_ttnn(x, hidden_size, device):
     # assert x.size() == (seq_len, 1, batch, hidden_size)
 
     if torch.is_tensor(x):
-        x = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        x = ttnn.from_torch(
+            x,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
     else:  # Convert the row major layout from embedding back to tile layout
         x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
     return x
@@ -310,7 +316,7 @@ def get_rot_transformation_mat(dhead):
     return rot_emb_matrix
 
 
-def prepare_inputs_ttnn_prefill(x_bsh, device):
+def prepare_inputs_ttnn_prefill(x_bsh, mesh_device):
     """
     Prepare inputs for prefill mode.
     x: (batch, seq, hidden_dim)
@@ -326,15 +332,16 @@ def prepare_inputs_ttnn_prefill(x_bsh, device):
     # input goes to L1
     xs_1BSH = ttnn.from_torch(
         x_1BSH,
-        device=device,
+        device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     return xs_1BSH
 
 
-def get_single_rot_mat(dhead, device, start_pos=0, theta: float = 500000.0, use_scaled=True):
+def get_single_rot_mat(dhead, mesh_device, start_pos=0, theta: float = 500000.0, use_scaled=True):
     freqs_unscaled = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
     if use_scaled:
         freqs = apply_scaling(freqs_unscaled)
@@ -359,12 +366,14 @@ def get_single_rot_mat(dhead, device, start_pos=0, theta: float = 500000.0, use_
 
     return ttnn.from_torch(
         current_rot_mat.T.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
-        device=device,
+        device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     ), ttnn.from_torch(
         rot_matrix.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
-        device=device,
+        device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
