@@ -181,18 +181,19 @@ namespace operations {
 namespace ccl {
 
 Tensor all_gather(
-    const Tensor& input_tensor, const uint32_t dim, const uint32_t num_links, const std::optional<MemoryConfig>& memory_config, const std::optional<size_t> user_defined_num_workers, const std::optional<size_t> user_defined_num_buffers_per_channel) {
+    const Tensor& input_tensor, const uint32_t dim, const uint32_t num_links, const std::optional<MemoryConfig>& memory_config, const std::optional<size_t> user_defined_num_workers, const std::optional<size_t> user_defined_num_buffers_per_channel, const all_gather_op::Topology topology) {
 
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
-    all_gather_op::Topology topology = all_gather_op::Topology::Ring;
     auto devices = input_tensor.get_workers();
     uint32_t num_devices = devices.size();
+    all_gather_op::Topology ccl_topology = all_gather_op::Topology::Ring;
+
     if (num_devices == 2){
-        topology = all_gather_op::Topology::Linear;
+        ccl_topology = all_gather_op::Topology::Linear;
     }
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
-        [dim, num_links, memory_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, topology](
+        [dim, num_links, memory_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, ccl_topology](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -200,7 +201,7 @@ Tensor all_gather(
             const auto& input_tensor = input_tensors.at(0);
 
             return operation::run(
-                create_all_gather_struct(input_tensor, dim, num_links, memory_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, topology),
+                create_all_gather_struct(input_tensor, dim, num_links, memory_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, ccl_topology),
                 {input_tensor});
         },
         {input_tensor},
