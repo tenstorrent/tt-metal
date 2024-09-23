@@ -266,5 +266,5 @@ Open the visualizer by running the following command:
 15. Capturing graph of C++ functions, buffer allocations, etc
 -------------------------------------------------------------
 
-.. literalinclude:: ../../../../ttnn/examples/usage/graph_capture.py
+.. literalinclude:: ../../../../ttnn/ttnn/examples/usage/graph_capture.py
    :language: python
