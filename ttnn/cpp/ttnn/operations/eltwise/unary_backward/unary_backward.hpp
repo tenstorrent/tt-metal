@@ -317,41 +317,29 @@ DEFINE_UNARY_BACKWARD_OPERATION_WITH_1_DEFAULT_FLOAT(Logiteps)
 
 }  // operations::unary
 
+// Tensor + Float
+constexpr auto div_no_nan_bw = ttnn::register_operation<"ttnn::div_no_nan_bw", operations::unary_backward::ExecuteUnaryBackwardDivNoNan>();
+constexpr auto rpow_bw = ttnn::register_operation<"ttnn::rpow_bw", operations::unary_backward::ExecuteUnaryBackwardRpow>();
+
+//Tensor
+constexpr auto multigammaln_bw = ttnn::register_operation< "ttnn::multigammaln_bw", operations::unary_backward::ExecuteUnaryBackwardMultigammaln>();
+constexpr auto lgamma_bw = ttnn::register_operation<"ttnn::lgamma_bw", operations::unary_backward::ExecuteUnaryBackwardLgamma>();
+constexpr auto hardsigmoid_bw = ttnn::register_operation<"ttnn::hardsigmoid_bw", operations::unary_backward::ExecuteUnaryBackwardHardsigmoid>();
+constexpr auto relu_bw = ttnn::register_operation<"ttnn::relu_bw", operations::unary_backward::ExecuteUnaryBackwardRelu>();
+constexpr auto logit_bw = ttnn::register_operation<"ttnn::logit_bw", operations::unary_backward::ExecuteUnaryBackwardLogit>();
+constexpr auto floor_bw = ttnn::register_operation<"ttnn::floor_bw", operations::unary_backward::ExecuteUnaryBackwardFloor>();
+constexpr auto round_bw = ttnn::register_operation<"ttnn::round_bw", operations::unary_backward::ExecuteUnaryBackwardRound>();
+constexpr auto log_bw = ttnn::register_operation<"ttnn::log_bw", operations::unary_backward::ExecuteUnaryBackwardLog>();
+constexpr auto cos_bw = ttnn::register_operation<"ttnn::cos_bw", operations::unary_backward::ExecuteUnaryBackwardCos>();
+constexpr auto acosh_bw = ttnn::register_operation<"ttnn::acosh_bw", operations::unary_backward::ExecuteUnaryBackwardAcosh>();
+
 constexpr auto threshold_bw = ttnn::register_operation<
     "ttnn::threshold_bw",
     operations::unary_backward::ExecuteUnaryBackwardThreshold>();
 
-constexpr auto multigammaln_bw = ttnn::register_operation<
-    "ttnn::multigammaln_bw",
-    operations::unary_backward::ExecuteUnaryBackwardMultigammaln>();
-
-constexpr auto lgamma_bw = ttnn::register_operation<
-    "ttnn::lgamma_bw",
-    operations::unary_backward::ExecuteUnaryBackwardLgamma>();
-
 constexpr auto fill_bw = ttnn::register_operation<
     "ttnn::fill_bw",
     operations::unary_backward::ExecuteUnaryBackwardFill>();
-
-constexpr auto hardsigmoid_bw = ttnn::register_operation<
-    "ttnn::hardsigmoid_bw",
-    operations::unary_backward::ExecuteUnaryBackwardHardsigmoid>();
-
-constexpr auto cos_bw = ttnn::register_operation<
-    "ttnn::cos_bw",
-    operations::unary_backward::ExecuteUnaryBackwardCos>();
-
-constexpr auto acosh_bw = ttnn::register_operation<
-    "ttnn::acosh_bw",
-    operations::unary_backward::ExecuteUnaryBackwardAcosh>();
-
-constexpr auto rpow_bw = ttnn::register_operation<
-    "ttnn::rpow_bw",
-    operations::unary_backward::ExecuteUnaryBackwardRpow>();
-
-constexpr auto div_no_nan_bw = ttnn::register_operation<
-    "ttnn::div_no_nan_bw",
-    operations::unary_backward::ExecuteUnaryBackwardDivNoNan>();
 
 constexpr auto polygamma_bw = ttnn::register_operation<
     "ttnn::polygamma_bw",
@@ -586,26 +574,6 @@ constexpr auto silu_bw = ttnn::register_operation<
 constexpr auto prod_bw = ttnn::register_operation<
     "ttnn::prod_bw",
     operations::unary_backward::ExecuteUnaryBackwardProd>();
-
-constexpr auto relu_bw = ttnn::register_operation<
-    "ttnn::relu_bw",
-    operations::unary_backward::ExecuteUnaryBackwardRelu>();
-
-constexpr auto logit_bw = ttnn::register_operation<
-    "ttnn::logit_bw",
-    operations::unary_backward::ExecuteUnaryBackwardLogit>();
-
-constexpr auto floor_bw = ttnn::register_operation<
-    "ttnn::floor_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloor>();
-
-constexpr auto round_bw = ttnn::register_operation<
-    "ttnn::round_bw",
-    operations::unary_backward::ExecuteUnaryBackwardRound>();
-
-constexpr auto log_bw = ttnn::register_operation<
-    "ttnn::log_bw",
-    operations::unary_backward::ExecuteUnaryBackwardLog>();
 
 // overload
 constexpr auto reciprocal_bw = ttnn::register_operation<
