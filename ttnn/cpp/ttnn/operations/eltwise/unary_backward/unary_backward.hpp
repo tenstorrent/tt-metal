@@ -84,17 +84,6 @@ struct ExecuteUnaryBackward##op_name { \
         const std::optional<MemoryConfig> &memory_config = std::nullopt); \
 };
 
-template <UnaryBackwardOpType unary_backward_op_type>
-struct ExecuteUnaryBackwardOp {
-    static std::vector<Tensor> invoke(
-        const Tensor &grad_tensor_arg,
-        const Tensor &input_tensor_arg,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, output_memory_config);
-    }
-};
-
 struct ExecuteUnaryBackwardRsqrt {
     static std::vector<std::optional<Tensor>> invoke(
         uint8_t queue_id,
@@ -304,6 +293,40 @@ struct Logit {};
 struct Floor {};
 struct Round {};
 struct Log {};
+struct Acos {};
+struct Atan {};
+struct Rad2deg {};
+struct Frac {};
+struct Trunc {};
+struct LogSigmoid {};
+struct FillZero {};
+struct Square {};
+struct Selu {};
+struct Relu6 {};
+struct I0 {};
+struct Softsign {};
+struct Ceil {};
+struct Sigmoid {};
+struct Tan {};
+struct Exp2 {};
+struct Sign {};
+struct Log2 {};
+struct Cosh {};
+struct Erf {};
+struct Erfinv {};
+struct Digamma {};
+struct Expm1 {};
+struct Deg2rad {};
+struct Sin {};
+struct Asinh {};
+struct Asin {};
+struct Atanh {};
+struct Tanhshrink {};
+struct Hardswish {};
+struct Erfc {};
+struct Log1p {};
+struct Log10 {};
+struct Sinh {};
 
 struct DivNoNan {};
 struct Rpow {};
@@ -335,6 +358,40 @@ constexpr auto round_bw = ttnn::register_operation<"ttnn::round_bw", operations:
 constexpr auto log_bw = ttnn::register_operation<"ttnn::log_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Log, 0>>();
 constexpr auto cos_bw = ttnn::register_operation<"ttnn::cos_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Cos, 0>>();
 constexpr auto acosh_bw = ttnn::register_operation<"ttnn::acosh_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Acosh, 0>>();
+constexpr auto acos_bw = ttnn::register_operation<"ttnn::acos_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Acos, 0>>();
+constexpr auto atan_bw = ttnn::register_operation<"ttnn::atan_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Atan, 0>>();
+constexpr auto rad2deg_bw = ttnn::register_operation<"ttnn::rad2deg_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Rad2deg, 0>>();
+constexpr auto frac_bw = ttnn::register_operation<"ttnn::frac_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Frac, 0>>();
+constexpr auto trunc_bw = ttnn::register_operation<"ttnn::trunc_bw",operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Trunc, 0>>();
+constexpr auto log_sigmoid_bw = ttnn::register_operation<"ttnn::log_sigmoid_bw",operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::LogSigmoid, 0>>();
+constexpr auto fill_zero_bw = ttnn::register_operation<"ttnn::fill_zero_bw",operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::FillZero, 0>>();
+constexpr auto i0_bw = ttnn::register_operation<"ttnn::i0_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::I0, 0>>();
+constexpr auto relu6_bw = ttnn::register_operation<"ttnn::relu6_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Relu6, 0>>();
+constexpr auto selu_bw = ttnn::register_operation<"ttnn::selu_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Selu, 0>>();
+constexpr auto square_bw = ttnn::register_operation<"ttnn::square_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Square, 0>>();
+constexpr auto tan_bw = ttnn::register_operation<"ttnn::tan_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Tan, 0>>();
+constexpr auto sigmoid_bw = ttnn::register_operation<"ttnn::sigmoid_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Sigmoid, 0>>();
+constexpr auto ceil_bw = ttnn::register_operation<"ttnn::ceil_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Ceil, 0>>();
+constexpr auto softsign_bw = ttnn::register_operation<"ttnn::softsign_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Softsign, 0>>();
+constexpr auto cosh_bw = ttnn::register_operation<"ttnn::cosh_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Cosh, 0>>();
+constexpr auto log2_bw = ttnn::register_operation<"ttnn::log2_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Log2, 0>>();
+constexpr auto sign_bw = ttnn::register_operation<"ttnn::sign_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Sign, 0>>();
+constexpr auto exp2_bw = ttnn::register_operation<"ttnn::exp2_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Exp2, 0>>();
+constexpr auto expm1_bw = ttnn::register_operation<"ttnn::expm1_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Expm1, 0>>();
+constexpr auto digamma_bw = ttnn::register_operation<"ttnn::digamma_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Digamma, 0>>();
+constexpr auto erfinv_bw = ttnn::register_operation<"ttnn::erfinv_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Erfinv, 0>>();
+constexpr auto erf_bw = ttnn::register_operation<"ttnn::erf_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Erf, 0>>();
+constexpr auto deg2rad_bw = ttnn::register_operation<"ttnn::deg2rad_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Deg2rad, 0>>();
+constexpr auto hardswish_bw = ttnn::register_operation<"ttnn::hardswish_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Hardswish, 0>>();
+constexpr auto tanhshrink_bw = ttnn::register_operation<"ttnn::tanhshrink_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Tanhshrink, 0>>();
+constexpr auto atanh_bw = ttnn::register_operation<"ttnn::atanh_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Atanh, 0>>();
+constexpr auto asin_bw = ttnn::register_operation<"ttnn::asin_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Asin, 0>>();
+constexpr auto asinh_bw = ttnn::register_operation<"ttnn::asinh_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Asinh, 0>>();
+constexpr auto sin_bw = ttnn::register_operation<"ttnn::sin_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Sin, 0>>();
+constexpr auto sinh_bw = ttnn::register_operation<"ttnn::sinh_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Sinh, 0>>();
+constexpr auto log10_bw = ttnn::register_operation<"ttnn::log10_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Log10, 0>>();
+constexpr auto log1p_bw = ttnn::register_operation<"ttnn::log1p_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Log1p, 0>>();
+constexpr auto erfc_bw = ttnn::register_operation<"ttnn::erfc_bw", operations::unary_backward::ExecuteUnaryBackward<operations::unary_backward::Erfc, 0>>();
 
 constexpr auto threshold_bw = ttnn::register_operation<
     "ttnn::threshold_bw",
@@ -348,72 +405,6 @@ constexpr auto polygamma_bw = ttnn::register_operation<
     "ttnn::polygamma_bw",
     operations::unary_backward::ExecuteUnaryBackwardPolygamma>();
 
-//ExecuteUnaryBackwardOp : get_function_type1
-constexpr auto acos_bw = ttnn::register_operation<
-    "ttnn::acos_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::ACOS_BW>>();
-
-constexpr auto atan_bw = ttnn::register_operation<
-    "ttnn::atan_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::ATAN_BW>>();
-
-constexpr auto rad2deg_bw = ttnn::register_operation<
-    "ttnn::rad2deg_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::RAD2DEG_BW>>();
-
-constexpr auto frac_bw = ttnn::register_operation<
-    "ttnn::frac_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::FRAC_BW>>();
-
-constexpr auto trunc_bw = ttnn::register_operation<
-    "ttnn::trunc_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::TRUNC_BW>>();
-
-constexpr auto log_sigmoid_bw = ttnn::register_operation<
-    "ttnn::log_sigmoid_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::LOG_SIGMOID_BW>>();
-
-constexpr auto fill_zero_bw = ttnn::register_operation<
-    "ttnn::fill_zero_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::FILL_ZERO_BW>>();
-
-constexpr auto i0_bw = ttnn::register_operation<
-    "ttnn::i0_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::I0_BW>>();
-
-constexpr auto relu6_bw = ttnn::register_operation<
-    "ttnn::relu6_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::RELU6_BW>>();
-
-constexpr auto selu_bw = ttnn::register_operation<
-    "ttnn::selu_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::SELU_BW>>();
-
-constexpr auto square_bw = ttnn::register_operation<
-    "ttnn::square_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::SQUARE_BW>>();
-
-constexpr auto tan_bw = ttnn::register_operation<
-    "ttnn::tan_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::TAN_BW>>();
-
-constexpr auto sigmoid_bw = ttnn::register_operation<
-    "ttnn::sigmoid_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::SIGMOID_BW>>();
-
 constexpr auto rsqrt_bw = ttnn::register_operation<
     "ttnn::rsqrt_bw",
     operations::unary_backward::ExecuteUnaryBackwardRsqrt>();
@@ -421,111 +412,6 @@ constexpr auto rsqrt_bw = ttnn::register_operation<
 constexpr auto neg_bw = ttnn::register_operation<
     "ttnn::neg_bw",
     operations::unary_backward::ExecuteUnaryBackwardNeg>();
-
-constexpr auto ceil_bw = ttnn::register_operation<
-    "ttnn::ceil_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::CEIL_BW>>();
-
-constexpr auto softsign_bw = ttnn::register_operation<
-    "ttnn::softsign_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::SOFTSIGN_BW>>();
-
-constexpr auto cosh_bw = ttnn::register_operation<
-    "ttnn::cosh_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::COSH_BW>>();
-
-constexpr auto log2_bw = ttnn::register_operation<
-    "ttnn::log2_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::LOG2_BW>>();
-
-constexpr auto sign_bw = ttnn::register_operation<
-    "ttnn::sign_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::SIGN_BW>>();
-
-constexpr auto exp2_bw = ttnn::register_operation<
-    "ttnn::exp2_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::EXP2_BW>>();
-
-constexpr auto expm1_bw = ttnn::register_operation<
-    "ttnn::expm1_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::EXPM1_BW>>();
-
-constexpr auto digamma_bw = ttnn::register_operation<
-    "ttnn::digamma_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::DIGAMMA_BW>>();
-
-constexpr auto erfinv_bw = ttnn::register_operation<
-    "ttnn::erfinv_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::ERFINV_BW>>();
-
-constexpr auto erf_bw = ttnn::register_operation<
-    "ttnn::erf_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::ERF_BW>>();
-
-constexpr auto deg2rad_bw = ttnn::register_operation<
-    "ttnn::deg2rad_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::DEG2RAD_BW>>();
-
-constexpr auto hardswish_bw = ttnn::register_operation<
-    "ttnn::hardswish_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::HARDSWISH_BW>>();
-
-constexpr auto tanhshrink_bw = ttnn::register_operation<
-    "ttnn::tanhshrink_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::TANHSHRINK_BW>>();
-
-constexpr auto atanh_bw = ttnn::register_operation<
-    "ttnn::atanh_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::ATANH_BW>>();
-
-constexpr auto asin_bw = ttnn::register_operation<
-    "ttnn::asin_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::ASIN_BW>>();
-
-constexpr auto asinh_bw = ttnn::register_operation<
-    "ttnn::asinh_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::ASINH_BW>>();
-
-constexpr auto sin_bw = ttnn::register_operation<
-    "ttnn::sin_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::SIN_BW>>();
-
-constexpr auto sinh_bw = ttnn::register_operation<
-    "ttnn::sinh_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::SINH_BW>>();
-
-constexpr auto log10_bw = ttnn::register_operation<
-    "ttnn::log10_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::LOG10_BW>>();
-
-constexpr auto log1p_bw = ttnn::register_operation<
-    "ttnn::log1p_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::LOG1P_BW>>();
-
-constexpr auto erfc_bw = ttnn::register_operation<
-    "ttnn::erfc_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::ERFC_BW>>();
 
 // Tensor + Float(Default)
 constexpr auto logiteps_bw = ttnn::register_operation<"ttnn::logiteps_bw", operations::unary_backward::ExecuteUnaryBackwardLogiteps>();
@@ -563,9 +449,11 @@ constexpr auto pow_bw = ttnn::register_operation<
 constexpr auto exp_bw = ttnn::register_operation<
     "ttnn::exp_bw",
     operations::unary_backward::ExecuteUnaryBackwardExp>();
+
 constexpr auto tanh_bw = ttnn::register_operation<
     "ttnn::tanh_bw",
     operations::unary_backward::ExecuteUnaryBackwardTanh>();
+
 constexpr auto sqrt_bw = ttnn::register_operation<
     "ttnn::sqrt_bw",
     operations::unary_backward::ExecuteUnaryBackwardSqrt>();
