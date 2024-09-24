@@ -64,6 +64,8 @@ on:
           - data_movement.slice.slice_pytorch2_tiled
           - data_movement.permute.permute_pytorch2_rm
           - data_movement.permute.permute_pytorch2_tiled
+          - eltwise.unary.sqrt.sqrt_interleaved
+          - eltwise.unary.square.square_interleaved
   schedule:
     - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 
