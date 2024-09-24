@@ -37,13 +37,28 @@ jobs:
     with:
       from-precompiled: true
     secrets: inherit
+  build-docker-image-2004:
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+    with:
+      os: ubuntu-20.04-amd64
+  build-docker-image-2204:
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+    with:
+      os: ubuntu-22.04-amd64
   build-artifact:
+    needs: build-docker-image-2004
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
+    with:
+      build-docker: false
   build-artifact-profiler:
+    needs: build-docker-image-2004
     uses: ./.github/workflows/build-artifact.yaml
     with:
       tracy: true
+      build-docker: false
     secrets: inherit
   # UMD Unit Tests
   umd-unit-tests:
@@ -149,6 +164,7 @@ jobs:
     uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
   build:
+    needs: [build-artifact, build-docker-image-2204]
     uses: ./.github/workflows/build.yaml
     secrets: inherit
   # We used to use this for post-commit, but we didn't have enough runners
