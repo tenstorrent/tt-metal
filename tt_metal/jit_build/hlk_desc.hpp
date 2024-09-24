@@ -34,6 +34,13 @@ class tt_hlk_desc
     DataFormat param_buf_dataformat_arr[8];
     DataFormat output_buf_dataformat_arr[8];
     DataFormat intermediate_buf_dataformat_arr[8];
+    uint32_t buf_num_faces_arr[32];
+    uint32_t buf_partial_face_arr[32];
+    uint32_t buf_face_r_dim_arr[32];
+    uint32_t buf_narrow_tile_arr[32];
+    uint32_t buf_tile_r_dim_arr[32];
+    uint32_t buf_tile_c_dim_arr[32];
+    uint32_t buf_tile_size_arr[32];
 
     tt_hlk_desc()
     {
@@ -50,6 +57,17 @@ class tt_hlk_desc
             output_buf_dataformat_arr[i] = DataFormat::Invalid;
             intermediate_buf_dataformat_arr[i] = DataFormat::Invalid;
         }
+
+        for (int i = 0; i < 32; ++i)
+        {
+            buf_num_faces_arr[i] = constants::TILE_HW / constants::FACE_HW;
+            buf_partial_face_arr[i] = 0;
+            buf_face_r_dim_arr[i] = constants::FACE_HEIGHT;
+            buf_narrow_tile_arr[i] = 0;
+            buf_tile_r_dim_arr[i] = constants::TILE_HEIGHT;
+            buf_tile_c_dim_arr[i] = constants::TILE_WIDTH;
+            buf_tile_size_arr[i] = constants::BFLOAT8_B_TILE_HW;
+        }
     }
 
     tt_hlk_desc(tt_hlk_desc &in)
@@ -60,6 +78,17 @@ class tt_hlk_desc
             param_buf_dataformat_arr[i] = in.param_buf_dataformat_arr[i] ;
             output_buf_dataformat_arr[i] = in.output_buf_dataformat_arr[i];
             intermediate_buf_dataformat_arr[i] = in.intermediate_buf_dataformat_arr[i];
+        }
+
+        for (int i = 0; i < 32; ++i)
+        {
+            buf_num_faces_arr[i] = in.buf_num_faces_arr[i];
+            buf_partial_face_arr[i] = in.buf_partial_face_arr[i];
+            buf_face_r_dim_arr[i] = in.buf_face_r_dim_arr[i];
+            buf_narrow_tile_arr[i] = in.buf_narrow_tile_arr[i];
+            buf_tile_r_dim_arr[i] = in.buf_tile_r_dim_arr[i];
+            buf_tile_c_dim_arr[i] = in.buf_tile_c_dim_arr[i];
+            buf_tile_size_arr[i] = in.buf_tile_size_arr[i];
         }
 
         math_fidelity = in.math_fidelity;
@@ -107,6 +136,76 @@ class tt_hlk_desc
     void set_intermediate_buf_dataformat(int buf_idx, DataFormat data_format)
     {
         intermediate_buf_dataformat_arr[buf_idx] = data_format;
+    }
+
+    uint32_t get_buf_num_faces(int buf_idx) const
+    {
+        return buf_num_faces_arr[buf_idx];
+    }
+
+    void set_buf_num_faces(int buf_idx, uint32_t num_faces)
+    {
+        buf_num_faces_arr[buf_idx] = num_faces;
+    }
+
+    uint32_t get_buf_partial_face(int buf_idx) const
+    {
+        return buf_partial_face_arr[buf_idx];
+    }
+
+    void set_buf_partial_face(int buf_idx, uint32_t partial_face)
+    {
+        buf_partial_face_arr[buf_idx] = partial_face;
+    }
+
+    uint32_t get_buf_face_r_dim(int buf_idx) const
+    {
+        return buf_face_r_dim_arr[buf_idx];
+    }
+
+    void set_buf_face_r_dim(int buf_idx, uint32_t face_r_dim)
+    {
+        buf_face_r_dim_arr[buf_idx] = face_r_dim;
+    }
+
+    uint32_t get_buf_narrow_tile(int buf_idx) const
+    {
+        return buf_narrow_tile_arr[buf_idx];
+    }
+
+    void set_buf_narrow_tile(int buf_idx, uint32_t narrow_tile)
+    {
+        buf_narrow_tile_arr[buf_idx] = narrow_tile;
+    }
+
+    uint32_t get_buf_tile_r_dim(int buf_idx) const
+    {
+        return buf_tile_r_dim_arr[buf_idx];
+    }
+
+    void set_buf_tile_r_dim(int buf_idx, uint32_t tile_r_dim)
+    {
+        buf_tile_r_dim_arr[buf_idx] = tile_r_dim;
+    }
+
+    uint32_t get_buf_tile_c_dim(int buf_idx) const
+    {
+        return buf_tile_c_dim_arr[buf_idx];
+    }
+
+    void set_buf_tile_c_dim(int buf_idx, uint32_t tile_c_dim)
+    {
+        buf_tile_c_dim_arr[buf_idx] = tile_c_dim;
+    }
+
+    uint32_t get_buf_tile_size(int buf_idx) const
+    {
+        return buf_tile_size_arr[buf_idx];
+    }
+
+    void set_buf_tile_size(int buf_idx, uint32_t tile_size)
+    {
+        buf_tile_size_arr[buf_idx] = tile_size;
     }
 
     void set_hlk_args(void* args, size_t size)
@@ -203,6 +302,11 @@ struct std::hash<tt::tt_hlk_desc>
         }
         tt::utils::hash_combine(hash_value, hash<MathFidelity>{}(obj.get_hlk_math_fidelity()));
         tt::utils::hash_combine(hash_value, hash<bool>{}(obj.get_hlk_math_approx_mode()));
+        for (int i = 0; i < 32; i++)
+        {
+            tt::utils::hash_combine(hash_value, hash<uint32_t>{}(obj.get_buf_tile_r_dim(i)));
+            tt::utils::hash_combine(hash_value, hash<uint32_t>{}(obj.get_buf_tile_c_dim(i)));
+        }
 
         // Get hash for hlk_args here
         void *hlk_args = obj.get_hlk_args();
@@ -216,7 +320,7 @@ struct std::hash<tt::tt_hlk_desc>
         }
         else
         {
-            TT_ASSERT("Mismatching values, either hlk_args == nullptr and hlk_args_size == 0 or hlk_args != nullptr and hlk_args_size > 0!");
+            TT_THROW("Mismatching values, either hlk_args == nullptr and hlk_args_size == 0 or hlk_args != nullptr and hlk_args_size > 0!");
         }
 
         return hash_value;

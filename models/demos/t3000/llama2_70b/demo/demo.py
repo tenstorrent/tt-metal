@@ -4,6 +4,7 @@
 
 from dataclasses import dataclass
 import os
+import gc
 import json
 import torch
 import torch.nn.functional as F
@@ -19,7 +20,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import load_llama_state_dict
 from models.demos.t3000.llama2_70b.reference.llama.llama.tokenizer3 import ChatFormat
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
-    check_device_mesh,
+    check_mesh_device,
     string_similarity_score,
 )
 
@@ -39,11 +40,12 @@ class ModelArgs:
 
 @dataclass
 class TTArgs:
-    device_mesh: object = None
+    mesh_device: object = None
     n_devices: int = 8
     emulated: bool = False
     cache_path: str = None
     decode_only: bool = False
+    trace_mode: bool = False
 
 
 @dataclass
@@ -105,7 +107,14 @@ def main(args):
     # Run decode
     with torch.no_grad():
         all_text = run_decode(
-            model_args, tt_args, data_args, model=model, tokenizer=tokenizer, prompt_tokens=tokenized, prompts=prompts
+            model_args,
+            tt_args,
+            data_args,
+            model=model,
+            tokenizer=tokenizer,
+            prompt_tokens=tokenized,
+            prompts=prompts,
+            trace_mode=tt_args.trace_mode,
         )
 
         if data_args.output_at_end:
@@ -135,7 +144,7 @@ def build_generator(model_args, tt_args):
     generator = Llama.build(
         ckpt_dir=model_args.ckpt_dir,
         tokenizer_path=model_args.tokenizer_path,
-        max_seq_len=model_args.max_seq_len,
+        max_seq_len=model_args.max_kv_context_len,
         max_batch_size=model_args.max_batch_size,
         skip_model_load=model_args.skip_model_load,
         n_layers=1 if model_args.implementation == "tt" else model_args.num_layers,
@@ -162,7 +171,11 @@ def get_sampling_func(top_k, top_p, temperature):
 
 def load_prompts_file(model_args, data_args, tokenizer):
     # Load prompts from json
-    prompts = json.load(open(data_args.prompts_file))
+    # If text file:
+    if data_args.prompts_file.endswith(".txt"):
+        prompts = [open(data_args.prompts_file).read()]
+    else:
+        prompts = json.load(open(data_args.prompts_file))
     # Encode the prompt
     if data_args.chat:
         formatter = ChatFormat(tokenizer)
@@ -212,6 +225,7 @@ def run_decode(
     prompts,
     return_logits=False,
     return_full_logits=False,
+    trace_mode=False,
 ):
     """
     return_logits: return the logits for the last token
@@ -244,10 +258,22 @@ def run_decode(
     latencies = []
     full_logits = []
 
+    # capture trace
+    if trace_mode:
+        logger.info("Capturing trace")
+        trace_id, tt_inp_emb, rot_mat, cache_idxs_tt, tt_logits = model.capture_trace(
+            tokens[:, prev_pos:min_prompt_len], prev_pos
+        )
+
     for cur_pos in range(min_prompt_len, total_len):
         start = time()
         input_tokens = tokens[:, prev_pos:cur_pos]
-        logits = model.forward(input_tokens, prev_pos)
+        if trace_mode and input_tokens.shape[1] == 1:
+            logits = model.decode_forward_trace(
+                input_tokens, prev_pos, trace_id, tt_inp_emb, rot_mat, cache_idxs_tt, tt_logits
+            )
+        else:
+            logits = model.forward(input_tokens, prev_pos)
 
         next_logits = logits[:, -1, :]  # batch, vocab of last token
         next_token = sampling_func(next_logits)
@@ -276,6 +302,11 @@ def run_decode(
     elif return_full_logits:
         full_logits = torch.cat(full_logits, dim=1)
         output = (output, full_logits)
+
+    # delete trace
+    if trace_mode:
+        model.delete_trace(trace_id)
+
     return output
 
 
@@ -350,9 +381,11 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
     (
         (True, "models/demos/t3000/llama2_70b/demo/data/multi_prompt_chat.json"),
         (False, "models/demos/t3000/llama2_70b/demo/data/multi_prompt.json"),
+        (False, "models/demos/t3000/llama2_70b/demo/data/a_tale_of_two_cities.txt"),
     ),
-    ids=("chat_completion", "text_completion"),
+    ids=("chat_completion", "text_completion", "tale_two_cities"),
 )
+@pytest.mark.parametrize("trace_mode", (True, False), ids=("trace_mode_on", "trace_mode_off"))
 @pytest.mark.parametrize("decode_only", (True, False), ids=("decode_only", "prefill_decode"))
 @pytest.mark.parametrize("num_layers", (1, 2, 10, 80), ids=("1L", "2L", "10L", "80L"))
 @pytest.mark.parametrize(
@@ -374,10 +407,11 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
 @pytest.mark.parametrize(
     "max_output_tokens, output_at_end, top_p, top_k, temperature",
     (
+        (119 * 1024, True, 1, 1, 1.0),
         (128, True, 1, 1, 1.0),
         (128, True, 0.9, 10, 1.0),
     ),
-    ids=("greedy", "sampling"),
+    ids=("128k_greedy", "greedy", "sampling"),
 )
 @pytest.mark.parametrize(
     "ground_truth",
@@ -386,12 +420,10 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
 )
 @pytest.mark.parametrize(
     "max_batch_size, max_context_len",
-    (
-        (32, 2048),
-        (16, 8192),
-    ),
-    ids=("short_context", "long_context"),
+    ((32, 2048), (16, 8192), (1, 128 * 1024)),
+    ids=("short_context", "long_context", "128k_context"),
 )
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 14227456}], indirect=True)
 def test_LlamaModel_demo(
     # model args
     implementation,
@@ -406,9 +438,10 @@ def test_LlamaModel_demo(
     temperature,
     chat,
     # TT args
-    t3k_device_mesh,
+    t3k_mesh_device,
     n_devices,
     decode_only,
+    trace_mode,
     llama_version,
     ground_truth,
     max_batch_size,
@@ -422,10 +455,10 @@ def test_LlamaModel_demo(
         llama_version=llama_version,
     )
 
-    check_device_mesh(t3k_device_mesh, model_config)
+    check_mesh_device(t3k_mesh_device, model_config)
 
-    for i in t3k_device_mesh.get_device_ids():
-        device = t3k_device_mesh.get_device(i)
+    for i in t3k_mesh_device.get_device_ids():
+        device = t3k_mesh_device.get_device(i)
         device.enable_async(True)
 
     args = construct_arg(
@@ -444,10 +477,11 @@ def test_LlamaModel_demo(
         top_k=top_k,
         temperature=temperature,
         chat=chat,
-        device_mesh=t3k_device_mesh,
+        mesh_device=t3k_mesh_device,
         n_devices=n_devices,
         cache_path=cache_path,
         decode_only=decode_only,
+        trace_mode=trace_mode,
         ground_truth=ground_truth,
     )
     main(args)

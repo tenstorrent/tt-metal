@@ -15,7 +15,6 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 
-using namespace tt::constants;
 
 namespace ttnn::operations::experimental::auto_format{
 
@@ -42,6 +41,7 @@ Tensor AutoFormat::move_tensor_to_mem_config(const Tensor& input, const MemoryCo
 // Used in backward_ops.cpp
 // See: Remove auto format within permute_op.cpp #9404
 Tensor AutoFormat::move_tensor_to_device_and_pad(const Tensor& input, Device *device, Layout target_layout, std::optional<MemoryConfig> target_mem_config){
+    using namespace tt::constants;
     const auto intended_shape = input.get_shape();
     const auto device_shape = input.get_legacy_shape();
     const auto new_intended_shape = std::array<std::uint32_t, 4>{intended_shape[0], intended_shape[1], intended_shape[-2], intended_shape[-1]};
@@ -51,14 +51,14 @@ Tensor AutoFormat::move_tensor_to_device_and_pad(const Tensor& input, Device *de
         (device_shape[-2] % TILE_HEIGHT != 0 ? (device_shape[-2] / TILE_HEIGHT + 1) * TILE_HEIGHT : device_shape[-2]),
         (device_shape[-1] % TILE_WIDTH != 0 ? (device_shape[-1] / TILE_WIDTH + 1) * TILE_WIDTH : device_shape[-1])
         };
-    const auto new_shape = tt::tt_metal::Shape(new_intended_shape, new_device_shape);
+    const auto new_shape = tt::tt_metal::LegacyShape(new_intended_shape, new_device_shape);
     return AutoFormat::format_input_tensor(input, device, new_shape, 0.0, target_layout, target_mem_config);
 }
 
 Tensor AutoFormat::format_input_tensor(
     const Tensor& input,
     Device* device,
-    const tt::tt_metal::Shape& padded_shape,
+    const tt::tt_metal::LegacyShape& padded_shape,
     float pad_value,
     Layout target_layout,
     std::optional<MemoryConfig> target_mem_config) {
@@ -122,7 +122,7 @@ Tensor AutoFormat::format_input_tensor(
 
 Tensor AutoFormat::format_output_tensor(
     const Tensor& output,
-    const tt::tt_metal::Shape& shape,
+    const tt::tt_metal::LegacyShape& shape,
     Device* device,
     Layout target_layout,
     std::optional<MemoryConfig> target_mem_config) {
@@ -158,11 +158,16 @@ Tensor AutoFormat::format_output_tensor(
             // Output can be unpadded and layout supports the shape
             if ((formatted_output.get_layout() == Layout::TILE && AutoFormat::legal_tile_shape(shape)) ||
                 (formatted_output.get_layout() == Layout::ROW_MAJOR && AutoFormat::legal_rm_shape(shape))) {
+                auto begins = std::vector<uint32_t>({0, 0, 0, 0});
+                auto ends = std::vector<uint32_t>({shape[0], shape[1], shape[2], shape[3]});
+                auto step = std::vector<uint32_t>({1, 1, 1, 1});
+
                 formatted_output = ttnn::slice(
-                    0,
+                    DefaultQueueId,
                     formatted_output,
-                    std::vector<uint32_t>({0, 0, 0, 0}),
-                    std::vector<uint32_t>({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),
+                    begins,
+                    ends,
+                    step,
                     mem_config);
                 return formatted_output;
                 // Output is tile but shape cannot be tile. We leave in RM
@@ -184,11 +189,15 @@ Tensor AutoFormat::format_output_tensor(
             } else if (
                 formatted_output.get_layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE &&
                 AutoFormat::legal_tile_shape(shape)) {
+                auto begins = std::vector<uint32_t>({0, 0, 0, 0});
+                auto ends = std::vector<uint32_t>({shape[0], shape[1], shape[2], shape[3]});
+                auto step = std::vector<uint32_t>({1, 1, 1, 1});
                 formatted_output = ttnn::slice(
-                    0,
+                    DefaultQueueId,
                     formatted_output,
-                    std::vector<uint32_t>({0, 0, 0, 0}),
-                    std::vector<uint32_t>({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),
+                    begins,
+                    ends,
+                    step,
                     mem_config);
                 formatted_output = ttnn::tilize(formatted_output, mem_config);
                 return formatted_output;
@@ -205,8 +214,11 @@ Tensor AutoFormat::format_output_tensor(
             formatted_output = formatted_output.to(Layout::ROW_MAJOR);
             convert_layout = formatted_output.get_layout() != target_layout;
         }
+        auto begins = std::vector<uint32_t>({0, 0, 0, 0});
+        auto ends = std::vector<uint32_t>({shape[0], shape[1], shape[2], shape[3]});
+        auto step = std::vector<uint32_t>({1, 1, 1, 1});
         formatted_output =
-            ttnn::slice(formatted_output, tt::tt_metal::Array4D({0, 0, 0, 0}), tt::tt_metal::Array4D({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}));
+            ttnn::slice(formatted_output, begins, ends, step, std::nullopt);
     }
 
     if (convert_layout) {

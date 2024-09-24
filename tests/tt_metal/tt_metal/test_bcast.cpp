@@ -26,7 +26,7 @@ using std::vector;
 
 namespace {
 const char* get_reader_name(bool multibank, BcastDim::Enum bcast_dim) {
-    TT_FATAL(multibank && "Only multibank is supported correctly.");
+    TT_FATAL(multibank && "Only multibank is supported correctly.", "Error");
     if (bcast_dim == BcastDim::H) {
         return multibank ?
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bcast_h_8bank.cpp" :
@@ -40,7 +40,7 @@ const char* get_reader_name(bool multibank, BcastDim::Enum bcast_dim) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bcast_hw_8bank.cpp" :
             "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp";
     }
-    TT_FATAL(false && "Unexpected bcast_dim!");
+    TT_THROW("Unexpected bcast_dim!");
     return "";
 }
 
@@ -49,7 +49,7 @@ const char* get_compute_name(BcastDim::Enum bcast_dim) {
         case BcastDim::H:  return "tests/tt_metal/tt_metal/test_kernels/compute/bcast_h.cpp";
         case BcastDim::W:  return "tests/tt_metal/tt_metal/test_kernels/compute/bcast_w.cpp";
         case BcastDim::HW: return "tests/tt_metal/tt_metal/test_kernels/compute/bcast_hw.cpp";
-        default:           TT_FATAL(false && "Unexpected bcast_dim!");
+        default:           TT_THROW("Unexpected bcast_dim!");
     }
     return "";
 }
@@ -101,8 +101,8 @@ int main(int argc, char **argv) {
         vector<uint32_t> shape = {2, 4, 2*TILE_HEIGHT, 3*TILE_WIDTH};
         uint32_t W = shape[3], H = shape[2], NC = shape[1]*shape[0], N = shape[0], C = shape[1];
         uint32_t HW = H*W;
-        TT_FATAL(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
-        TT_FATAL(H > 0 && W > 0 && NC > 0);
+        TT_FATAL(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0, "Error");
+        TT_FATAL(H > 0 && W > 0 && NC > 0, "Error");
         uint32_t Wt = W/TILE_WIDTH;
         uint32_t Ht = H/TILE_HEIGHT;
         uint32_t num_tensor_tiles = NC*H*W / (32*32);
@@ -163,8 +163,8 @@ int main(int argc, char **argv) {
                 ref_bcast_values[j] = bfloat16(bcast_1value+(j%7)).to_uint16();
             // convert the reference broadcast tensor to tiled format
             tiled_bcast_values = convert_layout<uint16_t>(
-                ref_bcast_values, ref_bcast_shape, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES);
-            TT_FATAL(tiled_bcast_values[0] == bcast_1value16);
+                ref_bcast_values, ref_bcast_shape, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED_NFACES);
+            TT_FATAL(tiled_bcast_values[0] == bcast_1value16, "Error");
             // restore ref values and shape to 1
             ref_bcast_shape[3] = 1;
             ref_bcast_shape[4] = 1;
@@ -173,7 +173,7 @@ int main(int argc, char **argv) {
             // At least that's the behavior i've seen from a single tile bcast-H
             // So this is why here we create a W-sized vector
             // Same for the if branch for BCAST_W below
-            TT_FATAL(W%32 == 0);
+            TT_FATAL(W%32 == 0, "Error");
             // pad values and shape with extra 32 values because the reader kernel expects it
             // generate broadcast values along the W axis with one extra tile (needed by the kernel I believe)
             // TODO(AP): need to figure out why the extra tile in broadcast inputs is expected by the kernel
@@ -183,7 +183,7 @@ int main(int argc, char **argv) {
                 // add something not too large but different between tiles
                 ref_bcast_values[j] = bfloat16(bcast_1value+(j%7)).to_uint16();
             tiled_bcast_values = convert_layout<uint16_t>(
-                ref_bcast_values, ref_bcast_shape, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES);
+                ref_bcast_values, ref_bcast_shape, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED_NFACES);
             num_bcast_tiles = NC*Wt;
             // restore values and shape to W
         } else if (bcast_dim == BcastDim::W) {
@@ -194,7 +194,7 @@ int main(int argc, char **argv) {
                 // add something not too large but different between tiles
                 ref_bcast_values[j] = bfloat16(bcast_1value+(j%7)).to_uint16();
             tiled_bcast_values = convert_layout<uint16_t>(
-                ref_bcast_values, ref_bcast_shape, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES);
+                ref_bcast_values, ref_bcast_shape, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED_NFACES);
             num_bcast_tiles = NC*Ht;
         }
 
@@ -292,7 +292,7 @@ int main(int argc, char **argv) {
 
         tt_metal::detail::LaunchProgram(device, program);
 
-        // The kernel will view the input as TILED32_4FACES
+        // The kernel will view the input as TILED_NFACES
         vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
 
@@ -313,7 +313,7 @@ int main(int argc, char **argv) {
         // recover a linear view of input vector for consumption by gold_ function
         auto u16_src0_vec = u16_from_u32_vector(src0_vec);
         vector<uint16_t> src_linear = convert_layout<uint16_t>(
-            u16_src0_vec, shape, TensorLayout::TILED32_4FACES, TensorLayout::LIN_ROW_MAJOR);
+            u16_src0_vec, shape, TensorLayout::TILED_NFACES, TensorLayout::LIN_ROW_MAJOR);
         vector<uint16_t> gold_added = gold_bcast_op(
             src_linear, shape, ref_bcast_values, bcast_dim, bcast_op); // result is uint16_t untilized
 
@@ -321,13 +321,13 @@ int main(int argc, char **argv) {
         vector<uint32_t> shapeR{shape[0], shape[1], shape[2], shape[3]};
         auto gold_4f_u32 = u32_from_u16_vector(
             convert_layout<uint16_t>(
-                gold_added, shapeR, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES));
+                gold_added, shapeR, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED_NFACES));
 
         pass &= packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);
         if (!pass)
             log_error(LogTest, "Failure position={}", argfail);
 
-        pass &= tt_metal::CloseDevice(device);;
+        pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;
@@ -346,7 +346,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

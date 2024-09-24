@@ -16,15 +16,15 @@
 
 using namespace tt::constants;
 
-namespace tt {
-namespace tt_metal {
+namespace ttnn::operations::upsample {
+using namespace tt;
 
-operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor& output, uint32_t scale_factor_h, uint32_t scale_factor_w) {
+operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor& output, const uint32_t scale_factor_h, const uint32_t scale_factor_w) {
     Program program = CreateProgram();
     Device *device = input.device();
 
-    DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
-    DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
     // NOTE: input is assumed to have channels last format: {N, H, W, C}, {N, 1, H * W, C}, {1, 1, N * H * W, C}
     // NOTE: Bfp8_b/TILE is not yet supported
@@ -60,7 +60,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
         input_stick_nbytes = input_stick_nbytes / ncores_x;
         output_stick_nbytes = output_stick_nbytes / ncores_x;
     } else {
-        TT_FATAL(false, "Unsupported sharding layout");
+        TT_THROW("Unsupported sharding layout");
     }
 
     uint32_t input_nsticks_per_core = div_up(input_nsticks, ncores_nhw);
@@ -69,7 +69,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     // TODO: Support non-multiple case
     TT_FATAL(in_nsticks_per_core == input_nsticks_per_core, "Input sticks per shard {} should be same as input sticks per core {}", in_nsticks_per_core, input_nsticks_per_core);
     TT_FATAL(out_nsticks_per_core == output_nsticks_per_core, "Output sticks per shard {} should be same as output sticks per core {}", out_nsticks_per_core, output_nsticks_per_core);
-    TT_FATAL(input_nsticks_per_core % in_w == 0);
+    TT_FATAL(input_nsticks_per_core % in_w == 0, "Error");
 
     // CBs
 
@@ -159,7 +159,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
             start_input_stick_id += input_nsticks_per_core;
         }
     } else {
-        TT_FATAL(false, "Unsupported memory layout");
+        TT_THROW("Unsupported memory layout");
     }
 
     auto override_runtime_args_callback = [writer_kernel, cb_src0, out_cb](
@@ -180,5 +180,4 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace ttnn::operations::upsample

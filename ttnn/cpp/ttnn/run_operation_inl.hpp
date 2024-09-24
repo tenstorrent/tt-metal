@@ -61,7 +61,7 @@ auto& get_workers(auto& output_tensors) {
             return output_tensor->workers;
         }
     }
-    TT_FATAL(false, "Workers not found in output tensors.");
+    TT_THROW("Workers not found in output tensors.");
 }
 
 
@@ -232,6 +232,7 @@ void launch_op(
                             output_tensor->tensor_attributes->shape = local_tensor->tensor_attributes->shape;
                             output_tensor->tensor_attributes->dtype = local_tensor->tensor_attributes->dtype;
                             output_tensor->tensor_attributes->layout = local_tensor->tensor_attributes->layout;
+                            output_tensor->tensor_attributes->tile = local_tensor->tensor_attributes->tile;
                             output_tensor->tensor_attributes->metadata_populated = true;
                         }
                     }

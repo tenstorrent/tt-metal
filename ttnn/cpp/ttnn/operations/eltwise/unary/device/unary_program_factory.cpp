@@ -6,7 +6,7 @@
 
 #include "unary_program_factory.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -42,7 +42,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -85,6 +85,11 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
         1                            // per_core_block_size
     };
 
+    vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (args.preserve_fp32_precision) {
+        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    }
+
     bool math_approx_mode = std::all_of(
         args.op_chain.begin(), args.op_chain.end(), [](const auto &u) { return utils::get_op_approx_mode(u.op_type); });
     std::map<string, string> unary_defines = utils::get_block_defines(args.op_chain);
@@ -95,7 +100,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
-            .preserve_fp32_precision = args.preserve_fp32_precision,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args_group_1,
             .defines = unary_defines});
@@ -113,7 +118,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
                 .fp32_dest_acc_en = args.fp32_dest_acc_en,
-                .preserve_fp32_precision = args.preserve_fp32_precision,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .math_approx_mode = math_approx_mode,
                 .compile_args = compute_kernel_args_group_2,
                 .defines = unary_defines});

@@ -9,7 +9,7 @@
 #include "tt_metal/host_api.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 namespace tt {
 using namespace constants;
 namespace operations {
@@ -18,7 +18,7 @@ namespace primary {
 
 namespace {
 
-void get_tensor_dim(std::vector<uint32_t> &dim, const Shape &shape) {
+void get_tensor_dim(std::vector<uint32_t> &dim, const tt::tt_metal::LegacyShape &shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -37,7 +37,7 @@ void get_tensor_dim(std::vector<uint32_t> &dim, const Shape &shape) {
     }
 }
 
-Shape get_output_grad_shape(
+tt::tt_metal::LegacyShape get_output_grad_shape(
     const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keep_batch_dim) {
     if (keep_batch_dim) {
         return output_grad.get_legacy_shape();
@@ -57,7 +57,7 @@ Shape get_output_grad_shape(
         }
     }
 
-    return Shape(shape, padding);
+    return tt::tt_metal::LegacyShape(shape, padding);
 }
 }  // namespace
 

@@ -8,7 +8,6 @@
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api/tile_move_copy.h"
-
 namespace NAMESPACE {
 void MAIN {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
@@ -26,7 +25,11 @@ void MAIN {
     binary_op_init_common(cb_inp0, cb_inp1, cb_out0);
 
 #if not defined ELTWISE_DEST_REUSE_TYPE
+#ifdef FULL_INIT
+    binary_op_specific_init<true, ELTWISE_OP_TYPE>();
+#else
     binary_op_specific_init<false, ELTWISE_OP_TYPE>();
+#endif
 #endif
 
 #ifdef PACK_RELU
@@ -51,7 +54,12 @@ void MAIN {
 #endif
 
 #ifdef DST_ACCUM_MODE
-        ELTWISE_OP_INIT(cb_inp0, cb_inp1, true);
+// The following define is needed if mul_tiles/_init is used
+#ifdef MUL_TILES_WITH_DST_ACCUM
+    ELTWISE_OP_INIT(cb_inp0, cb_inp1);
+#else
+    ELTWISE_OP_INIT(cb_inp0, cb_inp1, true);
+#endif
 #endif
 
 #ifdef ELTWISE_DEST_REUSE_TYPE

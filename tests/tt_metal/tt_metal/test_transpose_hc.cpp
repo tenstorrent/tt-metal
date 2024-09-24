@@ -184,12 +184,12 @@ int main(int argc, char **argv) {
         };
 
         // recover a linear view of input vector for consumption by gold_ function
-        vector<uint16_t> src_linear = convert_layout<uint16_t>(src_4f_16, shape, TensorLayout::TILED32_4FACES, TensorLayout::LIN_ROW_MAJOR);
+        vector<uint16_t> src_linear = convert_layout<uint16_t>(src_4f_16, shape, TensorLayout::TILED_NFACES, TensorLayout::LIN_ROW_MAJOR);
         vector<uint16_t> gold_reduced = gold_transpose_hc(src_linear, shape); // result is uint16_t untilized
 
         // Tilize from row major and convert to pairs (uint32_t)
         vector<uint32_t> shapeR{shape[0], shape[2], shape[1], shape[3]};
-        auto gold_16_4f = convert_layout<uint16_t>(gold_reduced, shapeR, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES);
+        auto gold_16_4f = convert_layout<uint16_t>(gold_reduced, shapeR, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED_NFACES);
         auto gold_4f_u32 = u32_from_u16_vector(gold_16_4f);
         auto u16_result = u16_from_u32_vector(result_vec);
 
@@ -197,7 +197,7 @@ int main(int argc, char **argv) {
         if (!pass)
             log_error(LogTest, "Failure position={}", argfail);
 
-        pass &= tt_metal::CloseDevice(device);;
+        pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;
@@ -213,7 +213,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

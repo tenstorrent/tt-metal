@@ -11,7 +11,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
-from models.utility_functions import is_wormhole_b0, skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_wormhole_b0, is_blackhole, skip_for_blackhole
 from loguru import logger
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 
@@ -180,6 +180,7 @@ def test_sharded_rm(
     assert passing
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("H, num_cores", [[100352, 98], [25088, 98]])
 @pytest.mark.parametrize("in_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
@@ -255,6 +256,7 @@ def test_sharded_untilize(H, num_cores, in_sharded, out_sharded, dtype, device, 
     assert passing
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("H, num_cores", [[25088, 98]])
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_sharded_tilize(H, num_cores, output_dtype, device, function_level_defaults):
@@ -319,7 +321,28 @@ def test_sharded_tilize(H, num_cores, output_dtype, device, function_level_defau
     assert passing
 
 
-@skip_for_wormhole_b0("WH ND hang, see issue #4392")
+@pytest.mark.parametrize("H", [400, 416])
+def test_to_layout_height_sharded(device, H):
+    torch_input = torch.randn((1, 1, H, 256), dtype=torch.bfloat16)
+
+    sharded_memory_config = ttnn.create_sharded_memory_config(
+        [32, 256],
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (7, 0)), ttnn.CoreRange((0, 1), (4, 1))}),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, memory_config=sharded_memory_config)
+
+    # Height 400 will trigger code path with padding ttnn::tilize_with_val_padding
+    # while 416 will codepath w/o padding ttnn::tilize
+    ttnn_input = ttnn.to_layout(ttnn_input, layout=ttnn.TILE_LAYOUT)
+
+    to_torch = ttnn.to_torch(ttnn_input)[:, :, :H, :]
+    passing, _ = comp_equal(torch_input, to_torch)
+    assert passing
+
+
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="WH ND hang, see issue #4392")
 @pytest.mark.parametrize("M", [127 * 32])
 @pytest.mark.parametrize("K", [1 * 32])
 @pytest.mark.parametrize("N", [1 * 32])
@@ -387,7 +410,7 @@ def test_height_sharded_matmul_1d_padding(device, M, K, N, num_cores):
     assert passing
 
 
-@skip_for_wormhole_b0("WH ND hang, see issue #4392")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="WH ND hang, see issue #4392")
 @pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize("M, num_cores", [[25088, 98], [50176, 98]])
@@ -1045,6 +1068,7 @@ def test_sharded_program_cache(device, use_program_cache, function_level_default
     assert eq
 
 
+@skip_for_blackhole("Hanging on BH, see #12349")
 @pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize("M", [1600])
@@ -1314,6 +1338,7 @@ def test_sharded_matmul_2d_transposed(
     assert passing
 
 
+@skip_for_blackhole("Hanging on BH, see #12349")
 def test_resharded_binary_to_matmul(device, function_level_defaults):
     grid_size_binary = device.compute_with_storage_grid_size()
     num_cores_binary = 98
@@ -1630,7 +1655,7 @@ def test_block_sharded_untilize_with_unpadding(in_sharded, out_sharded, dtype, d
 
     yt = ttnn.untilize_with_unpadding(
         xt,
-        output_tensor_end=ttnn.experimental.tensor.Shape([0, 0, 391, 511]),
+        output_tensor_end=ttnn.Shape([0, 0, 391, 511]),
         memory_config=out_mem_config,
     )
 
@@ -1718,7 +1743,7 @@ def test_width_sharded_untilize_with_unpadding(
 
     yt = ttnn.untilize_with_unpadding(
         xt,
-        output_tensor_end=ttnn.experimental.tensor.Shape([N - 1, C - 1, output_H - 1, W - 1]),
+        output_tensor_end=ttnn.Shape([N - 1, C - 1, output_H - 1, W - 1]),
         memory_config=out_mem_config,
     )
 
@@ -1740,6 +1765,7 @@ def test_width_sharded_untilize_with_unpadding(
     assert passing
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("input_shape", [[8, 1, 49, 2048], [1, 1, 8, 2048], [16, 1, 49, 2048], [1, 1, 16, 2048]])
 @pytest.mark.parametrize("sharding_config", [(True, True), (False, False)], ids=["both_sharded", "both_interleaved"])
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -1785,7 +1811,7 @@ def test_sharded_tilize_with_val_padding(input_shape, sharding_config, output_dt
 
     yt = ttnn.tilize_with_val_padding(
         xt,
-        ttnn.experimental.tensor.Shape([N, C, roundup32(H), W]),
+        ttnn.Shape([N, C, roundup32(H), W]),
         1.0,
         memory_config=out_mem_config,
         dtype=output_dtype,
@@ -1811,6 +1837,7 @@ def test_sharded_tilize_with_val_padding(input_shape, sharding_config, output_dt
     assert passing
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("N", [8, 16])
 @pytest.mark.parametrize("in_sharded", [True], ids=["in0_sharded"])
 @pytest.mark.parametrize("out_sharded", [True], ids=["out_sharded"])
@@ -1969,6 +1996,7 @@ def test_sharded_matmul_1d_in0(
 
 
 # Have at least one example of 1d matmul with in1 mcasted that runs on WH
+@skip_for_blackhole("Hangs on BH, see #12349")
 def test_sharded_matmul_1d_in1_wormhole(device, function_level_defaults):
     M = 4096
     K = 64

@@ -9,6 +9,8 @@
 
 #include "jit_build/settings.hpp"
 
+#include "fmt/ranges.h"
+
 #include <unordered_set>
 #include <mutex>
 #include "dev_msgs.h"
@@ -18,15 +20,9 @@ namespace tt {
 // llrt = lower-level runtime
 namespace llrt {
 
-namespace fs = std::filesystem;
-
-using std::endl;
-using std::move;
-using std::string;
-using std::to_string;
+using std::uint16_t;
 using std::uint32_t;
-using std::unordered_map;
-using std::vector;
+using std::uint64_t;
 
 struct HexNameToMemVectorCache {
     using lock = std::unique_lock<std::mutex>;
@@ -49,17 +45,15 @@ struct HexNameToMemVectorCache {
         cache_[path] = mem;
     }
 
-    unordered_map<string, ll_api::memory> cache_;
+    std::unordered_map<std::string, ll_api::memory> cache_;
     std::mutex mutex_;
 };
 
-ll_api::memory get_risc_binary(string path) {
+ll_api::memory get_risc_binary(std::string path) {
 
     if (HexNameToMemVectorCache::inst().exists(path)) {
         return HexNameToMemVectorCache::inst().get(path);
     }
-
-    fs::path bin_file(path);
 
     std::ifstream hex_istream(path);
     ll_api::memory mem(hex_istream);
@@ -105,7 +99,7 @@ uint16_t get_binary_code_size16(const ll_api::memory& mem, int riscv_id) {
             range_min = MEM_IERISC_FIRMWARE_BASE;
             range_max = MEM_IERISC_FIRMWARE_BASE + MEM_IERISC_FIRMWARE_SIZE;
             break;
-        default: TT_ASSERT("Bad riscv_id: {}", riscv_id);
+        default: TT_THROW("Bad riscv_id: {}", riscv_id);
     }
 
     uint64_t min = std::numeric_limits<decltype(min)>::max();
@@ -137,8 +131,8 @@ void write_hex_vec_to_core(chip_id_t chip, const CoreCoord &core, const std::vec
     tt::Cluster::instance().write_core(hex_vec.data(), hex_vec.size() * sizeof(uint32_t), tt_cxy_pair(chip, core), addr, small_access);
 }
 
-std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t sz_bytes) {
-    vector<std::uint32_t> read_hex_vec;
+std::vector<uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t sz_bytes) {
+    std::vector<uint32_t> read_hex_vec;
     tt::Cluster::instance().read_core(read_hex_vec, sz_bytes, tt_cxy_pair(chip, core), addr);
     return read_hex_vec;
 }
@@ -294,7 +288,9 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
                 run,
                 run_state,
                 RUN_MSG_DONE);
-            TT_FATAL(run_mailbox_read_val[0] == run_state || run_mailbox_read_val[0] == RUN_MSG_DONE);
+            TT_FATAL(
+                run_mailbox_read_val[0] == run_state || run_mailbox_read_val[0] == RUN_MSG_DONE,
+                "Read unexpected run_mailbox value");
         }
 
         return run == RUN_MSG_DONE;
@@ -324,11 +320,7 @@ void wait_until_cores_done(
 
         // Print not-done cores
         if (loop_count % 1000 == 0) {
-            string not_done_cores_str = "Not done phys cores: ";
-            for (const auto &core : not_done_phys_cores) {
-                not_done_cores_str += (core.str() + " ");
-            }
-            log_debug(tt::LogMetal, not_done_cores_str.c_str());
+            log_debug(tt::LogMetal, "Not done phys cores: {}", fmt::join(not_done_phys_cores, " "));
         }
 
         for (auto it = not_done_phys_cores.begin(); it != not_done_phys_cores.end(); ) {

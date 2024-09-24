@@ -10,7 +10,6 @@ from models.utility_functions import is_grayskull
 import torch
 import ttnn
 
-
 """
 Falcon-7B shapes + functionality
 """
@@ -313,9 +312,7 @@ def run_sharded_nlp_create_qkv_heads_test(
     torch.manual_seed(1234)
     compute_grid_size = device.compute_with_storage_grid_size()
     num_cores = num_kv_heads
-    shard_grid = ttnn.CoreRangeSet(
-        ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
-    )
+    shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
     q_shape = [seq_len, 1, batch, num_cores, num_q_heads // num_cores * head_dim]
     kv_shape = [seq_len, 1, batch, num_cores, num_kv_heads // num_cores * head_dim]
     Q = torch.randn(q_shape)

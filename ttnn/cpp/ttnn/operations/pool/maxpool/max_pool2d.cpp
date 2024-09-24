@@ -13,15 +13,16 @@ namespace ttnn {
 namespace operations::pool {
 
 template<typename T>
-Tensor MaxPoolNewOp::invoke(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, T* device) {
+Tensor MaxPool2DOp::invoke(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, T* device) {
 
-    sliding_window::SlidingWindowConfig sliding_window_config = sliding_window::SlidingWindowConfig(
-                                                                    batch_size,
-                                                                    input_h, input_w,
-                                                                    kernel_size.at(0), kernel_size.at(1),
-                                                                    stride.at(0), stride.at(1),
-                                                                    padding.at(0), padding.at(1),
-                                                                    dilation.at(0), dilation.at(1));
+    sliding_window::SlidingWindowConfig sliding_window_config{
+            .batch_size = batch_size,
+            .input_hw = {input_h, input_w},
+            .window_hw = {kernel_size.at(0), kernel_size.at(1)},
+            .stride_hw = {stride.at(0), stride.at(1)},
+            .pad_hw = {padding.at(0), padding.at(1)},
+            .dilation_hw = {dilation.at(0), dilation.at(1)}
+    };
     auto output_shape = sliding_window_config.get_output_shape();
     auto input_tensor_sharded = input_tensor;
 
@@ -70,21 +71,18 @@ Tensor MaxPoolNewOp::invoke(uint8_t queue_id, const Tensor& input_tensor, uint32
     log_debug(tt::LogOp, "output_nhw: {}, output_nhw_padded: {}, output_shard_height_padded: {}, output_shard_width_padded: {}", output_nhw, output_nhw_padded, output_shard_height_padded, output_shard_width_padded);
     memory_config.shard_spec = ShardSpec{shard_spec.grid, {output_shard_height_padded, output_shard_width_padded}, ShardOrientation::ROW_MAJOR, false};
 
-    sliding_window_config = sliding_window::SlidingWindowConfig(
-                                            batch_size,
-                                            input_h,
-                                            input_w,
-                                            kernel_size.at(0),
-                                            kernel_size.at(1),
-                                            stride.at(0),
-                                            stride.at(1),
-                                            padding.at(0),
-                                            padding.at(1),
-                                            dilation.at(0),
-                                            dilation.at(1),
-                                            num_cores_nhw,
-                                            parallel_config.grid,
-                                            false);
+    sliding_window_config = sliding_window::SlidingWindowConfig{
+            .batch_size = batch_size,
+            .input_hw = {input_h, input_w},
+            .window_hw = {kernel_size.at(0), kernel_size.at(1)},
+            .stride_hw = {stride.at(0), stride.at(1)},
+            .pad_hw = {padding.at(0), padding.at(1)},
+            .dilation_hw = {dilation.at(0), dilation.at(1)},
+            .num_cores_nhw = num_cores_nhw,
+            .core_range_set = parallel_config.grid,
+            .snap_to_tile = false
+    };
+
     // call the halo uop
     uint32_t neg_inf_pad_val = 0xf7ff;
     auto haloed_tensor = ttnn::halo(
@@ -98,7 +96,7 @@ Tensor MaxPoolNewOp::invoke(uint8_t queue_id, const Tensor& input_tensor, uint32
         input_tensor_sharded.memory_config(),
         is_out_tiled);
 
-    return ttnn::prim::max_pool_new(
+    return ttnn::prim::max_pool2d(
         queue_id,
         haloed_tensor,
         sliding_window_config,
@@ -107,8 +105,8 @@ Tensor MaxPoolNewOp::invoke(uint8_t queue_id, const Tensor& input_tensor, uint32
 }
 
 // device template specializations
-template Tensor MaxPoolNewOp::invoke<Device>(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, Device* device);
-template Tensor MaxPoolNewOp::invoke<DeviceMesh>(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, DeviceMesh* device);
+template Tensor MaxPool2DOp::invoke<Device>(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, Device* device);
+template Tensor MaxPool2DOp::invoke<MeshDevice>(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, MeshDevice* device);
 
 }  // namespace operations::pool
 }  // namespace ttnn

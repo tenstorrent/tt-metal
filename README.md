@@ -6,7 +6,7 @@
 
 </h1>
 
-<img src="./docs/source/common/_static/tt_nn_w_logo.png" alt="ttnn logo" height="150"/>
+<img src="./docs/source/common/_static/tt_nn_w_logo.png" alt="ttnn logo" height="180"/>
 
 **TT-NN** is a Python & C++ Neural Network OP library.
 
@@ -20,99 +20,58 @@
 
 ---
 
-## Grayskull (GS) Models
+## LLMs
+| Model                                                                | Batch | Hardware                                                 | ttft (s)   | t/s/u | Target t/s/u | Release                                                                   |
+|----------------------------------------------------------------------|-------|----------------------------------------------------------|------------|-------|--------------|---------------------------------------------------------------------------|
+| [Falcon7B-decode](./models/demos/ttnn_falcon7b)                      | 32    | [e150](https://tenstorrent.com/hardware/grayskull)       |            | 4.2   | 4.4          |                                                                           |
+| [Falcon7B](./models/demos/wormhole/falcon7b)                         | 32    | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.07       | 16.7  | 26           | [v0.52.0-rc2](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc2)   |
+| [Mistral-7B](./models/demos/wormhole/mistral7b)                      | 32    | [n150](https://tenstorrent.com/hardware/wormhole)        |            | 9.9   | 25           | [v0.51.0-rc28](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc28) |
+| [Mamba-2.8B](./models/demos/wormhole/mamba)                          | 32    | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.04       | 12.3  | 41           | [v0.51.0-rc26](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc26) |
+| [LLaMA-3.1-8B](./models/demos/wormhole/llama31_8b)                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        |            | 8.3   | 23           | [v0.51.0-rc28](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc28) |
+| [Falcon7B (data parallel)](./models/demos/t3000/falcon7b)            | 256   | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 0.11       | 13.4  | 26           | [v0.51.0-rc36](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc36) |
+| [LLaMA-2-70B - (tensor parallel)](./models/demos/t3000/llama2_70b)   | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) |            | 10.4  | 20           | [v0.52.0-rc14](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc14) |
+| [LLaMA-3.1-70B (tensor parallel)](./models/demos/t3000/llama3_70b)   | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) |            | 10.4  | 20           | [v0.52.0-rc14](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc14) |
+| [Falcon40B (tensor parallel)](./models/demos/t3000/falcon40b)        | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) |            | 5.3   | 36           | [v0.52.0-rc12](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc12) |
+| [Mixtral7Bx8 (tensor parallel)](./models/demos/t3000/mixtral8x7b)    | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 0.19       | 13.6  | 33           | [v0.51.0-rc33](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc33) |
+| [Falcon7B (data parallel)](./models/demos/tg/falcon7b)               |1024   | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 0.27       | 4.1   | 26           | [v0.52.0-rc14](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc14) |
 
-| Model                                                      | Batch               | End-to-end throughput [1]    | Device throughput [2]       | Target throughput                             |
-|----------------------------------------------------------  |---------------------|------------------------------|-----------------------------|-------------------------------------|
-| [ResNet-50](./models/demos/resnet) (fps)                   | 20                  | 5,600                        | 7,560                       | 10,000                              |
-| [BERT-Large](./models/demos/bert) (sen/s)                  | 12                  | 370                          | 406                         | 410                                 |
-| [Falcon7B-decode](./models/demos/ttnn_falcon7b) (t/s)      | 32                  | 135                          | 135                         | 140                                 |
-| [ViT](./models/demos/grayskull/vit) (fps)                  | 8                   | 860                          | 1570                        | 2000                                |
-| [T5 small](.models/demos/grayskull/t5) (sen/s)             |                     | 140                          |                             |                                     |
-| [Bloom](.models/demos/grayskull/functional_bloom) (sen/s)  |                     | 70                           |                             |                                     |
-| U-Net                                                      | coming soon         |                              |                             |                                     |
+> **Notes:**
+> - The reported LLM performance is for an input sequence length (number of rows filled in the KV cache) of 128 for all models except Mamba (which can accept any sequence length).
+> - The t/s/u reported is the throughput of the first token generated after prefill, i.e. 1 / inter token latency.
 
-[1] - Observed from the host. Includes dispatch overhead and kernel execution time. For LLMs, token-to-token decode throughput is reported.
+## CNNs
+| Model                                                                       | Batch | Hardware                                                 | fps     | Target fps | Release     |
+|-----------------------------------------------------------------------------|-------|----------------------------------------------------------|---------|------------|-------------|
+| [ResNet-50 (224x224)](./models/demos/grayskull/resnet50)                    | 20    | [e150](https://tenstorrent.com/hardware/grayskull)       | 5,100   | 10,000     |             |
+| [ResNet-50 (224x224)](./models/demos/wormhole/resnet50)                     | 16    | [n150](https://tenstorrent.com/hardware/wormhole)        | 4,100   | 7,000      |             |
+| [ResNet-50 (224x224) (data parallel)](./models/demos/t3000/resnet50)        | 128   | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 32,250  | 56,000     |             |
+| [ResNet-50 (224x224) (data parallel)](./models/demos/tg/resnet50)           | 512   | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 66,150  | 224,000    |             |
+| [ResNet-50 (224x224) (data parallel)](./models/demos/tgg/resnet50)          | 1024  | [Two Galaxies](https://tenstorrent.com/hardware/galaxy)  | 128,800 | 448,000    |             |
+| [ViT](./models/demos/grayskull/vit)                                         | 9     | [e150](https://tenstorrent.com/hardware/grayskull)       | 1,360   | 2,000      |             |
+| [Stable Diffusion 1.4 (512x512)](./models/demos/wormhole/stable_diffusion)  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.167   | 0.3        |             |
 
-[2] - Ignoring host overhead. Kernel execution time only. For LLMs, token-to-token decode throughput is reported.
-
-## Wormhole (WH) Models
-
-> [!NOTE]
->
-> All model demos in this table function on both N150 and N300 Wormhole cards, unless otherwise stated.
->
-> Furthermore, all performance numbers here are run or based off an N300 Wormhole card.
-
-| Model                                                                                  | Last verified release                                                     | Gen. Token [3]     |  Batch               | Time to first token [4] | End-to-end throughput [1]      | Device throughput [2]        | Target throughput        |
-|----------------------------------------------------------------------------------------|---------------------------------------------------------------------------|--------------------|----------------------|-------------------------| ---------------------------------|------------------------------|----------------|
-| [Falcon7B](./models/demos/wormhole/falcon7b)                                           | [v0.51.0-rc24](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc24) | 129th              | 32                   | 0.08 s                  | 16.7 t/s/u - 534 t/s           | 19.6 t/s/u - 627 t/s         | 26             |
-| [Mistral-7B](./models/demos/wormhole/mistral7b)                                        | [v0.51.0-rc28](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc28) | 129th              | 32                   | coming soon             | 9.9 t/s/u - 317 t/s            | 11.0 t/s/u - 352 t/s         | 25             |
-| [Mamba-2.8B](./models/demos/wormhole/mamba)                                            | [v0.51.0-rc26](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc26) | any                | 32                   | 0.04 s                  | 12.3 t/s/u - 394 t/s           | 17.1 t/s/u - 547 t/s         | 41             |
-| [LLaMA-3.1-8B](./models/demos/wormhole/llama31_8b)                                     | [v0.51.0-rc28](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc28) | 129th              | 1                    | coming soon             | 8.3 t/s/u - 8.3 t/s           | 9.7 t/s/u - 9.7 t/s         | 23             |
-| [BERT-Large](./models/demos/metal_BERT_large_11/) (sen/s) [5]                          |                                                                           | -                   | 8                    | -                       | 270                            | 340                          | 400            |
-| [Stable Diffusion 1.4](./models/demos/wormhole/stable_diffusion) 512x512 (sec/img) [6] |                                                                           | -                   | 1                    | -                       | 6                              | 5                            | 3              |
-| [ResNet-50](./models/demos/ttnn_resnet) (fps)                                          |                                                                           | -                   | 16                   | -                       | 4,100                          | 5,010                        | 7,000          |
-
-[1] - Observed from the host. Includes dispatch overhead and kernel execution time. For LLMs, token-to-token decode throughput is reported.
-
-[2] - Ignoring host overhead. Kernel execution time only. For LLMs, token-to-token decode throughput is reported.
-
-[3] - Generating the `i`'th token in a sequence while the kv_cache is filled with `i-1` rows.
-
-[4] - Time to fill the kv_cache and generate the first output token (1st user).
-
-[5] - This model demo does not work on N150. It does work on N300.
-
-[6] - This model demo does not work on N300. It does work on N150.
-
-##  TT-QuietBox & TT-LoudBox (2x4 mesh of WHs) Models
-
-| Model                                              | Last verified release                                                     |   Technique        | Gen. Token [3]      |  Batch                | Time to first token [4] | End-to-end throughput [1]    | Device throughput [2]        | Target throughput          |
-|----------------------------------------------------|---------------------------------------------------------------------------|--------------------|---------------------|-----------------------|-------------------------|------------------------------|------------------------------|-----------------|
-| [Falcon7B](./models/demos/t3000/falcon7b)          | [v0.51.0-rc36](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc36) | Data Parallel      | 129th               |  256                  | 0.11 s                  | 13.4 t/s/u - 3430 t/s         |  19.6 t/s/u - 5018 t/s       |   26 t/s/u      |
-| [LLaMA-2-70B](./models/demos/t3000/llama2_70b)     | [v0.51.0-rc36](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc36) | Tensor Parallel    | 129th               |  32                   | coming soon             | 10.4 t/s/u - 333 t/s         |  16.6 t/s/u - 531 t/s        |   20 t/s/u      |
-| [LLaMA-3.1-70B](./models/demos/t3000/llama3_70b)   | [v0.51.0-rc36](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc36) | Tensor Parallel    | 129th               |  32                   | coming soon             | 10.4 t/s/u - 333 t/s         |  15.8 t/s/u - 506 t/s        |   20 t/s/u      |
-| [Falcon40B](./models/demos/t3000/falcon40b)        | [v0.51.0-rc35](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc35) | Tensor Parallel    | 129th               |  32                   | coming soon             | 5.3 t/s/u - 168 t/s          |  12.2 t/s/u - 390 t/s        |   36 t/s/u      |
-| [Mixtral7Bx8](./models/demos/t3000/mixtral8x7b)    | [v0.51.0-rc33](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc33) | Tensor Parallel    | 129th               |  32                   | 0.19 s                  | 15.7 t/s/u - 502 t/s         |  21.4 t/s/u - 685 t/s        |   33 t/s/u      |
-| [ResNet-50](./models/demos/ttnn_resnet) (fps)      |                                                                           | Data Parallel      | -                   |  128                  | -                       | 31,250                       |  40,080                      |   56,000        |
-
-## Single Galaxy (8x4 mesh of WHs) Models
-
-| Model                                              | Last verified release                                                     |   Technique        | Gen. Token [3]      |  Batch                | Time to first token [4] | End-to-end throughput [1]    | Device throughput [2]        | Target throughput |
-|----------------------------------------------------|---------------------------------------------------------------------------|--------------------|---------------------|-----------------------|-------------------------|------------------------------|------------------------------|-------------------|
-| [Falcon7B](./models/demos/tg/falcon7b)             | [v0.51.0-rc30](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc30) | Data Parallel      | 129th               |  1024                 | 0.30 s                  | 4.0 t/s/u - 4096 t/s         | 17.7 t/s/u - 18125 t/s       |   26 t/s/u        |
+## NLPs
+| Model                                               | Batch | Hardware                                           | sen/sec   | Target sen/sec | Release     |
+|-----------------------------------------------------|-------|----------------------------------------------------|-----------|----------------|-------------|
+| [BERT-Large](./models/demos/metal_BERT_large_11/)   | 12    | [e150](https://tenstorrent.com/hardware/grayskull) | 370       | 410            |             |
+| [BERT-Large](./models/demos/metal_BERT_large_11/)   | 8     | [n150](https://tenstorrent.com/hardware/wormhole)  | 270       | 400            |             |
+| [T5 small](.models/demos/grayskull/t5)              |       | [e150](https://tenstorrent.com/hardware/grayskull) | 140       |                |             |
+| [Bloom](.models/demos/grayskull/functional_bloom)   |       | [e150](https://tenstorrent.com/hardware/grayskull) | 70        |                |             |
 
 
 
 ## Model Updates
 For the latest model updates and features, please see [MODEL_UPDATES.md](models/MODEL_UPDATES.md)
 
-
-## Using TT-NN ops and tensors
-
-```python
-import ttnn
-import torch
-
-with ttnn.manage_device(device_id=0) as device:
-   a = torch.ones((5, 7))
-   b = torch.ones((1, 7))
-
-   a = ttnn.from_torch(a, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-   b = ttnn.from_torch(b, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-
-   output = a + b
-   output = ttnn.to_torch(output)
-
-print(output)
-```
-
+## TT-NN Tech Reports
+- [Advanced Performance Optimizations for Models](./tech_reports/AdvancedPerformanceOperationsForModels/AdvancedPerformanceOptimizationsForModels.md) (updated Sept 18th)
+- [Programming Mesh of Devices](./tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md) (updated Sept 9th)
+- [ViT Implementation in TT-NN on GS](./tech_reports/ViT-TTNN/vit.md)  (updated Sept 22nd)
 ---
 
 <div align="center">
 
-<img src="./docs/source/common/_static/tt_metalium_w_logo.png" alt="TT-Metalium logo" height="150"/>
+<img src="./docs/source/common/_static/tt_metalium_w_logo.png" alt="TT-Metalium logo" height="180"/>
 
 **TT-Metalium** is our low-level programming model, enabling kernel development for Tenstorrent hardware.
 
@@ -127,3 +86,35 @@ print(output)
 ## Getting started
 
 Get started with [simple kernels](https://docs.tenstorrent.com/tt-metalium/latest/tt_metal/examples/index.html).
+
+## TT-Metalium Tech Reports
+- [Matrix Engine](./tech_reports/matrix_engine/matrix_engine.md) (updated Sept 6th)
+- [Tensor Layouts](./tech_reports/tensor_layouts/tensor_layouts.md) (updated Sept 6th)
+- [Data Formats](./tech_reports/data_formats/data_formats.md) (updated Sept 7th)
+- [Saturating DRAM Bandwidth](./tech_reports/Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md) (updated Sept 6th)
+- [Flash Attention on Wormhole](./tech_reports/FlashAttention/FlashAttention.md) (updated Sept 6th)
+- [CNNs on TT Architectures](./tech_reports/CNNs/ttcnn.md) (updated Sept 6th)
+- [Ethernet and Multichip Basics](./tech_reports/EthernetMultichip/BasicEthernetGuide.md) (Updated Sept 20th)
+- [Collective Communication Library (CCL)](./tech_reports/EthernetMultichip/CclDeveloperGuide.md) (Updated Sept 20th)
+- [Blackhole Bring-Up Prgramming Guide](./tech_reports/Blackhole/BlackholeBringUpProgrammingGuide.md) (Updated Sept 12th)
+
+## TT-Metalium Programming Examples
+### Hello World
+- [Hello World! Compute Kernel](./tech_reports/prog_examples/hello_world_compute/hello_world_compute.md)
+- [Hello World! Data Movement Kernel](./tech_reports/prog_examples/hello_world_data_movement/hello_world_data_movement.md)
+### Add Integers  
+- [Add 2 Integers in Baby RiscV](./tech_reports/prog_examples/add_2_integers_in_riscv/add_2_integers_in_riscv.md)
+- [Add 2 Integers in Compute Kernel](./tech_reports/prog_examples/add_2_integers_in_compute/add_2_integers_in_compute.md)
+### Simple Tensor Manipulation 
+- [Sharding](./tech_reports/prog_examples/shard_data_rm/shard_data_rm.md)
+- [Padding](./tech_reports/prog_examples/pad_multi_core/pad_multi_core.md)
+### DRAM Data Movement
+- [Dram Loopback Data Movement](./tech_reports/prog_examples/dram_loopback/dram_loopback.md)
+### Eltwise
+- [Eltwise Unary OP in Vector Engine (SFPU)](./tech_reports/prog_examples/eltwise_sfpu/eltwise_sfpu.md)
+- [Eltwise Binary OP in Matrix Engine (FPU)](./tech_reports/prog_examples/eltwise_binary/eltwise_binary.md)
+### Matmul
+- [Matmul OP on a Single_core](./tech_reports/prog_examples/matmul_single_core/matmul_single_core.md)
+- [Matmul OP on Multi_core (Basic)](./tech_reports/prog_examples/matmul_multi_core/matmul_multi_core.md)
+- [Matmul Multi_core Reuse (Optimized)](./tech_reports/prog_examples/matmul_multi_core_optimized/data_reuse.md)
+- [Matmul Multi_core Multi-Cast (Optimized)](./tech_reports/prog_examples/matmul_multi_core_optimized/data_mcast.md)

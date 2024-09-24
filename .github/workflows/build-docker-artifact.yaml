@@ -2,8 +2,20 @@ name: "Build tt-metal docker artifact"
 
 on:
   workflow_call:
+    inputs:
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04-amd64"
   workflow_dispatch:
-
+    inputs:
+      os:
+        required: false
+        type: choice
+        default: "ubuntu-20.04-amd64"
+        options:
+            - "ubuntu-20.04-amd64"
+            - "ubuntu-22.04-amd64"
 jobs:
   build-docker-image:
     env:
@@ -11,33 +23,54 @@ jobs:
       CONFIG: ci
       SILENT: 0
       VERBOSE: 1
-      TT_METAL_DOCKER_IMAGE: tt-metalium/ubuntu-20.04-amd64
-      TT_METAL_DOCKER_IMAGE_TAG: ${{ github.sha }}
+      TT_METAL_DOCKER_IMAGE: ${{ inputs.os }}
+      IMAGE: tt-metalium/ubuntu-20.04-amd64
+      DOCKERFILE: ubuntu-20.04-amd64
     environment: dev
     runs-on:
       - build-docker
       - in-service
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+        with:
+          fetch-depth: 0
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build Docker image
+      - name: Get all test, doc and src files that have changed
+        id: changed-files-specific
+        uses: tj-actions/changed-files@v45
+        with:
+          files: |
+              dockerfile/**.Dockerfile
+              scripts/docker/install_test_deps.sh
+              scripts/docker/requirements*
+              pyproject.toml
+              tt_metal/python_env/requirements-dev.txt
+          base_sha: 'main'
+      - name: Determine docker image tag
+        uses: ./.github/actions/generate-docker-tag
+        with:
+          image: ${{ inputs.os }}
+      - name: Build Docker image and push to GHCR
+        if: steps.changed-files-specific.outputs.any_changed == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/${{ inputs.os }}.Dockerfile
+          push: true
+          tags: ${{ env.TT_METAL_DOCKER_IMAGE_TAG}}
+          cache-from: type=registry,ref=${{ env.TT_METAL_REF_IMAGE_TAG }}
+          cache-to: type=inline
+          pull: true
+      - name: Tag Docker main image as current image
+        if: steps.changed-files-specific.outputs.any_changed != 'true'
         run: |
-          ./scripts/docker/build_docker_image.sh ${{ env.TT_METAL_DOCKER_IMAGE }}:${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
-      - name: Determine Docker Image Tag
-        id: set-image
-        run: |
-          if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
-            echo "IMAGE_TAG=latest" >> $GITHUB_ENV
-          else
-            echo "IMAGE_TAG=dev-${GITHUB_ACTOR}" >> $GITHUB_ENV
-          fi
+          docker pull ghcr.io/${{ github.repository }}/tt-metalium/${{ env.TT_METAL_DOCKER_IMAGE }}:latest
+          docker tag ghcr.io/${{ github.repository }}/tt-metalium/${{ env.TT_METAL_DOCKER_IMAGE }}:latest ${{ env.TT_METAL_DOCKER_IMAGE_TAG}}
       - name: Push Docker image to GitHub Container Registry
         run: |
-          GITHUB_REPO_DOCKER_IMAGE_TAG=ghcr.io/${{ github.repository }}/${{ env.TT_METAL_DOCKER_IMAGE }}:${{ env.IMAGE_TAG }}
-          docker tag ${{ env.TT_METAL_DOCKER_IMAGE }}:${{ env.TT_METAL_DOCKER_IMAGE_TAG }} $GITHUB_REPO_DOCKER_IMAGE_TAG
-          docker push $GITHUB_REPO_DOCKER_IMAGE_TAG
+          docker push ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}

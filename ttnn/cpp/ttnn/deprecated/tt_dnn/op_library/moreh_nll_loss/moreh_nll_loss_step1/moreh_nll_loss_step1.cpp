@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/run_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_op.hpp"
+#include "tt_metal/common/work_split.hpp"
+#include "ttnn/run_operation.hpp"
 
 using namespace tt::constants;
 using namespace std;
@@ -48,28 +48,56 @@ operation::ProgramWithCallbacks moreh_nll_loss_step1_impl(
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(core_range, units_to_divide);
 
-    auto arch = target.device()->arch();
+    auto* device = target.device();
+    auto arch = device->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
     Program program = Program();
 
     // create circular buffers
-    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    const auto target_data_format = tt_metal::datatype_to_dataformat_converter(target.get_dtype());
+    const auto data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
-    auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    const auto target_tile_size = tt_metal::detail::TileSize(target_data_format);
+    const auto data_tile_size = tt_metal::detail::TileSize(data_format);
+    const auto intermed_tile_size = tt_metal::detail::TileSize(intermed_data_format);
 
-    uint32_t weight_num_tile = div_up(channel_size, TILE_WIDTH);
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        data_format,
-        {
-            {CB::c_in0, 1, tt::DataFormat::Int32},               // traget
-            {CB::c_in1, weight_num_tile},                        // weight
-            {CB::c_intermed0, 1, fp32_dest_acc_en_data_format},  // tmp_weight
-            {CB::c_out0, 1},                                     // output
-        });
+    const uint32_t available_L1 = device->l1_size_per_core() - L1_UNRESERVED_BASE;
+
+    uint32_t target_num_tile = 1;
+    uint32_t weight_num_tile = weight_has_value ? div_up(channel_size, TILE_WIDTH) : 0;
+    uint32_t intermed_num_tile = 1;
+    uint32_t output_num_tile = 1;
+    uint32_t cb_usage = target_num_tile * target_tile_size + weight_num_tile * data_tile_size +
+                        intermed_num_tile * intermed_tile_size + output_num_tile * data_tile_size;
+
+    const bool use_large_algorithm = cb_usage >= available_L1;
+
+    if (use_large_algorithm) {
+        CreateCircularBuffer(
+            program,
+            all_cores,
+            data_format,
+            {
+                {CB::c_in0, 1, tt::DataFormat::Int32},     // traget
+                {CB::c_in1, 1},                            // weight
+                {CB::c_intermed0, 1, intermed_data_format},  // tmp_weight
+                {CB::c_out0, 1},                           // output
+            });
+    } else {
+        CreateCircularBuffer(
+            program,
+            all_cores,
+            data_format,
+            {
+                {CB::c_in0, 1, tt::DataFormat::Int32},     // traget
+                {CB::c_in1, weight_num_tile},              // weight
+                {CB::c_intermed0, 1, intermed_data_format},  // tmp_weight
+                {CB::c_out0, 1},                           // output
+            });
+    }
 
     // create read/wrtie kernel
     const std::vector<uint32_t> reader_compile_time_args{
@@ -89,19 +117,17 @@ operation::ProgramWithCallbacks moreh_nll_loss_step1_impl(
     if (fp32_dest_acc_en) {
         reader_defines["FP32_DEST_ACC_EN"] = 1;
     }
+    const auto reader_kernel_file =
+        use_large_algorithm ? "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step1/kernels/reader_moreh_nll_loss_step1_large.cpp"
+            : "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step1/kernels/reader_moreh_nll_loss_step1.cpp";
+    const auto writer_kernel_file =
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step1/kernels/"
+        "writer_moreh_nll_loss_step1.cpp";
 
-    auto reader_kernel_id = CreateReadKernel(
-        program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step1/kernels/reader_moreh_nll_loss_step1.cpp",
-        all_cores,
-        reader_compile_time_args,
-        reader_defines);
-    auto writer_kernel_id = CreateWriteKernel(
-        program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_step1/kernels/writer_moreh_nll_loss_step1.cpp",
-        all_cores,
-        writer_compile_time_args,
-        writer_defines);
+    auto reader_kernel_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    auto writer_kernel_id =
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
 
     const auto target_addr = target.buffer()->address();
     const auto weight_addr = weight_has_value ? weight.value().buffer()->address() : 0;

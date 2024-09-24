@@ -18,7 +18,6 @@
 #include "firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "dataflow_api.h"
-#include "noc_addr_ranges_gen.h"
 
 #include <kernel_includes.hpp>
 

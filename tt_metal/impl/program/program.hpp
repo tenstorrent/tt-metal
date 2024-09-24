@@ -142,9 +142,6 @@ class Program {
     void finalize();
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 
-    void capture_multi_device_dependencies() { capture_multi_device_dependencies_ = true; }
-    bool has_multi_device_dependencies() { return capture_multi_device_dependencies_; }
-
     ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
 
     // debug/test
@@ -219,7 +216,6 @@ class Program {
 
     std::vector<ProgramConfig> program_configs_;
     std::vector<uint32_t> program_config_sizes_;
-    bool capture_multi_device_dependencies_ = false;
     friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
@@ -242,6 +238,8 @@ class Program {
     void validate_circular_buffer_region(const Device *device) const;
 
     void set_cb_data_fmt( Device *device, const std::vector<CoreRange> & crs, JitBuildOptions& build_options) const;
+
+    void set_cb_tile_dims( Device *device, const std::vector<CoreRange> & crs, JitBuildOptions& build_options) const;
 
     void update_kernel_groups(uint32_t programmable_core_type_index);
 

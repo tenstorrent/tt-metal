@@ -9,7 +9,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
@@ -23,6 +23,7 @@ using ttnn::operations::unary::UnaryWithParam;
 namespace reuse_mcast_1d_optimized_helpers {
 
 operation::ProgramWithCallbacks create_program_mcast_in0(
+    tt_metal::Program& program,
     const Tensor& a,
     tt_metal::Device* device,
     MathFidelity math_fidelity,
@@ -45,14 +46,19 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     tt_metal::Buffer* in1_buffer,
     tt_metal::Buffer* bias_buffer,
     tt_metal::Buffer* out_buffer,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const tt::tt_metal::Tile& bias_tile,
+    const tt::tt_metal::Tile& output_tile,
     tt::DataFormat in0_data_format,
     tt::DataFormat in1_data_format,
     tt::DataFormat bias_data_format,
     tt::DataFormat output_data_format,
     bool in0_is_sharded,
     bool output_is_sharded,
-    bool untilize_out) {
-    tt_metal::Program program{};
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler) {
+    bool fuse_op = fused_op_signaler.has_value();
 
     uint32_t num_blocks = K / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise
@@ -64,11 +70,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                              : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
 
-    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
-    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
-    uint32_t bias_single_tile_size = tt_metal::detail::TileSize(bias_data_format);
-    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
-    uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_data_format);
+    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
+    uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
+    uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
+    uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
@@ -81,8 +87,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     uint32_t in0_shard_width_in_tiles = 0;
     uint32_t in0_shard_height_in_tiles = 0;
     if (in0_is_sharded) {
-        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / TILE_WIDTH;
-        in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / TILE_HEIGHT;
+        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
+        in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / in0_tile.get_tile_shape()[0];
         in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
     }
     uint32_t in2_CB_tiles = in2_block_tiles;
@@ -260,6 +266,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             (std::uint32_t)B       // batch
         };
     }
+    in0_sender_compile_time_args.push_back((std::uint32_t)fuse_op);
+
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t)in1_is_dram,
@@ -302,7 +310,13 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     if (bias_buffer != nullptr) {
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)in3_is_dram);
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)1);
+    } else {
+        in1_sender_writer_compile_time_args.push_back(0);  // Placeholder; not used
+        in1_sender_writer_compile_time_args.push_back(0);  // Placeholder; not used
     }
+
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
+
     std::vector<uint32_t> in0_receiver_compile_time_args = {
         // in0 block args
         (std::uint32_t)in0_block_w * per_core_M,  // in0_block_num_tiles
@@ -355,6 +369,12 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
     tt_metal::NOC in1_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
+
+    if (fuse_op) {
+        // Create semaphores
+        fused_op_signaler->init_fused_op(program, device, in0_mcast_sender_cores,
+            in0_is_sharded ? ttnn::experimental::ccl::FusedOpSignalerMode::SINGLE : ttnn::experimental::ccl::FusedOpSignalerMode::MULTI);
+    }
 
     auto mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id = tt_metal::CreateKernel(
         program,
@@ -474,7 +494,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     uint32_t src0_cb_index = 0;
     tt_metal::CircularBufferConfig src0_cb_config =
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
-            .set_page_size(src0_cb_index, in0_single_tile_size);
+            .set_page_size(src0_cb_index, in0_single_tile_size)
+            .set_tile_dims(src0_cb_index, in0_tile);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
     log_debug(
         LogOp,
@@ -487,7 +508,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     uint32_t src1_cb_index = 1;
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
-            .set_page_size(src1_cb_index, in1_single_tile_size);
+            .set_page_size(src1_cb_index, in1_single_tile_size)
+            .set_tile_dims(src1_cb_index, in1_tile);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
     log_debug(
         LogOp,
@@ -503,7 +525,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         tt_metal::CircularBufferConfig src2_cb_config =
             tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
                 .set_page_size(src2_cb_index, in0_single_tile_size)
-                .set_globally_allocated_address(*in0_buffer);
+                .set_globally_allocated_address(*in0_buffer)
+                .set_tile_dims(src2_cb_index, in0_tile);
         cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
         log_debug(
             LogOp,
@@ -533,13 +556,15 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             {output_cb_index, output_data_format},
         };
         output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
-                               .set_page_size(output_cb_index, output_single_tile_size);
+                               .set_page_size(output_cb_index, output_single_tile_size)
+                               .set_tile_dims(output_cb_index, output_tile);
         // interm0
         std::map<uint8_t, tt::DataFormat> interm0_cb_data_format_spec{
             {interm0_cb_index, interm0_data_format},
         };
         interm0_cb_config = tt_metal::CircularBufferConfig(interm0_CB_size, interm0_cb_data_format_spec)
-                                .set_page_size(interm0_cb_index, interm0_single_tile_size);
+                                .set_page_size(interm0_cb_index, interm0_single_tile_size)
+                                .set_tile_dims(interm0_cb_index, output_tile);
 
         auto cb_interm0 = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
         log_debug(
@@ -555,7 +580,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
         output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
                                .set_page_size(output_cb_index, output_single_tile_size)
-                               .set_page_size(interm0_cb_index, interm0_single_tile_size);
+                               .set_page_size(interm0_cb_index, interm0_single_tile_size)
+                               .set_tile_dims(output_cb_index, output_tile)
+                               .set_tile_dims(interm0_cb_index, output_tile);
     }
 
     if (output_is_sharded) {
@@ -574,7 +601,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         uint32_t src3_cb_index = 3;
         tt_metal::CircularBufferConfig cb_src3_config =
             tt_metal::CircularBufferConfig(in3_CB_size, {{src3_cb_index, bias_data_format}})
-                .set_page_size(src3_cb_index, bias_single_tile_size);
+                .set_page_size(src3_cb_index, bias_single_tile_size)
+                .set_tile_dims(src3_cb_index, bias_tile);
         auto cb_src3 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src3_config);
         log_debug(
             LogOp,
@@ -624,7 +652,12 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
             mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
 
+            if (fuse_op) {
+                fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
+            }
+
             if (i < num_cores_with_work) {
+
                 tt_metal::SetRuntimeArgs(
                     program,
                     mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
@@ -659,6 +692,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 // padding args
                 (std::uint32_t)per_core_M  // last_block_h
             };
+
+            if (fuse_op) {
+                fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
+            }
+
             tt_metal::SetRuntimeArgs(
                 program,
                 mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
@@ -723,7 +761,15 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 mm_in1_sender_writer_args.push_back((std::uint32_t)bias_buffer->address());
                 mm_in1_sender_writer_args.push_back(
                     (std::uint32_t)per_core_N * output_idx_x);  // in3_tensor_start_tile_id
+            } else { // Placeholder args
+                mm_in1_sender_writer_args.push_back(0);
+                mm_in1_sender_writer_args.push_back(0);
             }
+
+            if (fuse_op) {
+                fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
+            }
+
             tt_metal::SetRuntimeArgs(
                 program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_0_default
         }
@@ -814,6 +860,10 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     tt_metal::Buffer* in1_buffer,
     tt_metal::Buffer* bias_buffer,
     tt_metal::Buffer* out_buffer,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const tt::tt_metal::Tile& bias_tile,
+    const tt::tt_metal::Tile& output_tile,
     tt::DataFormat in0_data_format,
     tt::DataFormat in1_data_format,
     tt::DataFormat bias_data_format,
@@ -822,6 +872,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     bool output_is_sharded,
     bool untilize_out) {
     tt_metal::Program program{};
+
+    bool fuse_op = false;
 
     uint32_t num_blocks = K / in0_block_w;
     // Only enable packer l1 accumulation when there are num_blocks > 2, otherwise
@@ -835,11 +887,11 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                              : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
 
-    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
-    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
-    uint32_t bias_single_tile_size = tt_metal::detail::TileSize(bias_data_format);
-    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
-    uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_data_format);
+    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
+    uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
+    uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
+    uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
@@ -854,8 +906,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     uint32_t in0_shard_height_in_tiles = 0;
     uint32_t in0_shard_width_in_tiles = 0;
     if (in0_is_sharded) {
-        in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / TILE_HEIGHT;
-        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / TILE_WIDTH;
+        in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / in0_tile.get_tile_shape()[0];
+        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
         // NOTE: Criteria for extract_shard_sub_blocks is different from mcast in0
         // In the reader kernel, always need to copy to cb0 even for height=1 shards since we may not always do mcast
         // In mcast in0 sharded reader kernel, this is handled by mcast with loopback src
@@ -949,6 +1001,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         (std::uint32_t)M * K,  // MtKt
         (std::uint32_t)B       // batch
     };
+    in0_sender_compile_time_args.push_back((std::uint32_t)fuse_op);
+
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t)in1_is_dram,
@@ -991,7 +1045,13 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     if (bias_buffer != nullptr) {
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)in3_is_dram);
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)1);
+    } else {
+        in1_sender_writer_compile_time_args.push_back(0);  // Placeholder; not used
+        in1_sender_writer_compile_time_args.push_back(0);  // Placeholder; not used
     }
+
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
+
     std::vector<uint32_t> in1_receiver_writer_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t)out_is_dram,
@@ -1156,7 +1216,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     uint32_t src0_cb_index = 0;
     tt_metal::CircularBufferConfig src0_cb_config =
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
-            .set_page_size(src0_cb_index, in0_single_tile_size);
+            .set_page_size(src0_cb_index, in0_single_tile_size)
+            .set_tile_dims(src0_cb_index, in0_tile);
     if (in0_is_sharded and not extract_shard_sub_blocks) {
         src0_cb_config = src0_cb_config.set_globally_allocated_address(*in0_buffer);
     }
@@ -1175,7 +1236,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         tt_metal::CircularBufferConfig src2_cb_config =
             tt_metal::CircularBufferConfig(in0_CB_size, {{src2_cb_index, in0_data_format}})
                 .set_page_size(src2_cb_index, in0_single_tile_size)
-                .set_globally_allocated_address(*in0_buffer);
+                .set_globally_allocated_address(*in0_buffer)
+                .set_tile_dims(src2_cb_index, in0_tile);
         cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
         log_debug(
             LogOp,
@@ -1189,7 +1251,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     uint32_t src1_cb_index = 1;
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
-            .set_page_size(src1_cb_index, in1_single_tile_size);
+            .set_page_size(src1_cb_index, in1_single_tile_size)
+            .set_tile_dims(src1_cb_index, in1_tile);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
     log_debug(
         LogOp,
@@ -1212,13 +1275,15 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
             {output_cb_index, output_data_format},
         };
         output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
-                               .set_page_size(output_cb_index, output_single_tile_size);
+                               .set_page_size(output_cb_index, output_single_tile_size)
+                               .set_tile_dims(output_cb_index, output_tile);
         // interm0
         std::map<uint8_t, tt::DataFormat> interm0_cb_data_format_spec{
             {interm0_cb_index, interm0_data_format},
         };
         interm0_cb_config = tt_metal::CircularBufferConfig(interm0_CB_size, interm0_cb_data_format_spec)
-                                .set_page_size(interm0_cb_index, interm0_single_tile_size);
+                                .set_page_size(interm0_cb_index, interm0_single_tile_size)
+                                .set_tile_dims(interm0_cb_index, output_tile);
 
         auto cb_interm0 = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
         log_debug(
@@ -1234,7 +1299,9 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
             {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
         output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
                                .set_page_size(output_cb_index, output_single_tile_size)
-                               .set_page_size(interm0_cb_index, interm0_single_tile_size);
+                               .set_page_size(interm0_cb_index, interm0_single_tile_size)
+                               .set_tile_dims(output_cb_index, output_tile)
+                               .set_tile_dims(interm0_cb_index, output_tile);
     }
 
     if (output_is_sharded) {
@@ -1253,7 +1320,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         uint32_t src3_cb_index = 3;
         tt_metal::CircularBufferConfig cb_src3_config =
             tt_metal::CircularBufferConfig(in3_CB_size, {{src3_cb_index, bias_data_format}})
-                .set_page_size(src3_cb_index, bias_single_tile_size);
+                .set_page_size(src3_cb_index, bias_single_tile_size)
+                .set_tile_dims(src3_cb_index, bias_tile);
         auto cb_src3 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src3_config);
         log_debug(
             LogOp,
@@ -1474,6 +1542,7 @@ namespace operations {
 namespace matmul {
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
+    tt::tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor> bias,
@@ -1489,8 +1558,15 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     bool fuse_batch,
     std::optional<UnaryWithParam> fused_activation,
     bool mcast_in0,
-    bool untilize_out) {
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler) {
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+    auto in0_tile = a.get_tile();
+    auto in1_tile = b.get_tile();
+    // cannot use the output tensor tile directly as that might be changed by user override
+    auto output_tile = tt::tt_metal::Tile({in0_tile.get_tile_shape()[0], in1_tile.get_tile_shape()[1]});
+    auto in0_tile_shape = a.get_tile().get_tile_shape();
+    auto in1_tile_shape = b.get_tile().get_tile_shape();
 
     // CB dataformats
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());          // in0
@@ -1501,7 +1577,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;  // bias; doesn't matter if bias=nullptr
     if (bias.has_value()) {
         auto& c = bias.value();
-        TT_FATAL(c.storage_type() == StorageType::DEVICE);
+        TT_FATAL(c.storage_type() == StorageType::DEVICE, "Error");
         TT_FATAL(a.device() == c.device(), "Operands to matmul need to be on the same device!");
         TT_FATAL(c.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
 
@@ -1512,20 +1588,20 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
 
     tt_metal::Device* device = a.device();
 
-    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
-    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
+    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     tt_metal::Buffer* in1_buffer = b.buffer();
-    TT_FATAL(in0_buffer->size() % in0_single_tile_size == 0);
-    TT_FATAL(in1_buffer->size() % in1_single_tile_size == 0);
+    TT_FATAL(in0_buffer->size() % in0_single_tile_size == 0, "Error");
+    TT_FATAL(in1_buffer->size() % in1_single_tile_size == 0, "Error");
 
     TT_FATAL(
-        ashape[-1] == bshape[-2] &&
+        ashape[-1] == bshape[-2],
         "Dimension K (A.shape[-1] and B.shape[-2]) must match for A and B in bmm_op");  // A.K == B.K
-    TT_FATAL(ashape[-2] % TILE_HEIGHT == 0);
-    TT_FATAL(ashape[-1] % TILE_WIDTH == 0);
-    TT_FATAL(bshape[-2] % TILE_HEIGHT == 0);
-    TT_FATAL(bshape[-1] % TILE_WIDTH == 0);
+    TT_FATAL(ashape[-2] % in0_tile_shape[0] == 0, "Error");
+    TT_FATAL(ashape[-1] % in0_tile_shape[1] == 0, "Error");
+    TT_FATAL(bshape[-2] % in1_tile_shape[0] == 0, "Error");
+    TT_FATAL(bshape[-1] % in1_tile_shape[1] == 0, "Error");
 
     MathFidelity math_fidelity;
     bool math_approx_mode;
@@ -1548,14 +1624,14 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
                 fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
                 packer_l1_acc = compute_kernel_config.packer_l1_acc;
             } else {
-                TT_FATAL("arch not supported");
+                TT_THROW("arch not supported");
             }
         },
         compute_kernel_config);
 
     if (fp32_dest_acc_en) {
         TT_FATAL(
-            out_subblock_h * out_subblock_w <= 4 &&
+            out_subblock_h * out_subblock_w <= 4,
             "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
     }
 
@@ -1565,15 +1641,15 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
     uint32_t B = get_batch_size(ashape);
-    uint32_t Mt = ashape[-2] / TILE_HEIGHT;
-    uint32_t Kt = ashape[-1] / TILE_WIDTH;
-    uint32_t Nt = bshape[-1] / TILE_WIDTH;
+    uint32_t Mt = ashape[-2] / in0_tile_shape[0];
+    uint32_t Kt = ashape[-1] / in0_tile_shape[1];
+    uint32_t Nt = bshape[-1] / in1_tile_shape[1];
 
     if (fuse_batch) {
         Mt = B * Mt;
         B = 1;
     }
-    TT_FATAL(Kt % in0_block_w == 0);
+    TT_FATAL(Kt % in0_block_w == 0, "Error");
 
     // This should allocate a DRAM buffer on the device
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -1603,6 +1679,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     ////////////////////////////////////////////////////////////////////////////
     if (mcast_in0) {
         return reuse_mcast_1d_optimized_helpers::create_program_mcast_in0(
+            program,
             a,
             device,
             math_fidelity,
@@ -1625,13 +1702,18 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
             in1_buffer,
             bias_buffer,
             out_buffer,
+            in0_tile,
+            in1_tile,
+            bias.has_value() ? bias->get_tile() : output_tile,
+            output_tile,
             in0_data_format,
             in1_data_format,
             bias_data_format,
             output_data_format,
             a.memory_config().is_sharded(),
             output.memory_config().is_sharded(),
-            untilize_out);
+            untilize_out,
+            fused_op_signaler);
     } else {
         return reuse_mcast_1d_optimized_helpers::create_program_mcast_in1(
             device,
@@ -1655,6 +1737,10 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
             in1_buffer,
             bias_buffer,
             out_buffer,
+            in0_tile,
+            in1_tile,
+            bias.has_value() ? bias->get_tile() : output_tile,
+            output_tile,
             in0_data_format,
             in1_data_format,
             bias_data_format,
@@ -1682,7 +1768,12 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     std::optional<UnaryWithParam> fused_activation,
     bool mcast_in0,
     bool untilize_out) {
+
+    tt_metal::Program program{}; /* Create a program */
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
+
     return matmul_multi_core_reuse_mcast_1d_optimized_(
+        program,
         a,
         b,
         bias,
@@ -1698,7 +1789,43 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
         fuse_batch,
         fused_activation,
         mcast_in0,
-        untilize_out);
+        untilize_out,
+        empty_fused_op_signaler);
+}
+
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& a,
+    const Tensor& b,
+    const std::optional<const Tensor> bias,
+    Tensor& output_tensor,
+    bool broadcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const MatmulProgramConfig program_config,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler) {
+
+    MatmulMultiCoreReuseMultiCast1DProgramConfig config = std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
+
+    return matmul_multi_core_reuse_mcast_1d_optimized_(
+        program,
+        a,
+        b,
+        bias,
+        output_tensor,
+        broadcast_batch,
+        config.compute_with_storage_grid_size,
+        compute_kernel_config,
+        config.in0_block_w,
+        config.out_subblock_h,
+        config.out_subblock_w,
+        config.per_core_M,
+        config.per_core_N,
+        config.fuse_batch,
+        config.fused_activation,
+        config.mcast_in0,
+        untilize_out,
+        fused_op_signaler);
 }
 
 }  // namespace matmul

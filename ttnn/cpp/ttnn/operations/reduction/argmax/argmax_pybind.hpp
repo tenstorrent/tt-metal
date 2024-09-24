@@ -15,10 +15,12 @@ namespace ttnn::operations::reduction::detail {
 namespace py = pybind11;
 void bind_reduction_argmax_operation(py::module& module) {
     auto doc =
-        R"doc(argmax(input_tensor: ttnn.Tensor, *, dim: Optional[int] = None, memory_config: MemoryConfig = std::nullopt, output_tensor : Optional[ttnn.Tensor] = std::nullopt, queue_id : [int] = 0) -> ttnn.Tensor
+        R"doc(
 
             Returns the indices of the maximum value of elements in the ``input`` tensor
             If no ``dim`` is provided, it will return the indices of maximum value of all elements in given ``input``
+
+            Currenly this op only support dimension-specific reduction on last dimension.
 
             Input tensor must have BFLOAT16 data type and ROW_MAJOR layout.
 
@@ -31,13 +33,17 @@ void bind_reduction_argmax_operation(py::module& module) {
                 return torch.argmax(input_tensor, dim=dim)
 
             Args:
-                * :attr:`input_tensor`: Input Tensor for argmax.
+                input_tensor (ttnn.Tensor): the input tensor.
 
-            Keyword Args:
-                * :attr:`dim`: the dimension to reduce. If None, the argmax of the flattened input is returned
-                * :attr:`memory_config`: Memory Config of the output tensor
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-                * :attr:`queue_id` (Optional[uint8]): command queue id
+            Keyword args:
+                dim (int, optional): dimension to reduce. Defaults to `None`.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+                queue_id (int, optional): command queue id. Defaults to `0`.
+
+            Returns:
+                List of ttnn.Tensor: the output tensor.
+
         )doc";
 
     using OperationType = decltype(ttnn::argmax);
@@ -49,14 +55,16 @@ void bind_reduction_argmax_operation(py::module& module) {
             [] (const OperationType& self,
                 const ttnn::Tensor& input_tensor,
                 const std::optional<int> dim,
+                const bool use_multicore,
                 const std::optional<ttnn::MemoryConfig>& memory_config,
                 std::optional<ttnn::Tensor> optional_output_tensor,
                 uint8_t queue_id) {
-                    return self(queue_id, input_tensor, dim, memory_config, optional_output_tensor);
+                    return self(queue_id, input_tensor, dim, use_multicore, memory_config, optional_output_tensor);
                 },
                 py::arg("input_tensor").noconvert(),
                 py::kw_only(),
                 py::arg("dim") = std::nullopt,
+                py::arg("use_multicore") = false,
                 py::arg("memory_config") = std::nullopt,
                 py::arg("output_tensor") = std::nullopt,
                 py::arg("queue_id") = 0});

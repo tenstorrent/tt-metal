@@ -37,9 +37,7 @@ static string get_absolute_path(const string& file_path_string) {
     // If the path doesn't exist as a absolute/relative path, then it must be relative to TT_METAL_HOME.
     if (!fs::exists(file_path)) {
         file_path = fs::path(llrt::OptionsG.get_root_dir() + file_path_string);
-        if (!fs::exists(file_path)) {
-            TT_FATAL("Kernel file {} doesn't exist!", file_path_string);
-        }
+        TT_FATAL(fs::exists(file_path), "Kernel file {} doesn't exist!", file_path_string);
     }
 
     // Convert to absolute path and return
@@ -68,7 +66,7 @@ void jit_build_genfiles_triscs_src(const JitBuildEnv& env,
     // Note: assumes dirs (and descriptors) already created
     log_trace(tt::LogBuildKernels, "Generating defines for TRISCs");
 
-    string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";;
+    string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
     string unpack_base        = out_dir + "chlkc_unpack";
     string math_base          = out_dir + "chlkc_math";
     string pack_base          = out_dir + "chlkc_pack";
@@ -180,14 +178,14 @@ static std::string create_formats_array_string(std::string array_type, std::stri
 }
 
 static std::pair<std::vector<DataFormat>, std::vector<DataFormat>>
-generate_unpack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, bool preserve_fp32_precision) {
+generate_unpack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, std::vector<UnpackToDestMode> unpack_to_dest_mode) {
 
     vector<DataFormat> src_formats = tt::get_unpack_src_formats(
         desc.input_buf_dataformat_arr, desc.param_buf_dataformat_arr, desc.intermediate_buf_dataformat_arr);
 
     vector<DataFormat> dst_formats = tt::get_unpack_dst_formats(
         desc.input_buf_dataformat_arr, desc.param_buf_dataformat_arr, desc.intermediate_buf_dataformat_arr,
-        desc.output_buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, preserve_fp32_precision);
+        desc.output_buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, unpack_to_dest_mode);
 
     TT_ASSERT(src_formats.size() == 24 && dst_formats.size() == 24,
         "There must be 8 unpack src/dst formats for each input, param, and intermediate operands.");
@@ -301,12 +299,8 @@ static void generate_data_format_descriptors(JitBuildOptions& options, const tt:
             (pack_exp_prec == ExpPrecision::A) ? DataFormat::Float16 : DataFormat::Float16_b;
     }
 
-    if ((tt::is_all_fp32_formats(desc.input_buf_dataformat_arr) || options.preserve_fp32_precision) && options.fp32_dest_acc_en){
-        if (options.preserve_fp32_precision) {
-            unpack_conditional_dst_format = DataFormat::Float32;
-        } else {
-            unpack_conditional_dst_format = DataFormat::Tf32;
-        }
+    if (tt::is_all_fp32_formats(desc.input_buf_dataformat_arr) && options.fp32_dest_acc_en) {
+        unpack_conditional_dst_format = DataFormat::Tf32;
     }
 
     tt::check_valid_in_out_data_formats(
@@ -316,7 +310,7 @@ static void generate_data_format_descriptors(JitBuildOptions& options, const tt:
         desc.intermediate_buf_dataformat_arr);
 
     vector<DataFormat> unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs;
-    tie(unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs) = generate_unpack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.preserve_fp32_precision);
+    tie(unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs) = generate_unpack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.unpack_to_dest_mode);
 
     vector<DataFormat> pack_src_formats_all_cbs, pack_dst_formats_all_cbs;
     tie(pack_src_formats_all_cbs, pack_dst_formats_all_cbs) = generate_pack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, arch);
@@ -331,6 +325,52 @@ static void generate_data_format_descriptors(JitBuildOptions& options, const tt:
 
     emit_unpack_data_formats(unpack_data_format_descs, unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs);
     emit_pack_data_formats(pack_data_format_descs, pack_src_formats_all_cbs, pack_dst_formats_all_cbs);
+}
+
+static std::string array_to_string(const uint32_t arr[]) {
+    std::string formats_string = "";
+    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+        formats_string += to_string((int)arr[i]) + ",";
+    }
+    return formats_string;
+}
+
+static void emit_unpack_tile_dims(std::string unpack_tile_dims_descs, tt_hlk_desc& desc) {
+    ofstream file_stream;
+    file_stream.open(unpack_tile_dims_descs);
+    file_stream << create_formats_array_string("constexpr uint8_t", "unpack_tile_num_faces", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_num_faces_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "unpack_partial_face", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_partial_face_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "unpack_tile_face_r_dim", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_face_r_dim_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "unpack_narrow_tile", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_narrow_tile_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "unpack_tile_r_dim", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_tile_r_dim_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "unpack_tile_c_dim", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_tile_c_dim_arr));
+    file_stream << create_formats_array_string("constexpr uint16_t", "unpack_tile_size", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_tile_size_arr));
+    file_stream.close();
+}
+
+static void emit_pack_tile_dims(std::string pack_tile_dims_descs, tt_hlk_desc& desc) {
+    ofstream file_stream;
+    file_stream.open(pack_tile_dims_descs);
+    file_stream << create_formats_array_string("constexpr uint8_t", "pack_tile_num_faces", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_num_faces_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "pack_partial_face", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_partial_face_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "pack_tile_face_r_dim", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_face_r_dim_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "pack_narrow_tile", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_narrow_tile_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "pack_tile_r_dim", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_tile_r_dim_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "pack_tile_c_dim", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_tile_c_dim_arr));
+    file_stream.close();
+}
+
+static void generate_tile_dims_descriptors(JitBuildOptions& options, const tt::ARCH arch) {
+    string out_file_name_base = "chlkc_";
+    string out_file_name_suffix = "_tile_dims.h";
+    string unpack_tile_dims_descs = options.path + out_file_name_base + "unpack" + out_file_name_suffix;
+    string pack_tile_dims_descs = options.path + out_file_name_base + "pack" + out_file_name_suffix;
+
+    // assuming all cores within a op have the same desc
+    tt_hlk_desc& desc = options.hlk_desc;
+
+    emit_unpack_tile_dims(unpack_tile_dims_descs, desc);
+    emit_pack_tile_dims(pack_tile_dims_descs, desc);
 }
 
 static void generate_dst_accum_mode_descriptor(JitBuildOptions& options) {
@@ -383,10 +423,12 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env,
     fs::create_directories(options.path);
     try {
         std::thread td( [&]() { generate_data_format_descriptors(options, env.get_arch()); } );
+        std::thread tt( [&]() { generate_tile_dims_descriptors(options, env.get_arch()); } );
         std::thread tm( [&]() { generate_math_fidelity_descriptor(options); } );
         std::thread ta( [&]() { generate_math_approx_mode_descriptor(options); } );
         std::thread tf( [&]() { generate_dst_accum_mode_descriptor(options); } );
         td.join();
+        tt.join();
         tm.join();
         ta.join();
         tf.join();
@@ -589,134 +631,6 @@ static string generate_noc_core_xy_range_define(const std::vector<CoreCoord>& co
     ss << ")" << endl;
 
     return ss.str();
-}
-
-static string generate_noc_addr_ranges_string(
-    uint64_t pcie_addr_base,
-    uint64_t pcie_addr_size,
-    uint64_t dram_addr_base,
-    uint64_t dram_addr_size,
-    const std::vector<CoreCoord>& pcie_cores,
-    const std::vector<CoreCoord>& dram_cores,
-    const std::vector<CoreCoord>& ethernet_cores,
-    CoreCoord grid_size,
-    const std::vector<uint32_t>& harvested_rows,
-    bool has_pcie_cores) {
-
-    stringstream ss;
-
-    ss << "// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc." << endl;
-    ss << "//" << endl;
-    ss << "// SPDX-License-Identifier: Apache-2.0" << endl;
-    ss << endl;
-
-    ss << "/*" << endl;
-    ss << " * This file is autogenerated by tt-metal API" << endl;
-    ss << " * DO NOT EDIT" << endl;
-    ss << " * This file contains values for use in device compiled code." << endl;
-    ss << " * The macros here can be used to, eg, validate the sanity of noc addresses." << endl;
-    ss << " */" << endl;
-    ss << endl;
-    ss << "#pragma once" << endl;
-    ss << endl;
-
-    ss << "#define NOC_PCIE_ADDR_BASE (uint64_t) 0x" << std::hex << pcie_addr_base << std::dec << endl;
-    ss << "#define NOC_PCIE_ADDR_SIZE (uint64_t) 0x" << std::hex << pcie_addr_size << std::dec << endl;
-    ss << "#define NOC_PCIE_ADDR_END (NOC_PCIE_ADDR_BASE + NOC_PCIE_ADDR_SIZE)" << endl;
-    ss << endl;
-    ss << "#define NOC_DRAM_ADDR_BASE 0x" << std::hex << dram_addr_base << std::dec << endl;
-    ss << "#define NOC_DRAM_ADDR_SIZE 0x" << std::hex << dram_addr_size << std::dec << endl;
-    ss << "#define NOC_DRAM_ADDR_END (NOC_DRAM_ADDR_BASE + NOC_DRAM_ADDR_SIZE)" << endl;
-    ss << endl;
-
-    if (not has_pcie_cores) {
-        // If the address range is 0, then there are no PCIe cores (non-mmio device)
-        ss << "#define NOC_PCIE_XY_P(noc_idx, x, y) false" << endl;
-    } else {
-        ss << "#define NOC_PCIE_XY_P(noc_idx, x, y)";
-        ss << generate_noc_core_xy_range_define(pcie_cores);
-    }
-    ss << endl;
-
-    ss << "#define NOC_DRAM_XY_P(noc_idx, x, y)";
-    ss << generate_noc_core_xy_range_define(dram_cores);
-    ss << endl;
-
-    ss << "#define NOC_ETH_XY_P(noc_idx, x, y)";
-    if (ethernet_cores.size() == 0) {
-        ss << " false" << endl;
-    } else {
-        ss << generate_noc_core_xy_range_define(ethernet_cores);
-    }
-    ss << endl;
-
-    ss << "#define NOC_HARVESTED_Y_P(noc_idx, y)";
-    if (harvested_rows.size() == 0) {
-        ss << " false" << endl;
-    } else {
-        string join = " \\\n    ( \\\n";
-        for (const auto& y : harvested_rows) {
-            ss << join << "     (NOC_0_Y(noc_idx, noc_size_y, (y)) == " << y << ")";
-            join = " || \\\n";
-        }
-        ss << ")" << endl;
-    }
-    ss << endl;
-
-    ss << "#define NOC_WORKER_XY_P(noc_idx, x, y) \\" << endl;
-    ss << "    (!NOC_PCIE_XY_P(noc_idx, x, y) && \\" << endl;
-    ss << "     !NOC_DRAM_XY_P(noc_idx, x, y) && \\" << endl;
-    ss << "     !NOC_ETH_XY_P(noc_idx, x, y) && \\" << endl;
-    ss << "     !NOC_HARVESTED_Y_P(noc_idx, y) && \\" << endl;
-    ss << "     ((noc_idx == 0) ? \\" << endl;
-    ss << "     ((x) >= NOC_0_X(noc_idx, noc_size_x, (uint32_t)" << 1 << ") && \\" << endl;
-    ss << "      (x) <= NOC_0_X(noc_idx, noc_size_x, (uint32_t)" << grid_size.x - 1 << ") && \\" << endl;
-    ss << "      (y) >= NOC_0_Y(noc_idx, noc_size_y, (uint32_t)" << 1 << ") && \\" << endl;
-    ss << "      (y) <= NOC_0_Y(noc_idx, noc_size_y, (uint32_t)" << grid_size.y - 1 << ")) : \\" << endl;
-    ss << "     ((x) <= NOC_0_X(noc_idx, noc_size_x, (uint32_t)" << 1 << ") && \\" << endl;
-    ss << "      (x) >= NOC_0_X(noc_idx, noc_size_x, (uint32_t)" << grid_size.x - 1 << ") && \\" << endl;
-    ss << "      (y) <= NOC_0_Y(noc_idx, noc_size_y, (uint32_t)" << 1 << ") && \\" << endl;
-    ss << "      (y) >= NOC_0_Y(noc_idx, noc_size_y, (uint32_t)" << grid_size.y - 1 << "))))" << endl;
-    ss << endl;
-    ss << endl;
-
-    return ss.str();
-}
-
-void jit_build_genfiles_noc_addr_ranges_header(
-    const std::string& path,
-    uint64_t pcie_addr_base,
-    uint64_t pcie_addr_size,
-    uint64_t dram_addr_base,
-    uint64_t dram_addr_size,
-    const std::vector<CoreCoord>& pcie_cores,
-    const std::vector<CoreCoord>& dram_cores,
-    const std::vector<CoreCoord>& ethernet_cores,
-    CoreCoord grid_size,
-    const std::vector<uint32_t>& harvested_rows,
-    bool has_pcie_cores) {
-
-    string output_string = generate_noc_addr_ranges_string(pcie_addr_base, pcie_addr_size, dram_addr_base, dram_addr_size,
-                                                           pcie_cores, dram_cores, ethernet_cores, grid_size, harvested_rows, has_pcie_cores);
-
-    ofstream file_stream_br(path + "/brisc/noc_addr_ranges_gen.h");
-    file_stream_br << output_string;
-    file_stream_br.close();
-
-    fs::create_directories(path + "/ncrisc");
-    ofstream file_stream_nc(path + "/ncrisc/noc_addr_ranges_gen.h");
-    file_stream_nc << output_string;
-    file_stream_nc.close();
-
-    fs::create_directories(path + "/erisc");
-    ofstream file_stream_er(path + "/erisc/noc_addr_ranges_gen.h");
-    file_stream_er << output_string;
-    file_stream_er.close();
-
-    fs::create_directories(path + "/idle_erisc");
-    ofstream file_stream_ier(path + "/idle_erisc/noc_addr_ranges_gen.h");
-    file_stream_ier << output_string;
-    file_stream_ier.close();
 }
 
 } // namespace tt::tt_metal

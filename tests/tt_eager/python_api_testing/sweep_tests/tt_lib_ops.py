@@ -551,6 +551,26 @@ def binary_assign_bw(
 
 
 @setup_host_and_device
+def eltwise_logical_and_(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t3 = ttnn.logical_and_(t0, t1)
+
+    return tt2torch_tensor(t3)
+
+
+@setup_host_and_device
 def eltwise_lerp_binary(
     x,
     y,
@@ -604,7 +624,8 @@ def conv(
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttnn.experimental.tensor.conv(t0, t1, conv_params, 0, 0, 0, 0, 0, conv_params[0])
+    # t2 = ttnn.experimental.tensor.conv(t0, t1, conv_params, 0, 0, 0, 0, 0, conv_params[0])
+    t2 = ttnn.conv2d(t0, t1, conv_params, 0, 0, 0, 0, 0, conv_params[0])
 
     return tt2torch_tensor(t2)
 
@@ -1113,9 +1134,10 @@ def tril(x, *args, device, dtype, layout, input_mem_config, output_mem_config, *
 def empty(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t1 = ttnn.empty(
         x.shape,
-        layout=layout[0],
-        device=device if input_mem_config[0] is not None else None,
-        memory_config=output_mem_config,
+        dtype,
+        layout[0],
+        device if input_mem_config[0] is not None else None,
+        output_mem_config,
     )
 
     return tt2torch_tensor(t1)

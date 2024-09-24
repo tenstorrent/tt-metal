@@ -7,7 +7,7 @@
 #include "common/constants.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_metal/detail/util.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 namespace tt {
 namespace operations {
@@ -61,7 +61,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
          core_group_1_t,
          core_group_2_t,
          num_tiles_per_core_group_1,
-         num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, units_to_divide);
+         num_tiles_per_core_group_2] = tt_metal::split_work_to_cores(grid_size, units_to_divide);
 
     auto core_x_offset = core_range.start_coord.x;
     auto core_y_offset = core_range.start_coord.y;
@@ -129,7 +129,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
-    bool preserve_fp32_precision) {
+    vector<UnpackToDestMode> unpack_to_dest_mode) {
     std::vector<KernelHandle> compute_kernel_ids{};
     KernelHandle compute_kernel_id{};
     for (auto arg : args) {
@@ -141,7 +141,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
             math_fidelity,
             fp32_dest_acc_en,
             math_approx_mode,
-            preserve_fp32_precision);
+            unpack_to_dest_mode);
         compute_kernel_ids.push_back(compute_kernel_id);
     }
     return compute_kernel_ids;
@@ -155,7 +155,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
-    bool preserve_fp32_precision) {
+    vector<UnpackToDestMode> unpack_to_dest_mode) {
     KernelHandle compute_kernel_id{0};
     if (arg.num_tile_per_core_group > 0) {
         compute_kernel_id = CreateKernel(
@@ -165,7 +165,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
             tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .preserve_fp32_precision = preserve_fp32_precision,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .math_approx_mode = math_approx_mode,
                 .compile_args = arg.compile_args,
                 .defines = defines});
@@ -195,7 +195,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
             tt_metal::ComputeConfig{
                 .math_fidelity = config.math_fidelity,
                 .fp32_dest_acc_en = config.fp32_dest_acc_en,
-                .preserve_fp32_precision = config.preserve_fp32_precision,
+                .unpack_to_dest_mode = config.unpack_to_dest_mode,
                 .math_approx_mode = config.math_approx_mode,
                 .compile_args = arg.compile_args,
                 .defines = config.defines});
@@ -302,7 +302,7 @@ bool is_hw_dim(uint32_t dim, uint32_t rank) {
     return (dim >= rank - 2);
 }
 
-uint32_t compute_inner(Shape shape, uint32_t dim) {
+uint32_t compute_inner(tt::tt_metal::LegacyShape shape, uint32_t dim) {
     uint32_t num_inner = 1;
     auto rank = shape.rank();
 
@@ -317,7 +317,7 @@ uint32_t compute_inner(Shape shape, uint32_t dim) {
     return num_inner;
 }
 
-uint32_t compute_outer(Shape shape, uint32_t dim) {
+uint32_t compute_outer(tt::tt_metal::LegacyShape shape, uint32_t dim) {
     uint32_t num_outer = 1;
     auto rank = shape.rank();
 
@@ -331,7 +331,7 @@ uint32_t compute_outer(Shape shape, uint32_t dim) {
     return num_outer;
 }
 
-void expand_to_max_dim(std::vector<uint32_t> &dim, const Shape &shape) {
+void expand_to_max_dim(std::vector<uint32_t> &dim, const tt::tt_metal::LegacyShape &shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -391,8 +391,8 @@ void validate_output_with_keepdim(const Tensor &input, const Tensor &output, con
         expand_to_max_dim(output_dim_wo_padding, output_shape_wo_padding);
 
         for (int i = 0; i < input_rank; ++i) {
-            TT_FATAL(input_dim[i] == output_dim[i]);
-            TT_FATAL(input_dim_wo_padding[i] == output_dim_wo_padding[i]);
+            TT_FATAL(input_dim[i] == output_dim[i], "Error");
+            TT_FATAL(input_dim_wo_padding[i] == output_dim_wo_padding[i], "Error");
         }
     } else {
         std::vector<uint32_t> expected_output_shape;
@@ -412,8 +412,8 @@ void validate_output_with_keepdim(const Tensor &input, const Tensor &output, con
         for (int i = 0; i < input_rank; ++i) {
             if (i == dim)
                 continue;
-            TT_FATAL(input_shape[i] == expected_output_shape[i]);
-            TT_FATAL(input_shape_wo_padding[i] == expected_output_shape_wo_padding[i]);
+            TT_FATAL(input_shape[i] == expected_output_shape[i], "Error");
+            TT_FATAL(input_shape_wo_padding[i] == expected_output_shape_wo_padding[i], "Error");
         }
     }
 }
@@ -440,7 +440,7 @@ std::vector<int64_t> get_dim(
     return dims;
 }
 
-std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const Shape& shape) {
+std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const tt::tt_metal::LegacyShape& shape) {
     const auto rank = shape.rank();
 
     TT_FATAL(rank >= 2, "Shape must have at least two dims.");
@@ -455,7 +455,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const Shape& shape
     return { W, H, other_dims_product};
 }
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const Shape& shape, uint32_t dim) {
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const tt::tt_metal::LegacyShape& shape, uint32_t dim) {
     const auto rank = shape.rank();
 
     TT_FATAL(rank >= 2, "Shape must have at least two dims.");

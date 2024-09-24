@@ -25,12 +25,14 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     const Tensor& input_tensor_k,
     const Tensor& input_tensor_v,
     std::optional<const Tensor> cur_pos_tensor,
+    std::optional<const Tensor> page_table_tensor,
     const Tensor& output_tensor,
     const std::vector<uint32_t>& cur_pos_ids,
     std::optional<float> scale,
     DeviceComputeKernelConfig compute_kernel_config,
     std::optional<SDPAProgramConfig> program_config,
-    const uint32_t k_chunk_size){
+    const uint32_t k_chunk_size,
+    std::optional<bool> share_cache){
 
     /*
     Q: 1 x B x PNH x DH
@@ -43,16 +45,38 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     During runtime, we may override the number of chunks being processed based on the actual sequence length of the current batch.
     */
 
+    const bool is_paged_attention = page_table_tensor.has_value();
+
     const auto q_shape = input_tensor_q.get_legacy_shape();
     const auto k_shape = input_tensor_k.get_legacy_shape();
     // Use k_shape for S and DH since Q might be different for decode
     uint32_t B = q_shape[1], PNH = q_shape[2], S = k_shape[2], DH = k_shape[3];
+
+    uint32_t num_kv_heads = 0;
+    uint32_t page_block_size_t = 0;
+
+    if (is_paged_attention) {
+        const auto page_table_shape = page_table_tensor.value().get_legacy_shape();
+        uint32_t max_blocks_per_seq = page_table_shape[1];
+        uint32_t block_size = k_shape[2];
+        S = max_blocks_per_seq * block_size;
+        num_kv_heads = k_shape[1];
+        page_block_size_t = block_size / TILE_HEIGHT;
+    }
+    uint32_t Bkv = k_shape[1];
     uint32_t St = S/TILE_HEIGHT;
     uint32_t DHt = DH/TILE_WIDTH;
     uint32_t PNHt = PNH/TILE_HEIGHT;
     uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
     bool is_q_sharded = input_tensor_q.is_sharded();
     bool is_output_sharded = output_tensor.is_sharded();
+    if (!share_cache.has_value()) {
+        // default share_cache to false
+        share_cache = false;
+    }
+    if (share_cache.value()) {
+        TT_FATAL(B%Bkv == 0, "Batch dim in Q must be divisible by batch dim in KV if sharing cache");
+    }
 
     // log_debug all of the above
     log_debug("B: {}", B);
@@ -86,7 +110,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             math_approx_mode = compute_kernel_config.math_approx_mode;
             fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
         } else {
-            TT_FATAL("arch not supported");
+            TT_THROW("arch not supported");
         }
 
     }, compute_kernel_config);
@@ -107,7 +131,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores_available = grid_size.x * grid_size.y;
 
-    TT_FATAL(num_cores_available <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
+    TT_FATAL(num_cores_available <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y, "Error");
 
     // balance the number of cores to use based on batch
     uint32_t num_cores_per_batch = num_cores_available / B;
@@ -214,15 +238,15 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     // Find log2 of stats_granularity using std
     const uint32_t log2_stats_granularity = std::log2(stats_granularity);
     // Assert that this is a power of 2
-    TT_FATAL(stats_granularity == (1 << log2_stats_granularity));
+    TT_FATAL(stats_granularity == (1 << log2_stats_granularity), "Error");
 
     const uint32_t sub_exp_granularity = std::min(Sk_chunk_t, dst_size);
     const uint32_t log2_sub_exp_granularity = std::log2(sub_exp_granularity);
-    TT_FATAL(sub_exp_granularity == (1 << log2_sub_exp_granularity));
+    TT_FATAL(sub_exp_granularity == (1 << log2_sub_exp_granularity), "Error");
 
     const uint32_t mul_bcast_granularity = std::min(PNHt * Sk_chunk_t, dst_size);
     const uint32_t log2_mul_bcast_granularity = std::log2(mul_bcast_granularity);
-    TT_FATAL(mul_bcast_granularity == (1 << log2_mul_bcast_granularity));
+    TT_FATAL(mul_bcast_granularity == (1 << log2_mul_bcast_granularity), "Error");
 
     const uint32_t dht_granularity = std::min(DHt, dst_size);
     const uint32_t log2_dht_granularity = std::log2(dht_granularity);
@@ -265,13 +289,25 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         tt::DataFormat pos_df = tt_metal::datatype_to_dataformat_converter(cur_pos_tensor.value().get_dtype());
         pos_tensor_tile_size = tt_metal::detail::TileSize(pos_df);
         index_stick_size = pos_buffer->aligned_page_size();
-        log2_page_size = std::log2(index_stick_size);
-        TT_FATAL(1 << log2_page_size == index_stick_size);
 
         //cb pos
         auto c_in8_config = CircularBufferConfig(pos_tensor_tile_size, {{CB::dataflow0, pos_df}}).set_page_size(CB::dataflow0, pos_tensor_tile_size);
         auto cb_in8_id = CreateCircularBuffer(program, core_grid, c_in8_config);
 
+    }
+
+    uint32_t page_table_tile_size = 0;
+    uint32_t log2_page_table_page_size = 0;
+    uint32_t page_table_stick_size = 0;
+    if (is_paged_attention) {
+        auto page_table_buffer = page_table_tensor.value().buffer();
+        tt::DataFormat page_table_df = tt_metal::datatype_to_dataformat_converter(page_table_tensor.value().get_dtype());
+        page_table_tile_size = tt_metal::detail::TileSize(page_table_df);
+        page_table_stick_size = page_table_buffer->aligned_page_size();
+
+        //cb page_table
+        auto c_in9_config = CircularBufferConfig(page_table_tile_size, {{CB::dataflow1, page_table_df}}).set_page_size(CB::dataflow1, page_table_tile_size);
+        auto cb_in9_id = CreateCircularBuffer(program, core_grid, c_in9_config);
     }
 
 
@@ -424,7 +460,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     auto in0_mcast_reducer_semaphore_id = tt_metal::CreateSemaphore(program, core_grid, 0);
 
     std::vector<uint32_t> reader_compile_time_args_common = {
-        B, PNHt, St, DHt, Sk_chunk_t, num_active_cores, is_q_sharded, num_cores_per_batch, k_chunk_size, log2_page_size, index_stick_size
+        B, PNHt, St, DHt, Sk_chunk_t, num_active_cores, is_q_sharded, num_cores_per_batch, k_chunk_size, log2_page_size, index_stick_size, (uint32_t)is_paged_attention, num_kv_heads, page_block_size_t, log2_page_table_page_size, page_table_stick_size, Bkv
     };
 
     std::vector<uint32_t> writer_compile_time_args_common = {
@@ -490,6 +526,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     uint32_t k_addr = k_buffer->address();
     uint32_t v_addr = v_buffer->address();
     uint32_t pos_addr = use_cur_pos_tensor ? cur_pos_tensor.value().buffer()->address() : 0;
+    uint32_t page_table_addr = is_paged_attention ? page_table_tensor.value().buffer()->address() : 0;
     uint32_t out_addr = out0_buffer->address();
 
     // Set reader rt args
@@ -504,7 +541,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         uint32_t cur_pos = use_cur_pos_tensor ? -1 : cur_pos_ids.at(cur_batch);
 
         // reader runtime args
-        std::vector<uint32_t> reader_rt_args = { q_addr, k_addr, v_addr, pos_addr, cur_batch, !do_reduce, core_num, cur_pos};
+        std::vector<uint32_t> reader_rt_args = { q_addr, k_addr, v_addr, pos_addr, page_table_addr, cur_batch, !do_reduce, core_num, cur_pos};
         reader_rt_args.insert(reader_rt_args.end(), reduce_core_physical_xs.begin(), reduce_core_physical_xs.end());
         reader_rt_args.insert(reader_rt_args.end(), reduce_core_physical_ys.begin(), reduce_core_physical_ys.end());
 
@@ -545,7 +582,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         is_output_sharded,
         cb_out4_id,
         B,
-        use_cur_pos_tensor
+        use_cur_pos_tensor,
+        is_paged_attention
         ]
     (
         const void* operation,
@@ -566,6 +604,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         uint32_t k_addr = k_buffer->address();
         uint32_t v_addr = v_buffer->address();
         uint32_t pos_addr = use_cur_pos_tensor ? optional_input_tensors.at(0).value().buffer()->address() : 0;
+        uint32_t page_table_addr = is_paged_attention ? optional_input_tensors.at(1).value().buffer()->address() : 0;
         uint32_t out_addr = out0_buffer->address();
 
         auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
@@ -589,10 +628,11 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             reader_args[1] = k_addr;
             reader_args[2] = v_addr;
             reader_args[3] = pos_addr;
-            reader_args[4] = cur_batch;
-            reader_args[5] = !do_reduce;
-            reader_args[6] = core_num;
-            reader_args[7] = use_cur_pos_tensor ? -1: cur_pos_ids.at(cur_batch);
+            reader_args[4] = page_table_addr;
+            reader_args[5] = cur_batch;
+            reader_args[6] = !do_reduce;
+            reader_args[7] = core_num;
+            reader_args[8] = use_cur_pos_tensor ? -1: cur_pos_ids.at(cur_batch);
 
             // writer runtime args
             writer_args[0] = out_addr;

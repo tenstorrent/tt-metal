@@ -2,10 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import ttnn
 import torch
 
-from loguru import logger
+from typing import List
 
 from ttnn.operations.conv2d import determine_parallel_config, create_sharded_memory_config_from_parallel_config
 
@@ -13,66 +14,72 @@ from models.utility_functions import nearest_32
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, ParameterDict
 
 
-# Unet reshard wrapper
-def unet_reshard(
-    ttnn_tensor,
-    sharded_memory_config,
-    use_reshard=True,
-    interleaved_memory_config=ttnn.L1_MEMORY_CONFIG,
-    dtype=None,
-):
-    if use_reshard:
-        return ttnn.to_memory_config(
-            ttnn_tensor,
-            memory_config=sharded_memory_config,
+def nearest_16(x):
+    return math.ceil(x / 16) * 16
+
+
+def determine_num_cores_for_upsample(nhw: int, width: int, max_cores=64) -> int:
+    gcd_nhw_width = math.gcd(nhw, width)
+    cores = nhw // gcd_nhw_width
+    if cores > max_cores:
+        for divisor in range(max_cores, 0, -1):
+            if nhw % divisor == 0 and (nhw // divisor) % width == 0:
+                cores = divisor
+                break
+    return cores
+
+
+# TODO: Make this valid over any num_cores
+def get_core_grid_from_num_cores(num_cores: int):
+    if num_cores == 44:
+        return ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(7, 4),
+                ),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 5),
+                    ttnn.CoreCoord(3, 5),
+                ),
+            }
         )
-    else:
-        ttl_tensor = ttnn_tensor
-        ttl_tensor = ttnn.sharded_to_interleaved(ttl_tensor, interleaved_memory_config, dtype)
-        ttl_tensor = ttnn.interleaved_to_sharded(
-            ttl_tensor,
-            sharded_memory_config,
-            dtype,
-        )
-        return ttl_tensor
+    elif num_cores == 48:
+        return ttnn.CoreGrid(x=8, y=6)
+    raise RuntimeError(f"Could not get core grid given num_cores={num_cores}")
 
 
-# Unet concat tensor wrapper
-def unet_concat(ttnn_tensors, dim=-1, use_reshard=True, perf_mode=False):
-    if not perf_mode:
-        return ttnn.concat(ttnn_tensors, dim=3)
-
-    assert len(ttnn_tensors) > 0
+def unet_concat(inputs: List, dim=-1):
+    assert len(inputs) > 0
     assert dim < 0
-    ttlib_tensors = ttnn_tensors
-    all_sharded = all(t.is_sharded() for t in ttlib_tensors)
+    all_sharded = all(tensor.is_sharded() for tensor in inputs)
     if all_sharded:
-        max_idx, output_mem_config = max(
-            ((i, t.memory_config()) for i, t in enumerate(ttlib_tensors)), key=lambda m: m[1].shard_spec.num_cores()
+        max_idx, memory_config = max(
+            ((i, t.memory_config()) for i, t in enumerate(inputs)), key=lambda m: m[1].shard_spec.num_cores()
         )
-        for i in range(0, len(ttlib_tensors)):
+        for i in range(0, len(inputs)):
             if i == max_idx:
                 continue
-            t = ttlib_tensors[i]
+            t = inputs[i]
             t_mem_config = t.memory_config()
             t_shard_shape = t_mem_config.shard_spec.shape
-            output_shard_shape = output_mem_config.shard_spec.shape
+            output_shard_shape = memory_config.shard_spec.shape
             output_shard_shape[dim] += t_shard_shape[dim]
-            output_mem_config.shard_spec.shape = output_shard_shape
+            memory_config.shard_spec.shape = output_shard_shape
 
             reshard_shape = output_shard_shape
             reshard_shape[dim] = t_shard_shape[dim]
             if reshard_shape != t_shard_shape:
                 t_mem_config.shard_spec.shape = reshard_shape
-                t_mem_config.shard_spec.grid = output_mem_config.shard_spec.grid
-                t_mem_config.shard_spec.orientation = output_mem_config.shard_spec.orientation
-                ttlib_tensors[i] = ttnn.reshard(t, t_mem_config)
+                t_mem_config.shard_spec.grid = memory_config.shard_spec.grid
+                t_mem_config.shard_spec.orientation = memory_config.shard_spec.orientation
+                inputs[i] = ttnn.reshard(t, t_mem_config)
     else:
-        output_mem_config = ttnn.DRAM_MEMORY_CONFIG
-        for i in range(0, len(ttlib_tensors)):
-            if ttlib_tensors[i].is_sharded():
-                ttlib_tensors[i] = ttnn.to_memory_config(ttlib_tensors[i], output_mem_config)
-    return ttnn.concat(ttlib_tensors, dim=dim, memory_config=output_mem_config)
+        memory_config = ttnn.DRAM_MEMORY_CONFIG
+        for i in range(0, len(inputs)):
+            if inputs[i].is_sharded():
+                inputs[i] = ttnn.to_memory_config(inputs[i], memory_config)
+    return ttnn.concat(inputs, dim=dim, memory_config=memory_config)
 
 
 class UNetPointwiseConv2D:
@@ -104,8 +111,20 @@ class UNetPointwiseConv2D:
         self.bias = ttnn.to_layout(self.bias, ttnn.TILE_LAYOUT).to(device)
 
     def __call__(self, x):
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        x = ttnn.linear(x, self.weight, bias=self.bias, dtype=self.activation_dtype)
+        x = ttnn.linear(
+            x,
+            self.weight,
+            memory_config=x.memory_config(),
+            bias=self.bias,
+            dtype=self.activation_dtype,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            ),
+        )
         return x
 
 
@@ -149,10 +168,14 @@ class UNetConv2D:
             deallocate_activation=self.deallocate_activation,
             fp32_dest_acc_enabled=True,
             packer_l1_accum_enabled=False,
-            enable_act_double_buffer=False,
-            enable_split_reader=False,
+            enable_act_double_buffer=(
+                conv.use_activation_double_buffer if "use_activation_double_buffer" in conv else False
+            ),
+            enable_split_reader=conv.use_split_reader if "use_split_reader" in conv else False,
             enable_subblock_padding=False,
             activation=activation,
+            output_layout=ttnn.TILE_LAYOUT,
+            input_channels_alignment=conv.input_channels_alignment if "input_channels_alignment" in conv else 32,
         )
         config_override = conv.conv_blocking_and_parallelization_config_override
         if config_override and "act_block_h" in config_override:
@@ -190,20 +213,13 @@ class UNetConv2D:
 
 
 class UNetMaxPool2D:
-    def __init__(self, pool, channels, device=None, reader_patterns_cache={}):
+    def __init__(self, pool, channels, device=None):
         self.pool = pool
         self.channels = channels
         self.device = device
 
     def __call__(self, x):
-        # For some reason the shard widths don't always match - so don't assert on it
-        # assert (
-        # x.memory_config().shard_spec.num_cores()
-        # == self.max_pool.max_pool.input_sharded_memory_config.shard_spec.num_cores()
-        # and x.memory_config().shard_spec.shape[0]
-        # == self.max_pool.max_pool.input_sharded_memory_config.shard_spec.shape[0]
-        # ), "Expected same input shard to match max pool's shard configuration"
-        x = ttnn.max_pool2d_new(
+        x = ttnn.max_pool2d(
             input_tensor=x,
             batch_size=self.pool.batch_size,
             input_h=self.pool.input_height,
@@ -228,17 +244,22 @@ class UNetDownblock:
         pool,
         device,
         conv_cache={},
-        max_pool_cache={},
         should_reshard=False,
         mesh_mapper=None,
     ):
         self.conv1 = UNetConv2D(conv1, bn=bn1, device=device, cache=conv_cache, mesh_mapper=mesh_mapper)
-        self.conv2 = UNetConv2D(conv2, bn=bn2, device=device, cache=conv_cache, mesh_mapper=mesh_mapper)
-        self.pool1 = UNetMaxPool2D(pool, conv2.out_channels, device=device, reader_patterns_cache=max_pool_cache)
+        self.conv2 = UNetConv2D(
+            conv2,
+            bn=bn2,
+            device=device,
+            cache=conv_cache,
+            mesh_mapper=mesh_mapper,
+        )
+        self.pool1 = UNetMaxPool2D(pool, conv2.out_channels, device=device)
 
         self.should_reshard = should_reshard
         if self.should_reshard:
-            self.parallel_config = determine_parallel_config(
+            parallel_config = determine_parallel_config(
                 is_1d_systolic=True,
                 batch_size=self.conv1.batch_size,
                 input_channels=self.conv1.in_channels,
@@ -247,6 +268,16 @@ class UNetDownblock:
                 output_channels=self.conv1.out_channels,
                 device=device,
                 is_out_tiled=True,
+            )
+            self.sharded_memory_config = create_sharded_memory_config_from_parallel_config(
+                tensor_shape=[
+                    1,
+                    1,
+                    self.conv1.input_width * self.conv1.input_height * self.conv1.batch_size,
+                    nearest_32(self.conv1.in_channels),
+                ],
+                parallel_config=parallel_config,
+                tile_size=32 if conv1.dtype == ttnn.bfloat8_b else 1,
             )
 
     def __call__(self, x):
@@ -257,25 +288,13 @@ class UNetDownblock:
             x.shape[-1],  # Channels can be padded
         ], f"Expected downblock input to flattened into [1, 1, BHW, C] but was {list(x.shape)}"
         if self.should_reshard:
-            sharded_memory_config = create_sharded_memory_config_from_parallel_config(
-                tensor_shape=[
-                    1,
-                    1,
-                    x.shape[0] * x.shape[1] * x.shape[2],
-                    x.shape[3],
-                ],
-                parallel_config=self.parallel_config,
-                tile_size=32 if x.dtype == ttnn.bfloat8_b else 1,
-            )
             x = ttnn.to_memory_config(
                 x,
-                memory_config=sharded_memory_config,
+                memory_config=self.sharded_memory_config,
             )
         x = self.conv1(x)
         x = self.conv2(x)
-        residual = ttnn.sharded_to_interleaved(
-            x, memory_config=ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.bfloat16
-        )  # pool deletes its activation - spill to DRAM
+        residual = x
         x = self.pool1(x)
         return x, residual
 
@@ -306,7 +325,7 @@ class UNetUpblock:
                     1,
                     1,
                     self.conv1.input_width * self.conv1.input_height * self.conv1.batch_size,
-                    nearest_32(self.conv1.in_channels),
+                    self.conv1.in_channels,
                 ],
                 parallel_config=parallel_config,
                 tile_size=32 if conv1.dtype == ttnn.bfloat8_b else 1,
@@ -317,7 +336,19 @@ class UNetUpblock:
         x = ttnn.reshape(
             x, (self.conv1.batch_size, self.conv1.input_height // 2, self.conv1.input_width // 2, x.shape[-1])
         )
-        x = ttnn.upsample(x, (2, 2, 1))
+
+        nhw = x.shape[0] * x.shape[1] * x.shape[2]
+        num_cores = determine_num_cores_for_upsample(nhw, x.shape[2])
+        core_grid = get_core_grid_from_num_cores(num_cores)
+        shardspec = ttnn.create_sharded_memory_config_(
+            x.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
+        )
+        if x.is_sharded():
+            x = ttnn.reshard(x, shardspec)
+        else:
+            x = ttnn.interleaved_to_sharded(x, shardspec)
+
+        x = ttnn.upsample(x, (2, 2, 1), memory_config=x.memory_config())
         x = ttnn.reshape(
             x, (1, 1, self.conv1.batch_size * self.conv1.input_height * self.conv1.input_width, x.shape[-1])
         )
@@ -327,32 +358,34 @@ class UNetUpblock:
         assert list(x.shape)[:2] == [
             1,
             1,
-        ], f"Expected downblock input to flattened into [1, 1, BHW, C] but was {list(x.shape)}"
+        ], f"Expected upblock input to flattened into [1, 1, BHW, C] but was {list(x.shape)}"
 
+        residual = ttnn.to_layout(residual, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         x = self.upsample(x)
 
-        residual = ttnn.to_layout(residual, ttnn.ROW_MAJOR_LAYOUT)
-        x = unet_concat([x, residual], dim=-1, perf_mode=True)
+        y = unet_concat([x, residual], dim=-1)
+        ttnn.deallocate(x)
         ttnn.deallocate(residual)
 
         if self.should_reshard:
-            x = ttnn.to_memory_config(x, self.sharded_memory_config)
+            if y.is_sharded():
+                y = ttnn.reshard(y, self.sharded_memory_config)
+            else:
+                y = ttnn.interleaved_to_sharded(y, self.sharded_memory_config)
 
-        x = self.conv1(x)
-        x = self.conv2(x)
-        x = self.conv3(x)
+        y = self.conv1(y)
+        y = self.conv2(y)
+        y = self.conv3(y)
 
-        return x
+        return y
 
 
 class UNet:
     def __init__(self, parameters: ParameterDict, device, mesh_mapper=None) -> None:
         self.device = device
         self.conv_cache = {}
-        self.max_pool_cache = {}
         self.downblock1 = UNetDownblock(
             parameters.c1,
             parameters.b1,
@@ -361,8 +394,7 @@ class UNet:
             parameters.p1,
             device,
             conv_cache=self.conv_cache,
-            max_pool_cache=self.max_pool_cache,
-            should_reshard=True,
+            should_reshard=False,
             mesh_mapper=mesh_mapper,
         )
         self.downblock2 = UNetDownblock(
@@ -373,7 +405,6 @@ class UNet:
             parameters.p2,
             device,
             conv_cache=self.conv_cache,
-            max_pool_cache=self.max_pool_cache,
             should_reshard=True,
             mesh_mapper=mesh_mapper,
         )
@@ -385,7 +416,6 @@ class UNet:
             parameters.p3,
             device,
             conv_cache=self.conv_cache,
-            max_pool_cache=self.max_pool_cache,
             should_reshard=True,
             mesh_mapper=mesh_mapper,
         )
@@ -397,7 +427,6 @@ class UNet:
             parameters.p4,
             device,
             conv_cache=self.conv_cache,
-            max_pool_cache=self.max_pool_cache,
             should_reshard=True,
             mesh_mapper=mesh_mapper,
         )
@@ -436,7 +465,7 @@ class UNet:
             parameters.b5_3,
             device,
             conv_cache=self.conv_cache,
-            should_reshard=False,
+            should_reshard=True,
             mesh_mapper=mesh_mapper,
         )
         self.upblock2 = UNetUpblock(
@@ -482,20 +511,35 @@ class UNet:
             mesh_mapper=mesh_mapper,
         )
 
+        self.input_sharded_memory_config = ttnn.create_sharded_memory_config(
+            [
+                1,
+                1,
+                self.downblock1.conv1.batch_size
+                * self.downblock1.conv1.input_height
+                * self.downblock1.conv1.input_width,
+                nearest_16(self.downblock1.conv1.in_channels),
+            ],
+            ttnn.CoreGrid(x=8, y=8),
+            ttnn.ShardStrategy.HEIGHT,
+        )
+
     def bottleneck(self, x):
         if x.is_sharded():
-            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-        x = ttnn.interleaved_to_sharded(
-            x,
-            self.bnc_sharded_memory_config,
-        )
+            x = ttnn.reshard(x, self.bnc_sharded_memory_config)
+        else:
+            x = ttnn.interleaved_to_sharded(
+                x,
+                self.bnc_sharded_memory_config,
+            )
         x = self.bnc(x)
         return self.bnc2(x)
 
-    def __call__(self, x, original_shape, perf_mode=False):
+    def __call__(self, x, move_input_tensor_to_device=True):
         assert len(x.shape) == 4, f"Expected UNet input tensors to be rank 4 (was {len(x.shape)})"
 
-        x = x.to(self.device, ttnn.L1_MEMORY_CONFIG)
+        if move_input_tensor_to_device:
+            x = ttnn.to_device(x, device=self.device, memory_config=self.input_sharded_memory_config)
 
         x, c1_residual = self.downblock1(x)
         x, c2_residual = self.downblock2(x)
@@ -505,12 +549,14 @@ class UNet:
         x = self.bottleneck(x)
 
         x = self.upblock1(x, c4_residual)
+        ttnn.deallocate(c4_residual)
         x = self.upblock2(x, c3_residual)
+        ttnn.deallocate(c3_residual)
         x = self.upblock3(x, c2_residual)
+        ttnn.deallocate(c2_residual)
         x = self.upblock4(x, c1_residual)
+        ttnn.deallocate(c1_residual)
 
         x = self.output_layer(x)
-
-        x = ttnn.from_device(x)
 
         return x

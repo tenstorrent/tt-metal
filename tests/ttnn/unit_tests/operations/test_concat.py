@@ -60,10 +60,22 @@ def test_concat(device, height, width, dim, async_mode):
             (80, 48),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
         ),
+        (
+            (1, 1, 25600, 64),
+            (512, 64),
+            (1, 1, 25600, 64),
+            (512, 64),
+            (512, 128),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 6), ttnn.CoreCoord(1, 6)),
+                }
+            ),
+        ),
     ),
 )
 @pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
-@pytest.mark.skip(reason="Issue #8426: Add validation for ttnn.concat for sharded inputs")
 def test_sharded_concat(
     device, input_shape_a, shard_shape_a, input_shape_b, shard_shape_b, output_shard_shape, shard_grid, async_mode
 ):

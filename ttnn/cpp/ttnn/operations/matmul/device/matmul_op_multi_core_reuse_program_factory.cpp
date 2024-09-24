@@ -5,7 +5,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
@@ -84,7 +84,7 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     uint32_t num_blocks_y = M / per_core_M;
     uint32_t num_blocks_x = N / per_core_N;
 
-    CoreRangeSet all_cores(tt::tt_metal::num_cores_to_corerange_set(
+    CoreRangeSet all_cores(num_cores_to_corerange_set(
         num_blocks_x * num_blocks_y, device->compute_with_storage_grid_size(), true));
 
     // Create circular buffers
@@ -269,9 +269,9 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse(
     uint32_t per_core_M = 16;
     uint32_t per_core_N = 16;
 
-    TT_FATAL(Mt % per_core_M == 0);
-    TT_FATAL(Nt % per_core_N == 0);
-    TT_FATAL(Kt % in0_block_w == 0);
+    TT_FATAL(Mt % per_core_M == 0, "Error");
+    TT_FATAL(Nt % per_core_N == 0, "Error");
+    TT_FATAL(Kt % in0_block_w == 0, "Error");
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
@@ -280,12 +280,12 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     uint32_t num_blocks_total = (Mt / per_core_M) * (Nt / per_core_N);
-    TT_FATAL(num_blocks_total <= num_cores_x * num_cores_y);
+    TT_FATAL(num_blocks_total <= num_cores_x * num_cores_y, "Error");
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::tt_metal::Shape cshape = output.get_legacy_shape();  // C=A*B, N1MK*11KN->N1MN
+    tt::tt_metal::LegacyShape cshape = output.get_legacy_shape();  // C=A*B, N1MK*11KN->N1MN
     tt_metal::Buffer *out_buffer = output.buffer();
     TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
 

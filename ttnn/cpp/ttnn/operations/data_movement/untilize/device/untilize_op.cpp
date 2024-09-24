@@ -5,7 +5,7 @@
 #include "untilize_op.hpp"
 
 #include "ttnn/run_operation.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "untilize_program_factory.hpp"
 
 namespace ttnn::operations::data_movement {
@@ -26,44 +26,46 @@ uint32_t get_num_cores(CoreCoord grid_size, uint32_t nblocks) {
 }  // namespace untilize_helpers
 
 void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
+    using namespace tt::constants;
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to untilize need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to untilize need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Can only untilize tile major data");
 
-    TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
+    TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
 
     if (input_tensor_a.memory_config().is_sharded()) {
         if (this->output_mem_config.is_sharded()) {
-            TT_FATAL(this->output_mem_config.memory_layout == input_tensor_a.memory_config().memory_layout);
+            TT_FATAL(this->output_mem_config.memory_layout == input_tensor_a.memory_config().memory_layout, "Error");
         }
         if (input_tensor_a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-            TT_FATAL(input_tensor_a.shard_spec().value().grid.ranges().size() == 1);
+            TT_FATAL(input_tensor_a.shard_spec().value().grid.ranges().size() == 1, "Error");
         }
-        TT_FATAL(this->use_multicore == true);
+        TT_FATAL(this->use_multicore == true, "Error");
     } else if (this->output_mem_config.is_sharded()) {
-        TT_FATAL(this->use_multicore == true);
-        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        TT_FATAL(this->use_multicore == true, "Error");
+        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
         uint32_t ntiles = input_tensor_a.volume() / TILE_HW;
         uint32_t ntiles_per_block = input_tensor_a.get_legacy_shape()[-1] / TILE_WIDTH;
         uint32_t nblocks = ceil((float)ntiles / ntiles_per_block);
         auto num_cores =
             untilize_helpers::get_num_cores(input_tensor_a.device()->compute_with_storage_grid_size(), nblocks);
         uint32_t fused_height = input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1];
-        TT_FATAL(fused_height % num_cores == 0);
+        TT_FATAL(fused_height % num_cores == 0, "Error");
     } else {
-        TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
-        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+        TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
     }
 }
 
-std::vector<tt::tt_metal::Shape> Untilize::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> Untilize::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     return {input_tensor_a.get_legacy_shape()};
 }
 
 std::vector<Tensor> Untilize::create_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
     DataType output_dtype =
         input_tensor.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.get_dtype();
@@ -84,7 +86,7 @@ std::vector<Tensor> Untilize::create_output_tensors(
             auto num_cores =
                 untilize_helpers::get_num_cores(input_tensor.device()->compute_with_storage_grid_size(), nblocks);
             auto shard_grid =
-                num_cores_to_corerange_set(num_cores, input_tensor.device()->compute_with_storage_grid_size(), true);
+                tt::tt_metal::num_cores_to_corerange_set(num_cores, input_tensor.device()->compute_with_storage_grid_size(), true);
             uint32_t fused_height = input_tensor.volume() / input_tensor.get_legacy_shape()[-1];
             std::array<uint32_t, 2> shard_shape = {fused_height / num_cores, input_tensor.get_legacy_shape()[-1]};
             ShardSpec shard_spec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};

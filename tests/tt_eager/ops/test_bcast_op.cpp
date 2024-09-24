@@ -7,7 +7,7 @@
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "common/constants.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
-#include <tt_numpy/functions.hpp>
+#include <ttnn/operations/numpy/functions.hpp>
 
 #include <algorithm>
 #include <functional>
@@ -38,7 +38,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        auto shapes = std::vector<Shape>{{1, 1, TILE_HEIGHT, TILE_WIDTH}, {1, 1, TILE_HEIGHT * 2, TILE_WIDTH * 2}, {1, 1, TILE_HEIGHT * 3, TILE_WIDTH * 4}};
+        auto shapes = std::vector<tt::tt_metal::LegacyShape>{{1, 1, TILE_HEIGHT, TILE_WIDTH}, {1, 1, TILE_HEIGHT * 2, TILE_WIDTH * 2}, {1, 1, TILE_HEIGHT * 3, TILE_WIDTH * 4}};
 
         auto run_operations = [&shapes, device] {
             for (const auto shape : shapes) {
@@ -56,8 +56,8 @@ int main(int argc, char **argv) {
                         throw std::runtime_error("Unsupported Dim!");
                     }
 
-                    Tensor a = tt::numpy::random::random(input_shape_a).to(Layout::TILE).to(device);
-                    Tensor b = tt::numpy::zeros({1, 1, TILE_HEIGHT, TILE_WIDTH}, DataType::BFLOAT16).to(Layout::TILE).to(device);
+                    Tensor a = ttnn::numpy::random::random(input_shape_a).to(Layout::TILE).to(device);
+                    Tensor b = ttnn::numpy::zeros({1, 1, TILE_HEIGHT, TILE_WIDTH}, DataType::BFLOAT16).to(Layout::TILE).to(device);
 
                     for (auto bcast_math: magic_enum::enum_values<ttnn::BcastOpMath>()) {
                         Tensor c = ttnn::bcast(0,a, b, bcast_math, bcast_dim);
@@ -73,29 +73,29 @@ int main(int argc, char **argv) {
             }
 
             {
-                Tensor a = tt::numpy::random::random({1, 1, 32, 4544}).to(Layout::TILE).to(device);
-                Tensor b = tt::numpy::zeros({1, 1, 32, 4544}, DataType::BFLOAT16).to(Layout::TILE).to(device);
+                Tensor a = ttnn::numpy::random::random({1, 1, 32, 4544}).to(Layout::TILE).to(device);
+                Tensor b = ttnn::numpy::zeros({1, 1, 32, 4544}, DataType::BFLOAT16).to(Layout::TILE).to(device);
                 Tensor c = ttnn::bcast(0, a, b, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::H);
                 Tensor d = c.cpu();
             }
 
             {
-                Tensor a = tt::numpy::random::random({1, 1, 32, 4544}).to(Layout::TILE).to(device);
-                Tensor b = tt::numpy::zeros({1, 1, 32, 4544}, DataType::BFLOAT16).to(Layout::TILE).to(device);
+                Tensor a = ttnn::numpy::random::random({1, 1, 32, 4544}).to(Layout::TILE).to(device);
+                Tensor b = ttnn::numpy::zeros({1, 1, 32, 4544}, DataType::BFLOAT16).to(Layout::TILE).to(device);
                 Tensor c = ttnn::bcast(0,a, b, ttnn::BcastOpMath::ADD, ttnn::BcastOpDim::H);
                 Tensor d = c.cpu();
             }
 
             {
-                Tensor a = tt::numpy::random::random({1, 71, 32, 32}).to(Layout::TILE).to(device);
-                Tensor b = tt::numpy::zeros({1, 1, 32, 32}, DataType::BFLOAT16).to(Layout::TILE).to(device);
+                Tensor a = ttnn::numpy::random::random({1, 71, 32, 32}).to(Layout::TILE).to(device);
+                Tensor b = ttnn::numpy::zeros({1, 1, 32, 32}, DataType::BFLOAT16).to(Layout::TILE).to(device);
                 Tensor c = ttnn::bcast(0,a, b, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::HW);
                 Tensor d = c.cpu();
             }
 
             {
-                Tensor a = tt::numpy::random::random({1, 71, 32, 64}).to(Layout::TILE).to(device);
-                Tensor b = tt::numpy::zeros({1, 1, 32, 32}, DataType::BFLOAT16).to(Layout::TILE).to(device);
+                Tensor a = ttnn::numpy::random::random({1, 71, 32, 64}).to(Layout::TILE).to(device);
+                Tensor b = ttnn::numpy::zeros({1, 1, 32, 32}, DataType::BFLOAT16).to(Layout::TILE).to(device);
                 Tensor c = ttnn::bcast(0,a, b, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::HW);
                 Tensor d = c.cpu();
             }
@@ -124,7 +124,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

@@ -5,12 +5,13 @@
 #include "untilize_with_halo_v2_op.hpp"
 
 #include "ttnn/run_operation.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "untilize_with_halo_v2_program_factory.hpp"
 
 namespace ttnn::operations::data_movement {
 
 void UntilizeWithHaloV2::validate(const std::vector<Tensor>& input_tensors) const {
+    using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
 
     // validate input data tensor
@@ -18,15 +19,16 @@ void UntilizeWithHaloV2::validate(const std::vector<Tensor>& input_tensors) cons
         // skip the untilize, only do halo
         log_debug(tt::LogOp, "Input is ROW_MAJOR, no need to untilize.");
     } else {
-        TT_FATAL(input_tensor.volume() % TILE_HW == 0);
+        TT_FATAL(input_tensor.volume() % TILE_HW == 0, "Error");
     }
     TT_FATAL(
         input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
-    TT_FATAL(input_tensor.shard_spec().has_value());
+        input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
+        "Unsupported memory layout {}.", input_tensor.memory_config().memory_layout);
+    TT_FATAL(input_tensor.shard_spec().has_value(), "Error");
 }
 
-std::vector<tt::tt_metal::Shape> UntilizeWithHaloV2::compute_output_shapes(
+std::vector<tt::tt_metal::LegacyShape> UntilizeWithHaloV2::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input = input_tensors.at(0);
     const auto& input_shape = input.get_legacy_shape();
@@ -58,6 +60,7 @@ std::vector<Tensor> UntilizeWithHaloV2::create_output_tensors(
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout == out_mem_config_.memory_layout,
+        "{} {}",
         input_tensor.memory_config(),
         out_mem_config_);
     if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
@@ -65,7 +68,7 @@ std::vector<Tensor> UntilizeWithHaloV2::create_output_tensors(
         auto output_core_range = *(out_mem_config_.shard_spec->grid.ranges().begin());
         auto input_core_w = input_core_range.end_coord.y - input_core_range.start_coord.y + 1;
         auto output_core_w = output_core_range.end_coord.y - output_core_range.start_coord.y + 1;
-        TT_FATAL(input_core_w == output_core_w);
+        TT_FATAL(input_core_w == output_core_w, "Error");
     }
 
     auto out_mem_config = out_mem_config_;

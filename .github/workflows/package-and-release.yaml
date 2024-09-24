@@ -11,13 +11,21 @@ permissions:
   packages: write
 
 jobs:
+  build-docker-image:
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
   build-artifact:
+    needs: build-docker-image
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
+    with:
+      build-docker: false
   build-artifact-profiler:
+    needs: build-docker-image
     uses: ./.github/workflows/build-artifact.yaml
     with:
       tracy: true
+      build-docker: false
   single-card-demos:
     needs: build-artifact
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
@@ -110,23 +118,23 @@ jobs:
         with:
           name: release-notes
           path: RELEASE_NOTES.txt
-  build-eager-package:
+  build-wheels:
     needs: create-tag
     strategy:
       matrix:
         os: [ubuntu-20.04]
         arch: [grayskull, wormhole_b0]
-    uses: ./.github/workflows/eager-package.yaml
+    uses: ./.github/workflows/_build-wheels-impl.yaml
     with:
-      environment: dev
       os: ${{ matrix.os }}
       arch: ${{ matrix.arch }}
+      from-precompiled: false
   # Candidate for breaking up
   create-and-upload-draft-release:
     needs: [
       create-tag,
       create-release-notes,
-      build-eager-package,
+      build-wheels,
     ]
     strategy:
       matrix:

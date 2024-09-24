@@ -5,7 +5,7 @@
 #include "binary_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-//#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+//#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -31,6 +31,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::constants;
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
@@ -105,7 +106,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
             bN,
             TILE_HEIGHT);
     } else {
-        TT_FATAL(false, "Unsupported memory layout");
+        TT_THROW("Unsupported memory layout");
     }
 
     TT_ASSERT(
@@ -252,6 +253,7 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreShardedOptimized::override_
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::constants;
 
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
@@ -282,7 +284,7 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreShardedOptimized::override_
             Wt = shard_spec.shape[1] / TILE_WIDTH;
             Ht = shard_spec.shape[0] / TILE_HEIGHT;
         } else{
-            TT_FATAL(false, "Unsupported memory layout");
+            TT_THROW("Unsupported memory layout");
         }
         uint32_t ncores_y = ncores / ncores_x;
         uint32_t Ht_per_b1 = 0; // Ht per batch

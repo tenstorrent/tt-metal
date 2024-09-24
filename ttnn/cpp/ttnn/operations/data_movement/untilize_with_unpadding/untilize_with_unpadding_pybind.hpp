@@ -16,8 +16,6 @@ namespace py = pybind11;
 void bind_untilize_with_unpadding(py::module &module) {
     auto doc =
         R"doc(
-            untilize_with_unpadding(input_tensor: ttnn.Tensor, output_tensor_end: ttnn.Shape, *, memory_config: Optional[MemoryConfig] = None, use_multicore: bool = False, use_pack_untilize: bool = True, queue_id: int = 0) -> ttnn.Tensor
-
             Changes data layout of input tensor to ROW_MAJOR and unpads/removes elements from the tensor.
 
             Input tensor must be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.
@@ -25,14 +23,17 @@ void bind_untilize_with_unpadding(py::module &module) {
             Output tensor will be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
 
             Args:
-                * :attr:`input_tensor`: Input Tensor.
-                * :attr:`output_tensor_end`: End indices of input tensor in output tensor.
+                input_tensor (ttnn.Tensor): the input tensor
+                output_tensor_end (shape): End indices of input tensor in output tensor.
 
             Keyword Args:
-                * :attr:`memory_config`: Memory Config of the output tensor.
-                * :attr:`use_multicore`: Whether to use multicore.
-                * :attr:`use_pack_untilize`: Whether to use pack untilize.
-                * :attr:`queue_id`: command queue id.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
+                use_pack_untilize (bool, optional): Whether to use pack untilize. Defaults to `True`.
+                queue_id (int, optional): command queue id. Defaults to `0`.
+
+            Returns:
+                List of ttnn.Tensor: the output tensor.
         )doc";
 
     using OperationType = decltype(ttnn::untilize_with_unpadding);
@@ -43,7 +44,7 @@ void bind_untilize_with_unpadding(py::module &module) {
         ttnn::pybind_overload_t{
             [](const OperationType &self,
                const ttnn::Tensor &input_tensor,
-               const tt::tt_metal::Shape &output_tensor_end,
+               const tt::tt_metal::LegacyShape &output_tensor_end,
                const std::optional<MemoryConfig> &memory_config,
                bool use_multicore,
                bool use_pack_untilize,

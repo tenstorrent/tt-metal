@@ -44,6 +44,21 @@ def is_sharded(tensor) -> bool:
 get_memory_config = ttnn._ttnn.core.get_memory_config
 
 
+def num_cores_to_corerange_set(
+    target_num_cores: int,
+    grid_size: ttnn.CoreCoord,
+    row_wise: bool = False,
+):
+    """
+    Create a CoreRangeSet containing the specified number of cores
+    """
+    return ttnn._ttnn.operations.core.num_cores_to_corerange_set(
+        target_num_cores,
+        grid_size,
+        row_wise,
+    )
+
+
 def has_tile_padding(tensor, *, dim=None):
     if dim is not None:
         rank = tensor.shape.rank
@@ -73,22 +88,21 @@ def create_sharded_memory_config(
     use_height_and_width_as_shard_shape: bool = False,
 ) -> MemoryConfig:
     """
-    create_sharded_memory_config(shape: Union[ttnn.Shape, Tuple[int, ...], List[int]], core_grid: Union[ttnn.CoreGrid, ttnn.CoreRange], strategy: ShardStrategy, orientation: Optional[ShardOrientation] = None, halo: bool = False, use_height_and_width_as_shard_shape: bool = False) -> MemoryConfig
-
     Creates a MemoryConfig object with a sharding spec, required for sharded ops.
-    Currently sharding only supports L1 tensors.
 
     Args:
-        * :attr:`shape`: the shape of the tensor
-        * :attr:`core_grid`: the core_grid on which to distribute the sharded tensor on (writes to the cores L1s)
-        * :attr:`strategy`: the sharding strategy of either height, width or block
-        * :attr:`orientation`: the order in which to traverse the cores when reading/writing shards. Defaults to ttnn.ShardOrientation.ROW_MAJOR
-        * :attr:`halo`: if the shards have overlapping values. Defaults to False
-        * :attr:`use_height_and_width_as_shard_shape`: if True, the height and width of the tensor will be used as the shard shape. Defaults to False. If is False, the shard shape will be calculated based on the core_grid and the tensor shape where tensor shape is seen as [math.prod(dims), width]
+        shape (ttnn.Shape | Tuple[int, ...] | List[int]): the shape of the tensor.
+        core_grid (ttnn.CoreGrid | ttnn.CoreRange): the core_grid on which to distribute the sharded tensor on (writes to the cores L1s).
+        strategy (ttnn.ShardStrategy): the sharding strategy of either height, width or block.
+        orientation (ttnn.ShardOrientation, optional): the order in which to traverse the cores when reading/writing shards. Defaults to `None`.
+        halo (bool, optional): if the shards have overlapping values. Defaults to `False`.
+        use_height_and_width_as_shard_shape (bool, optional): if True, the height and width of the tensor will be used as the shard shape. Defaults to `False`. If is False, the shard shape will be calculated based on the core_grid and the tensor shape where tensor shape is seen as [math.prod(dims), width]
 
-
-    Example::
+    Example:
         >>> tensor = ttnn.create_sharded_memory_config((5, 8), (320,64), ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR, False)
+
+    Note:
+        Currently sharding only supports L1 tensors.
     """
 
     if not isinstance(shape, (list, tuple, ttnn.Shape)):
@@ -321,8 +335,8 @@ def create_sharded_memory_config_(
     return memory_config
 
 
-dump_memory_config = ttnn._ttnn.deprecated.tensor.dump_memory_config
-load_memory_config = ttnn._ttnn.deprecated.tensor.load_memory_config
+dump_memory_config = ttnn._ttnn.tensor.dump_memory_config
+load_memory_config = ttnn._ttnn.tensor.load_memory_config
 
 
 __all__ = []

@@ -1,6 +1,5 @@
-
-#/bin/bash
-# set -eo pipefail
+#!/bin/bash
+set -eo pipefail
 
 run_t3000_ttmetal_tests() {
   # Record the start time
@@ -134,6 +133,24 @@ run_t3000_grok_tests() {
   fi
 }
 
+run_t3000_unet_shallow_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_unet_shallow_tests"
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_unet/tests/test_unet_multi_device.py; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_unet_shallow_tests took $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_tests() {
   # Run ttmetal tests
   run_t3000_ttmetal_tests
@@ -152,6 +169,9 @@ run_t3000_tests() {
 
   # Run grok tests
   run_t3000_grok_tests
+
+  # Run unet shallow tests
+  run_t3000_unet_shallow_tests
 }
 
 fail=0

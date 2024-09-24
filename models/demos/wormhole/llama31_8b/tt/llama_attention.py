@@ -53,7 +53,10 @@ class TtLlamaAttention(nn.Module):
         self.rot_mat = rot_mat  # Rotational matrix in the form of a list of 8K tensors [1,1,head_dim,head_dim] for positional embedding on device
 
         layer_name = f"layers.{layer_num}.attention"
-        cache_name = lambda name: weight_cache_path / (f"{layer_name}.{name}")
+        if configuration.dummy_weights:
+            cache_name = lambda _: None
+        else:
+            cache_name = lambda name: weight_cache_path / (f"{layer_name}.{name}")
 
         wq_str = f"{layer_name}.wq.weight"
         wk_str = f"{layer_name}.wk.weight"
@@ -298,6 +301,16 @@ class TtLlamaAttention(nn.Module):
             ttnn.deallocate(k_heads)
             ttnn.deallocate(v_heads)
 
+            # Reshape such that true unpadded batch is tracked in shape
+            q_heads_shape = q_heads.shape
+            q_heads = ttnn.reshape(
+                q_heads,
+                ttnn.Shape(
+                    (1, q_heads_shape[1], self.max_batch_size, q_heads_shape[3]),
+                    (1, q_heads_shape[1], 32, q_heads_shape[3]),
+                ),
+            )
+
             attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode_gqa(
                 q_heads,
                 keys,
@@ -321,7 +334,8 @@ class TtLlamaAttention(nn.Module):
             dense_out = ttnn.linear(
                 attn_output_cat,
                 wo,
-                memory_config=self.model_config["LM_HEAD_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["ATTN_OUTPUT_MEMCFG"],
+                program_config=self.model_config["ATTN_OUTPUT_PROGCFG"],
                 compute_kernel_config=self.compute_kernel_config,
                 # core_grid=self.grid_size,
             )  # seqlen, 1, batch, hidden_size
@@ -427,7 +441,6 @@ class TtLlamaAttention(nn.Module):
             q_heads_84SD,
             k_heads_K1SD,
             v_heads_V1SD,
-            attn_masks,
             is_causal=True,
             scale=self.scale,
             program_config=self.model_config["SDPA_PROGCFG"](seq_len),

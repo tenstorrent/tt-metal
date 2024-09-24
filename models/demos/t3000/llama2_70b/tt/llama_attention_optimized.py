@@ -12,7 +12,7 @@ from ttnn import ShardTensorToMesh
 class TtLlamaAttention_optimized:
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         layer_num,
@@ -22,12 +22,16 @@ class TtLlamaAttention_optimized:
         cache_path=None,
         batch_size=None,
         read_cache=False,
+        paged_attention_config=None,
+        vllm=False,
     ):
         self.state_dict = state_dict
-        self.device_mesh = device_mesh
-        self.num_devices = device_mesh.get_num_devices()
+        self.mesh_device = mesh_device
+        self.num_devices = mesh_device.get_num_devices()
         self.model_config = model_config
         self.read_cache = read_cache
+        self.paged_attention_config = paged_attention_config
+        self.vllm = vllm
 
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
@@ -45,12 +49,17 @@ class TtLlamaAttention_optimized:
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices
         self.padded_local_heads = 32
 
+        self.layer_num = layer_num
         self.layer_name = f"{base_url}.{layer_num}"
         self.cache_path = cache_path
         self.transformation_mats = transformation_mats
 
+        self.kv_dtype = ttnn.bfloat8_b
+
         self.load_weights()
-        self.init_kv_cache()
+        if not vllm:
+            # vLLM provides its own kv cache
+            self.init_kv_cache()
 
     def set_model_config(self, model_config):
         self.model_config = model_config
@@ -60,35 +69,53 @@ class TtLlamaAttention_optimized:
         Generates empty KV cache and pushed to device memory
         """
 
-        cache_k = torch.zeros(
-            (
-                self.n_kv_heads,
-                self.max_batch_size,
-                self.model_config["MAX_CONTEXT_LEN"],
-                self.head_dim,
+        if self.paged_attention_config:
+            cache_k = torch.zeros(
+                (
+                    self.paged_attention_config.max_num_blocks,
+                    self.n_kv_heads,
+                    self.paged_attention_config.block_size,
+                    self.head_dim,
+                )
             )
-        )
-        cache_v = torch.zeros(
-            (
-                self.n_kv_heads,
-                self.max_batch_size,
-                self.model_config["MAX_CONTEXT_LEN"],
-                self.head_dim,
+            cache_v = torch.zeros(
+                (
+                    self.paged_attention_config.max_num_blocks,
+                    self.n_kv_heads,
+                    self.paged_attention_config.block_size,
+                    self.head_dim,
+                )
             )
-        )
+        else:
+            cache_k = torch.zeros(
+                (
+                    self.max_batch_size,
+                    self.n_kv_heads,
+                    self.model_config["MAX_CONTEXT_LEN"],
+                    self.head_dim,
+                )
+            )
+            cache_v = torch.zeros(
+                (
+                    self.max_batch_size,
+                    self.n_kv_heads,
+                    self.model_config["MAX_CONTEXT_LEN"],
+                    self.head_dim,
+                )
+            )
         layer_past = [cache_k, cache_v]
         self.layer_past = [
             ttnn.to_device(
                 ttnn.as_tensor(
                     lp,
-                    device=self.device_mesh,
-                    mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=0),
+                    device=self.mesh_device,
+                    mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=1),
                     layout=ttnn.TILE_LAYOUT,
-                    memory_config=self.model_config["DRAM_MEMCFG"],
-                    dtype=ttnn.bfloat8_b,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=self.kv_dtype,
                     cache_file_name=self.cache_path / f"empty_attn_cache{cache_k.shape}",
                 ),
-                self.device_mesh,
+                self.mesh_device,
             )
             for lp in layer_past
         ]
@@ -149,51 +176,50 @@ class TtLlamaAttention_optimized:
             qkv_cat,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
-            memory_config=self.model_config["DRAM_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=3),
             cache_file_name=self.cache_path / wqkv_cache_str,
         )
-        self.qkv = ttnn.to_device(qkv_ttnn, self.device_mesh)
+        self.qkv = ttnn.to_device(qkv_ttnn, self.mesh_device)
 
         wo_ttnn = ttnn.as_tensor(
             pt_wo,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
-            memory_config=self.model_config["DRAM_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=3),
             cache_file_name=self.cache_path / wo_str,
         )
 
-        self.wo = ttnn.to_device(wo_ttnn, self.device_mesh)
+        self.wo = ttnn.to_device(wo_ttnn, self.mesh_device)
 
     def __call__(
         self,
         xs,
         rot_mats,
         start_pos: int,
-        attn_masks,
         user_id: int = 0,
+        cache_idxs=None,
+        page_table=None,
+        kv_cache=None,
+        mode="decode",
     ):
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
-        if self.model_config["LLM_MODE"] == "decode":
-            return self.decode_forward(xs, rot_mats, start_pos, attn_masks)
+        if mode == "decode":
+            return self.decode_forward(xs, rot_mats, start_pos, cache_idxs, page_table=page_table, kv_cache=kv_cache)
         # Prefill should have input tensor of shape (1, batch=1, seqlen, hidden_size)
-        elif self.model_config["LLM_MODE"] == "prefill":
-            return self.prefill_forward(xs, rot_mats, attn_masks, user_id)
+        elif mode == "prefill":
+            return self.prefill_forward(xs, rot_mats, user_id, page_table=page_table, kv_cache=kv_cache)
         else:
-            raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
+            raise ValueError(f"Unknown llm_mode: {mode}")
 
-    def decode_forward(
-        self,
-        xs,
-        rot_mats,
-        start_pos: int,
-        attn_masks,
-    ):
+    def decode_forward(self, xs, rot_mats, start_pos: int, cache_idxs, page_table=None, kv_cache=None):
         query_layer, key_layer, value_layer = self.attn_qkv(xs, rot_mats)
-        attn_outputs = self.attn_mqa(query_layer, key_layer, value_layer, start_pos)
+        attn_outputs = self.attn_mqa(
+            query_layer, key_layer, value_layer, start_pos, cache_idxs, page_table=page_table, kv_cache=kv_cache
+        )
         return self.attn_selfout(attn_outputs)
 
     def attn_qkv(
@@ -227,7 +253,7 @@ class TtLlamaAttention_optimized:
             fused_query_key_value,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
-            memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
         )
 
         fused_query_key_value.deallocate(True)
@@ -238,7 +264,7 @@ class TtLlamaAttention_optimized:
             query_layer,
             rot_mats,
             program_config=self.model_config["ROT_MAT_MM_PROGCFG"],
-            memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
             compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
             # [seqlen, n_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_heads, bsz, head_dim]
         )
@@ -247,40 +273,59 @@ class TtLlamaAttention_optimized:
             key_layer,
             rot_mats,
             program_config=self.model_config["ROT_MAT_MM_PROGCFG"],
-            memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
             compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
         )
 
         return query_layer, key_layer, value_layer
 
-    def attn_mqa(
-        self,
-        query_layer,
-        key_layer,
-        value_layer,
-        start_pos: int,
-        batch_offset: int = 0,
-    ):
+    def attn_mqa(self, query_layer, key_layer, value_layer, start_pos: int, cache_idxs, page_table=None, kv_cache=None):
         # K CACHE UPDATE
-        keys = self.layer_past[0]
-        ttnn.update_cache(keys, key_layer, start_pos, batch_offset=batch_offset)
+        if kv_cache:
+            keys = kv_cache[self.layer_num][0]
+            values = kv_cache[self.layer_num][1]
+        else:
+            keys = self.layer_past[0]
+            values = self.layer_past[1]
+        # ttnn.update_cache(keys, key_layer, start_pos, batch_offset=batch_offset)
+        ttnn.experimental.paged_update_cache(keys, key_layer, update_idxs_tensor=cache_idxs, page_table=page_table)
+
         key_layer.deallocate(True)
 
         # V CACHE UPDATE
-        values = self.layer_past[1]
-        ttnn.update_cache(values, value_layer, start_pos, batch_offset=batch_offset)
+        # ttnn.update_cache(values, value_layer, start_pos, batch_offset=batch_offset)
+        ttnn.experimental.paged_update_cache(values, value_layer, update_idxs_tensor=cache_idxs, page_table=page_table)
+
         value_layer.deallocate(True)
 
-        attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
-            query_layer,
-            keys,
-            values,
-            [start_pos for _ in range(self.max_batch_size)],
-            scale=self.scale,
-            program_config=self.model_config["SDPA_DECODE_PROGRAM_CONFIG"],
-            compute_kernel_config=self.model_config["SDPA_COMPUTE_KERNEL_CONFIG"],
-            memory_config=self.model_config["SDPA_OUTPUT_MEMCFG"],
-        )
+        if page_table:
+            attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                query_layer,
+                keys,
+                values,
+                cur_pos_tensor=cache_idxs,
+                page_table_tensor=page_table,
+                scale=self.scale,
+                program_config=self.model_config["SDPA_DECODE_PROGRAM_CONFIG"],
+                compute_kernel_config=self.model_config["SDPA_COMPUTE_KERNEL_CONFIG"],
+                memory_config=self.model_config["SDPA_OUTPUT_MEMCFG"],
+            )
+
+        else:
+            # Have to reshape back since sdpa expects batch in dim 1
+            keys_reshaped = ttnn.reshape(keys, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
+            values_reshaped = ttnn.reshape(values, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
+            attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
+                query_layer,
+                keys_reshaped,
+                values_reshaped,
+                # [start_pos for _ in range(self.max_batch_size)],
+                cur_pos_tensor=cache_idxs,
+                scale=self.scale,
+                program_config=self.model_config["SDPA_DECODE_PROGRAM_CONFIG"],
+                compute_kernel_config=self.model_config["SDPA_COMPUTE_KERNEL_CONFIG"],
+                memory_config=self.model_config["SDPA_OUTPUT_MEMCFG"],
+            )
         return attn_output
 
     def attn_selfout(
@@ -304,22 +349,18 @@ class TtLlamaAttention_optimized:
             attn_output,
             self.wo,
             program_config=self.model_config["SELFOUT_MM_PROGCFG"],
-            memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )  # seqlen, 1, batch, hidden_size
 
         return attn_output
 
-    def prefill_forward(
-        self,
-        xs,
-        rot_mats,
-        attn_masks,
-        user_id: int = 0,
-    ):
+    def prefill_forward(self, xs, rot_mats, user_id: int = 0, page_table=None, kv_cache=None):
         query_layer, key_layer, value_layer = self.prefill_attn_qkv(xs, rot_mats)
-        attn_outputs = self.prefill_attn_mqa(query_layer, key_layer, value_layer, attn_masks, user_id)
+        attn_outputs = self.prefill_attn_mqa(
+            query_layer, key_layer, value_layer, user_id, page_table=page_table, kv_cache=kv_cache
+        )
         return self.prefill_attn_selfout(attn_outputs)
 
     def prefill_attn_qkv(
@@ -328,24 +369,31 @@ class TtLlamaAttention_optimized:
         rot_mats,
     ):
         assert xs.shape[1] == 1, "batch must be 1"
-        assert xs.shape[2] % 128 == 0 and xs.shape[2] > 0, "Seqlen must be divisible by 128"
         _, _, seq_len, _ = xs.shape
-
         max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
-        batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
+        if seq_len >= max_mm_seq_len:
+            if seq_len % max_mm_seq_len != 0:
+                raise ValueError(f"seq_len {seq_len} must be divisible by {max_mm_seq_len}")
+            batch_dim = seq_len // max_mm_seq_len  # Find the division factor
+            xs = ttnn.reshape(xs, (1, batch_dim, seq_len // batch_dim, -1))
+            pc_qkv = self.model_config["PREFILL_FUSED_QKV_MM_PROGCFG"]
+        elif seq_len == 128:
+            pc_qkv = self.model_config["PREFILL_FUSED_QKV_MM_PROGCFG_128"]
+        else:
+            # Use default program configs
+            pc_qkv = None
 
-        xs = ttnn.reshape(xs, (1, batch_dim, seq_len // batch_dim, -1))
-
-        # Fused QKV
-        fused_query_key_value = ttnn.matmul(
+        fused_query_key_value = ttnn.linear(
             xs,
             self.qkv,
-            program_config=self.model_config["FUSED_QKV_MM_PROGCFG"],
-            memory_config=self.model_config["DRAM_MEMCFG"],
-            dtype=ttnn.bfloat16,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_qkv else None,
+            dtype=ttnn.bfloat16,
+            program_config=pc_qkv,
         )
-        fused_query_key_value = ttnn.reshape(fused_query_key_value, (1, 1, seq_len, -1))
+
+        if seq_len >= max_mm_seq_len:
+            fused_query_key_value = ttnn.reshape(fused_query_key_value, (1, 1, seq_len, -1))
 
         xs.deallocate(True)
 
@@ -358,7 +406,7 @@ class TtLlamaAttention_optimized:
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
             transpose_k_heads=False,
-            memory_config=self.model_config["DRAM_MEMCFG"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         fused_query_key_value.deallocate(True)
@@ -380,35 +428,41 @@ class TtLlamaAttention_optimized:
 
         return query_layer_ret, key_layer_ret, value_layer
 
-    def prefill_attn_mqa(
-        self,
-        query_layer,
-        key_layer,
-        value_layer,
-        attn_masks,
-        user_id: int = 0,
-    ):
-        # FILL K CACHE
-        keys = self.layer_past[0]
-        # Fill cache expects batch in dim0
-        keys_reshaped = ttnn.reshape(keys, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
-        ttnn.fill_cache(keys_reshaped, ttnn.experimental.typecast(key_layer, ttnn.bfloat8_b), user_id)
+    def prefill_attn_mqa(self, query_layer, key_layer, value_layer, user_id: int = 0, page_table=None, kv_cache=None):
+        if kv_cache:
+            keys = kv_cache[self.layer_num][0]
+            values = kv_cache[self.layer_num][1]
+        else:
+            keys = self.layer_past[0]
+            values = self.layer_past[1]
 
-        # FILL V CACHE
-        values = self.layer_past[1]
-        # Fill cache expects batch in dim0
-        values_reshaped = ttnn.reshape(values, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
-        ttnn.fill_cache(values_reshaped, ttnn.experimental.typecast(value_layer, ttnn.bfloat8_b), user_id)
+        if page_table:
+            ttnn.experimental.paged_fill_cache(
+                keys, ttnn.experimental.typecast(key_layer, self.kv_dtype), page_table, batch_idx=user_id
+            )
+            ttnn.experimental.paged_fill_cache(
+                values, ttnn.experimental.typecast(value_layer, self.kv_dtype), page_table, batch_idx=user_id
+            )
+        else:
+            ttnn.fill_cache(keys, ttnn.experimental.typecast(key_layer, self.kv_dtype), user_id)
+            ttnn.fill_cache(values, ttnn.experimental.typecast(value_layer, self.kv_dtype), user_id)
 
-        # SDPA
+        seq_len = query_layer.shape[2]
+        q_chunk_size = 128 if seq_len % 128 == 0 else 32
+        k_chunk_size = q_chunk_size
+
+        pc_sdpa = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=[8, 7],
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
+        )
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             query_layer,
             key_layer,
             value_layer,
-            attn_masks,
             is_causal=True,
             scale=self.scale,
-            program_config=self.model_config["SDPA_PROGCFG"],
+            program_config=pc_sdpa,
         )
 
         # deallocate keys and values
@@ -422,30 +476,38 @@ class TtLlamaAttention_optimized:
         # ATTENTION SELFOUT
         attn_output = ttnn.experimental.nlp_concat_heads(
             attn_output,
-            memory_config=self.model_config["L1_MEMCFG"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # seqlen, 1, batch, hidden_size
 
         attn_output = ttnn.all_gather(
             attn_output,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=self.model_config["DRAM_MEMCFG"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         _, _, seq_len, _ = attn_output.shape
-
         max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
-        batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
-        attn_output = ttnn.reshape(attn_output, (1, batch_dim, seq_len // batch_dim, -1))
+        if seq_len >= max_mm_seq_len:
+            if seq_len % max_mm_seq_len != 0:
+                raise ValueError(f"seq_len {seq_len} must be divisible by {max_mm_seq_len}")
+            batch_dim = seq_len // max_mm_seq_len  # Find the division factor
+            attn_output = ttnn.reshape(attn_output, (1, batch_dim, seq_len // batch_dim, -1))
+            pc_dense_out = self.model_config["PREFILL_SELFOUT_MM_PROGCFG"]
+        elif seq_len == 128:
+            pc_dense_out = self.model_config["PREFILL_SELFOUT_MM_PROGCFG_128"]
+        else:
+            # Use default program configs
+            pc_dense_out = None
 
-        attn_output = ttnn.matmul(
+        attn_output = ttnn.linear(
             attn_output,
             self.wo,
-            program_config=self.model_config["SELFOUT_MM_PROGCFG"],
-            memory_config=self.model_config["DRAM_MEMCFG"],
-            dtype=ttnn.bfloat16,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-        )  # seqlen, 1, batch, hidden_size
+            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_dense_out else None,
+            dtype=ttnn.bfloat16,
+            program_config=pc_dense_out,
+        )
 
         attn_output = ttnn.reshape(attn_output, (1, 1, seq_len, -1))
 

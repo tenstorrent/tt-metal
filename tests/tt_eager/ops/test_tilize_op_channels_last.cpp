@@ -12,7 +12,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_numpy/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 
 using namespace tt;
 using namespace tt_metal;
@@ -39,9 +39,9 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        Shape shape = {1, 32, 32, 64};
+        tt::tt_metal::LegacyShape shape = {1, 32, 32, 64};
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = tt::numpy::random::random(shape).to(device);
+        Tensor a = ttnn::numpy::random::random(shape).to(device);
         Tensor b = ttnn::tilize(a);
         Tensor c = b.cpu();
         ////////////////////////////////////////////////////////////////////////////
@@ -54,7 +54,7 @@ int main(int argc, char **argv) {
         auto golden_vec = owned_buffer::get_as<bfloat16>(golden);
         auto result_vec = owned_buffer::get_as<bfloat16>(c);
         pass &= (result_vec == golden_vec);
-        pass &= tt_metal::CloseDevice(device);;
+        pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;
@@ -70,7 +70,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

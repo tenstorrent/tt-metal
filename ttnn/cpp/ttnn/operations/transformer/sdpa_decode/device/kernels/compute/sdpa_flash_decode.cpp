@@ -313,44 +313,44 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: out_cb has num_tiles produced
     // Postcondition: in0_cb and in1_cb has num_tiles produced
-    // DEBUG_STATUS("XCAE");
+    // WAYPOINT("XCAE");
     sub_tiles_init();
-    // DEBUG_STATUS("XCAF");
+    // WAYPOINT("XCAF");
     exp_tile_init<true>();
-    // DEBUG_STATUS("XCAG");
+    // WAYPOINT("XCAG");
     // DPRINT_MATH(DPRINT << "[C] R ckpt 2.1.1.0 math" << ENDL());
     // DPRINT_PACK(DPRINT << "[C] R ckpt 2.1.1.0 pack" << ENDL());
     // DPRINT_UNPACK(DPRINT << "[C] R ckpt 2.1.1.0 unpack" << ENDL());
     cb_wait_front(in0_cb, num_tiles);
-    // DEBUG_STATUS("XCAH");
+    // WAYPOINT("XCAH");
     // DPRINT_MATH(DPRINT << "[C] R ckpt 2.1.1.1 math" << ENDL());
     // DPRINT_PACK(DPRINT << "[C] R ckpt 2.1.1.1 pack" << ENDL());
     // DPRINT_UNPACK(DPRINT << "[C] R ckpt 2.1.1.1 unpack" << ENDL());
     cb_wait_front(in1_cb, num_tiles);
-    // DEBUG_STATUS("XCAI");
+    // WAYPOINT("XCAI");
     cb_reserve_back(out_cb, num_tiles);
-    // DEBUG_STATUS("XCAJ");
+    // WAYPOINT("XCAJ");
 
     // DPRINT << "[C] R ckpt 2.1.1.2" << ENDL();
 
     for (uint32_t i = 0; i < num_tiles; i++) {
 
         acquire_dst(tt::DstMode::Half);
-        // DEBUG_STATUS("XCAK");
+        // WAYPOINT("XCAK");
 
         sub_tiles(in0_cb, in1_cb, i, i, 0);
-        // DEBUG_STATUS("XCAL");
+        // WAYPOINT("XCAL");
 
         exp_tile<true>(0);
-        // DEBUG_STATUS("XCAM");
+        // WAYPOINT("XCAM");
 
         pack_tile(0, out_cb);
-        // DEBUG_STATUS("XCAN");
+        // WAYPOINT("XCAN");
 
         cb_push_back(out_cb, 1);
-        // DEBUG_STATUS("XCAO");
+        // WAYPOINT("XCAO");
         release_dst(tt::DstMode::Half);
-        // DEBUG_STATUS("XCAP");
+        // WAYPOINT("XCAP");
     }
 }
 
@@ -376,7 +376,7 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     cb_pop_front(in_cb, num_tiles);
 }
 
-void cb_matmul_blocks(const uint32_t& in0_cb, const uint32_t& in1_cb, const uint32_t& out_cb, const uint32_t& M, const uint32_t& N, const uint32_t& K, const uint32_t& num_blocks, const uint32_t& in0_num_subblocks, const uint32_t& in1_num_subblocks,
+ALWI void cb_matmul_blocks(const uint32_t& in0_cb, const uint32_t& in1_cb, const uint32_t& out_cb, const uint32_t& M, const uint32_t& N, const uint32_t& K, const uint32_t& num_blocks, const uint32_t& in0_num_subblocks, const uint32_t& in1_num_subblocks,
                     const uint32_t& in0_block_w, const uint32_t& subblock_h, const uint32_t& subblock_w, const bool& transpose) {
     // precondition: in0_cb has M*K produced
     // preconditino: in1_cb has K*N produced
@@ -494,8 +494,8 @@ void MAIN {
 
     // Get cur_pos
     uint32_t cur_pos = 0;
-    // using 4294967295 (end of uint32 range) as a flag to indicate that cur_pos is not provided as a list
-    if (cur_pos_arg!=4294967295){
+    // using UINT32_MAX as a flag to indicate that cur_pos is not provided as a list
+    if (cur_pos_arg != UINT32_MAX){
         cur_pos = cur_pos_arg;
     }
     else {
@@ -505,6 +505,11 @@ void MAIN {
         cb_get_tile(cb_index_id, 0, &index_addr_ptr);
         cur_pos = index_addr_ptr[4+cur_batch];
         cb_release_tile(cb_index_id);
+    }
+
+    if (cur_pos == UINT32_MAX) {
+        // cur_pos of -1 indicates that the user should be skipped
+        return;
     }
     // Sequence length assignment
     auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(cur_pos, cur_batch, core_num, num_cores_per_batch, k_chunk_size);
@@ -666,14 +671,14 @@ void MAIN {
                 // copy_block(cb_prev_max, cb_cur_max, Sq_chunk_t);
                 // DPRINT << "[C] R ckpt 1.1" << ENDL();
                 // cb_push_back(cb_prev_max, Sq_chunk_t);
-                // DEBUG_STATUS("XCAA");
+                // WAYPOINT("XCAA");
                 // DPRINT << "[C] R ckpt 1.2" << ENDL();
                 // max_block_inplace<cb_cur_max, cb_prev_max_2, Sq_chunk_t>(); // TODO: NEED TO FIX THIS
 
                 // DPRINT_MATH(DPRINT << "[C] R ckpt 2 math" << ENDL());
                 // DPRINT_PACK(DPRINT << "[C] R ckpt 2 pack" << ENDL());
                 // DPRINT_UNPACK(DPRINT << "[C] R ckpt 2 unpack" << ENDL());
-                // DEBUG_STATUS("XCAB");
+                // WAYPOINT("XCAB");
 
                 // l = torch.exp(m_2 - m) * l_2 + torch.exp(m_1 - m) * l_1
                 /// l1 = torch.exp(m_2 - m) * l_2

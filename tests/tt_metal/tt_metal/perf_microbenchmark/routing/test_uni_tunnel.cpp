@@ -125,6 +125,11 @@ int main(int argc, char **argv) {
     uint32_t test_device_id = test_args::get_command_option_uint32(input_args, "--device_id", default_test_device_id);
 
     bool pass = true;
+
+    std::map<string, string> defines = {
+        {"FD_CORE_TYPE", std::to_string(0)}, // todo, support dispatch on eth
+    };
+
     try {
         int num_devices = tt_metal::GetNumAvailableDevices();
         if (test_device_id >= num_devices) {
@@ -206,7 +211,7 @@ int main(int argc, char **argv) {
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                     .compile_args = compile_args,
-                    .defines = {}
+                    .defines = defines
                 }
             );
         }
@@ -255,7 +260,7 @@ int main(int argc, char **argv) {
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = mux_compile_args,
-                .defines = {}
+                .defines = defines
             }
         );
 
@@ -283,6 +288,7 @@ int main(int argc, char **argv) {
                 tunneler_test_results_addr, // 12: test_results_addr
                 tunneler_test_results_size, // 13: test_results_size
                 timeout_mcycles * 1000 * 1000 * 4, // 14: timeout_cycles
+                0, // 15:
             };
 
         auto tunneler_l_kernel = tt_metal::CreateKernel(
@@ -291,7 +297,8 @@ int main(int argc, char **argv) {
             tunneler_logical_core,
             tt_metal::EthernetConfig{
                 .noc = tt_metal::NOC::NOC_0,
-                .compile_args = tunneler_l_compile_args
+                .compile_args = tunneler_l_compile_args,
+                .defines = defines
             }
         );
 
@@ -304,7 +311,7 @@ int main(int argc, char **argv) {
                 (tunneler_queue_size_bytes >> 4), // 3: rx_queue_size_words
                 packet_switch_4B_pack(demux_phys_core.x,
                                       demux_phys_core.y,
-                                      num_dest_endpoints,
+                                      0,
                                       (uint32_t)DispatchRemoteNetworkType::NOC0), // 4: remote_receiver_0_info
                 0, // 5: remote_receiver_1_info
                 (demux_queue_start_addr >> 4), // 6: remote_receiver_queue_start_addr_words 0
@@ -320,6 +327,7 @@ int main(int argc, char **argv) {
                 tunneler_test_results_addr, // 12: test_results_addr
                 tunneler_test_results_size, // 13: test_results_size
                 timeout_mcycles * 1000 * 1000 * 4, // 14: timeout_cycles
+                0, // 15:
             };
 
         auto tunneler_r_kernel = tt_metal::CreateKernel(
@@ -328,7 +336,8 @@ int main(int argc, char **argv) {
             r_tunneler_logical_core,
             tt_metal::EthernetConfig{
                 .noc = tt_metal::NOC::NOC_0,
-                .compile_args = tunneler_r_compile_args
+                .compile_args = tunneler_r_compile_args,
+                .defines = defines
             }
         );
 
@@ -345,7 +354,7 @@ int main(int argc, char **argv) {
                     (rx_queue_size_bytes >> 4), // 4: queue_size_words
                     (uint32_t)demux_phys_core.x, // 5: remote_tx_x
                     (uint32_t)demux_phys_core.y, // 6: remote_tx_y
-                    i, // 7: remote_tx_queue_id
+                    i + 1, // 7: remote_tx_queue_id
                     (uint32_t)DispatchRemoteNetworkType::NOC0, // 8: rx_rptr_update_network_type
                     test_results_addr, // 9: test_results_addr
                     test_results_size, // 10: test_results_size
@@ -367,7 +376,7 @@ int main(int argc, char **argv) {
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                     .compile_args = compile_args,
-                    .defines = {}
+                    .defines = defines
                 }
             );
         }
@@ -426,7 +435,7 @@ int main(int argc, char **argv) {
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt_metal::NOC::RISCV_0_default,
                 .compile_args = demux_compile_args,
-                .defines = {}
+                .defines = defines
             }
         );
 

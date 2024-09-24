@@ -9,7 +9,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/operations/data_movement/repeat_interleave/repeat_interleave.hpp"
-#include "tt_numpy/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 #include "tt_metal/common/logger.hpp"
 
 #include "ttnn_test_fixtures.hpp"
@@ -30,7 +30,7 @@ void run_repeat_interleave_test(tt::tt_metal::Device* device, const uint32_t rep
     const uint32_t input_buf_size_datums = 32 * 32;
     const uint32_t output_buf_size_datums = input_buf_size_datums * repeats;
     const uint32_t datum_size_bytes = 2;
-    ttnn::Shape input_shape = ttnn::Shape(tt::tt_metal::Shape({1, 1, 32, 32}));
+    ttnn::Shape input_shape = ttnn::Shape(tt::tt_metal::LegacyShape({1, 1, 32, 32}));
     auto host_data = std::shared_ptr<uint16_t[]>(new uint16_t[input_buf_size_datums]);
     auto readback_data = std::shared_ptr<uint16_t[]>(new uint16_t[output_buf_size_datums]);
 

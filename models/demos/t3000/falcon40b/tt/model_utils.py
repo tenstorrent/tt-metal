@@ -66,10 +66,25 @@ def memcfg_1d_width_sharded_from_tensor_shape(shape, grid=ttnn.CoreGrid(x=8, y=8
 
 
 def matmul_1d_config_from_tensor_shapes(
-    in0_shape, in1_shape, grid=ttnn.CoreGrid(x=8, y=8), act=None, is_fp32_accumulate=False
+    in0_shape,
+    in1_shape,
+    grid=ttnn.CoreGrid(x=8, y=8),
+    act=None,
+    is_fp32_accumulate=False,
+    overwrite_subblock_w=None,
+    overwrite_subblock_h=None,
 ):
     m, k, n = in0_shape[0] * in0_shape[1] * in0_shape[2], in0_shape[3], in1_shape[3]
-    return matmul_1d_config(m, k, n, grid, act, is_fp32_accumulate)
+    return matmul_1d_config(
+        m,
+        k,
+        n,
+        grid,
+        act,
+        is_fp32_accumulate,
+        overwrite_subblock_w=overwrite_subblock_w,
+        overwrite_subblock_h=overwrite_subblock_h,
+    )
 
 
 def matmul_1d_config(
@@ -133,10 +148,27 @@ def matmul_1d_config(
 
 
 def matmul_2d_config_from_tensor_shapes(
-    in0_shape, in1_shape, grid=ttnn.CoreGrid(x=8, y=8), act=None, is_fp32_accumulate=False
+    in0_shape,
+    in1_shape,
+    grid=ttnn.CoreGrid(x=8, y=8),
+    act=None,
+    is_fp32_accumulate=False,
+    overwrite_subblock_h=None,
+    overwrite_subblock_w=None,
+    fuse_batch=True,
 ):
     m, k, n = in0_shape[0] * in0_shape[1] * in0_shape[2], in0_shape[3], in1_shape[3]
-    return matmul_2d_config(m, k, n, grid, act, is_fp32_accumulate)
+    return matmul_2d_config(
+        m,
+        k,
+        n,
+        grid,
+        act,
+        is_fp32_accumulate,
+        overwrite_subblock_h=overwrite_subblock_h,
+        overwrite_subblock_w=overwrite_subblock_w,
+        fuse_batch=fuse_batch,
+    )
 
 
 def matmul_2d_config(
@@ -205,6 +237,7 @@ def matmul_2d_config(
     if overwrite_subblock_h is not None:
         out_subblock_h = overwrite_subblock_h
 
+    # print all arguments used in the program config
     # print(
     #     f"per_core_m: {per_core_m}, per_core_k: {per_core_k}, per_core_n: {per_core_n}, out_subblock_h: {out_subblock_h}, out_subblock_w: {out_subblock_w}"
     # )
@@ -389,7 +422,7 @@ def determine_tensor_deallocation(layernorm_slice_size, seq_len):
     return seq_len <= layernorm_slice_size
 
 
-def generate_layernorm_persistent_tensors(seq_len, slice_size, ln_output_tensors_dict, device_mesh, hidden_size, dtype):
+def generate_layernorm_persistent_tensors(seq_len, slice_size, ln_output_tensors_dict, mesh_device, hidden_size, dtype):
     if seq_len <= slice_size:
         return
 
@@ -399,9 +432,9 @@ def generate_layernorm_persistent_tensors(seq_len, slice_size, ln_output_tensors
             tensor=tensor,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
-            device=device_mesh,
+            device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
         if name in ln_output_tensors_dict and ln_output_tensors_dict[name] is not None:
             ln_output_tensors_dict[name].update({seq_len: output_tensor})

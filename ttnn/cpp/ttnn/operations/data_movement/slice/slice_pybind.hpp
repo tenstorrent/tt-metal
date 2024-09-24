@@ -31,12 +31,14 @@ void bind_slice(py::module& module) {
                 * :attr:`input_tensor`: Input Tensor.
                 * :attr:`slice_start`: Start indices of input tensor. Values along each dim must be < input_tensor_shape[i].
                 * :attr:`slice_end`: End indices of input tensor. Values along each dim must be < input_tensor_shape[i].
+                * :attr:`step` (Optional[List[int[tensor rank]]): Step size for each dim. Default is None, which works out be 1 for each dimension.
 
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor
                 * :attr:`queue_id` (Optional[uint8]): command queue id
         )doc";
 
+    // TODO: implementing the array version and overloading the pybind with all the possible array sizes is better than a vector with a fixed size default value
     using OperationType = decltype(ttnn::slice);
     ttnn::bind_registered_operation(
         module,
@@ -45,17 +47,22 @@ void bind_slice(py::module& module) {
         ttnn::pybind_overload_t{
             [] (const OperationType& self,
                 const ttnn::Tensor& input_tensor,
-                const tt::tt_metal::Array4D & slice_start,
-                const tt::tt_metal::Array4D & slice_end,
+                const std::vector<int> &slice_start,
+                const std::vector<int> &slice_end,
+                const std::optional<std::vector<int>> &step,
                 const std::optional<ttnn::MemoryConfig>& memory_config,
+                const std::optional<Tensor>& optional_output_tensor,
                 uint8_t queue_id) {
-                    return self(queue_id, input_tensor, slice_start, slice_end, memory_config);
+                    const auto step_value = step.value_or(std::vector<int>(slice_end.size(), 1));
+                    return self(queue_id, input_tensor, slice_start, slice_end, step_value, memory_config, optional_output_tensor);
                 },
                 py::arg("input_tensor"),
                 py::arg("slice_start"),
                 py::arg("slice_end"),
+                py::arg("step") = std::nullopt, // should consider a better default value
                 py::kw_only(),
                 py::arg("memory_config") = std::nullopt,
+                py::arg("output_tensor") = std::nullopt,
                 py::arg("queue_id") = 0,
                 }
         );

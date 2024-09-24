@@ -17,20 +17,20 @@ void ReduceScatter::validate(const std::vector<Tensor>& input_tensors) const {
     for (auto const& t : input_tensors) {
         TT_FATAL(
             t.get_legacy_shape()[this->scatter_dim] / this->ring_size > 0,
-            "Reduce scatter input tensor shape on dim {} must be divisible by ring size");
+            "Reduce scatter input tensor shape on dim {} must be divisible by ring size", this->scatter_dim);
         TT_FATAL(
             t.get_legacy_shape()[this->scatter_dim] % this->ring_size == 0,
-            "Reduce scatter input tensor shape on dim {} must be divisible by ring size");
+            "Reduce scatter input tensor shape on dim {} must be divisible by ring size", this->scatter_dim);
     }
 }
 
-std::vector<tt::tt_metal::Shape> ReduceScatter::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> ReduceScatter::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     auto shape = input_tensors[0].get_legacy_shape();
     TT_ASSERT(
         shape[this->scatter_dim] % this->ring_size == 0,
         "The size of the scatter dimension must be a multiple of the ring size");
     shape[this->scatter_dim] /= this->ring_size;
-    return std::vector<tt::tt_metal::Shape>(input_tensors.size(), shape);
+    return std::vector<tt::tt_metal::LegacyShape>(input_tensors.size(), shape);
 }
 
 std::vector<Tensor> ReduceScatter::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
@@ -51,14 +51,19 @@ operation::ProgramWithCallbacks ReduceScatter::create_program(
         this->ring_index,
         this->receiver_device_id,
         this->sender_device_id,
-        this->topology);
+        this->topology,
+        this->user_defined_num_workers,
+        this->user_defined_num_buffers_per_channel);
 }
 
 static ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_type(ttnn::operations::reduction::ReduceType reduce_op) {
+    // Leaving switch statement for future support of additional types.
     switch (reduce_op) {
-        case ttnn::operations::reduction::ReduceType::Sum: return ttnn::operations::binary::BinaryOpType::ADD;
-
-        default: TT_FATAL("Reduce scatter only support reduce_type Sum"); return ttnn::operations::binary::BinaryOpType::ADD;
+        case ttnn::operations::reduction::ReduceType::Sum:
+            return ttnn::operations::binary::BinaryOpType::ADD;
+        default:
+            TT_THROW("Reduce scatter only supports reduce_type Sum. Op type {} not supported.", reduce_op);
+            return ttnn::operations::binary::BinaryOpType::ADD;
     }
 }
 
@@ -69,7 +74,9 @@ Tensor reduce_scatter(
     const uint32_t scatter_dim,
     ttnn::operations::reduction::ReduceType math_op,
     const uint32_t num_links,
-    const MemoryConfig& output_mem_config) {
+    const MemoryConfig& output_mem_config,
+    const std::optional<size_t> user_defined_num_workers,
+    const std::optional<size_t> user_defined_num_buffers_per_channel) {
     ttnn::operations::binary::BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(math_op);
     const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring;
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
@@ -77,7 +84,7 @@ Tensor reduce_scatter(
     auto devices = input_tensor.get_workers();
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
-        [binary_op_type, scatter_dim, num_links, output_mem_config, topology, devices](
+        [binary_op_type, scatter_dim, num_links, output_mem_config, topology, devices, user_defined_num_workers, user_defined_num_buffers_per_channel](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -111,7 +118,9 @@ Tensor reduce_scatter(
                     receiver_device_id,
                     sender_device_id,
                     output_mem_config,
-                    topology},
+                    topology,
+                    user_defined_num_workers,
+                    user_defined_num_buffers_per_channel},
                 {input_tensor});
         },
      {input_tensor},

@@ -32,11 +32,17 @@ ENV PYTHON_ENV_DIR=${TT_METAL_INFRA_DIR}/tt-metal/python_env
 # RUN python3 -m venv $PYTHON_ENV_DIR
 # ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 
+# Create directories for infra
+RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/
+RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/
+RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/
+
 # Copy requirements from tt-metal folders with requirements.txt docs
 COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/.
 # Copy requirements from tt-metal folders for sweeps (requirements-sweeps.txt)
 COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/.
-COPY /tt_metal/python_env/* ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
+COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
+
 RUN python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu \
     && python3 -m pip install setuptools wheel
 
@@ -64,5 +70,7 @@ RUN apt-get -y update \
     libc++-17-dev \
     libc++abi-17-dev \
     && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /usr/app
 
 CMD ["tail", "-f", "/dev/null"]

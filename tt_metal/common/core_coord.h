@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -255,19 +256,38 @@ class CoreRangeSet {
                 auto no_overlap = first_core_left_of_second or first_core_right_of_second or first_core_above_second or
                                   first_core_below_second;
                 if (not no_overlap) {
-                    TT_THROW(("Cannot create CoreRangeSet with specified core ranges because core ranges " +
-                              first_core_range.str() + " and " + second_core_range.str() + " overlap!")
-                                 .c_str());
+                    TT_THROW(
+                        "Cannot create CoreRangeSet with specified core ranges because core ranges {} and {} overlap!",
+                        first_core_range.str(),
+                        second_core_range.str());
                 }
             }
         }
     }
 
-    CoreRangeSet(const CoreRangeSet &other) = default;
-    CoreRangeSet &operator=(const CoreRangeSet &other) = default;
+    friend void swap(CoreRangeSet& first, CoreRangeSet& second) {
+        std::scoped_lock lock(first.ranges_guard, second.ranges_guard);
+        std::swap(first.ranges_, second.ranges_);
+    }
 
-    CoreRangeSet(CoreRangeSet &&other) = default;
-    CoreRangeSet &operator=(CoreRangeSet &&other) = default;
+    CoreRangeSet(const CoreRangeSet &other) {
+        std::scoped_lock lock(other.ranges_guard);
+        this->ranges_ = other.ranges_;
+    }
+    CoreRangeSet &operator=(const CoreRangeSet &other) {
+        std::scoped_lock lock(other.ranges_guard);
+        this->ranges_ = other.ranges_;
+        return *this;
+    }
+
+    CoreRangeSet(CoreRangeSet &&other) {
+        swap(*this, other);
+    }
+
+    CoreRangeSet &operator=(CoreRangeSet &&other) {;
+        swap(*this, other);
+        return *this;
+    }
 
     auto size() const { return ranges_.size(); }
 
@@ -390,8 +410,9 @@ class CoreRangeSet {
         return {{min_x, min_y}, {max_x, max_y}};
     }
 
-   private:
-    std::set<CoreRange> ranges_;
+    private:
+     mutable std::mutex ranges_guard;
+     std::set<CoreRange> ranges_;
 };
 
 const inline bool operator==(const CoreRangeSet &a, const CoreRangeSet &b) {
@@ -532,6 +553,13 @@ struct fmt::formatter<CoreRangeSet> {
         return fmt::format_to(ctx.out(), "{}", ss.str());
     }
 };
+
+// Adding to tt::tt_metal namespace as we transition to moving this out of global namespace eventually.
+namespace tt::tt_metal {
+   using ::CoreCoord;
+   using ::CoreRange;
+   using ::CoreRangeSet;
+}
 
 namespace std {
 template <>

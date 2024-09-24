@@ -28,10 +28,10 @@ void validate_fold(const std::vector<Tensor> &input_tensors, bool is_sharded, ui
             "Fold: Only height-sharded input tensors are supported.");
 
         auto shard_shape = input_tensor.shard_spec().value().shape;
-        TT_FATAL(shard_shape[0] % (input_shape[2] * stride_h * stride_w) == 0);
+        TT_FATAL(shard_shape[0] % (input_shape[2] * stride_h * stride_w) == 0, "Error");
     } else {
-        TT_FATAL(input_shape[1] % stride_h == 0);
-        TT_FATAL(input_shape[2] % stride_w == 0);
+        TT_FATAL(input_shape[1] % stride_h == 0, "Error");
+        TT_FATAL(input_shape[2] % stride_w == 0, "Error");
     }
     TT_FATAL(
         (input_shape[-1] * input_tensor.element_size()) % 16 == 0,
@@ -50,7 +50,7 @@ Fold::shape_return_value_t Fold::compute_output_shapes(const operation_attribute
     auto input_tensor = tensors.input_tensor;
     const Shape &input_shape = Shape(input_tensor.get_legacy_shape());
     // we concatenate (stride_h sticks in H-dim) * (stride_w in W-dim) into 1 stick along C-dim
-    Shape output_shape = Shape(tt::tt_metal::Shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2] / (op_attr.stride_h * op_attr.stride_w), input_shape[3] * op_attr.stride_h * op_attr.stride_w}));
+    Shape output_shape = Shape(tt::tt_metal::LegacyShape({1, 1, input_shape[0] * input_shape[1] * input_shape[2] / (op_attr.stride_h * op_attr.stride_w), input_shape[3] * op_attr.stride_h * op_attr.stride_w}));
     return output_shape;
 }
 
@@ -82,7 +82,7 @@ std::tuple<Fold::operation_attributes_t, Fold::tensor_args_t>
             const ttnn::Tensor &input_tensor,
             uint32_t stride_h,
             uint32_t stride_w,
-            const std::optional<const tt::tt_metal::Shape> &output_shape,
+            const std::optional<const tt::tt_metal::LegacyShape> &output_shape,
             uint32_t pad_c,
             uint32_t pad_h,
             uint32_t pad_w) {

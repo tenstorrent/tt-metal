@@ -32,7 +32,7 @@ int main(int argc, char **argv) {
         }
 
         std::vector<uint32_t> shape_vec = {1, num_tiles, 32, 32};
-        std::vector<float> tiled_fp32_vec = convert_layout(fp32_vec, shape_vec, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES);
+        std::vector<float> tiled_fp32_vec = convert_layout(fp32_vec, shape_vec, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED_NFACES);
 
         std::vector<uint32_t> packed_bfp4b_tile_vec_rm_in = pack_fp32_vec_as_bfp4_tiles(fp32_vec, /*row_major_input=*/true, /*is_exp_a=*/false);
         std::vector<float> unpacked_bfp4b_tile_vec_rm_out = unpack_bfp4_tiles_into_float_vec(packed_bfp4b_tile_vec_rm_in, /*row_major_output*/true, /*is_exp_a=*/false);
@@ -44,13 +44,13 @@ int main(int argc, char **argv) {
         // ////////////////////////////////////////////////////////////////////////////
         // //                      Validation
         // ////////////////////////////////////////////////////////////////////////////
-        std::vector<float> tiled_to_rm_fp32_vec = convert_layout(unpacked_bfp4b_tile_vec_tile_out, shape_vec, TensorLayout::TILED32_4FACES, TensorLayout::LIN_ROW_MAJOR);
-        std::vector<float> rm_to_tiled_fp32_vec = convert_layout(unpacked_bfp4b_tile_vec_rm_out, shape_vec, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES);
+        std::vector<float> tiled_to_rm_fp32_vec = convert_layout(unpacked_bfp4b_tile_vec_tile_out, shape_vec, TensorLayout::TILED_NFACES, TensorLayout::LIN_ROW_MAJOR);
+        std::vector<float> rm_to_tiled_fp32_vec = convert_layout(unpacked_bfp4b_tile_vec_rm_out, shape_vec, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED_NFACES);
 
         // Ensure that passing in row_major_input=true and row_major_output=true are inverses of row_major_input=false and row_major_output=false yield the same result
         pass &= (packed_bfp4b_tile_vec_rm_in == packed_bfp4b_tile_vec_tile_in);
 
-        TT_FATAL(unpacked_bfp4b_tile_vec_rm_out.size() == fp32_vec.size());
+        TT_FATAL(unpacked_bfp4b_tile_vec_rm_out.size() == fp32_vec.size(), "Error");
         for (int rm_idx = 0; rm_idx < fp32_vec.size(); rm_idx++) {
             float golden = fp32_vec.at(rm_idx);
             float converted = unpacked_bfp4b_tile_vec_rm_out.at(rm_idx);
@@ -60,7 +60,7 @@ int main(int argc, char **argv) {
             pass &= comp;
         }
 
-        TT_FATAL(unpacked_bfp4b_tile_vec_tile_out.size() == tiled_fp32_vec.size());
+        TT_FATAL(unpacked_bfp4b_tile_vec_tile_out.size() == tiled_fp32_vec.size(), "Error");
         for (int rm_idx = 0; rm_idx < fp32_vec.size(); rm_idx++) {
             float golden = tiled_fp32_vec.at(rm_idx);
             float converted = unpacked_bfp4b_tile_vec_tile_out.at(rm_idx);
@@ -87,7 +87,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

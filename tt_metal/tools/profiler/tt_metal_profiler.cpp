@@ -5,11 +5,13 @@
 #include <thread>
 #include <cmath>
 
+#include "llrt/hal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "impl/debug/dprint_server.hpp"
 
 #include "tools/profiler/profiler.hpp"
 #include "hostdevcommon/profiler_common.h"
+#include "dev_msgs.h"
 
 #include "tt_metal/detail/tt_metal.hpp"
 
@@ -51,6 +53,8 @@ std::map <uint32_t, DeviceProfiler> tt_metal_device_profiler_map;
 std::unordered_map <uint32_t, std::vector <std::pair<uint64_t,uint64_t>>> deviceHostTimePair;
 std::unordered_map <uint32_t, uint64_t> smallestHostime;
 
+std::mutex device_mutex;
+
 constexpr CoreCoord SYNC_CORE = {0,0};
 
 void setControlBuffer(uint32_t device_id, std::vector<uint32_t>& control_buffer)
@@ -61,24 +65,24 @@ void setControlBuffer(uint32_t device_id, std::vector<uint32_t>& control_buffer)
     auto ethCores = soc_d.get_physical_ethernet_cores() ;
     for (auto &core : soc_d.physical_routing_to_profiler_flat_id)
     {
+        profiler_msg_t *profiler_msg;
+        // TODO: clean this up when HAL is more complete (one lookup w/ type)
         if (std::find(ethCores.begin(), ethCores.end(), core.first) == ethCores.end())
         {
             //Tensix
-            tt::llrt::write_hex_vec_to_core(
-                    device_id,
-                    core.first,
-                    control_buffer,
-                    PROFILER_L1_BUFFER_CONTROL);
+            profiler_msg = hal.get_dev_addr<profiler_msg_t *>(HalProgrammableCoreType::TENSIX, HalMemAddrType::PROFILER);
         }
         else
         {
             //ETH
-            tt::llrt::write_hex_vec_to_core(
-                    device_id,
-                    core.first,
-                    control_buffer,
-                    eth_l1_mem::address_map::PROFILER_L1_BUFFER_CONTROL);
+            profiler_msg = hal.get_dev_addr<profiler_msg_t *>(HalProgrammableCoreType::ACTIVE_ETH, HalMemAddrType::PROFILER);
         }
+
+        tt::llrt::write_hex_vec_to_core(
+            device_id,
+            core.first,
+            control_buffer,
+            reinterpret_cast<uint64_t>(profiler_msg->control_vector));
     }
 #endif
 }
@@ -127,13 +131,16 @@ void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_m
     const int64_t hostStartTime = TracyGetCpuTime();
     std::vector<int64_t> writeTimes(sampleCount);
 
+    profiler_msg_t *profiler_msg = device->get_dev_addr<profiler_msg_t *>(core, HalMemAddrType::PROFILER);
+    uint64_t control_addr = reinterpret_cast<uint64_t>(&profiler_msg->control_vector[kernel_profiler::FW_RESET_L]);
     for (int i = 0; i < sampleCount; i++)
     {
         ZoneScopedC(tracy::Color::Tomato2);
         std::this_thread::sleep_for(std::chrono::milliseconds(millisecond_wait));
         int64_t writeStart = TracyGetCpuTime();
         uint32_t sinceStart = writeStart - hostStartTime;
-        tt::Cluster::instance().write_reg(&sinceStart, tt_cxy_pair(device_id, core) , PROFILER_L1_BUFFER_CONTROL + kernel_profiler::FW_RESET_L * sizeof(uint32_t));
+
+        tt::Cluster::instance().write_reg(&sinceStart, tt_cxy_pair(device_id, core), control_addr);
         writeTimes[i] = (TracyGetCpuTime() - writeStart);
     }
 
@@ -151,10 +158,14 @@ void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_m
         writeSum += writeTime;
     }
     double writeOverhead = (double)writeSum / sampleCount;
+
+    constexpr uint32_t briscIndex = 0;
+    uint64_t addr = reinterpret_cast<uint64_t>(&profiler_msg->buffer[briscIndex][kernel_profiler::CUSTOM_MARKERS]);
+
     vector<std::uint32_t> sync_times = tt::llrt::read_hex_vec_from_core(
             device_id,
             core,
-            PROFILER_L1_BUFFER_BR + kernel_profiler::CUSTOM_MARKERS * sizeof(uint32_t),
+            addr,
             (sampleCount + 1) * 2 * sizeof(uint32_t));
 
     uint32_t preDeviceTime = 0;
@@ -256,7 +267,7 @@ void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_m
 
 void ClearProfilerControlBuffer(Device *device){
     auto device_id = device->id();
-    std::vector<uint32_t> control_buffer(PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
+    std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
     setControlBuffer (device_id, control_buffer);
 }
 
@@ -308,7 +319,7 @@ void InitDeviceProfiler(Device *device){
             tt_metal_device_profiler_map.at(device_id).output_dram_buffer = tt_metal::CreateBuffer(dram_config);
         }
 
-        std::vector<uint32_t> control_buffer(PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
+        std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] = tt_metal_device_profiler_map.at(device_id).output_dram_buffer->address();
         setControlBuffer (device_id, control_buffer);
 
@@ -324,6 +335,7 @@ void InitDeviceProfiler(Device *device){
 
 void DumpDeviceProfileResults(Device *device, bool lastDump) {
 #if defined(TRACY_ENABLE)
+    ZoneScoped;
     std::vector<CoreCoord> workerCores;
     auto device_id = device->id();
     auto device_num_hw_cqs = device->num_hw_cqs();
@@ -336,7 +348,10 @@ void DumpDeviceProfileResults(Device *device, bool lastDump) {
         auto physicalCore = device->physical_core_from_logical_core(core, CoreType::ETH);
         workerCores.push_back(physicalCore);
     }
-    DumpDeviceProfileResults(device, workerCores, lastDump);
+    device->push_work([device, workerCores, lastDump] () mutable {
+        DumpDeviceProfileResults(device, workerCores, lastDump);
+    });
+
 #endif
 }
 
@@ -345,6 +360,7 @@ void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cor
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
+    std::scoped_lock<std::mutex> lock(device_mutex);
     auto dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
     if (tt::llrt::OptionsG.get_profiler_do_dispatch_cores()) {
         auto device_id = device->id();
@@ -395,11 +411,12 @@ void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cor
                     for (const CoreCoord& core :
                          tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs, dispatch_core_type)) {
                         const auto curr_core = device->physical_core_from_logical_core(core, dispatch_core_type);
+                        profiler_msg_t *profiler_msg = device->get_dev_addr<profiler_msg_t *>(curr_core, HalMemAddrType::PROFILER);
                         vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
                                 device_id,
                                 curr_core,
-                                PROFILER_L1_BUFFER_CONTROL,
-                                PROFILER_L1_CONTROL_BUFFER_SIZE);
+                                reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+                                kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
                         if (control_buffer[kernel_profiler::PROFILER_DONE] == 0)
                         {
                             unfinishedCore = curr_core;
@@ -413,11 +430,13 @@ void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cor
                     }
                     for (const CoreCoord& core : tt::Cluster::instance().get_soc_desc(device_id).physical_ethernet_cores)
                     {
+                        const auto curr_core = device->physical_core_from_logical_core(core, CoreType::ETH);
+                        profiler_msg_t *profiler_msg = device->get_dev_addr<profiler_msg_t *>(curr_core, HalMemAddrType::PROFILER);
                         vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
                                 device_id,
                                 core,
-                                eth_l1_mem::address_map::PROFILER_L1_BUFFER_CONTROL,
-                                PROFILER_L1_CONTROL_BUFFER_SIZE);
+                                reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+                                kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
                         if (control_buffer[kernel_profiler::PROFILER_DONE] == 0)
                         {
                             unfinishedCore = core;
@@ -431,6 +450,7 @@ void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cor
         }
 	TT_FATAL(DprintServerIsRunning() == false, "Debug print server is running, cannot dump device profiler data");
         auto device_id = device->id();
+
         if (tt_metal_device_profiler_map.find(device_id) != tt_metal_device_profiler_map.end())
         {
             if (!lastDump)

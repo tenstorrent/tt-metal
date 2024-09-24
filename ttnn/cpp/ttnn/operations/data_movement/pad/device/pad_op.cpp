@@ -2,18 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_metal/common/constants.hpp"
 #include "pad_op.hpp"
 #include "pad_program_factory.hpp"
-
 
 namespace ttnn::operations::data_movement {
 
 void Pad::validate_with_output_tensors(
     const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
+    using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operand to pad needs to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
-    TT_FATAL(input_tensor.get_layout() == Layout::TILE || input_tensor.get_layout() == Layout::ROW_MAJOR);
+    TT_FATAL(input_tensor.get_layout() == Layout::TILE || input_tensor.get_layout() == Layout::ROW_MAJOR, "Error");
     if (input_tensor.get_layout() == Layout::TILE) {
         TT_FATAL(
             (this->input_tensor_start[0] == 0 && this->input_tensor_start[1] == 0 && this->input_tensor_start[2] == 0 && this->input_tensor_start[3] == 0),
@@ -35,16 +36,16 @@ void Pad::validate_with_output_tensors(
     }
 
     if (input_tensor.is_sharded()) {
-        TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
-        TT_FATAL(input_tensor.get_layout() == Layout::ROW_MAJOR);
+        TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+        TT_FATAL(input_tensor.get_layout() == Layout::ROW_MAJOR, "Error");
 
-        TT_FATAL(this->output_mem_config.is_sharded());
-        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        TT_FATAL(this->output_mem_config.is_sharded(), "Error");
+        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
     }
 }
 
-std::vector<tt::tt_metal::Shape> Pad::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    return {tt::tt_metal::Shape(this->output_tensor_shape)};
+std::vector<tt::tt_metal::LegacyShape> Pad::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    return {tt::tt_metal::LegacyShape(this->output_tensor_shape)};
 }
 
 std::vector<Tensor> Pad::create_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
@@ -82,7 +83,7 @@ operation::ProgramWithCallbacks Pad::create_program(const std::vector<Tensor>& i
         }
         return detail::pad_tile(input_tensor, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
     } else {
-        TT_FATAL(false and "Unsupported layout for pad");
+        TT_THROW("Unsupported layout for pad");
         return {};
     }
 

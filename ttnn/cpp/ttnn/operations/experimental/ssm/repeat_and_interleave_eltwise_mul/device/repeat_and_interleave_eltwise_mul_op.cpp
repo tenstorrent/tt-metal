@@ -5,11 +5,13 @@
 #include "repeat_and_interleave_eltwise_mul_op.hpp"
 
 #include "repeat_and_interleave_eltwise_mul_program_factory.hpp"
+#include "tt_metal/common/constants.hpp"
 
 namespace ttnn::operations::experimental::ssm {
 
 void RepeatAndInterleaveEltwiseMul::validate(const std::vector<Tensor>& input_tensors) const {
-    TT_FATAL(input_tensors.size() == 2);
+    using namespace tt::constants;
+    TT_FATAL(input_tensors.size() == 2, "Error");
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     TT_FATAL(
@@ -62,13 +64,13 @@ void RepeatAndInterleaveEltwiseMul::validate(const std::vector<Tensor>& input_te
         (bshape[3] == HIDDEN_SIZE || bshape[3] == TILE_WIDTH * HIDDEN_SIZE), "Input b width must be 32 or 32*5120!");
 }
 
-std::vector<tt::tt_metal::Shape> RepeatAndInterleaveEltwiseMul::compute_output_shapes(
+std::vector<tt::tt_metal::LegacyShape> RepeatAndInterleaveEltwiseMul::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     const auto shape_a = input_tensor_a.get_legacy_shape();
     const auto shape_b = input_tensor_b.get_legacy_shape();
-    return {{shape_a[0], shape_a[1], shape_a[2], TILE_WIDTH * HIDDEN_SIZE}};
+    return {{shape_a[0], shape_a[1], shape_a[2], tt::constants::TILE_WIDTH * HIDDEN_SIZE}};
 }
 
 std::vector<Tensor> RepeatAndInterleaveEltwiseMul::create_output_tensors(

@@ -39,7 +39,7 @@ from models.utility_functions import disable_compilation_reports, disable_persis
         "decode_seq2047_bfloat16-l1_sharded",
     ],
 )
-@pytest.mark.parametrize("device_mesh", (1,), indirect=True)
+@pytest.mark.parametrize("mesh_device", (1,), indirect=True)
 def test_device_perf_wh_bare_metal(
     model_version,
     llm_mode,
@@ -50,7 +50,7 @@ def test_device_perf_wh_bare_metal(
     model_config_str,
     model_location_generator,
     get_tt_cache_path,
-    device_mesh,
+    mesh_device,
 ):
     model_config = get_model_config(model_config_str, seq_len, batch)
     tt_cache_path = get_tt_cache_path(
@@ -70,7 +70,7 @@ def test_device_perf_wh_bare_metal(
         ][kv_cache_len]
 
     run_test_FalconCausalLM_end_to_end(
-        device_mesh,
+        mesh_device,
         model_version,
         llm_mode,
         batch,
@@ -95,7 +95,7 @@ def test_device_perf_wh_bare_metal(
         ("prefill", 1, 2048, 0, "BFLOAT16-DRAM", 2680),
         ("decode", 32, 1, 128, "BFLOAT16-L1_SHARDED", 625),
         ("decode", 32, 1, 1024, "BFLOAT16-L1_SHARDED", 568),
-        ("decode", 32, 1, 2047, "BFLOAT16-L1_SHARDED", 511),
+        ("decode", 32, 1, 2047, "BFLOAT16-L1_SHARDED", 550),
     ),
 )
 @skip_for_grayskull()

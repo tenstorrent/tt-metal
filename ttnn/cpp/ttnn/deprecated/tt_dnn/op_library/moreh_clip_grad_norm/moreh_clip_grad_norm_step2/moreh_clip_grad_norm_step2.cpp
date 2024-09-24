@@ -12,7 +12,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -33,7 +33,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step2_impl(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto num_tiles = tmp_pow_sum.volume() / TILE_HW;
+    const auto num_tiles = tmp_pow_sum.volume() / tt::constants::TILE_HW;
 
     auto [p, decimal, p_is_negative] = get_p_decimal_p_is_negative(1.0f / norm_type);
 

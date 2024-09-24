@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "attn_matmul_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -43,7 +43,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
             fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
             packer_l1_acc = compute_kernel_config.packer_l1_acc;
         } else {
-            TT_FATAL("arch not supported");
+            TT_THROW("arch not supported");
         }
 
     }, compute_kernel_config);
@@ -78,7 +78,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
     // A block of work is one MtNt
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto num_output_blocks_total = ashape[1]; // ashape[1] is Q num_heads; only parallelize on this
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_output_blocks_per_core_group_1, num_output_blocks_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_output_blocks_total);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_output_blocks_per_core_group_1, num_output_blocks_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_blocks_total);
 
     auto all_device_cores = CoreRange({0, 0}, {a.device()->compute_with_storage_grid_size().x - 1, a.device()->compute_with_storage_grid_size().y - 1});
     auto total_num_cores = a.device()->compute_with_storage_grid_size().x * a.device()->compute_with_storage_grid_size().y;
@@ -295,7 +295,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
         UpdateCircularBufferPageSize(program, cb_src0, src0_cb_index, in0_single_tile_size);
 
         auto num_output_blocks_total = ashape[1]; // ashape[1] is Q num_heads; only parallelize on this
-        auto [num_cores, all_cores, core_group_1, core_group_2, num_output_blocks_per_core_group_1, num_output_blocks_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_output_blocks_total);
+        auto [num_cores, all_cores, core_group_1, core_group_2, num_output_blocks_per_core_group_1, num_output_blocks_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_blocks_total);
 
         uint32_t num_output_blocks_per_core;
         for (uint32_t i = 0, num_blocks_written = 0; i < total_num_cores; i++){

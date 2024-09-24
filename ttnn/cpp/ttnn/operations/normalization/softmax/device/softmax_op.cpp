@@ -7,7 +7,7 @@
 #include "common/base_types.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/run_operation.hpp"
 
 #include "tt_metal/host_api.hpp"
@@ -29,22 +29,22 @@ void Softmax::validate(const std::vector<Tensor> &input_tensors, const std::vect
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr , "Operands to softmax need to be allocated in buffers on device!");
     TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to softmax must be tilized");
-    TT_FATAL(input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B);
+    TT_FATAL(input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B, "Error");
     if (optional_input_tensors.size() == 1) {
         if (optional_input_tensors.at(0).has_value()) {
             auto& mask = optional_input_tensors.at(0).value();
             TT_FATAL(mask.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
-            TT_FATAL(input_tensor.device() == mask.device());
+            TT_FATAL(input_tensor.device() == mask.device(), "Error");
             if (mask.is_sharded()) { // sharded mask
-                TT_FATAL(mask.get_layout() == Layout::TILE);
-                TT_FATAL(mask.get_legacy_shape() == input_tensor.get_legacy_shape());
+                TT_FATAL(mask.get_layout() == Layout::TILE, "Error");
+                TT_FATAL(mask.get_legacy_shape() == input_tensor.get_legacy_shape(), "Error");
             } else {
                 if (mask.get_layout() == Layout::ROW_MAJOR) {
-                    tt::tt_metal::Shape expected_shape = {mask.get_legacy_shape()[0], 1, input_tensor.get_legacy_shape()[-1] / TILE_WIDTH, TILE_WIDTH};
-                    TT_FATAL(mask.get_legacy_shape() == expected_shape);
+                    tt::tt_metal::LegacyShape expected_shape = {mask.get_legacy_shape()[0], 1, input_tensor.get_legacy_shape()[-1] / TILE_WIDTH, TILE_WIDTH};
+                    TT_FATAL(mask.get_legacy_shape() == expected_shape, "Error");
                 }
                 for (uint32_t i = 1; i < input_tensor.get_legacy_shape().rank() - 2; i++) {
-                    TT_FATAL(mask.get_legacy_shape()[i] == 1);
+                    TT_FATAL(mask.get_legacy_shape()[i] == 1, "Error");
                 }
             }
 
@@ -54,8 +54,8 @@ void Softmax::validate(const std::vector<Tensor> &input_tensors, const std::vect
                     if constexpr (
                         std::is_same_v<ProgramConfigType, SoftmaxDefaultProgramConfig>
                     ) {
-                        TT_FATAL(input_tensor.get_legacy_shape()[0] == mask.get_legacy_shape()[0]);
-                        TT_FATAL(!this->is_scale_causal_mask_hw_dims_softmax);
+                        TT_FATAL(input_tensor.get_legacy_shape()[0] == mask.get_legacy_shape()[0], "Error");
+                        TT_FATAL(!this->is_scale_causal_mask_hw_dims_softmax, "Error");
                     } else if constexpr (
                         std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>
                     ) {
@@ -67,7 +67,7 @@ void Softmax::validate(const std::vector<Tensor> &input_tensors, const std::vect
                         TT_FATAL(K % TILE_WIDTH == 0, "K must be divisible by tile width.");
                         TT_FATAL(program_config.block_w % program_config.subblock_w == 0, "block_w must be divisible by subblock_w.");
                         TT_FATAL(program_config.block_w * TILE_WIDTH == shape[3], "shard width must equal to input tensor shape[3]!");
-                        TT_FATAL(this->inplace);
+                        TT_FATAL(this->inplace, "Error");
                         if (!this->is_scale_causal_mask_hw_dims_softmax) {
                             // grid
                             auto num_cores_c = program_config.compute_with_storage_grid_size.x;
@@ -75,28 +75,28 @@ void Softmax::validate(const std::vector<Tensor> &input_tensors, const std::vect
                             // check dims
                             TT_FATAL(M * K / ((program_config.block_w * program_config.block_h) * TILE_HW) == num_cores_r * num_cores_c, "number of shards must equal to number of cores. M = {}, K = {}, block_w = {}, block_h = {}, num_cores = {}", M, K, program_config.block_w, program_config.block_h, num_cores_r * num_cores_c);
                         } else {
-                            TT_FATAL(this->is_causal_mask);
-                            TT_FATAL(mask.get_layout() == Layout::TILE);
-                            TT_FATAL(mask.is_sharded() == false);
-                            TT_FATAL(input_tensor.get_layout() == Layout::TILE);
-                            TT_FATAL(input_tensor.is_sharded());
-                            TT_FATAL(input_tensor.shard_spec()->orientation == ShardOrientation::ROW_MAJOR);
-                            TT_FATAL(this->scale.has_value());
+                            TT_FATAL(this->is_causal_mask, "Error");
+                            TT_FATAL(mask.get_layout() == Layout::TILE, "Error");
+                            TT_FATAL(mask.is_sharded() == false, "Error");
+                            TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
+                            TT_FATAL(input_tensor.is_sharded(), "Error");
+                            TT_FATAL(input_tensor.shard_spec()->orientation == ShardOrientation::ROW_MAJOR, "Error");
+                            TT_FATAL(this->scale.has_value(), "Error");
                         }
                     }
                 },
                 this->program_config
             );
         } else {
-            TT_FATAL(not this->scale.has_value());
+            TT_FATAL(not this->scale.has_value(), "Error");
         }
     } else {
-        TT_FATAL(not this->scale.has_value());
-        TT_FATAL(not this->is_scale_causal_mask_hw_dims_softmax);
+        TT_FATAL(not this->scale.has_value(), "Error");
+        TT_FATAL(not this->is_scale_causal_mask_hw_dims_softmax, "Error");
     }
 }
 
-std::vector<tt::tt_metal::Shape> Softmax::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> Softmax::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     return {input_tensors.at(0).get_legacy_shape()};
 }
 
@@ -197,17 +197,17 @@ Tensor scale_mask_softmax(const Tensor& input_tensor, std::optional<float> scale
         [scale, mask, output_mem_config, is_causal_mask, compute_kernel_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto& input_tensor = input_tensors.at(0);
             auto& mask = optional_input_tensors.at(0);
-            tt::tt_metal::Shape input_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
+            tt::tt_metal::LegacyShape input_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
             ttnn::operations::experimental::auto_format::FormatParams input_format_params = {.pad_shape=input_pad_shape, .pad_value=-std::numeric_limits<float>::infinity(), .target_layout=Layout::TILE};
             std::optional<ttnn::operations::experimental::auto_format::FormatParams> mask_format_params = std::nullopt;
             if (mask.has_value()) {
-                TT_FATAL(input_tensor.get_legacy_shape()[-1] == mask.value().get_legacy_shape()[-1]);
-                TT_FATAL(input_tensor.get_legacy_shape()[0] == mask.value().get_legacy_shape()[0]);
-                TT_FATAL(mask.value().get_legacy_shape()[-2] == 1 or mask.value().get_legacy_shape()[-2] == TILE_HEIGHT);
+                TT_FATAL(input_tensor.get_legacy_shape()[-1] == mask.value().get_legacy_shape()[-1], "Error");
+                TT_FATAL(input_tensor.get_legacy_shape()[0] == mask.value().get_legacy_shape()[0], "Error");
+                TT_FATAL(mask.value().get_legacy_shape()[-2] == 1 or mask.value().get_legacy_shape()[-2] == TILE_HEIGHT, "Error");
                 for (uint32_t i = 1; i < input_tensor.get_legacy_shape().rank() - 2; i++) {
-                    TT_FATAL(mask.value().get_legacy_shape()[i] == 1);
+                    TT_FATAL(mask.value().get_legacy_shape()[i] == 1, "Error");
                 }
-                tt::tt_metal::Shape mask_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(mask.value().get_legacy_shape());
+                tt::tt_metal::LegacyShape mask_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(mask.value().get_legacy_shape());
                 mask_format_params = {.pad_shape=mask_pad_shape, .pad_value=-std::numeric_limits<float>::infinity(), .target_layout=Layout::TILE};
             }
             auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);

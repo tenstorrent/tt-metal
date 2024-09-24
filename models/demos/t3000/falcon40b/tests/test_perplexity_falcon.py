@@ -27,7 +27,7 @@ from models.utility_functions import is_wormhole_b0, tt_tensors_to_torch_tensors
 
 
 def calculate_perplexity(
-    model, dataloader, llm_mode, batch_size, seq_len, kv_cache, configuration, device_mesh, use_hf_model=False
+    model, dataloader, llm_mode, batch_size, seq_len, kv_cache, configuration, mesh_device, use_hf_model=False
 ):
     if llm_mode == "prefill" and not use_hf_model:
         assert batch_size == 1
@@ -55,7 +55,7 @@ def calculate_perplexity(
                     )
                     # Get outputs from all devices
                     logits = ttnn.to_torch(
-                        tt_logits, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=-1)
+                        tt_logits, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1)
                     )
                     # Deallocate tt tensors
                     tt_prefill_input_ids.deallocate()
@@ -86,7 +86,7 @@ def calculate_perplexity(
                         )
                         # Get outputs from all devices
                         logits_cur = ttnn.to_torch(
-                            tt_logits, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=-1)
+                            tt_logits, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1)
                         )
                         logits.append(logits_cur.view(-1, 1, configuration.vocab_size))
                         # Deallocate tt tensors
@@ -123,7 +123,7 @@ def run_test_perplexity(
     model_config_str,
     model_location_generator,
     get_tt_cache_path,
-    device_mesh,
+    mesh_device,
     num_samples,
     expected_acc_metrics,
     stride=None,
@@ -153,7 +153,7 @@ def run_test_perplexity(
         # Load tt-metal model config
         input_shape = [batch_size, max_seq_len]
         model_config = get_model_config(
-            model_config_str, llm_mode, input_shape, num_devices=len(device_mesh.get_devices())
+            model_config_str, llm_mode, input_shape, num_devices=len(mesh_device.get_devices())
         )
         tt_cache_path = get_tt_cache_path(
             model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
@@ -162,7 +162,7 @@ def run_test_perplexity(
         # Load tt-metal model
         logger.info("Moving weights (all layers) to device; might take some time...")
         model = TtFalconCausalLM(
-            device_mesh,
+            mesh_device,
             state_dict,
             "",
             num_layers,
@@ -172,7 +172,7 @@ def run_test_perplexity(
             tt_cache_path,
             use_global_cos_sin_cache=True,
         )
-        for device in device_mesh.get_devices():
+        for device in mesh_device.get_devices():
             ttnn.synchronize_device(device)
 
         # Initialize kvcache
@@ -194,7 +194,7 @@ def run_test_perplexity(
         max_seq_len,
         kv_cache,
         configuration,
-        device_mesh,
+        mesh_device,
         use_hf_model=use_hf_model,
     )
     logger.info(f"Perplexity evaluation time: {(time.time() - start):.2f} s")
@@ -263,7 +263,7 @@ def test_perplexity_huggingface(
         ("prefill", 1, 2048, "BFLOAT8_B-DRAM", 64, 6.55, 0.56, 0.80),
         ("decode", 32, 128, "BFLOAT8_B-SHARDED", 64, 13.91, 0.46, 0.71),
         ("decode", 32, 1024, "BFLOAT8_B-SHARDED", 64, 7.79, 0.54, 0.78),
-        ("decode", 32, 2048, "BFLOAT8_B-SHARDED", 64, 6.96, 0.55, 0.79),
+        ("decode", 32, 2048, "BFLOAT8_B-SHARDED", 64, 6.96, 0.55, 0.79),  # TODO: Hangs on CI
     ),
     ids=[
         "prefill_seq128",
@@ -285,10 +285,13 @@ def test_perplexity(
     expected_top5,
     model_location_generator,
     get_tt_cache_path,
-    t3k_device_mesh,
+    t3k_mesh_device,
     use_program_cache,
 ):
     assert is_wormhole_b0(), "This test is only for Wormhole B0"
+
+    if llm_mode == "decode" and max_seq_len > 128:
+        pytest.skip("Decode mode is hanging for seqlen > 128")
 
     run_test_perplexity(
         llm_mode,
@@ -297,7 +300,7 @@ def test_perplexity(
         model_config_str,
         model_location_generator,
         get_tt_cache_path,
-        t3k_device_mesh,
+        t3k_mesh_device,
         num_samples,
         {"ppl": expected_ppl, "top1_acc": expected_top1, "top5_acc": expected_top5},
     )

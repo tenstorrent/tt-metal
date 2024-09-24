@@ -22,21 +22,24 @@ inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uin
 }
 #endif
 
+constexpr uint32_t weight_size_h                    = get_compile_time_arg_val(7);
+constexpr uint32_t weight_size_w                    = get_compile_time_arg_val(8);
 //Only a part of the total channel depth (width) is used in one block.
 template<int window_height, int window_width>
 FORCE_INLINE void read_channels(uint32_t& l1_write_addr_act, const uint32_t act_l1_read_addr, const uint32_t reader_channel_idx,
-        const uint32_t conv_act_c_bytes, const uint32_t conv_act_c_read_bytes, const uint32_t stride_h_bytes) {
+        const uint32_t conv_act_c_bytes, const uint32_t conv_act_c_read_bytes, const uint32_t stride_h_bytes, const uint32_t stride_w_bytes) {
 
     uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_channel_idx * conv_act_c_bytes);
-    #pragma GCC unroll 3
+    #pragma GCC unroll weight_size_h
     for(uint32_t outer = 0; outer < window_height; outer++) {
         uint32_t act_l1_read_addr_row_offset = act_l1_read_addr_plus_offset;
+        #pragma  GCC unroll weight_size_w
         for (uint32_t inner = 0; inner < window_width; inner++) {
             //Read the partial depth.
             noc_async_read_one_packet_with_state<true>(act_l1_read_addr_row_offset, l1_write_addr_act);
             //Increment by full depth to go to the next pixel
             l1_write_addr_act += conv_act_c_read_bytes;
-            act_l1_read_addr_row_offset += conv_act_c_bytes;
+            act_l1_read_addr_row_offset += stride_w_bytes;
         }
         //Go to the next row
         act_l1_read_addr_plus_offset += stride_h_bytes;
@@ -45,25 +48,26 @@ FORCE_INLINE void read_channels(uint32_t& l1_write_addr_act, const uint32_t act_
 
 void kernel_main() {
 
-    constexpr bool act_in_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t stride_h = get_compile_time_arg_val(1);
-    constexpr uint32_t stride_2 = get_compile_time_arg_val(2);
-    constexpr uint32_t conv_act_size_w = get_compile_time_arg_val(3);
-    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(5);
-    constexpr uint32_t weight_size_h = get_compile_time_arg_val(6);
-    constexpr uint32_t weight_size_w = get_compile_time_arg_val(7);
-    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(8);
-    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(9);
-    constexpr uint32_t act_w_num_outer = get_compile_time_arg_val(10);
-    constexpr uint32_t act_num_blocks_w = get_compile_time_arg_val(11);
-    const uint32_t act_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(12));
-    const uint32_t act_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(13));
-    constexpr uint32_t act_mcast_dest_noc_start_x = get_compile_time_arg_val(14);
-    constexpr uint32_t act_mcast_dest_noc_start_y = get_compile_time_arg_val(15);
-    constexpr uint32_t act_mcast_dest_noc_end_x   = get_compile_time_arg_val(16);
-    constexpr uint32_t act_mcast_dest_noc_end_y   = get_compile_time_arg_val(17);
-    constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(18);
-    constexpr uint32_t act_mcast_num_cores = get_compile_time_arg_val(19);
+    constexpr bool act_in_dram                          = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t stride_h                         = get_compile_time_arg_val(1);
+    constexpr uint32_t stride_w                         = get_compile_time_arg_val(2);
+    constexpr uint32_t dilation_h                       = get_compile_time_arg_val(3);
+    constexpr uint32_t dilation_w                       = get_compile_time_arg_val(4);
+    constexpr uint32_t conv_act_size_w                  = get_compile_time_arg_val(5);
+    constexpr uint32_t conv_act_c_read_bytes            = get_compile_time_arg_val(6);
+
+    constexpr uint32_t act_block_h_datums               = get_compile_time_arg_val(9);
+    constexpr uint32_t act_block_num_tiles              = get_compile_time_arg_val(10);
+    constexpr uint32_t act_w_num_outer                  = get_compile_time_arg_val(11);
+    constexpr uint32_t act_num_blocks_w                 = get_compile_time_arg_val(12);
+    const uint32_t act_mcast_sender_semaphore_addr      = get_semaphore(get_compile_time_arg_val(13));
+    const uint32_t act_mcast_receiver_semaphore_addr    = get_semaphore(get_compile_time_arg_val(14));
+    constexpr uint32_t act_mcast_dest_noc_start_x       = get_compile_time_arg_val(15);
+    constexpr uint32_t act_mcast_dest_noc_start_y       = get_compile_time_arg_val(16);
+    constexpr uint32_t act_mcast_dest_noc_end_x         = get_compile_time_arg_val(17);
+    constexpr uint32_t act_mcast_dest_noc_end_y         = get_compile_time_arg_val(18);
+    constexpr uint32_t act_mcast_sender_size_bytes      = get_compile_time_arg_val(19);
+    constexpr uint32_t act_mcast_num_cores              = get_compile_time_arg_val(20);
 
 
     uint32_t i = 0; //Runtime arg index
@@ -82,7 +86,7 @@ void kernel_main() {
     tt_l1_ptr uint32_t *act_mcast_y_lookup  = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
 
-    // DPRINT<<"Act Params L1 :  "<<conv_act_size_w<<"  "<<conv_act_c_read_bytes<<"  "<<weight_size_h<<"  "<<weight_size_w<<"  "<<act_block_h_datums<<"  "<<act_block_num_tiles<<ENDL()<<
+    // DPRINT<<"Act Params L1 :  "<<dilation_h<<" "<<dilation_w<<" "<<conv_act_size_w<<"  "<<conv_act_c_read_bytes<<"  "<<weight_size_h<<"  "<<weight_size_w<<"  "<<act_block_h_datums<<"  "<<act_block_num_tiles<<ENDL()<<
     // "L2  "<<act_w_num_outer<<"  "<<act_num_blocks_w<<"  "<<act_mcast_sender_semaphore_addr<<"  "<<act_mcast_receiver_semaphore_addr<<"  "<<act_mcast_dest_noc_start_x<<
     // "L3  "<<act_mcast_dest_noc_start_y<<"  "<<act_mcast_dest_noc_end_x<<"  "<<act_mcast_dest_noc_end_y<<"  "<<act_mcast_sender_size_bytes<<"  "<<act_mcast_num_cores<<ENDL();
 
@@ -129,11 +133,14 @@ void kernel_main() {
     //Compute is divided along the width to reduce the size of CBs.
     //Only a part of the width on each core is used in one block.
     //Bytes read is conv_act_c_read_bytes.
-    //Striding to next pixel happens using conv_act_c_bytes.
+    //Size of channel in bytes on this core is conv_act_c_bytes.
     constexpr uint32_t conv_act_c_bytes = conv_act_c_read_bytes * act_num_blocks_w;
 
+    //Stride after each channel read.
+    constexpr uint32_t stride_w_bytes = conv_act_c_bytes * dilation_w;
+
     //Striding to next row happens using stride_h_bytes
-    constexpr uint32_t stride_h_bytes = (conv_act_size_w ) * conv_act_c_bytes;
+    constexpr uint32_t stride_h_bytes = (conv_act_size_w ) * conv_act_c_bytes * dilation_h;
 
     uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
     noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), conv_act_c_read_bytes);
@@ -150,8 +157,8 @@ void kernel_main() {
 
         for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
             uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
-            read_channels<weight_size_h,weight_size_w>(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, conv_act_c_bytes, conv_act_c_read_bytes, stride_h_bytes);
-            read_channels<weight_size_h,weight_size_w>(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , conv_act_c_bytes, conv_act_c_read_bytes, stride_h_bytes);
+            read_channels<weight_size_h, weight_size_w>(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, conv_act_c_bytes, conv_act_c_read_bytes, stride_h_bytes, stride_w_bytes);
+            read_channels<weight_size_h, weight_size_w>(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , conv_act_c_bytes, conv_act_c_read_bytes, stride_h_bytes, stride_w_bytes);
 
             reader_idx++;
         }
@@ -195,8 +202,12 @@ void kernel_main() {
                 noc_async_write_multicast_loopback_src(tilized_act_start_address, act_multicast_data_addr, act_mcast_sender_size_bytes, act_mcast_num_cores , false, false);
 
 
-                // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
+                // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc even though cmd bufs are different
                 // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
+#ifdef ARCH_BLACKHOLE
+                // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and may not be sent in order they are issued
+                noc_async_writes_flushed();
+#endif
 
                 // // We should also multicast VALID flag to destinations for receiver semaphore
                 noc_semaphore_set_multicast_loopback_src(act_mcast_sender_semaphore_valid_addr, act_mcast_receiver_semaphore_noc_addr, act_mcast_num_cores , false, false);

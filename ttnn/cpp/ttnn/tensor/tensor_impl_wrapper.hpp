@@ -33,7 +33,7 @@ auto dispatch(DataType dtype, Func &&func, Args &&...args) {
             std::get<0>(std::forward_as_tuple(args...)).get_dtype(), AS_LAMBDA(func), std::forward<Args>(args)...); \
     }
 
-inline uint32_t packed_buffer_size_bytes_wrapper(DataType dtype, uint32_t volume_unpacked_data) {
+inline size_t packed_buffer_size_bytes_wrapper(DataType dtype, size_t volume_unpacked_data) {
     return dispatch(dtype, AS_LAMBDA(packed_buffer_size_bytes), volume_unpacked_data);
 }
 

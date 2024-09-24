@@ -22,9 +22,7 @@ def create_unet_input_tensors(
         ttnn_input_tensor.shape[3],
     )
     if pad_input:
-        # Pad to 16 if grayskull run and 32 for wormhole
-        pad = 32 if device.arch() == ttnn.device.Arch.WORMHOLE_B0 else 16
-        hpad = 0  # 96*32*64
+        pad, hpad = 16, 0
         if ttnn_input_tensor.shape[-1] < pad or ttnn_input_tensor.shape[-2] < hpad:
             ttnn_input_tensor = torch.nn.functional.pad(
                 ttnn_input_tensor,
@@ -66,34 +64,80 @@ def create_unet_model_parameters(model: unet_shallow_torch.UNet, input_tensor: t
     }
 
     parameters.c1["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 8 * 32}
-    parameters.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 8 * 32}
+    parameters.c1["use_split_reader"] = True
+    parameters.c1["use_activation_double_buffer"] = True
+    parameters.c1["input_channels_alignment"] = 16
 
-    parameters.c2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 5 * 32}
-    parameters.c2_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 5 * 32}
+    parameters.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 8 * 32}
+    parameters.c1_2["use_split_reader"] = True
+    parameters.c1_2["use_activation_double_buffer"] = True
+
+    parameters.c2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 6 * 32}
+    parameters.c2["use_split_reader"] = True
+    parameters.c2["use_activation_double_buffer"] = True
+
+    parameters.c2_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 6 * 32}
+    parameters.c2_2["use_activation_double_buffer"] = True
+    parameters.c2_2["use_split_reader"] = True
+    parameters.c2_2["use_activation_double_buffer"] = True
+
     parameters.c3["conv_blocking_and_parallelization_config_override"] = None
+    parameters.c3["use_split_reader"] = True
+    parameters.c3["use_activation_double_buffer"] = True
     parameters.c3_2["conv_blocking_and_parallelization_config_override"] = None
+    parameters.c3_2["use_split_reader"] = True
+    parameters.c3_2["use_activation_double_buffer"] = True
+
     parameters.c4["conv_blocking_and_parallelization_config_override"] = None
+    parameters.c4["use_activation_double_buffer"] = True
     parameters.c4_2["conv_blocking_and_parallelization_config_override"] = None
+    parameters.c4_2["use_activation_double_buffer"] = True
 
     parameters.bnc["conv_blocking_and_parallelization_config_override"] = None
+    parameters.bnc["use_activation_double_buffer"] = True
     parameters.bnc_2["conv_blocking_and_parallelization_config_override"] = None
+    parameters.bnc_2["use_activation_double_buffer"] = True
 
     parameters.c5["conv_blocking_and_parallelization_config_override"] = None
+    parameters.c5["use_activation_double_buffer"] = True
     parameters.c5_2["conv_blocking_and_parallelization_config_override"] = None
+    parameters.c5_2["use_activation_double_buffer"] = True
     parameters.c5_3["conv_blocking_and_parallelization_config_override"] = None
+    parameters.c5_3["use_activation_double_buffer"] = True
 
     parameters.c6["conv_blocking_and_parallelization_config_override"] = None
+    parameters.c6["use_split_reader"] = True
+    parameters.c6["use_activation_double_buffer"] = True
     parameters.c6_2["conv_blocking_and_parallelization_config_override"] = None
+    parameters.c6_2["use_split_reader"] = True
+    parameters.c6_2["use_activation_double_buffer"] = True
     parameters.c6_3["conv_blocking_and_parallelization_config_override"] = None
+    parameters.c6_3["use_split_reader"] = True
+    parameters.c6_3["use_activation_double_buffer"] = True
 
-    parameters.c7["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
+    parameters.c7["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 8 * 32}
+    parameters.c7["use_activation_double_buffer"] = True
+    parameters.c7["use_split_reader"] = True
+    parameters.c7["input_channels_alignment"] = 16
+
     parameters.c7_2["conv_blocking_and_parallelization_config_override"] = None
-    parameters.c7_3["conv_blocking_and_parallelization_config_override"] = None
+    parameters.c7_2["use_split_reader"] = True
+    parameters.c7_2["use_activation_double_buffer"] = True
 
-    parameters.c8["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
-    parameters.c8["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
-    parameters.c8_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
-    parameters.c8_3["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
+    parameters.c7_3["conv_blocking_and_parallelization_config_override"] = None
+    parameters.c7_3["use_split_reader"] = True
+    parameters.c7_3["use_activation_double_buffer"] = True
+
+    parameters.c8["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 8 * 32}
+    parameters.c8["use_activation_double_buffer"] = True
+    parameters.c8["use_split_reader"] = True
+
+    parameters.c8_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 8 * 32}
+    parameters.c8_2["use_activation_double_buffer"] = True
+    parameters.c8_2["use_split_reader"] = True
+    parameters.c8_3["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 8 * 32}
+    parameters.c8_3["use_activation_double_buffer"] = True
+    parameters.c8_3["use_split_reader"] = True
 
     parameters.output_layer["conv_blocking_and_parallelization_config_override"] = None
 

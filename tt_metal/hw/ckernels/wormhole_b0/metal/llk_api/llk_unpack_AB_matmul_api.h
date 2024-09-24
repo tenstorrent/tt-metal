@@ -6,6 +6,7 @@
 #include "llk_unpack_AB_matmul.h"
 #include "llk_unpack_common_api.h"
 
+
 /*************************************************************************
  * LLK UNPACK AB MATMUL
  *************************************************************************/
@@ -111,19 +112,20 @@ inline void llk_unpack_AB_matmul(
 
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
-    const std::uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandB_id);  // In1/InB -> srcA
-    const std::uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandA_id);  // In0/InA -> srcB
 
-    const bool partial_face_a = get_operand_partial_face(operandA_id);
-    const bool partial_face_b = get_operand_partial_face(operandB_id);
+    const std::uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandB_id);  // In1/InB -> srcA - unused in lower API
+    const std::uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandA_id);  // In0/InA -> srcB - unused in lower API
+
+    // TODO: remove partial_face flag, as this is easily to be confused with the partial face flag in math kernel
+    const bool partial_face_a = get_operand_partial_face(operandB_id); // In1/InB -> srcA
+    const bool partial_face_b = get_operand_partial_face(operandA_id); // In0/InA -> srcB`
 
     std::uint32_t base_address_a = cb_interface[operandA_id].fifo_rd_ptr - 1;
     std::uint32_t base_address_b = cb_interface[operandB_id].fifo_rd_ptr - 1;
-
     std::uint32_t tile_size_a = cb_interface[operandA_id].fifo_page_size;
     std::uint32_t tile_size_b = cb_interface[operandB_id].fifo_page_size;
 
-    DEBUG_STATUS("UPMW");
+    WAYPOINT("UPMW");
     _llk_unpack_AB_matmul_(
         base_address_a,
         base_address_b,
@@ -138,5 +140,5 @@ inline void llk_unpack_AB_matmul(
         ct_dim,
         rt_dim,
         kt_dim);
-    DEBUG_STATUS("UPMD");
+    WAYPOINT("UPMD");
 }

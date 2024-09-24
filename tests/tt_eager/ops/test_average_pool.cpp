@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/pool/avgpool/avg_pool.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-#include "tt_numpy/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 #include "common/constants.hpp"
@@ -13,11 +13,11 @@ using tt::tt_metal::Device;
 using tt::tt_metal::Tensor;
 using tt::tt_metal::DataType;
 using tt::tt_metal::Layout;
-using tt::tt_metal::Shape;
+using tt::tt_metal::LegacyShape;
 
-Tensor run_avg_pool_2d_resnet(Shape& tensor_shape, Device* device) {
+Tensor run_avg_pool_2d_resnet(tt::tt_metal::LegacyShape& tensor_shape, Device* device) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
-    auto input_tensor = tt::numpy::random::random(tensor_shape, DataType::BFLOAT16);
+    auto input_tensor = ttnn::numpy::random::random(tensor_shape, DataType::BFLOAT16);
     auto padded_input_shape = AutoFormat::pad_to_tile_shape(tensor_shape, false, false);
     Tensor padded_input_tensor = input_tensor;
     if (!AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape)) {
@@ -31,12 +31,12 @@ int main () {
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
 
-    Shape resnet18_shape = {1, 1, 7 * 7, 2048};
+    tt::tt_metal::LegacyShape resnet18_shape = {1, 1, 7 * 7, 2048};
     auto result = run_avg_pool_2d_resnet(resnet18_shape, device);
 
-    TT_FATAL(result.get_legacy_shape() == Shape({1, 1, TILE_HEIGHT, 2048}));
-    TT_FATAL(result.get_legacy_shape().without_padding() == Shape({1, 1, 1, 2048}));
+    TT_FATAL(result.get_legacy_shape() == tt::tt_metal::LegacyShape({1, 1, tt::constants::TILE_HEIGHT, 2048}), "Incorrect shape {}.", result.get_legacy_shape());
+    TT_FATAL(result.get_legacy_shape().without_padding() == tt::tt_metal::LegacyShape({1, 1, 1, 2048}), "Incorrect shape {}.", result.get_legacy_shape().without_padding());
 
-    TT_FATAL(tt::tt_metal::CloseDevice(device));
+    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
     return 0;
 }

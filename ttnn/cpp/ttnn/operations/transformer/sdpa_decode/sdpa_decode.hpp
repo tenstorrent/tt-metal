@@ -36,6 +36,31 @@ struct ExecuteScaledDotProductAttentionDecode {
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
+struct ExecutePagedScaledDotProductAttentionDecode {
+    static ttnn::Tensor invoke(
+        uint8_t queue_id,
+        const ttnn::Tensor &input_tensor_q,
+        const ttnn::Tensor &input_tensor_k,
+        const ttnn::Tensor &input_tensor_v,
+        const ttnn::Tensor &cur_pos_tensor,
+        const ttnn::Tensor &page_table_tensor,
+        std::optional<float> scale = std::nullopt,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<SDPAProgramConfig> program_config = std::nullopt,
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor &input_tensor_q,
+        const ttnn::Tensor &input_tensor_k,
+        const ttnn::Tensor &input_tensor_v,
+        const ttnn::Tensor &cur_pos_tensor,
+        const ttnn::Tensor &page_table_tensor,
+        std::optional<float> scale = std::nullopt,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<SDPAProgramConfig> program_config = std::nullopt,
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+};
+
 }  // namespace operations::transformer
 
 namespace transformer {
@@ -43,6 +68,11 @@ namespace transformer {
 constexpr auto scaled_dot_product_attention_decode = ttnn::register_operation_with_auto_launch_op<
     "ttnn::transformer::scaled_dot_product_attention_decode",
     ttnn::operations::transformer::ExecuteScaledDotProductAttentionDecode>();
+
+constexpr auto paged_scaled_dot_product_attention_decode = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::transformer::paged_scaled_dot_product_attention_decode",
+    ttnn::operations::transformer::ExecutePagedScaledDotProductAttentionDecode>();
+
 
 }  // namespace transformer
 

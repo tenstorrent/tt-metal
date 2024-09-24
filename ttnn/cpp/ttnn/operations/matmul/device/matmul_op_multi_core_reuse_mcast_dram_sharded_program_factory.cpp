@@ -9,7 +9,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
@@ -351,6 +351,10 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     tt_metal::Buffer* in1_buffer,
     tt_metal::Buffer* bias_buffer,
     tt_metal::Buffer* out_buffer,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const tt::tt_metal::Tile& bias_tile,
+    const tt::tt_metal::Tile& output_tile,
     tt::DataFormat in0_data_format,
     tt::DataFormat in1_data_format,
     tt::DataFormat bias_data_format,
@@ -376,7 +380,6 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         get_dram_reader_core_coords_wormhole_b0(device, all_worker_cores, all_worker_cores_ordered);
     } else {
         get_dram_reader_core_coords_grayskull(device, all_worker_cores, all_worker_cores_ordered);
-        // TT_FATAL("not implemeted except for wormhole_b0 yet!");
     }
 
     // dram banks
@@ -429,11 +432,11 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
                                              : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
     interm0_data_format = tt::DataFormat::Float16_b;
 
-    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
-    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
-    uint32_t bias_single_tile_size = tt_metal::detail::TileSize(bias_data_format);
-    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
-    uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_data_format);
+    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
+    uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
+    uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
+    uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
@@ -457,8 +460,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     uint32_t out_reshard_CB_tiles = out_reshard_block_tiles;  // No double buffer
     uint32_t out_reshard_CB_size = out_reshard_CB_tiles * output_single_tile_size;
 
-    uint32_t in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / TILE_WIDTH;
-    uint32_t in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / TILE_HEIGHT;
+    uint32_t in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
+    uint32_t in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / in0_tile.get_tile_shape()[0];
     uint32_t in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
     uint32_t in2_CB_tiles = in2_block_tiles;
     uint32_t in2_CB_size = in2_CB_tiles * in0_single_tile_size;
@@ -712,7 +715,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     uint32_t src0_cb_index = 0;
     tt_metal::CircularBufferConfig src0_cb_config =
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
-            .set_page_size(src0_cb_index, in0_single_tile_size);
+            .set_page_size(src0_cb_index, in0_single_tile_size)
+            .set_tile_dims(src0_cb_index, in0_tile);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, src0_cb_config);
     log_debug(
         LogOp,
@@ -725,7 +729,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     uint32_t src1_cb_index = 1;
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
-            .set_page_size(src1_cb_index, in1_single_tile_size);
+            .set_page_size(src1_cb_index, in1_single_tile_size)
+            .set_tile_dims(src1_cb_index, in1_tile);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, src1_cb_config);
     log_debug(
         LogOp,
@@ -739,6 +744,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     tt_metal::CircularBufferConfig src2_cb_config =
         tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
             .set_page_size(src2_cb_index, in0_single_tile_size)
+            .set_tile_dims(src2_cb_index, in0_tile)
             .set_globally_allocated_address(*in0_buffer);
     auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, src2_cb_config);
     log_debug(
@@ -762,13 +768,15 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
             {output_cb_index, output_data_format},
         };
         output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
-                               .set_page_size(output_cb_index, output_single_tile_size);
+                               .set_page_size(output_cb_index, output_single_tile_size)
+                               .set_tile_dims(output_cb_index, output_tile);
         // interm0
         std::map<uint8_t, tt::DataFormat> interm0_cb_data_format_spec{
             {interm0_cb_index, interm0_data_format},
         };
         interm0_cb_config = tt_metal::CircularBufferConfig(interm0_CB_size, interm0_cb_data_format_spec)
-                                .set_page_size(interm0_cb_index, interm0_single_tile_size);
+                                .set_page_size(interm0_cb_index, interm0_single_tile_size)
+                                .set_tile_dims(interm0_cb_index, output_tile);
 
         auto cb_interm0 = tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, interm0_cb_config);
         log_debug(
@@ -785,7 +793,9 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
             {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
         output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
                                .set_page_size(output_cb_index, output_single_tile_size)
-                               .set_page_size(interm0_cb_index, interm0_single_tile_size);
+                               .set_page_size(interm0_cb_index, interm0_single_tile_size)
+                               .set_tile_dims(output_cb_index, output_tile)
+                               .set_tile_dims(interm0_cb_index, output_tile);
     }
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, output_cb_config);
     log_debug(
@@ -803,7 +813,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     };
     tt_metal::CircularBufferConfig output_reshard_cb_config =
         tt_metal::CircularBufferConfig(out_reshard_CB_size, output_reshard_cb_data_format_spec)
-            .set_page_size(output_reshard_cb_index, output_single_tile_size);
+            .set_page_size(output_reshard_cb_index, output_single_tile_size)
+            .set_tile_dims(output_reshard_cb_index, output_tile);
     output_reshard_cb_config = output_reshard_cb_config.set_globally_allocated_address(*out_buffer);
     auto cb_output_reshard = tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, output_reshard_cb_config);
 
@@ -811,7 +822,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         uint32_t src3_cb_index = 3;
         tt_metal::CircularBufferConfig cb_src3_config =
             tt_metal::CircularBufferConfig(in3_CB_size, {{src3_cb_index, bias_data_format}})
-                .set_page_size(src3_cb_index, bias_single_tile_size);
+                .set_page_size(src3_cb_index, bias_single_tile_size)
+                .set_tile_dims(src3_cb_index, bias_tile);
         auto cb_src3 = tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, cb_src3_config);
         log_debug(
             LogOp,
@@ -1088,8 +1100,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            TT_FATAL(input_tensors.size() + optional_input_tensors.size() == 3);
-            TT_FATAL(output_tensors.size() == 1);
+            TT_FATAL(input_tensors.size() + optional_input_tensors.size() == 3, "Error");
+            TT_FATAL(output_tensors.size() == 1, "Error");
 
             auto src_buffer_a = input_tensors.at(0).buffer();
             auto src_buffer_b = input_tensors.at(1).buffer();
@@ -1138,6 +1150,12 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     bool skip_in0_mcast,
     bool skip_write_back) {
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+    auto in0_tile = a.get_tile();
+    auto in1_tile = b.get_tile();
+    // cannot use the output tensor tile directly as that might be changed by user override
+    auto output_tile = tt::tt_metal::Tile({in0_tile.get_tile_shape()[0], in1_tile.get_tile_shape()[1]});
+    auto in0_tile_shape = a.get_tile().get_tile_shape();
+    auto in1_tile_shape = b.get_tile().get_tile_shape();
 
     // CB dataformats
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());          // in0
@@ -1148,7 +1166,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;  // bias; doesn't matter if bias=nullptr
     if (bias.has_value()) {
         auto& c = bias.value();
-        TT_FATAL(c.storage_type() == StorageType::DEVICE);
+        TT_FATAL(c.storage_type() == StorageType::DEVICE, "Error");
         TT_FATAL(a.device() == c.device(), "Operands to matmul need to be on the same device!");
         TT_FATAL(c.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
 
@@ -1159,23 +1177,23 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
 
     tt::tt_metal::Device* device = a.device();
 
-    TT_FATAL(a.shard_spec().has_value() && output.shard_spec().has_value());
+    TT_FATAL(a.shard_spec().has_value() && output.shard_spec().has_value(), "Error");
     CoreRangeSet all_cores_storage = a.shard_spec().value().grid;
 
-    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
-    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
+    uint32_t in0_single_tile_size = a.get_tile().get_tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = b.get_tile().get_tile_size(in1_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     tt_metal::Buffer* in1_buffer = b.buffer();
-    TT_FATAL(in0_buffer->size() % in0_single_tile_size == 0);
-    TT_FATAL(in1_buffer->size() % in1_single_tile_size == 0);
+    TT_FATAL(in0_buffer->size() % in0_single_tile_size == 0, "Error");
+    TT_FATAL(in1_buffer->size() % in1_single_tile_size == 0, "Error");
 
     TT_FATAL(
-        ashape[-1] == bshape[-2] &&
+        ashape[-1] == bshape[-2],
         "Dimension K (A.shape[-1] and B.shape[-2]) must match for A and B in bmm_op");  // A.K == B.K
-    TT_FATAL(ashape[-2] % TILE_HEIGHT == 0);
-    TT_FATAL(ashape[-1] % TILE_WIDTH == 0);
-    TT_FATAL(bshape[-2] % TILE_HEIGHT == 0);
-    TT_FATAL(bshape[-1] % TILE_WIDTH == 0);
+    TT_FATAL(ashape[-2] % in0_tile_shape[0] == 0, "Error");
+    TT_FATAL(ashape[-1] % in0_tile_shape[1] == 0, "Error");
+    TT_FATAL(bshape[-2] % in1_tile_shape[0] == 0, "Error");
+    TT_FATAL(bshape[-1] % in1_tile_shape[1] == 0, "Error");
 
     MathFidelity math_fidelity;
     bool math_approx_mode;
@@ -1198,7 +1216,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
                 fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
                 packer_l1_acc = compute_kernel_config.packer_l1_acc;
             } else {
-                TT_FATAL("arch not supported");
+                TT_THROW("arch not supported");
             }
         },
         compute_kernel_config);
@@ -1209,11 +1227,11 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
     uint32_t B = 1;
-    uint32_t Mt = get_batch_size(ashape) * ashape[-2] / TILE_HEIGHT;
-    uint32_t Kt = ashape[-1] / TILE_WIDTH;
-    uint32_t Nt = bshape[-1] / TILE_WIDTH;
+    uint32_t Mt = get_batch_size(ashape) * ashape[-2] / in0_tile_shape[0];
+    uint32_t Kt = ashape[-1] / in0_tile_shape[1];
+    uint32_t Nt = bshape[-1] / in1_tile_shape[1];
 
-    TT_FATAL(Kt % in0_block_w == 0);
+    TT_FATAL(Kt % in0_block_w == 0, "Error");
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
@@ -1243,6 +1261,10 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
         in1_buffer,
         bias_buffer,
         out_buffer,
+        in0_tile,
+        in1_tile,
+        bias.has_value() ? bias->get_tile() : output_tile,
+        output_tile,
         in0_data_format,
         in1_data_format,
         bias_data_format,

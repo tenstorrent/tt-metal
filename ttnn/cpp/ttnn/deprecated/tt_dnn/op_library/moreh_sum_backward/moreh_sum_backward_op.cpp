@@ -40,7 +40,7 @@ void MorehSumBackward::validate_with_output_tensors(
     // validate output_grad shape
     if (this->keep_batch_dim) {
         for (int i = 0; i < input_rank; ++i) {
-            TT_FATAL(input_shape_wo_padding[i] >= output_grad_shape_wo_padding[i]);
+            TT_FATAL(input_shape_wo_padding[i] >= output_grad_shape_wo_padding[i], "Error");
         }
     } else {
         std::vector<uint32_t> expected_output_grad_shape;
@@ -69,7 +69,7 @@ void MorehSumBackward::validate_with_output_tensors(
         uint32_t rank = output_grad_shape_wo_padding.rank();
         TT_FATAL(expected_rank == rank, "expected_rank {} == rank {}", expected_rank, rank);
         for (int i = 0; i < rank; ++i) {
-            TT_FATAL(expected_output_grad_shape[i] >= output_grad_shape_wo_padding[i]);
+            TT_FATAL(expected_output_grad_shape[i] >= output_grad_shape_wo_padding[i], "Error");
             log_debug(LogOp, "rank {} expected_output_grad_shape {}, output_grad_shape_wo_padding {}", i, expected_output_grad_shape[i], output_grad_shape_wo_padding[i]);
         }
     }
@@ -81,7 +81,7 @@ void MorehSumBackward::validate_with_output_tensors(
     }
 }
 
-std::vector<Shape> MorehSumBackward::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> MorehSumBackward::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     return {input_tensors.at(1).get_legacy_shape()};
 }
 
@@ -91,7 +91,7 @@ std::vector<Tensor> MorehSumBackward::create_output_tensors(
         return {output_tensors.at(0).value()};
     }
 
-    TT_FATAL(input_tensors.size() == 2);
+    TT_FATAL(input_tensors.size() == 2, "Error");
     return operation::generic_create_output_tensors(
         *this, input_tensors, input_tensors.at(1).get_dtype(), Layout::TILE, this->input_grad_mem_config);
 }

@@ -5,7 +5,7 @@
 #include "binary_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-//#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+//#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -31,6 +31,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::constants;
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
@@ -96,7 +97,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
         Ht = shard_spec.shape[0] / TILE_HEIGHT;
         TT_ASSERT((shard_spec.shape[0] % (bN * TILE_HEIGHT) == 0), "Shard height per batch must be divisible by TILE_HEIGHT {} {} {} ", shard_spec.shape[0], bN, TILE_HEIGHT);
     } else{
-        TT_FATAL(false, "Unsupported memory layout");
+        TT_THROW("Unsupported memory layout");
     }
 
     TT_ASSERT((shard_spec.shape[0] % TILE_HEIGHT == 0) && (shard_spec.shape[0] % TILE_WIDTH == 0), "Shard shapes must be multiple of TILE_HEIGHT ");
@@ -218,6 +219,7 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreSharded::override_runtime_a
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::constants;
 
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
@@ -249,7 +251,7 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreSharded::override_runtime_a
             Wt = shard_spec.shape[1] / TILE_WIDTH;
             Ht = shard_spec.shape[0] / TILE_HEIGHT;
         } else{
-            TT_FATAL(false, "Unsupported memory layout");
+            TT_THROW("Unsupported memory layout");
         }
         uint32_t Ht_per_core = 0, ncores_y = ncores / ncores_x;
         for (uint32_t i = 0; i < ncores; i++){

@@ -20,6 +20,7 @@
 #include "tt_metal/third_party/umd/device/tt_soc_descriptor.h" // For CoreType
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
+#include "llrt/hal.hpp"
 
 namespace tt {
 
@@ -102,7 +103,7 @@ struct ShardSpecBuffer {
         auto height_in_pages = tensor_shard_spec.shape[1] / page_shape[1];
         return {width_in_pages, height_in_pages};
     }
-    uint32_t size() const {
+    DeviceAddr size() const {
         auto shape_in_pages_ = this->shape_in_pages();
         return shape_in_pages_[0] * shape_in_pages_[1];
     }
@@ -110,10 +111,11 @@ struct ShardSpecBuffer {
 
 struct BufferConfig {
     Device *device;
-    uint64_t size;       // Size in bytes
-    uint64_t page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
+    DeviceAddr size;       // Size in bytes
+    DeviceAddr page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type;
     TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED;
+    bool allocate = true;
 };
 
 typedef BufferConfig InterleavedBufferConfig;
@@ -122,11 +124,12 @@ typedef BufferConfig InterleavedBufferConfig;
 // designator constructor
 struct ShardedBufferConfig {
     Device *device;
-    uint64_t size;       // Size in bytes
-    uint64_t page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
+    DeviceAddr size;       // Size in bytes
+    DeviceAddr page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type = BufferType::L1;
     TensorMemoryLayout buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED;
     ShardSpecBuffer shard_parameters;
+    bool allocate = true;
 };
 
 bool is_sharded(const TensorMemoryLayout &layout);
@@ -152,12 +155,13 @@ class Buffer {
         buffer_type_(BufferType::DRAM),
         buffer_layout_(TensorMemoryLayout::INTERLEAVED),
         shard_parameters_(std::nullopt),
-        bottom_up_(std::nullopt) {}
+        bottom_up_(std::nullopt),
+        allocate_(true) {}
 
     Buffer(
         Device *device,
-        uint64_t size,
-        uint64_t page_size,
+        DeviceAddr size,
+        DeviceAddr page_size,
         const BufferType buffer_type,
         const TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
         const std::optional<ShardSpecBuffer>& shard_parameter = std::nullopt,
@@ -173,21 +177,22 @@ class Buffer {
     virtual ~Buffer();
     Device *device() const { return device_; }
 
-    uint32_t size() const { return static_cast<uint32_t>(size_); }
+    DeviceAddr size() const { return static_cast<DeviceAddr>(size_); }
 
-    void set_size(uint64_t size) { size_ = size; }
+    void set_size(DeviceAddr size) { size_ = size; this->buffer_page_mapping_ = nullptr; }
     // Returns address of buffer in the first bank
     uint32_t address() const { return static_cast<uint32_t>(address_); }
 
     void set_address(uint64_t addr) { address_ = addr; }
 
-    uint32_t page_size() const { return page_size_; }
+    DeviceAddr page_size() const { return page_size_; }
 
     uint32_t num_pages() const { return this->size() / this->page_size(); }
 
-    void set_page_size(uint64_t page_size) {
+    void set_page_size(DeviceAddr page_size) {
         TT_FATAL(size_ % page_size == 0, "buffer size must be divisible by new page size");
         page_size_ = page_size;
+        this->buffer_page_mapping_ = nullptr;
     }
 
     uint32_t num_dev_pages() const {
@@ -226,18 +231,18 @@ class Buffer {
     // returns NoC coordinates of first bank buffer is in
     CoreCoord noc_coordinates() const;
 
-    uint64_t page_address(uint32_t bank_id, uint32_t page_index) const;
+    DeviceAddr page_address(uint32_t bank_id, uint32_t page_index) const;
 
     uint32_t alignment() const { return ALLOCATOR_ALIGNMENT; }
 
-    uint32_t aligned_page_size() const { return align(page_size_, this->alignment());}
+    DeviceAddr aligned_page_size() const { return align(page_size_, this->alignment());}
 
-    uint32_t aligned_size() const { return this->num_dev_pages() * this->aligned_page_size(); }
+    DeviceAddr aligned_size() const { return this->num_dev_pages() * this->aligned_page_size(); }
 
     // SHARDED API STARTS HERE
     // TODO: WILL SEPARATE INTO SHARDED BUFFER CLASS
 
-    uint64_t sharded_page_address(uint32_t bank_id, uint32_t page_index) const;
+    DeviceAddr sharded_page_address(uint32_t bank_id, uint32_t page_index) const;
 
     ShardSpecBuffer shard_spec() const {
         TT_ASSERT(is_sharded(this->buffer_layout_), "Buffer not sharded");
@@ -247,6 +252,7 @@ class Buffer {
 
     void set_shard_spec(const ShardSpecBuffer& shard_spec) {
         this->shard_parameters_ = shard_spec;
+        this->buffer_page_mapping_ = nullptr;
     }
 
     uint32_t num_cores() const {
@@ -257,21 +263,25 @@ class Buffer {
         }
     }
 
+    const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
+
    private:
     virtual void allocate();
 
     virtual void deallocate();
     friend void DeallocateBuffer(Buffer &buffer);
 
-    uint64_t translate_page_address(uint64_t offset, uint32_t bank_id) const;
+    DeviceAddr translate_page_address(uint64_t offset, uint32_t bank_id) const;
 
     Device *device_;
-    uint64_t size_;       // Size in bytes
-    uint64_t address_;    // Address of buffer
-    uint64_t page_size_;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
+    DeviceAddr size_;       // Size in bytes
+    DeviceAddr address_;    // Address of buffer
+    DeviceAddr page_size_;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type_;
     TensorMemoryLayout buffer_layout_;
     std::optional<ShardSpecBuffer> shard_parameters_;
+    std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
+    bool allocate_ = true;
    protected:
     std::optional<bool> bottom_up_;
 };
@@ -279,22 +289,21 @@ class Buffer {
 BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer);
 
 namespace detail {
-using PageAddress = uint32_t;
 using Deviceid = uint32_t;
 
 class buffer_map_t {
    public:
-    void insert(std::tuple<Deviceid, PageAddress> buf_attr, Buffer *buffer) {
+    void insert(std::tuple<Deviceid, DeviceAddr> buf_attr, Buffer *buffer) {
         std::scoped_lock<std::mutex> lock(this->map_mutex);
         this->map.insert({buf_attr, buffer});
     }
 
-    void erase(std::tuple<Deviceid, PageAddress> buf_attr) {
+    void erase(std::tuple<Deviceid, DeviceAddr> buf_attr) {
         std::scoped_lock<std::mutex> lock(this->map_mutex);
         this->map.erase(buf_attr);
     }
 
-    std::map<std::tuple<Deviceid, PageAddress>, Buffer *> value() {
+    std::map<std::tuple<Deviceid, DeviceAddr>, Buffer *> value() {
         std::scoped_lock<std::mutex> lock(this->map_mutex);
         return this->map;
     }
@@ -303,7 +312,7 @@ class buffer_map_t {
 
    private:
     std::mutex map_mutex;
-    std::map<std::tuple<Deviceid, PageAddress>, Buffer *> map = {};
+    std::map<std::tuple<Deviceid, DeviceAddr>, Buffer *> map = {};
 };
 
 extern buffer_map_t BUFFER_MAP;

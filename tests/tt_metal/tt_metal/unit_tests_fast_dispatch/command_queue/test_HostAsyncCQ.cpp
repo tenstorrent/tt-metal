@@ -64,7 +64,7 @@ inline std::vector<uint32_t> gold_standard_flatten(std::vector<uint32_t> src_vec
         start_dram_addr_offset_for_tensor_row += num_tile_cols * 16;
     }
 
-    TT_FATAL(expected_dst_vec.size() == (num_tile_rows * 32) * (num_tile_cols * 16) * 32);
+    TT_FATAL(expected_dst_vec.size() == (num_tile_rows * 32) * (num_tile_cols * 16) * 32, "Error");
     return expected_dst_vec;
 }
 
@@ -182,7 +182,7 @@ bool flatten(Device *device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5)
         EnqueueReadBuffer(device->command_queue(), dst_dram_buffer, result_vec, true);
 
         // Validation of data
-        TT_FATAL(golden.size() == result_vec.size());
+        TT_FATAL(golden.size() == result_vec.size(), "Error");
         pass &= (golden == result_vec);
 
         if (not pass) {

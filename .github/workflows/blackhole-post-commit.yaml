@@ -14,16 +14,29 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  packages: write
 
 jobs:
   static-checks:
     uses: ./.github/workflows/all-static-checks.yaml
     secrets: inherit
+  build-docker-image:
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
   build-artifact:
+    needs: build-docker-image
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
       arch: '["blackhole"]'
+      build-docker: false
+  build-wheels:
+    needs: build-artifact
+    uses: ./.github/workflows/_build-wheels-impl.yaml
+    with:
+      os: "ubuntu-20.04"
+      arch: "blackhole"
+      from-precompiled: true
 #   build-artifact-profiler:
 #     uses: ./.github/workflows/build-artifact.yaml
 #     with:
@@ -43,13 +56,13 @@ jobs:
       arch: blackhole
       runner-label: BH
       timeout: 30
-  # fd-unit-tests:
-  #   needs: build-artifact
-  #   uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
-  #   secrets: inherit
-  #   with:
-  #     arch: blackhole
-  #     runner-label: BH
+  fd-unit-tests:
+    needs: build-wheels
+    uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
+    secrets: inherit
+    with:
+      arch: blackhole
+      runner-label: BH
   # FD C++ Unit Tests
   cpp-unit-tests:
     needs: build-artifact
@@ -64,8 +77,8 @@ jobs:
 #     needs: build-artifact-profiler
 #     uses: ./.github/workflows/run-profiler-regression.yaml
 #     secrets: inherit
-#   eager-package-main:
-#     uses: ./.github/workflows/eager-package-main.yaml
+#   build-and-test-wheels:
+#     uses: Check all-post-commit yaml for directions
 #     secrets: inherit
 #   build-docs:
 #     needs: build-artifact

@@ -12,7 +12,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_adamw/moreh_adamw_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -42,7 +42,7 @@ operation::ProgramWithCallbacks moreh_adamw_(
     const std::optional<const Tensor> max_exp_avg_sq_out,
     const CoreRange core_range,
     const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
-    uint32_t num_units = param_in.volume() / TILE_HW;
+    uint32_t num_units = param_in.volume() / tt::constants::TILE_HW;
 
     Program program{};
 

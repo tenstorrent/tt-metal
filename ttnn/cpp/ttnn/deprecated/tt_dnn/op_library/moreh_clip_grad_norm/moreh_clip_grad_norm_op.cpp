@@ -48,7 +48,7 @@ void MorehClipGradNormStep1::validate(
     check_tensor(tmp_pow_sum, "moreh_clip_grad_norm_step1", "tmp_pow_sum");
 };
 
-std::vector<Shape> MorehClipGradNormStep1::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
+std::vector<tt::tt_metal::LegacyShape> MorehClipGradNormStep1::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
 
 std::vector<Tensor> MorehClipGradNormStep1::create_output_tensors(const std::vector<Tensor> &) const { return {}; }
 
@@ -105,7 +105,7 @@ void MorehClipGradNormStep2::validate(const std::vector<Tensor> &input_tensors) 
     check_tensor(total_norm, "moreh_clip_grad_norm_step2", "total_norm");
 }
 
-std::vector<Shape> MorehClipGradNormStep2::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
+std::vector<tt::tt_metal::LegacyShape> MorehClipGradNormStep2::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
 
 std::vector<Tensor> MorehClipGradNormStep2::create_output_tensors(const std::vector<Tensor> &) const { return {}; }
 
@@ -146,7 +146,7 @@ void MorehClipGradNormStep3::validate(
     check_tensor(clip_coef_clamped, "moreh_clip_grad_norm_step3", "clip_coef_clamped");
 }
 
-std::vector<Shape> MorehClipGradNormStep3::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
+std::vector<tt::tt_metal::LegacyShape> MorehClipGradNormStep3::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
 
 std::vector<Tensor> MorehClipGradNormStep3::create_output_tensors(const std::vector<Tensor> &) const { return {}; }
 
@@ -210,11 +210,10 @@ Tensor moreh_clip_grad_norm_impl(
             tensor_impl::cast_vec<float>(owned_buffer::get_as<bfloat16>(total_norm.cpu())).at(0);
         TT_ASSERT(
             std::isfinite(fp32_total_norm),
-            fmt::format(
                 "The total norm of order {} for gradients from `parameters` is non-finite, so it cannot be "
                 "clipped. To disable this error and scale the gradients by the non-finite norm anyway, set "
                 "`error_if_nonfinite=False`",
-                norm_type));
+                norm_type);
     }
 
     // max_norm / (total_norm + 1e-6)
@@ -237,9 +236,10 @@ Tensor moreh_clip_grad_norm_impl(
     bool error_if_nonfinite,
     const std::optional<std::reference_wrapper<const Tensor>> total_norm,
     const MemoryConfig &output_mem_config) {
+    using namespace tt::constants;
     // Create tmp_pow_sum[1, 1, TILE_HEIGHT, TILE_WIDTH * total_num_inputs]
     const auto total_num_inputs = static_cast<uint32_t>(inputs.size());
-    Shape tmp_pow_sum_shape{1, 1, TILE_HEIGHT, TILE_WIDTH * total_num_inputs};
+    tt::tt_metal::LegacyShape tmp_pow_sum_shape{1, 1, TILE_HEIGHT, TILE_WIDTH * total_num_inputs};
     const auto &tmp_pow_sum =
         create_device_tensor(tmp_pow_sum_shape, inputs.at(0).get_dtype(), Layout::TILE, inputs.at(0).device());
 
@@ -250,7 +250,7 @@ Tensor moreh_clip_grad_norm_impl(
 
     // Create total_norm[1, 1, 1, 1]
     Padding padding{{{0, 0}, {0, 0}, {0, TILE_HEIGHT - 1}, {0, TILE_WIDTH - 1}}, Padding::PadValue::Zero};
-    Shape total_norm_shape{{1, 1, TILE_HEIGHT, TILE_WIDTH}, padding};
+    tt::tt_metal::LegacyShape total_norm_shape{{1, 1, TILE_HEIGHT, TILE_WIDTH}, padding};
     const auto &created_total_norm = create_device_tensor(
         total_norm_shape, inputs.at(0).get_dtype(), Layout::TILE, inputs.at(0).device(), output_mem_config);
 

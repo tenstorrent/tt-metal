@@ -74,9 +74,9 @@ class CclOpShardedTensorConfig final : public virtual CclOpTensorConfig {
 
 struct CclTensorSlicer {
     CclTensorSlicer(
-        tt::tt_metal::Shape tensor_shape,
-        tt::tt_metal::Shape dim_slice_factors,
-        // tt::tt_metal::Shape page_shape,
+        tt::tt_metal::LegacyShape tensor_shape,
+        tt::tt_metal::LegacyShape dim_slice_factors,
+        // tt::tt_metal::LegacyShape page_shape,
         std::size_t num_pages,
         std::size_t elem_size,
         std::size_t page_size_in_bytes) :
@@ -103,12 +103,12 @@ struct CclTensorSlicer {
         return n;
     }
 
-    tt::tt_metal::Shape const tensor_shape;
-    tt::tt_metal::Shape const dim_slice_factors_per_rank;
-    // tt::tt_metal::Shape const page_shape;
+    tt::tt_metal::LegacyShape const tensor_shape;
+    tt::tt_metal::LegacyShape const dim_slice_factors_per_rank;
+    // tt::tt_metal::LegacyShape const page_shape;
     std::size_t const num_pages;
 
-    // tt::tt_metal::Shape rank_slice_shape;
+    // tt::tt_metal::LegacyShape rank_slice_shape;
 
     std::size_t const page_size_in_bytes;
     std::size_t const elem_size;
@@ -255,7 +255,7 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
 
     [[deprecated("deprecated code path for reduce scatter. Use nerw get_worker_slice API instead")]]
     virtual void increment(uint32_t num_pages) override {
-        TT_FATAL(false, "deprecated code path for ");
+        TT_THROW("deprecated code path for ");
     }
 
    public:
@@ -266,7 +266,7 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
     }
 
     void create_worker_slice_shape_for_row_major_layout(tt_xy_pair const& tensor_slice_shape, uint32_t num_workers) {
-        TT_FATAL("Row major interleaved not supported by Reduce Scatter");
+        TT_THROW("Row major interleaved not supported by Reduce Scatter");
     }
 
     // Static methods
@@ -274,7 +274,7 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
         std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape);
 
     static std::vector<tt_xy_pair> create_worker_slice_shapes_for_tile_layout(
-        tt::tt_metal::Shape const& tensor_shape,
+        tt::tt_metal::LegacyShape const& tensor_shape,
         tt_xy_pair const& tensor_slice_shape_in_tiles,
         uint32_t num_workers,
         uint32_t max_slice_size_in_pages,
@@ -313,7 +313,7 @@ class RingReduceScatterTensorSlicer : public RingReduceScatterBaseTensorSlicer<R
         std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape);
 
     static std::vector<tt_xy_pair> create_worker_slice_shapes_for_tile_layout(
-        tt::tt_metal::Shape const& tensor_shape,
+        tt::tt_metal::LegacyShape const& tensor_shape,
         tt_xy_pair const& tensor_slice_shape_in_tiles,
         uint32_t num_workers,
         uint32_t max_slice_size_in_pages,
@@ -341,7 +341,7 @@ class RingReduceScatterWrappedTensorSlicer : public RingReduceScatterBaseTensorS
         std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape);
 
     static std::vector<tt_xy_pair> create_worker_slice_shapes_for_tile_layout(
-        tt::tt_metal::Shape const& tensor_shape,
+        tt::tt_metal::LegacyShape const& tensor_shape,
         tt_xy_pair const& tensor_slice_shape_in_tiles,
         uint32_t num_workers,
         uint32_t max_slice_size_in_pages,

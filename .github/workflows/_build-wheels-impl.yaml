@@ -1,0 +1,61 @@
+name: "[internal] Python wheels build impl"
+
+on:
+  workflow_call:
+    inputs:
+      os:
+        required: True
+        type: string
+      arch:
+        required: True
+        type: string
+      from-precompiled:
+        required: True
+        default: True
+        type: boolean
+
+jobs:
+  build-wheel:
+    runs-on: ${{ inputs.os }}
+    env:
+      ARCH_NAME: ${{ inputs.arch }}
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/install-metal-deps
+        with:
+          os: ${{ inputs.os }}
+      - uses: ./.github/actions/install-metal-dev-deps
+        with:
+          os: ${{ inputs.os }}
+      - name: Clean up dirty files
+        run: git clean -f -d
+      - uses: actions/setup-python@v5.0.0
+        with:
+          cache: 'pip'
+          cache-dependency-path: |
+            tt_metal/python_env/requirements-dev.txt
+            pyproject.toml
+      - name: Install python deps for packaging
+        run: pip install build
+      - name: Use g++ as umd compiler for ubuntu 22.04
+        if: ${{ inputs.os == 'ubuntu-22.04' }}
+        run: |
+          echo "DEVICE_CXX=g++" >> $GITHUB_ENV
+      - uses: ./.github/actions/prepare-metal-run
+        if: ${{ inputs.from-precompiled }}
+        with:
+          arch: ${{ inputs.arch }}
+      - name: Set precompiled dir for precompile builds
+        if: ${{ inputs.from-precompiled }}
+        # TT_FROM_PRECOMPILED_DIR env variable allows us to not re-run the full C++ build and instead
+        # rely on the artifact that was already compiled. We point it to where the repo is.
+        run: echo "TT_FROM_PRECOMPILED_DIR=${{ github.workspace }}" >> $GITHUB_ENV
+      - name: Build Python package distribution
+        run: python -m build
+      - name: Upload distribution as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: eager-dist-${{ inputs.os }}-${{ inputs.arch }}
+          path: dist/

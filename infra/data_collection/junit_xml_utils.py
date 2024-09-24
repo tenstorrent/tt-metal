@@ -62,16 +62,23 @@ def get_pytest_testcase_properties(testcase_element):
     return reduce(merge, map(get_property_as_dict_, properties_block), {})
 
 
-def get_pytest_testcase_is_skipped(testcase_element):
-    skipped_element = get_at_most_one_single_child_element_(testcase_element, "skipped")
+def get_optional_child_element_exists_(parent_element, tag_name):
+    return get_at_most_one_single_child_element_(parent_element, tag_name) != None
 
-    return skipped_element != None
+
+def get_pytest_testcase_is_skipped(testcase_element):
+    return get_optional_child_element_exists_(testcase_element, "skipped")
 
 
 def get_pytest_testcase_is_failed(testcase_element):
-    failure_element = get_at_most_one_single_child_element_(testcase_element, "failure")
+    return get_optional_child_element_exists_(testcase_element, "failure")
 
-    return failure_element != None
+
+def get_pytest_testcase_is_error(testcase_element):
+    return get_optional_child_element_exists_(testcase_element, "error")
+
+
+# opportunity for less copy-pasta
 
 
 def get_pytest_failure_message(testcase_element):
@@ -80,3 +87,11 @@ def get_pytest_failure_message(testcase_element):
     failure_element = get_at_most_one_single_child_element_(testcase_element, "failure")
 
     return failure_element.attrib["message"]
+
+
+def get_pytest_error_message(testcase_element):
+    assert get_pytest_testcase_is_error(testcase_element)
+
+    error_element = get_at_most_one_single_child_element_(testcase_element, "error")
+
+    return error_element.attrib["message"]

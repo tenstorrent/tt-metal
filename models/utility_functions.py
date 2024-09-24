@@ -13,7 +13,6 @@ import math
 import struct
 import pytest
 
-from tt_lib.fused_ops.conv import conv as TtConv
 from ttnn.device import Arch
 
 
@@ -194,7 +193,7 @@ def torch2tt_tensor(
 
 
 def tt_tensors_to_torch_tensors(
-    tt_tensors_device: ttnn.Tensor, device_mesh: Union[ttnn.DeviceMesh, ttnn.Device], concat_dim: int = 0
+    tt_tensors_device: ttnn.Tensor, mesh_device: Union[ttnn.MeshDevice, ttnn.Device], concat_dim: int = 0
 ):
     # Convert tensors to interleaved
     if tt_tensors_device.is_sharded():
@@ -211,7 +210,7 @@ def tt_tensors_to_torch_tensors(
         tt_tensors_device = ttnn.untilize(tt_tensors_device, use_multicore=False)
 
     tt_tensors_device = ttnn.to_torch(
-        tt_tensors_device, mesh_composer=ttnn.ConcatMeshToTensor(device_mesh, dim=concat_dim), device=device_mesh
+        tt_tensors_device, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=concat_dim), device=mesh_device
     )
 
     return tt_tensors_device
@@ -300,10 +299,10 @@ def unpad_from_zero(x, desired_shape):
         x = x.unpad(
             (0, 0, 0, 0),
             (
-                desired_shape[0] - 1,
-                desired_shape[1] - 1,
-                desired_shape[2] - 1,
-                desired_shape[3] - 1,
+                desired_shape[0],
+                desired_shape[1],
+                desired_shape[2],
+                desired_shape[3],
             ),
         )
 
@@ -915,80 +914,6 @@ def is_conv_supported_on_device(conv_params):
     return True
 
 
-def run_conv_on_device_wrapper(conv_weight, conv_params, device, conv_bias=None, channel_transpose=False):
-    K, C, R, S, U, V, P_H, P_W, dilation, groups = [conv_params[i] for i in range(10)]
-    conv_on_device = TtConv(conv_weight, conv_params, device, conv_bias)
-
-    def run_conv_on_device(x):
-        [N, C, H, W] = x.get_legacy_shape()
-        if N == 1:
-            return run_conv_on_device_batch_one(x)
-        # need to move on CPU
-        if isinstance(x, ttnn.Tensor):
-            xx = x.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
-        else:
-            xx = x
-
-        partial_convs = [
-            run_conv_on_device_batch_one(torch_to_tt_tensor_rm(xx[batch_idx, :, :, :], device))
-            for batch_idx in range(N)
-        ]
-        conv_concat = ttnn.concat(partial_convs, 0)
-        return conv_concat
-
-    def run_conv_on_device_batch_one(x):
-        [N, C, H, W] = x.get_legacy_shape()
-        if channel_transpose:
-            # n c h w -> n h w c
-            x = ttnn.transpose(x, 1, -2)
-            x = ttnn.transpose(x, -2, -1)  # wh
-
-        logger.info("Running Conv with following parameters on device -")
-        logger.info(
-            "K="
-            + str(K)
-            + " C="
-            + str(C)
-            + " H="
-            + str(H)
-            + " W="
-            + str(W)
-            + " R="
-            + str(R)
-            + " S="
-            + str(S)
-            + " U="
-            + str(U)
-            + " V="
-            + str(V)
-            + " PH="
-            + str(P_H)
-            + " PW="
-            + str(P_W)
-            + " dilation="
-            + str(dilation)
-            + " groups="
-            + str(groups)
-        )
-
-        logger.info("Going to run conv on tt device")
-        if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-            x = ttnn.untilize(x)
-        else:
-            x_padded_shape = list(x.get_legacy_shape())
-            x_padded_shape[-1] = roundup(x.get_legacy_shape()[-1], 16)
-            x = ttnn.pad(x, x_padded_shape, [0, 0, 0, 0], 0)
-        x = conv_on_device(x)
-        if channel_transpose:
-            x = ttnn.transpose(x, -2, -1)
-            x = ttnn.transpose(x, 1, -2)
-
-        logger.info("conv on tt device done")
-        return x
-
-    return run_conv_on_device
-
-
 # detect E75 Grayskull card
 def is_e75(device):
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -1013,6 +938,10 @@ def is_wormhole_b0():
 def is_grayskull():
     ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
     return "grayskull" in ARCH_NAME
+
+
+def skip_for_blackhole(reason_str="not working for Blackhole"):
+    return pytest.mark.skipif(is_blackhole(), reason=reason_str)
 
 
 def skip_for_wormhole_b0(reason_str="not working for Wormhole B0"):
@@ -1042,9 +971,10 @@ def get_devices_for_t3000(all_devices, num_devices):
     if num_devices <= 4:
         return all_devices[:num_devices]
     elif num_devices == 8:
-        # TODO: Generalize this for different arch
-        hamiltonian_ring_indices = [0, 4, 5, 1, 2, 6, 7, 3]
-        return [all_devices[i] for i in hamiltonian_ring_indices]
+        # Temporary until we move request for ring order to CCL operations directly.
+        # This is better because we no longer need to manually manage the ring order.
+        ring_indices = ttnn.get_t3k_physical_device_ids_ring()
+        return [all_devices[i] for i in ring_indices]
     else:
         raise NotImplementedError("Only supports 1, 2, 3, 4, and 8 chip configurations!")
 

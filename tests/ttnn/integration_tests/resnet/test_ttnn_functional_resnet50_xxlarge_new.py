@@ -20,10 +20,10 @@ from models.utility_functions import (
     pad_and_fold_conv_filters_for_unity_stride,
     enable_memory_reports,
     skip_for_grayskull,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
 )
 
-from models.demos.ttnn_resnet.tests.ttnn_resnet_test_infra import load_resnet50_model
+from models.demos.ttnn_resnet.tests.resnet50_test_infra import load_resnet50_model
 from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_xxlarge_new_conv_api import resnet50
 
 

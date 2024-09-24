@@ -18,7 +18,7 @@
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include "tt_metal/tt_metal/perf_microbenchmark/common/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include <yaml-cpp/yaml.h>
 
 using namespace tt;
@@ -598,7 +598,7 @@ int main(int argc, char **argv) {
             input_size = k * n * 2;
             tile_format = tt::DataFormat::Float16_b;
         } else {
-            TT_FATAL("input data format invalid");
+            TT_THROW("Input data format {} is invalid. Please change.", df);
         }
         uint32_t kt = k / 32;
         uint32_t nt = n / 32;

@@ -5,14 +5,9 @@
 
 import torch
 from loguru import logger
-from torchvision import models
 from transformers import AutoImageProcessor
 import pytest
 import ttnn
-
-from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
-)
 
 from models.utility_functions import (
     disable_compilation_reports,
@@ -21,11 +16,8 @@ from models.utility_functions import (
     profiler,
 )
 
-from models.demos.resnet.tests.demo_utils import get_data, get_data_loader, get_batch, load_resnet50_model
-
-from models.demos.ttnn_resnet.tt.custom_preprocessing import create_custom_mesh_preprocessor
-from models.demos.ttnn_resnet.tests.ttnn_resnet_test_infra import load_resnet50_model
-from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_new_conv_api import resnet50
+from models.demos.ttnn_resnet.tests.demo_utils import get_data, get_data_loader, get_batch
+from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra
 
 resnet_model_config = {
     "MATH_FIDELITY": ttnn.MathFidelity.LoFi,
@@ -49,11 +41,6 @@ def run_resnet_imagenet_inference(
     disable_compilation_reports()
     profiler.clear()
 
-    # set up huggingface model - TT model will use weights from this model
-    torch_resnet50 = load_resnet50_model(model_location_generator)
-    torch_resnet50.eval()
-
-    state_dict = torch_resnet50.state_dict()
     # set up image processor
     image_processor = AutoImageProcessor.from_pretrained(model_version)
 
@@ -64,23 +51,17 @@ def run_resnet_imagenet_inference(
 
     # Create TT Model Start
     # this will move weights to device
-    sharded = False
-    if batch_size >= 8:
-        sharded = True
-
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: torch_resnet50, custom_preprocessor=create_custom_mesh_preprocessor(None), device=None
-    )
-    torch_resnet50.to(torch.bfloat16)
-
-    tt_resnet50 = resnet50(
-        device=device,
-        parameters=parameters,
-        batch_size=batch_size,
-        model_config=model_config,
+    test_infra = create_test_infra(
+        device,
+        batch_size,
+        model_config["ACTIVATIONS_DTYPE"],
+        model_config["WEIGHTS_DTYPE"],
+        model_config["MATH_FIDELITY"],
         dealloc_input=True,
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
+        model_location_generator=model_location_generator,
     )
+    ttnn.synchronize_device(device)
 
     # load ImageNet batch by batch
     # and run inference
@@ -88,9 +69,10 @@ def run_resnet_imagenet_inference(
     for iter in range(iterations):
         predictions = []
         inputs, labels = get_batch(data_loader, image_processor)
-        tt_inputs = tt_resnet50.preprocessing(inputs)
-        tt_output = tt_resnet50(tt_inputs, device, ops_parallel_config)
-        tt_output = tt_output.cpu().to_torch().to(torch.float)
+        tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device, inputs)
+        test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
+        tt_output = test_infra.run()
+        tt_output = ttnn.from_device(tt_output, blocking=True).to_torch().to(torch.float)
         prediction = tt_output[:, 0, 0, :].argmax(dim=-1)
         for i in range(batch_size):
             predictions.append(imagenet_label_dict[prediction[i].item()])
@@ -99,7 +81,7 @@ def run_resnet_imagenet_inference(
             )
             if imagenet_label_dict[labels[i]] == predictions[-1]:
                 correct += 1
-        del tt_output, tt_inputs, inputs, labels, predictions
+        del tt_output, inputs, labels, predictions
     accuracy = correct / (batch_size * iterations)
     logger.info(f"Accuracy for {batch_size}x{iterations} inputs: {accuracy}")
 
@@ -116,11 +98,6 @@ def run_resnet_inference(
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
-    # set up huggingface model - TT model will use weights from this model
-    torch_resnet50 = load_resnet50_model(model_location_generator)
-    torch_resnet50.eval()
-
-    state_dict = torch_resnet50.state_dict()
     # set up image processor
     image_processor = AutoImageProcessor.from_pretrained(model_version)
 
@@ -144,43 +121,42 @@ def run_resnet_inference(
     # Create TT Model Start
     # this will move weights to device
     profiler.start(f"move_weights")
-    sharded = False
-    if batch_size >= 8:
-        sharded = True
 
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: torch_resnet50, custom_preprocessor=create_custom_mesh_preprocessor(None), device=None
-    )
-    torch_resnet50.to(torch.bfloat16)
-
-    tt_resnet50 = resnet50(
-        device=device,
-        parameters=parameters,
-        batch_size=batch_size,
-        model_config=model_config,
+    test_infra = create_test_infra(
+        device,
+        batch_size,
+        model_config["ACTIVATIONS_DTYPE"],
+        model_config["WEIGHTS_DTYPE"],
+        model_config["MATH_FIDELITY"],
         dealloc_input=True,
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
+        model_location_generator=model_location_generator,
     )
     ttnn.synchronize_device(device)
 
     profiler.end(f"move_weights")
 
     profiler.start(f"preprocessing")
-    tt_inputs = tt_resnet50.preprocessing(inputs)
+    tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device, inputs)
+    test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
+    ttnn.synchronize_device(device)
     profiler.end(f"preprocessing")
 
     profiler.disable()
     # Use force enable to only record this profiler call while others are disabled
     profiler.start("first_model_run", force_enable=True)
-    tt_out = tt_resnet50(tt_inputs, device, ops_parallel_config)
+    tt_out = test_infra.run()
     ttnn.synchronize_device(device)
     profiler.end("first_model_run", force_enable=True)
     tt_out.deallocate()
     del tt_out
 
+    test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
+    ttnn.synchronize_device(device)
+
     # Use force enable to only record this profiler call while others are disabled
     profiler.start("second_model_run_with_compile", force_enable=True)
-    tt_out = tt_resnet50(tt_inputs, device, ops_parallel_config)
+    tt_out = test_infra.run()
     ttnn.synchronize_device(device)
     profiler.end("second_model_run_with_compile", force_enable=True)
     tt_out.deallocate()
@@ -189,15 +165,18 @@ def run_resnet_inference(
     profiler.enable()
     enable_persistent_kernel_cache()
 
+    test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
+    ttnn.synchronize_device(device)
+
     ##### Run Forward on TT Model Start
     profiler.start(f"model_run_for_inference")
-    tt_out = tt_resnet50(tt_inputs, device, ops_parallel_config)
+    tt_out = test_infra.run()
     ttnn.synchronize_device(device)
     profiler.end(f"model_run_for_inference")
 
     profiler.start(f"post_processing")
     predictions = []
-    tt_out = tt_out.cpu().to_torch().to(torch.float)
+    tt_out = ttnn.from_device(tt_out, blocking=True).to_torch().to(torch.float)
 
     prediction = tt_out[:, 0, 0, :].argmax(dim=-1)
     for i in range(batch_size):
@@ -247,7 +226,7 @@ def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_locati
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_loc",
-    ((16, "models/demos/resnet/demo/images/"),),
+    ((16, "models/demos/ttnn_resnet/demo/images/"),),
 )
 def test_demo_sample(device, use_program_cache, batch_size, input_loc, imagenet_label_dict, model_location_generator):
     run_resnet_inference(batch_size, input_loc, imagenet_label_dict, device, model_location_generator)

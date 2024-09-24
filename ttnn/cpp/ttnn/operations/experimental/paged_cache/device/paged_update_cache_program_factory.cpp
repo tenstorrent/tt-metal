@@ -7,7 +7,7 @@
 #include "tt_metal/detail/util.hpp"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/cb_utils.hpp"
 #include "paged_cache_operation.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/experimental/paged_cache/device/paged_update_cache_program_factory.hpp"
 
 namespace ttnn::operations::experimental::paged_cache::detail {
@@ -26,7 +26,7 @@ bool enable_fp32_dest(const tt_metal::Device * device, const ttnn::DeviceCompute
             TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
             fp32_dest_acc_en = input_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
         } else {
-            TT_FATAL("arch not supported");
+            TT_THROW("arch not supported");
         }
 
     }, compute_kernel_config);
@@ -34,7 +34,7 @@ bool enable_fp32_dest(const tt_metal::Device * device, const ttnn::DeviceCompute
     return fp32_dest_acc_en;
 }
 
-operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, std::optional<const Tensor> update_idxs_tensor, std::optional<const Tensor> page_table, const std::vector<uint32_t> update_idxs, const uint32_t batch_offset, ttnn::DeviceComputeKernelConfig compute_kernel_config) {
+operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, std::optional<const Tensor> update_idxs_tensor, std::optional<const Tensor> page_table, const std::vector<uint32_t> update_idxs, const uint32_t batch_offset, ttnn::DeviceComputeKernelConfig compute_kernel_config, const bool share_cache) {
     Program program{};
 
     tt_metal::Device *device = input_tensor.device();
@@ -65,9 +65,6 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
         index_tensor_tile_size = tt_metal::detail::TileSize(index_data_format);
         index_is_dram = update_idxs_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM;
         index_stick_size = update_idxs_tensor.value().buffer()->aligned_page_size();
-
-        log2_page_size = std::log2(index_stick_size);
-        TT_FATAL(1 << log2_page_size == index_stick_size);
     }
 
     // Pagetable-specific parameters
@@ -88,8 +85,6 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
         block_size_t = block_size / TILE_HEIGHT;
         max_blocks_per_seq = page_table_tensor.get_legacy_shape()[1];
         page_table_stick_size = page_table_tensor.get_legacy_shape()[-1] * page_table_tensor.element_size();
-        log2_page_table_stick_size = std::log2(page_table_stick_size);
-        TT_FATAL(1 << log2_page_table_stick_size == page_table_stick_size);
 
         page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.get_dtype());
 
@@ -97,9 +92,10 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
     }
 
     uint32_t Wt = cache_tensor.get_legacy_shape()[-1] / TILE_WIDTH;
+    uint32_t St = cache_tensor.get_legacy_shape()[-2] / TILE_HEIGHT;
     uint32_t Wbytes = fp32_dest_acc_en ? cache_tensor.get_legacy_shape()[-1] * sizeof(float) : cache_tensor.get_legacy_shape()[-1] * 2; // 2 bytes for bfloat16
     uint32_t cache_total_num_tiles = cache_tensor.volume() / TILE_HW;
-    uint32_t cache_batch_num_tiles = cache_total_num_tiles / cache_tensor.get_legacy_shape()[0];
+    uint32_t cache_batch_num_tiles = share_cache ? 0 : cache_total_num_tiles / cache_tensor.get_legacy_shape()[0]; // if share cache, we can set cache batch num tiles to 0 so batch offset would be 0 in future calculations
     uint32_t num_tiles = input_tensor.volume() / TILE_HW;
     uint32_t B = input_tensor.get_legacy_shape()[1];
     uint32_t num_heads = cache_tensor.get_legacy_shape()[1];
@@ -109,7 +105,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
     log_debug("interm_cb_data_format: {}", interm_cb_data_format);
     log_debug("Wbytes: {}", Wbytes);
     log_debug("Wt: {}", Wt);
-
+    log_debug("St: {}", St);
 
     std::optional<ShardSpec> shard_spec = input_tensor.shard_spec();
     bool row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
@@ -140,6 +136,8 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
     create_cb({intermed0_cb_index, intermed1_cb_index}, program, all_cores, interm_single_tile_size, num_interm_tiles, interm_cb_data_format);
     create_cb(intermed2_cb_index, program, all_cores, interm_single_tile_size, num_interm_tiles, interm_cb_data_format);
     create_cb(output_cb_index, program, all_cores, cache_single_tile_size, num_output_tiles, cache_cb_data_format);
+
+    auto in0_sequential_mode_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, 0); // used for share cache for signaling when the cache is ready to be read
 
     if (use_index_tensor) {
         create_cb(cb_index_id, program, all_cores, index_tensor_tile_size, 1, index_data_format);
@@ -177,7 +175,8 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
         page_table_stick_size,
         (std::uint32_t) page_table_is_dram,
         cb_pagetable_id,
-
+        St,
+        in0_sequential_mode_semaphore_id,
     };
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -199,6 +198,8 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
         (std::uint32_t) block_size_t,
         (std::uint32_t) max_blocks_per_seq,
         cb_pagetable_id,
+        St,
+        in0_sequential_mode_semaphore_id,
     };
 
     std::vector<uint32_t> compute_kernel_args = {
@@ -209,6 +210,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
         intermed2_cb_index,
         output_cb_index,
         Wt,
+        num_heads,
     };
 
     auto unary_reader_kernel_id = tt_metal::CreateKernel(
@@ -232,6 +234,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
 
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
+    CoreCoord prev_core;
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; ++i) {
         const CoreCoord &core = cores.at(i);
         const uint32_t update_idx = use_index_tensor ? 0 : update_idxs.at(i);
@@ -240,6 +243,23 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
         const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
         // Offset to write into untilized cache
         uint32_t tile_update_offset_B = update_idx % TILE_HEIGHT * Wbytes;
+
+        bool wait_to_start, send_signal;
+        uint32_t send_core_x, send_core_y;
+        if (share_cache) {
+            // Share cache
+            wait_to_start = i == 0 ? false : true;
+            send_signal = i == num_cores - 1 ? false : true;
+            auto next_core = i == num_cores - 1 ? core : cores.at(i + 1);
+            auto next_core_physical = device->worker_core_from_logical_core(next_core);
+            send_core_x = next_core_physical.x;
+            send_core_y = next_core_physical.y;
+        } else {
+            wait_to_start = false;
+            send_signal = false;
+            send_core_x = 0;
+            send_core_y = 0;
+        }
 
         SetRuntimeArgs(
             program,
@@ -251,6 +271,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
                 index_buffer_addr,
                 i,
                 is_paged_cache ? page_table.value().buffer()->address() : 0,
+                wait_to_start,
             }
         );
 
@@ -263,6 +284,9 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
                 use_index_tensor ? 0 : cache_start_id,
                 use_index_tensor ? 0 : tile_update_offset_B,
                 i,
+                send_signal,
+                send_core_x,
+                send_core_y,
             }
         );
     }

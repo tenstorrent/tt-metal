@@ -13,11 +13,7 @@ from ttnn.decorators import create_module_if_not_exists
 
 def register_tt_lib_operations_as_ttnn_operations(module):
     module_name = module.__name__
-    if not (
-        module_name.startswith("ttnn._ttnn.deprecated.tensor")
-        or module_name.startswith("ttnn._ttnn.deprecated.operations")
-        or module_name.startswith("ttnn._ttnn.deprecated.profiler")
-    ):
+    if not (module_name.startswith("ttnn._ttnn.deprecated.operations")):
         return
     ttnn_module_name = module_name.replace("ttnn._ttnn.deprecated", "ttnn.experimental")
     for attribute_name in dir(module):
@@ -40,6 +36,4 @@ def register_tt_lib_operations_as_ttnn_operations(module):
             setattr(target_module, attribute_name, attribute)
 
 
-register_tt_lib_operations_as_ttnn_operations(ttnn._ttnn.deprecated.tensor)
 register_tt_lib_operations_as_ttnn_operations(ttnn._ttnn.deprecated.operations)
-register_tt_lib_operations_as_ttnn_operations(ttnn._ttnn.deprecated.profiler)

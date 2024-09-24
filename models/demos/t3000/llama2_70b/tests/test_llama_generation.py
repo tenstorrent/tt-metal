@@ -20,7 +20,7 @@ from models.demos.t3000.llama2_70b.tt.llama_generation import TtLlamaModelForGen
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
-    check_device_mesh,
+    check_mesh_device,
     extract_pcc_from_log,
     MAX_SEQ_LEN,
     BASE_URL,
@@ -135,7 +135,7 @@ def test_LlamaModel_inference(
     temperature,
     # TT args
     # all_devices,
-    t3k_device_mesh,
+    t3k_mesh_device,
     n_devices,
     llama_version,
     decode_only,
@@ -144,15 +144,15 @@ def test_LlamaModel_inference(
         llama_version=llama_version,
     )
 
-    if t3k_device_mesh.get_num_devices() < n_devices and not emulated:
+    if t3k_mesh_device.get_num_devices() < n_devices:
         pytest.skip(f"Requires at {n_devices} devices to run")
 
-    compute_grid_size = t3k_device_mesh.get_device(0).compute_with_storage_grid_size()
+    compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
-    for i in t3k_device_mesh.get_device_ids():
-        device = t3k_device_mesh.get_device(i)
+    for i in t3k_mesh_device.get_device_ids():
+        device = t3k_mesh_device.get_device(i)
         device.enable_program_cache()
 
     args = construct_arg(
@@ -168,7 +168,7 @@ def test_LlamaModel_inference(
         top_p=top_p,
         top_k=top_k,
         temperature=temperature,
-        device_mesh=t3k_device_mesh,
+        mesh_device=t3k_mesh_device,
         n_devices=n_devices,
         cache_path=cache_path,
         decode_only=decode_only,

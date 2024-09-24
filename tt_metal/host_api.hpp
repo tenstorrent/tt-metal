@@ -6,9 +6,10 @@
 
 #include <variant>
 #include <vector>
+
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
-#include "tt_metal/impl/program/program.hpp"
 #include "tt_metal/impl/kernels/runtime_args_data.hpp"
+#include "tt_metal/impl/program/program.hpp"
 
 /** @file */
 
@@ -84,10 +85,7 @@ Device *CreateDevice(
  * | device_id  | ID of the device to target| chip_id_t (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
  * */
 Device *CreateDeviceMinimal(
-    chip_id_t device_id,
-    const uint8_t num_hw_cqs = 1,
-    DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER
-    );
+    chip_id_t device_id, const uint8_t num_hw_cqs = 1, DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER);
 
 /**
  * Resets device and closes device
@@ -148,7 +146,10 @@ KernelHandle CreateKernel(
  * | core_spec | Either a single logical core, a range of logical cores or a set of logical core ranges that indicate where the circular buffer will be configured | const std::variant<CoreCoord, CoreRange, CoreRangeSet> & |             | Yes      |
  * | config    | Config for circular buffer                                                                                                                        | const CircularBufferConfig &                             |             | Yes      |
  */
-CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
+CBHandle CreateCircularBuffer(
+    Program &program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+    const CircularBufferConfig &config);
 
 /**
  * Gets a reference to the config owned by circular buffer at the given circular buffer ID.
@@ -214,7 +215,11 @@ void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, co
  * | initial_value | Initial value of the semaphore                       | uint32_t                                                  |              | Yes      |
  * | core_type     | Tensix or Ethernet core to create semaphore on.      | CoreType                                                  |              | Yes      |
  */
-uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type=CoreType::WORKER);
+uint32_t CreateSemaphore(
+    Program &program,
+    const std::variant<CoreRange, CoreRangeSet> &core_spec,
+    uint32_t initial_value,
+    CoreType core_type = CoreType::WORKER);
 
 /**
 *  Allocates an interleaved DRAM or L1 buffer on device
@@ -257,14 +262,14 @@ void DeallocateBuffer(Buffer &buffer);
 *  | Argument | Description                                  | Type                           | Valid Range | Required |
 *  |----------|----------------------------------------------|--------------------------------|-------------|----------|
 *  | buffer   | The buffer that will be owned by the program | std::shared_ptr<Buffer> buffer |             | Yes      |
-*  | program  | The program getting ownership of the buffer  | std::shared_ptr<Buffer> buffer |             | Yes      |
+*  | program  | The program getting ownership of the buffer  | Program &                      |             | Yes      |
 */
-void AssignGlobalBufferToProgram(std::shared_ptr<Buffer> buffer, std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>> program);
+void AssignGlobalBufferToProgram(std::shared_ptr<Buffer> buffer, Program& program);
 
 // ==================================================
 //           COMPILE & EXECUTE KENRNELS
 // ==================================================
-using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
+using RuntimeArgs = std::vector<std::variant<Buffer *, uint32_t>>;
 /**
  * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
  * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
@@ -278,7 +283,11 @@ using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
  * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any logical Tensix core coordinate(s) on which the kernel is placed | Yes      |
  * | runtime_args | The runtime args to be written                                         | const std::vector<uint32_t> &                          |                                                                     | Yes      |
  */
-void SetRuntimeArgs(const Program &program, KernelHandle kernel, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::vector<uint32_t> &runtime_args);
+void SetRuntimeArgs(
+    const Program &program,
+    KernelHandle kernel,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+    const std::vector<uint32_t> &runtime_args);
 
 /**
  * Set multiple runtime arguments of a kernel at once during runtime, each mapping to a specific core. The runtime args for each core may be unique.
@@ -293,7 +302,11 @@ void SetRuntimeArgs(const Program &program, KernelHandle kernel, const std::vari
  * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::vector<CoreCoord> &                         | Any set of logical Tensix core coordinates on which the kernel is placed   | Yes      |
  * | runtime_args | The runtime args to be written                                         | const std::vector< vector<uint32_t> > &                | Outer vector size must be equal to size of core_spec vector                | Yes      |
  */
-void SetRuntimeArgs(const Program &program, KernelHandle kernel, const std::vector< CoreCoord > & core_spec, const std::vector< std::vector<uint32_t> > &runtime_args);
+void SetRuntimeArgs(
+    const Program &program,
+    KernelHandle kernel,
+    const std::vector<CoreCoord> &core_spec,
+    const std::vector<std::vector<uint32_t>> &runtime_args);
 
 /**
  * Set runtime args for a kernel that are sent to the specified cores using the command queue. This API must be used when Asynchronous Command Queue Mode is enabled.
@@ -308,7 +321,11 @@ void SetRuntimeArgs(const Program &program, KernelHandle kernel, const std::vect
  * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any set of logical Tensix core coordinates on which the kernel is placed   | Yes      |
  * | runtime_args | The runtime args to be written                                         | std::shared_ptr<RuntimeArgs>                           |                                                                            | Yes      |
 */
-void SetRuntimeArgs(Device* device, const std::shared_ptr<Kernel> kernel, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, std::shared_ptr<RuntimeArgs> runtime_args);
+void SetRuntimeArgs(
+    Device *device,
+    const std::shared_ptr<Kernel> kernel,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+    std::shared_ptr<RuntimeArgs> runtime_args);
 
 /**
  * Set multiple runtime arguments of a kernel using the command queue. Each core can have distinct arguments. This API must be used when Asynchronous Command Queue Mode is enabled.
@@ -322,8 +339,11 @@ void SetRuntimeArgs(Device* device, const std::shared_ptr<Kernel> kernel, const 
  * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::vector< CoreCoord > &                       | Any set of logical Tensix core coordinates on which the kernel is placed   | Yes      |
  * | runtime_args | The runtime args to be written                                         | const std::vector<std::shared_ptr<RuntimeArgs>>        | Outer vector size must be equal to size of core_spec vector                | Yes      |
  */
-void SetRuntimeArgs(Device* device, const std::shared_ptr<Kernel> kernel, const std::vector< CoreCoord > & core_spec, const std::vector<std::shared_ptr<RuntimeArgs>> runtime_args);
-
+void SetRuntimeArgs(
+    Device *device,
+    const std::shared_ptr<Kernel> kernel,
+    const std::vector<CoreCoord> &core_spec,
+    const std::vector<std::shared_ptr<RuntimeArgs>> runtime_args);
 
 /**
  * Set common (shared by all cores) runtime args for a kernel that are sent to all cores during runtime. This API needs to be called to update the common runtime args for the kernel.
@@ -339,7 +359,6 @@ void SetRuntimeArgs(Device* device, const std::shared_ptr<Kernel> kernel, const 
  */
 void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, const std::vector<uint32_t> &runtime_args);
 
-
 /**
  * Get the runtime args for a kernel.
  *
@@ -351,7 +370,7 @@ void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, const 
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)       |                                    | Yes      |
  * | logical_core | The location of the Tensix core where the runtime args will be written | const CoreCoord &             | Any logical Tensix core coordinate | Yes      |
  */
-RuntimeArgsData & GetRuntimeArgs(const Program &program, KernelHandle kernel_id, const CoreCoord &logical_core);
+RuntimeArgsData &GetRuntimeArgs(const Program &program, KernelHandle kernel_id, const CoreCoord &logical_core);
 
 /**
  * Get the runtime args for a kernel.
@@ -363,7 +382,7 @@ RuntimeArgsData & GetRuntimeArgs(const Program &program, KernelHandle kernel_id,
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &               |                                    | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)       |                                    | Yes      |
  */
-std::vector< std::vector< RuntimeArgsData > > & GetRuntimeArgs(const Program &program, KernelHandle kernel_id);
+std::vector<std::vector<RuntimeArgsData>> &GetRuntimeArgs(const Program &program, KernelHandle kernel_id);
 
 /**
  * Get the common runtime args for a kernel.
@@ -375,7 +394,7 @@ std::vector< std::vector< RuntimeArgsData > > & GetRuntimeArgs(const Program &pr
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &               |                                    | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)       |                                    | Yes      |
  */
-RuntimeArgsData & GetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id);
+RuntimeArgsData &GetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id);
 
 /**
  * Reads a buffer from the device
@@ -389,7 +408,11 @@ RuntimeArgsData & GetCommonRuntimeArgs(const Program &program, KernelHandle kern
  * | dst          | The vector where the results that are read will be stored              | vector<uint32_t> &                  |                                        | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                                | Only blocking mode supported currently | Yes      |
  */
-void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, std::vector<uint32_t>& dst, bool blocking);
+void EnqueueReadBuffer(
+    CommandQueue &cq,
+    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    std::vector<uint32_t> &dst,
+    bool blocking);
 
 /**
  * Reads a buffer from the device
@@ -403,7 +426,11 @@ void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buf
  * | dst          | The memory where the result will be stored                             | void*                               |                                        | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                                | Only blocking mode supported currently | Yes      |
  */
-void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, void * dst, bool blocking);
+void EnqueueReadBuffer(
+    CommandQueue &cq,
+    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    void *dst,
+    bool blocking);
 
 /**
  * Writes a buffer to the device
@@ -417,7 +444,11 @@ void EnqueueReadBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buf
  * | src          | The vector we are writing to the device                                | vector<uint32_t> &                  |                                    | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                                |                                    | Yes      |
  */
-void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, std::vector<uint32_t>& src, bool blocking);
+void EnqueueWriteBuffer(
+    CommandQueue &cq,
+    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    std::vector<uint32_t> &src,
+    bool blocking);
 
 /**
  * Writes a buffer to the device
@@ -431,7 +462,11 @@ void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Bu
  * | src          | The memory we are writing to the device                                | HostDataType                        |                                    | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                                |                                    | Yes      |
  */
-void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer> > buffer, HostDataType src, bool blocking);
+void EnqueueWriteBuffer(
+    CommandQueue &cq,
+    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    HostDataType src,
+    bool blocking);
 
 /**
  * Writes a program to the device and launches it
@@ -444,7 +479,7 @@ void EnqueueWriteBuffer(CommandQueue& cq, std::variant<std::reference_wrapper<Bu
  * | program      | The program that will be executed on the device that cq is bound to    | Program &                          |                                    | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                               |                                    | Yes      |
  */
-void EnqueueProgram(CommandQueue& cq, std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program> > program, bool blocking);
+void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
 
 /**
  * Blocks until all previously dispatched commands on the device have completed
@@ -455,7 +490,7 @@ void EnqueueProgram(CommandQueue& cq, std::variant<std::reference_wrapper<Progra
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
  * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
  */
-void Finish(CommandQueue& cq);
+void Finish(CommandQueue &cq);
 
 /**
  * Begins capture on a trace, when the trace is in capture mode all programs pushed into the trace queue will have their execution delayed until the trace is instantiated and enqueued.
@@ -551,7 +586,7 @@ void DumpDeviceProfileResults(Device *device, const Program &program);
  * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
  * | event        | An event that will be populated by this function, and inserted in CQ   | std::shared_ptr<Event>        |                                    | Yes      |
  */
-void EnqueueRecordEvent(CommandQueue& cq, std::shared_ptr<Event> event);
+void EnqueueRecordEvent(CommandQueue &cq, const std::shared_ptr<Event> &event);
 
 /**
  * Enqueues a command on the device for a given CQ (non-blocking). The command on device will block and wait for completion of the specified event (which may be in another CQ).
@@ -562,7 +597,7 @@ void EnqueueRecordEvent(CommandQueue& cq, std::shared_ptr<Event> event);
  * |              | and waits for the event to complete.                                   |                               |                                    |          |
  * | event        | The event object that this CQ will wait on for completion.             | std::shared_ptr<Event>        |                                    | Yes      |
  */
-void EnqueueWaitForEvent(CommandQueue& cq, std::shared_ptr<Event> event);
+void EnqueueWaitForEvent(CommandQueue &cq, const std::shared_ptr<Event> &event);
 
 /**
  * Blocking function for host to synchronize (wait) on an event completion on device.
@@ -571,7 +606,7 @@ void EnqueueWaitForEvent(CommandQueue& cq, std::shared_ptr<Event> event);
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
  * | event        | The event object that host will wait on for completion.                | std::shared_ptr<Event>        |                                    | Yes      |
  */
-void EventSynchronize(std::shared_ptr<Event> event);
+void EventSynchronize(const std::shared_ptr<Event> &event);
 
 /**
  * Host will query an event for completion status on device.
@@ -580,7 +615,7 @@ void EventSynchronize(std::shared_ptr<Event> event);
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
  * | event        | The event object that host will query for completion.                  | std::shared_ptr<Event>        |                                    | Yes      |
  */
-bool EventQuery(std::shared_ptr<Event> event);
+bool EventQuery(const std::shared_ptr<Event> &event);
 
 /**
  * Synchronize the device with host by waiting for all operations to complete.

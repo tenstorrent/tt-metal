@@ -61,7 +61,7 @@ inline std::vector<uint32_t> gold_standard_flatten(std::vector<uint32_t> src_vec
         start_dram_addr_offset_for_tensor_row += num_tile_cols * 16;
     }
 
-    TT_FATAL(expected_dst_vec.size() == (num_tile_rows * 32) * (num_tile_cols * 16) * 32);
+    TT_FATAL(expected_dst_vec.size() == (num_tile_rows * 32) * (num_tile_cols * 16) * 32, "Error");
     return expected_dst_vec;
 }
 
@@ -196,7 +196,7 @@ int main(int argc, char **argv) {
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
 
-        TT_FATAL(golden.size() == result_vec.size());
+        TT_FATAL(golden.size() == result_vec.size(), "Error");
         pass &= (golden == result_vec);
 
         if (not pass) {
@@ -207,7 +207,7 @@ int main(int argc, char **argv) {
             print_vec_of_uint32_as_packed_bfloat16(result_vec, num_tiles * 32);
         }
 
-        pass &= tt_metal::CloseDevice(device);;
+        pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;
@@ -223,7 +223,7 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 
     return 0;
 }

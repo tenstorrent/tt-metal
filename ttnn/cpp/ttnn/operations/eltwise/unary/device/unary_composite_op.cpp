@@ -12,7 +12,7 @@
 #include "tt_metal/common/bfloat16.hpp"
 #include "ttnn/operations/data_movement/reshape/reshape.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "ttnn/deprecated/tt_numpy/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
@@ -89,7 +89,7 @@ Tensor _acosh(const Tensor& input_a, const std::optional<MemoryConfig>& output_m
        // input < 1, output is nan
        // input > 1, output is acosh(input)
        Tensor nan_res = ttnn::multiply(
-           ttnn::le(input_a, t_one, std::nullopt, output_mem_config), std::nanf(""), std::nullopt, output_mem_config);
+           ttnn::le(input_a, t_one, std::nullopt, output_mem_config), input_a.device()->sfpu_nan(), std::nullopt, output_mem_config);
        t_result = ttnn::multiply(
            ttnn::gt(input_a, t_one, std::nullopt, output_mem_config), ln_res, std::nullopt, output_mem_config);
        t_result = ttnn::add(nan_res, t_result, std::nullopt, output_mem_config);
@@ -365,13 +365,18 @@ Tensor _swish(const Tensor& a, const std::optional<MemoryConfig>& output_mem_con
     return ttnn::silu(a);
 }
 
-Tensor _trunc(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ExecuteTrunc::invoke(uint8_t queue_id, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
     auto arch = input.device()->arch();
-    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
-    Tensor floor_res = ttnn::floor(input, output_mem_config);
-    Tensor trunc_res = ttnn::where(ttnn::ne(input, floor_res), ttnn::add(floor_res, 1.0f, std::nullopt, output_mem_config), floor_res);
-    Tensor result = ttnn::where(ttnn::gtz(input, output_mem_config), floor_res, trunc_res);
-    return result;
+    output_tensor = output_tensor.value_or(ttnn::empty_like(input));
+    TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Op is not supported on Grayskull");
+    Tensor floor_res = ttnn::floor(queue_id, input, output_mem_config);
+    ttnn::where(queue_id, ttnn::ne(queue_id, input, floor_res), ttnn::add(queue_id, floor_res, 1.0f, std::nullopt, output_mem_config), floor_res, output_mem_config, output_tensor);
+    ttnn::where(queue_id, ttnn::gtz(queue_id, input, output_mem_config), floor_res, output_tensor.value(), output_mem_config, output_tensor);
+    return output_tensor.value();
+}
+
+Tensor ExecuteTrunc::invoke(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
+    return ExecuteTrunc::invoke(DefaultQueueId, input, output_mem_config, output_tensor);
 }
 
 // Function variance of whole tensor.
@@ -524,16 +529,17 @@ Tensor _threshold(const Tensor& input_tensor, float threshold, float value, cons
 
 std::vector<Tensor> split_tensor_for_glu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> t_split;
-    Shape inshape(input_a.get_legacy_shape());
-    TT_FATAL(((inshape[dim] / 2) % TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
+    tt::tt_metal::LegacyShape inshape(input_a.get_legacy_shape());
+    TT_FATAL(((inshape[dim] / 2) % tt::constants::TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
     std::vector<uint32_t> s_a = {0, 0, 0, 0};
-    std::vector<uint32_t> e_a = {input_a.get_legacy_shape()[0] - 1, inshape[1] - 1, inshape[2] - 1, inshape[3] / 2 - 1};
+    std::vector<uint32_t> e_a = {input_a.get_legacy_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
 
     std::vector<uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
-    std::vector<uint32_t> e_b = {inshape[0] - 1, inshape[1] - 1, inshape[2] - 1, inshape[3] - 1};
+    std::vector<uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
 
-    Tensor t_a = ttnn::slice(0, input_a, s_a, e_a, output_mem_config);
-    Tensor t_b = ttnn::slice(0, input_a, s_b, e_b, output_mem_config);
+    auto step = std::vector<uint32_t>({1,1,1,1});
+    Tensor t_a = ttnn::slice(DefaultQueueId, input_a, s_a, e_a, step, output_mem_config);
+    Tensor t_b = ttnn::slice(DefaultQueueId, input_a, s_b, e_b, step, output_mem_config);
 
     t_split.emplace_back(t_a);
     t_split.emplace_back(t_b);
@@ -601,14 +607,14 @@ Tensor _swiglu(
 
 // tril : select lower triangular region of input matrix
 Tensor _tril(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>&  output_mem_config) {
-    Tensor index_l = tt::numpy::index_tril<::bfloat16>(
+    Tensor index_l = numpy::index_tril<::bfloat16>(
         input_a.get_legacy_shape(), diag, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_mem_config.value());
     return ttnn::multiply(input_a, index_l, std::nullopt, output_mem_config);
 }
 
 // triu : select upper triangular region of input matrix
 Tensor _triu(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>&  output_mem_config) {
-    Tensor index_u = tt::numpy::index_triu<::bfloat16>(
+    Tensor index_u = numpy::index_triu<::bfloat16>(
         input_a.get_legacy_shape(), diag, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_mem_config.value());
     return ttnn::multiply(input_a, index_u, std::nullopt, output_mem_config);
 }
@@ -724,11 +730,11 @@ Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig
     Tensor linput_m1 = ttnn::rsub(logit_input, 1.0, output_mem_config);
     Tensor log_input = ttnn::multiply(logit_input, ttnn::reciprocal(linput_m1, output_mem_config), std::nullopt, output_mem_config);
     linput_m1.deallocate();
-    Tensor t_inf = ttnn::multiply(ttnn::sign(input_a, output_mem_config), std::numeric_limits<float>::infinity(), std::nullopt, output_mem_config);
+    Tensor t_inf = ttnn::multiply(ttnn::sign(input_a, output_mem_config), input_a.device()->sfpu_inf(), std::nullopt, output_mem_config);
     Tensor logit_result = ttnn::where(
         ttnn::eq(logit_input, 1.0, std::nullopt, output_mem_config),
         t_inf,
-        ttnn::where(ttnn::ltz(log_input, output_mem_config), std::nanf(" "), ttnn::log(log_input, output_mem_config))
+        ttnn::where(ttnn::ltz(log_input, output_mem_config), input_a.device()->sfpu_nan(), ttnn::log(log_input, output_mem_config))
         );
     return logit_result;
 }

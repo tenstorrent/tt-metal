@@ -7,11 +7,532 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0, is_grayskull
+from models.utility_functions import skip_for_grayskull, is_wormhole_b0, is_grayskull, is_blackhole, run_for_wormhole_b0
+
+
+def find_max_subblock(out_block_h, out_block_w):
+    max_product = 0
+    best_h = 1
+    best_w = 1
+
+    for h in range(1, out_block_h + 1):
+        if out_block_h % h == 0:  # h is a divisor of out_block_h
+            for w in range(1, out_block_w + 1):
+                if out_block_w % w == 0 and h * w <= 8:  # w is a divisor and product condition met
+                    if h * w > max_product:
+                        max_product = h * w
+                        best_h = h
+                        best_w = w
+    if out_block_w > best_w:
+        best_h = 1
+    return best_h, best_w, max_product
+
+
+@pytest.mark.parametrize("n", [1])
+@pytest.mark.parametrize("c", [2])
+@pytest.mark.parametrize("h", [71])
+@pytest.mark.parametrize("w", [35])
+@pytest.mark.parametrize("tile_h", [1, 2, 4, 8, 16, 32])
+@pytest.mark.parametrize("tile_w", [16, 32])
+def test_tiny_tiles(device, n, c, h, w, tile_h, tile_w):
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        tile=(tile_h, tile_w),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.to_torch(input_tensor)
+    assert_with_pcc(torch_input_tensor, output_tensor, 1)
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize("b", [8])
+@pytest.mark.parametrize("h", [4])
+@pytest.mark.parametrize("m", [256])
+@pytest.mark.parametrize("k", [256])
+@pytest.mark.parametrize("n", [256])
+@pytest.mark.parametrize("tile_h", [16, 32])
+@pytest.mark.parametrize("tile_w", [16, 32])
+@pytest.mark.parametrize("in0_sharded", [True, False])
+@pytest.mark.parametrize("in1_sharded", [True, False])
+@pytest.mark.parametrize("out_sharded", [True, False])
+def test_matmul_reuse_config_sharded_tiny_tile(
+    device, b, h, m, k, n, tile_h, tile_w, in0_sharded, in1_sharded, out_sharded
+):
+    torch.manual_seed(0)
+
+    grid_size = (b, h)
+
+    in0 = torch.ones([b, h, m, k]).bfloat16().float()
+    in1 = torch.randn([b, h, k, n]).bfloat16().float()
+
+    if in0_sharded:
+        in0_memory_config = ttnn.create_sharded_memory_config(
+            (b, h, m, k),
+            core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+    else:
+        in0_memory_config = ttnn.L1_MEMORY_CONFIG
+    in0_t = ttnn.from_torch(
+        in0,
+        tile=(tile_h, 32),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in0_memory_config,
+    )
+
+    if in1_sharded:
+        in1_memory_config = ttnn.create_sharded_memory_config(
+            (b, h, k, n),
+            core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+    else:
+        in1_memory_config = ttnn.L1_MEMORY_CONFIG
+    in1_t = ttnn.from_torch(
+        in1,
+        tile=(32, tile_w),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in1_memory_config,
+    )
+
+    out_block_h = m // tile_h
+    out_block_w = n // tile_w
+    out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
+
+    program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=k // 32,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=out_block_h,
+        per_core_N=out_block_w,
+    )
+    if out_sharded:
+        out_mem_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+        )
+    else:
+        out_mem_config = ttnn.L1_MEMORY_CONFIG
+    # override the tile width for later ops
+    if out_sharded and tile_h <= 16:
+        output_tile = ttnn.Tile([tile_h, 32])
+    else:
+        output_tile = ttnn.Tile([tile_h, tile_w])
+    output_t = ttnn.matmul(
+        in0_t, in1_t, program_config=program_config, memory_config=out_mem_config, output_tile=output_tile
+    )
+    output_tensor = ttnn.to_torch(output_t)
+    pt_out = in0 @ in1
+
+    assert_with_pcc(pt_out, output_tensor, 0.999)
+
+
+def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
+    remainder = num % lcm
+    if remainder == 0:
+        return num
+    padding_needed = lcm - remainder
+    padded_number = num + padding_needed
+    return padded_number
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize("k", [8192])
+@pytest.mark.parametrize("n", [1280])
+@pytest.mark.parametrize("has_bias", [False, True])
+@pytest.mark.parametrize("grid_size", [(8, 1)])
+@pytest.mark.parametrize("tile_h", [16, 32])
+@pytest.mark.parametrize("tile_w", [16, 32])
+def test_matmul_in1_dram_sharded_tiny_tile(device, k, n, has_bias, grid_size, tile_h, tile_w):
+    # PCC issue when height not equal to tile height
+    m = tile_h
+    if is_grayskull():
+        n_padded = n
+        num_banks = 8
+    else:
+        num_banks = 12
+        n_padded = pad_to_dram_banks(n, tile_w, tile_w * num_banks)
+
+    in0_shape = [1, 1, m, k]
+    in1_shape = [1, 1, k, n]
+    in1_shard_shape = [k, n_padded // num_banks]
+    bias_shape = [1, 1, n]
+    bias_shard_shape = [tile_h, n_padded // num_banks]
+    num_cores = grid_size[0] * grid_size[1]
+
+    in0_block_w = k // num_cores // 32
+    out_block_h = m // tile_h
+    out_block_w = n // num_cores // tile_w
+
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+    )
+
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    in1 = torch.randn(in1_shape).bfloat16().float()
+
+    in0_memory_config = ttnn.create_sharded_memory_config(
+        (1, 1, m, k),
+        core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    in0_t = ttnn.from_torch(
+        in0,
+        tile=(tile_h, 32),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in0_memory_config,
+    )
+    in1_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
+    in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), in1_shard_grid)})
+    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+    in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
+    in1_t = ttnn.from_torch(
+        in1,
+        tile=(32, tile_w),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in1_memory_config,
+    )
+
+    if has_bias:
+        bias = torch.randn(bias_shape).bfloat16().float()
+        bias_padded = bias.unsqueeze(2)
+        bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, tile_h - bias_padded.size(2)), "constant", 0)
+        bias_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
+        bias_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), bias_shard_grid)})
+        bias_shard_spec = ttnn.ShardSpec(bias_shard_grid, bias_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+        bias_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, bias_shard_spec
+        )
+        bias_t = ttnn.from_torch(
+            bias_padded,
+            tile=(tile_h, tile_w),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=bias_mem_config,
+        )
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=in0_block_w // 4,
+        per_core_M=out_block_h,
+        per_core_N=out_block_w,
+        fused_activation=None,
+    )
+
+    if is_grayskull():
+        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+        )
+    else:
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+    if has_bias:
+        output_t = ttnn.linear(
+            in0_t,
+            in1_t,
+            bias=bias_t,
+            program_config=program_config,
+            memory_config=sharded_mem_config,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_kernel_config,
+            output_tile=ttnn.Tile([tile_h, 32]) if tile_h <= 16 else ttnn.Tile([tile_h, tile_w]),
+        )
+    else:
+        output_t = ttnn.matmul(
+            in0_t,
+            in1_t,
+            program_config=program_config,
+            memory_config=sharded_mem_config,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_kernel_config,
+            output_tile=ttnn.Tile([tile_h, 32]) if tile_h <= 16 else ttnn.Tile([tile_h, tile_w]),
+        )
+    output_tensor = ttnn.to_torch(output_t)
+    pt_out = in0 @ in1
+    if has_bias:
+        pt_out += bias
+
+    assert_with_pcc(pt_out, output_tensor, 0.999)
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize("m", [1536])
+@pytest.mark.parametrize("k", [1024])
+@pytest.mark.parametrize("n", [3072])
+@pytest.mark.parametrize("has_bias", [False, True])
+@pytest.mark.parametrize("grid_size", [(8, 4)])
+@pytest.mark.parametrize("tile_h", [16, 32])
+@pytest.mark.parametrize("tile_w", [16, 32])
+@pytest.mark.parametrize("in0_sharded", [True, False])
+@pytest.mark.parametrize("out_sharded", [True, False])
+def test_matmul_2d_tiny_tile(device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded):
+    in0_shape = [1, 1, m, k]
+    in1_shape = [1, 1, k, n]
+    bias_shape = [1, 1, n]
+
+    in0_block_w = k // grid_size[0] // 32
+    out_block_h = m // grid_size[1] // tile_h
+    out_block_w = n // grid_size[0] // tile_w
+    out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
+
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    in1 = torch.randn(in1_shape).bfloat16().float()
+
+    if in0_sharded:
+        in0_memory_config = ttnn.create_sharded_memory_config(
+            (1, 1, m, k),
+            core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+    else:
+        in0_memory_config = ttnn.L1_MEMORY_CONFIG
+    in0_t = ttnn.from_torch(
+        in0,
+        tile=(tile_h, 32),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in0_memory_config,
+    )
+    in1_t = ttnn.from_torch(
+        in1,
+        tile=(32, tile_w),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    if has_bias:
+        bias = torch.randn(bias_shape).bfloat16().float()
+        bias_padded = bias.unsqueeze(2)
+        bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, tile_h - bias_padded.size(2)), "constant", 0)
+        bias_t = ttnn.from_torch(
+            bias_padded,
+            tile=(tile_h, tile_w),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=out_block_h,
+        per_core_N=out_block_w,
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+
+    if is_grayskull():
+        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+        )
+    else:
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+    if out_sharded:
+        out_mem_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+        )
+    else:
+        out_mem_config = ttnn.L1_MEMORY_CONFIG
+    if out_sharded:
+        output_tile = ttnn.Tile([tile_h, 32]) if tile_h <= 16 else ttnn.Tile([tile_h, tile_w])
+    else:
+        output_tile = ttnn.Tile([tile_h, tile_w])
+    if has_bias:
+        output_t = ttnn.linear(
+            in0_t,
+            in1_t,
+            bias=bias_t,
+            program_config=program_config,
+            memory_config=out_mem_config,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_kernel_config,
+            output_tile=output_tile,
+        )
+    else:
+        output_t = ttnn.matmul(
+            in0_t,
+            in1_t,
+            program_config=program_config,
+            memory_config=out_mem_config,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_kernel_config,
+            output_tile=output_tile,
+        )
+    output_tensor = ttnn.to_torch(output_t)
+    pt_out = in0 @ in1
+    if has_bias:
+        pt_out += bias
+
+    assert_with_pcc(pt_out, output_tensor, 0.999)
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize("m", [256])
+@pytest.mark.parametrize("k", [1024])
+@pytest.mark.parametrize("n", [1024])
+@pytest.mark.parametrize("has_bias", [False, True])
+@pytest.mark.parametrize("grid_size", [(8, 4)])
+@pytest.mark.parametrize("tile_h", [16, 32])
+@pytest.mark.parametrize("tile_w", [16, 32])
+@pytest.mark.parametrize("in0_sharded", [True, False])
+@pytest.mark.parametrize("out_sharded", [True, False])
+def test_matmul_1d_tiny_tile(device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded):
+    in0_shape = [1, 1, m, k]
+    in1_shape = [1, 1, k, n]
+    bias_shape = [1, 1, n]
+
+    num_cores = grid_size[0] * grid_size[1]
+
+    in0_block_w = k // num_cores // 32
+    out_block_h = m // tile_h
+    out_block_w = n // num_cores // tile_w
+    out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
+
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    in1 = torch.randn(in1_shape).bfloat16().float()
+
+    if in0_sharded:
+        in0_memory_config = ttnn.create_sharded_memory_config(
+            (1, 1, m, k),
+            core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+    else:
+        in0_memory_config = ttnn.L1_MEMORY_CONFIG
+    in0_t = ttnn.from_torch(
+        in0,
+        tile=(tile_h, 32),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in0_memory_config,
+    )
+    in1_t = ttnn.from_torch(
+        in1,
+        tile=(32, tile_w),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    if has_bias:
+        bias = torch.randn(bias_shape).bfloat16().float()
+        bias_padded = bias.unsqueeze(2)
+        bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, tile_h - bias_padded.size(2)), "constant", 0)
+        bias_t = ttnn.from_torch(
+            bias_padded,
+            tile=(tile_h, tile_w),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=out_block_h,
+        per_core_N=out_block_w,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+    if is_grayskull():
+        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+        )
+    else:
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+    if out_sharded:
+        out_mem_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+        )
+    else:
+        out_mem_config = ttnn.L1_MEMORY_CONFIG
+    if out_sharded:
+        output_tile = ttnn.Tile([tile_h, 32]) if tile_h <= 16 else ttnn.Tile([tile_h, tile_w])
+    else:
+        output_tile = ttnn.Tile([tile_h, tile_w])
+    if has_bias:
+        output_t = ttnn.linear(
+            in0_t,
+            in1_t,
+            bias=bias_t,
+            program_config=program_config,
+            memory_config=out_mem_config,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_kernel_config,
+            output_tile=output_tile,
+        )
+    else:
+        output_t = ttnn.matmul(
+            in0_t,
+            in1_t,
+            program_config=program_config,
+            memory_config=out_mem_config,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_kernel_config,
+            output_tile=output_tile,
+        )
+    output_tensor = ttnn.to_torch(output_t)
+    pt_out = in0 @ in1
+    if has_bias:
+        pt_out += bias
+
+    assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
 # fmt: off
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("m_size,k_size,n_size", [
     (1, 2, 2),
     (1, 2, 4),
@@ -41,7 +562,7 @@ def test_matmul_with_matched_width_height(device, m_size, k_size, n_size):
 
 
 # fmt: off
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("k_size, n_size", [
     (2, 4),
     (4, 2),
@@ -69,7 +590,7 @@ def test_matmul_with_matched_width_height_from_1D(device, k_size, n_size):
     assert_with_pcc(torch_output_tensor, output, 0.9999)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.skip(reason="ttnn.reshape doesn't support reshaping the input tensors used in this test")
 @pytest.mark.parametrize("w", [(4), (2)])
 def test_matmul_does_dot_product(device, w):
@@ -94,7 +615,7 @@ def test_matmul_does_dot_product(device, w):
 
 
 # fmt: off
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("n_size,c,h,w", [
     (1, 1, 2, 4),
     (1, 1, 4, 2),
@@ -120,7 +641,7 @@ def test_matmul_with_matched_width_height_4D(device, n_size, c, h, w):
 
 
 # fmt: off
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("n_size,c,h,w", [
     (1, 1, 2, 2),
     (1, 1, 4, 4),
@@ -145,7 +666,7 @@ def test_matmul_same_shape_and_valid(device, n_size, c, h, w):
 
 
 # fmt: off
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("input_a,input_b", [
         ([1.0,2.0,3.0],[3.0,4.0,5.0])
     ])
@@ -172,7 +693,7 @@ def test_matmul_same_shape_but_invalid(device, input_a, input_b):
     assert "The width of the first tensor must be equal to the height of the second tensor" in str(exception.value)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_tutorial_matmul(device):
     torch.manual_seed(0)
 
@@ -193,7 +714,7 @@ def test_tutorial_matmul(device):
     assert_with_pcc(torch_output_tensor, output, pcc=0.999)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_tutorial_matmul_inputs_and_output_in_l1_memory(device):
     torch.manual_seed(0)
 
@@ -218,7 +739,7 @@ def test_tutorial_matmul_inputs_and_output_in_l1_memory(device):
     assert_with_pcc(torch_output_tensor, output, pcc=0.999)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_core_grid(device):
     torch.manual_seed(0)
 
@@ -246,7 +767,7 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
     assert_with_pcc(torch_output_tensor, output, pcc=0.999)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize(
     "batch_size_0, batch_size_1, m_size, k_size, n_size, bcast_batch, input_a_sharded_memory_config_args, input_b_sharded_memory_config_args",
     [
@@ -382,7 +903,7 @@ def test_sharded_matmul(
     assert_with_pcc(torch_output_tensor, output, pcc=0.999)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("batch_size", [1, 7])
 def test_matmul_with_core_grid(device, batch_size):
     torch.manual_seed(0)
@@ -408,7 +929,7 @@ def test_matmul_with_core_grid(device, batch_size):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("m_size", [30, 61])
 @pytest.mark.parametrize("k_size", [1023, 2048])
@@ -433,7 +954,7 @@ def test_wide_matmul_with_argument_for_core_grid_set_to_device_grid(device, batc
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("m_size", [1024, 2048])
 @pytest.mark.parametrize("k_size", [1023, 2048])
@@ -458,7 +979,7 @@ def test_tall_matmul_with_argument_for_core_grid_set_to_device_grid(device, batc
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.997)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("m_size", [31, 63])
 @pytest.mark.parametrize("k_size", [1024, 2048])
@@ -517,7 +1038,7 @@ def test_matmul_with_transpose_a_or_b(device, n_size, c, m, k, n, transpose_a, t
 ##########################
 # MODEL SPECIFIC MATMULS #
 ##########################
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("m_size", [128])
 @pytest.mark.parametrize("k_size", [4544])
@@ -544,7 +1065,7 @@ def test_falcon_query_key_value_matmul(device, batch_size, m_size, k_size, n_siz
 
 
 # @skip_for_grayskull()
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize(
     "batch_size, channel_a, channel_b, m_size, k_size, n_size, has_bias",
     [

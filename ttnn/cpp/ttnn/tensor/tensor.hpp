@@ -18,8 +18,9 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/impl/tile/tile.hpp"
 #include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/device/device_mesh.hpp"
+#include "tt_metal/impl/device/mesh_device.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 
 namespace tt {
@@ -32,6 +33,7 @@ struct Tensor {
         ttnn::Shape shape;
         DataType dtype;
         Layout layout;
+        Tile tile;
         uint32_t num_shards_to_be_populated = 0;
         uint32_t main_thread_ref_count = 0;
         std::atomic<uint32_t> num_sibling_workers_sharing_tensor = 0;
@@ -41,10 +43,10 @@ struct Tensor {
         bool deallocated = false;      // Set to true if device side storage was deallocated
         bool dynamic_storage = false;  // Storage type can change, depending on op behaviour
         bool track_ref_count = false;
-        TensorAttributes(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout) :
-            storage(storage), shape(shape), dtype(dtype), layout(layout) {}
+        TensorAttributes(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout, Tile tile = std::array<uint32_t, 2>{32, 32}) :
+            storage(storage), shape(shape), dtype(dtype), layout(layout), tile(tile) {}
         TensorAttributes() :
-            shape(std::array<uint32_t, 4>{0xff, 0xff, 0xff, 0xff}), dtype(DataType::INVALID), layout(Layout::INVALID) {}
+            shape(std::array<uint32_t, 4>{0xff, 0xff, 0xff, 0xff}), dtype(DataType::INVALID), layout(Layout::INVALID), tile(std::array<uint32_t, 2>{32, 32}) {}
         ~TensorAttributes() = default;
 
         // Use these functions to manage the main_thread_ref_count for a tensor attr instance.
@@ -118,8 +120,8 @@ struct Tensor {
         workers(std::vector<Device *>{}),
         deallocate_through_destructor(false) {}
 
-    Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout);
-    Tensor(const Storage storage, const Shape shape, DataType dtype, Layout layout);
+    Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout, const std::optional<Tile>& tile = std::nullopt);
+    Tensor(const Storage storage, const tt::tt_metal::LegacyShape shape, DataType dtype, Layout layout, const std::optional<Tile>& tile = std::nullopt);
 
     // Constructor to initialize unpopulated tensor with workers and storage specified. Use this when creating tensor
     // handles in async mode.
@@ -175,7 +177,7 @@ struct Tensor {
                 std::get<MultiDeviceHostStorage>(this->tensor_attributes->storage).buffers =
                     std::vector<OwnedBuffer>(num_buffers, OwnedBuffer());
                 std::get<MultiDeviceHostStorage>(this->tensor_attributes->storage).shapes =
-                    std::vector<Shape>(num_buffers, this->tensor_attributes->shape.value);
+                    std::vector<tt::tt_metal::LegacyShape>(num_buffers, this->tensor_attributes->shape.value);
             }
             this->tensor_attributes->num_shards_to_be_populated = num_buffers;
         }
@@ -245,7 +247,7 @@ struct Tensor {
         const MemoryConfig &mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
 
     Tensor to(
-        DeviceMesh *device_mesh,
+        MeshDevice *mesh_device,
         const MemoryConfig &mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
 
     Tensor to(
@@ -258,19 +260,19 @@ struct Tensor {
 
     Tensor to(Layout target_layout, Device *worker = nullptr) const;
 
-    Tensor to(Layout target_layout, DeviceMesh *device_mesh) const;
+    Tensor to(Layout target_layout, MeshDevice *mesh_device) const;
 
-    Tensor pad(const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value) const;
+    Tensor pad(const tt::tt_metal::LegacyShape &output_tensor_shape, const tt::tt_metal::LegacyShape &input_tensor_start, float pad_value) const;
 
     Tensor cpu(bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId) const;
 
     Tensor cpu_sharded() const;
 
-    Tensor unpad(const Shape &output_tensor_start, const Shape &output_tensor_end) const;
+    Tensor unpad(const tt::tt_metal::LegacyShape &output_tensor_start, const tt::tt_metal::LegacyShape &output_tensor_end) const;
 
     Tensor pad_to_tile(float pad_value) const;
 
-    Tensor unpad_from_tile(const Shape &output_tensor_shape) const;
+    Tensor unpad_from_tile(const tt::tt_metal::LegacyShape &output_tensor_shape) const;
 
     const std::string write_to_string() const;
     void print() const;
@@ -282,26 +284,28 @@ struct Tensor {
     //                                  Low Level APIs
     // ======================================================================================
     Tensor reshape(int N, int C, int H, int W) const;
-    Tensor reshape(const Shape &new_shape) const;
+    Tensor reshape(const tt::tt_metal::LegacyShape &new_shape) const;
 
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
     const Storage &get_storage() const;
     // [[deprecated("Use get_shape() instead.")]]
-    const Shape &get_legacy_shape() const;
+    const tt::tt_metal::LegacyShape &get_legacy_shape() const;
     const ttnn::Shape &get_shape() const;
     const DataType &get_dtype() const;
     const Layout &get_layout() const;
+    const Tile &get_tile() const;
 
     // ======================================================================================
     // Non-Blocking Getters. Query attributes directly, without waiting for worker completion
     // ======================================================================================
     inline const Storage &storage() const { return this->tensor_attributes->storage; };
-    inline const Shape &legacy_shape() const { return this->tensor_attributes->shape.value; };
+    inline const tt::tt_metal::LegacyShape &legacy_shape() const { return this->tensor_attributes->shape.value; };
     inline const ttnn::Shape &shape() const { return this->tensor_attributes->shape; };
     inline const DataType &dtype() const { return this->tensor_attributes->dtype; };
     inline const Layout &layout() const { return this->tensor_attributes->layout; };
+    inline const Tile &tile() const { return this->tensor_attributes->tile; };
 
     // ======================================================================================
     //                                      Setters
@@ -310,11 +314,12 @@ struct Tensor {
     inline void set_shape(const ttnn::Shape &shape) { this->tensor_attributes->shape = shape; }
     inline void set_dtype(const DataType &dtype) { this->tensor_attributes->dtype = dtype; }
     inline void set_layout(const Layout &layout) { this->tensor_attributes->layout = layout; }
+    inline void set_tile(const Tile &tile) { this->tensor_attributes->tile = tile; }
     // ======================================================================================
     //                                      Extra Helper Functions
     // ======================================================================================
     StorageType storage_type() const;
-    const Shape strides() const;
+    const tt::tt_metal::LegacyShape strides() const;
     uint32_t volume() const;
     uint32_t intended_volume() const;
 
@@ -367,9 +372,9 @@ struct Tensor {
     // Size in bytes of a single element held in tensor
     uint32_t element_size() const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("storage", "shape", "dtype", "layout");
+    static constexpr auto attribute_names = std::forward_as_tuple("storage", "shape", "dtype", "layout", "tile");
     const auto attribute_values() const {
-        return std::forward_as_tuple(this->tensor_attributes->storage, this->tensor_attributes->shape, this->tensor_attributes->dtype, this->tensor_attributes->layout);
+        return std::forward_as_tuple(this->tensor_attributes->storage, this->tensor_attributes->shape, this->tensor_attributes->dtype, this->tensor_attributes->layout, this->tensor_attributes->tile);
     }
 
     std::vector<uint32_t> host_page_ordering();
@@ -392,19 +397,21 @@ struct Tensor {
 };
 
 Tensor create_device_tensor(
-    const Shape &shape,
+    const tt::tt_metal::LegacyShape &shape,
     DataType dtype,
     Layout layout,
     Device *device,
-    const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
+    const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+    const std::optional<Tile>& tile = std::nullopt);
 
 static Tensor create_device_tensor(
     const ttnn::Shape &shape,
     DataType dtype,
     Layout layout,
     Device *device,
-    const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    return create_device_tensor(shape.value, dtype, layout, device, memory_config);
+    const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+    const std::optional<Tile>& tile = std::nullopt) {
+    return create_device_tensor(shape.value, dtype, layout, device, memory_config, tile);
 }
 
 // template<typename Buffer>
@@ -432,17 +439,19 @@ Tensor allocate_tensor_on_device(
     DataType data_type,
     Layout layout,
     Device *device,
-    const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
+    const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+    const std::optional<Tile>& tile = std::nullopt);
 Tensor allocate_tensor_on_device(
     const ttnn::Shape &shape,
     DataType data_type,
     Layout layout,
-    DeviceMesh *device_mesh,
-    const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
+    MeshDevice *mesh_device,
+    const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+    const std::optional<Tile>& tile = std::nullopt);
 void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id = ttnn::DefaultQueueId);
 
 // Maps a tensor to the set of devices in the device-mesh that the shards will be distributed across.
-std::vector<Device*> distribute_tensor_to_mesh(const Tensor& tensor, DeviceMesh& device_mesh);
+std::vector<Device*> distribute_tensor_to_mesh(const Tensor& tensor, MeshDevice& mesh_device);
 
 Tensor set_tensor_id(const Tensor &tensor);
 

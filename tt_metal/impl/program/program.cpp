@@ -306,6 +306,7 @@ void Program::update_kernel_groups(uint32_t programmable_core_type_index) {
                     for (auto x = range.start_coord.x; x <= range.end_coord.x; x++) {
                         core_to_kernel_group_index_table_[programmable_core_type_index][y * grid_extent_[programmable_core_type_index].x + x] = index;
 
+                        if (not hal.get_supports_cbs(programmable_core_type_index)) continue;
                         auto val = per_core_cb_indices_.find(CoreCoord({x, y}));
                         if (val != per_core_cb_indices_.end()) {
                             int i;
@@ -496,7 +497,7 @@ void Program::validate_circular_buffer_region(const Device *device) const {
     // Only compute with storage cores can have CBs and all compute with storage cores will have the same bank offset
     const std::vector<uint32_t> &bank_ids =
         device->bank_ids_from_logical_core(BufferType::L1, *device->compute_cores_.begin());
-    std::optional<uint64_t> lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids[0]);
+    std::optional<DeviceAddr> lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids[0]);
     uint32_t max_l1_size = device->l1_size_per_core();
 
     for (const CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
@@ -585,6 +586,37 @@ void Program::set_cb_data_fmt(Device *device, const std::vector<CoreRange> &crs,
             for (auto buffer_index : circular_buffer->buffer_indices()) {
                 build_options.set_cb_dataformat_all_cores(
                     static_cast<CB>(buffer_index), circular_buffer->data_format(buffer_index));
+            }
+        }
+    }
+}
+
+void Program::set_cb_tile_dims(Device *device, const std::vector<CoreRange> &crs, JitBuildOptions &build_options) const {
+    ZoneScoped;
+    for (const auto &logical_cr : crs) {
+        auto cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
+        for (const auto &circular_buffer : cbs_on_core) {
+            for (auto buffer_index : circular_buffer->buffer_indices()) {
+                auto tile = circular_buffer->tile(buffer_index);
+                if (tile.has_value()) {
+                    build_options.set_cb_tile_dims_all_cores(
+                        static_cast<CB>(buffer_index),
+                        tile->get_num_faces(),
+                        tile->get_partial_face(),
+                        tile->get_face_shape()[0],
+                        tile->get_narrow_tile(),
+                        tile->get_tile_shape()[0],
+                        tile->get_tile_shape()[1]);
+                    build_options.set_cb_tile_size_all_cores(
+                        static_cast<CB>(buffer_index),
+                        tile->get_tile_size(circular_buffer->data_format(buffer_index)));
+                } else {
+                    Tile t;
+                    build_options.set_cb_tile_size_all_cores(
+                        static_cast<CB>(buffer_index),
+                        t.get_tile_size(circular_buffer->data_format(buffer_index)));
+                }
+
             }
         }
     }
@@ -862,7 +894,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
 
     // TODO: this is asserted here as the leveling above can break the limits enforced by the API
     // Once we use a ring buffer, memory space will be dynamic and this assert won't matter
-    TT_FATAL(offset <= L1_KERNEL_CONFIG_SIZE);
+    TT_FATAL(offset <= L1_KERNEL_CONFIG_SIZE, "offset {} cannot exceed config size {}", offset, L1_KERNEL_CONFIG_SIZE);
 
     return max_unique_rta_size + total_crta_size;
 }
@@ -903,20 +935,20 @@ void Program::set_launch_msg_sem_offsets() {
 
 uint32_t Program::finalize_cbs(uint32_t programmable_core_type_index, uint32_t base_offset) {
 
-    int max_id = -1;
+    int count = 0;
 
     // TODO: has to be better way to do this and don't read from volatile
     for (auto& kg : this->get_kernel_groups(programmable_core_type_index)) {
+        // TODO "max_cb_index" is misnamed, it is really the count of indices
         int32_t id = kg.launch_msg.kernel_config.max_cb_index;
-        if (id > max_id) {
-            max_id = id;
+        if (id > count) {
+            count = id;
         }
 
         kg.launch_msg.kernel_config.cb_offset = base_offset;
     }
 
-    uint32_t cb_size = (max_id + 1) * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
-
+    uint32_t cb_size = count * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
     this->program_configs_[programmable_core_type_index].cb_offset = base_offset;
     this->program_configs_[programmable_core_type_index].cb_size = cb_size;
 
@@ -1017,6 +1049,7 @@ void Program::compile(Device *device, bool fd_bootloader_mode) {
                     JitBuildOptions build_options(device->build_env());
                     kernel->set_build_options(build_options);
                     this->set_cb_data_fmt(device, kernel->logical_coreranges(), build_options);
+                    this->set_cb_tile_dims(device, kernel->logical_coreranges(), build_options);
 
                     auto kernel_hash = KernelCompileHash(kernel, build_options, device->build_key());
                     std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";

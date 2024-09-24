@@ -9,14 +9,15 @@ import importlib
 import datetime
 import os
 import enlighten
+from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report, PROFILER_LOGS_DIR
 from multiprocessing import Process, Queue
 from queue import Empty
 import subprocess
 from statuses import TestStatus, VectorValidity, VectorStatus
 import tt_smi_util
-from device_fixtures import default_device
 from elasticsearch import Elasticsearch, NotFoundError
 from elastic_config import *
+from sweeps_logger import sweeps_logger as logger
 
 ARCH = os.getenv("ARCH_NAME")
 
@@ -38,18 +39,38 @@ def get_username():
 
 def get_devices(test_module):
     try:
-        return test_module.device_mesh_fixture()
+        return test_module.mesh_device_fixture()
     except:
         return default_device()
+
+
+def gather_single_test_perf(device, test_passed):
+    if not isinstance(device, ttnn.Device):
+        logger.error("Multi-device perf is not supported. Failing.")
+        return None
+    ttnn.DumpDeviceProfiler(device)
+    opPerfData = get_device_data_generate_report(
+        PROFILER_LOGS_DIR, None, None, None, export_csv=False, cleanup_device_log=True
+    )
+    if not test_passed:
+        return None
+    elif opPerfData == []:
+        logger.error("No profiling data available. Ensure you are running with the profiler build.")
+        return None
+    elif len(opPerfData) > 1:
+        logger.info("Composite op detected in device perf measurement. Composite op perf is not supported. Failing.")
+        return None
+    else:
+        return opPerfData[0]
 
 
 def run(test_module, input_queue, output_queue):
     device_generator = get_devices(test_module)
     try:
         device, device_name = next(device_generator)
-        print(f"SWEEPS: Opened device configuration, {device_name}.")
+        logger.info(f"Opened device configuration, {device_name}.")
     except AssertionError as e:
-        output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None])
+        output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None, None])
         return
     try:
         while True:
@@ -66,13 +87,17 @@ def run(test_module, input_queue, output_queue):
             except Exception as e:
                 status, message = False, str(e)
                 e2e_perf = None
-            output_queue.put([status, message, e2e_perf])
+            if MEASURE_DEVICE_PERF:
+                perf_result = gather_single_test_perf(device, status)
+                output_queue.put([status, message, e2e_perf, perf_result])
+            else:
+                output_queue.put([status, message, e2e_perf, None])
     except Empty as e:
         try:
-            # Run teardown in device_mesh_fixture
+            # Run teardown in mesh_device_fixture
             next(device_generator)
         except StopIteration:
-            print(f"SWEEPS: Closed device configuration, {device_name}.")
+            logger.info(f"Closed device configuration, {device_name}.")
 
 
 def get_timeout(test_module):
@@ -111,29 +136,36 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
                     # Run one time before capturing result to deal with compile-time slowdown of perf measurement
                     input_queue.put(test_vector)
                     if len(test_vectors) == 1:
-                        print(
-                            "SWEEPS: Executing test (first run, e2e perf is enabled) on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
+                        logger.info(
+                            "Executing test (first run, e2e perf is enabled) on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
                         )
                         run(test_module, input_queue, output_queue)
                     output_queue.get(block=True, timeout=timeout)
                 input_queue.put(test_vector)
                 if len(test_vectors) == 1:
-                    print(
-                        "SWEEPS: Executing test on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
+                    logger.info(
+                        "Executing test on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
                     )
                     run(test_module, input_queue, output_queue)
                 response = output_queue.get(block=True, timeout=timeout)
-                status, message, e2e_perf = response[0], response[1], response[2]
-                if status:
+                status, message, e2e_perf, device_perf = response[0], response[1], response[2], response[3]
+                if status and MEASURE_DEVICE_PERF and device_perf is None:
+                    result["status"] = TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF
+                    result["message"] = message
+                elif status and MEASURE_DEVICE_PERF:
+                    result["status"] = TestStatus.PASS
+                    result["message"] = message
+                    result["device_perf"] = device_perf
+                elif status:
                     result["status"] = TestStatus.PASS
                     result["message"] = message
                 else:
                     if "DEVICE EXCEPTION" in message:
-                        print(
-                            "SWEEPS: DEVICE EXCEPTION: Device could not be initialized. The following assertion was thrown: ",
+                        logger.error(
+                            "DEVICE EXCEPTION: Device could not be initialized. The following assertion was thrown: ",
                             message,
                         )
-                        print("SWEEPS: Skipping test suite because of device error, proceeding...")
+                        logger.info("Skipping test suite because of device error, proceeding...")
                         return []
                     if "Out of Memory: Not enough space to allocate" in message:
                         result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
@@ -147,7 +179,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
                 else:
                     result["e2e_perf"] = None
             except Empty as e:
-                print(f"SWEEPS: TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
+                logger.warning(f"TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
                 p.terminate()
                 p = None
                 tt_smi_util.run_tt_smi(ARCH)
@@ -159,6 +191,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
 
         suite_pbar.update()
         results.append(result)
+
     if p is not None:
         p.join()
 
@@ -212,42 +245,62 @@ def run_sweeps(module_name, suite_name, vector_id):
             sweep_name = str(pathlib.Path(file).relative_to(sweeps_path))[:-3].replace("/", ".")
             test_module = importlib.import_module("sweeps." + sweep_name)
             vector_index = VECTOR_INDEX_PREFIX + sweep_name
-            print(f"SWEEPS: Executing tests for module {sweep_name}...")
+            logger.info(f"Executing tests for module {sweep_name}...")
             try:
-                response = client.search(
-                    index=vector_index,
-                    query={"match": {"tag.keyword": SWEEPS_TAG}},
-                    aggregations={"suites": {"terms": {"field": "suite_name.keyword", "size": 10000}}},
-                )
-                suites = [suite["key"] for suite in response["aggregations"]["suites"]["buckets"]]
-                if len(suites) == 0:
-                    print(
-                        f"SWEEPS: No suites found for module {module_name}, with tag {SWEEPS_TAG}. If you meant to run the CI suites of tests, use '--tag ci-main' in your test command, otherwise, run the parameter generator with your own tag and try again. Continuing..."
+                if not suite_name:
+                    response = client.search(
+                        index=vector_index,
+                        query={"match": {"tag.keyword": SWEEPS_TAG}},
+                        aggregations={"suites": {"terms": {"field": "suite_name.keyword", "size": 10000}}},
                     )
+                    suites = [suite["key"] for suite in response["aggregations"]["suites"]["buckets"]]
+                else:
+                    response = client.search(
+                        index=vector_index,
+                        query={
+                            "bool": {
+                                "must": [
+                                    {"match": {"tag.keyword": SWEEPS_TAG}},
+                                    {"match": {"suite_name.keyword": suite_name}},
+                                ]
+                            }
+                        },
+                        aggregations={"suites": {"terms": {"field": "suite_name.keyword", "size": 10000}}},
+                    )
+                    suites = [suite["key"] for suite in response["aggregations"]["suites"]["buckets"]]
+                if len(suites) == 0:
+                    if not suite_name:
+                        logger.info(
+                            f"No suites found for module {sweep_name}, with tag {SWEEPS_TAG}. If you meant to run the CI suites of tests, use '--tag ci-main' in your test command, otherwise, run the parameter generator with your own tag and try again. Continuing..."
+                        )
+                    else:
+                        logger.info(
+                            f"No suite named {suite_name} found for module {sweep_name}, with tag {SWEEPS_TAG}. If you meant to run the CI suite of tests, use '--tag ci-main' in your test command, otherwise, run the parameter generator with your own tag and try again. Continuing..."
+                        )
                     continue
 
                 module_pbar = pbar_manager.counter(total=len(suites), desc=f"Module: {sweep_name}", leave=False)
                 for suite in suites:
-                    print(f"SWEEPS: Executing tests for module {sweep_name}, suite {suite}.")
+                    logger.info(f"Executing tests for module {sweep_name}, suite {suite}.")
                     header_info, test_vectors = get_suite_vectors(client, vector_index, suite)
                     results = execute_suite(test_module, test_vectors, pbar_manager, suite)
-                    print(f"SWEEPS: Completed tests for module {sweep_name}, suite {suite}.")
-                    print(f"SWEEPS: Tests Executed - {len(results)}")
+                    logger.info(f"Completed tests for module {sweep_name}, suite {suite}.")
+                    logger.info(f"Tests Executed - {len(results)}")
                     export_test_results(header_info, results)
                     module_pbar.update()
                 module_pbar.close()
             except NotFoundError as e:
-                print(f"SWEEPS: No test vectors found for module {sweep_name}. Skipping...")
+                logger.info(f"No test vectors found for module {sweep_name}. Skipping...")
                 continue
             except Exception as e:
-                print(e)
+                logger.error(e)
                 continue
 
     else:
         try:
             test_module = importlib.import_module("sweeps." + module_name)
         except ModuleNotFoundError as e:
-            print(f"SWEEPS: No module found with name {module_name}")
+            logger.error(f"No module found with name {module_name}")
             exit(1)
         vector_index = VECTOR_INDEX_PREFIX + module_name
 
@@ -268,27 +321,27 @@ def run_sweeps(module_name, suite_name, vector_id):
                     )
                     suites = [suite["key"] for suite in response["aggregations"]["suites"]["buckets"]]
                     if len(suites) == 0:
-                        print(
-                            f"SWEEPS: No suites found for module {module_name}, with tag {SWEEPS_TAG}. If you meant to run the CI suites of tests, use '--tag ci-main' in your test command, otherwise, run the parameter generator with your own tag and try again."
+                        logger.info(
+                            f"No suites found for module {module_name}, with tag {SWEEPS_TAG}. If you meant to run the CI suites of tests, use '--tag ci-main' in your test command, otherwise, run the parameter generator with your own tag and try again."
                         )
                         return
 
                     for suite in suites:
-                        print(f"SWEEPS: Executing tests for module {module_name}, suite {suite}.")
+                        logger.info(f"Executing tests for module {module_name}, suite {suite}.")
                         header_info, test_vectors = get_suite_vectors(client, vector_index, suite)
                         results = execute_suite(test_module, test_vectors, pbar_manager, suite)
-                        print(f"SWEEPS: Completed tests for module {module_name}, suite {suite}.")
-                        print(f"SWEEPS: Tests Executed - {len(results)}")
+                        logger.info(f"Completed tests for module {module_name}, suite {suite}.")
+                        logger.info(f"Tests Executed - {len(results)}")
                         export_test_results(header_info, results)
                 else:
-                    print(f"SWEEPS: Executing tests for module {module_name}, suite {suite_name}.")
+                    logger.info(f"Executing tests for module {module_name}, suite {suite_name}.")
                     header_info, test_vectors = get_suite_vectors(client, vector_index, suite_name)
                     results = execute_suite(test_module, test_vectors, pbar_manager, suite_name)
-                    print(f"SWEEPS: Completed tests for module {module_name}, suite {suite_name}.")
-                    print(f"SWEEPS: Tests Executed - {len(results)}")
+                    logger.info(f"Completed tests for module {module_name}, suite {suite_name}.")
+                    logger.info(f"Tests Executed - {len(results)}")
                     export_test_results(header_info, results)
             except Exception as e:
-                print(e)
+                logger.info(e)
 
     client.close()
 
@@ -308,6 +361,9 @@ def export_test_results(header_info, results):
     for i in range(len(results)):
         result = header_info[i]
         for elem in results[i].keys():
+            if elem == "device_perf":
+                result[elem] = results[i][elem]
+                continue
             result[elem] = serialize(results[i][elem])
         client.index(index=results_index, body=result)
 
@@ -315,15 +371,27 @@ def export_test_results(header_info, results):
 
 
 def enable_watcher():
-    print("SWEEPS: Enabling Watcher")
+    logger.info("Enabling Watcher")
     os.environ["TT_METAL_WATCHER"] = "120"
     os.environ["TT_METAL_WATCHER_APPEND"] = "1"
 
 
 def disable_watcher():
-    print("SWEEPS: Disabling Watcher")
+    logger.info("Disabling Watcher")
     os.environ.pop("TT_METAL_WATCHER")
     os.environ.pop("TT_METAL_WATCHER_APPEND")
+
+
+def enable_profiler():
+    logger.info("Enabling Device Profiler")
+    os.environ["TT_METAL_DEVICE_PROFILER"] = "1"
+    os.environ["ENABLE_TRACY"] = "1"
+
+
+def disable_profiler():
+    logger.info("Disabling Device Profiler")
+    os.environ.pop("TT_METAL_DEVICE_PROFILER")
+    os.environ.pop("ENABLE_TRACY")
 
 
 if __name__ == "__main__":
@@ -354,6 +422,13 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--device-perf",
+        required=False,
+        action="store_true",
+        help="Measure device perf using device profiler. REQUIRES PROFILER BUILD!",
+    )
+
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         required=False,
@@ -367,15 +442,10 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args(sys.argv[1:])
-
-    if not args.module_name and args.suite_name:
-        parser.print_help()
-        print("ERROR: Module name is required if suite name is specified.")
-        exit(1)
-
     if not args.module_name and args.vector_id:
         parser.print_help()
-        print("ERROR: Module name is required if vector id is specified.")
+        logger.error("Module name is required if vector id is specified.")
+        exit(1)
 
     global ELASTIC_CONNECTION_STRING
     ELASTIC_CONNECTION_STRING = get_elastic_url(args.elastic)
@@ -383,21 +453,32 @@ if __name__ == "__main__":
     global MEASURE_PERF
     MEASURE_PERF = args.perf
 
+    global MEASURE_DEVICE_PERF
+    MEASURE_DEVICE_PERF = args.device_perf
+
     global DRY_RUN
     DRY_RUN = args.dry_run
 
     global SWEEPS_TAG
     SWEEPS_TAG = args.tag
 
-    print(f"SWEEPS: Running current sweeps with tag: {SWEEPS_TAG}.")
+    logger.info(f"Running current sweeps with tag: {SWEEPS_TAG}.")
 
     if args.watcher:
         enable_watcher()
 
+    if MEASURE_DEVICE_PERF:
+        enable_profiler()
+
     from ttnn import *
     from serialize import *
+    from device_fixtures import default_device
+    from sweeps_logger import sweeps_logger as logger
 
     run_sweeps(args.module_name, args.suite_name, args.vector_id)
 
     if args.watcher:
         disable_watcher()
+
+    if MEASURE_DEVICE_PERF:
+        disable_profiler()

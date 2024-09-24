@@ -6,13 +6,13 @@ import ttnn
 from models.experimental.grok.tt.grok_decoder import TtTransformerBlock
 from models.experimental.grok.tt.grok_rms_norm import TtRMSNormSharded, TtRMSNorm
 from models.experimental.grok.tt.grok_common import LightweightModule
-from models.experimental.grok.scripts.tlog import tlog, tlog_device_mesh
+from models.experimental.grok.scripts.tlog import tlog, tlog_mesh_device
 
 
 class TtTransformer(LightweightModule):
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         args,
         dtype,
@@ -22,15 +22,15 @@ class TtTransformer(LightweightModule):
         self.args = args
         self.vocab_size = args.vocab_size
         self.n_layers = args.n_layers
-        self.device_mesh = device_mesh
-        tlog_device_mesh = device_mesh
+        self.mesh_device = mesh_device
+        tlog_mesh_device = mesh_device
         self.model_config = args.get_model_config()
         self.output_multiplier_scale = args.output_multiplier_scale
         assert self.vocab_size > 0
 
         self.layers = [
             TtTransformerBlock(
-                device_mesh=device_mesh,
+                mesh_device=mesh_device,
                 state_dict=state_dict,
                 args=args,
                 dtype=dtype,
@@ -39,7 +39,7 @@ class TtTransformer(LightweightModule):
             for i in layers
         ]
         self.norm = TtRMSNormSharded(
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             args=args,
             dtype=ttnn.bfloat16,
@@ -56,12 +56,12 @@ class TtTransformer(LightweightModule):
 
         self.output_weight = ttnn.as_tensor(
             self.state_dict["lm_head.weight"].permute(1, 0).unsqueeze(0).unsqueeze(0),
-            device=device_mesh,
+            device=mesh_device,
             layout=self.model_config["OUTPUT_W_LAYOUT_TILE"],
             dtype=ttnn.bfloat16,
             memory_config=self.model_config["OUTPUT_WEIGHTS_MEMCFG"],
             cache_file_name=output_cache_name,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.device_mesh, dim=-1),
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
         )
 
         self.compute_kernel = self.args.get_compute_kernel_output_config()

@@ -22,8 +22,8 @@ using namespace tt;
 // is contiguous
 template <typename T>
 std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
-    TT_FATAL(rows % 32 == 0);
-    TT_FATAL(cols % 32 == 0);
+    TT_FATAL(rows % 32 == 0, "Error");
+    TT_FATAL(cols % 32 == 0, "Error");
     int num_tiles_r = rows / 32;
     int num_tiles_c = cols / 32;
     std::vector<T> result;
@@ -49,8 +49,8 @@ std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
 // transform it back to row major full tensor. (This function inverts the tilize() function)
 template <typename T>
 std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
-    TT_FATAL(rows % 32 == 0);
-    TT_FATAL(cols % 32 == 0);
+    TT_FATAL(rows % 32 == 0, "Error");
+    TT_FATAL(cols % 32 == 0, "Error");
     int num_tiles_r = rows / 32;
     int num_tiles_c = cols / 32;
     std::vector<T> result;
@@ -220,9 +220,9 @@ bool test_matmul_large_block(tt_metal::Device *device, bool activations_rm, bool
         int in0_block_w = K;
 
         uint32_t single_tile_size = 2 * 1024;
-        TT_FATAL(M * in0_block_w * single_tile_size * 2 <= 150*1024);
-        TT_FATAL(N * in0_block_w * single_tile_size * 2 <= 100*1024);
-        TT_FATAL(M * N * single_tile_size <= 600*1024);
+        TT_FATAL(M * in0_block_w * single_tile_size * 2 <= 150*1024, "Error");
+        TT_FATAL(N * in0_block_w * single_tile_size * 2 <= 100*1024, "Error");
+        TT_FATAL(M * N * single_tile_size <= 600*1024, "Error");
         uint32_t dram_buffer_size_act = single_tile_size * M * K; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
         uint32_t dram_buffer_size_weights = single_tile_size * K * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
         uint32_t dram_buffer_size_out = single_tile_size * M * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
@@ -322,8 +322,8 @@ bool test_matmul_large_block(tt_metal::Device *device, bool activations_rm, bool
 
         create_CBs_for_fused_matmul(program, device, core, activations_rm, output_rm, M, N, in0_block_w, out_subblock_h);
 
-        TT_FATAL(in0_subblock_h * in0_block_w * in0_num_subblocks == in0_block_num_tiles);
-        TT_FATAL(in0_block_w == K);
+        TT_FATAL(in0_subblock_h * in0_block_w * in0_num_subblocks == in0_block_num_tiles, "Error");
+        TT_FATAL(in0_block_w == K, "Error");
 
         vector<uint32_t> compute_kernel_args = {
             uint(in0_block_w),
@@ -486,7 +486,7 @@ int main(int argc, char **argv) {
 
 
 
-    pass &= tt_metal::CloseDevice(device);;
+    pass &= tt_metal::CloseDevice(device);
 
     if (pass) {
         log_info(LogTest, "Test Passed");
@@ -494,5 +494,5 @@ int main(int argc, char **argv) {
         TT_THROW("Test Failed");
     }
 
-    TT_FATAL(pass);
+    TT_FATAL(pass, "Error");
 }
