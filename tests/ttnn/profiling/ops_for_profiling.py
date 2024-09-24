@@ -2287,7 +2287,7 @@ all_unary_ops = [
     },
     {
         "op": primary_moreh_norm_3,
-        "name": "tt_lib.operations.primary.moreh_norm_dim_3",
+        "name": "ttnn.operations.moreh.norm_dim_3",
     },
     {
         "op": fused_softmax,
