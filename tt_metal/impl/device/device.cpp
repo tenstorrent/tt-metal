@@ -248,6 +248,13 @@ void Device::initialize_build() {
 
 void Device::build_firmware() {
     log_debug(tt::LogMetal, "Building base firmware for device {}", this->id_);
+
+    // hack
+    if (std::getenv("TT_NO_FIRMWARE"))
+    {
+        return;
+    }
+
     ZoneScoped;
 
     this->generate_device_headers(this->build_env_.get_out_firmware_root_path());
@@ -394,6 +401,12 @@ void Device::reset_cores() {
 
 void Device::initialize_and_launch_firmware() {
     ZoneScoped;
+
+        // hack
+    if (std::getenv("TT_NO_FIRMWARE"))
+    {
+        return;
+    }
 
     launch_msg_t launch_msg;
     std::memset(&launch_msg, 0, sizeof(launch_msg_t));
