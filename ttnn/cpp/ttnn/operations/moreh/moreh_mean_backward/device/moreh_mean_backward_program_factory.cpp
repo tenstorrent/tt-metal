@@ -159,6 +159,7 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
         "ttnn/cpp/ttnn/operations/moreh/moreh_mean_backward/device/kernels/moreh_mean_backward.cpp";
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1, need_bcast_dim[0], need_bcast_dim[1]};
     const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2, need_bcast_dim[0], need_bcast_dim[1]};
+    vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     auto compute_kernel_ids = tt::operations::primary::CreateComputeKernel(
         program,
         compute_kernel_file,
@@ -169,9 +170,9 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
         tt::operations::primary::ComputeKernelConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
-            // TODO(hyungsuk): change preserve_fp32_precision from false to fp32_dest_acc_en after fix #10337
-            // .preserve_fp32_precision = fp32_dest_acc_en,
-            .preserve_fp32_precision = false,
+            // TODO(hyungsuk): change unpack_to_dest_mode from false to fp32_dest_acc_en after fix #10337
+            // .unpack_to_dest_mode = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .defines = compute_defines});
 

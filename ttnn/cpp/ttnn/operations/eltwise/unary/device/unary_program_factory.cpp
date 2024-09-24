@@ -85,6 +85,11 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
         1                            // per_core_block_size
     };
 
+    vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (args.preserve_fp32_precision) {
+        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    }
+
     bool math_approx_mode = std::all_of(
         args.op_chain.begin(), args.op_chain.end(), [](const auto &u) { return utils::get_op_approx_mode(u.op_type); });
     std::map<string, string> unary_defines = utils::get_block_defines(args.op_chain);
@@ -95,7 +100,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
-            .preserve_fp32_precision = args.preserve_fp32_precision,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args_group_1,
             .defines = unary_defines});
@@ -113,7 +118,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
                 .fp32_dest_acc_en = args.fp32_dest_acc_en,
-                .preserve_fp32_precision = args.preserve_fp32_precision,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .math_approx_mode = math_approx_mode,
                 .compile_args = compute_kernel_args_group_2,
                 .defines = unary_defines});

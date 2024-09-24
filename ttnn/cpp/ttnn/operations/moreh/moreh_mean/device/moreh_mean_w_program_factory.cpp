@@ -127,6 +127,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
         1,                       // NC
         origin_W,
     };
+    vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
 
     auto compute_kernel_ids = CreateComputeKernel(
         program,
@@ -138,9 +139,9 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
         ComputeKernelConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
-            // TODO(hyungsuk): change preserve_fp32_precision from false to fp32_dest_acc_en after fix #10337
-            // .preserve_fp32_precision = fp32_dest_acc_en,
-            .preserve_fp32_precision = false,
+            // TODO(hyungsuk): change unpack_to_dest_mode from false to fp32_dest_acc_en after fix #10337
+            // .unpack_to_dest_mode = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .defines = compute_defines});
 
