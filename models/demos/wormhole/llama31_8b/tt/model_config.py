@@ -150,6 +150,14 @@ class TtModelArgs:
                 fused_activation=None,
             )
 
+            self.model_config["SHARDED_SKIP_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+                (32, 4096 // 32),  # Shard shape: [32, 128] -> 1 shard per core
+                ttnn.CoreGrid(y=4, x=8),
+                ttnn.ShardStrategy.WIDTH,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
             # in0: [B(seqlen//1024), 1024, 4096]
             # in1: [1, 4096, 14336]
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(

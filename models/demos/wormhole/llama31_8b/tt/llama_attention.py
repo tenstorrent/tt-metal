@@ -351,8 +351,6 @@ class TtLlamaAttention(nn.Module):
             )  # seqlen, 1, batch, hidden_size
 
             ttnn.deallocate(attn_output_cat)
-            # TODO: Update the rest of the model to take a width sharded tensor up to MLP to avoid sharded<->interleaved ops
-            dense_out = ttnn.sharded_to_interleaved(dense_out)
             dense_outputs.append(dense_out)
 
         # return the sum of the outputs

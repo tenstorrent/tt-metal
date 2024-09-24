@@ -89,15 +89,7 @@ class TtLlamaMLP(torch.nn.Module):
                 pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"](seq_len)
                 pc_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG_128"](seq_len)
 
-        # TODO Update the model itself to output sharded tensor to MLP
-        if mode == "decode":
-            old_x = x
-            x = ttnn.interleaved_to_sharded(
-                x,
-                self.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"],
-            )
-            old_x.deallocate(True)
-
+        # In decode mode (seqlen <= 32) do DRAM sharded matmuls
         w1_out = ttnn.linear(
             x,
             self.w1,
@@ -105,9 +97,8 @@ class TtLlamaMLP(torch.nn.Module):
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             dtype=ttnn.bfloat16,
             program_config=pc_1,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if seq_len <= 32 else ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
         )
-
         w3_out = ttnn.linear(
             x,
             self.w3,
@@ -115,7 +106,7 @@ class TtLlamaMLP(torch.nn.Module):
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             dtype=ttnn.bfloat16,
             program_config=pc_3,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if seq_len <= 32 else ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
         )
 
         x.deallocate(True)
@@ -123,7 +114,7 @@ class TtLlamaMLP(torch.nn.Module):
         w2_in = ttnn.multiply(
             w1_out,
             w3_out,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if seq_len <= 32 else ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
             input_tensor_a_activation=ttnn.UnaryOpType.SILU,
             dtype=ttnn.bfloat8_b,
         )
@@ -138,8 +129,7 @@ class TtLlamaMLP(torch.nn.Module):
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
             dtype=ttnn.bfloat8_b,
             program_config=pc_2,
-            # memory_config=ttnn.L1_MEMORY_CONFIG if seq_len <= 32 else ttnn.DRAM_MEMORY_CONFIG,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if seq_len <= 32 else ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
         )
 
         w2_in.deallocate(True)
