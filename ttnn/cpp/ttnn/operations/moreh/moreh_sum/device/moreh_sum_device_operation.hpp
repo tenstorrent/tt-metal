@@ -38,7 +38,7 @@ struct MorehSumOperation {
         const bool keepdim;
 
         const MemoryConfig output_mem_config;
-        const std::optional<DeviceComputeKernelConfig> compute_kernel_config;
+        const DeviceComputeKernelConfig compute_kernel_config;
     };
 
     struct tensor_args_t {

@@ -19,9 +19,7 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
     auto dim = operation_attributes.dim;
 
     auto output_mem_config = operation_attributes.output_mem_config;
-    const DeviceComputeKernelConfig &compute_kernel_config = init_device_compute_kernel_config(
-        input.device()->arch(), operation_attributes.compute_kernel_config, MathFidelity::HiFi4);
-    ;
+    const DeviceComputeKernelConfig &compute_kernel_config = operation_attributes.compute_kernel_config;
 
     auto* device = input.device();
     auto program = Program();

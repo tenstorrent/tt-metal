@@ -440,6 +440,17 @@ Normalization
    ttnn.layer_norm
    ttnn.rms_norm
 
+
+Moreh Operations
+================
+
+.. autosummary::
+   :toctree: api
+   :nosignatures:
+   :template: function.rst
+
+   ttnn.moreh_sum
+
 Transformer
 ===========
 
