@@ -11,7 +11,8 @@ jobs:
     steps:
       - uses: fpicalausa/remove-stale-branches@v2.0.1
         with:
-          dry-run: true
+          dry-run: false
           days-before-branch-stale: 180 # Branches stale for ~6 months
           ignore-unknown-authors: true
           default-recipient: "blozano-tt"
+          operations-per-run: 30
