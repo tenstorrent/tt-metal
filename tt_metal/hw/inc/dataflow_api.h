@@ -7,6 +7,7 @@
 #if __has_include("chlkc_unpack_data_format.h")
 #include "chlkc_pack_data_format.h"
 #include "chlkc_unpack_data_format.h"
+#include "chlkc_unpack_tile_dims.h"
 #define DATA_FORMATS_DEFINED
 #endif
 #if __has_include("generated_bank_to_noc_coord_mapping.h")
@@ -211,24 +212,31 @@ constexpr static std::int32_t GET_TILE_SIZE(uint format) {
     };
 }
 
-FORCE_INLINE
-constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint index) {
+template <uint32_t tile_hw = 1024>
+FORCE_INLINE constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint index) {
+    constexpr uint8_t datum_shift = (tile_hw == 1024) ? 10 :
+                                    (tile_hw == 512)  ? 9  :
+                                    (tile_hw == 256)  ? 8  : 10;
+
+    constexpr uint8_t exp_shift   = (tile_hw == 1024) ? 2  :
+                                    (tile_hw == 512)  ? 1  :
+                                    (tile_hw == 256)  ? 0  : 2;
     switch (format & 0x1F) {
-        case ((uint8_t)DataFormat::UInt8): return (index << 10);
+        case ((uint8_t)DataFormat::UInt8): return (index << datum_shift);
         case ((uint8_t)DataFormat::UInt16):
         case ((uint8_t)DataFormat::Float16):
-        case ((uint8_t)DataFormat::Float16_b): return (index << 11);
+        case ((uint8_t)DataFormat::Float16_b): return (index << (datum_shift + 1));
         case ((uint8_t)DataFormat::Int32):
         case ((uint8_t)DataFormat::UInt32):
-        case ((uint8_t)DataFormat::Float32): return (index << 12);
+        case ((uint8_t)DataFormat::Float32): return (index << (datum_shift + 2));
         case ((uint8_t)DataFormat::Bfp2):
-        case ((uint8_t)DataFormat::Bfp2_b): return ((index << 8) + (index << 6));
+        case ((uint8_t)DataFormat::Bfp2_b): return ((index << (datum_shift - 2)) + (index << (4 + exp_shift)));
         case ((uint8_t)DataFormat::Bfp4):
-        case ((uint8_t)DataFormat::Bfp4_b): return ((index << 9) + (index << 6));
+        case ((uint8_t)DataFormat::Bfp4_b): return ((index << (datum_shift - 1)) + (index << (4 + exp_shift)));
         case ((uint8_t)DataFormat::Bfp8):
         case ((uint8_t)DataFormat::Bfp8_b):
         // Keep default as Bfp8?
-        default: return ((index << 10) + (index << 6));
+        default: return ((index << datum_shift) + (index << (4 + exp_shift)));
     };
 }
 
@@ -321,10 +329,20 @@ constexpr inline std::int32_t get_tile_size(const std::int32_t operand) {
     std::uint32_t input = operand;
 
     // L1 16B words
-    std::uint32_t num_words = GET_TILE_SIZE((uint)unpack_src_format[input]);
+    std::uint32_t num_words = (uint)unpack_tile_size[input];
 
     // return bytes
     return num_words;
+}
+
+constexpr inline uint32_t get_tile_hw(const std::int32_t operand) {
+    std::uint32_t input = operand;
+    return (uint32_t)unpack_tile_r_dim[input] * (uint32_t)unpack_tile_c_dim[input];
+}
+
+constexpr inline uint32_t get_tile_num_faces(const std::int32_t operand) {
+    std::uint32_t input = operand;
+    return (uint32_t)unpack_tile_num_faces[input];
 }
 
 constexpr inline DataFormat get_dataformat(const std::int32_t operand) {
@@ -892,7 +910,7 @@ struct InterleavedPow2AddrGen {
     }
 };
 
-template <bool DRAM>
+template <bool DRAM, uint32_t tile_hw = 1024>
 struct InterleavedAddrGenFast {
     uint32_t bank_base_address;  // Base address for the whole tensor.
     // TODO: Remove page_size from argument list. This can be derived from data_format
@@ -901,7 +919,7 @@ struct InterleavedAddrGenFast {
 
     FORCE_INLINE
     uint32_t get_addr(const uint32_t id, const uint32_t bank_offset_index, const uint32_t bank_index, const uint32_t offset = 0) const {
-        return MUL_WITH_TILE_SIZE((uint)this->data_format, bank_offset_index) + this->bank_base_address + offset + interleaved_addr_gen::get_bank_offset<DRAM>(bank_index);
+        return MUL_WITH_TILE_SIZE<tile_hw>((uint)this->data_format, bank_offset_index) + this->bank_base_address + offset + interleaved_addr_gen::get_bank_offset<DRAM>(bank_index);
     }
 
     FORCE_INLINE
@@ -1090,8 +1108,8 @@ FORCE_INLINE std::uint64_t get_noc_addr(const uint32_t id, const InterleavedPow2
     return s.get_noc_addr(id, offset);
 }
 
-template <bool DRAM>
-FORCE_INLINE std::uint64_t get_noc_addr(const uint32_t id, const InterleavedAddrGenFast<DRAM>& s, uint32_t offset = 0) {
+template <bool DRAM, uint32_t tile_hw>
+FORCE_INLINE std::uint64_t get_noc_addr(const uint32_t id, const InterleavedAddrGenFast<DRAM, tile_hw>& s, uint32_t offset = 0) {
     /*
         Alternative API for getting the noc address when we are reading using a swizzled
         layout. This version assumes bank unit size can be arbitrary size. Use
@@ -1116,9 +1134,9 @@ FORCE_INLINE void noc_async_read_page(
     s.noc_async_read_page(id, dst_local_l1_addr, offset);
 }
 
-template <bool DRAM>
+template <bool DRAM, uint32_t tile_hw>
 FORCE_INLINE void noc_async_read_tile(
-    const uint32_t id, const InterleavedAddrGenFast<DRAM>& s, std::uint32_t dst_local_l1_addr, uint32_t offset = 0) {
+    const uint32_t id, const InterleavedAddrGenFast<DRAM, tile_hw>& s, std::uint32_t dst_local_l1_addr, uint32_t offset = 0) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
@@ -1167,9 +1185,9 @@ void noc_async_write(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr
     }
 }
 
-template <bool DRAM>
+template <bool DRAM, uint32_t tile_hw>
 FORCE_INLINE void noc_async_write_tile(
-    const uint32_t id, const InterleavedAddrGenFast<DRAM>& s, std::uint32_t src_local_l1_addr) {
+    const uint32_t id, const InterleavedAddrGenFast<DRAM, tile_hw>& s, std::uint32_t src_local_l1_addr) {
     s.noc_async_write_tile(id, src_local_l1_addr);
 }
 

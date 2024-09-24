@@ -168,9 +168,6 @@ void JitBuildState::finish_init() {
     // Append hw build objects compiled offline
     std::string build_dir = llrt::OptionsG.get_root_dir() + "runtime/hw/lib/";
     if (this->is_fw_) {
-        if (this->target_name_ == "brisc") {
-            this->link_objs_ += build_dir + "tdma_xmov.o ";
-        }
         if (this->target_name_ != "erisc") {
             this->link_objs_ += build_dir + "tmu-crt0.o ";
         }
@@ -180,10 +177,6 @@ void JitBuildState::finish_init() {
     } else {
         this->link_objs_ += build_dir + "tmu-crt0k.o ";
     }
-    if (this->target_name_ == "brisc" or this->target_name_ == "idle_erisc") {
-        this->link_objs_ += build_dir + "noc.o ";
-    }
-    this->link_objs_ += build_dir + "substitutes.o ";
 
     // Note the preceding slash which defies convention as this gets appended to
     // the kernel name used as a path which doesn't have a slash
@@ -205,6 +198,9 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, int which, bo
 
     uint32_t l1_cache_disable_mask = tt::llrt::OptionsG.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
 
+    // TODO(pgk): build these once at init into built/libs!
+    this->srcs_.push_back("tt_metal/hw/toolchain/substitutes.cpp");
+
     this->lflags_ = env_.lflags_ + "-Os ";
 
     switch (this->core_id_) {
@@ -215,6 +211,9 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, int which, bo
             if ((l1_cache_disable_mask & tt::llrt::DebugHartFlags::RISCV_BR) == tt::llrt::DebugHartFlags::RISCV_BR) {
                 this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
             }
+
+            this->srcs_.push_back("tt_metal/hw/firmware/src/tdma_xmov.c");
+            this->srcs_.push_back("tt_metal/hw/firmware/src/" + env_.aliased_arch_name_ + "/noc.c");
             if (this->is_fw_) {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/brisc.cc");
             } else {
@@ -271,6 +270,7 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, int which, bool is_fw) 
                       "tt_metal/third_party/sfpi/include " + "-I" + env_.root_ + "tt_metal/hw/firmware/src " + "-I" +
                       env_.root_ + "tt_metal/third_party/tt_llk_" + env.arch_name_ + "/llk_lib ";
 
+    this->srcs_.push_back("tt_metal/hw/toolchain/substitutes.cpp");
     if (this->is_fw_) {
         this->srcs_.push_back("tt_metal/hw/firmware/src/trisc.cc");
     } else {
@@ -348,9 +348,9 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw
 
             this->includes_ += "-I " + env_.root_ + "tt_metal/hw/inc/ethernet ";
 
+            this->srcs_.push_back("tt_metal/hw/toolchain/substitutes.cpp");
             if (this->is_fw_) {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/erisc.cc");
-                this->srcs_.push_back("tt_metal/hw/toolchain/erisc-early-exit.S");
             } else {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/erisck.cc");
             }
@@ -382,6 +382,9 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw
 
             this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
 
+            // TODO(pgk): build these once at init into built/libs!
+            this->srcs_.push_back("tt_metal/hw/toolchain/substitutes.cpp");
+            this->srcs_.push_back("tt_metal/hw/firmware/src/" + env_.aliased_arch_name_ + "/noc.c");
             if (this->is_fw_) {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisc.cc");
             } else {

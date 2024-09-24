@@ -450,10 +450,10 @@ class resnetBlock2D:
                         hidden_states,
                         [0, 0, 0, output_tensor_start_width_dim],
                         [
-                            hidden_states.shape[0] - 1,
-                            hidden_states.shape[1] - 1,
-                            hidden_states.shape[2] - 1,
-                            output_tensor_end_width_dim - 1,
+                            hidden_states.shape[0],
+                            hidden_states.shape[1],
+                            hidden_states.shape[2],
+                            output_tensor_end_width_dim,
                         ],
                         memory_config=ttnn.L1_MEMORY_CONFIG,
                     )

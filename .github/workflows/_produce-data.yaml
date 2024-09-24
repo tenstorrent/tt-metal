@@ -15,11 +15,24 @@ on:
   workflow_run:
     workflows:
       - "All post-commit tests"
-      - "(T3K) T3000 demo tests"
-      - "(T3K) T3000 model perf tests"
       - "(Single-card) Model perf tests"
       - "(Single-card) Device perf tests"
+      - "(Single-card) Demo tests"
       - "Nightly fast dispatch tests"
+      - "(T3K) T3000 demo tests"
+      - "(T3K) T3000 model perf tests"
+      - "(T3K) T3000 perplexity tests"
+      - "(T3K) T3000 model perf tests"
+      - "(T3K) T3000 profiler tests"
+      - "(T3K) T3000 unit tests"
+      - "(TG) TG unit tests"
+      - "(TG) TG demo tests"
+      - "(TG) TG frequent tests"
+      - "(TG) TG model perf tests"
+      - "(TGG) TGG model perf tests"
+      - "(TGG) TGG unit tests"
+      - "(TGG) TGG demo tests"
+      - "(TGG) TGG frequent tests"
     types:
       - completed
 

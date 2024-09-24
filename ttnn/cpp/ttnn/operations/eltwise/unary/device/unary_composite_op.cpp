@@ -12,7 +12,7 @@
 #include "tt_metal/common/bfloat16.hpp"
 #include "ttnn/operations/data_movement/reshape/reshape.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "ttnn/deprecated/tt_numpy/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
@@ -532,13 +532,14 @@ std::vector<Tensor> split_tensor_for_glu(const Tensor& input_a, int32_t dim, con
     tt::tt_metal::LegacyShape inshape(input_a.get_legacy_shape());
     TT_FATAL(((inshape[dim] / 2) % tt::constants::TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
     std::vector<uint32_t> s_a = {0, 0, 0, 0};
-    std::vector<uint32_t> e_a = {input_a.get_legacy_shape()[0] - 1, inshape[1] - 1, inshape[2] - 1, inshape[3] / 2 - 1};
+    std::vector<uint32_t> e_a = {input_a.get_legacy_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
 
     std::vector<uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
-    std::vector<uint32_t> e_b = {inshape[0] - 1, inshape[1] - 1, inshape[2] - 1, inshape[3] - 1};
+    std::vector<uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
 
-    Tensor t_a = ttnn::slice(DefaultQueueId, input_a, s_a, e_a, std::nullopt, output_mem_config);
-    Tensor t_b = ttnn::slice(DefaultQueueId, input_a, s_b, e_b, std::nullopt, output_mem_config);
+    auto step = std::vector<uint32_t>({1,1,1,1});
+    Tensor t_a = ttnn::slice(DefaultQueueId, input_a, s_a, e_a, step, output_mem_config);
+    Tensor t_b = ttnn::slice(DefaultQueueId, input_a, s_b, e_b, step, output_mem_config);
 
     t_split.emplace_back(t_a);
     t_split.emplace_back(t_b);
@@ -606,14 +607,14 @@ Tensor _swiglu(
 
 // tril : select lower triangular region of input matrix
 Tensor _tril(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>&  output_mem_config) {
-    Tensor index_l = tt::numpy::index_tril<::bfloat16>(
+    Tensor index_l = numpy::index_tril<::bfloat16>(
         input_a.get_legacy_shape(), diag, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_mem_config.value());
     return ttnn::multiply(input_a, index_l, std::nullopt, output_mem_config);
 }
 
 // triu : select upper triangular region of input matrix
 Tensor _triu(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>&  output_mem_config) {
-    Tensor index_u = tt::numpy::index_triu<::bfloat16>(
+    Tensor index_u = numpy::index_triu<::bfloat16>(
         input_a.get_legacy_shape(), diag, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_mem_config.value());
     return ttnn::multiply(input_a, index_u, std::nullopt, output_mem_config);
 }

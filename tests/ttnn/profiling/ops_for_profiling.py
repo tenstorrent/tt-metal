@@ -1186,10 +1186,10 @@ def ttnn_slice(x):
     shape = x.get_legacy_shape()
 
     output_tensor_end = (
-        shape[0] - 1,
-        shape[1] - 1,
-        shape[2] - 33,
-        shape[3] - 33,
+        shape[0],
+        shape[1],
+        shape[2] - 32,
+        shape[3] - 32,
     )
 
     ttnn.slice(x, (0, 0, 0, 0), output_tensor_end)
@@ -1466,19 +1466,19 @@ def primary_moreh_logsoftmax_3(x):
 
 
 def primary_moreh_norm_0(x):
-    tt_lib.operations.primary.moreh_norm(x, p=2.0, dim=0)
+    ttnn.operations.moreh.norm(x, p=2.0, dim=0)
 
 
 def primary_moreh_norm_1(x):
-    tt_lib.operations.primary.moreh_norm(x, p=2.0, dim=1)
+    ttnn.operations.moreh.norm(x, p=2.0, dim=1)
 
 
 def primary_moreh_norm_2(x):
-    tt_lib.operations.primary.moreh_norm(x, p=2.0, dim=2)
+    ttnn.operations.moreh.norm(x, p=2.0, dim=2)
 
 
 def primary_moreh_norm_3(x):
-    tt_lib.operations.primary.moreh_norm(x, p=2.0, dim=3)
+    ttnn.operations.moreh.moreh_norm(x, p=2.0, dim=3)
 
 
 def split_dim_3(x):
@@ -2254,15 +2254,15 @@ all_unary_ops = [
     },
     {
         "op": primary_moreh_norm_0,
-        "name": "tt_lib.operations.primary.moreh_norm_dim_0",
+        "name": "ttnn.operations.moreh.norm_dim_0",
     },
     {
         "op": primary_moreh_norm_1,
-        "name": "tt_lib.operations.primary.moreh_norm_dim_1",
+        "name": "ttnn.operations.moreh.norm_dim_1",
     },
     {
         "op": primary_moreh_norm_2,
-        "name": "tt_lib.operations.primary.moreh_norm_dim_2",
+        "name": "ttnn.operations.moreh.norm_dim_2",
     },
     {
         "op": primary_moreh_norm_3,
@@ -2485,7 +2485,7 @@ def add_bw(x, y, z):
 
 
 def primary_moreh_norm_backward(x, y, z):
-    tt_lib.operations.primary.moreh_norm_backward(x, y, z, p=2.0)
+    ttnn.operations.moreh.norm_backward(x, y, z, p=2.0)
 
 
 def linear(x, weight, bias):
@@ -2669,7 +2669,7 @@ all_ternary_ops = [
     },
     {
         "op": primary_moreh_norm_backward,
-        "name": "tt_lib.tensor.moreh_norm_backward",
+        "name": "ttnn.operations.moreh.norm_backward",
     },
     {
         "op": linear,
