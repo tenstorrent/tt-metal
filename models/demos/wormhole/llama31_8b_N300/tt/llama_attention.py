@@ -487,7 +487,13 @@ class TtLlamaAttention(nn.Module):
         if seq_len > 2048:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         attn_output_11SH.deallocate(True)
-        return [output_11SH]
+
+        # All reduce
+        dense_out_gathered = ttnn.line_all_gather(output_11SH, dim=1, num_links=1)
+        dense_out_reduced = ttnn.experimental.fast_reduce_nc(
+            dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
+        )
+        return dense_out_reduced
 
     def forward(
         self, xs, current_pos, current_pos_attn=None, rot_mats=None, transformation_mats=None, user_id=0, mode="decode"

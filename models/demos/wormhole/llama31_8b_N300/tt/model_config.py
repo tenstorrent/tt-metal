@@ -159,7 +159,7 @@ class TtModelArgs:
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=4,  # 32, #16,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=56,  # N / TILE_WIDTH / Grid_Size
+                per_core_N=28,  # N / TILE_WIDTH / Grid_Size
                 transpose_mcast=False,
                 fused_activation=None,
                 fuse_batch=False,
@@ -171,7 +171,7 @@ class TtModelArgs:
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=4,  # 32, #16,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=56,  # N / TILE_WIDTH / Grid_Size
+                per_core_N=28,  # N / TILE_WIDTH / Grid_Size
                 transpose_mcast=False,
                 fused_activation=None,
                 fuse_batch=False,
@@ -196,7 +196,7 @@ class TtModelArgs:
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=seq_len // 32 // 4,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=56,  # 14336/32/8cores = 56: N / TILE_WIDTH / Grid_Size
+                per_core_N=28,  # 14336/32/8cores = 56: N / TILE_WIDTH / Grid_Size
                 transpose_mcast=False,
                 fused_activation=None,
                 fuse_batch=True,
@@ -210,7 +210,7 @@ class TtModelArgs:
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=seq_len // 32 // 4,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=56,  # 14336/32/8cores = 56: N / TILE_WIDTH / Grid_Size
+                per_core_N=28,  # 14336/32/8cores = 56: N / TILE_WIDTH / Grid_Size
                 transpose_mcast=False,
                 fused_activation=None,
                 fuse_batch=True,
@@ -321,7 +321,7 @@ class TtModelArgs:
                 per_core_M=max(
                     1, seq_len // (512 if seq_len > 2048 else 256)
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=24,  # N / TILE_WIDTH / Grid_Size
+                per_core_N=12,  # N / TILE_WIDTH / Grid_Size
                 transpose_mcast=False,
                 fused_activation=None,
                 fuse_batch=seq_len <= 2048,
@@ -353,7 +353,7 @@ class TtModelArgs:
                 )
 
             self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
-                (seq_len // 8, self.head_dim),
+                (seq_len // 16, self.head_dim),
                 ttnn.CoreGrid(y=8, x=8),
                 ttnn.ShardStrategy.HEIGHT,
                 ttnn.ShardOrientation.ROW_MAJOR,

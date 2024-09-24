@@ -6,9 +6,9 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.demos.wormhole.llama31_8b.tt.llama_attention import TtLlamaAttention
-from models.demos.wormhole.llama31_8b.tt.model_config import TtModelArgs
-from models.demos.wormhole.llama31_8b.tt.llama_common import (
+from models.demos.wormhole.llama31_8b_N300.tt.llama_attention import TtLlamaAttention
+from models.demos.wormhole.llama31_8b_N300.tt.model_config import TtModelArgs
+from models.demos.wormhole.llama31_8b_N300.tt.llama_common import (
     get_prefill_rot_mat,
     prepare_inputs_ttnn_prefill,
     get_rot_transformation_mat,
@@ -26,11 +26,11 @@ from models.utility_functions import skip_for_grayskull
     "seq_len",
     (4096,),
 )
-def test_llama_attention_inference(seq_len, device, use_program_cache, reset_seeds):
+def test_llama_attention_inference(seq_len, mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
     pcc = 0.99
 
-    model_args = TtModelArgs(device)
+    model_args = TtModelArgs(mesh_device.get_devices()[0])
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -41,13 +41,14 @@ def test_llama_attention_inference(seq_len, device, use_program_cache, reset_see
     batch = 1
 
     # pre-compute the rotational embedding matrix and send to device
-    rot_mats = get_prefill_rot_mat(model_args.head_dim, model_args.max_seq_len, device, seq_len=seq_len)
+    rot_mats = get_prefill_rot_mat(model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=seq_len)
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
     transformation_mats = ttnn.as_tensor(
         transformation_mat_torch,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     generation_start_pos = 0
@@ -55,7 +56,7 @@ def test_llama_attention_inference(seq_len, device, use_program_cache, reset_see
     all_tests_pass = True
 
     tt_model = TtLlamaAttention(
-        [device],
+        mesh_device,
         state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         layer_num=0,
@@ -67,14 +68,13 @@ def test_llama_attention_inference(seq_len, device, use_program_cache, reset_see
     tt_attention_input = pt_attention_input.clone()
     attention_input = prepare_inputs_ttnn_prefill(
         tt_attention_input,
-        device,
+        mesh_device,
     )
 
     tt_out = tt_model([attention_input], 0, None, rot_mats, transformation_mats, user_id=0, mode="prefill")
-    # multi-device attention module returns replicated output
-    assert isinstance(tt_out, list)
-    tt_out = tt_out[0]
-    tt_output_torch = ttnn.to_torch(tt_out).view(batch, seq_len, -1)  # [ batch, seq, hidden_dim]
+    tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[:, 0, :, :].view(
+        batch, seq_len, -1
+    )  # [ batch, seq, hidden_dim]
 
     positions = torch.LongTensor(range(seq_len))
     freqs_cis_i = precompute_freqs_cis(
@@ -105,7 +105,9 @@ def test_llama_attention_inference(seq_len, device, use_program_cache, reset_see
         # TT hardware execution -------------------------------------------------------------
         tt_layer_present = []
         for layer_past in tt_model.layer_past_list:
-            tt_layer_present.append([ttnn.to_torch(cache) for cache in layer_past])
+            tt_layer_present.append(
+                [ttnn.to_torch(cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_deive, dim=1)) for cache in layer_past]
+            )
 
         tt_layer_present = tt_layer_present[0]
 

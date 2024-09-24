@@ -21,11 +21,11 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "seq_len",
     (
-        # 4096, TODO: OOM L1
+        4096,
         # 1024,
         # 512,
         # 128,
-        32,
+        # 32,
     ),
 )
 def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seeds):

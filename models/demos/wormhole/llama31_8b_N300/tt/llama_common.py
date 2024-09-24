@@ -38,51 +38,6 @@ def encode_prompt_llama_instruct(tokenizer, prompt_text, system_prompt_text=None
     return begin_of_text + system_prompt + user_prompt + assistant_reply
 
 
-def generate_cos_sin_cache_ttnn(
-    tt_devices,
-    head_dim,
-    max_position_embeddings=2048,
-    base=500000,
-    dtype=None,
-):
-    inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2).float() / head_dim))
-
-    t = torch.arange(
-        max_position_embeddings,
-        device=inv_freq.device,
-        dtype=inv_freq.dtype,
-    )
-    freqs = torch.einsum("i,j->ij", t, inv_freq)
-    # Different from paper, but it uses a different permutation in order to obtain the same calculation
-    emb = torch.cat((freqs, freqs), dim=-1)
-    emb_cos = emb.cos()[None, None, :, :]
-    emb_sin = emb.sin()[None, None, :, :]
-
-    tt_cos_cached = [
-        ttnn.from_torch(
-            emb_cos,
-            device=tt_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        for tt_device in tt_devices
-    ]
-
-    tt_sin_cached = [
-        ttnn.from_torch(
-            emb_sin,
-            device=tt_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        for tt_device in tt_devices
-    ]
-
-    return tt_cos_cached, tt_sin_cached
-
-
 def apply_scaling(freqs: torch.Tensor):
     # Llama-3.1 specific scaling
     # Values obtained from grid search
@@ -242,38 +197,6 @@ def sample(logits: torch.Tensor, temperature: float, top_p: float):
     return next_token
 
 
-from models.demos.wormhole.llama31_8b.tt.llama_attention import TtLlamaAttention
-
-
-def cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype, iterations):
-    attention_input = ttnn.from_torch(
-        torch.randn(1, 1, 32, 4096),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    tt_model = TtLlamaAttention(
-        [device],
-        state_dict,
-        weight_cache_path=model_args.weight_cache_path(dtype),
-        layer_num=0,
-        dtype=dtype,
-        configuration=model_args,
-        rot_mat=None,
-        start_pos=0,
-    )
-    for iter in range(iterations):
-        pos = iter
-        tt_out = tt_model([attention_input], pos, rot_mats=rot_emb_matrix_list)
-
-    ttnn.deallocate(tt_model.wqkv_list[0])
-    ttnn.deallocate(tt_model.wo_list[0])
-    ttnn.deallocate(tt_model.layer_past_list[0][0])
-    ttnn.deallocate(tt_model.layer_past_list[0][1])
-    ttnn.deallocate(attention_input)
-
-
 def gather_cos_sin(position_ids, cos, sin):
     position_id_expanded = position_ids.unsqueeze(1).expand(-1, cos.shape[-1])
     cos = cos.gather(0, position_id_expanded)
@@ -283,7 +206,7 @@ def gather_cos_sin(position_ids, cos, sin):
     return cos, sin
 
 
-def get_prefill_rot_mat(head_dim, max_seq_len, device, seq_len):
+def get_prefill_rot_mat(head_dim, max_seq_len, device_mesh, seq_len):
     cos, sin = precompute_freqs(head_dim, max_seq_len * 2)
     cos_gathered, sin_gathered = gather_cos_sin(torch.arange(0, seq_len), cos, sin)
     assert cos_gathered.size() == (1, 1, seq_len, head_dim)
@@ -293,13 +216,15 @@ def get_prefill_rot_mat(head_dim, max_seq_len, device, seq_len):
         cos_gathered,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
+        device=device_mesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
     )
     sin_gathereds = ttnn.from_torch(
         sin_gathered,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device,
+        device=device_mesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
     )
 
     rot_mats = [cos_gathereds, sin_gathereds]
