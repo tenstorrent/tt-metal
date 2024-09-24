@@ -16,8 +16,6 @@ namespace py = pybind11;
 void bind_tilize_with_val_padding(py::module &module) {
     auto doc =
         R"doc(
-            tilize_with_val_padding(input_tensor: ttnn.Tensor, output_tensor_shape: ttnn.Shape, pad_value: Union[int, float], *, memory_config: Optional[MemoryConfig] = None, dtype: Optional[DataType] = None, use_multicore: bool = False, queue_id: int = 0) -> ttnn.Tensor
-
             Changes data layout of input tensor to TILE. Pads to specified shape with a user-provided value.
 
             Input tensor must be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
@@ -25,15 +23,19 @@ void bind_tilize_with_val_padding(py::module &module) {
             Output tensor will be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.
 
             Args:
-                * :attr:`input_tensor`: Input Tensor.
-                * :attr:`output_tensor_shape`: Shape of the output tensor.
-                * :attr:`pad_value`: Value to pad the output tensor with.
+                input_tensor (ttnn.Tensor): the input tensor.
+                output_tensor_shape (shape): Shape of the output tensor.
+                pad_value (number): Value to pad the output tensor.
 
             Keyword Args:
-                * :attr:`memory_config`: Memory Config of the output tensor.
-                * :attr:`dtype`: Data type of the output tensor.
-                * :attr:`use_multicore`: Whether to use multicore.
-                * :attr:`queue_id`: command queue id.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                dtype (data type, optional): Data type of the output tensor. Defaults to `None`.
+                use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
+                queue_id (int, optional): command queue id. Defaults to `0`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+
         )doc";
 
     using OperationType = decltype(ttnn::tilize_with_val_padding);

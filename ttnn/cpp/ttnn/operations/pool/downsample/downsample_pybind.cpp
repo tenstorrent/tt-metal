@@ -26,10 +26,21 @@ void py_bind_downsample(py::module& module) {
         Downsamples a given multi-channel 2D (spatial) data.
         The input data is assumed to be of the form [N, H, W, C].
 
+
         Args:
-        * :attr:`input_tensor`: the input tensor
-        * :attr:`downsample_params`: Params list: batch size, conv input H, conv input W, conv stride H, conv stride W
-    )doc";
+            input_tensor (ttnn.Tensor): the input tensor.
+            downsample_params (List): Params list: batch size, conv input H, conv input W, conv stride H, conv stride W.
+
+
+        Keyword Args:
+            dtype (ttnn.DataType, optional): Defaults to `None`.
+
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+
+        )doc";
     detail::bind_downsample(module, doc);
 }
 

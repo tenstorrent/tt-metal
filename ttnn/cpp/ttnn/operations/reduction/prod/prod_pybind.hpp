@@ -17,7 +17,7 @@ namespace py = pybind11;
 template <typename unary_operation_t>
 void bind_reduction_prod_operation(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, all_dimensions: bool, dim: int *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
 
             Computes the prod function along specified ``dim`` or all dimensions on the ``input`` tensor.
 
@@ -25,13 +25,15 @@ void bind_reduction_prod_operation(py::module& module, const unary_operation_t& 
                 {0}(\\mathrm{{input\\_tensor}}_i)
 
             Args:
-                * :attr:`input_tensor`
-                * :attr:`all_dimensions` - If ``all_dimensions`` is set to ``true`` irrespective of given dimension it will prod along all dimensions. Default value = False.
-                * :attr:`dim` - Dimension to perform prod, Default value = 0.
+                input_tensor (ttnn.Tensor): the input tensor.
+                all_dimensions (bool, optional): prod along all dimensions. Defaults to `False`.
+                dim (int, optional): Dimension to perform prod. Defaults to `0`.
 
             Keyword Args:
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
+            Returns:
+                List of ttnn.Tensor: the output tensor.
 
             Example::
 

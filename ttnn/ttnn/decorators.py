@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import pathlib
 import sys
 import time
 import traceback
@@ -74,12 +75,13 @@ def register_pre_operation_hook(hook):
 
     register_pre_operation_hook is a context manager that registers a pre-operation hook. The hook can be used to run custom code before the operation is executed.
 
-    The hook takes in the following arguments:
-    - operation: The operation that is being called
-    - args: The arguments that are passed to the operation
-    - kwargs: The keyword arguments that are passed to the operation
+    Args:
+        operation: The operation that is being called.
+        args: The arguments that are passed to the operation.
+        kwargs: The keyword arguments that are passed to the operation.
 
-    The hook must return None.
+    Returns:
+        `None`: the hook is executed.
 
     """
 
@@ -98,13 +100,14 @@ def register_post_operation_hook(hook):
 
     register_post_operation_hook is a context manager that registers a post-operation hook. The hook can be used to run custom code after the operation is executed.
 
-    The hook takes in the following arguments:
-    - operation: The operation that is being called
-    - args: The arguments that are passed to the operation
-    - kwargs: The keyword arguments that are passed to the operation
-    - output: The output of the operation
+    Args:
+        operation: The operation that is being called.
+        args: The arguments that are passed to the operation.
+        kwargs: The keyword arguments that are passed to the operation.
+        output: The output of the operation.
 
-    The hook must return None.
+    Returns:
+        `None`: the hook is executed.
 
     """
 
@@ -325,7 +328,23 @@ class FastOperation:
     def __call__(self, *function_args, **function_kwargs):
         return self.function(*function_args, **function_kwargs)
 
-    __doc__ = property(lambda self: self.function.__doc__)
+    def __post_init__(self):
+        if self.function.__doc__ is None:
+            return
+
+        # Delete the signature line created by pybind11
+        docstring_lines = self.function.__doc__.split("\n")
+        op_name = self.python_fully_qualified_name.split(".")[-1]
+        if f"{op_name}(" in docstring_lines[0]:
+            docstring_lines.pop(0)
+        self.__doc__ = "\n".join(docstring_lines)
+
+        # # TEMP HACK to read docstring from the file
+        # doc_folder = pathlib.Path(__file__).parent.parent.parent / "ops_docs"
+        # doc_file = doc_folder / f"{self.python_fully_qualified_name}.md"
+        # if doc_file.exists():
+        #     with open(doc_file, "r") as f:
+        #         self.__doc__ = f.read()
 
 
 @dataclasses.dataclass
@@ -536,11 +555,14 @@ class Operation:
                 global_tensor_comparison_records = []
                 global_golden_function_output = []
                 if ttnn.CONFIG.enable_comparison_mode:
-                    output, (
-                        local_tensor_comparison_records,
-                        local_golden_function_output,
-                        global_tensor_comparison_records,
-                        global_golden_function_output,
+                    (
+                        output,
+                        (
+                            local_tensor_comparison_records,
+                            local_golden_function_output,
+                            global_tensor_comparison_records,
+                            global_golden_function_output,
+                        ),
                     ) = output
 
                 if ttnn.CONFIG.enable_logging:
@@ -668,7 +690,14 @@ def dump_operations(csv_file, include_experimental=False):
     df = pd.DataFrame([to_dict(obj) for obj in apis])
     df.sort_values(by=["is_experimental", "is_cpp_operation", "python_fully_qualified_name"], inplace=True)
     df["has_golden_function"] = df["golden_function"].apply(lambda golden_function: golden_function is not None)
-    df = df[["python_fully_qualified_name", "is_cpp_operation", "has_golden_function", "is_experimental"]]
+    df = df[
+        [
+            "python_fully_qualified_name",
+            "is_cpp_operation",
+            "has_golden_function",
+            "is_experimental",
+        ]
+    ]
     df.to_csv(csv_file, index=False)
 
 
@@ -697,7 +726,11 @@ def get_fallback_function(operation):
 
 
 def attach_golden_function(
-    operation, golden_function, *, preprocess_golden_function_inputs=None, postprocess_golden_function_outputs=None
+    operation,
+    golden_function,
+    *,
+    preprocess_golden_function_inputs=None,
+    postprocess_golden_function_outputs=None,
 ):
     operation.golden_function = golden_function
     operation.preprocess_golden_function_inputs = (

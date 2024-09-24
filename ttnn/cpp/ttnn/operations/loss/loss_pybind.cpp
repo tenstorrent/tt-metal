@@ -26,24 +26,27 @@ void bind_loss_type(py::module& m) {
 
 void bind_mse_loss_function(py::module& module) {
     auto doc = fmt::format(
-        R"doc({0}(input_reference: ttnn.Tensor, input_prediction: ttnn.Tensor, *,  reduction: LossReductionMode, memory_config: Optional[ttnn.MemoryConfig] = None)  -> ttnn.Tensor
-
+        R"doc(
             Returns mean squared error loss function for `input_reference` and `input_prediction`
 
             Args:
-                * :attr:`input_reference`
-                * :attr:`input_prediction`
+                input_reference (ttnn.Tensor): the input tensor.
+                input_prediction (ttnn.Tensor): the input tensor.
+
 
             Keyword Args:
-                * :attr:`reduction` : LossReductionMode : NONE (default), MEAN, SUM
-                * :attr:`output_tensor`: the optional output tensor. Default is None. (`output_tensor` currently supported only for reduction=NONE)
-                * :attr:`memory_config`: the memory configuration of the output tensor. Default is input tensor memory config.
-                * :attr:`queue_id`: the command queue id. Default is 0.
+                reduction (bool, optional): Loss Reduction Mode. Defaults to `None`.
+                output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                queue_id (int, optional): command queue id. Defaults to `0`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
 
             Example:
 
-                >>> input_reference = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-                >>> input_prediction = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+                >>> input_reference = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+                >>> input_prediction = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
                 >>> output = ttnn.mse_loss(input_reference, input_prediction, reduction)
         )doc",
         ttnn::mse_loss.base_name());
@@ -75,24 +78,27 @@ void bind_mse_loss_function(py::module& module) {
 
 void bind_mae_loss_function(py::module& module) {
     auto doc = fmt::format(
-        R"doc({0}(input_reference: ttnn.Tensor, input_prediction: ttnn.Tensor, *, reduction: LossReductionMode, memory_config: Optional[ttnn.MemoryConfig] = None)  -> ttnn.Tensor
-
+        R"doc(
             Returns mean absolute error loss function for `input_reference` and `input_prediction`
 
             Args:
-                * :attr:`input_reference`
-                * :attr:`input_prediction`
+                input_reference (ttnn.Tensor): the input tensor.
+                input_prediction (ttnn.Tensor): the input tensor.
+
 
             Keyword Args:
-                * :attr:`reduction` : LossReductionMode : NONE (default), MEAN, SUM
-                * :attr:`output_tensor`: the optional output tensor. Default is None. (`output_tensor` currently supported only for reduction=NONE)
-                * :attr:`memory_config`: the memory configuration of the output tensor. Default is input tensor memory config.
-                * :attr:`queue_id`: the command queue id. Default is 0.
+                reduction (bool, optional): Loss Reduction Mode. Defaults to `None`.
+                output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                queue_id (int, optional): command queue id. Defaults to `0`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
 
             Example:
 
-                >>> input_reference = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-                >>> input_prediction = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+                >>> input_reference = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+                >>> input_prediction = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
                 >>> output = ttnn.l1_loss(input_reference, input_prediction, reduction)
         )doc",
         ttnn::l1_loss.base_name());

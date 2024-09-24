@@ -23,23 +23,31 @@ namespace detail {
 template <typename complex_unary_backward_operation_t>
 void bind_complex_unary_backward(py::module& module, const complex_unary_backward_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-R"doc({0}(grad_tensor: ComplexTensor, input_tensor: ComplexTensor, *, memory_config: ttnn.MemoryConfig) -> std::vector<ComplexTensor>
+        R"doc(
+        {2}
 
-{2}
 
-Args:
-    * :attr:`grad_tensor`: Complex tensor type
-    * :attr:`input_tensor`: Complex tensor type
+        Args:
+            grad_tensor (ComplexTensor): the input tensor.
+            input_tensor (ComplexTensor): the input tensor.
 
-Keyword args:
-    * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
 
-Example:
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
-    >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> output = {1}(grad_tensor, tensor)
-)doc",
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
+
+
+        Example:
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> output = {1}(grad_tensor, tensor)
+
+
+        )doc",
+
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description);
@@ -64,23 +72,31 @@ Example:
 template <typename complex_unary_backward_operation_t>
 void bind_complex_unary_backward_tensor(py::module& module, const complex_unary_backward_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ComplexTensor, *, memory_config: ttnn.MemoryConfig) -> std::vector<ComplexTensor>
+        R"doc(
+        {2}
 
-{2}
 
-Args:
-    * :attr:`grad_tensor`:
-    * :attr:`input_tensor`: Complex tensor type
+        Args:
+            grad_tensor (ttnn.Tensor): the input tensor.
+            input_tensor (ComplexTensor): the input tensor.
 
-Keyword args:
-    * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
 
-Example:
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
-    >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> output = {1}(grad_tensor, tensor)
-)doc",
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
+
+
+        Example:
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> output = {1}(grad_tensor, tensor)
+
+
+        )doc",
+
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description);

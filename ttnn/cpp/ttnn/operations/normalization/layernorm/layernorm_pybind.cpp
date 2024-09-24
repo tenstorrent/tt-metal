@@ -35,9 +35,30 @@ void bind_normalization_layernorm_operation(py::module& module) {
     ttnn::bind_registered_operation(
         module,
         ttnn::layer_norm,
-        R"doc(rms_norm(input_tensor: ttnn.Tensor, epsilon: float = 1e-12, weight: Optional[ttnn.Tensor] = None, bias: Optional[ttnn.Tensor] = None, residual_input_tensor: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, program_config: Optional[ttnn.ProgramConfig] = None) -> ttnn.Tensor
+        R"doc(
             Compute layer_norm over :attr:`input_tensor`.
+
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            epsilon (float): 1e-12.
+            weight (ttnn.Tensor, optional): Defaults to `None`.
+            bias (ttnn.Tensor, optional): Defaults to `None`.
+            residual_input_tensor (ttnn.Tensor, optional): Defaults to `None`.
+            program_config (ttnn.ProgramConfig, optional): Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig)
+
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+
         )doc",
+
         ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::kw_only(),

@@ -17,15 +17,19 @@ void py_bind_concatenate_heads(pybind11::module& module) {
     ttnn::bind_registered_operation(
         module,
         ttnn::transformer::concatenate_heads,
-        R"doc(concatenate_heads(input_tensor: ttnn.Tensor, *, memory_config: Optional[MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
 
             Takes in a tensor of shape ``[batch_size, num_heads, sequence_size, head_size]``, concatenates heads back along the width dimension and returns the tensor of shape ``[batch_size, sequence_size, num_heads * head_size]``
 
             Args:
-                * :attr:`input_tensor`: Input Tensor
+                input_tensor (ttnn.Tensor): the input tensor.
 
             Keyword Args:
-                * :attr:`memory_config`: Memory Config of the output tensor, if None then it gets set to input_tensor.memory_config()
+                memory_config: Memory Config of the output tensor, if `None` then it gets set to input_tensor.memory_config(). Defaults to `None`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+
         )doc",
         ttnn::pybind_arguments_t{
             py::arg("input_tensor"),

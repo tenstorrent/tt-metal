@@ -20,28 +20,32 @@ namespace detail {
 
 void bind_global_avg_pool2d(py::module& module) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
-
+        R"doc(
         Applies {0} to :attr:`input_tensor` by performing a 2D adaptive average pooling over an input signal composed of several input planes. This operation computes the average of all elements in each channel across the entire spatial dimensions.
 
         .. math::
             {0}(\\mathrm{{input\\_tensor}}_i)
 
         Args:
-            * :attr:`input_tensor` (ttnn.Tensor): The input tensor to be pooled. Typically of shape (batch_size, channels, height, width).
+            input_tensor (ttnn.Tensor): the input tensor. Typically of shape (batch_size, channels, height, width).
 
-        Keyword Args:
-            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-            * :attr:`dtype` (Optional[ttnn.DataType]): data type for the output tensor
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`
+
 
         Returns:
-            ttnn.Tensor: The tensor with the averaged values. The output tensor shape is (batch_size, channels, 1, 1).
+            ttnn.Tensor: the output tensor with the averaged values. The output tensor shape is (batch_size, channels, 1, 1).
+
 
         Example:
-
             >>> tensor = ttnn.from_torch(torch.randn((10, 3, 32, 32), dtype=ttnn.bfloat16), device=device)
             >>> output = {1}(tensor)
-    )doc",
+
+
+        )doc",
+
         ttnn::global_avg_pool2d.base_name(),
         ttnn::global_avg_pool2d.python_fully_qualified_name());
 

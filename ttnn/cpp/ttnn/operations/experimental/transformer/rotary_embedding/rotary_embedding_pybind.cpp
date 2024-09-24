@@ -18,19 +18,27 @@ void py_bind_rotary_embedding(pybind11::module& module) {
     ttnn::bind_registered_operation(
         module,
         ttnn::experimental::rotary_embedding,
-        R"doc(rotary_embedding(input_tensor: ttnn.Tensor, cos_cache: ttnn.Tensor, sin_cache: ttnn.Tensor, token_index: int, memory_config: MemoryConfig, compute_kernel_config: Optional[DeviceComputeKernelConfig]) -> ttnn.Tensor
+        R"doc(
+        Applies the rotary embedding to the input_tensor tensor using the cos_cache and sin_cache tensors.
 
-            Applies the rotary embedding to the input_tensor tensor using the cos_cache and sin_cache tensors.
+        When token_idx is passed, this assumes input is transposed to [seq_len, 1, B, head_dim], and seq_len is 1.
 
-            When token_idx is passed, this assumes input is transposed to [seq_len, 1, B, head_dim], and seq_len is 1.
 
-            Args:
-                * :attr:`input_tensor`: Input Tensor
-                * :attr:`cos_cache`: Cosine Cache Tensor
-                * :attr:`sin_cache`: Sine Cache Tensor
-                * :attr:`token_index`: Token Index = None
-                * :attr:`memory_config`: Memory Config of the output tensor = None
-                * :attr:`compute_kernel_config`: Optional[DeviceComputeKernelConfig] = None
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+            cod_cache (ttnn.Tensor): the Cosine Cache tensor.
+            sin_cache (ttnn.Tensor): the Sine Cache tensor.
+            token_index (int, optional): Defaults to `None`.
+
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
         )doc",
         ttnn::pybind_arguments_t {
             py::arg("input_tensor"),

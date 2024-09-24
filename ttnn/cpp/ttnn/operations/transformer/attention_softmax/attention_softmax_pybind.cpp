@@ -17,19 +17,25 @@ void py_bind_attention_softmax(pybind11::module& module) {
     ttnn::bind_registered_operation(
         module,
         ttnn::transformer::attention_softmax,
-        R"doc(attention_softmax(tensor: ttnn.Tensor, *, head_size: Optional[int] = None, attention_mask: Optional[ttnn.Tensor] = None, program_config: Optional[SoftmaxProgramConfig] = SoftmaxDefaultProgramConfig(), causal_mask: bool = False,  memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+        Divides :attr:`tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax.
 
-            Divides :attr:`tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax.
 
-            Args:
-                * :attr:`tensor`: Input Tensor
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
 
-            Keyword Args:
-                * :attr:`head_size`: Number of heads
-                * :attr:`attention_mask`: Attention Mask
-                * :attr:`program_config`: Program Config of the output tensor
-                * :attr:`causal_mask`: the attention mask is causal
-                * :attr:`memory_config`: Memory Config of the output tensor, defaults to input_tensor.memory_config()
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            head_size (int, optional): Number of heads. Defaults to `None`.
+            attention_mask(ttnn.Tensor, optional): Attention Mask. Defaults to `None`.
+            program_config (SoftmaxProgramConfig): Program Config of the output tensor. Defaults to `SoftmaxDefaultProgramConfig()`.
+            causal_mask (bool, optional): the attention mask is causal. Defaults to `false`.
+
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
         )doc",
         ttnn::pybind_arguments_t{
             py::arg("tensor"),
@@ -45,19 +51,25 @@ void py_bind_attention_softmax(pybind11::module& module) {
     ttnn::bind_registered_operation(
         module,
         ttnn::transformer::attention_softmax_,
-        R"doc(attention_softmax_(tensor: ttnn.Tensor, *, head_size: Optional[int] = None, attention_mask: Optional[ttnn.Tensor] = None, program_config: Optional[SoftmaxProgramConfig] = SoftmaxDefaultProgramConfig(), causal_mask: bool = False,  memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+        In-Place divides :attr:`tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax.
 
-            In-Place divides :attr:`tensor` by the square root of :attr:`head_size`, adds :attr:`attention_mask` (optionally) and computes softmax.
 
-            Args:
-                * :attr:`tensor`: Input Tensor
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
 
-            Keyword Args:
-                * :attr:`head_size`: Number of heads
-                * :attr:`attention_mask`: Attention Mask
-                * :attr:`program_config`: Program Config of the output tensor
-                * :attr:`causal_mask`: the attention mask is causal
-                * :attr:`memory_config`: Memory Config of the output tensor, defaults to input_tensor.memory_config()
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            head_size (int, optional): Number of heads. Defaults to `None`.
+            attention_mask(ttnn.Tensor, optional): Attention Mask. Defaults to `None`.
+            program_config (SoftmaxProgramConfig): Program Config of the output tensor. Defaults to `SoftmaxDefaultProgramConfig()`.
+            causal_mask (bool, optional): the attention mask is causal. Defaults to `false`.
+
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
         )doc",
         ttnn::pybind_arguments_t{
             py::arg("tensor"),

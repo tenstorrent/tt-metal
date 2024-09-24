@@ -17,15 +17,26 @@ namespace py = pybind11;
 
 void bind_upsample(py::module& module) {
     const auto doc = R"doc(
- Upsamples a given multi-channel 2D (spatial) data.
- The input data is assumed to be of the form [N, H, W, C].
+        Upsamples a given multi-channel 2D (spatial) data.
+        The input data is assumed to be of the form [N, H, W, C].
 
- The algorithms available for upsampling are 'nearest' for now.
+        The algorithms available for upsampling are 'nearest' for now.
 
- Args:
-     * :attr:`input_tensor`: the input tensor
-     * :attr:`scale_factor`: multiplier for spatial size. Has to match input size if it is a tuple.
-     )doc";
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+            scale_factor (int or tt::tt_metal::Array2D or tt::tt_metal::Array3D or tt::tt_metal::Array4D): multiplier for spatial size. Has to match input size if it is a tuple.
+
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+
+        )doc";
 
     using OperationType = decltype(ttnn::upsample);
     ttnn::bind_registered_operation(
