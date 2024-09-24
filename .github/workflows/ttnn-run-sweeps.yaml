@@ -40,8 +40,12 @@ on:
           - eltwise.binary.div.div_interleaved
           - eltwise.binary.div_no_nan.div_no_nan_interleaved
           - eltwise.binary.logical_or.logical_or_interleaved
+          - eltwise.binary.remainder.remainder_interleaved
+          - eltwise.binary.fmod.fmod_interleaved
           - eltwise.composite.binary.addalpha.addalpha_interleaved
           - eltwise.composite.binary.subalpha.subalpha_interleaved
+          - eltwise.composite.binary.minimum.minimum_interleaved
+          - eltwise.composite.binary.maximum.maximum_interleaved
           - eltwise.ternary.addcmul.addcmul_interleaved
           - eltwise.ternary.addcdiv.addcdiv_interleaved
           - eltwise.ternary.mac.mac_interleaved
