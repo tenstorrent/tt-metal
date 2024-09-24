@@ -86,15 +86,11 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds):
 
         tt_out = tt_model([attention_input], current_pos_tensor, current_pos_attn_tensor, rot_mats=current_rot_mat)
         # multi-device attention module returns replicated output
-        assert isinstance(tt_out, list)
-        tt_out = tt_out[0]
         tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[0]
             .view(1, -1, 4096)
-            .permute(1, 0, 2)[: model_args.max_batch_size, :, :],
-        )[
-            :, :1, :, :
-        ]  # [ batch, seq, hidden_dim]
+            .permute(1, 0, 2)[: model_args.max_batch_size, :, :]
+        )  # [ batch, seq, hidden_dim]
 
         freqs_cis_i = freqs_cis[current_pos, :].unsqueeze(0)
         # positions = torch.tensor([current_pos])
@@ -127,7 +123,7 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds):
             for layer_past in tt_model.layer_past_list:
                 tt_layer_present.append(
                     [
-                        ttnn.to_torch(cache, mesh_composer == ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+                        ttnn.to_torch(cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
                         for cache in layer_past
                     ]
                 )

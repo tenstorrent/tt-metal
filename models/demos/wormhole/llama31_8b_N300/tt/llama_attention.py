@@ -99,7 +99,7 @@ class TtLlamaAttention(nn.Module):
                 dtype=self.dtype,
                 memory_config=self.model_config["ATTN_WEIGHTS_MEMCFG"],
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
-                # cache_file_name=cache_name("wqkv"),
+                cache_file_name=cache_name("wqkv_n300"),
             )
 
             # wo: 4096 x 4096: width-sharded on 12 banks, 4224 over 12 banks.
@@ -124,7 +124,7 @@ class TtLlamaAttention(nn.Module):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,  # TODO: wo dram sharded matmul errors// wo_mem_config,
                 dtype=self.dtype,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
-                # cache_file_name=cache_name("wo"),
+                cache_file_name=cache_name("wo_n300"),
             )
 
             cache_k = torch.zeros(
@@ -145,16 +145,17 @@ class TtLlamaAttention(nn.Module):
             )
             layer_past = [cache_k, cache_v]
             layer_past = [
-                ttnn.from_torch(
+                ttnn.as_tensor(
                     lp,
                     device=self.device_mesh,
                     mesh_mapper=ttnn.ShardTensorToMesh(self.device_mesh, dim=1),
                     layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                     dtype=self.dtype,
+                    cache_file_name=cache_name(f"kvcache_{id}_{lp.shape}_n300"),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
-                for lp in layer_past
+                for id, lp in enumerate(layer_past)
             ]
-            print("SHAPES!", wqkv.shape, wo.shape, layer_past[0].shape, layer_past[1].shape)
             # add to the list
             self.wqkv_list.append(wqkv)
             self.wo_list.append(wo)
@@ -353,8 +354,10 @@ class TtLlamaAttention(nn.Module):
             dense_outputs.append(dense_out)
 
         # All reduce
-        dense_out_gathered = ttnn.all_gather(dense_out, dim=1, num_links=4)
-        dense_out_reduced = ttnn.experimental.fast_reduce_nc(dense_out_gathered, dim=1)
+        dense_out_gathered = ttnn.line_all_gather(dense_out, dim=1, num_links=1)
+        dense_out_reduced = ttnn.experimental.fast_reduce_nc(
+            dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
+        )
         return dense_out_reduced
 
     def forward_prefill(self, xs_11SH, rot_mats, transformation_mats, user_id: int = 0):

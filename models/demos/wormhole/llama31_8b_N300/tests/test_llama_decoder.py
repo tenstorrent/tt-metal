@@ -90,12 +90,10 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds):
         # Run TT model
         tt_out = tt_model(decode_input, current_pos_tensor, current_pos_attn_tensor, rot_mat=current_rot_mat)
         tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[:, :1, :, :]
             .permute(2, 1, 0, 3)
             .squeeze(1)[: model_args.max_batch_size, :, :]
-        )[
-            :, :1, :, :
-        ]  # [seq, batch, hidden_dim]
+        )  # [seq, batch, hidden_dim]
 
         freqs_cis_i = freqs_cis[current_pos, :].unsqueeze(0)
 

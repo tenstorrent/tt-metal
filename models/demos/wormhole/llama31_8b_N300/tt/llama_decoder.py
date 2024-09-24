@@ -4,8 +4,8 @@
 import torch
 import ttnn
 from typing import Optional
-from models.demos.wormhole.llama31_8b.tt.llama_attention import TtLlamaAttention
-from models.demos.wormhole.llama31_8b.tt.llama_mlp import TtLlamaMLP
+from models.demos.wormhole.llama31_8b_N300.tt.llama_attention import TtLlamaAttention
+from models.demos.wormhole.llama31_8b_N300.tt.llama_mlp import TtLlamaMLP
 from models.common.rmsnorm import RMSNorm
 
 
@@ -94,10 +94,6 @@ class TtTransformerBlock(torch.nn.Module):
             user_id,
             mode,
         )
-        # Attention also returns multiple outputs (multi-device support)
-        assert len(r) == 1, "Multiple devices not yet supported"
-        r = r[0]
-        # r = ttnn.reshape(r, (1, 1, 32, 4096))
         h = ttnn.add(x, r, memory_config=skip_mem_cfg)
         r = self.feed_forward.forward(self.ffn_norm(h), mode)
         out = ttnn.add(h, r, memory_config=skip_mem_cfg)

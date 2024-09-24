@@ -30,16 +30,16 @@ class TtModelArgs:
     # Parameters for our use
     max_batch_size = 1
     # max_seq_len = 131072
-    max_seq_len = 8192 * 4
-    kv_seq_len = 8192 * 4
-    sliding_window = 8192 * 4
+    max_seq_len = 8192 * 4 * 4
+    kv_seq_len = 8192 * 4 * 4
+    sliding_window = 8192 * 4 * 4
 
     # Default folder location for weights and cached files
     DEFAULT_CKPT_DIR = os.getenv("LLAMA_CKPT_DIR", "/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct/")
     DEFAULT_TOKENIZER_PATH = os.getenv(
         "LLAMA_TOKENIZER_PATH", "/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct/"
     )
-    DEFAULT_CACHE_PATH = os.getenv("LLAMA_CACHE_PATH", "/proj_sw/user_dev/llama3-data-cache/weight-cache-8b-instruct")
+    DEFAULT_CACHE_PATH = os.getenv("LLAMA_CACHE_PATH", "/proj_sw/user_dev/llama_81_n300_cache_instruct")
 
     OP_KEYS = (
         # Embedding
@@ -332,7 +332,7 @@ class TtModelArgs:
                     compute_with_storage_grid_size=(7, 8),
                     in0_block_w=1,
                     per_core_M=1,
-                    per_core_N=72,  # vocab size = 128k = 4008 tiles. 4008/56cores = 72
+                    per_core_N=36,  # vocab size = 128k = 4008 tiles. 4008/56cores = 72
                     out_subblock_h=1,
                     out_subblock_w=1,
                     fuse_batch=True,
@@ -346,7 +346,7 @@ class TtModelArgs:
                     out_subblock_h=1,
                     out_subblock_w=4,
                     per_core_M=1,
-                    per_core_N=72,  # vocab size = 128k = 4008 tiles. 4008/56cores = 72
+                    per_core_N=36,  # vocab size = 128k = 4008 tiles. 4008/56cores = 72
                     fuse_batch=True,
                     fused_activation=None,
                     mcast_in0=True,
