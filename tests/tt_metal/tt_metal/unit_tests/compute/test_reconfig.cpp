@@ -119,7 +119,7 @@ bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_c
     std::map<string, string> defines;
 
 
-    defines["DST_ACCUM_MODE"] = "1"; // Needed in order for reader kernel to load data from cb2
+    defines["DST_ACCUM_MODE"] = "1"; // Needed always in order for reader kernel to load data from cb2
     defines["EXPLICIT_RECONFIG"] = test_config.explicit_reconfig ? "1" : "0";
     defines["SPLIT_SRC_RECONFIG"] = test_config.split_src_reconfig ? "1" : "0";
     defines["BLOCK_COPY"] = test_config.block_copy ? "1" : "0";

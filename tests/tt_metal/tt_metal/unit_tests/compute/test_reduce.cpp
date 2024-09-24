@@ -291,6 +291,7 @@ void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig
         uint(Ht),
         uint(Wt),
         uint(NC),
+        test_config.at_start,
     };
 
     std::map<string, string> reduce_defines = {
