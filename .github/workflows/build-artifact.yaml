@@ -90,7 +90,7 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e ARCH_NAME=${{ matrix.arch }}
-          run: |
+          run_args: |
             nice -n 19 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }}
             nice -n 19 cmake --build build --target tests
             nice -n 19 cmake --build build --target install
