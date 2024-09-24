@@ -20,12 +20,32 @@ inline void eltwise_unary_configure_addrmod();
 template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE, DstSync Dst = DstSync::SyncFull, bool is_fp32_dest_acc_en = false, bool unpack_to_dest = false>
 inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format) {
 
+        std::uint32_t constexpr num_faces = 4;
+
+        // For 32bit data, each half of DEST can take 16 tiles. Since dest offset is returned as if 16bit data are used, we need to
+        // adjust it to offset in faces for 32bit data.
+        std::uint32_t dest_base_offset_in_faces = get_dest_buffer_base() >> 5;
+        std::uint32_t dst_index_in_faces = dst_index << 2; // Each tile has 4 faces;
+
     if (unpack_to_dest && is_32bit_input(src_format, dst_format)) {
-#if SKIP_UNP == 1 
+#if SKIP_UNP == 1
 #else
         math_unpack_to_dest_math_ready();
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32, true>(dst_index);
         math::math_unpack_to_dest_tile_ready();
+
+        // Due to bug in Blackhole Tensix (more details in budabackend/#2730) when an event with side effect of clearing DEST zero flags
+        // (such as Unpack-to-dest or RISC-to-dest) and a ZEROACC instruction from packer occur in the same cycle,
+        // zero flags clearing is dropped.
+        // To mitigate that, we issue additional zero flag clear instruction immediatelly after unpack tile to dest is done.
+        // RISC-to-dest event is not currently used.
+
+        #pragma GCC unroll 0
+        for (std::uint32_t i = 0; i < num_faces; i++)
+        {
+            // Clears zero flags in DEST for one face.
+            TT_ZEROACC(p_zeroacc::CLR_16, 0, 1 /*clear zero flags*/, ADDR_MOD_3, dest_base_offset_in_faces + dst_index_in_faces + i);
+        }
 #endif
     } else {
 
@@ -61,6 +81,13 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
 
 template <DataCopyType type, BroadcastType bcast_type = BroadcastType::NONE>
 inline void eltwise_unary_configure_addrmod() {
+    addr_mod_t{
+            .srca = {.incr = 0},
+            .srcb = {.incr = 0},
+            .dest = {.incr = 0},
+        }
+            .set(ADDR_MOD_3);
+
     // Use srcA for data movement
     if constexpr (type == A2D) {
         addr_mod_t{
