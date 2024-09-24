@@ -102,6 +102,7 @@ jobs:
         with:
           image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
           options: |
+            --rm
             -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
             -v ${{ github.workspace }}:${{ github.workspace }}
             -v /etc/passwd:/etc/passwd:ro
@@ -109,6 +110,7 @@ jobs:
             -v /etc/bashrc:/etc/bashrc:ro
             -e ARCH_NAME=${{ matrix.arch }}
             -w ${{ github.workspace }}
+
           run: |
             nice -n 19 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }}
             nice -n 19 cmake --build build --target tests
