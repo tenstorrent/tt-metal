@@ -110,7 +110,6 @@ jobs:
             -v /etc/bashrc:/etc/bashrc:ro
             -e ARCH_NAME=${{ matrix.arch }}
             -w ${{ github.workspace }}
-
           run: |
             nice -n 19 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }}
             nice -n 19 cmake --build build --target tests
