@@ -22,16 +22,21 @@ namespace detail {
 template <typename kv_cache_operation_t>
 void bind_fill_cache_for_user_(py::module& module, const kv_cache_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc({0}(cache: ttnn.Tensor, input: ttnn.Tensor, batch_index: int) -> ttnn.Tensor
-
+        R"doc(
         Populates the :attr:`cache` tensor in-place with values sourced from :attr:`input` at :attr:`batch_index`.
 
-        Args:
-            * :attr:`cache` (ttnn.Tensor): The cache tensor to be written to.
-            * :attr:`input` (ttnn.Tensor): The input tensor to be written to the cache.
-            * :attr:`batch_index` (int): The index into the cache tensor.
 
-    )doc",
+        Args:
+            cache (ttnn.Tensor): the cache tensor to be written to.
+            input_tensor (ttnn.Tensor): the input tensor to be written to the cache.
+            batch_index (int): the index into the cache tensor.
+
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+
+        )doc",
         operation.base_name(),
         operation.python_fully_qualified_name());
 
@@ -53,17 +58,22 @@ void bind_fill_cache_for_user_(py::module& module, const kv_cache_operation_t& o
 template <typename kv_cache_operation_t>
 void bind_update_cache_for_token_(py::module& module, const kv_cache_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc({0}(cache: ttnn.Tensor, input: ttnn.Tensor, update_index: int, batch_offset: int) -> ttnn.Tensor
-
+        R"doc(
         Updates the :attr:`cache` tensor in-place with values from :attr:`input` at :attr:`update_index` and :attr:`batch_offset`.
 
-        Args:
-            * :attr:`cache` (ttnn.Tensor): The cache tensor to be written to.
-            * :attr:`token` (ttnn.Tensor): The token tensor to be written to the cache.
-            * :attr:`update_index` (int): The index into the cache tensor.
-            * :attr:`batch_offset` (int): The batch_offset into the cache tensor.
 
-    )doc",
+        Args:
+            cache (ttnn.Tensor): the cache tensor to be written to.
+            token (ttnn.Tensor): the token tensor to be written to the cache.
+            update_index (int): the index into the cache tensor.
+            batch_offset (int): the batch_offset into the cache tensor.
+
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+
+        )doc",
         operation.base_name(),
         operation.python_fully_qualified_name());
 

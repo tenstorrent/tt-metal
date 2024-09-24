@@ -21,7 +21,20 @@ namespace detail {
 template <typename creation_operation_t>
 void bind_full_operation(py::module& module, const creation_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc({0}(shape: ttnn.Shape, fill_value: Union[int, float], dtype: Optional[ttnn.DataType] = None, layout: Optional[ttnn.Layout] = None, device: Optional[ttnn.Device] = None, memory_config: Optional[ttnn.MemoryConfig] = None)doc",
+        R"doc(
+        Creates a tensor of the specified shape and fills it with the specified value.
+
+        Args:
+            shape (ttnn.Shape): The shape of the tensor.
+            fill_value (float): The value to fill the tensor with.
+            dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `None`.
+            layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `None`.
+            device (ttnn.Device, optional): The device on which the tensor will be allocated. Defaults to None.
+            memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to None.
+
+        Returns:
+            ttnn.Tensor: A filled tensor.
+        )doc",
         operation.base_name());
 
     bind_registered_operation(
@@ -73,7 +86,19 @@ void bind_full_operation(py::module& module, const creation_operation_t& operati
 template <typename creation_operation_t>
 void bind_full_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc({0}(shape: ttnn.Shape, dtype: Optional[ttnn.DataType] = None, layout: Optional[ttnn.Layout] = None, device: Optional[ttnn.Device] = None, memory_config: Optional[ttnn.MemoryConfig] = None)doc",
+        R"doc(
+        Creates a tensor with the specified shape and fills it with the value of {0}.
+
+        Args:
+            shape (ttnn.Shape): The shape of the tensor.
+            dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `None`.
+            layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `None`.
+            device (ttnn.Device, optional): The device on which the tensor will be allocated. Defaults to None.
+            memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to None.
+
+        Returns:
+            ttnn.Tensor: A filled tensor.
+        )doc",
         operation.base_name());
 
     bind_registered_operation(
@@ -99,7 +124,20 @@ void bind_full_operation_with_hard_coded_value(py::module& module, const creatio
 template <typename creation_operation_t>
 void bind_full_like_operation(py::module& module, const creation_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc({0}(tensor: ttnn.Tensor, fill_value: Union[int, float], dtype: Optional[ttnn.DataType] = None, layout: Optional[ttnn.Layout] = None, device: Optional[ttnn.Device] = None, memory_config: Optional[ttnn.MemoryConfig] = None)doc",
+        R"doc(
+        Creates a tensor of the same shape as the input tensor and fills it with the specified value.
+
+        Args:
+            tensor (ttnn.Tensor): The tensor to use as a template for the shape of the new tensor.
+            fill_value (float): The value to fill the tensor with.
+            dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `None`.
+            layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `None`.
+            device (ttnn.Device, optional): The device on which the tensor will be allocated. Defaults to None.
+            memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to None.
+
+        Returns:
+            ttnn.Tensor: A filled tensor.
+        )doc",
         operation.base_name());
 
     bind_registered_operation(
@@ -151,7 +189,19 @@ void bind_full_like_operation(py::module& module, const creation_operation_t& op
 template <typename creation_operation_t>
 void bind_full_like_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc({0}(tensor: ttnn.Tensor, dtype: Optional[ttnn.DataType] = None, layout: Optional[ttnn.Layout] = None, device: Optional[ttnn.Device] = None, memory_config: Optional[ttnn.MemoryConfig] = None)doc",
+        R"doc(
+        Creates a tensor of the same shape as the input tensor and fills it with the value of {0}.
+
+        Args:
+            tensor (ttnn.Tensor): The tensor to use as a template for the shape of the new tensor.
+            dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `None`.
+            layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `None`.
+            device (ttnn.Device, optional): The device on which the tensor will be allocated. Defaults to None.
+            memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to None.
+
+        Returns:
+            ttnn.Tensor: A filled tensor.
+        )doc",
         operation.base_name());
 
     bind_registered_operation(
@@ -181,7 +231,25 @@ void bind_full_like_operation_with_hard_coded_value(py::module& module, const cr
 template <typename creation_operation_t>
 void bind_arange_operation(py::module& module, const creation_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc({0}(start: int = 0, end: int, step: int = 1, dtype: ttnn.DataType = ttnn.bfloat16, device: ttnn.Device = None, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG)doc",
+        R"doc(
+        Creates a tensor with values ranging from `start` (inclusive) to `end` (exclusive) with a specified `step` size. The data type, device, and memory configuration of the resulting tensor can be specified.
+
+        Args:
+            start (int, optional): The start of the range. Defaults to 0.
+            end (int): The end of the range (exclusive).
+            step (int, optional): The step size between consecutive values. Defaults to 1.
+            dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `ttnn.bfloat16`.
+            device (ttnn.Device, optional): The device where the tensor will be allocated. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): The memory configuration for the tensor. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
+
+        Returns:
+            ttnn.Tensor: A tensor containing evenly spaced values within the specified range.
+
+        Example:
+            >>> tensor = ttnn.arange(start=0, end=10, step=2, dtype=ttnn.float32)
+            >>> print(tensor)
+            ttnn.Tensor([[[[ 0.00000,  2.00000,  ...,  8.00000,  0.00000]]]], shape=Shape([1, 1, 1, 6]), dtype=DataType::FLOAT32, layout=Layout::ROW_MAJOR)
+        )doc",
         operation.base_name());
 
     bind_registered_operation(
