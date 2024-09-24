@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
 
 enum ProgrammableCoreType {
     TENSIX     = 0,
@@ -13,7 +13,7 @@ enum ProgrammableCoreType {
     COUNT      = 3,
 };
 
-enum class AddressableCoreType : uint8_t {
+enum class AddressableCoreType : std::uint8_t {
     TENSIX    = 0,
     ETH       = 1,
     PCIE      = 2,
