@@ -84,37 +84,16 @@ jobs:
       - name: Update submodules
         run: |
           git submodule update --init --recursive
-      - name: Generate docker tag
-        id: generate-docker-tag
-        uses: ./.github/actions/generate-docker-tag
-        with:
-          image: ${{ inputs.os }}
-      - name: Docker login
-        uses: docker/login-action@v3
-        with:
-          registry: https://ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Pull docker image
-        run: docker pull ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
       - name: Build tt-metal and libs
-        uses: addnab/docker-run-action@v3
+        uses: ./.github/actions/docker-run
         with:
-          image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
-          options: |
-            --rm
-            -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
-            -v ${{ github.workspace }}:${{ github.workspace }}
-            -v /etc/passwd:/etc/passwd:ro
-            -v /etc/shadow:/etc/shadow:ro
-            -v /etc/bashrc:/etc/bashrc:ro
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
             -e ARCH_NAME=${{ matrix.arch }}
-            -w ${{ github.workspace }}
           run: |
             nice -n 19 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }}
             nice -n 19 cmake --build build --target tests
             nice -n 19 cmake --build build --target install
-
       - name: 'Tar files'
         run: tar -cvf ttm_${{ matrix.arch }}.tar build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools runtime
       - name: 'Upload Artifact'
