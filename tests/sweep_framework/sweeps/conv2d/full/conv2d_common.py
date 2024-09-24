@@ -86,8 +86,6 @@ def run(
         pad_w,
         dilation,
     ] = input_specs
-    print("test starts")
-    print(input_specs)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
     conv_weight_shape = [output_channels, input_channels // groups, kernel_height, kernel_width]
     conv_bias_shape = [1, 1, 1, output_channels]
@@ -170,5 +168,4 @@ def run(
 
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
 
-    print("done with test case")
     return [check_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=0.998), e2e_perf]
