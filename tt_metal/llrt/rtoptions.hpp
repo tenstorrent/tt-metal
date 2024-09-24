@@ -113,6 +113,7 @@ class RunTimeOptions {
     bool clear_l1 = false;
 
     bool skip_loading_fw = false;
+    bool skip_reset_cores_on_init = false;
 
     bool riscv_debug_info_enabled = false;
     uint32_t watcher_debug_delay = 0;
@@ -262,6 +263,7 @@ class RunTimeOptions {
     inline void set_clear_l1(bool clear) { clear_l1 = clear; }
 
     inline bool get_skip_loading_fw() { return skip_loading_fw; }
+    inline bool get_skip_reset_cores_on_init() { return skip_reset_cores_on_init; }
 
     // Whether to compile with -g to include DWARF debug info in the binary.
     inline bool get_riscv_debug_info_enabled() { return riscv_debug_info_enabled; }
