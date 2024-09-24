@@ -67,7 +67,7 @@ void py_bind_all_gather(pybind11::module& module) {
             * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
             * :attr:`num_workers` (int): Number of workers to use for the operation.
             * :attr:`num_buffers_per_channel` (int): Number of buffers per channel to use for the operation.
-            * :attr:`topology`: Topology to be used for the operation.
+            * :attr:`topology`: Topology to be used for the operation. Allowable options are Linear and Ring
 
         Example:
 
