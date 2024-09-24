@@ -26,6 +26,7 @@ memory::memory(std::string const &path) : memory() {
     ElfFile elf;
 
     elf.ReadImage(path);
+    elf.MakeExecuteInPlace();
 
     // The ELF file puts the text segment first, but memory wants
     // ordered spans.

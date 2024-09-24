@@ -523,6 +523,8 @@ void JitBuildState::link(const string& log_file, const string& out_dir) const {
         cmd += " -Xlinker \"--just-symbols=" + weakened_elf_name + "\" ";
     }
 
+    // Emit relocations, so we can relocate the resulting binary
+    cmd += "-Wl,--emit-relocs ";
     cmd += "-o " + out_dir + this->target_name_ + ".elf";
     log_debug(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
     if (!tt::utils::run_command(cmd, log_file, false)) {
