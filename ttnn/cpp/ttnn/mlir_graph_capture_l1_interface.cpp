@@ -3,118 +3,16 @@
 #include <cstdint>
 #include <tuple>
 
-#include "host_api.hpp"
-#include "impl/device/device.hpp"
 #include "third_party/json/json.hpp"
-#include "ttnn/graph/graph_operation_queries.hpp"
+#include "ttnn/graph/graph_trace_utils.hpp"
+#include "ttnn/mlir_interface_graph_capture_utils.hpp"
 #include "ttnn/operations/common/l1_interface_common.hpp"
-#include "ttnn/operations/creation.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_l1_interface.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_l1_interface.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/matmul/matmul_l1_interface.hpp"
-#include "ttnn/operations/normalization/softmax/softmax.hpp"
 #include "ttnn/operations/normalization/softmax/softmax_l1_interface.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::mlir_interface::graph_capture {
-
-class ScopedDeviceContext {
-   public:
-    ScopedDeviceContext() : m_device(tt::tt_metal::CreateDevice(0)) {}
-    ~ScopedDeviceContext() { tt::tt_metal::CloseDevice(m_device); }
-
-    tt::tt_metal::Device& get_device() { return *m_device; }
-
-   private:
-    tt::tt_metal::Device* m_device;
-};
-
-static ttnn::Tensor create_tensor(tt::tt_metal::Device& device, const L1InterfaceOperandParams& params) {
-    return ttnn::zeros(
-        std::get<ttnn::types::Shape>(params),
-        std::get<tt::tt_metal::DataType>(params),
-        std::get<tt::tt_metal::Layout>(params),
-        device,
-        std::get<tt::tt_metal::MemoryConfig>(params));
-}
-
-static nlohmann::json get_unary_op_trace(
-    const L1InterfaceOperandParams& input, const L1InterfaceOperandParams& output) {
-    ScopedDeviceContext ctx;
-
-    auto input_tensor = create_tensor(ctx.get_device(), input);
-
-    auto call = [&] {
-        const auto output_tensor = ttnn::relu(input_tensor, std::get<tt::tt_metal::MemoryConfig>(output));
-        return output_tensor;
-    };
-
-    return graph::query_trace(call);
-}
-
-static nlohmann::json get_binary_op_trace(
-    const L1InterfaceOperandParams& input_a,
-    const L1InterfaceOperandParams& input_b,
-    const L1InterfaceOperandParams& output) {
-    ScopedDeviceContext ctx;
-
-    auto input_tensor_a = create_tensor(ctx.get_device(), input_a);
-    auto input_tensor_b = create_tensor(ctx.get_device(), input_b);
-
-    auto call = [&] {
-        const auto output_tensor = ttnn::add(
-            input_tensor_a,
-            input_tensor_b,
-            std::get<tt::tt_metal::DataType>(output),
-            std::get<tt::tt_metal::MemoryConfig>(output));
-        return output_tensor;
-    };
-
-    return graph::query_trace(call);
-}
-
-static nlohmann::json get_softmax_op_trace(
-    const L1InterfaceOperandParams& input, const int dim_arg, const L1InterfaceOperandParams& output) {
-    ScopedDeviceContext ctx;
-
-    auto input_tensor = create_tensor(ctx.get_device(), input);
-
-    auto call = [&] {
-        const auto output_tensor = ttnn::softmax(input_tensor, dim_arg, std::get<tt::tt_metal::MemoryConfig>(output));
-        return output_tensor;
-    };
-
-    return graph::query_trace(call);
-}
-
-static nlohmann::json get_matmul_op_trace(
-    const L1InterfaceOperandParams& input_a,
-    const L1InterfaceOperandParams& input_b,
-    const L1InterfaceOperandParams& output,
-    const ttnn::operations::matmul::MatmulProgramConfig& program_config) {
-    ScopedDeviceContext ctx;
-
-    auto input_tensor_a = create_tensor(ctx.get_device(), input_a);
-    auto input_tensor_b = create_tensor(ctx.get_device(), input_b);
-
-    auto call = [&] {
-        const auto output_tensor = ttnn::matmul(
-            input_tensor_a,
-            input_tensor_b,
-            false /* transpose_a */,
-            false /* transpose_b */,
-            std::get<tt::tt_metal::MemoryConfig>(output),
-            std::get<tt::tt_metal::DataType>(output),
-            program_config);
-        return output_tensor;
-    };
-
-    return graph::query_trace(call);
-}
 
 static std::vector<std::tuple<uint32_t, uint32_t>> get_cb_allocations_from_trace(const nlohmann::json& json_trace) {
     auto graph_circular_buffer_allocations = graph::extract_circular_buffer_allocations_per_core(json_trace);

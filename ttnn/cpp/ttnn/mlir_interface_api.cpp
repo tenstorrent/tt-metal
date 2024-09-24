@@ -1,13 +1,16 @@
 #include "mlir_interface_api.hpp"
 
 #include <cstddef>
+#include <exception>
 #include <memory>
 #include <optional>
 #include <tuple>
 
-#include "tensor/types.hpp"                            // DataType, Lauout, StorageType
+#include "tensor/types.hpp"  // DataType, Lauout, StorageType
+#include "tt_metal/common/logger.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"            // BufferType
 #include "tt_metal/impl/buffers/buffer_constants.hpp"  // TensorMemoryLayout, ShardOrientation
+#include "ttnn/mlir_interface_graph_capture_utils.hpp"
 #include "ttnn/mlir_l1_interface.hpp"
 #include "ttnn/operations/common/l1_interface_common.hpp"
 #include "ttnn/operations/eltwise/binary/binary_constraints.hpp"
@@ -23,6 +26,17 @@
 
 namespace ttnn::mlir_interface {
 
+template <typename T>
+static bool extract_graph_capture_constraints_check(const T& call) {
+    try {
+        call();
+        return true;
+    } catch (const std::exception& ex) {
+        tt::log_info("GRAPH_CAPTURE_TRACE_EXCEPTION {}", ex.what());
+        return false;
+    }
+}
+
 // ============= OP constraints API ==============
 bool does_binary_op_support_input_output_constraints(
     const std::vector<uint32_t>& _shape_a,
@@ -33,7 +47,7 @@ bool does_binary_op_support_input_output_constraints(
     const std::string& _data_type_b,
     const memory_config_tuple& _memory_config_o,
     const std::string& _data_type_o) {
-    auto shape_a = ttnn::vector_wrapper::to_shape(_shape_a);
+    auto shape_a = ttnn::types::Shape(ttnn::vector_wrapper::to_shape(_shape_a));
     auto memory_config_a = ttnn::tuple_wrapper::to_memory_config(_memory_config_a);
     if (!memory_config_a.has_value()) {
         return false;
@@ -42,7 +56,7 @@ bool does_binary_op_support_input_output_constraints(
     if (!data_type_a.has_value()) {
         return false;
     }
-    auto shape_b = ttnn::vector_wrapper::to_shape(_shape_b);
+    auto shape_b = ttnn::types::Shape(ttnn::vector_wrapper::to_shape(_shape_b));
     auto memory_config_b = ttnn::tuple_wrapper::to_memory_config(_memory_config_b);
     if (!memory_config_b.has_value()) {
         return false;
@@ -60,27 +74,36 @@ bool does_binary_op_support_input_output_constraints(
         return false;
     }
 
-    auto builder = EltwiseOpConstraintsFactory::Make(
-        ttnn::Shape(shape_a),
-        memory_config_a.value(),
-        ttnn::Shape(shape_b),
-        memory_config_b.value(),
-        memory_config_o.value(),
-        CoreCoord{8, 8});
-    if (builder) {
-        const auto op_constraints = (*builder)
-                                        .setDataTypeA(data_type_a.value())
-                                        .setDataTypeB(data_type_b.value())
-                                        .setDataTypeO(data_type_o.value())
-                                        .build_constraints();
-        if (op_constraints.size() == 0) {
-            return false;
-        }
+    // TODO: Extract to a separate classes with appropriate factories
+    if (graph_capture::is_graph_capture_mode_enabled()) {
+        return extract_graph_capture_constraints_check([&]() {
+            graph_capture::get_binary_op_trace(
+                shape_a,
+                data_type_a.value(),
+                tt::tt_metal::Layout::TILE,
+                memory_config_a.value(),
+                shape_b,
+                data_type_b.value(),
+                tt::tt_metal::Layout::TILE,
+                memory_config_b.value(),
+                data_type_o.value(),
+                memory_config_o.value());
+        });
     } else {
-        return false;
+        auto builder = EltwiseOpConstraintsFactory::Make(
+            shape_a,
+            memory_config_a.value(),
+            shape_b,
+            memory_config_b.value(),
+            memory_config_o.value(),
+            CoreCoord{8, 8});
+        return builder && !(*builder)
+                               .setDataTypeA(data_type_a.value())
+                               .setDataTypeB(data_type_b.value())
+                               .setDataTypeO(data_type_o.value())
+                               .build_constraints()
+                               .empty();
     }
-
-    return true;
 }
 
 bool does_unary_op_support_input_output_constraints(
@@ -91,7 +114,7 @@ bool does_unary_op_support_input_output_constraints(
     const std::vector<uint32_t>& _input_shape_o,
     const memory_config_tuple& _memory_config_o,
     const std::string& _data_type_o) {
-    auto shape_a = ttnn::vector_wrapper::to_shape(_input_shape_a);
+    auto shape_a = ttnn::types::Shape(ttnn::vector_wrapper::to_shape(_input_shape_a));
     auto memory_config_a = ttnn::tuple_wrapper::to_memory_config(_memory_config_a);
     if (!memory_config_a.has_value()) {
         return false;
@@ -100,7 +123,7 @@ bool does_unary_op_support_input_output_constraints(
     if (!data_type_a.has_value()) {
         return false;
     }
-    auto shape_o = ttnn::vector_wrapper::to_shape(_input_shape_o);
+    auto shape_o = ttnn::types::Shape(ttnn::vector_wrapper::to_shape(_input_shape_o));
     auto memory_config_o = ttnn::tuple_wrapper::to_memory_config(_memory_config_o);
     if (!memory_config_o.has_value()) {
         return false;
@@ -117,26 +140,30 @@ bool does_unary_op_support_input_output_constraints(
 
     // ignoring is_supported_arch for now.
     // because it's GS specific, and we dont care about GS today.
-
-    auto builder = ttnn::operations::unary::UnaryOpConstraintsFactory::Make(
-        op_type.value(),
-        tt::ARCH::WORMHOLE_B0,
-        ttnn::Shape(shape_a),
-        memory_config_a.value(),
-        ttnn::Shape(shape_o),
-        memory_config_o.value(),
-        CoreCoord{8, 8});
-    if (builder) {
-        const auto op_constraints =
-            (*builder).setDataTypeA(data_type_a.value()).setDataTypeO(data_type_o.value()).build_constraints();
-        if (op_constraints.size() == 0) {
-            return false;
-        }
+    if (graph_capture::is_graph_capture_mode_enabled()) {
+        return extract_graph_capture_constraints_check([&]() {
+            graph_capture::get_unary_op_trace(
+                shape_a,
+                data_type_a.value(),
+                tt::tt_metal::Layout::TILE,
+                memory_config_a.value(),
+                memory_config_o.value());
+        });
     } else {
-        return false;
+        auto builder = ttnn::operations::unary::UnaryOpConstraintsFactory::Make(
+            op_type.value(),
+            tt::ARCH::WORMHOLE_B0,
+            shape_a,
+            memory_config_a.value(),
+            shape_o,
+            memory_config_o.value(),
+            CoreCoord{8, 8});
+        return builder && !(*builder)
+                               .setDataTypeA(data_type_a.value())
+                               .setDataTypeO(data_type_o.value())
+                               .build_constraints()
+                               .empty();
     }
-
-    return true;
 }
 
 bool does_softmax_op_support_input_output_constraints(
@@ -146,7 +173,7 @@ bool does_softmax_op_support_input_output_constraints(
     const std::vector<uint32_t>& _input_shape_o,
     const memory_config_tuple& _memory_config_o,
     const std::string& _data_type_o) {
-    auto shape_a = ttnn::vector_wrapper::to_shape(_input_shape_a);
+    auto shape_a = ttnn::types::Shape(ttnn::vector_wrapper::to_shape(_input_shape_a));
     auto memory_config_a = ttnn::tuple_wrapper::to_memory_config(_memory_config_a);
     if (!memory_config_a.has_value()) {
         return false;
@@ -155,7 +182,7 @@ bool does_softmax_op_support_input_output_constraints(
     if (!data_type_a.has_value()) {
         return false;
     }
-    auto shape_o = ttnn::vector_wrapper::to_shape(_input_shape_o);
+    auto shape_o = ttnn::types::Shape(ttnn::vector_wrapper::to_shape(_input_shape_o));
     auto memory_config_o = ttnn::tuple_wrapper::to_memory_config(_memory_config_o);
     if (!memory_config_o.has_value()) {
         return false;
@@ -165,19 +192,25 @@ bool does_softmax_op_support_input_output_constraints(
         return false;
     }
 
-    auto builder = SoftmaxOpConstraintsFactory::Make(
-        ttnn::Shape(shape_a), memory_config_a.value(), ttnn::Shape(shape_o), memory_config_o.value(), CoreCoord{8, 8});
-    if (builder) {
-        const auto op_constraints =
-            (*builder).setDataTypeA(data_type_a.value()).setDataTypeO(data_type_o.value()).build_constraints();
-        if (op_constraints.size() == 0) {
-            return false;
-        }
+    if (graph_capture::is_graph_capture_mode_enabled()) {
+        return extract_graph_capture_constraints_check([&]() {
+            graph_capture::get_softmax_op_trace(
+                shape_a,
+                data_type_a.value(),
+                tt::tt_metal::Layout::TILE,
+                memory_config_a.value(),
+                -1 /* dim_arg */,
+                memory_config_o.value());
+        });
     } else {
-        return false;
+        auto builder = SoftmaxOpConstraintsFactory::Make(
+            shape_a, memory_config_a.value(), shape_o, memory_config_o.value(), CoreCoord{8, 8});
+        return builder && !(*builder)
+                               .setDataTypeA(data_type_a.value())
+                               .setDataTypeO(data_type_o.value())
+                               .build_constraints()
+                               .empty();
     }
-
-    return true;
 }
 
 bool does_matmul_multicore_reuse_multicast_support_input_output_constraints(
@@ -192,7 +225,7 @@ bool does_matmul_multicore_reuse_multicast_support_input_output_constraints(
     const matmul_multicore_reuse_config_tuple _matmul_config,
     const bool transpose_mcast,
     const bool fuse_batch) {
-    auto shape_a = ttnn::vector_wrapper::to_shape(_shape_a);
+    auto shape_a = ttnn::types::Shape(ttnn::vector_wrapper::to_shape(_shape_a));
     auto memory_config_a = ttnn::tuple_wrapper::to_memory_config(_memory_config_a);
     if (!memory_config_a.has_value()) {
         return false;
@@ -201,7 +234,7 @@ bool does_matmul_multicore_reuse_multicast_support_input_output_constraints(
     if (!data_type_a.has_value()) {
         return false;
     }
-    auto shape_b = ttnn::vector_wrapper::to_shape(_shape_b);
+    auto shape_b = ttnn::types::Shape(ttnn::vector_wrapper::to_shape(_shape_b));
     auto memory_config_b = ttnn::tuple_wrapper::to_memory_config(_memory_config_b);
     if (!memory_config_b.has_value()) {
         return false;
@@ -222,28 +255,37 @@ bool does_matmul_multicore_reuse_multicast_support_input_output_constraints(
     auto matmul_config =
         ttnn::tuple_wrapper::to_multicast_matmul_program_config(_matmul_config, transpose_mcast, fuse_batch);
 
-    auto builder = MatmulOpConstraintsFactory::Make(
-        ttnn::Shape(shape_a),
-        memory_config_a.value(),
-        ttnn::Shape(shape_b),
-        memory_config_b.value(),
-        memory_config_o.value(),
-        matmul_config.value(),
-        CoreCoord{8, 8});
-    if (builder) {
-        const auto op_constraints = (*builder)
-                                        .setDataTypeA(data_type_a.value())
-                                        .setDataTypeB(data_type_b.value())
-                                        .setDataTypeO(data_type_o.value())
-                                        .build_constraints();
-        if (op_constraints.size() == 0) {
-            return false;
-        }
+    if (graph_capture::is_graph_capture_mode_enabled()) {
+        return extract_graph_capture_constraints_check([&]() {
+            graph_capture::get_matmul_op_trace(
+                shape_a,
+                data_type_a.value(),
+                tt::tt_metal::Layout::TILE,
+                memory_config_a.value(),
+                shape_b,
+                data_type_b.value(),
+                tt::tt_metal::Layout::TILE,
+                memory_config_b.value(),
+                data_type_o.value(),
+                memory_config_o.value(),
+                matmul_config.value());
+        });
     } else {
-        return false;
+        auto builder = MatmulOpConstraintsFactory::Make(
+            shape_a,
+            memory_config_a.value(),
+            shape_b,
+            memory_config_b.value(),
+            memory_config_o.value(),
+            matmul_config.value(),
+            CoreCoord{8, 8});
+        return builder && !(*builder)
+                               .setDataTypeA(data_type_a.value())
+                               .setDataTypeB(data_type_b.value())
+                               .setDataTypeO(data_type_o.value())
+                               .build_constraints()
+                               .empty();
     }
-
-    return true;
 }
 
 bool does_matmul_multicore_reuse_multicast_1d_op_support_input_output_constraints(
@@ -258,7 +300,7 @@ bool does_matmul_multicore_reuse_multicast_1d_op_support_input_output_constraint
     const matmul_multicore_reuse_config_tuple _matmul_config,
     const bool fuse_batch,
     const bool mcast_in0) {
-    auto shape_a = ttnn::vector_wrapper::to_shape(_shape_a);
+    auto shape_a = ttnn::types::Shape(ttnn::vector_wrapper::to_shape(_shape_a));
     auto memory_config_a = ttnn::tuple_wrapper::to_memory_config(_memory_config_a);
     if (!memory_config_a.has_value()) {
         return false;
@@ -267,7 +309,7 @@ bool does_matmul_multicore_reuse_multicast_1d_op_support_input_output_constraint
     if (!data_type_a.has_value()) {
         return false;
     }
-    auto shape_b = ttnn::vector_wrapper::to_shape(_shape_b);
+    auto shape_b = ttnn::types::Shape(ttnn::vector_wrapper::to_shape(_shape_b));
     auto memory_config_b = ttnn::tuple_wrapper::to_memory_config(_memory_config_b);
     if (!memory_config_b.has_value()) {
         return false;
@@ -288,28 +330,37 @@ bool does_matmul_multicore_reuse_multicast_1d_op_support_input_output_constraint
     auto matmul_config =
         ttnn::tuple_wrapper::to_multicast_1d_matmul_program_config(_matmul_config, fuse_batch, mcast_in0);
 
-    auto builder = MatmulOpConstraintsFactory::Make(
-        ttnn::Shape(shape_a),
-        memory_config_a.value(),
-        ttnn::Shape(shape_b),
-        memory_config_b.value(),
-        memory_config_o.value(),
-        matmul_config.value(),
-        CoreCoord{8, 8});
-    if (builder) {
-        const auto op_constraints = (*builder)
-                                        .setDataTypeA(data_type_a.value())
-                                        .setDataTypeB(data_type_b.value())
-                                        .setDataTypeO(data_type_o.value())
-                                        .build_constraints();
-        if (op_constraints.size() == 0) {
-            return false;
-        }
+    if (graph_capture::is_graph_capture_mode_enabled()) {
+        return extract_graph_capture_constraints_check([&]() {
+            graph_capture::get_matmul_op_trace(
+                shape_a,
+                data_type_a.value(),
+                tt::tt_metal::Layout::TILE,
+                memory_config_a.value(),
+                shape_b,
+                data_type_b.value(),
+                tt::tt_metal::Layout::TILE,
+                memory_config_b.value(),
+                data_type_o.value(),
+                memory_config_o.value(),
+                matmul_config.value());
+        });
     } else {
-        return false;
+        auto builder = MatmulOpConstraintsFactory::Make(
+            shape_a,
+            memory_config_a.value(),
+            shape_b,
+            memory_config_b.value(),
+            memory_config_o.value(),
+            matmul_config.value(),
+            CoreCoord{8, 8});
+        return builder && !(*builder)
+                               .setDataTypeA(data_type_a.value())
+                               .setDataTypeB(data_type_b.value())
+                               .setDataTypeO(data_type_o.value())
+                               .build_constraints()
+                               .empty();
     }
-
-    return true;
 }
 
 // ============= L1 interface API ==============

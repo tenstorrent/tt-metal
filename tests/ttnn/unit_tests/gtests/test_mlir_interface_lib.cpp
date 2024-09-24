@@ -58,6 +58,7 @@ TEST(MLIR_INTERFACE_API, binary_op) {
 TEST(MLIR_INTERFACE_API, binary_op_batch_broadcast) {
     std::vector<uint32_t> shape_a = {2, 1, 32, 32};
     std::vector<uint32_t> shape_b = {1, 1, 32, 32};
+    std::vector<uint32_t> shape_b_invalid = {5, 1, 32, 32};
     ttnn::mlir_interface::memory_config_tuple memory_config = {"interleaved", "dram", std::nullopt};
     std::string data_type = "bf16";
     std::string layout = "tile";
@@ -81,7 +82,7 @@ TEST(MLIR_INTERFACE_API, binary_op_batch_broadcast) {
             layout));
 
     EXPECT_FALSE(ttnn::mlir_interface::does_binary_op_support_input_output_constraints(
-        shape_b, memory_config, data_type, shape_a, memory_config, data_type, memory_config, data_type));
+        shape_a, memory_config, data_type, shape_b_invalid, memory_config, data_type, memory_config, data_type));
 }
 
 TEST(MLIR_INTERFACE_API, binary_op_width_sharded) {

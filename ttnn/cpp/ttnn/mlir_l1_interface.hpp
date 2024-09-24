@@ -13,8 +13,6 @@ class MatmulOpL1Usage;
 
 namespace ttnn::mlir_interface {
 
-bool is_graph_capture_mode_enabled();
-
 class OpL1UsageFactory {
    public:
     virtual ~OpL1UsageFactory() = default;

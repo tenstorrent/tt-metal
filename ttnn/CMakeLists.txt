@@ -458,6 +458,7 @@ set(MLIR_INTERFACE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/mlir_interface_api.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/mlir_l1_interface.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/mlir_graph_capture_l1_interface.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/mlir_interface_graph_capture_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/types_wrapper.cpp
 
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/common/op_constraints.cpp

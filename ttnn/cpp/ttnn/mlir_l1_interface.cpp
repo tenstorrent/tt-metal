@@ -2,8 +2,8 @@
 
 #include <memory>
 
-#include "common/env_lib.hpp"
 #include "ttnn/mlir_graph_capture_l1_interface.hpp"
+#include "ttnn/mlir_interface_graph_capture_utils.hpp"
 #include "ttnn/operations/eltwise/binary/binary_l1_interface.hpp"
 #include "ttnn/operations/eltwise/unary/unary_l1_interface.hpp"
 #include "ttnn/operations/matmul/matmul_l1_interface.hpp"
@@ -11,14 +11,8 @@
 
 namespace ttnn::mlir_interface {
 
-bool is_graph_capture_mode_enabled() {
-    static const bool graph_capture_enabled = tt::parse_env("TTNN_MLIR_INTERFACE_USE_GRAPH_CAPTURE", false);
-
-    return graph_capture_enabled;
-}
-
 std::unique_ptr<OpL1UsageFactory> OpL1UsageAbstractFactory::Make() {
-    if (is_graph_capture_mode_enabled()) {
+    if (graph_capture::is_graph_capture_mode_enabled()) {
         return std::make_unique<GraphCaptureOpL1UsageFactory>();
     } else {
         return std::make_unique<AnalyticalOpL1UsageFactory>();
