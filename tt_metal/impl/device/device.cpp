@@ -465,7 +465,9 @@ void Device::reset_cores() {
             try {
                 llrt::internal_::wait_until_cores_done(id_and_cores.first, RUN_MSG_GO, id_and_cores.second, timeout_ms);
             } catch (std::runtime_error &e) {
-                TT_THROW("Device {} init: failed to reset cores! Try resetting the board.", this->id());
+                log_warning(
+                    "Detected dispatch kernels still running but failed to complete an early exit. This may happen "
+                    "from time to time following a reset, continuing to FW intialization...");
             }
         }
     }
@@ -602,7 +604,12 @@ void Device::initialize_and_launch_firmware() {
     // Wait until fw init is done, ensures the next launch msg doesn't get
     // written while fw is still in init
     log_debug("Waiting for firmware init complete");
-    llrt::internal_::wait_until_cores_done(this->id(), RUN_MSG_INIT, not_done_cores);
+    const int timeout_ms = 10000; // 10 seconds for now
+    try {
+        llrt::internal_::wait_until_cores_done(this->id(), RUN_MSG_INIT, not_done_cores, timeout_ms);
+    } catch (std::runtime_error &e) {
+        TT_THROW("Device {} init: failed to initialize FW! Try resetting the board.", this->id());
+    }
     log_debug("Firmware init complete");
 }
 
