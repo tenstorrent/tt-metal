@@ -80,7 +80,7 @@ runs:
           ${{ inputs.device }}
           -w ${{ github.workspace }}
         run: |
-          if [ ${{ inputs.install_wheel }} ]; then
+          if [ ${{ inputs.install_wheel }} = "true" ]; then
             WHEEL_FILENAME=$(ls -1 *.whl)
             pip3 install $WHEEL_FILENAME
           fi
