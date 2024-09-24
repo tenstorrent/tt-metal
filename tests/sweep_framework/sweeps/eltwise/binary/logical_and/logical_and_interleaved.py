@@ -25,9 +25,7 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16)
-        + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 16)
-        + gen_shapes([32, 32], [256, 256], [32, 32], 16),
+        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 32),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_layout": [ttnn.TILE_LAYOUT],
@@ -62,7 +60,7 @@ def run(
     torch_input_tensor_b = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
     )(input_shape)
-    torch_output_tensor = torch_input_tensor_a.logical_xor_(torch_input_tensor_b)
+    torch_output_tensor = torch_input_tensor_a.logical_and_(torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -79,7 +77,7 @@ def run(
         memory_config=input_b_memory_config,
     )
     start_time = start_measuring_time()
-    ttnn.logical_xor_(input_tensor_a, input_tensor_b)
+    ttnn.logical_and_(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(input_tensor_a)
     e2e_perf = stop_measuring_time(start_time)
 
