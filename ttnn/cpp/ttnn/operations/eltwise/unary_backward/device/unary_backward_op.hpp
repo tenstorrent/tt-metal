@@ -13,7 +13,6 @@
 namespace ttnn::operations::unary_backward {
 
 enum class UnaryBackwardOpType {
-    DIV_BW,
     ADD_BW,
     EQ_BW,
     GT_BW,
