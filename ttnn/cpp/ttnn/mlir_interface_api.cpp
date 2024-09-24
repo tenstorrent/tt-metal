@@ -42,9 +42,11 @@ bool does_binary_op_support_input_output_constraints(
     const std::vector<uint32_t>& _shape_a,
     const memory_config_tuple& _memory_config_a,
     const std::string& _data_type_a,
+    const std::string& _layout_a,
     const std::vector<uint32_t>& _shape_b,
     const memory_config_tuple& _memory_config_b,
     const std::string& _data_type_b,
+    const std::string& _layout_b,
     const memory_config_tuple& _memory_config_o,
     const std::string& _data_type_o) {
     auto shape_a = ttnn::types::Shape(ttnn::vector_wrapper::to_shape(_shape_a));
@@ -56,6 +58,10 @@ bool does_binary_op_support_input_output_constraints(
     if (!data_type_a.has_value()) {
         return false;
     }
+    auto layout_a = ttnn::str_wrapper::to_layout(_layout_a);
+    if (!layout_a.has_value()) {
+        return false;
+    }
     auto shape_b = ttnn::types::Shape(ttnn::vector_wrapper::to_shape(_shape_b));
     auto memory_config_b = ttnn::tuple_wrapper::to_memory_config(_memory_config_b);
     if (!memory_config_b.has_value()) {
@@ -63,6 +69,10 @@ bool does_binary_op_support_input_output_constraints(
     }
     auto data_type_b = ttnn::str_wrapper::to_data_type(_data_type_b);
     if (!data_type_b.has_value()) {
+        return false;
+    }
+    auto layout_b = ttnn::str_wrapper::to_layout(_layout_b);
+    if (!layout_b.has_value()) {
         return false;
     }
     auto memory_config_o = ttnn::tuple_wrapper::to_memory_config(_memory_config_o);
@@ -80,11 +90,11 @@ bool does_binary_op_support_input_output_constraints(
             graph_capture::get_binary_op_trace(
                 shape_a,
                 data_type_a.value(),
-                tt::tt_metal::Layout::TILE,
+                layout_a.value(),
                 memory_config_a.value(),
                 shape_b,
                 data_type_b.value(),
-                tt::tt_metal::Layout::TILE,
+                layout_b.value(),
                 memory_config_b.value(),
                 data_type_o.value(),
                 memory_config_o.value());
@@ -111,6 +121,7 @@ bool does_unary_op_support_input_output_constraints(
     const std::vector<uint32_t>& _input_shape_a,
     const memory_config_tuple& _memory_config_a,
     const std::string& _data_type_a,
+    const std::string& _layout_a,
     const std::vector<uint32_t>& _input_shape_o,
     const memory_config_tuple& _memory_config_o,
     const std::string& _data_type_o) {
@@ -121,6 +132,10 @@ bool does_unary_op_support_input_output_constraints(
     }
     auto data_type_a = ttnn::str_wrapper::to_data_type(_data_type_a);
     if (!data_type_a.has_value()) {
+        return false;
+    }
+    auto layout_a = ttnn::str_wrapper::to_layout(_layout_a);
+    if (!layout_a.has_value()) {
         return false;
     }
     auto shape_o = ttnn::types::Shape(ttnn::vector_wrapper::to_shape(_input_shape_o));
@@ -145,7 +160,7 @@ bool does_unary_op_support_input_output_constraints(
             graph_capture::get_unary_op_trace(
                 shape_a,
                 data_type_a.value(),
-                tt::tt_metal::Layout::TILE,
+                layout_a.value(),
                 memory_config_a.value(),
                 memory_config_o.value());
         });
@@ -170,6 +185,7 @@ bool does_softmax_op_support_input_output_constraints(
     const std::vector<uint32_t>& _input_shape_a,
     const memory_config_tuple& _memory_config_a,
     const std::string& _data_type_a,
+    const std::string& _layout_a,
     const std::vector<uint32_t>& _input_shape_o,
     const memory_config_tuple& _memory_config_o,
     const std::string& _data_type_o) {
@@ -180,6 +196,10 @@ bool does_softmax_op_support_input_output_constraints(
     }
     auto data_type_a = ttnn::str_wrapper::to_data_type(_data_type_a);
     if (!data_type_a.has_value()) {
+        return false;
+    }
+    auto layout_a = ttnn::str_wrapper::to_layout(_layout_a);
+    if (!layout_a.has_value()) {
         return false;
     }
     auto shape_o = ttnn::types::Shape(ttnn::vector_wrapper::to_shape(_input_shape_o));
@@ -197,7 +217,7 @@ bool does_softmax_op_support_input_output_constraints(
             graph_capture::get_softmax_op_trace(
                 shape_a,
                 data_type_a.value(),
-                tt::tt_metal::Layout::TILE,
+                layout_a.value(),
                 memory_config_a.value(),
                 -1 /* dim_arg */,
                 memory_config_o.value());
@@ -217,9 +237,11 @@ bool does_matmul_multicore_reuse_multicast_support_input_output_constraints(
     const std::vector<uint32_t>& _shape_a,
     const memory_config_tuple& _memory_config_a,
     const std::string& _data_type_a,
+    const std::string& _layout_a,
     const std::vector<uint32_t>& _shape_b,
     const memory_config_tuple& _memory_config_b,
     const std::string& _data_type_b,
+    const std::string& _layout_b,
     const memory_config_tuple& _memory_config_o,
     const std::string& _data_type_o,
     const matmul_multicore_reuse_config_tuple _matmul_config,
@@ -234,6 +256,10 @@ bool does_matmul_multicore_reuse_multicast_support_input_output_constraints(
     if (!data_type_a.has_value()) {
         return false;
     }
+    auto layout_a = ttnn::str_wrapper::to_layout(_layout_a);
+    if (!layout_a.has_value()) {
+        return false;
+    }
     auto shape_b = ttnn::types::Shape(ttnn::vector_wrapper::to_shape(_shape_b));
     auto memory_config_b = ttnn::tuple_wrapper::to_memory_config(_memory_config_b);
     if (!memory_config_b.has_value()) {
@@ -241,6 +267,10 @@ bool does_matmul_multicore_reuse_multicast_support_input_output_constraints(
     }
     auto data_type_b = ttnn::str_wrapper::to_data_type(_data_type_b);
     if (!data_type_b.has_value()) {
+        return false;
+    }
+    auto layout_b = ttnn::str_wrapper::to_layout(_layout_b);
+    if (!layout_b.has_value()) {
         return false;
     }
     auto memory_config_o = ttnn::tuple_wrapper::to_memory_config(_memory_config_o);
@@ -260,11 +290,11 @@ bool does_matmul_multicore_reuse_multicast_support_input_output_constraints(
             graph_capture::get_matmul_op_trace(
                 shape_a,
                 data_type_a.value(),
-                tt::tt_metal::Layout::TILE,
+                layout_a.value(),
                 memory_config_a.value(),
                 shape_b,
                 data_type_b.value(),
-                tt::tt_metal::Layout::TILE,
+                layout_b.value(),
                 memory_config_b.value(),
                 data_type_o.value(),
                 memory_config_o.value(),
@@ -292,9 +322,11 @@ bool does_matmul_multicore_reuse_multicast_1d_op_support_input_output_constraint
     const std::vector<uint32_t>& _shape_a,
     const memory_config_tuple& _memory_config_a,
     const std::string& _data_type_a,
+    const std::string& _layout_a,
     const std::vector<uint32_t>& _shape_b,
     const memory_config_tuple& _memory_config_b,
     const std::string& _data_type_b,
+    const std::string& _layout_b,
     const memory_config_tuple& _memory_config_o,
     const std::string& _data_type_o,
     const matmul_multicore_reuse_config_tuple _matmul_config,
@@ -306,7 +338,11 @@ bool does_matmul_multicore_reuse_multicast_1d_op_support_input_output_constraint
         return false;
     }
     auto data_type_a = ttnn::str_wrapper::to_data_type(_data_type_a);
-    if (!data_type_a.has_value()) {
+if (!data_type_a.has_value()) {
+        return false;
+    }
+    auto layout_a = ttnn::str_wrapper::to_layout(_layout_a);
+    if (!layout_a.has_value()) {
         return false;
     }
     auto shape_b = ttnn::types::Shape(ttnn::vector_wrapper::to_shape(_shape_b));
@@ -316,6 +352,10 @@ bool does_matmul_multicore_reuse_multicast_1d_op_support_input_output_constraint
     }
     auto data_type_b = ttnn::str_wrapper::to_data_type(_data_type_b);
     if (!data_type_b.has_value()) {
+        return false;
+    }
+    auto layout_b = ttnn::str_wrapper::to_layout(_layout_b);
+    if (!layout_b.has_value()) {
         return false;
     }
     auto memory_config_o = ttnn::tuple_wrapper::to_memory_config(_memory_config_o);
@@ -335,11 +375,11 @@ bool does_matmul_multicore_reuse_multicast_1d_op_support_input_output_constraint
             graph_capture::get_matmul_op_trace(
                 shape_a,
                 data_type_a.value(),
-                tt::tt_metal::Layout::TILE,
+                layout_a.value(),
                 memory_config_a.value(),
                 shape_b,
                 data_type_b.value(),
-                tt::tt_metal::Layout::TILE,
+                layout_b.value(),
                 memory_config_b.value(),
                 data_type_o.value(),
                 memory_config_o.value(),
