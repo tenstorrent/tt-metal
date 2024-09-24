@@ -10,11 +10,11 @@ from models.common.rmsnorm import RMSNorm
 
 
 class TtTransformerBlock(torch.nn.Module):
-    def __init__(self, args, device, dtype, state_dict, layer_num, weight_cache_path, rot_mat, start_pos):
+    def __init__(self, args, mesh_device, dtype, state_dict, layer_num, weight_cache_path, rot_mat, start_pos):
         super().__init__()
 
         self.state_dict = state_dict
-        self.device = device
+        self.mesh_device = mesh_device
         self.num_devices = 1
         self.start_pos = start_pos
 
@@ -35,7 +35,7 @@ class TtTransformerBlock(torch.nn.Module):
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices
 
         self.attention = TtLlamaAttention(
-            devices=[device],
+            devices=[mesh_device],
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
@@ -45,7 +45,7 @@ class TtTransformerBlock(torch.nn.Module):
             start_pos=start_pos,
         )
         self.feed_forward = TtLlamaMLP(
-            device=device,
+            mesh_device=self.mesh_device,
             args=args,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
@@ -54,7 +54,7 @@ class TtTransformerBlock(torch.nn.Module):
             model_config=self.model_config,
         )
         self.attention_norm = RMSNorm(
-            device=device,
+            device=self.mesh_device,
             dim=args.dim,
             state_dict=state_dict,
             layer_num=layer_num,
@@ -63,7 +63,7 @@ class TtTransformerBlock(torch.nn.Module):
             weight_key="attention_norm",
         )
         self.ffn_norm = RMSNorm(
-            device=device,
+            device=self.mesh_device,
             dim=args.dim,
             state_dict=state_dict,
             layer_num=layer_num,
@@ -86,7 +86,9 @@ class TtTransformerBlock(torch.nn.Module):
             skip_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
         else:
             skip_mem_cfg = self.model_config["DEC_SKIP_OUTPUT_MEMCFG"]
+        print("x shape: ", x.shape)
         attn_norm = self.attention_norm(x)
+        print("attn_norm shape: ", attn_norm.shape)
         # Attention module expects a list of inputs, attn masks (multi-device support)
         r = self.attention.forward(
             [attn_norm],
@@ -100,8 +102,11 @@ class TtTransformerBlock(torch.nn.Module):
         # Attention also returns multiple outputs (multi-device support)
         assert len(r) == 1, "Multiple devices not yet supported"
         r = r[0]
+        print("r shape: ", r.shape)
         # r = ttnn.reshape(r, (1, 1, 32, 4096))
         h = ttnn.add(x, r, memory_config=skip_mem_cfg)
+        print("h shape: ", h.shape)
         r = self.feed_forward.forward(self.ffn_norm(h))
+        print("r shape: ", r.shape)
         out = ttnn.add(h, r, memory_config=skip_mem_cfg)
         return out

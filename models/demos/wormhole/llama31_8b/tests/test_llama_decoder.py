@@ -22,10 +22,10 @@ from models.utility_functions import skip_for_grayskull
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
-def test_llama_decoder_inference(device, use_program_cache, reset_seeds):
+def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(device)
+    model_args = TtModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -37,17 +37,17 @@ def test_llama_decoder_inference(device, use_program_cache, reset_seeds):
     generation_length = 10
     all_tests_pass = True
 
-    # pre-compute the rotational embedding matrix and send to device
+    # pre-compute the rotational embedding matrix and send to mesh_device
     current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
-        device,
+        mesh_device,
         start_pos=0,
     )
 
     # Initialize TT model
     tt_model = TtTransformerBlock(
         args=model_args,
-        device=device,
+        mesh_device=mesh_device,
         dtype=dtype,
         state_dict=state_dict,
         layer_num=0,
@@ -76,10 +76,12 @@ def test_llama_decoder_inference(device, use_program_cache, reset_seeds):
             current_pos,
             model_args.dim,
             model_args.sliding_window,
-            tt_model.device,
+            tt_model.mesh_device,
         )
 
         # Run TT model
+        print("decode_input shape: ", decode_input.shape)
+        print("current_rot_mat shape: ", current_rot_mat.shape)
         tt_out = tt_model(decode_input, pos, rot_mat=current_rot_mat)
         tt_output_torch = (
             ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[: model_args.max_batch_size, :, :]
