@@ -179,6 +179,8 @@ void py_module(py::module& module) {
           dimensions that are all of size 1 and the second input has batch dimensions
           that are not all of size 1.
 
+        - Note: Dimensions of size 0 are not supported.
+
         - Note: In general, the number of dimensions between the two inputs should
           match. There may be cases where they don't. In that case, if the inputs
           are not valid based on the above criteria, the error messages may
@@ -256,7 +258,7 @@ void py_module(py::module& module) {
             >>> output = tensor1 @ tensor2 # alternative to ttnn.matmul(tensor1, tensor2)
             >>> print(output.shape)
             [10, 64, 128]
-            >>> # batched matrix x broadcasted tensor - first input has batch dimensions not of size 1
+            >>> # batched matrix x broadcasted extended matrix - first input has batch dimensions not of size 1
             >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
             >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((1, 1, 32, 128), dtype=torch.bfloat16)), device)
             >>> output = tensor1 @ tensor2
