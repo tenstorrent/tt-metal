@@ -69,8 +69,8 @@ jobs:
       - name: Tag Docker main image as current image
         if: steps.changed-files-specific.outputs.any_changed != 'true'
         run: |
-          docker pull ghcr.io/${{ github.repository }}/${{ env.TT_METAL_DOCKER_IMAGE }}:latest
-          docker tag ghcr.io/${{ github.repository }}/${{ env.TT_METAL_DOCKER_IMAGE }}:latest ${{ env.TT_METAL_DOCKER_IMAGE_TAG}}
+          docker pull ghcr.io/${{ github.repository }}/tt-metalium/${{ env.TT_METAL_DOCKER_IMAGE }}:latest
+          docker tag ghcr.io/${{ github.repository }}/tt-metalium/${{ env.TT_METAL_DOCKER_IMAGE }}:latest ${{ env.TT_METAL_DOCKER_IMAGE_TAG}}
       - name: Push Docker image to GitHub Container Registry
         run: |
           docker push ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
