@@ -12,7 +12,6 @@ on:
           - ALL SWEEPS (Nightly)
           - add
           - line_all_gather
-          - logical_and_
           - eltwise.unary.relu.relu_interleaved
           - eltwise.unary.gelu.gelu_interleaved
           - eltwise.unary.cos.cos_interleaved
@@ -40,6 +39,8 @@ on:
           - eltwise.binary.div.div_interleaved
           - eltwise.binary.div_no_nan.div_no_nan_interleaved
           - eltwise.binary.logical_or.logical_or_interleaved
+          - eltwise.binary.logical_xor.logical_or_interleaved
+          - eltwise.binary.logical_and.logical_or_interleaved
           - eltwise.binary.remainder.remainder_interleaved
           - eltwise.binary.fmod.fmod_interleaved
           - eltwise.composite.binary.addalpha.addalpha_interleaved
