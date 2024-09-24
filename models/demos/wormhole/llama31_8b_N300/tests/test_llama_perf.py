@@ -7,15 +7,15 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.demos.wormhole.llama31_8b.tt.llama_common import (
+from models.demos.wormhole.llama31_8b_N300.tt.llama_common import (
     prepare_inputs_ttnn,
     sample,
     HostEmbedding,
     get_single_rot_mat,
 )
-from models.demos.wormhole.llama31_8b.tt.llama_model import TtTransformer
-from models.demos.wormhole.llama31_8b.tt.llama_embedding import TtLlamaEmbedding
-from models.demos.wormhole.llama31_8b.tt.model_config import TtModelArgs
+from models.demos.wormhole.llama31_8b_N300.tt.llama_model import TtTransformer
+from models.demos.wormhole.llama31_8b_N300.tt.llama_embedding import TtLlamaEmbedding
+from models.demos.wormhole.llama31_8b_N300.tt.model_config import TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 
 from models.perf.perf_utils import prep_perf_report
@@ -37,14 +37,14 @@ if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs
     ),
 )
 def test_llama_model_perf(
-    device, kv_cache_len, expected_compile_time, expected_inference_time, use_program_cache, reset_seeds
+    mesh_device, kv_cache_len, expected_compile_time, expected_inference_time, use_program_cache, reset_seeds
 ):
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(device)
+    model_args = TtModelArgs(mesh_device.get_devices()[0])
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
-    model_args.n_layers = 32
+    model_args.n_layers = 32  # Full model
     # Clear global profiler state before starting measurements
     profiler.clear()
 
@@ -76,7 +76,7 @@ def test_llama_model_perf(
     # Load TTNN model
     tt_model = TtTransformer(
         args=model_args,
-        device=device,
+        device_mesh=mesh_device,
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
@@ -84,7 +84,7 @@ def test_llama_model_perf(
     )
     # Load TTNN embedding module
     tt_embd = TtLlamaEmbedding(
-        device=device,
+        device_mesh=mesh_device,
         args=model_args,
         weight_cache_path=model_args.weight_cache_path(dtype),
         state_dict=state_dict,
@@ -99,8 +99,9 @@ def test_llama_model_perf(
     profiler.print()
     compile_and_iter_time = profiler.get("model_run_for_inference_0")
 
-    ttnn.DumpDeviceProfiler(device)
-    ttnn.synchronize_device(device)
+    ttnn.DumpDeviceProfiler(mesh_device.get_devices()[0])
+    ttnn.synchronize_device(mesh_device.get_devices()[0])
+    ttnn.synchronize_device(mesh_device.get_devices()[1])
 
     if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
         signpost("Model perf run")
@@ -114,7 +115,7 @@ def test_llama_model_perf(
     comment = f"kv_cache_len={kv_cache_len}_num_layers={model_args.n_layers}"
 
     prep_perf_report(
-        model_name=f"Llama_31_8B_{comment}",
+        model_name=f"Llama_31_8B_N300_{comment}",
         batch_size=model_args.max_batch_size,
         inference_and_compile_time=compile_and_iter_time,
         inference_time=iter_time,
@@ -127,11 +128,11 @@ def test_llama_model_perf(
 def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos, generation_length):
     seqlen = 1  # Generating one token per user at a time
     batch = tt_model.args.max_batch_size
-
+    mesh_device = tt_model.device_mesh
     # pre-compute the rotational embedding matrix and send to device
     current_rot_mat, rot_matrix = get_single_rot_mat(
         tt_model.args.head_dim,
-        tt_model.device,
+        tt_model.device_mesh,
         start_pos=0,
     )
 
@@ -145,12 +146,20 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
         decode_input = prepare_inputs_ttnn(
             tt_decode_input,
             tt_model.args.dim,
-            tt_model.device,
+            tt_model.device_mesh,
         )
 
-        current_pos_tensor = ttnn.from_torch(torch.tensor([current_pos] * batch), device=device, dtype=ttnn.int32)
+        current_pos_tensor = ttnn.from_torch(
+            torch.tensor([current_pos] * batch),
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            dtype=ttnn.int32,
+        )
         current_pos_attn_tensor = ttnn.from_torch(
-            torch.tensor([current_pos] * batch * 8), device=device, dtype=ttnn.int32
+            torch.tensor([current_pos] * batch * 8),
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            dtype=ttnn.int32,
         )
 
         # Run TT model
@@ -160,7 +169,11 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
         # Convert ttnn tensor to torch tensor
         profiler.start(f"result_wait_for_inference_{i}")
         tt_out = ttnn.untilize(tt_out, use_multicore=True)
-        tt_output_torch = ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
+        tt_output_torch = (
+            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+            .permute(2, 1, 0, 3)
+            .squeeze(1)
+        )  # [seq, batch, hidden_dim]
 
         profiler.end(f"model_run_for_inference_{i}")
         profiler.end(f"result_wait_for_inference_{i}")
