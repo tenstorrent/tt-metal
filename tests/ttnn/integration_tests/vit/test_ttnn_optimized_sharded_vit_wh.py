@@ -382,7 +382,7 @@ def test_vit_encoder(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
     config = transformers.ViTConfig.from_pretrained(model_name)
-    config.num_hidden_layers = 1
+    config.num_hidden_layers = 12
     model = transformers.ViTForImageClassification.from_pretrained(
         "google/vit-base-patch16-224", config=config
     ).vit.encoder
@@ -430,7 +430,7 @@ def test_vit_encoder(device, model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output, 0.9999)
 
 
-@pytest.mark.skipif(is_grayskull() or is_blackhole(), reason="Unsupported on BH, and different version than BH")
+@pytest.mark.skipif(is_grayskull() or is_blackhole(), reason="Unsupported on BH, and different version than GS")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("image_size", [224])
