@@ -144,6 +144,7 @@ models/demos/grayskull @uaydonat @eyonland
 models/demos/**/*resnet* @mywoodstock @shwetankTT @tt-aho
 models/experimental/functional_unet @esmalTT @uaydonat @mywoodstock
 models/perf/ @uaydonat @tt-rkim
+models/perf/perf_report.py @yieldthought @uaydonat @tt-rkim
 models/perf/benchmarking_utils.py @skhorasganiTT @tt-rkim
 
 # docs
