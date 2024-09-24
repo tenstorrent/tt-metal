@@ -566,6 +566,25 @@ struct ExecuteUnaryBackwardFill {
         const Tensor &input_tensor_arg,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
+
+    static std::vector<std::optional<Tensor>> invoke(
+        uint8_t queue_id,
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt,
+        std::optional<Tensor> other_grad = std::nullopt);
+
+    static std::vector<std::optional<Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt,
+        std::optional<Tensor> other_grad = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardProd {

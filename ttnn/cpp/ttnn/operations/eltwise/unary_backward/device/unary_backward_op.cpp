@@ -452,6 +452,44 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardFill::invoke(const Tensor
     return ExecuteUnaryBackwardFill::invoke(DefaultQueueId, grad, input, output_mem_config, input_grad);
 }
 
+//   name: fill.Tensor(Tensor self, Tensor value) -> Tensor
+//   self: zeros_like(grad)
+//   value: grad.sum()
+//   result: at::fill(self_t, value_t)
+std::vector<std::optional<Tensor>> ExecuteUnaryBackwardFill::invoke(
+    uint8_t queue_id,
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& other,
+    const std::vector<bool>& are_required_outputs,
+    const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+
+    std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
+
+    if (are_required_outputs.at(0)) {
+        result[0] = input_grad.has_value() ? ttnn::zeros_like(grad, std::nullopt, std::nullopt, std::nullopt, std::nullopt, input_grad) : ttnn::zeros_like(grad);
+    }
+    if (are_required_outputs.at(1)) {
+        if(!other_grad.has_value()){
+            other_grad = ttnn::zeros_like(grad);
+        }
+        Tensor val = grad;
+        // Reduce op - Sum gives incorrect results.
+        // In Wormhole N300 - works for non-decimal inputs
+        val = ttnn::sum(grad);
+        ttnn::add(queue_id, ttnn::zeros_like(grad), val, std::nullopt, output_mem_config, other_grad);
+        result[1] = other_grad;
+    }
+    return result;
+}
+
+std::vector<std::optional<Tensor>> ExecuteUnaryBackwardFill::invoke(const Tensor& grad, const Tensor& input, const Tensor& other, const std::vector<bool>& are_required_outputs, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad, std::optional<Tensor> other_grad) {
+    return ExecuteUnaryBackwardFill::invoke(DefaultQueueId, grad, input, other, are_required_outputs, output_mem_config, input_grad, other_grad);
+}
+
+
 std::vector<Tensor> ExecuteUnaryBackwardHardsigmoid::invoke(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_a = ttnn::where(
