@@ -2202,6 +2202,10 @@ CoreCoord Device::physical_core_from_logical_core(const CoreCoord &logical_coord
     return soc_desc.get_physical_core_from_logical_core(logical_coord, core_type);
 }
 
+CoreCoord Device::physical_core_from_logical_core(const CoreDescriptor &logical_core) const {
+    return physical_core_from_logical_core(logical_core.coord, logical_core.type);
+}
+
 CoreType Device::core_type_from_physical_core(const CoreCoord &physical_coord) const {
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
     if (soc_desc.physical_cores.find(physical_coord) == soc_desc.physical_cores.end())
