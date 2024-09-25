@@ -49,15 +49,17 @@ struct HexNameToMemVectorCache {
     std::mutex mutex_;
 };
 
-ll_api::memory get_risc_binary(std::string path) {
+ll_api::memory get_risc_binary(std::string const &path) {
 
+  // FIXME: There is a race and dangling object problem here if
+  // multiple threads concurrently load the same path.
+  
     if (HexNameToMemVectorCache::inst().exists(path)) {
         return HexNameToMemVectorCache::inst().get(path);
     }
-
-    std::ifstream hex_istream(path);
-    ll_api::memory mem(hex_istream);
-
+    
+    ll_api::memory mem(path);
+  
     // add this path to binary cache
     HexNameToMemVectorCache::inst().add(path, mem);
 
