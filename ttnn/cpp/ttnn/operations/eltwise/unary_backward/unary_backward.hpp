@@ -72,14 +72,22 @@ struct ExecuteUnaryBackwardWoFloat {
 
 };
 
-#define DEFINE_UNARY_BACKWARD_OPERATION_WITH_2_DEFAULT_FLOATS(op_name) \
-struct ExecuteUnaryBackward##op_name { \
-    static std::vector<Tensor> invoke( \
-         const Tensor &grad_tensor_arg, \
-        const Tensor &input_tensor_arg, \
-        float parameter_a, \
-        float parameter_b, \
-        const std::optional<MemoryConfig> &memory_config = std::nullopt); \
+struct ExecuteUnaryBackwardSoftplus {
+    static std::vector<Tensor> invoke(
+         const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float parameter_a,
+        float parameter_b,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardHardtanh {
+    static std::vector<Tensor> invoke(
+         const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float parameter_a,
+        float parameter_b,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
 #define DEFINE_UNARY_BACKWARD_OPERATION_WITH_1_DEFAULT_FLOAT(op_name) \
@@ -300,9 +308,6 @@ struct ExecuteUnaryBackwardGelu{
         std::optional<Tensor> input_grad = std::nullopt);
 
 };
-
-DEFINE_UNARY_BACKWARD_OPERATION_WITH_2_DEFAULT_FLOATS(Softplus)
-DEFINE_UNARY_BACKWARD_OPERATION_WITH_2_DEFAULT_FLOATS(Hardtanh)
 
 DEFINE_UNARY_BACKWARD_OPERATION_WITH_1_DEFAULT_FLOAT(Hardshrink)
 DEFINE_UNARY_BACKWARD_OPERATION_WITH_1_DEFAULT_FLOAT(Softshrink)
