@@ -31,15 +31,13 @@ static_assert(
     "unsigned long can't cover whole range of words");
 
 
-memory::memory() : data_(0), link_spans_(0) {
+memory::memory() {
     data_.reserve(initial_data_space_);
     link_spans_.reserve(initial_span_space_);
 }
 
-memory::memory(std::istream& is) : data_(0), link_spans_(0) {
-    data_.reserve(initial_data_space_);
-    link_spans_.reserve(initial_span_space_);
-    fill_from_discontiguous_hex(is);
+memory::memory(std::string const &path) : memory() {
+  fill_from_discontiguous_hex(path);
 }
 
 bool memory::operator==(const memory& other) const {
@@ -48,9 +46,11 @@ bool memory::operator==(const memory& other) const {
         link_spans_ == other.link_spans_;
 }
 
-void memory::fill_from_discontiguous_hex(std::istream& is) {
+void memory::fill_from_discontiguous_hex(std::string const &path) {
+    std::ifstream is(path);
+
     // Intended to start empty
-    assert(data_.size() == 0);
+    assert(data_.empty());
     bool first = true;
     address_t last_addr = 0;
     // hex files run low address to high address

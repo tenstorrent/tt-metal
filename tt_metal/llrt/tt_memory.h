@@ -38,8 +38,9 @@ class memory {
 
  public:
   memory();
-  memory(std::istream& is);
+  memory(std::string const &path);
 
+ public:
   const std::vector<word_t>& data() const { return this->data_; }
 
   // memory& operator=(memory &&src);
@@ -49,9 +50,11 @@ class memory {
 
   size_t num_spans() const { return link_spans_.size(); }
 
+private:
   // Read from file
-  void fill_from_discontiguous_hex(std::istream& is);
+  void fill_from_discontiguous_hex(std::string const &path);
 
+public:
   // Process spans in arg mem to fill data in *this (eg, from device)
   void fill_from_mem_template(const memory& mem_template, const std::function<void (std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback);
 
