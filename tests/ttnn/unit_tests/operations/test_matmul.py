@@ -1173,6 +1173,7 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
 
 
+@run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "in0_dtype, in1_dtype, num_activation_cores, num_compute_cores",
     [
