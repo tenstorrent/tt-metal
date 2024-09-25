@@ -11,6 +11,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <unordered_set>
 #include <vector>
 
@@ -24,33 +25,25 @@ namespace llrt {
 
 static inline const char *get_core_type_name(CoreType ct) {
     switch (ct) {
-        case CoreType::ARC:
-            return "ARC";
-        case CoreType::DRAM:
-            return "DRAM";
-        case CoreType::ETH:
-            return "ethernet";
-        case CoreType::PCIE:
-            return "PCIE";
-        case CoreType::WORKER:
-            return "worker";
-        case CoreType::HARVESTED:
-            return "harvested";
-        case CoreType::ROUTER_ONLY:
-            return "router_only";
-        default:
-            return "UNKNOWN";
+        case CoreType::ARC: return "ARC";
+        case CoreType::DRAM: return "DRAM";
+        case CoreType::ETH: return "ethernet";
+        case CoreType::PCIE: return "PCIE";
+        case CoreType::WORKER: return "worker";
+        case CoreType::HARVESTED: return "harvested";
+        case CoreType::ROUTER_ONLY: return "router_only";
+        default: return "UNKNOWN";
     }
 }
 
 // TODO: This should come from the HAL
 enum DebugHartFlags : unsigned int {
-    RISCV_NC  = 1,
+    RISCV_NC = 1,
     RISCV_TR0 = 2,
     RISCV_TR1 = 4,
     RISCV_TR2 = 8,
-    RISCV_BR  = 16,
-    RISCV_ER  = 32
+    RISCV_BR = 16,
+    RISCV_ER = 32
 };
 
 // Enumerates the debug features that can be enabled at runtime. These features allow for
@@ -90,7 +83,11 @@ struct TargetSelection {
 };
 
 class RunTimeOptions {
+    bool is_root_dir_env_var_set = false;
     std::string root_dir;
+
+    bool is_kernel_dir_env_var_set = false;
+    std::string kernel_dir;
 
     bool build_map_enabled = false;
 
@@ -129,7 +126,11 @@ class RunTimeOptions {
    public:
     RunTimeOptions();
 
+    inline bool is_root_dir_specified() const { return this->is_root_dir_env_var_set; }
     const std::string &get_root_dir();
+
+    inline bool is_kernel_dir_specified() const { return this->is_kernel_dir_env_var_set; }
+    const std::string &get_kernel_dir() const;
 
     inline bool get_build_map_enabled() { return build_map_enabled; }
 
@@ -292,6 +293,9 @@ class RunTimeOptions {
     bool watcher_feature_disabled(const std::string &name) {
         return watcher_disabled_features.find(name) != watcher_disabled_features.end();
     }
+
+    // Helper function to generate a message string when an environment variable has not been set
+    std::string generate_env_var_not_set_message(const std::string &env_var) const;
 };
 
 extern RunTimeOptions OptionsG;

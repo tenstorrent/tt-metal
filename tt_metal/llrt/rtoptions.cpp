@@ -6,8 +6,9 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <string>
+
 #include <cstring>
+#include <string>
 
 #include "impl/debug/dprint_server.hpp"
 #include "tools/profiler/profiler_state.hpp"
@@ -26,12 +27,10 @@ const char *RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
     "DISABLE_L1_DATA_CACHE",
 };
 
-const char *RunTimeDebugClassNames[RunTimeDebugClassCount] = {
-    "N/A",
-    "worker",
-    "dispatch",
-    "all"
-};
+const char *RunTimeDebugClassNames[RunTimeDebugClassCount] = {"N/A", "worker", "dispatch", "all"};
+
+static const char *TT_METAL_HOME_ENV_VAR = "TT_METAL_HOME";
+static const char *TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
 
 // Note: global initialization order is non-deterministic
 // This is ok so long as this gets initialized before decisions are based on
@@ -39,8 +38,16 @@ const char *RunTimeDebugClassNames[RunTimeDebugClassCount] = {
 RunTimeOptions OptionsG;
 
 RunTimeOptions::RunTimeOptions() {
-    if (const char *root_dir_ptr = std::getenv("TT_METAL_HOME")) {
-        root_dir = std::string(root_dir_ptr) + "/";
+    const char *root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
+    if (root_dir_str != nullptr) {
+        this->is_root_dir_env_var_set = true;
+        this->root_dir = std::string(root_dir_str) + "/";
+    }
+
+    const char *kernel_dir_str = std::getenv(TT_METAL_KERNEL_PATH_ENV_VAR);
+    if (kernel_dir_str != nullptr) {
+        this->is_kernel_dir_env_var_set = true;
+        this->kernel_dir = std::string(kernel_dir_str) + "/";
     }
 
     build_map_enabled = (getenv("TT_METAL_KERNEL_MAP") != nullptr);
@@ -96,7 +103,7 @@ RunTimeOptions::RunTimeOptions() {
     if (num_cqs != nullptr) {
         try {
             set_num_hw_cqs(std::stoi(num_cqs));
-        } catch (const std::invalid_argument& ia) {
+        } catch (const std::invalid_argument &ia) {
             TT_THROW("Invalid TT_METAL_GTEST_NUM_HW_CQS: {}", num_cqs);
         }
     }
@@ -116,11 +123,19 @@ RunTimeOptions::RunTimeOptions() {
 }
 
 const std::string &RunTimeOptions::get_root_dir() {
-    if (root_dir == "") {
-        TT_THROW("Env var TT_METAL_HOME is not set.");
+    if (!this->is_root_dir_specified()) {
+        TT_THROW("Env var {} is not set.", TT_METAL_HOME_ENV_VAR);
     }
 
     return root_dir;
+}
+
+const std::string &RunTimeOptions::get_kernel_dir() const {
+    if (!this->is_kernel_dir_specified()) {
+        TT_THROW("Env var {} is not set.", TT_METAL_KERNEL_PATH_ENV_VAR);
+    }
+
+    return this->kernel_dir;
 }
 
 void RunTimeOptions::ParseWatcherEnv() {
