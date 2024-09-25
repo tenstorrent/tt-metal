@@ -36,8 +36,7 @@ ll_api::memory get_risc_binary(std::string const &path) {
   if (inserted) {
     // We're the first with PATH. Create and insert.
     lock.unlock();
-    std::ifstream hex_istream(path);
-    auto *ptr = new ll_api::memory(hex_istream);
+    auto *ptr = new ll_api::memory(path);
     lock.lock();
     // maps have iterator stability, so SLOT is still valid.
     slot->second = decltype(slot->second)(ptr);
