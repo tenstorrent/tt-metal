@@ -12,10 +12,21 @@ ExampleMultipleReturnDeviceOperation::program_factory_t ExampleMultipleReturnDev
 }
 
 void ExampleMultipleReturnDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+        TT_FATAL(attributes.return_output1 || attributes.return_output2,
+        "At least one output must be returned. return_output1 = {}, return_output2 = {} ",
+        attributes.return_output1,
+        attributes.return_output2);
+
+}
 
 void ExampleMultipleReturnDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+        TT_FATAL(attributes.return_output1 || attributes.return_output2,
+        "At least one output must be returned. return_output1 = {}, return_output2 = {} ",
+        attributes.return_output1,
+        attributes.return_output2);
+}
 
 ExampleMultipleReturnDeviceOperation::shape_return_value_t ExampleMultipleReturnDeviceOperation::compute_output_shapes(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
@@ -28,6 +39,9 @@ ExampleMultipleReturnDeviceOperation::tensor_return_value_t ExampleMultipleRetur
 
     auto output1_shape = output1_shape_opt.value();
     auto output2_shape = output2_shape_opt.value();
+
+    auto return_output1 = operation_attributes.return_output1;
+    auto return_output2 = operation_attributes.return_output2;
 
     const auto& input_tensor = tensor_args.input_tensor;
     auto output1 = create_device_tensor(
@@ -42,14 +56,20 @@ ExampleMultipleReturnDeviceOperation::tensor_return_value_t ExampleMultipleRetur
         input_tensor.tensor_attributes->layout,
         input_tensor.device());
 
-    return {output1, output2};
+
+    std::vector<std::optional<Tensor>> ret(2);
+
+    if (return_output1) ret[0] = output1;
+    if (return_output2) ret[1] = output2;
+
+    return ret;
 }
 
 
 std::tuple<ExampleMultipleReturnDeviceOperation::operation_attributes_t, ExampleMultipleReturnDeviceOperation::tensor_args_t>
-ExampleMultipleReturnDeviceOperation::invoke(const Tensor& input_tensor) {
+ExampleMultipleReturnDeviceOperation::invoke(const Tensor& input_tensor, bool return_output1, bool return_output2) {
     return {
-        operation_attributes_t{true, 42},
+        operation_attributes_t{true, 42, return_output1, return_output2},
         tensor_args_t{input_tensor}
     };
 }

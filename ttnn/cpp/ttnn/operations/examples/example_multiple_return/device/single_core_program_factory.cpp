@@ -15,18 +15,18 @@ ExampleMultipleReturnDeviceOperation::SingleCore::cached_program_t ExampleMultip
 
     const auto& input_tensor = tensor_args.input_tensor;
 
-    auto output_tensor1 = tensor_return_value.at(0).value();
-    auto output_tensor2 = tensor_return_value.at(1).value();
+    auto output_tensor1 = tensor_return_value.at(0);
+    auto output_tensor2 = tensor_return_value.at(1);
 
     auto src_buffer = input_tensor.buffer();
-    auto dst_buffer1 = output_tensor1.buffer();
-    auto dst_buffer2 = output_tensor2.buffer();
 
     tt::tt_metal::Program program{};
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_tensor1.get_dtype());
+
+    auto output_dtype = output_tensor1.has_value() ? output_tensor1.value().get_dtype() : output_tensor2.value().get_dtype();
+    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_dtype);
     uint32_t single_tile_size_output = tt::tt_metal::detail::TileSize(cb_data_format_output);
 
     uint32_t num_tiles = input_tensor.volume() / tt::constants::TILE_HW;
@@ -56,8 +56,9 @@ ExampleMultipleReturnDeviceOperation::SingleCore::cached_program_t ExampleMultip
 
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram};
-    bool dst_is_dram1 = dst_buffer1->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram2 = dst_buffer2->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+
+    bool dst_is_dram1 = output_tensor1.has_value() ? (output_tensor1.value().buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0) : 0;
+    bool dst_is_dram2 = output_tensor2.has_value() ? (output_tensor2.value().buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0) : 0;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram1, (std::uint32_t)dst_is_dram2};
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -117,8 +118,10 @@ ExampleMultipleReturnDeviceOperation::SingleCore::cached_program_t ExampleMultip
         tt::tt_metal::SetRuntimeArgs(
             program, unary_reader_kernel_id, core, {src_buffer->address(), num_tiles_per_core, num_tiles_written});
 
+        auto dst_buffer1_address = output_tensor1.has_value() ? output_tensor1.value().buffer()->address() : 0;
+        auto dst_buffer2_address = output_tensor2.has_value() ? output_tensor2.value().buffer()->address() : 0;
         tt::tt_metal::SetRuntimeArgs(
-            program, unary_writer_kernel_id, core, {dst_buffer1->address(), dst_buffer2->address(), num_tiles_per_core, num_tiles_written});
+            program, unary_writer_kernel_id, core, {dst_buffer1_address, dst_buffer2_address, num_tiles_per_core, num_tiles_written});
         num_tiles_written += num_tiles_per_core;
     }
 
@@ -137,11 +140,12 @@ void ExampleMultipleReturnDeviceOperation::SingleCore::override_runtime_argument
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
 
     const auto& input_tensor = tensor_args.input_tensor;
-    auto output_tensor1 = tensor_return_value.at(0).value();
-    auto output_tensor2 = tensor_return_value.at(0);
+    auto output_tensor1 = tensor_return_value.at(0);
+    auto output_tensor2 = tensor_return_value.at(1);
 
     auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensor1.buffer();
+    auto dst_buffer1 = output_tensor1.has_value() ? output_tensor1.value().buffer() : 0;
+    auto dst_buffer2 = output_tensor2.has_value() ? output_tensor2.value().buffer() : 0;
 
     {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, CoreCoord{0, 0});
@@ -150,9 +154,11 @@ void ExampleMultipleReturnDeviceOperation::SingleCore::override_runtime_argument
 
     {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, CoreCoord{0, 0});
-        runtime_args[0] = dst_buffer->address();
+        if (output_tensor1.has_value()) {
+            runtime_args[0] = dst_buffer1->address();
+        }
         if (output_tensor2.has_value()) {
-            // do something
+            runtime_args[1] = dst_buffer2->address();
         }
     }
 }
