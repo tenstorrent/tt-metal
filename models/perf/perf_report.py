@@ -166,7 +166,7 @@ def evaluate_fidelity(input_0_datatype, input_1_datatype, output_datatype, math_
             )
         else:
             assert False, f"Unknown math fidelity: {math_fidelity}"
-    elif in1_bits == 7 and out_bits >= 7:
+    elif in1_bits >= 7 and out_bits >= 7:
         if math_fidelity == "HiFi4":
             return "too_high", "HiFi2 is sufficient for BFP8 multiplication and has 2x the throughput of HiFi4"
         elif math_fidelity == "HiFi2":
@@ -175,7 +175,7 @@ def evaluate_fidelity(input_0_datatype, input_1_datatype, output_datatype, math_
             return "too_low", "HiFi2 is recommended for accuracy; LoFi discards the lowest 2 bits of the weights"
         else:
             assert False, f"Unknown math fidelity: {math_fidelity}"
-    elif in1_bits == 7 and out_bits == 3:
+    elif in1_bits >= 7 and out_bits == 3:
         if math_fidelity == "HiFi4":
             return "too_high", "HiFi2 is sufficient for BFP8 multiplication and has 2x the throughput of HiFi4"
         elif math_fidelity == "HiFi2":
@@ -241,6 +241,15 @@ def analyze_matmul(row):
 
     core_count = row["CORE COUNT"]
     math_fidelity = row["MATH FIDELITY"]
+
+    # Check for DRAM-sharded program config
+    attributes = row["ATTRIBUTES"] if pd.notna(row["ATTRIBUTES"]) else ""
+    is_dram_sharded = "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig" in attributes
+
+    # Override core count for DRAM-sharded matmuls
+    if is_dram_sharded:
+        core_count = 12
+
     peak_flops_value = tflops_per_core(math_fidelity) * 1e12 * core_count
 
     M, K, N = int(row["INPUT_0_Y"]), int(row["INPUT_0_X"]), int(row["INPUT_1_X"])
@@ -253,10 +262,6 @@ def analyze_matmul(row):
 
     dram_percentage = (dram_speed_gb_s / 288) * 100 if dram_speed_gb_s is not None else None
     flops_percentage = (flops / peak_flops_value) * 100
-
-    # Check for DRAM-sharded program config
-    attributes = row["ATTRIBUTES"] if pd.notna(row["ATTRIBUTES"]) else ""
-    is_dram_sharded = "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig" in attributes
 
     input_0_datatype = row["INPUT_0_DATATYPE"]
     input_1_datatype = row["INPUT_1_DATATYPE"]
@@ -274,6 +279,7 @@ def analyze_matmul(row):
         is_dram_sharded,
         input_0_datatype,
         input_1_datatype,
+        core_count,  # Return the potentially adjusted core count
     )
 
 
@@ -308,6 +314,7 @@ def analyze_op(row, prev_row):
             is_dram_sharded,
             input_0_datatype,
             input_1_datatype,
+            adjusted_core_count,  # Get the potentially adjusted core count
         ) = analyze_matmul(row)
         op_code = Cell(f"{op_code.raw_value} {size}")
         dram_speed = Cell(dram_speed, unit="GB/s", decimals=0)
