@@ -67,7 +67,7 @@ operation::ProgramWithCallbacks all_gather_matmul_multi_core_with_workers(
     const std::optional<size_t> user_defined_num_buffers_per_channel,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
-    all_gather_op::Topology topology,
+    ttnn::ccl::Topology topology,
     const CoreCoord core_grid_offset,
 
     /* Matmul Params */
