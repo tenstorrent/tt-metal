@@ -80,6 +80,7 @@ struct TargetSelection {
     bool all_chips = false;
     uint32_t riscv_mask = 0;
     std::string file_name;  // File name to write output to.
+    bool one_file_per_risc = false;
 };
 
 class RunTimeOptions {
@@ -207,6 +208,12 @@ class RunTimeOptions {
     inline void set_feature_file_name(RunTimeDebugFeatures feature, std::string file_name) {
         feature_targets[feature].file_name = file_name;
     }
+    inline bool get_feature_one_file_per_risc(RunTimeDebugFeatures feature) {
+        return feature_targets[feature].one_file_per_risc;
+    }
+    inline void set_feature_one_file_per_risc(RunTimeDebugFeatures feature, bool one_file_per_risc) {
+        feature_targets[feature].one_file_per_risc = one_file_per_risc;
+    }
     inline TargetSelection get_feature_targets(RunTimeDebugFeatures feature) { return feature_targets[feature]; }
     inline void set_feature_targets(RunTimeDebugFeatures feature, TargetSelection targets) {
         feature_targets[feature] = targets;
@@ -277,6 +284,7 @@ class RunTimeOptions {
     void ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string &env_var);
     void ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string &env_var);
     void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string &env_var);
+    void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string &env_var);
 
     // Helper function to parse watcher-specific environment variables.
     void ParseWatcherEnv();

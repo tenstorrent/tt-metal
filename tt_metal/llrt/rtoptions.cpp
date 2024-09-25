@@ -200,6 +200,7 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature) {
     ParseFeatureChipIds(feature, feature_env_prefix + "_CHIPS");
     ParseFeatureRiscvMask(feature, feature_env_prefix + "_RISCVS");
     ParseFeatureFileName(feature, feature_env_prefix + "_FILE");
+    ParseFeatureOneFilePerRisc(feature, feature_env_prefix + "_ONE_FILE_PER_RISC");
 
     // Set feature enabled if the user asked for any feature cores
     feature_targets[feature].enabled = false;
@@ -337,6 +338,11 @@ void RunTimeOptions::ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const s
 void RunTimeOptions::ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string &env_var) {
     char *env_var_str = std::getenv(env_var.c_str());
     feature_targets[feature].file_name = (env_var_str != nullptr) ? std::string(env_var_str) : "";
+}
+
+void RunTimeOptions::ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string &env_var) {
+    char *env_var_str = std::getenv(env_var.c_str());
+    feature_targets[feature].one_file_per_risc = (env_var_str != nullptr);
 }
 
 }  // namespace llrt

@@ -13,6 +13,18 @@
 #include <cstddef>
 #include <dev_msgs.h>
 
+// Used to index into the DPRINT buffers. Erisc is separate because it only has one buffer.
+enum DebugPrintHartIndex : unsigned int {
+    DPRINT_RISCV_INDEX_NC  = 0,
+    DPRINT_RISCV_INDEX_TR0 = 1,
+    DPRINT_RISCV_INDEX_TR1 = 2,
+    DPRINT_RISCV_INDEX_TR2 = 3,
+    DPRINT_RISCV_INDEX_BR  = 4,
+    DPRINT_RISCV_INDEX_ER  = 0,
+};
+#define DPRINT_NRISCVS 5
+#define DPRINT_NRISCVS_ETH 1
+
 #define DPRINT_TYPES                 \
     DPRINT_PREFIX(CSTR)              \
     DPRINT_PREFIX(ENDL)              \
