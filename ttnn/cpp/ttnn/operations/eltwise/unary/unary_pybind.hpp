@@ -1372,6 +1372,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::tan);
     detail::bind_unary_operation(module, ttnn::tanh);
     detail::bind_unary_operation(module, ttnn::log_sigmoid);
+    detail::bind_unary_operation(module, ttnn::zero);
 
     //  Unaries with fast_and_approximate_mode
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::exp,
