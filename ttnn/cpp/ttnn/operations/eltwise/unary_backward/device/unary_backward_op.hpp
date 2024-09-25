@@ -60,7 +60,6 @@ enum class UnaryBackwardOpType {
     DIV_NO_NAN_BW,
     EXP2_BW,
     EXPM1_BW,
-    RECIPROCAL_BW,
     DIGAMMA_BW,
     ERFINV_BW,
     ERF_BW,
@@ -78,7 +77,6 @@ std::vector<Tensor> _fill_zero_bw( const Tensor& grad, const Tensor& input, cons
 std::vector<Tensor> _i0_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _tan_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _sigmoid_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _reciprocal_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _ceil_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _softsign_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _cosh_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
@@ -176,13 +174,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::SIGMOID_BW> {
     static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
         return _sigmoid_bw(grad, input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::RECIPROCAL_BW> {
-    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-        return _reciprocal_bw(grad, input, output_mem_config);
     }
 };
 
