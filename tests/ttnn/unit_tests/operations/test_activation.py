@@ -10,10 +10,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_grayskull
 
 
-def run_activation_unary_test(device, h, w, ttnn_function, pcc=0.99):
+def run_activation_unary_test(device, b, c, h, w, ttnn_function, pcc=0.99):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.randn((h, w), dtype=torch.bfloat16)
+    torch_input_tensor = torch.randn((b, c, h, w), dtype=torch.bfloat16)
     golden_function = ttnn.get_golden_function(ttnn_function)
     torch_output_tensor = golden_function(torch_input_tensor)
 
@@ -359,3 +359,16 @@ def run_activation_test_threshold(device, h, w, scalar1, scalar2, ttnn_function,
 @pytest.mark.parametrize("w", [128])
 def test_threshold(device, h, w, value, threshold):
     run_activation_test_threshold(device, h, w, value, threshold, ttnn.threshold)
+
+
+@pytest.mark.parametrize(
+    "b, c, h, w",
+    (
+        # Input resolution: 4094x510
+        (1, 1, 4034, 450),  # Passed
+        # Input resolution: 2047x255
+        (1, 1, 1986, 194),  # Passed
+    ),
+)
+def test_sigmoid_model_net(device, b, c, h, w):
+    run_activation_unary_test(device, b, c, h, w, ttnn.sigmoid)

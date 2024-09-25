@@ -112,3 +112,34 @@ def test_sharded_concat(
 
     assert_with_pcc(torch_output_tensor, output, 0.9999)
     assert_with_pcc(torch_output_tensor, output)
+
+
+@pytest.mark.parametrize(
+    "batch_size, channels, height, width",
+    (
+        # Input resolution: 4094x510
+        (1, 64, 506, 58),  # Passed
+        (1, 64, 101, 114),  # Passed
+        (1, 64, 2018, 226),  # Passed
+        # Input resolution: 2047x255
+        (1, 64, 250, 26),  # Passed
+        (1, 64, 498, 50),  # Passed
+        (1, 64, 994, 98),  # Passed
+    ),
+)
+@pytest.mark.parametrize("dim", [1])
+def test_concat_model_net(device, batch_size, channels, height, width, dim):
+    torch_input_tensor_a = torch.rand((batch_size, channels, height, width), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand((batch_size, channels, height, width), dtype=torch.bfloat16)
+    torch_output_tensor = torch.concat([torch_input_tensor_a, torch_input_tensor_b], dim=dim)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    if ttnn.has_tile_padding(input_tensor_a, dim=dim) or ttnn.has_tile_padding(input_tensor_b, dim=dim):
+        pytest.skip("Cannot concat tensors with tile padding")
+
+    output = ttnn.concat([input_tensor_a, input_tensor_b], dim=dim)
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output_tensor, output, 0.99)

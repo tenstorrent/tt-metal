@@ -359,3 +359,91 @@ def test_bilinear_multi_core(
 
     assert allclose
     assert passing
+
+
+@pytest.mark.parametrize(
+    "input_shapes, scale_h, scale_w",
+    (
+        ([1, 254, 30, 64], 2, 2),  # Passed
+        ([1, 506, 58, 128], 2, 2),  # Passed
+        ([1, 1010, 114, 128], 2, 2),  # Passed
+        ([1, 2018, 226, 128], 2, 2),  # Passed
+    ),
+)
+def test_model_net_upsample_4094x510(device, input_shapes, scale_h, scale_w):
+    batch_size, height, width, num_channels = input_shapes
+
+    torch.manual_seed(0)
+    input = torch.rand(input_shapes, dtype=torch.bfloat16)
+    tt_input = input.permute(0, 3, 1, 2)
+
+    scale_factor = (scale_h, scale_w)
+    m = nn.Upsample(scale_factor=scale_factor, mode="nearest")
+    torch_result = m(tt_input)
+    torch_result = torch_result.permute(0, 2, 3, 1)
+    print("torch_result.shape:", torch_result.shape)
+
+    ## ttnn uses NHWC, so need to set scale_factor_c = 1
+    scale_factor = (scale_h, scale_w, 1)
+    input_tensor = ttnn.from_torch(input, device=device)
+    output_tensor = ttnn.upsample(input_tensor, scale_factor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_result, output_tensor, 0.99)
+
+
+@pytest.mark.parametrize(
+    "input_shapes, scale_h, scale_w",
+    (([1, 254, 30, 64], 2, 2),),
+)
+def test_model_net_upsample(device, input_shapes, scale_h, scale_w):
+    batch_size, height, width, num_channels = input_shapes
+
+    torch.manual_seed(0)
+    input = torch.rand(input_shapes, dtype=torch.bfloat16)
+    tt_input = input.permute(0, 3, 1, 2)
+
+    scale_factor = (scale_h, scale_w)
+    m = nn.Upsample(size=(510, 62), mode="nearest")
+    torch_result = m(tt_input)
+    torch_result = torch_result.permute(0, 2, 3, 1)
+    torch_result = torch_result[:, 1:509, :60, :]
+    print("torch_result.shape:", torch_result.shape)
+
+    ## ttnn uses NHWC, so need to set scale_factor_c = 1
+    scale_factor = (scale_h, scale_w, 1)
+    input_tensor = ttnn.from_torch(input, device=device)
+    output_tensor = ttnn.upsample(input_tensor, scale_factor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_result, output_tensor, 0.99)
+
+
+@pytest.mark.parametrize(
+    "input_shapes, scale_h, scale_w",
+    (
+        ([1, 126, 14, 64], 2, 2),  # Passed
+        ([1, 250, 26, 128], 2, 2),  # Passed
+        ([1, 498, 50, 128], 2, 2),  # Passed
+        ([1, 994, 98, 128], 2, 2),  # Passed
+    ),
+)
+def test_model_net_upsample_2047x255(device, input_shapes, scale_h, scale_w):
+    batch_size, height, width, num_channels = input_shapes
+
+    torch.manual_seed(0)
+    input = torch.rand(input_shapes, dtype=torch.bfloat16)
+    tt_input = input.permute(0, 3, 1, 2)
+
+    scale_factor = (scale_h, scale_w)
+    m = nn.Upsample(scale_factor=scale_factor, mode="nearest")
+    torch_result = m(tt_input)
+    torch_result = torch_result.permute(0, 2, 3, 1)
+
+    ## ttnn uses NHWC, so need to set scale_factor_c = 1
+    scale_factor = (scale_h, scale_w, 1)
+    input_tensor = ttnn.from_torch(input, device=device)
+    output_tensor = ttnn.upsample(input_tensor, scale_factor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_result, output_tensor, 0.99)
