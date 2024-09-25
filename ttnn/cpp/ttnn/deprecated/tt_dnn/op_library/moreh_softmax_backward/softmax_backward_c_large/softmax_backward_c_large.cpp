@@ -22,7 +22,7 @@ operation::ProgramWithCallbacks moreh_softmax_backward_c_large(const Tensor &out
     log_info(LogTest, "Large tensor algorithm selected");
 
     // split work
-    auto shape = input_grad.get_legacy_shape();
+    auto shape = input_grad.get_shape().with_tile_padding();
     auto H = shape[-2];
     auto W = shape[-1];
     auto Ht = H / TILE_HEIGHT;

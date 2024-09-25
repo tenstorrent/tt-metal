@@ -32,10 +32,10 @@ void MorehSumBackward::validate_with_output_tensors(
 
     const auto &input = input_tensors.at(1);
     check_tensor(input, "moreh_sum_backward", "input");
-    const auto &input_shape = input.get_legacy_shape();
-    auto input_shape_wo_padding = input_shape.without_padding();
+    const auto &input_shape = input.get_shape().with_tile_padding();
+    auto input_shape_wo_padding = input.get_shape();
     auto input_rank = input_shape.rank();
-    auto output_grad_shape_wo_padding = output_grad.get_legacy_shape().without_padding();
+    auto output_grad_shape_wo_padding = output_grad.get_shape();
 
     // validate output_grad shape
     if (this->keep_batch_dim) {
@@ -76,13 +76,13 @@ void MorehSumBackward::validate_with_output_tensors(
 
     // validate input_grad shape
     if (input_grad.has_value()) {
-        const auto &input_grad_shape = input_grad.value().get_legacy_shape();
+        const auto &input_grad_shape = input_grad.value().get_shape().with_tile_padding();
         TT_FATAL(input_shape == input_grad_shape, "both shape between input and input_grad should be the same");
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> MorehSumBackward::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    return {input_tensors.at(1).get_legacy_shape()};
+std::vector<ttnn::Shape> MorehSumBackward::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    return {input_tensors.at(1).get_shape().with_tile_padding()};
 }
 
 std::vector<Tensor> MorehSumBackward::create_output_tensors(
@@ -114,7 +114,7 @@ Tensor moreh_sum_backward(
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
 
     TT_FATAL((input.has_value() || input_grad.has_value()), "either input or input_grad must have a value");
-    uint32_t rank = input.has_value() ? input->get_legacy_shape().rank() : input_grad->get_legacy_shape().rank();
+    uint32_t rank = input.has_value() ? input->get_shape().with_tile_padding().rank() : input_grad->get_shape().with_tile_padding().rank();
     std::vector<int64_t> dims = get_dim(dim, rank);
     std::sort(dims.begin(), dims.end());
 

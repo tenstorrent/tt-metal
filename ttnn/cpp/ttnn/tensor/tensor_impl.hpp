@@ -304,10 +304,10 @@ Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout);
 //                                  .pad() and .unpad()
 // ======================================================================================
 template <typename T>
-Tensor pad(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_shape, const tt::tt_metal::LegacyShape& input_tensor_start, float pad_value);
+Tensor pad(const Tensor& tensor, const ttnn::Shape& output_shape, const ttnn::Shape& input_tensor_start, float pad_value);
 
 template <typename T>
-Tensor unpad(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end);
+Tensor unpad(const Tensor& tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end);
 
 // ======================================================================================
 //                                         Print

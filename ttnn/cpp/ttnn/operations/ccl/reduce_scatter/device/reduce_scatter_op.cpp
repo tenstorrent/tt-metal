@@ -16,21 +16,21 @@ namespace ttnn {
 void ReduceScatter::validate(const std::vector<Tensor>& input_tensors) const {
     for (auto const& t : input_tensors) {
         TT_FATAL(
-            t.get_legacy_shape()[this->scatter_dim] / this->ring_size > 0,
+            t.get_shape().with_tile_padding()[this->scatter_dim] / this->ring_size > 0,
             "Reduce scatter input tensor shape on dim {} must be divisible by ring size", this->scatter_dim);
         TT_FATAL(
-            t.get_legacy_shape()[this->scatter_dim] % this->ring_size == 0,
+            t.get_shape().with_tile_padding()[this->scatter_dim] % this->ring_size == 0,
             "Reduce scatter input tensor shape on dim {} must be divisible by ring size", this->scatter_dim);
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> ReduceScatter::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    auto shape = input_tensors[0].get_legacy_shape();
+std::vector<ttnn::Shape> ReduceScatter::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    auto shape = input_tensors[0].get_shape().with_tile_padding();
     TT_ASSERT(
         shape[this->scatter_dim] % this->ring_size == 0,
         "The size of the scatter dimension must be a multiple of the ring size");
     shape[this->scatter_dim] /= this->ring_size;
-    return std::vector<tt::tt_metal::LegacyShape>(input_tensors.size(), shape);
+    return std::vector<ttnn::Shape>(input_tensors.size(), shape);
 }
 
 std::vector<Tensor> ReduceScatter::create_output_tensors(const std::vector<Tensor>& input_tensors) const {

@@ -24,7 +24,7 @@ ConcatOpParallelizationStrategy ConcatDeviceOperation::get_parallelization_strat
 
 void ConcatDeviceOperation::validate(const std::vector<Tensor> &input_tensors) const {
     const auto &first_input = input_tensors[0];
-    tt::tt_metal::LegacyShape shape_first = first_input.get_legacy_shape();
+    ttnn::Shape shape_first = first_input.get_shape().with_tile_padding();
     TT_FATAL(this->dim < shape_first.rank(), "ConcatDeviceOperation dim specified is larger than input tensor rank.");
     shape_first[this->dim] = 0;
     bool shard_first = input_tensors[0].is_sharded();
@@ -36,7 +36,7 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor> &input_tensors) c
         TT_FATAL(in_ref.device() == first_input.device(), "Operands to concat need to be on the same device.");
         TT_FATAL(in_ref.get_layout() == first_input.get_layout(), "All Tensors should have same layouts.");
         TT_FATAL(in_ref.get_dtype() == first_input.get_dtype(), "All Tensors should have same dtypes.");
-        tt::tt_metal::LegacyShape curr_shape = in_ref.get_legacy_shape();
+        ttnn::Shape curr_shape = in_ref.get_shape().with_tile_padding();
         TT_FATAL(curr_shape.rank() == shape_first.rank(), "Input tensor ranks must be equal");
         curr_shape[this->dim] = 0;
             // last tensor can support without any kernel changes
@@ -44,7 +44,7 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor> &input_tensors) c
         TT_FATAL(curr_shape == shape_first, "concat tensors differ in shape across non-concat dimensions.");
         if (in_ref.get_layout() == Layout::ROW_MAJOR && this->dim == shape_first.rank() - 1) {
             TT_FATAL(
-                (in_ref.get_legacy_shape()[this->dim] * in_ref.element_size()) % in_ref.buffer()->alignment() == 0,
+                (in_ref.get_shape().with_tile_padding()[this->dim] * in_ref.element_size()) % in_ref.buffer()->alignment() == 0,
                 "Current concat implementation requires aligned last dim when concatting on last dim");
         }
         TT_FATAL(in_ref.is_sharded() == shard_first, "All tensors must be sharded or all must be interleaved");
@@ -61,11 +61,11 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor> &input_tensors) c
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> ConcatDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    tt::tt_metal::LegacyShape shape_out = input_tensors[0].get_legacy_shape();
+std::vector<ttnn::Shape> ConcatDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    ttnn::Shape shape_out = input_tensors[0].get_shape().with_tile_padding();
     shape_out[this->dim] = 0;
     for (const Tensor &in_ref : input_tensors) {
-        tt::tt_metal::LegacyShape curr_shape = in_ref.get_legacy_shape();
+        ttnn::Shape curr_shape = in_ref.get_shape().with_tile_padding();
         shape_out[this->dim] += curr_shape[this->dim];
     }
     return {shape_out};
@@ -109,8 +109,8 @@ Tensor concat_impl(std::vector<Tensor> &input_tensors, const std::int64_t dim, c
             if (input_tensors.size() == 1) {
                 return {ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(input_tensors[0], output_mem_config)};
             }
-            uint32_t ref_rank = input_tensors[0].get_legacy_shape().rank();
-            uint32_t normalized_dim = input_tensors[0].get_legacy_shape().get_normalized_index(dim);
+            uint32_t ref_rank = input_tensors[0].get_shape().rank();
+            uint32_t normalized_dim = input_tensors[0].get_shape().get_normalized_index(dim);
 
             if (input_tensors[0].is_sharded()) {
                 return operation::run(ConcatDeviceOperation{normalized_dim, output_mem_config}, {input_tensors});
@@ -118,7 +118,7 @@ Tensor concat_impl(std::vector<Tensor> &input_tensors, const std::int64_t dim, c
                 if (input_tensors[0].get_layout() == Layout::ROW_MAJOR && normalized_dim == ref_rank - 1) {
                     for (const auto &input_tensor : input_tensors) {
                         TT_FATAL(
-                            (input_tensor.get_legacy_shape()[dim] * input_tensor.element_size()) % input_tensor.buffer()->alignment() ==
+                            (input_tensor.get_shape().with_tile_padding()[dim] * input_tensor.element_size()) % input_tensor.buffer()->alignment() ==
                                 0,
                             "Current concat implementation requires aligned last dim when concatting on last dim");
                     }
@@ -126,7 +126,7 @@ Tensor concat_impl(std::vector<Tensor> &input_tensors, const std::int64_t dim, c
                 Layout target_layout = Layout::TILE;
                 for (const auto &input_tensor : input_tensors) {
                     if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-                        const auto &input_shape = input_tensor.get_legacy_shape();
+                        const auto &input_shape = input_tensor.get_shape().with_tile_padding();
                         if (input_shape.rank() < 2 || input_shape[-2] % TILE_HEIGHT != 0 ||
                             input_shape[-1] % TILE_WIDTH != 0) {
                             target_layout = Layout::ROW_MAJOR;
@@ -139,11 +139,11 @@ Tensor concat_impl(std::vector<Tensor> &input_tensors, const std::int64_t dim, c
                 for (const auto &input_tensor : input_tensors) {
                     if (target_layout == Layout::ROW_MAJOR) {
                         input_format_params.push_back(ttnn::operations::experimental::auto_format::FormatParams{
-                            .pad_shape = input_tensor.get_legacy_shape(),
+                            .pad_shape = input_tensor.get_shape().with_tile_padding(),
                             .pad_value = 0.0,
                             .target_layout = target_layout});
                     } else {
-                        tt::tt_metal::LegacyShape pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
+                        ttnn::Shape pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.get_shape().with_tile_padding());
                         input_format_params.push_back(
                             ttnn::operations::experimental::auto_format::FormatParams{.pad_shape = pad_shape, .pad_value = 0.0, .target_layout = target_layout});
                     }

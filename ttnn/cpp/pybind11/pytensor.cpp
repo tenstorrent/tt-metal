@@ -419,16 +419,16 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
         tt_shards.push_back(detail::convert_python_tensor_to_tt_tensor(shard, data_type, tile, false));
     }
     std::vector<OwnedBuffer> host_owned_buffers;
-    std::vector<tt::tt_metal::LegacyShape> host_owned_shapes;
+    std::vector<ttnn::Shape> host_owned_shapes;
     for (const auto &shard : tt_shards) {
         TT_ASSERT(std::holds_alternative<OwnedStorage>(shard.get_storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(shard.get_storage()));
         host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
-        host_owned_shapes.push_back(shard.get_legacy_shape());
+        host_owned_shapes.push_back(shard.get_shape());
     }
     auto distributed_tensor_config = get_distributed_tensor_config(strategy);
     auto storage = MultiDeviceHostStorage{distributed_tensor_config, std::move(host_owned_buffers), host_owned_shapes};
 
-    auto output = Tensor(std::move(storage), tt_shards.at(0).get_legacy_shape(), tt_shards.at(0).get_dtype(), Layout::ROW_MAJOR, tt_shards.at(0).get_tile());
+    auto output = Tensor(std::move(storage), tt_shards.at(0).get_shape(), tt_shards.at(0).get_dtype(), Layout::ROW_MAJOR, tt_shards.at(0).get_tile());
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -515,7 +515,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
         };
         auto torch_dtype = tt_dtype_to_torch_dtype.at(tt_dtype);
 
-        auto shape = tt_tensor.get_legacy_shape();
+        auto shape = tt_tensor.get_shape().value;
         auto torch_shape = std::vector<std::uint32_t>(std::begin(shape), std::end(shape));
         auto tensor = frombuffer(buffer, "dtype"_a=torch_dtype);
         tensor = tensor.attr("reshape")(torch_shape);
@@ -581,7 +581,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
         };
         auto np_dtype = tt_dtype_to_np_dtype.at(tt_dtype);
 
-        auto shape = tt_tensor.get_legacy_shape();
+        auto shape = tt_tensor.get_shape().with_tile_padding();
         auto np_shape = std::vector<std::uint32_t>(std::begin(shape), std::end(shape));
         auto tensor = frombuffer(buffer, "dtype"_a = np_dtype);
         tensor = tensor.attr("reshape")(np_shape);
@@ -646,7 +646,6 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
 } // namespace detail
 
 void pytensor_module_types(py::module &m_tensor) {
-    using tt::tt_metal::LegacyShape;
     // Tensor constructors that accept device and .to(device) function use keep alive call policy to communicate that Device needs to outlive Tensor.
     // This is because when tensors on device are destroyed they need to deallocate their buffers via device.
     // keep_alive increases the ref count of the Device object being passed into the constructor and .to() function.
@@ -729,7 +728,7 @@ void pytensor_module(py::module &m_tensor) {
                             Layout layout,
                             const std::optional<Tile> &tile) {
                 auto owned_buffer = detail::create_owned_buffer_from_vector_of_floats(std::move(data), data_type);
-                return Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout, tile);
+                return Tensor(OwnedStorage{owned_buffer}, ttnn::Shape(shape), data_type, layout, tile);
             }),
             py::arg("data"),
             py::arg("shape"),
@@ -770,7 +769,7 @@ void pytensor_module(py::module &m_tensor) {
                             Device *device,
                             const std::optional<Tile> &tile) {
                 auto owned_buffer = detail::create_owned_buffer_from_vector_of_floats(std::move(data), data_type);
-                auto tensor = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout, tile);
+                auto tensor = Tensor(OwnedStorage{owned_buffer}, ttnn::Shape(shape), data_type, layout, tile);
                 return tensor.to(device, MemoryConfig{});
             }),
             py::keep_alive<1, 6>(),
@@ -824,7 +823,7 @@ void pytensor_module(py::module &m_tensor) {
                             const MemoryConfig &memory_config,
                             const std::optional<Tile> &tile) {
                 auto owned_buffer = detail::create_owned_buffer_from_vector_of_floats(std::move(data), data_type);
-                auto tensor = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout, tile);
+                auto tensor = Tensor(OwnedStorage{owned_buffer}, ttnn::Shape(shape), data_type, layout, tile);
                 return tensor.to(device, memory_config);
             }),
             py::keep_alive<1, 7>(),
@@ -1132,7 +1131,7 @@ void pytensor_module(py::module &m_tensor) {
             [](const Tensor &self,
                 const std::array<uint32_t, 4> &output_tensor_shape,
                 const std::array<uint32_t, 4> &input_tensor_start,
-                float pad_value) { return self.pad(output_tensor_shape, input_tensor_start, pad_value); },
+                float pad_value) { return self.pad(ttnn::Shape(output_tensor_shape), ttnn::Shape(input_tensor_start), pad_value); },
             R"doc(
             Pad TT Tensor with given pad value ``arg2``.
 
@@ -1204,7 +1203,7 @@ void pytensor_module(py::module &m_tensor) {
             [](const Tensor &self,
                 const std::array<uint32_t, 4> &output_tensor_start,
                 const std::array<uint32_t, 4> &output_tensor_end) {
-                return self.unpad(output_tensor_start, output_tensor_end);
+                return self.unpad(ttnn::Shape(output_tensor_start), ttnn::Shape(output_tensor_end));
             },
             R"doc(
             Unpad this TT Tensor.
@@ -1592,16 +1591,6 @@ void pytensor_module(py::module &m_tensor) {
                 dtype = tt_tensor.get_dtype()
         )doc")
         .def(
-            "shape_without_padding",
-            [](const Tensor &self) { return Shape{self.get_legacy_shape().without_padding()}; },
-            R"doc(
-            Get shape without padding of TT Tensor.
-
-            .. code-block:: python
-
-                dtype = tt_tensor.shape_without_padding()
-        )doc")
-        .def(
             "reshape",
             [](Tensor &self, int N, int C, int H, int W) { return self.reshape(N, C, H, W); },
             R"doc(
@@ -1613,7 +1602,7 @@ void pytensor_module(py::module &m_tensor) {
             )doc")
         .def(
             "reshape",
-            [](Tensor &self, const tt::tt_metal::LegacyShape &shape) -> Tensor { return self.reshape(shape); },
+            [](Tensor &self, const ttnn::Shape &shape) -> Tensor { return self.reshape(shape); },
             R"doc(
                 Reshapes TT tensor
 

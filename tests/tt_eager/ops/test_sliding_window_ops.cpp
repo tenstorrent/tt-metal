@@ -14,7 +14,7 @@
 #include "ttnn/operations/numpy/functions.hpp"
 #include "ttnn/tensor/types.hpp"
 
-using tt::tt_metal::LegacyShape;
+using ttnn::Shape;
 using tt::tt_metal::Tensor;
 using namespace ttnn::operations::sliding_window;
 
@@ -370,12 +370,12 @@ int main() {
             .pad_hw = {tc.pad_h, tc.pad_w},
             .dilation_hw = {1, 1},
             .num_cores_nhw = tc.num_cores_nhw};
-        tt::tt_metal::LegacyShape input_tensor_shape = {
+        ttnn::Shape input_tensor_shape = {
             config.batch_size,
             config.input_hw.first + 2 * config.pad_hw.first,
             config.input_hw.second + 2 * config.pad_hw.second};
-        tt::tt_metal::LegacyShape output_tensor_shape = config.get_output_shape().value;
-        tt::tt_metal::LegacyShape filter_tensor_shape = {config.window_hw.first, config.window_hw.second};
+        ttnn::Shape output_tensor_shape = config.get_output_shape();
+        ttnn::Shape filter_tensor_shape = {config.window_hw.first, config.window_hw.second};
 
         Tensor input_padded_tensor =
             ttnn::numpy::random::random(input_tensor_shape, DataType::BFLOAT16).to(Layout::ROW_MAJOR).cpu();

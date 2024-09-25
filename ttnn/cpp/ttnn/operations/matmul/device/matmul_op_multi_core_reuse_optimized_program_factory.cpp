@@ -486,8 +486,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
     uint32_t per_core_N,
     bool fuse_batch,
     bool untilize_out) {
-    const auto& ashape = a.get_legacy_shape();
-    const auto& bshape = b.get_legacy_shape();
+    const auto& ashape = a.get_shape().with_tile_padding();
+    const auto& bshape = b.get_shape().with_tile_padding();
     auto in0_tile_shape = a.get_tile().get_tile_shape();
     auto in1_tile_shape = b.get_tile().get_tile_shape();
 

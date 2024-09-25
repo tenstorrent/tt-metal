@@ -20,7 +20,6 @@ using tt::tt_metal::Device;
 
 using tt::tt_metal::Layout;
 using tt::tt_metal::OwnedStorage;
-using tt::tt_metal::LegacyShape;
 using tt::tt_metal::Tensor;
 
 namespace detail {
@@ -51,13 +50,13 @@ Tensor host_function(const Tensor& input_tensor) {
 
     return Tensor(
         OwnedStorage{output_buffer},
-        input_tensor.get_legacy_shape(),
+        input_tensor.get_shape(),
         input_tensor.get_dtype(),
         input_tensor.get_layout());
 }
 
 template <ttnn::operations::unary::UnaryOpType unary_op_type, typename... Args>
-bool run_test(Device* device, const tt::tt_metal::LegacyShape& shape, float low, float high, Args... args) {
+bool run_test(Device* device, const ttnn::Shape& shape, float low, float high, Args... args) {
     auto input_tensor = ttnn::numpy::random::uniform(bfloat16(low), bfloat16(high), shape).to(Layout::TILE);
 
     using ttnn::operations::unary::UnaryWithParam;
@@ -110,7 +109,7 @@ void test_operation_infrastructure() {
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
 
-    auto shape = tt::tt_metal::LegacyShape{1, 1, TILE_HEIGHT, TILE_WIDTH};
+    auto shape = ttnn::Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
     auto input_tensor = ttnn::numpy::random::uniform(bfloat16(0), bfloat16(1), shape).to(Layout::TILE).to(device);
 
     ttnn::operations::unary::operation_attributes_t op_args {
@@ -139,7 +138,7 @@ void test_shape_padding() {
 
     tt::tt_metal::Array4D input_shape = {1, 1, 13, 18};
     tt::tt_metal::Array4D padded_input_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
-    auto input_tensor = ttnn::numpy::random::uniform(bfloat16(0), bfloat16(1), input_shape);
+    auto input_tensor = ttnn::numpy::random::uniform(bfloat16(0), bfloat16(1), (ttnn::Shape) input_shape);
 
     auto padded_input_tensor = ttnn::pad(input_tensor, padded_input_shape, tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
 
@@ -148,10 +147,10 @@ void test_shape_padding() {
     auto output_tensor = ttnn::sqrt(padded_input_tensor);
     output_tensor = output_tensor.cpu();
 
-    auto output_shape = output_tensor.get_legacy_shape();
+    auto output_shape = output_tensor.get_shape();
 
-    TT_FATAL(output_shape == tt::tt_metal::LegacyShape(padded_input_shape), "Error");
-    TT_FATAL(output_shape.without_padding() == tt::tt_metal::LegacyShape(input_shape), "Error");
+    TT_FATAL(output_shape.with_tile_padding() == ttnn::Shape(padded_input_shape), "Error");
+    TT_FATAL(output_shape == ttnn::Shape(input_shape), "Error");
 
     TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
 }
@@ -178,7 +177,7 @@ void test_numerically() {
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
 
-    auto shape = tt::tt_metal::LegacyShape{1, 1, TILE_HEIGHT, TILE_WIDTH};
+    auto shape = ttnn::Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
     {
         auto allclose = run_test<UnaryOpType::SQRT>(device, shape, 0.0f, 1.0f, 1e-1f, 1e-5f);
         TT_FATAL(allclose, "Error");

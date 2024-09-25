@@ -65,7 +65,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
 
     uint32_t page_size = input.buffer()->page_size();
 
-    uint32_t num_pages = tilized ? output.volume() / TILE_HW : output.volume() / output.get_legacy_shape()[-1];
+    uint32_t num_pages = tilized ? output.volume() / TILE_HW : output.volume() / output.get_shape().with_tile_padding()[-1];
     tt::tt_metal::Device *device = output.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -194,12 +194,12 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
     auto shard_spec = input.shard_spec().value();
     auto shard_shape = shard_spec.shape;
     auto shard_grid = shard_spec.grid;
-    auto input_shape = input.get_legacy_shape();
+    auto input_shape = input.get_shape().with_tile_padding();
     auto input_dtype = input.get_dtype();
     auto input_layout = input.get_layout();
     TT_FATAL(
         input_layout == output.get_layout() && input_dtype == output.get_dtype() &&
-        shard_shape == output.shard_spec().value().shape && input_shape == output.get_legacy_shape(), "Error");
+        shard_shape == output.shard_spec().value().shape && input_shape == output.get_shape().with_tile_padding(), "Error");
     const uint32_t src_cb_sharded = tt::CB::c_in0;
     const uint32_t dst_cb_sharded = tt::CB::c_in1;
     uint32_t tile_size_bytes = tile_size(cb_data_format);

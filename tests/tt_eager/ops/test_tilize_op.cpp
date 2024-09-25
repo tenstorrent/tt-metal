@@ -39,7 +39,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt::tt_metal::LegacyShape shape = {1, 64, 32, 64};
+        ttnn::Shape shape = {1, 64, 32, 64};
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a =  ttnn::numpy::random::random(shape).to(device);
         Tensor b = ttnn::tilize(a);

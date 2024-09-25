@@ -729,8 +729,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     const std::optional<size_t> user_defined_num_buffers_per_channel) {
     log_trace(tt::LogOp, "reduce_scatter_with_workers entry");
     TT_ASSERT(
-        input_tensor.get_legacy_shape()[scatter_split_dim] ==
-            output_tensor.get_legacy_shape()[scatter_split_dim] * ring_size,
+        input_tensor.get_shape().with_tile_padding()[scatter_split_dim] ==
+            output_tensor.get_shape().with_tile_padding()[scatter_split_dim] * ring_size,
         "Input and output tensor shapes must match");
     TT_ASSERT(
         input_tensor.buffer()->num_pages() % ring_size == 0,

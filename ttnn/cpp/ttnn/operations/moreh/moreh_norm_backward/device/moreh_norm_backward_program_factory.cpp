@@ -17,7 +17,7 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
     return std::make_tuple(static_cast<uint32_t>(floored_p), decimal, p_is_negative);
 }
 
-void get_tensor_dim(std::vector<uint32_t>& dim, const tt::tt_metal::LegacyShape& shape) {
+void get_tensor_dim(std::vector<uint32_t>& dim, const ttnn::Shape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -28,12 +28,12 @@ void get_tensor_dim(std::vector<uint32_t>& dim, const tt::tt_metal::LegacyShape&
     }
 }
 
-tt::tt_metal::LegacyShape get_output_grad_shape(
+ttnn::Shape get_output_grad_shape(
     const Tensor& output_grad, const Tensor& input_grad, const std::vector<int64_t>& dims, const bool& keepdim) {
     if (keepdim)
-        return output_grad.get_legacy_shape();
+        return output_grad.get_shape().with_tile_padding();
 
-    auto shape = input_grad.get_legacy_shape();
+    auto shape = input_grad.get_shape().with_tile_padding();
     auto rank = shape.rank();
     auto padding = shape.padding();
     for (auto dim : dims) {
@@ -45,7 +45,7 @@ tt::tt_metal::LegacyShape get_output_grad_shape(
         } else
             shape[dim] = 1;
     }
-    return tt::tt_metal::LegacyShape(shape, padding);
+    return ttnn::Shape(shape, padding);
 }
 
 MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOperation::ProgramFactory::create(
@@ -65,15 +65,15 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto& input_grad_shape = input_grad.get_legacy_shape();
-    const auto& input_grad_shape_wo_padding = input_grad_shape.without_padding();
+    const auto& input_grad_shape = input_grad.get_shape().with_tile_padding();
+  const auto& input_grad_shape_wo_padding = input_grad.get_shape();
     const auto input_grad_rank = input_grad_shape.rank();
 
     std::vector<uint32_t> input_grad_dim(input_grad_rank, 1);
     get_tensor_dim(input_grad_dim, input_grad_shape);
-    tt::tt_metal::LegacyShape output_grad_shape =
+    ttnn::Shape output_grad_shape_wo_padding =
         get_output_grad_shape(output_grad, input_grad, operation_attributes.dims, operation_attributes.keepdim);
-    const auto output_grad_shape_wo_padding = output_grad_shape.without_padding();
+    const auto output_grad_shape = output_grad_shape_wo_padding.with_tile_padding();
 
     std::vector<uint32_t> output_grad_dim(input_grad_rank, 1);
     get_tensor_dim(output_grad_dim, output_grad_shape);

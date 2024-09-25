@@ -25,7 +25,7 @@ struct ReduceScatter {
     const std::optional<size_t> user_defined_num_buffers_per_channel;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
-    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+    std::vector<ttnn::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;

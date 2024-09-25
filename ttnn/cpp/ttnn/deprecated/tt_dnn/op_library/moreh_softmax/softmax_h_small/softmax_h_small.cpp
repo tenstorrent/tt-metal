@@ -22,7 +22,7 @@ namespace primary {
 #define L1_512KB (512 * 1024)
 
 bool is_moreh_softmax_h_small_available(const Tensor &tensor, const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
-    auto h = tensor.get_legacy_shape()[-2];
+    auto h = tensor.get_shape().with_tile_padding()[-2];
     int32_t Ht = (h + TILE_HEIGHT - 1) / TILE_HEIGHT;
 
     auto arch = tensor.device()->arch();
@@ -53,7 +53,7 @@ bool is_moreh_softmax_h_small_available(const Tensor &tensor, const ttnn::Device
 operation::ProgramWithCallbacks moreh_softmax_h_small(const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op, const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     log_info(LogTest, "Small tensor algorithm selected");
     // split work
-    auto shape = input.get_legacy_shape();
+    auto shape = input.get_shape();
     auto H = shape[-2];
     auto W = shape[-1];
 
@@ -146,7 +146,7 @@ operation::ProgramWithCallbacks moreh_softmax_h_small(const Tensor &input, const
         }
 
         float scaler = 1.0f;
-        uint32_t mask_h = shape.without_padding()[-2] % TILE_HEIGHT;
+        uint32_t mask_h = shape[-2] % TILE_HEIGHT;
         if(mask_h == 0) mask_h = TILE_HEIGHT;
         vector<uint32_t> reader_args = {
             input.buffer()->address(), num_tiles_per_core, tile_offset, Ht, Wt, *reinterpret_cast<uint32_t *>(&scaler), mask_h};

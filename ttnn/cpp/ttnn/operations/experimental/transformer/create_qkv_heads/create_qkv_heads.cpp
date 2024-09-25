@@ -21,8 +21,8 @@ namespace ttnn:: operations::experimental::transformer {
 
         const MemoryConfig output_mem_config = memory_config.value_or(input_tensor.memory_config());
         const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_q_heads);
-        TT_FATAL(input_tensor.get_legacy_shape()[3] % (num_q_heads + (2 * num_kv_heads_val)) == 0, "Flattened hidden dimension {} must be a multiple of the combined Q {}, K {} and V {} heads", input_tensor.get_legacy_shape()[3], num_q_heads, num_kv_heads_val, num_kv_heads_val);
-        const uint32_t head_dim = input_tensor.get_legacy_shape()[3] / (num_q_heads + (2 * num_kv_heads_val));
+        TT_FATAL(input_tensor.get_shape().with_tile_padding()[3] % (num_q_heads + (2 * num_kv_heads_val)) == 0, "Flattened hidden dimension {} must be a multiple of the combined Q {}, K {} and V {} heads", input_tensor.get_shape().with_tile_padding()[3], num_q_heads, num_kv_heads_val, num_kv_heads_val);
+        const uint32_t head_dim = input_tensor.get_shape().with_tile_padding()[3] / (num_q_heads + (2 * num_kv_heads_val));
         auto optional_outputs = std::vector<std::optional<Tensor>>{};
         if (optional_output_tensors.has_value()) {
             optional_outputs = {optional_output_tensors.value().begin(), optional_output_tensors.value().end()};

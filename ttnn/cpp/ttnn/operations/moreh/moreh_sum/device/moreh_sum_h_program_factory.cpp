@@ -28,7 +28,7 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     tt::tt_metal::ReduceOpDim reduce_dim = tt::tt_metal::ReduceOpDim::H;
     float scaler = 1.0f;
 
-    const auto shape = input.get_shape().value;
+    const auto shape = input.get_shape();
     const auto [W, H, other_dims_product] = tt::operations::primary::extract_spatial_dims(shape);
 
     uint32_t Wt = W / tt::constants::TILE_WIDTH;
@@ -36,7 +36,7 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     uint32_t HtWt = Ht * Wt;
 
     // check mask for h-dim
-    const auto input_shape_without_padding = shape.without_padding();
+    const auto input_shape_without_padding = input.get_shape();
     const auto origin_H = input_shape_without_padding[-2];
     const bool do_mask_h = (origin_H % tt::constants::TILE_HEIGHT) != 0;
     const auto mask_h = do_mask_h ? origin_H % tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT;

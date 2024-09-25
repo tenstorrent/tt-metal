@@ -87,14 +87,14 @@ namespace detail {
     }
 
     std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor &input_tensor, const MemoryConfig &mem_config) {
-        auto input_shape = input_tensor.get_legacy_shape();
+        auto input_shape = input_tensor.get_shape().with_tile_padding();
         auto padded_input_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_shape);
         ttnn::operations::experimental::auto_format::FormatParams input_format_params = {.pad_shape = padded_input_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
         return operation::run_with_autoformat(SplitDeviceOperation{2, 3, mem_config}, {input_tensor}, {input_format_params}, {Layout::TILE, Layout::TILE});
     }
 
     std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor &input_tensor, const MemoryConfig &mem_config) {
-        const auto shape = input_tensor.get_legacy_shape();
+        const auto shape = input_tensor.get_shape().with_tile_padding();
         const bool pre_post_reshape = shape[0] > 1;
 
         if (!pre_post_reshape) {

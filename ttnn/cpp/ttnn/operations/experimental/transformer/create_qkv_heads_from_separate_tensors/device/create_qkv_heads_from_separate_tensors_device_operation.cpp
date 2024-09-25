@@ -36,8 +36,8 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Te
     TT_FATAL(this->num_q_heads % num_w_cores == 0, "Number of q heads {} must fit evenly into cores {}", this->num_q_heads, num_w_cores);
     TT_FATAL(this->num_kv_heads % num_w_cores == 0, "Number of kv heads {} must fit evenly into cores {}", this->num_kv_heads, num_w_cores);
 
-    const auto q_input_shape = q_input_tensor.get_legacy_shape();
-    const auto kv_input_shape = kv_input_tensor.get_legacy_shape();
+    const auto q_input_shape = q_input_tensor.get_shape().with_tile_padding();
+    const auto kv_input_shape = kv_input_tensor.get_shape().with_tile_padding();
     TT_FATAL(q_input_shape[1] == 1 && kv_input_shape[1] == 1, "Unsupported input shape");
     TT_FATAL(q_input_shape[0] == kv_input_shape[0], "Q {} and KV {} batch size must match", q_input_shape[0], kv_input_shape[0]);
 
@@ -70,16 +70,16 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Te
     TT_FATAL(q_input_shape[0] == num_h_cores, "Batch size {} must be equal to num cores {}", q_input_shape[0], num_h_cores);
 }
 
-std::vector<tt::tt_metal::LegacyShape> CreateQKVHeadsSeparateTensorsDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::Shape> CreateQKVHeadsSeparateTensorsDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto& input_tensor_kv = input_tensors.at(1);
-    const auto input_shape = input_tensor.get_legacy_shape();
-    const auto input_shape_kv = input_tensor_kv.get_legacy_shape();
+    const auto input_shape = input_tensor.get_shape().with_tile_padding();
+    const auto input_shape_kv = input_tensor_kv.get_shape().with_tile_padding();
 
     const auto q_output_shape = {input_shape[0], this->num_q_heads, input_shape[2], this->head_dim};
     const auto v_output_shape = {input_shape_kv[0], this->num_kv_heads, input_shape_kv[2], this->head_dim};
     const auto k_output_shape = this->transpose_k_heads
-                                     ? tt::tt_metal::LegacyShape{input_shape_kv[0], this->num_kv_heads, head_dim, input_shape_kv[2]}
+                                     ? ttnn::Shape{input_shape_kv[0], this->num_kv_heads, head_dim, input_shape_kv[2]}
                                      : v_output_shape;
     return {q_output_shape, k_output_shape, v_output_shape};
 }

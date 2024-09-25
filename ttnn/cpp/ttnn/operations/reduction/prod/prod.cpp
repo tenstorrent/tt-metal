@@ -21,7 +21,7 @@ inline Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& outp
     using ttnn::operations::experimental::auto_format::AutoFormat;
     auto formatted_input_tensor = temp;
     if(formatted_input_tensor.get_layout()==Layout::ROW_MAJOR){
-        auto a_pad_shape = AutoFormat::pad_to_tile_shape(temp.get_legacy_shape(), false, false, true, true);
+        auto a_pad_shape = AutoFormat::pad_to_tile_shape(temp.get_shape().with_tile_padding(), false, false, true, true);
         if (!AutoFormat::check_input_tensor_format(temp, a_pad_shape)) {
             formatted_input_tensor = AutoFormat::format_input_tensor(temp, temp.device(), a_pad_shape, 1.0, Layout::TILE);
         }
@@ -33,8 +33,8 @@ inline Tensor prod_all(const Tensor& input_a, const MemoryConfig& output_mem_con
     using ttnn::operations::experimental::auto_format::AutoFormat;
     auto formatted_input_tensor = input_a;
     if (formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        auto a_pad_shape = AutoFormat::pad_to_tile_shape(input_a.get_legacy_shape(), false, false, true, true);
-        auto out_shape = input_a.get_legacy_shape();
+        auto a_pad_shape = AutoFormat::pad_to_tile_shape(input_a.get_shape().with_tile_padding(), false, false, true, true);
+        auto out_shape = input_a.get_shape().with_tile_padding();
         out_shape = {out_shape[0], out_shape[1], out_shape[2], out_shape[3]};
         if (!AutoFormat::check_input_tensor_format(input_a, a_pad_shape)) {
             formatted_input_tensor =
@@ -49,8 +49,8 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
     // layout conversion
     auto formatted_input_tensor = temp;
     if(formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        auto a_pad_shape = AutoFormat::pad_to_tile_shape(temp.get_legacy_shape(), false, false, true, true);
-        auto out_shape = temp.get_legacy_shape();
+        auto a_pad_shape = AutoFormat::pad_to_tile_shape(temp.get_shape().with_tile_padding(), false, false, true, true);
+        auto out_shape = temp.get_shape().with_tile_padding();
         out_shape = {out_shape[0], out_shape[1], out_shape[2], out_shape[3]};
         if (!AutoFormat::check_input_tensor_format(temp, a_pad_shape)) {
             formatted_input_tensor =
@@ -59,7 +59,7 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
     }
     // Apply prod
     std::vector<int64_t> dimension = {(dim == 1 || dim == -3) ? 1 : 0};
-    tt::tt_metal::LegacyShape input_shape = formatted_input_tensor.get_legacy_shape();
+    ttnn::Shape input_shape = formatted_input_tensor.get_shape().with_tile_padding();
     std::array<uint32_t, 4> required = {
         ((dim == 1 || dim == -3) ? input_shape[0] : 1),
         ((dim == 1 || dim == -3) ? 1 : input_shape[1]),
@@ -105,7 +105,7 @@ Tensor ProdOperation::invoke(const Tensor& input_a, bool all_dimensions, int64_t
     } else if (dim == 2 || dim == -2) {
         std::vector<int64_t> after_permute_dims = {1, 2, 0, 3};
         Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
-        tt::tt_metal::LegacyShape input_shape = input_a.get_legacy_shape();
+        ttnn::Shape input_shape = input_a.get_shape().with_tile_padding();
         std::vector<uint32_t> start_index = {0, 0, 0, 0};
         std::vector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[3]};
         return ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);
@@ -114,7 +114,7 @@ Tensor ProdOperation::invoke(const Tensor& input_a, bool all_dimensions, int64_t
         std::vector<int64_t> after_permute_dims = {1, 2, 0, 3};
         Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
         // unpad
-        tt::tt_metal::LegacyShape input_shape = input_a.get_legacy_shape();
+        ttnn::Shape input_shape = input_a.get_shape().with_tile_padding();
         std::vector<uint32_t> start_index = {0, 0, 0, 0};
         std::vector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[2]};
         Tensor new_unpad_tensor = ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);

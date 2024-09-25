@@ -20,7 +20,7 @@ Tensor DataTransferToDeviceOperation::invoke(const Tensor &input_tensor, Device*
     TT_FATAL(device != nullptr, "Error");
 
     if(input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        TT_FATAL(input_tensor.get_legacy_shape()[-1] * input_tensor.element_size() % sizeof(uint32_t) == 0, "Error");
+        TT_FATAL(input_tensor.get_shape().with_tile_padding()[-1] * input_tensor.element_size() % sizeof(uint32_t) == 0, "Error");
     }
 
     if (input_tensor.storage_type() == StorageType::DEVICE && input_tensor.device() == device) {

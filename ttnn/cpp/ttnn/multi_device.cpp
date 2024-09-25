@@ -57,27 +57,27 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards)
     // we want to use MultiDeviceHostStorage or MultiDeviceStorage
     StorageType storage_type = tensor_shards.at(0).storage_type();
     if (storage_type == StorageType::OWNED) {
-        std::vector<tt::tt_metal::LegacyShape> shapes;
+        std::vector<ttnn::Shape> shapes;
         std::vector<OwnedBuffer> host_owned_buffers;
         for (const auto &shard : tensor_shards) {
             host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
-            shapes.push_back(shard.get_legacy_shape());
+            shapes.push_back(shard.get_shape());
         }
         auto storage = MultiDeviceHostStorage{AllGatherTensor(), std::move(host_owned_buffers), shapes};
-        return Tensor(std::move(storage), tensor_shards.at(0).get_legacy_shape(), tensor_shards.at(0).get_dtype(),  tensor_shards.at(0).get_layout());
+        return Tensor(std::move(storage), tensor_shards.at(0).get_shape().with_tile_padding(), tensor_shards.at(0).get_dtype(),  tensor_shards.at(0).get_layout());
     } else {
         std::vector<int> ordered_device_ids;
-        std::unordered_map<int, tt::tt_metal::LegacyShape> shapes;
+        std::unordered_map<int, ttnn::Shape> shapes;
         std::unordered_map<int, DeviceBuffer> device_buffers;
         for (const auto &shard : tensor_shards) {
             Device* device = std::get<DeviceStorage>(shard.get_storage()).buffer->device();
             auto device_id = device->id();
             ordered_device_ids.push_back(device_id);
             device_buffers.insert({device->id(), std::get<DeviceStorage>(shard.get_storage()).buffer});
-            shapes.insert({device->id(), shard.get_legacy_shape()});
+            shapes.insert({device->id(), shard.get_shape()});
         }
         auto storage = MultiDeviceStorage{AllGatherTensor(), ordered_device_ids, std::move(device_buffers), shapes};
-        return Tensor(std::move(storage), tensor_shards.at(0).get_legacy_shape(), tensor_shards.at(0).get_dtype(),  tensor_shards.at(0).get_layout());
+        return Tensor(std::move(storage), tensor_shards.at(0).get_shape().with_tile_padding(), tensor_shards.at(0).get_dtype(),  tensor_shards.at(0).get_layout());
     }
 }
 

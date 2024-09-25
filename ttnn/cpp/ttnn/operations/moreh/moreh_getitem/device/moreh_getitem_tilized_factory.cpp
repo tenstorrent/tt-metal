@@ -39,7 +39,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
     auto core_range = allCores;
 
     auto input_shape = input.get_shape();
-    auto input_shape_without_padding = input_shape.value.without_padding();
+    auto input_shape_without_padding = input_shape;
     auto output_shape = output.get_shape();
     auto output_shape_without_padding = output_shape.value.without_padding();
 
@@ -74,8 +74,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         }
     }
 
-    auto input_5d_shape_without_padding = input_5d_shape.value.without_padding();
-    auto output_5d_shape_without_padding = output_5d_shape.value.without_padding();
+    auto input_5d_shape_without_padding = input_5d_shape;
+    auto output_5d_shape_without_padding = output_5d_shape;
 
     auto index_layout = index_tensors.front().get_layout();
     bool is_row_major_index = (index_layout == Layout::ROW_MAJOR);
@@ -94,7 +94,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             index_info[dim].unit_size = index.element_size();
         }
 
-        uint32_t index_size = index_tensors[0].get_shape().value.without_padding()[-1];
+        uint32_t index_size = index_tensors[0].get_shape()[-1];
 
         uint32_t input_unit_size = input.element_size();
         uint32_t output_unit_size = output.element_size();
@@ -213,9 +213,9 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
         uint32_t input_stick_idx_stride_w = 1;
         uint32_t input_stick_idx_stride_h = input_num_stick_width;
-        uint32_t input_stick_idx_stride_d = input_stick_idx_stride_h * input_5d_shape.value.without_padding()[3];
-        uint32_t input_stick_idx_stride_c = input_stick_idx_stride_d * input_5d_shape.value.without_padding()[2];
-        uint32_t input_stick_idx_stride_n = input_stick_idx_stride_c * input_5d_shape.value.without_padding()[1];
+        uint32_t input_stick_idx_stride_d = input_stick_idx_stride_h * input_5d_shape[3];
+        uint32_t input_stick_idx_stride_c = input_stick_idx_stride_d * input_5d_shape[2];
+        uint32_t input_stick_idx_stride_n = input_stick_idx_stride_c * input_5d_shape[1];
 
         // Set Runtime Args
         auto core_x_offset = core_range.start_coord.x;
@@ -334,7 +334,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             index_info[dim].is_dram = is_dram(index_tensors[i]);
             index_info[dim].unit_size = index.get_shape().value[-1] * index.element_size();
         }
-        uint32_t index_size = index_tensors[0].get_shape().value.without_padding()[-1];
+        uint32_t index_size = index_tensors[0].get_shape()[-1];
 
         uint32_t input_unit_size = 16 * input.element_size();
         uint32_t output_unit_size = 16 * output.element_size();
@@ -444,9 +444,9 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
         uint32_t input_stick_idx_stride_w = 1;
         uint32_t input_stick_idx_stride_h = input_num_stick_width;
-        uint32_t input_stick_idx_stride_d = input_stick_idx_stride_h * input_5d_shape.value.without_padding()[3];
-        uint32_t input_stick_idx_stride_c = input_stick_idx_stride_d * input_5d_shape.value.without_padding()[2];
-        uint32_t input_stick_idx_stride_n = input_stick_idx_stride_c * input_5d_shape.value.without_padding()[1];
+        uint32_t input_stick_idx_stride_d = input_stick_idx_stride_h * input_5d_shape[3];
+        uint32_t input_stick_idx_stride_c = input_stick_idx_stride_d * input_5d_shape[2];
+        uint32_t input_stick_idx_stride_n = input_stick_idx_stride_c * input_5d_shape[1];
 
         // Set Runtime Args
         auto core_x_offset = core_range.start_coord.x;

@@ -28,10 +28,10 @@ void UntilizeWithHaloV2::validate(const std::vector<Tensor>& input_tensors) cons
     TT_FATAL(input_tensor.shard_spec().has_value(), "Error");
 }
 
-std::vector<tt::tt_metal::LegacyShape> UntilizeWithHaloV2::compute_output_shapes(
+std::vector<ttnn::Shape> UntilizeWithHaloV2::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input = input_tensors.at(0);
-    const auto& input_shape = input.get_legacy_shape();
+    const auto& input_shape = input.get_shape().with_tile_padding();
     auto output_shape = input_shape;
 
     uint32_t nbatch = input_shape[0];

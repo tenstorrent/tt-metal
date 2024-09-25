@@ -39,8 +39,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     attn_mask: B x NQH x S x S
     */
 
-    const auto q_shape = input_tensor_q.get_legacy_shape();
-    const auto k_shape = input_tensor_k.get_legacy_shape();
+    const auto q_shape = input_tensor_q.get_shape().with_tile_padding();
+    const auto k_shape = input_tensor_k.get_shape().with_tile_padding();
     // Use k_shape for S and DH since Q might be different for decode
     uint32_t B = q_shape[0], NQH = q_shape[1], S = k_shape[2], DH = k_shape[3];
     uint32_t St = S / TILE_HEIGHT;

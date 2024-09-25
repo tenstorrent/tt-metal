@@ -18,8 +18,8 @@ namespace operations {
 namespace primary {
 
 void grad_tensor_validate(const Tensor& tensor, const Tensor& grad_tensor) {
-    const auto& tensor_shape = tensor.get_legacy_shape().without_padding();
-    const auto& grad_tensor_shape = grad_tensor.get_legacy_shape().without_padding();
+    const auto& tensor_shape = tensor.get_shape();
+    const auto& grad_tensor_shape = grad_tensor.get_shape();
     TT_ASSERT(tensor_shape == grad_tensor_shape);
     TT_ASSERT(grad_tensor.storage_type() == StorageType::DEVICE, "Operands to dot backward need to be on device!");
     TT_ASSERT(grad_tensor.device() == tensor.device(), "Operands to dot backward need to be on the same device!");
@@ -63,7 +63,7 @@ void MorehDotBackward::validate(
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> MorehDotBackward::compute_output_shapes(const std::vector<Tensor>& inputs) const {
+std::vector<ttnn::Shape> MorehDotBackward::compute_output_shapes(const std::vector<Tensor>& inputs) const {
     // Inplace
     return {};
 }

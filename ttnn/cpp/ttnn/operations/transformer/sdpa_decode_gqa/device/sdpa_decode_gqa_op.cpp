@@ -17,9 +17,9 @@ void ScaledDotProductAttentionGQADecode::validate(const std::vector<Tensor>& inp
         TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to SDPA must be tilized");
     }
 
-    const auto q_shape = input_tensors.at(0).get_legacy_shape();
-    const auto k_shape = input_tensors.at(1).get_legacy_shape();
-    const auto v_shape = input_tensors.at(2).get_legacy_shape();
+    const auto q_shape = input_tensors.at(0).get_shape().with_tile_padding();
+    const auto k_shape = input_tensors.at(1).get_shape().with_tile_padding();
+    const auto v_shape = input_tensors.at(2).get_shape().with_tile_padding();
 
     if (optional_input_tensors.at(0).has_value()){
         const auto& cur_pos_tensor = optional_input_tensors.at(0).value();
@@ -73,12 +73,12 @@ void ScaledDotProductAttentionGQADecode::validate(const std::vector<Tensor>& inp
         this->compute_kernel_config);
 }
 
-std::vector<tt::tt_metal::LegacyShape> ScaledDotProductAttentionGQADecode::compute_output_shapes(
+std::vector<ttnn::Shape> ScaledDotProductAttentionGQADecode::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
-    auto tt_q_shape = input_tensors.at(0).get_legacy_shape();
-    auto tt_k_shape = input_tensors.at(1).get_legacy_shape();
+    auto tt_q_shape = input_tensors.at(0).get_shape().with_tile_padding();
+    auto tt_k_shape = input_tensors.at(1).get_shape().with_tile_padding();
     uint32_t n_groups = tt_q_shape[2] / tt_k_shape[1];
-    return {input_tensors.at(0).get_legacy_shape()};
+    return {input_tensors.at(0).get_shape().with_tile_padding()};
 }
 
 std::vector<Tensor> ScaledDotProductAttentionGQADecode::create_output_tensors(
@@ -99,7 +99,7 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionGQADecode::create_progr
 
     auto scale = this->scale;
     if (not scale.has_value()) {
-        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_legacy_shape()[-1]));
+        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_shape().with_tile_padding()[-1]));
     }
 
     // TODO: get this from program_config

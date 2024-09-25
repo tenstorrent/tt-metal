@@ -30,29 +30,29 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(weights.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharding");
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharding");
 
-    TT_FATAL(weights.get_legacy_shape()[0] == 1 && weights.get_legacy_shape()[1] == 1, "First two dimensions for the weights must be 1");
+    TT_FATAL(weights.get_shape().with_tile_padding()[0] == 1 && weights.get_shape().with_tile_padding()[1] == 1, "First two dimensions for the weights must be 1");
     if (this->tilized) {
-        TT_FATAL(a.get_legacy_shape()[-1] % TILE_HEIGHT == 0, "Error");
-        TT_FATAL(weights.get_legacy_shape()[-1] % TILE_WIDTH == 0, "Number of columns in table must be factor of tile width");
+        TT_FATAL(a.get_shape().with_tile_padding()[-1] % TILE_HEIGHT == 0, "Error");
+        TT_FATAL(weights.get_shape().with_tile_padding()[-1] % TILE_WIDTH == 0, "Number of columns in table must be factor of tile width");
     } else {
         TT_FATAL(this->output_dtype != DataType::BFLOAT8_B, "Error");
     }
-    TT_FATAL(a.get_legacy_shape()[1] == 1 && a.get_legacy_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
+    TT_FATAL(a.get_shape().with_tile_padding()[1] == 1 && a.get_shape().with_tile_padding()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
     switch (this->embeddings_type) {
         case EmbeddingsType::PADDED: TT_FATAL(this->pad_token.has_value(), "Error"); break;
-        case EmbeddingsType::BINARY: TT_FATAL(weights.get_legacy_shape()[-2] == 2, "Error");
+        case EmbeddingsType::BINARY: TT_FATAL(weights.get_shape().with_tile_padding()[-2] == 2, "Error");
         default: TT_FATAL(!this->pad_token.has_value(), "Error");
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> Embeddings::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<ttnn::Shape> Embeddings::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto &input_tensor = input_tensors.at(0);
     const auto &weight_tensor = input_tensors.at(1);
-    auto num_output_embeddings = input_tensor.get_legacy_shape()[3];
-    auto batch_num = input_tensor.get_legacy_shape()[0];
-    auto num_embedding_dims = weight_tensor.get_legacy_shape()[3];
+    auto num_output_embeddings = input_tensor.get_shape().with_tile_padding()[3];
+    auto batch_num = input_tensor.get_shape().with_tile_padding()[0];
+    auto num_embedding_dims = weight_tensor.get_shape().with_tile_padding()[3];
 
-    tt::tt_metal::LegacyShape output_shape({batch_num, 1, num_output_embeddings, num_embedding_dims});
+    ttnn::Shape output_shape({batch_num, 1, num_output_embeddings, num_embedding_dims});
     return {output_shape};
 }
 

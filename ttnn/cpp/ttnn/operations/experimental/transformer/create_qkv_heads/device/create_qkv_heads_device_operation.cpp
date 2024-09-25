@@ -16,7 +16,7 @@ void CreateQKVHeadsDeviceOperation::validate(const std::vector<Tensor> &input_te
     TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
     TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
     TT_FATAL(input_tensor.is_sharded(), "Operands to TM must be sharded");
-    const auto input_shape = input_tensor.get_legacy_shape();
+    const auto input_shape = input_tensor.get_shape().with_tile_padding();
     TT_FATAL(input_shape[1] == 1, "Unsupported input shape");
 
     auto bbox = input_tensor.shard_spec().value().grid.bounding_box();
@@ -34,15 +34,15 @@ void CreateQKVHeadsDeviceOperation::validate(const std::vector<Tensor> &input_te
     TT_FATAL(input_shape[0] == num_h_cores, "Batch size {} must be equal to num cores {}", input_shape[0], num_h_cores);
 }
 
-std::vector<tt::tt_metal::LegacyShape> CreateQKVHeadsDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    std::vector<tt::tt_metal::LegacyShape> output_shape_vec;
+std::vector<ttnn::Shape> CreateQKVHeadsDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    std::vector<ttnn::Shape> output_shape_vec;
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
+    const auto input_shape = input_tensor.get_shape().with_tile_padding();
 
-    const auto q_output_shape = tt::tt_metal::LegacyShape{input_shape[0], this->num_q_heads, input_shape[2], this->head_dim};
-    const auto v_output_shape = tt::tt_metal::LegacyShape{input_shape[0], this->num_kv_heads, input_shape[2], this->head_dim};
+    const auto q_output_shape = ttnn::Shape{input_shape[0], this->num_q_heads, input_shape[2], this->head_dim};
+    const auto v_output_shape = ttnn::Shape{input_shape[0], this->num_kv_heads, input_shape[2], this->head_dim};
     const auto k_output_shape = this->transpose_k_heads
-                                     ? tt::tt_metal::LegacyShape{input_shape[0], this->num_kv_heads, head_dim, input_shape[2]}
+                                     ? ttnn::Shape{input_shape[0], this->num_kv_heads, head_dim, input_shape[2]}
                                      : v_output_shape;
     return {q_output_shape, k_output_shape, v_output_shape};
 

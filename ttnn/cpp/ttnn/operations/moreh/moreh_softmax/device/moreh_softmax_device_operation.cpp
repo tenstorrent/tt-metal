@@ -9,7 +9,7 @@ namespace ttnn::operations::moreh::moreh_softmax {
 #define L1_512KB (512 * 1024)
 
 bool is_moreh_softmax_w_small_available(const Tensor& tensor, const DeviceComputeKernelConfig& compute_kernel_config) {
-    auto w = tensor.get_legacy_shape()[-1];
+    auto w = tensor.get_shape().with_tile_padding()[-1];
     int32_t Wt = (w + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
 
     auto arch = tensor.device()->arch();
@@ -39,7 +39,7 @@ bool is_moreh_softmax_w_small_available(const Tensor& tensor, const DeviceComput
 }
 
 bool is_moreh_softmax_h_small_available(const Tensor& tensor, const DeviceComputeKernelConfig& compute_kernel_config) {
-    auto h = tensor.get_legacy_shape()[-2];
+    auto h = tensor.get_shape().with_tile_padding()[-2];
     int32_t Ht = (h + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
 
     auto arch = tensor.device()->arch();
@@ -91,7 +91,7 @@ void MorehSoftmaxOperation::validate_inputs(
         input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B,
         "Inputs must be of bfloat16 or bfloat8_b type");
 
-    const auto rank = input_tensor.get_legacy_shape().rank();
+    const auto rank = input_tensor.get_shape().with_tile_padding().rank();
     const auto dim = operation_attributes.dim;
     TT_FATAL(dim >= 0 && dim < rank, "dim {} should be less than output tensor rank {}", dim, rank);
 }
@@ -118,7 +118,7 @@ MorehSoftmaxOperation::tensor_return_value_t MorehSoftmaxOperation::create_outpu
         return output_tensor.value();
 
     const auto& input_tensor = tensor_args.input_tensor;
-    const auto& output_shape = input_tensor.get_legacy_shape();
+    const auto& output_shape = input_tensor.get_shape().with_tile_padding();
     return create_device_tensor(
         output_shape,
         input_tensor.get_dtype(),
@@ -154,7 +154,7 @@ MorehSoftmaxOpParallelizationStrategy MorehSoftmaxOperation::get_parallelization
     const auto dim = operation_attributes.dim;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    auto rank = input.get_legacy_shape().rank();
+    auto rank = input.get_shape().with_tile_padding().rank();
     if (strategy == MorehSoftmaxOpParallelizationStrategy::NONE) {
         if (rank - 1 == dim) {
             if (is_moreh_softmax_w_small_available(input, compute_kernel_config)) {

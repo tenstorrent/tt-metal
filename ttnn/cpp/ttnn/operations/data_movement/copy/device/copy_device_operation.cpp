@@ -25,7 +25,7 @@ void CopyDeviceOperation::validate_with_output_tensors(const std::vector<Tensor>
     TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Copy does not currently support sharding");
     if (input_tensors.size() == 2) {
         const auto& dst_tensor = input_tensors[1];
-        TT_FATAL(input_tensor_a.get_legacy_shape() == dst_tensor.get_legacy_shape(), "Error");
+        TT_FATAL(input_tensor_a.get_shape().with_tile_padding() == dst_tensor.get_shape().with_tile_padding(), "Error");
         TT_FATAL(input_tensor_a.get_layout() == dst_tensor.get_layout(), "Error");
         TT_FATAL(input_tensor_a.memory_config().memory_layout == dst_tensor.memory_config().memory_layout, "Error");
         TT_FATAL(dst_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Copy does not currently support sharding");
@@ -34,7 +34,7 @@ void CopyDeviceOperation::validate_with_output_tensors(const std::vector<Tensor>
     if(!output_tensors.empty() && output_tensors.at(0).has_value()){
         const auto output_shape_required = this->compute_output_shapes(input_tensors);
         const auto& out_tensor = output_tensors.at(0).value();
-        TT_FATAL(out_tensor.get_legacy_shape() == output_shape_required.at(0), "The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape());
+        TT_FATAL(out_tensor.get_shape().with_tile_padding() == output_shape_required.at(0), "The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_shape().with_tile_padding());
         output_dtype = out_tensor.get_dtype();
     }
     if (output_dtype != input_tensor_a.get_dtype()) {
@@ -44,12 +44,12 @@ void CopyDeviceOperation::validate_with_output_tensors(const std::vector<Tensor>
     TT_FATAL(out_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Copy does not currently support sharding");
 }
 
-std::vector<tt::tt_metal::LegacyShape> CopyDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<ttnn::Shape> CopyDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     if (input_tensors.size() == 2) {
-        return {input_tensors[1].get_legacy_shape()};
+        return {input_tensors[1].get_shape().with_tile_padding()};
     } else {
         const auto& input_tensor = input_tensors.at(0);
-        return {input_tensor.get_legacy_shape()};
+        return {input_tensor.get_shape().with_tile_padding()};
     }
 }
 

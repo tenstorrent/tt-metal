@@ -29,10 +29,10 @@ void MorehMatmulOperation::validate_inputs(
     tt::operations::primary::check_tensor(bias, "moreh_matmul", "bias");
 
     // check matrix dims
-    const auto &input_shape = input.get_shape().value.without_padding();
-    const auto &other_shape = other.get_shape().value.without_padding();
-    const auto &input_wo_shape = input_shape.without_padding();
-    const auto &other_wo_shape = other_shape.without_padding();
+    const auto &input_shape = input.get_shape();
+    const auto &other_shape = other.get_shape();
+    const auto &input_wo_shape = input_shape;
+    const auto &other_wo_shape = other_shape;
     uint32_t input_m = (transpose_input) ? (input_wo_shape[-1]) : (input_wo_shape[-2]);
     uint32_t input_k = (transpose_input) ? (input_wo_shape[-2]) : (input_wo_shape[-1]);
     uint32_t other_k = (transpose_other) ? (other_wo_shape[-1]) : (other_wo_shape[-2]);
@@ -58,8 +58,8 @@ void MorehMatmulOperation::validate_inputs(
 
     // check output dims
     if (output.has_value()) {
-        const auto &output_shape = output.value().get_legacy_shape().without_padding();
-        const auto &output_wo_shape = output_shape.without_padding();
+        const auto &output_shape = output.value().get_shape();
+        const auto &output_wo_shape = output.value().get_shape();
         uint32_t output_m = output_wo_shape[-2];
         uint32_t output_n = output_wo_shape[-1];
         TT_FATAL(input_m == output_m, "m must be the same. input_m {}, output_m {}", input_m, output_m);
@@ -80,7 +80,7 @@ void MorehMatmulOperation::validate_inputs(
 
     // check bias size
     if (bias.has_value()) {
-        const auto &bias_wo_shape = bias.value().get_legacy_shape().without_padding();
+        const auto &bias_wo_shape = bias.value().get_shape();
         uint32_t bias_rank = bias_wo_shape.rank();
         uint32_t bias_w = bias_wo_shape[-1];
         TT_FATAL(bias_rank == 2, "bias rank {} must be 2 (tilized).", bias_rank);
@@ -105,14 +105,14 @@ void MorehMatmulOperation::validate_on_program_cache_miss(
 MorehMatmulOperation::shape_return_value_t compute_output_shapes(
     const MorehMatmulOperation::operation_attributes_t &operation_attributes,
     const MorehMatmulOperation::tensor_args_t &tensor_args) {
-    auto input_shape = tensor_args.input.get_shape().value;
-    auto other_shape = tensor_args.other.get_shape().value;
+    auto input_shape = tensor_args.input.get_shape().with_tile_padding();
+    auto other_shape = tensor_args.other.get_shape().with_tile_padding();
 
     auto transpose_input = operation_attributes.transpose_input;
     auto transpose_other = operation_attributes.transpose_other;
 
-    const auto &input_shape_wo_padding = input_shape.without_padding();
-    const auto &other_shape_wo_padding = other_shape.without_padding();
+    const auto &input_shape_wo_padding = tensor_args.input.get_shape();
+    const auto &other_shape_wo_padding = tensor_args.other.get_shape();
 
     auto h = (transpose_input) ? (input_shape[-1]) : (input_shape[-2]);
     auto w = (transpose_other) ? (other_shape[-2]) : (other_shape[-1]);
@@ -146,12 +146,12 @@ MorehMatmulOperation::shape_return_value_t compute_output_shapes(
     output_dim[output_rank - 2] = h;
     output_dim[output_rank - 1] = w;
 
-    tt::tt_metal::LegacyShape output_shape{output_dim};
+    ttnn::Shape output_shape{output_dim};
     auto padding = output_shape.padding();
     // padding for t logmatrix dims
     padding[output_rank - 2] = Padding::PadDimension{0, h - h_wo_padding};
     padding[output_rank - 1] = Padding::PadDimension{0, w - w_wo_padding};
-    return Shape({tt::tt_metal::LegacyShape(output_shape, padding)});
+    return Shape({ttnn::Shape(output_shape, padding)});
 }
 MorehMatmulOperation::tensor_return_value_t MorehMatmulOperation::create_output_tensors(
     const MorehMatmulOperation::operation_attributes_t &operation_attributes,
@@ -175,12 +175,12 @@ MorehMatmulOperation::program_factory_t MorehMatmulOperation::select_program_fac
 
 MorehMatmulOperation::shape_return_value_t MorehMatmulOperation::compute_output_shapes(
     const operation_attributes_t &operation_attributes, const tensor_args_t &tensor_args) {
-    const auto &input_shape = tensor_args.input.get_shape().value;
-    const auto &other_shape = tensor_args.other.get_shape().value;
+    const auto &input_shape = tensor_args.input.get_shape().with_tile_padding();
+    const auto &other_shape = tensor_args.other.get_shape().with_tile_padding();
     bool transpose_input = operation_attributes.transpose_input;
     bool transpose_other = operation_attributes.transpose_other;
-    const auto &input_shape_wo_padding = input_shape.without_padding();
-    const auto &other_shape_wo_padding = other_shape.without_padding();
+    const auto &input_shape_wo_padding = tensor_args.input.get_shape();
+    const auto &other_shape_wo_padding = tensor_args.other.get_shape();
 
     auto h = (transpose_input) ? (input_shape[-1]) : (input_shape[-2]);
     auto w = (transpose_other) ? (other_shape[-2]) : (other_shape[-1]);
@@ -214,12 +214,12 @@ MorehMatmulOperation::shape_return_value_t MorehMatmulOperation::compute_output_
     output_dim[output_rank - 2] = h;
     output_dim[output_rank - 1] = w;
 
-    tt::tt_metal::LegacyShape output_shape{output_dim};
+    ttnn::Shape output_shape{output_dim};
     auto padding = output_shape.padding();
     // padding for t logmatrix dims
     padding[output_rank - 2] = Padding::PadDimension{0, h - h_wo_padding};
     padding[output_rank - 1] = Padding::PadDimension{0, w - w_wo_padding};
-    return Shape({tt::tt_metal::LegacyShape(output_shape, padding)});
+    return Shape({ttnn::Shape(output_shape, padding)});
 }
 
 std::tuple<MorehMatmulOperation::operation_attributes_t, MorehMatmulOperation::tensor_args_t>

@@ -1415,14 +1415,14 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardGelu::invoke(
 }
 
 std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
-    const Tensor& grad, const Tensor& input, const tt::tt_metal::LegacyShape& shape, const std::optional<MemoryConfig>& output_mem_config) {
+    const Tensor& grad, const Tensor& input, const ttnn::Shape& shape, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
 
-    auto shape_wh = input.get_legacy_shape();
+    auto shape_wh = input.get_shape().with_tile_padding();
     TT_FATAL(shape_wh[0] == 1 && "input shape[0] should be 1", "Error");
     auto ttnn_device = input.device();
-    // input.get_legacy_shape()[0]
+    // input.get_shape().with_tile_padding()[0]
     // If repeat shape has 0's, it returns zeros of given input
     if (shape[0] == 0 || shape[1] == 0 || shape[2] == 0 || shape[3] == 0) {
         Tensor zero_tensor = ttnn::zeros_like(input, input.get_dtype(), input.get_layout(), std::nullopt, output_memory_config);
@@ -1462,7 +1462,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
 Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config) {
     auto formatted_input_tensor = temp;
     if(formatted_input_tensor.get_layout()==Layout::ROW_MAJOR){
-        auto a_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(temp.get_legacy_shape(), false, false, true, true);
+        auto a_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(temp.get_shape().with_tile_padding(), false, false, true, true);
         if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(temp, a_pad_shape)) {
             formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(temp, temp.device(), a_pad_shape, 1.0, Layout::TILE);
         }
@@ -1493,13 +1493,13 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     // all_dimensions = False
     Tensor updated_grad = prod_result;
     auto step = std::vector<uint32_t>({1, 1, 1, 1});
-    if (prod_result.get_legacy_shape().without_padding() != grad.get_legacy_shape()) {
+    if (prod_result.get_shape() != grad.get_shape().with_tile_padding()) {
         if (dim == 3 || dim == -1) {
             std::vector<int64_t> after_permute_dims = {0, 3, 1, 2};
             Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
             std::vector<uint32_t> start_index = {0, 0, 0, 0};
             std::vector<uint32_t> end_index = {
-            grad.get_legacy_shape()[0], 1, grad.get_legacy_shape()[1], grad.get_legacy_shape()[2]};
+            grad.get_shape().with_tile_padding()[0], 1, grad.get_shape().with_tile_padding()[1], grad.get_shape().with_tile_padding()[2]};
             Tensor new_slice_tensor = ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);
             after_permute_dims = {0, 2, 3, 1};
             updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
@@ -1513,7 +1513,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
             Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
             std::vector<uint32_t> start_index = {0, 0, 0, 0};
             std::vector<uint32_t> end_index = {
-            grad.get_legacy_shape()[0], 1, grad.get_legacy_shape()[1], grad.get_legacy_shape()[3]};
+            grad.get_shape().with_tile_padding()[0], 1, grad.get_shape().with_tile_padding()[1], grad.get_shape().with_tile_padding()[3]};
             Tensor new_slice_tensor = ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);
             updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
             if(updated_grad.get_layout()==Layout::ROW_MAJOR){
@@ -1536,9 +1536,9 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
         return grad_tensor;
     } else if (dim == 1 || dim == -3) {
         Tensor tensor_1_temp = reciprocal_input;
-        if (reciprocal_input.get_legacy_shape()[1] % 32 != 0) {
+        if (reciprocal_input.get_shape().with_tile_padding()[1] % 32 != 0) {
             std::vector<std::pair<uint32_t, uint32_t>> padding = {{0, 0},
-                          {0, 32 - (reciprocal_input.get_legacy_shape()[1] % 32)},
+                          {0, 32 - (reciprocal_input.get_shape().with_tile_padding()[1] % 32)},
                           {0, 0},
                           {0, 0}};
             tensor_1_temp = ttnn::pad(0, reciprocal_input, padding, 0, true, std::nullopt);
@@ -1557,13 +1557,13 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
             after_permute_dims,
             output_memory_config);
         Tensor grad_result = result;
-        if (reciprocal_input.get_legacy_shape()[1] % 32 != 0) {
+        if (reciprocal_input.get_shape().with_tile_padding()[1] % 32 != 0) {
             std::vector<uint32_t> start_index = {0, 0, 0, 0};
             std::vector<uint32_t> end_index = {
-                input.get_legacy_shape()[0],
-                input.get_legacy_shape()[1],
-                input.get_legacy_shape()[2],
-                input.get_legacy_shape()[3]};
+                input.get_shape().with_tile_padding()[0],
+                input.get_shape().with_tile_padding()[1],
+                input.get_shape().with_tile_padding()[2],
+                input.get_shape().with_tile_padding()[3]};
             auto step = std::vector<uint32_t>({1,1,1,1});
             grad_result = ttnn::slice(DefaultQueueId, result, start_index, end_index, step, std::nullopt);
         }
@@ -1572,8 +1572,8 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     }
     // dim 0
     Tensor tensor_1_temp = reciprocal_input;
-    if (reciprocal_input.get_legacy_shape()[0] % 32 != 0) {
-        std::vector<std::pair<uint32_t, uint32_t>> padding = {{0, (32 - (reciprocal_input.get_legacy_shape()[0] % 32))},
+    if (reciprocal_input.get_shape().with_tile_padding()[0] % 32 != 0) {
+        std::vector<std::pair<uint32_t, uint32_t>> padding = {{0, (32 - (reciprocal_input.get_shape().with_tile_padding()[0] % 32))},
                       {0, 0},
                       {0, 0},
                       {0, 0}};
@@ -1592,13 +1592,13 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
         after_permute_dims,
         output_memory_config);
     Tensor grad_result = result;
-    if (reciprocal_input.get_legacy_shape()[0] % 32 != 0) {
+    if (reciprocal_input.get_shape().with_tile_padding()[0] % 32 != 0) {
         std::vector<uint32_t> start_index = {0, 0, 0, 0};
         std::vector<uint32_t> end_index = {
-            input.get_legacy_shape()[0],
-            input.get_legacy_shape()[1],
-            input.get_legacy_shape()[2],
-            input.get_legacy_shape()[3]};
+            input.get_shape().with_tile_padding()[0],
+            input.get_shape().with_tile_padding()[1],
+            input.get_shape().with_tile_padding()[2],
+            input.get_shape().with_tile_padding()[3]};
         grad_result = ttnn::slice(DefaultQueueId, result, start_index, end_index, step, std::nullopt);
     }
     grad_tensor.emplace_back(grad_result);

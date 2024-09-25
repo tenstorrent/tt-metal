@@ -39,23 +39,23 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
     const auto cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
     const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
-    const auto& input_shape = input.get_shape();
-    const auto& input_shape_without_padding = input_shape.value.without_padding();
+    const auto& input_shape = input.get_shape().with_tile_padding();
+    const auto& input_shape_without_padding = input.get_shape();
 
-    const auto Ht = input_shape.value[-2] / constants::TILE_HEIGHT;
-    const auto Wt = input_shape.value[-1] / constants::TILE_WIDTH;
+    const auto Ht = input_shape[-2] / constants::TILE_HEIGHT;
+    const auto Wt = input_shape[-1] / constants::TILE_WIDTH;
     const auto HtWt = Ht * Wt;
-    const auto num_reduce_input_tile = input_shape.value[dim];
+    const auto num_reduce_input_tile = input_shape[dim];
 
     const auto rank = input_shape.rank();
     auto input_tile_stride = HtWt;
     for (int i = dim + 1; i < rank - 2; i++) {
-        input_tile_stride *= input_shape.value[i];
+        input_tile_stride *= input_shape[i];
     }
 
     uint32_t inner_size = 1;
     for (int i = dim + 1; i < rank - 2; i++) {
-        inner_size *= input_shape.value[i];
+        inner_size *= input_shape[i];
     }
 
     const auto units_to_divide = output.volume() / constants::TILE_HW;

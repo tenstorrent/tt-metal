@@ -50,8 +50,8 @@ void RepeatAndInterleaveEltwiseMul::validate(const std::vector<Tensor>& input_te
         this->dtype == tt::tt_metal::DataType::BFLOAT16 || this->dtype == tt::tt_metal::DataType::BFLOAT8_B,
         "Unsupported data format for output!");
 
-    const auto ashape = input_tensor_a.get_legacy_shape();
-    const auto bshape = input_tensor_b.get_legacy_shape();
+    const auto ashape = input_tensor_a.get_shape().with_tile_padding();
+    const auto bshape = input_tensor_b.get_shape().with_tile_padding();
     TT_FATAL((ashape[0] == 1 and ashape[1] == 1), "Batch not supported for input a!");
     TT_FATAL((bshape[0] == 1 and bshape[1] == 1), "Batch not supported for input b!");
     TT_FATAL((ashape[2] % TILE_HEIGHT == 0), "Num of users must be multiple of 32 for input a!");
@@ -64,12 +64,12 @@ void RepeatAndInterleaveEltwiseMul::validate(const std::vector<Tensor>& input_te
         (bshape[3] == HIDDEN_SIZE || bshape[3] == TILE_WIDTH * HIDDEN_SIZE), "Input b width must be 32 or 32*5120!");
 }
 
-std::vector<tt::tt_metal::LegacyShape> RepeatAndInterleaveEltwiseMul::compute_output_shapes(
+std::vector<ttnn::Shape> RepeatAndInterleaveEltwiseMul::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-    const auto shape_a = input_tensor_a.get_legacy_shape();
-    const auto shape_b = input_tensor_b.get_legacy_shape();
+    const auto shape_a = input_tensor_a.get_shape().with_tile_padding();
+    const auto shape_b = input_tensor_b.get_shape().with_tile_padding();
     return {{shape_a[0], shape_a[1], shape_a[2], tt::constants::TILE_WIDTH * HIDDEN_SIZE}};
 }
 

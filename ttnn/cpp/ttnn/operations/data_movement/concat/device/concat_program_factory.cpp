@@ -25,7 +25,7 @@ operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    uint32_t num_output_rows = output.get_legacy_shape()[-2];
+    uint32_t num_output_rows = output.get_shape().with_tile_padding()[-2];
     uint32_t num_input_tensors = input_tensors.size();
 
     vector<CBHandle> cb_input(num_input_tensors);
@@ -150,7 +150,7 @@ operation::ProgramWithCallbacks s2s_rm_concat_multi_core(
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    uint32_t num_output_rows = output.get_legacy_shape()[-2];
+    uint32_t num_output_rows = output.get_shape().with_tile_padding()[-2];
     uint32_t num_input_tensors = input_tensors.size();
 
     vector<CBHandle> cb_input(num_input_tensors);
@@ -320,7 +320,7 @@ operation::ProgramWithCallbacks s2s_rm_concat_multi_core(
             auto dst_buffer = output_tensors.at(0).buffer();
             auto cores = corerange_to_cores(all_cores, std::nullopt, row_wise);
             auto input_cores = input_tensors[0].shard_spec().value().grid;
-            uint32_t num_output_rows = output_tensors[0].get_legacy_shape()[-1];
+            uint32_t num_output_rows = output_tensors[0].get_shape().with_tile_padding()[-1];
             uint32_t num_output_rows_per_core = div_up(num_output_rows, input_cores.num_cores());
             for (auto core : cores) {
                 uint32_t curr_num_input_tensors;
@@ -363,7 +363,7 @@ operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     // CoreRangeSet all_cores({CoreRange(CoreCoord(0,0), compute_with_storage_grid_size)});
 
-    uint32_t num_output_rows = output.get_legacy_shape()[-1];
+    uint32_t num_output_rows = output.get_shape().with_tile_padding()[-1];
     uint32_t num_input_tensors = input_tensors.size();
 
     vector<CBHandle> cb_input(num_input_tensors);
@@ -454,7 +454,7 @@ operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
             auto dst_buffer = output_tensors.at(0).buffer();
             auto cores = corerange_to_cores(all_cores, std::nullopt, row_wise);
             auto input_cores = input_tensors[0].shard_spec().value().grid;
-            uint32_t num_output_rows = output_tensors[0].get_legacy_shape()[-1];
+            uint32_t num_output_rows = output_tensors[0].get_shape().with_tile_padding()[-1];
             uint32_t num_output_rows_per_core = div_up(num_output_rows, input_cores.num_cores());
             for (auto core : cores) {
                 uint32_t curr_num_input_tensors;
@@ -516,8 +516,8 @@ operation::ProgramWithCallbacks concat_multi_core(
     uint32_t num_output_pages;
     uint32_t single_page_size;
     if (rm_layout) {
-        num_output_pages = output.volume() / output.get_legacy_shape()[-1];
-        single_page_size = align(output.element_size() * output.get_legacy_shape()[-1], output.buffer()->alignment());
+        num_output_pages = output.volume() / output.get_shape().with_tile_padding()[-1];
+        single_page_size = align(output.element_size() * output.get_shape().with_tile_padding()[-1], output.buffer()->alignment());
     } else {
         num_output_pages = output.volume() / TILE_HW;
         single_page_size = tt_metal::detail::TileSize(cb_data_format);
@@ -541,7 +541,7 @@ operation::ProgramWithCallbacks concat_multi_core(
             .set_page_size(src0_cb_index, single_page_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    uint32_t num_dims = output.get_legacy_shape().rank();
+    uint32_t num_dims = output.get_shape().with_tile_padding().rank();
 
     std::vector<uint32_t> src_addr(num_input_tensors);
     std::vector<bool> is_dram(num_input_tensors);
@@ -563,11 +563,11 @@ operation::ProgramWithCallbacks concat_multi_core(
     }
 
     for (uint32_t i = dim + 1; i < num_dims; ++i) {
-        num_accum_pages *= output.get_legacy_shape()[i];
+        num_accum_pages *= output.get_shape().with_tile_padding()[i];
     }
     if (rm_layout) {
         if (num_dims > 1 && dim < num_dims - 1) {
-            num_accum_pages /= output.get_legacy_shape()[-1];
+            num_accum_pages /= output.get_shape().with_tile_padding()[-1];
         }
     } else {
         if (dim < num_dims - 2) {
@@ -588,7 +588,7 @@ operation::ProgramWithCallbacks concat_multi_core(
             if (dim == num_dims - 1) {
                 num_pages_per_block[i] = num_accum_pages;
             } else {
-                uint32_t dim_pages = input_tensors[i].get_legacy_shape()[dim];
+                uint32_t dim_pages = input_tensors[i].get_shape().with_tile_padding()[dim];
                 num_pages_per_block[i] = num_accum_pages * dim_pages;
                 num_output_pages_per_block += num_accum_pages * dim_pages;
             }
@@ -601,7 +601,7 @@ operation::ProgramWithCallbacks concat_multi_core(
             auto buffer = input_tensors[i].buffer();
             src_addr[i] = buffer->address();
             is_dram[i] = buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-            uint32_t dim_pages = input_tensors[i].get_legacy_shape()[dim] / scale_factor;
+            uint32_t dim_pages = input_tensors[i].get_shape().with_tile_padding()[dim] / scale_factor;
             num_pages_per_block[i] = num_accum_pages * dim_pages;
             num_output_pages_per_block += num_accum_pages * dim_pages;
         }

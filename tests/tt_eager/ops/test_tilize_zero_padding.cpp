@@ -39,7 +39,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt::tt_metal::LegacyShape shape = {1, 32, 45, 64};
+        ttnn::Shape shape = {1, 32, 45, 64};
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a =  ttnn::numpy::random::random(shape).to(device);
         Tensor b = ttnn::tilize_with_zero_padding(a);
@@ -50,7 +50,7 @@ int main(int argc, char **argv) {
         log_debug(LogTest, "Moving src data to host to validate");
         Tensor host_a = a.cpu(); // Move tensor a to host to validate
         // TODO: Update when tensor.pad_to_tile() function is added
-        auto padded_shape = a.get_legacy_shape();
+        auto padded_shape = a.get_shape();
         padded_shape[2] = round_up(padded_shape[2], TILE_HEIGHT);
         padded_shape[3] = round_up(padded_shape[3], TILE_WIDTH);
         Tensor padded_host_a = host_a.pad(padded_shape, {0,0,0,0}, 0);

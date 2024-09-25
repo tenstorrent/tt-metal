@@ -14,8 +14,8 @@ namespace ttnn::operations::experimental::transformer {
 
     static inline operation::ProgramWithCallbacks create_qkv_separate(const Tensor &input_tensor_q, const Tensor &input_tensor_kv, const uint32_t num_q_heads, const uint32_t num_kv_heads, const uint32_t head_dim, std::vector<Tensor> &output, bool transpose_k) {
 
-        const auto &q_shape = input_tensor_q.get_legacy_shape();
-        const auto &kv_shape = input_tensor_kv.get_legacy_shape();
+        const auto &q_shape = input_tensor_q.get_shape().with_tile_padding();
+        const auto &kv_shape = input_tensor_kv.get_shape().with_tile_padding();
         auto shard_spec = input_tensor_q.shard_spec().value();
         auto all_cores = shard_spec.grid;
         auto bbox = all_cores.bounding_box();

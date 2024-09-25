@@ -29,7 +29,7 @@ namespace ttnn::operations::moreh::moreh_norm_backward {
 
 std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(float p);
 void get_tensor_dim(std::vector<uint32_t>& dim, const Shape& shape);
-tt::tt_metal::LegacyShape get_output_grad_shape(
+ttnn::Shape get_output_grad_shape(
     const Tensor& output_grad, const Tensor& input_grad, const std::vector<int64_t>& dims, const bool& keepdim);
 
 struct MorehNormBackwardOperation {

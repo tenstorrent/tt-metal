@@ -38,7 +38,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        auto shapes = std::vector<tt::tt_metal::LegacyShape>{{1, 1, TILE_HEIGHT, TILE_WIDTH}, {1, 1, TILE_HEIGHT * 2, TILE_WIDTH * 2}, {1, 1, TILE_HEIGHT * 3, TILE_WIDTH * 4}};
+        auto shapes = std::vector<ttnn::Shape>{{1, 1, TILE_HEIGHT, TILE_WIDTH}, {1, 1, TILE_HEIGHT * 2, TILE_WIDTH * 2}, {1, 1, TILE_HEIGHT * 3, TILE_WIDTH * 4}};
 
         auto run_operations = [&shapes, device] {
             for (const auto shape : shapes) {

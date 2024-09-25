@@ -47,8 +47,8 @@ static Tensor reduce_impl(
     if (dim.size() == 1) {
         if (dim[0] == rank - 3) {
             // Pad before running the op to only pay cost of formatting once
-            auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor_arg.get_legacy_shape(), true);
-            auto out_shape = input_tensor_arg.get_legacy_shape();
+            auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor_arg.get_shape().with_tile_padding(), true);
+            auto out_shape = input_tensor_arg.get_shape().with_tile_padding();
             out_shape[1] = 1;
 
             auto formatted_input_tensor = input_tensor_arg;
@@ -67,8 +67,8 @@ static Tensor reduce_impl(
         } else if (dim[0] == 0) {
             // Pad before running the op to only pay cost of formatting once
             auto input_tensor_pad_shape =
-                AutoFormat::pad_to_tile_shape(input_tensor_arg.get_legacy_shape(), false, true);
-            auto out_shape = input_tensor_arg.get_legacy_shape();
+                AutoFormat::pad_to_tile_shape(input_tensor_arg.get_shape().with_tile_padding(), false, true);
+            auto out_shape = input_tensor_arg.get_shape().with_tile_padding();
             out_shape[0] = 1;
 
             auto formatted_input_tensor = input_tensor_arg;
@@ -115,12 +115,12 @@ static Tensor reduce_impl(
     if (!dim_arg.has_value()) {
         if constexpr (reduce_type == ReduceType::Sum || reduce_type == ReduceType::Max  || reduce_type == ReduceType::Min) {
             output_tensor = input_tensor;
-            for (int rank = input_tensor.get_legacy_shape().rank() - 1; rank >= 0; rank--) {
+            for (int rank = input_tensor.get_shape().with_tile_padding().rank() - 1; rank >= 0; rank--) {
                 output_tensor = reduce_impl<reduce_type>(output_tensor, rank, true, memory_config, compute_kernel_config, scalar, false);
             }
         } else if constexpr (reduce_type == ReduceType::Mean) {
             output_tensor = input_tensor;
-            for (int rank = input_tensor.get_legacy_shape().rank() - 1; rank >= 0; rank--) {
+            for (int rank = input_tensor.get_shape().with_tile_padding().rank() - 1; rank >= 0; rank--) {
                 output_tensor = reduce_impl<ReduceType::Sum>(output_tensor, rank, true, memory_config, compute_kernel_config, scalar, false);
             }
             float inv_volume = 1.0f/input_tensor.volume();
@@ -173,7 +173,7 @@ static Tensor reduce_impl(
     }
 
     if (reshape) {
-        output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{tt::tt_metal::LegacyShape{output_shape, padded_output_shape}});
+        output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{ttnn::Shape{output_shape, padded_output_shape}});
     }
 
     return output_tensor;

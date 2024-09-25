@@ -458,7 +458,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
         total_size = output_shard_spec.numel() / TILE_HW * unit_size;
     } else {
         unit_size = output_shard_spec.shape[1] * output.element_size();
-        page_size = output.get_legacy_shape()[-1] * output.element_size();
+        page_size = output.get_shape().with_tile_padding()[-1] * output.element_size();
         total_size = output_shard_shape[0] * unit_size;
     }
 

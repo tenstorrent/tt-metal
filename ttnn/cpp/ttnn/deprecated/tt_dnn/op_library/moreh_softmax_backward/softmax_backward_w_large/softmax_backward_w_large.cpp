@@ -21,7 +21,7 @@ namespace primary {
 operation::ProgramWithCallbacks moreh_softmax_backward_w_large(const Tensor &output, const Tensor &output_grad, const Tensor &input_grad, const CoreRange core_range, const MorehSoftmaxBackwardOp op, const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     log_info(LogTest, "Large tensor algorithm selected");
     // split work
-    auto shape = input_grad.get_legacy_shape();
+    auto shape = input_grad.get_shape().with_tile_padding();
     auto H = shape[-2];
     auto W = shape[-1];
     auto Ht = H / TILE_HEIGHT;
@@ -115,7 +115,7 @@ operation::ProgramWithCallbacks moreh_softmax_backward_w_large(const Tensor &out
         }
 
         float scaler = 1.0f;
-        uint32_t mask_w = shape.without_padding()[-1] % TILE_WIDTH;
+        uint32_t mask_w = input_grad.get_shape()[-1] % TILE_WIDTH;
         if(mask_w == 0) mask_w = TILE_WIDTH;
         vector<uint32_t> reader_args = {
             output.buffer()->address(),

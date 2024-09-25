@@ -32,8 +32,8 @@ void ReshapeDeviceOperation::validate(const std::vector<Tensor> &input_tensors) 
         TT_FATAL(output_shape[2] % TILE_HEIGHT == 0 && output_shape[3] % TILE_WIDTH == 0, "Expected a multiple of 32 for H, W (or -1 evaluating to such) for reshape!");
     } else if (input_tensor_a.get_layout() == Layout::ROW_MAJOR) {
         uint32_t ROW_MAJOR_WIDTH = 8;
-        TT_FATAL(input_tensor_a.get_legacy_shape()[3] % ROW_MAJOR_WIDTH == 0 && output_shape[3] % ROW_MAJOR_WIDTH == 0, "Operand/target width must be a multiple of 8");
-        uint32_t num_old_sticks = input_tensor_a.get_legacy_shape()[0] * input_tensor_a.get_legacy_shape()[1] * input_tensor_a.get_legacy_shape()[2];
+        TT_FATAL(input_tensor_a.get_shape().with_tile_padding()[3] % ROW_MAJOR_WIDTH == 0 && output_shape[3] % ROW_MAJOR_WIDTH == 0, "Operand/target width must be a multiple of 8");
+        uint32_t num_old_sticks = input_tensor_a.get_shape().with_tile_padding()[0] * input_tensor_a.get_shape().with_tile_padding()[1] * input_tensor_a.get_shape().with_tile_padding()[2];
         uint32_t num_new_sticks = output_shape[0] * output_shape[1] * output_shape[2];
     } else {
         TT_THROW("Unsupported layout for reshape");
@@ -41,7 +41,7 @@ void ReshapeDeviceOperation::validate(const std::vector<Tensor> &input_tensors) 
 }
 
 
-std::vector<tt::tt_metal::LegacyShape> ReshapeDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<ttnn::Shape> ReshapeDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     return {tt::tt_metal::infer_dims_for_reshape(this->N, this->C, this->H, this->W, input_tensor_a.volume())};
 }

@@ -17,12 +17,12 @@ using namespace tt;
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_runtime_args_tile_sharded(
     const Tensor &input_tensor,
     Tensor &output_tensor,
-    const tt::tt_metal::LegacyShape &output_tensor_start,
+    const ttnn::Shape &output_tensor_start,
     uint32_t num_cores_total,
     uint32_t num_cores_x,
     uint32_t num_tiles_per_core) {
     auto input_buffer = input_tensor.buffer();
-    auto input_shape = input_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_shape().with_tile_padding();
 
     vector<uint32_t> common_reader_kernel_args = {input_buffer->address(), 0};
 
@@ -49,9 +49,9 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_r
 }
 
 operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
-    const Tensor &a, Tensor &output, const tt::tt_metal::LegacyShape &output_tensor_start, const tt::tt_metal::LegacyShape &output_tensor_end) {
-    const tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
-    const tt::tt_metal::LegacyShape input_shape = a.get_legacy_shape();
+    const Tensor &a, Tensor &output, const ttnn::Shape &output_tensor_start, const ttnn::Shape &output_tensor_end) {
+    const ttnn::Shape output_shape = output.get_shape().with_tile_padding();
+    const ttnn::Shape input_shape = a.get_shape().with_tile_padding();
 
     tt_metal::Program program = tt_metal::CreateProgram();
 

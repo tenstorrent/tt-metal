@@ -16,26 +16,26 @@ namespace ttnn::operations::experimental::transformer {
         const uint32_t seq_len_end,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<Tensor> optional_output_tensor) {
-            auto input_tensor_shape = input_tensor.get_legacy_shape();
+            auto input_tensor_shape = input_tensor.get_shape().with_tile_padding();
             auto dim0 = input_tensor_shape[0];
             auto dim1 = input_tensor_shape[1];
             auto head_dim = input_tensor_shape[3];
 
-            const tt::tt_metal::LegacyShape output_tensor_start = {
+            const ttnn::Shape output_tensor_start = {
                 0,
                 0,
                 seq_len_start,
                 0,
             };
 
-            const tt::tt_metal::LegacyShape output_tensor_end = {
+            const ttnn::Shape output_tensor_end = {
                 dim0-1,
                 dim1-1,
                 seq_len_end-1,
                 head_dim-1,
             };
 
-            const tt::tt_metal::LegacyShape output_tensor_shape = {
+            const ttnn::Shape output_tensor_shape = {
                 output_tensor_end[0] - output_tensor_start[0] + 1,
                 output_tensor_end[1] - output_tensor_start[1] + 1,
                 output_tensor_end[2] - output_tensor_start[2] + 1,

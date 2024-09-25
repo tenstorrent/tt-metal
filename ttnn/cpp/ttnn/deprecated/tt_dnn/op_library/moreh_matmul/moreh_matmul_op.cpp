@@ -20,7 +20,7 @@ namespace primary {
 namespace {
 inline bool is_dot_forward(const Tensor& input, const Tensor& other, bool transpose_input, bool transpose_other) {
     // TODO: non-4d support for dot.
-    if (input.get_legacy_shape().rank() != 4 || other.get_legacy_shape().rank() != 4) {
+    if (input.get_shape().with_tile_padding().rank() != 4 || other.get_shape().with_tile_padding().rank() != 4) {
         return false;
     }
 
@@ -31,10 +31,10 @@ inline bool is_dot_forward(const Tensor& input, const Tensor& other, bool transp
     return is_1d_tensor(input) && is_1d_tensor(other) && is_same_shape(input, other);
 }
 
-tt::tt_metal::LegacyShape compute_output_shape(
-    const tt::tt_metal::LegacyShape& input_shape, const tt::tt_metal::LegacyShape& other_shape, bool transpose_input, bool transpose_other) {
-    const auto& input_shape_wo_padding = input_shape.without_padding();
-    const auto& other_shape_wo_padding = other_shape.without_padding();
+ttnn::Shape compute_output_shape(
+    const ttnn::Shape& input_shape_wo_padding, const ttnn::Shape& other_shape_wo_padding, bool transpose_input, bool transpose_other) {
+    const auto& input_shape = input_shape_wo_padding.with_tile_padding();
+    const auto& other_shape = other_shape_wo_padding.with_tile_padding();
 
     auto h = (transpose_input) ? (input_shape[-1]) : (input_shape[-2]);
     auto w = (transpose_other) ? (other_shape[-2]) : (other_shape[-1]);
@@ -68,17 +68,17 @@ tt::tt_metal::LegacyShape compute_output_shape(
     output_dim[output_rank - 2] = h;
     output_dim[output_rank - 1] = w;
 
-    tt::tt_metal::LegacyShape output_shape{output_dim};
+    ttnn::Shape output_shape{output_dim};
     auto padding = output_shape.padding();
     // padding for t logmatrix dims
     padding[output_rank - 2] = Padding::PadDimension{0, h - h_wo_padding};
     padding[output_rank - 1] = Padding::PadDimension{0, w - w_wo_padding};
-    return {tt::tt_metal::LegacyShape(output_shape, padding)};
+    return {ttnn::Shape(output_shape, padding)};
 }
 
 }  // namespace
 
-void get_tensor_dim(std::vector<uint32_t>& dim, const tt::tt_metal::LegacyShape& shape) {
+void get_tensor_dim(std::vector<uint32_t>& dim, const ttnn::Shape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -97,7 +97,7 @@ void get_tensor_dim(std::vector<uint32_t>& dim, const tt::tt_metal::LegacyShape&
     }
 }
 
-std::vector<int64_t> find_reduce_dim(const tt::tt_metal::LegacyShape& a_shape, const tt::tt_metal::LegacyShape& b_shape) {
+std::vector<int64_t> find_reduce_dim(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape) {
     std::vector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     std::vector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(a_dim, a_shape);
@@ -119,8 +119,8 @@ std::vector<int64_t> find_reduce_dim(const tt::tt_metal::LegacyShape& a_shape, c
 
 bool is_same_batch_dim(const Tensor& tensor_a, const Tensor& tensor_b) {
     // check batch dims
-    const auto& a_shape = tensor_a.get_legacy_shape();
-    const auto& b_shape = tensor_b.get_legacy_shape();
+    const auto& a_shape = tensor_a.get_shape().with_tile_padding();
+    const auto& b_shape = tensor_b.get_shape().with_tile_padding();
     std::vector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     std::vector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(a_dim, a_shape);
@@ -154,10 +154,10 @@ operation::ProgramWithCallbacks MorehMatmul::create_program(
 }
 
 // Must be provided in the case where an optional output tensor was not provided
-std::vector<tt::tt_metal::LegacyShape> MorehMatmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::Shape> MorehMatmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     return {compute_output_shape(
-        input_tensors.at(0).get_legacy_shape(),
-        input_tensors.at(1).get_legacy_shape(),
+        input_tensors.at(0).get_shape(),
+        input_tensors.at(1).get_shape(),
         this->transpose_input,
         this->transpose_other)};
 }
@@ -190,10 +190,10 @@ void MorehMatmul::validate_with_output_tensors(
     check_tensor(bias, "moreh_matmul", "bias");
 
     // check matrix dims
-    const auto& input_shape = input.get_legacy_shape().without_padding();
-    const auto& other_shape = other.get_legacy_shape().without_padding();
-    const auto& input_wo_shape = input_shape.without_padding();
-    const auto& other_wo_shape = other_shape.without_padding();
+    const auto& input_shape = input.get_shape();
+    const auto& other_shape = other.get_shape();
+    const auto& input_wo_shape = input_shape;
+    const auto& other_wo_shape = other_shape;
     uint32_t input_m = (this->transpose_input) ? (input_wo_shape[-1]) : (input_wo_shape[-2]);
     uint32_t input_k = (this->transpose_input) ? (input_wo_shape[-2]) : (input_wo_shape[-1]);
     uint32_t other_k = (this->transpose_other) ? (other_wo_shape[-1]) : (other_wo_shape[-2]);
@@ -214,8 +214,8 @@ void MorehMatmul::validate_with_output_tensors(
 
     // check output dims
     if (output.has_value()) {
-        const auto& output_shape = output.value().get_legacy_shape().without_padding();
-        const auto& output_wo_shape = output_shape.without_padding();
+        const auto& output_shape = output.value().get_shape();
+        const auto& output_wo_shape = output_shape;
         uint32_t output_m = output_wo_shape[-2];
         uint32_t output_n = output_wo_shape[-1];
         TT_FATAL(input_m == output_m, "m must be the same. input_m {}, output_m {}", input_m, output_m);
@@ -231,7 +231,7 @@ void MorehMatmul::validate_with_output_tensors(
 
     // check bias size
     if (bias.has_value()) {
-        const auto& bias_wo_shape = bias.value().get_legacy_shape().without_padding();
+        const auto& bias_wo_shape = bias.value().get_shape();
         uint32_t bias_rank = bias_wo_shape.rank();
         uint32_t bias_w = bias_wo_shape[-1];
         TT_FATAL(bias_rank == 2, "bias rank {} must be 2 (tilized).", bias_rank);

@@ -148,7 +148,7 @@ const Padding& LegacyShape::padding() const {
     return this->padding_;
 }
 
-const LegacyShape LegacyShape::without_padding() const {
+LegacyShape LegacyShape::without_padding() const {
     auto padding = this->padding_;
     std::vector<std::uint32_t> shape_without_padding;
     for (auto index = 0; index < this->rank(); index++) {
@@ -293,3 +293,24 @@ MemoryConfig load_memory_config(const std::string& file_name) {
 }  // namespace tt_metal
 
 }  // namespace tt
+
+namespace ttnn {
+namespace types {
+
+uint32_t &Shape::operator[](const std::int64_t index) {return this->value.without_padding()[index]; }
+const uint32_t Shape::operator[](std::int64_t index) const { return this->value.without_padding()[index]; }
+
+const uint32_t* Shape::begin() const {return this->value.begin(); }
+const uint32_t* Shape::end() const {return this-> value.end(); }
+
+tt::tt_metal::Array4D Shape::to_array_4D() const {
+    tt::tt_metal::Array4D ret_array;
+    for (int i = 0; i < rank(); i++) {
+        ret_array[i] = this->operator[](i);
+    }
+    return ret_array;
+}
+
+}  // namespace ttnn
+
+}  // namespace types

@@ -54,8 +54,8 @@ void FastReduceNCDeviceOperation::validate_with_output_tensors(
     tt::operations::primary::check_tensor(output, "FastReduceNC", "output", {DataType::BFLOAT16, DataType::BFLOAT8_B});
 
     // validate input dim
-    auto input_shape = input.get_legacy_shape();
-    auto input_shape_wo_padding = input.get_legacy_shape().without_padding();
+    auto input_shape = input.get_shape().with_tile_padding();
+    auto input_shape_wo_padding = input.get_shape();
     const auto input_rank = input_shape.rank();
     TT_FATAL(
         (this->dim >= 0 && this->dim <= tt::tt_metal::MAX_NUM_DIMENSIONS - 2),
@@ -64,10 +64,9 @@ void FastReduceNCDeviceOperation::validate_with_output_tensors(
     TT_FATAL((this->dim < input_rank), "dim must be smaller than input tensor rank {}.", input_rank);
 }
 
-std::vector<tt::tt_metal::LegacyShape> FastReduceNCDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::Shape> FastReduceNCDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input = input_tensors.at(0);
-    const auto& input_shape = input.get_legacy_shape();
-    const auto input_rank = input_shape.rank();
+    const auto& input_shape = input.get_shape();
 
     // keepdim=true
     auto output_shape = input_shape;
@@ -76,7 +75,7 @@ std::vector<tt::tt_metal::LegacyShape> FastReduceNCDeviceOperation::compute_outp
     // last 2-dim
     output_shape[this->dim] = 1;
 
-    output_shape = tt::tt_metal::LegacyShape(output_shape, padding);
+    output_shape = ttnn::Shape(output_shape, padding);
     return {output_shape};
 }
 

@@ -282,8 +282,8 @@ void device_module(py::module& m_device) {
         bool pad_c = false,
         bool pad_n = false,
         bool pad_h = true,
-        bool pad_w = true) -> tt::tt_metal::LegacyShape {
-            return ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(unpadded_shape, pad_c, pad_n, pad_h, pad_w);
+        bool pad_w = true) -> ttnn::Shape {
+            return ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(ttnn::Shape(unpadded_shape), pad_c, pad_n, pad_h, pad_w);
         });
 
     m_device.def("EnablePersistentKernelCache", &tt::tt_metal::detail::EnablePersistentKernelCache, R"doc(

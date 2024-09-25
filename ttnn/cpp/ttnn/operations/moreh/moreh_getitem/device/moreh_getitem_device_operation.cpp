@@ -111,7 +111,7 @@ MorehGetItemOperation::shape_return_value_t MorehGetItemOperation::compute_outpu
 
         auto index = index_tensors[0];
         uint32_t index_size = index.get_shape()[-1];
-        uint32_t index_size_without_padding = index.get_shape().value.without_padding()[-1];
+        uint32_t index_size_without_padding = index.get_shape()[-1];
 
         uint32_t last_dim = index_dims.back() + dim_offset;
 
@@ -137,7 +137,7 @@ MorehGetItemOperation::shape_return_value_t MorehGetItemOperation::compute_outpu
         }
 
         const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-        output_shape = Shape(tt::tt_metal::LegacyShape(output_size_vec, padding));
+        output_shape = Shape(ttnn::Shape(output_size_vec, padding));
 
     } else {
         // compute output shape

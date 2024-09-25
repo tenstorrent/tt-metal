@@ -284,7 +284,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     log_trace(tt::LogOp, "max_buffer_per_chunk: {}", max_buffer_per_chunk);
     log_trace(tt::LogOp, "max_pages_per_chunk: {}", max_pages_per_chunk);
     bool rm = input_tensor.get_layout() == Layout::ROW_MAJOR;
-    bool width = input_tensor.get_legacy_shape().rank() - 1 == dim;
+    bool width = input_tensor.get_shape().with_tile_padding().rank() - 1 == dim;
     tt::DataFormat df = datatype_to_dataformat_converter(input_tensor.get_dtype());
 
     std::map<string, string> worker_defines;

@@ -15,9 +15,9 @@ void MoveDeviceOperation::validate(const std::vector<Tensor> &input_tensors) con
     const auto& input_tensor_a = input_tensors.at(0);
 }
 
-std::vector<tt::tt_metal::LegacyShape> MoveDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<ttnn::Shape> MoveDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.get_legacy_shape()};
+    return {input_tensor.get_shape()};
 }
 
 std::vector<Tensor> MoveDeviceOperation::create_output_tensors(const std::vector<Tensor> &input_tensors) const {

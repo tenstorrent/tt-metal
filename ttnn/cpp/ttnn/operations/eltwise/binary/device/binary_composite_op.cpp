@@ -333,8 +333,8 @@ Tensor _logical_xor_(const Tensor& input_a, const Tensor& input_b, const std::op
 
 Tensor _scatter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     tt::tt_metal::Array4D start_index = {0, 0, 0, 0};
-    Tensor index_pad = ttnn::pad(0, ttnn::ones_like(input_a), input_b.get_legacy_shape().to_array_4D(), start_index, 0, false, std::nullopt);
-    Tensor temp_a = ttnn::pad(0, input_a, input_b.get_legacy_shape().to_array_4D(), start_index, 0, false, std::nullopt);
+    Tensor index_pad = ttnn::pad(0, ttnn::ones_like(input_a), input_b.get_shape().with_tile_padding().to_array_4D(), start_index, 0, false, std::nullopt);
+    Tensor temp_a = ttnn::pad(0, input_a, input_b.get_shape().with_tile_padding().to_array_4D(), start_index, 0, false, std::nullopt);
     return ttnn::where(index_pad, temp_a, input_b);
 }
 
@@ -345,9 +345,9 @@ Tensor _scatter(const Tensor& input_a, const Tensor& input_b, const std::optiona
  *   by running reshape.
  */
 Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    const tt::tt_metal::LegacyShape s_a = input_a.get_legacy_shape();
-    const tt::tt_metal::LegacyShape s_b = input_b.get_legacy_shape();
-    auto num_ones = [](const tt::tt_metal::LegacyShape& s) -> uint32_t {
+    const ttnn::Shape s_a = input_a.get_shape().with_tile_padding();
+    const ttnn::Shape s_b = input_b.get_shape().with_tile_padding();
+    auto num_ones = [](const ttnn::Shape& s) -> uint32_t {
         uint32_t num1s = 0;
         for (uint32_t idx = 0; idx < 4; idx++) num1s += (uint32_t)(s[idx] == 1);
         return num1s;

@@ -18,7 +18,7 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to transpose need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr , "Operands to transpose need to be allocated in buffers on device!");
-    const auto shape = input_tensor.get_legacy_shape();
+    const auto shape = input_tensor.get_shape().with_tile_padding();
     bool row_major = input_tensor.get_layout() == Layout::ROW_MAJOR;
     uint32_t W = shape[3], H = shape[2], C = shape[1], N = shape[0];
     uint32_t HW = H*W;
@@ -72,9 +72,9 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
 }
 
 
-std::vector<tt::tt_metal::LegacyShape> Transpose::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<ttnn::Shape> Transpose::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto out_shape = input_tensor.get_legacy_shape();
+    auto out_shape = input_tensor.get_shape().with_tile_padding();
     auto padding = out_shape.padding();
     switch (this->dim){
         case TransposeOpDim::CN:
@@ -102,7 +102,7 @@ std::vector<tt::tt_metal::LegacyShape> Transpose::compute_output_shapes(const st
             std::swap(padding[1], padding[3]);
             break;
     }
-    return {tt::tt_metal::LegacyShape(out_shape, padding)};
+    return {ttnn::Shape(out_shape, padding)};
 }
 
 
@@ -112,8 +112,8 @@ std::vector<Tensor> Transpose::create_output_tensors(const std::vector<Tensor> &
     if (this->output_mem_config.is_sharded()) {
         if (this->dim == TransposeOpDim::WH) {
             ShardSpec shard_spec = input_tensor.shard_spec().value();
-            shard_spec.shape[0] = shard_spec.shape[0] / input_tensor.get_legacy_shape()[-2] * input_tensor.get_legacy_shape()[-1];
-            shard_spec.shape[1] = input_tensor.get_legacy_shape()[-2];
+            shard_spec.shape[0] = shard_spec.shape[0] / input_tensor.get_shape().with_tile_padding()[-2] * input_tensor.get_shape().with_tile_padding()[-1];
+            shard_spec.shape[1] = input_tensor.get_shape().with_tile_padding()[-2];
             const auto output_shape = this->compute_output_shapes(input_tensors)[0];
             auto mem_config = this->output_mem_config;
             mem_config.shard_spec = shard_spec;

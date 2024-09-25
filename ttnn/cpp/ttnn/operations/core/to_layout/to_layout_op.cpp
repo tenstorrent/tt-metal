@@ -149,7 +149,7 @@ Tensor to_layout_impl(
 
             tensor =
                 ttnn::untilize_with_unpadding(tensor, output_tensor_end, output_memory_config, use_multicore_untilize);
-            return reshape(tensor, ttnn::Shape(tt::tt_metal::LegacyShape{output_shape}));
+            return reshape(tensor, ttnn::Shape{output_shape});
 
         } else if (layout == ttnn::TILE_LAYOUT) {
             std::vector<uint32_t> padded_output_shape;
@@ -176,7 +176,7 @@ Tensor to_layout_impl(
                     tensor, padded_output_shape, 0, output_memory_config, dtype, use_multicore_tilize);
             }
 
-            return reshape(tensor, ttnn::Shape(tt::tt_metal::LegacyShape{output_shape, padded_output_shape}));
+            return reshape(tensor, ttnn::Shape{output_shape, padded_output_shape});
 
         } else {
             TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);
@@ -187,8 +187,8 @@ Tensor to_layout_impl(
             return device ? tensor.to(layout, device) : tensor.to(layout);
         } else if (layout == ttnn::ROW_MAJOR_LAYOUT) {
             tensor = device ? tensor.to(layout, device) : tensor.to(layout);
-            tensor = tensor.unpad_from_tile(tensor.get_shape().value.without_padding());
-            return reshape(tensor, ttnn::Shape(tt::tt_metal::LegacyShape{output_shape}));
+            tensor = tensor.unpad_from_tile(tensor.get_shape());
+            return reshape(tensor, ttnn::Shape{output_shape});
         } else if (layout == ttnn::TILE_LAYOUT) {
             std::vector<uint32_t> padded_output_shape;
             std::vector<uint32_t> padded_input_start;
@@ -202,7 +202,7 @@ Tensor to_layout_impl(
             }
             tensor = tensor.pad(padded_output_shape, padded_input_start, 0);
             tensor = device ? tensor.to(layout, device) : tensor.to(layout);
-            return reshape(tensor, ttnn::Shape(tt::tt_metal::LegacyShape{output_shape, padded_output_shape}));
+            return reshape(tensor, ttnn::Shape{output_shape, padded_output_shape});
 
         } else {
             TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);

@@ -21,7 +21,7 @@ namespace matmul {
 operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor &b, Tensor &output, bool bcast_batch) {
     tt_metal::Program program{};
 
-    const tt::tt_metal::LegacyShape& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+    const ttnn::Shape& ashape = a.get_shape().with_tile_padding(), bshape = b.get_shape().with_tile_padding();
 
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
@@ -36,7 +36,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::Device *device = a.device();
-    const tt::tt_metal::LegacyShape& cshape = output.get_legacy_shape();  // C=A*B, N1MK*11KN->N1MN
+    const ttnn::Shape& cshape = output.get_shape().with_tile_padding();  // C=A*B, N1MK*11KN->N1MN
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;

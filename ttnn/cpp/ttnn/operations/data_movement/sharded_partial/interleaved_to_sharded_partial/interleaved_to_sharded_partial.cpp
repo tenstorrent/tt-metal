@@ -36,10 +36,10 @@ ttnn::Tensor InterleavedToShardedPartialOperation::invoke(
             if constexpr (std::is_same_v<GridType, CoreCoord>) {
                 grid_size = grid;
                 uint32_t num_cores = 0;
-                uint32_t total_height = input_tensor.volume() / input_tensor.get_legacy_shape()[-1];
+                uint32_t total_height = input_tensor.volume() / input_tensor.get_shape().with_tile_padding()[-1];
                 total_height /= num_slices;
 
-                uint32_t total_width = input_tensor.get_legacy_shape()[-1];
+                uint32_t total_width = input_tensor.get_shape().with_tile_padding()[-1];
                 switch (shard_scheme) {
                     case TensorMemoryLayout::HEIGHT_SHARDED: num_cores = tt::div_up(total_height, shard_shape[0]); break;
                     case TensorMemoryLayout::WIDTH_SHARDED: num_cores = tt::div_up(total_width, shard_shape[1]); break;

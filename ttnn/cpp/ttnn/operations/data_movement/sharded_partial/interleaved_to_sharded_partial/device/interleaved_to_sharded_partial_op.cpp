@@ -16,7 +16,7 @@ void InterleavedToShardedPartialDeviceOperation::validate(const std::vector<Tens
     // Validate output tensor
     TT_FATAL(slice_index >= 0 && slice_index < num_slices, "Slice index and num_slices don't match! Index = {} num_slices = {}", slice_index, num_slices);
     TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Currently, only tile layout is supported for partial I->S");
-    TT_FATAL((input_tensor.volume() / input_tensor.get_legacy_shape()[-1]) % num_slices == 0, "Total height of a tensor must be divisible by num_slices!");
+    TT_FATAL((input_tensor.volume() / input_tensor.get_shape().with_tile_padding()[-1]) % num_slices == 0, "Total height of a tensor must be divisible by num_slices!");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
@@ -32,9 +32,9 @@ void InterleavedToShardedPartialDeviceOperation::validate(const std::vector<Tens
 }
 
 
-std::vector<tt::tt_metal::LegacyShape> InterleavedToShardedPartialDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<ttnn::Shape> InterleavedToShardedPartialDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    tt::tt_metal::LegacyShape shape = input_tensor.get_legacy_shape();
+    ttnn::Shape shape = input_tensor.get_shape().with_tile_padding();
 
     uint32_t total_height = input_tensor.volume() / shape[-1];
     uint32_t new_height = total_height / this->num_slices;

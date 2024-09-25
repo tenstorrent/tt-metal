@@ -41,7 +41,7 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
     uint32_t HtWt = Ht * Wt;
 
     // check mask for h-dim
-    const auto input_shape_without_padding = shape.value.without_padding();
+    const auto input_shape_without_padding = input.get_shape();
     const auto origin_H = input_shape_without_padding[-2];
     const bool do_mask_h = (origin_H % constants::TILE_HEIGHT) != 0;
     const auto mask_h = do_mask_h ? origin_H % constants::TILE_HEIGHT : constants::TILE_HEIGHT;

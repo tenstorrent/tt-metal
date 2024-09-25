@@ -15,7 +15,7 @@ void Tilize::validate(const std::vector<Tensor>& input_tensors) const {
 
     TT_FATAL(input_tensor_a.volume() % tt::constants::TILE_HW == 0, "Error");
 
-    auto width = input_tensor_a.get_legacy_shape()[-1];
+    auto width = input_tensor_a.get_shape().with_tile_padding()[-1];
     uint32_t stick_s = width;
     uint32_t num_sticks = input_tensor_a.volume() / width;
     TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Error");
@@ -35,9 +35,9 @@ void Tilize::validate(const std::vector<Tensor>& input_tensors) const {
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> Tilize::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::Shape> Tilize::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    auto output_shape = input_tensor_a.get_legacy_shape();
+    auto output_shape = input_tensor_a.get_shape().with_tile_padding();
     return {output_shape};
 }
 

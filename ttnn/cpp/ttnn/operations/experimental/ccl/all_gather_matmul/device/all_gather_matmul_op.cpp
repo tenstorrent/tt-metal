@@ -34,7 +34,7 @@ void AllGatherMatmul::validate(const std::vector<Tensor> &input_tensors, const s
 
     // All Gather Matmul validate
     TT_FATAL(this->all_gather_struct.dim == 3, "AllGatherMatmul requires dim=3 for the AllGather operaitons.");
-    TT_FATAL(input_tensor.get_legacy_shape()[0] == 1 && input_tensor.get_legacy_shape()[1] == 1, "AllGatherMatmul requires input tensor to have batch size of 1.");
+    TT_FATAL(input_tensor.get_shape().with_tile_padding()[0] == 1 && input_tensor.get_shape().with_tile_padding()[1] == 1, "AllGatherMatmul requires input tensor to have batch size of 1.");
     std::visit([&] (const auto& config) {
         using ProgramConfigType = std::decay_t<decltype(config)>;
         if (not (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig> || std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>)) {
@@ -54,15 +54,15 @@ void AllGatherMatmul::validate(const std::vector<Tensor> &input_tensors, const s
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> AllGatherMatmul::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<ttnn::Shape> AllGatherMatmul::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
 
     // All Gather shape
-    tt::tt_metal::LegacyShape all_gather_output_shape = this->all_gather_struct.compute_output_shapes({input_tensors[0]})[0];
-    tt::tt_metal::LegacyShape datacopy_output_shape = all_gather_output_shape;
+    ttnn::Shape all_gather_output_shape = this->all_gather_struct.compute_output_shapes({input_tensors[0]})[0];
+    ttnn::Shape datacopy_output_shape = all_gather_output_shape;
 
 
     // Matmul shape
-    tt::tt_metal::LegacyShape matmul_output_shapes = this->matmul_struct.compute_output_shapes({input_tensors[1], input_tensors[2]})[0];
+    ttnn::Shape matmul_output_shapes = this->matmul_struct.compute_output_shapes({input_tensors[1], input_tensors[2]})[0];
 
     return {all_gather_output_shape, matmul_output_shapes, datacopy_output_shape};
 }

@@ -32,7 +32,7 @@ struct MorehClipGradNormStep1 {
     void validate(
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors) const;
-    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &) const;
+    std::vector<ttnn::Shape> compute_output_shapes(const std::vector<Tensor> &) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors,
@@ -49,7 +49,7 @@ struct MorehClipGradNormStep2 {
     float norm_type;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
-    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &) const;
+    std::vector<ttnn::Shape> compute_output_shapes(const std::vector<Tensor> &) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &) const;
@@ -64,7 +64,7 @@ struct MorehClipGradNormStep3 {
     void validate(
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors) const;
-    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &) const;
+    std::vector<ttnn::Shape> compute_output_shapes(const std::vector<Tensor> &) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors,

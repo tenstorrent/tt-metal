@@ -22,11 +22,11 @@ void Prod::validate(const std::vector<Tensor>& inputs) const {
     const auto& input = inputs.at(0);
     const auto& output = inputs.at(1);
 
-    auto input_shape = input.get_legacy_shape();
+    auto input_shape = input.get_shape().with_tile_padding();
     TT_FATAL((input_shape.rank() == 4), "rank should be 4");
-    const auto& output_shape = output.get_legacy_shape();
-    auto input_shape_wo_padding = input.get_legacy_shape().without_padding();
-    const auto& output_shape_wo_padding = output.get_legacy_shape().without_padding();
+    const auto& output_shape = output.get_shape().with_tile_padding();
+    auto input_shape_wo_padding = input.get_shape();
+    const auto& output_shape_wo_padding = output.get_shape();
 
     if (dim == 0 || dim == 1) {
         input_shape[dim] = 1;
@@ -44,7 +44,7 @@ std::vector<Tensor> Prod::create_output_tensors(const std::vector<Tensor>& input
     return {};
 }
 
-std::vector<tt::tt_metal::LegacyShape> Prod::compute_output_shapes(const std::vector<Tensor>& inputs) const {
+std::vector<ttnn::Shape> Prod::compute_output_shapes(const std::vector<Tensor>& inputs) const {
     // Inplace
     return {};
 
@@ -58,7 +58,7 @@ operation::ProgramWithCallbacks Prod::create_program(
     return prod_nc_format(input, output, dim);
 }
 
-tt::tt_metal::LegacyShape compute_output_shape(const tt::tt_metal::LegacyShape& input_shape, const int64_t& dim) {
+ttnn::Shape compute_output_shape(const ttnn::Shape& input_shape, const int64_t& dim) {
     auto output_shape = input_shape;
     auto padding = output_shape.padding();
     switch (dim) {
@@ -67,11 +67,11 @@ tt::tt_metal::LegacyShape compute_output_shape(const tt::tt_metal::LegacyShape& 
         break;
     }
 
-    return {tt::tt_metal::LegacyShape(output_shape, padding)};
+    return {ttnn::Shape(output_shape, padding)};
 }
 
 inline Tensor create_output_tensor(
-    const Tensor& input_tensor, const tt::tt_metal::LegacyShape& output_shape, const MemoryConfig& mem_config) {
+    const Tensor& input_tensor, const ttnn::Shape& output_shape, const MemoryConfig& mem_config) {
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE);
     return create_device_tensor(output_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config);
 }
@@ -84,11 +84,11 @@ Tensor prod_(const Tensor& input, const Tensor& output, const int64_t& dim) {
 
 // output creation inside
 Tensor prod_(const Tensor& input, const int64_t& dim, const MemoryConfig& mem_config) {
-    const auto& input_shape = input.get_legacy_shape();
+    const auto& input_shape = input.get_shape().with_tile_padding();
     const auto& output_shape = compute_output_shape(input_shape, dim);
     auto output = create_output_tensor(input, output_shape, mem_config);
 
-    const auto& output_shape_wo_padding = output.get_legacy_shape().without_padding();
+    const auto& output_shape_wo_padding = output.get_shape();
     operation::run(Prod{.dim = dim}, {input, output});
     return output;
 }

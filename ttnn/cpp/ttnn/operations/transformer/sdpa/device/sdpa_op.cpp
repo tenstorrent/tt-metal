@@ -34,9 +34,9 @@ void ScaledDotProductAttention::validate(
         TT_FATAL(mask.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "When mask is provided to SDPA, it must be in DRAM");
     }
 
-    const auto q_shape = input_tensors.at(0).get_legacy_shape();
-    const auto k_shape = input_tensors.at(1).get_legacy_shape();
-    const auto v_shape = input_tensors.at(2).get_legacy_shape();
+    const auto q_shape = input_tensors.at(0).get_shape().with_tile_padding();
+    const auto k_shape = input_tensors.at(1).get_shape().with_tile_padding();
+    const auto v_shape = input_tensors.at(2).get_shape().with_tile_padding();
 
     // assert all dataformats are the same
     TT_FATAL(
@@ -66,7 +66,7 @@ void ScaledDotProductAttention::validate(
         TT_FATAL(this->output_mem_config.buffer_type == tt::tt_metal::BufferType::DRAM, "Output must be in DRAM");
 
     } else {
-        const auto mask_shape = mask_option.value().get_legacy_shape();
+        const auto mask_shape = mask_option.value().get_shape().with_tile_padding();
 
         // Input 0 must be sharded by height. All other inputs must be in DRAM.
         const auto Q_memcfg = input_tensors.at(0).memory_config();
@@ -135,9 +135,9 @@ void ScaledDotProductAttention::validate(
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> ScaledDotProductAttention::compute_output_shapes(
+std::vector<ttnn::Shape> ScaledDotProductAttention::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
-    return {input_tensors.at(0).get_legacy_shape()};
+    return {input_tensors.at(0).get_shape().with_tile_padding()};
 }
 
 std::vector<Tensor> ScaledDotProductAttention::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
@@ -157,7 +157,7 @@ operation::ProgramWithCallbacks ScaledDotProductAttention::create_program(
 
     auto scale = this->scale;
     if (not scale.has_value()) {
-        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_legacy_shape()[-1]));
+        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_shape().with_tile_padding()[-1]));
     }
 
     std::size_t q_chunk_size = this->program_config ? this->program_config->q_chunk_size : 32;

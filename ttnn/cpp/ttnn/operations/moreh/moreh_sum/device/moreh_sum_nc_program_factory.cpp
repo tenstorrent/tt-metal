@@ -29,8 +29,8 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
     const auto cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
     const auto single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
-    const auto& input_shape = input.get_legacy_shape();
-    const auto& input_shape_without_padding = input_shape.without_padding();
+    const auto& input_shape = input.get_shape().with_tile_padding();
+    const auto& input_shape_without_padding = input.get_shape();
     const auto [Wt, Ht, inner_tile_size, reduce_tile_size] =
         tt::operations::primary::extract_and_scale_spatial_dims(input_shape, static_cast<uint32_t>(dim));
     const auto num_reduce_input_tile = input_shape[dim];

@@ -16,9 +16,9 @@ void PrefixScan::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& bx = input_tensors[1];
     TT_FATAL(a.dtype() == bx.dtype(), "Expected input tensors to have the same data type");
     TT_FATAL(a.layout() == Layout::TILE && bx.layout() == Layout::TILE, "Expected input tensors to be tile layout");
-    TT_FATAL(a.get_legacy_shape() == bx.get_legacy_shape(), "Expected input tensors to have the same shape");
+    TT_FATAL(a.get_shape().with_tile_padding() == bx.get_shape().with_tile_padding(), "Expected input tensors to have the same shape");
 
-    const auto& shape = a.get_legacy_shape();
+    const auto& shape = a.get_shape().with_tile_padding();
     TT_FATAL(shape.rank() == 4, "Expected input tensors to be rank 4");
     TT_FATAL(shape[0] == 1 && shape[1] == 1, "Dimension 0 and 1 should be size 1");
     TT_FATAL(shape[2] >= tt::constants::TILE_HEIGHT && shape[2] % tt::constants::TILE_HEIGHT == 0, "Sequence length should be a multiple of 32");
@@ -42,9 +42,9 @@ void PrefixScan::validate(const std::vector<Tensor>& input_tensors) const {
         "Expected h tensor to be row major orientation");
 }
 
-std::vector<tt::tt_metal::LegacyShape> PrefixScan::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::Shape> PrefixScan::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& a = input_tensors.at(0);
-    return {a.get_legacy_shape()};
+    return {a.get_shape().with_tile_padding()};
 }
 
 std::vector<Tensor> PrefixScan::create_output_tensors(const std::vector<Tensor>& input_tensors) const {

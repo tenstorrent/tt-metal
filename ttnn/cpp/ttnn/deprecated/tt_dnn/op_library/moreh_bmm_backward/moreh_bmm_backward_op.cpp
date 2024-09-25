@@ -23,20 +23,20 @@ inline void moreh_bmm_backward_validate(
             mat2.storage_type() == StorageType::DEVICE,
         "input tensors need to be on device");
 
-    const auto &output_grad_shape = output_grad.get_legacy_shape();
-    const auto &input_shape = input.get_legacy_shape();
-    const auto &mat2_shape = mat2.get_legacy_shape();
+    const auto &output_grad_shape = output_grad.get_shape().with_tile_padding();
+    const auto &input_shape = input.get_shape().with_tile_padding();
+    const auto &mat2_shape = mat2.get_shape().with_tile_padding();
     TT_ASSERT(output_grad_shape.rank() == 3, "output_grad must be a 3D tensor");
     TT_ASSERT(input_shape.rank() == 3, "input must be a 3D tensor");
     TT_ASSERT(mat2_shape.rank() == 3, "mat2 must be a 3D tensor");
 
     if (input_grad.has_value()) {
-        const auto &input_grad_shape = input_grad.value().get_legacy_shape();
+        const auto &input_grad_shape = input_grad.value().get_shape().with_tile_padding();
         TT_ASSERT(input_grad_shape.rank() == 3, "input_grad must be a 3D tensor");
     }
 
     if (mat2_grad.has_value()) {
-        const auto &mat2_grad_shape = mat2_grad.value().get_legacy_shape();
+        const auto &mat2_grad_shape = mat2_grad.value().get_shape().with_tile_padding();
         TT_ASSERT(mat2_grad_shape.rank() == 3, "mat2_grad must be a 3D tensor");
     }
 }

@@ -26,8 +26,8 @@ operation::ProgramWithCallbacks repeat_multi_core(
     uint32_t num_output_pages;
     uint32_t single_page_size;
     if (rm_layout) {
-        num_output_pages = output.volume() / output.get_legacy_shape()[-1];
-        single_page_size = align(output.element_size() * output.get_legacy_shape()[-1], output.buffer()->alignment());
+        num_output_pages = output.volume() / output.get_shape().with_tile_padding()[-1];
+        single_page_size = align(output.element_size() * output.get_shape().with_tile_padding()[-1], output.buffer()->alignment());
     } else {
         num_output_pages = output.volume() / TILE_HW;
         single_page_size = tt::tt_metal::detail::TileSize(cb_data_format);
@@ -49,7 +49,7 @@ operation::ProgramWithCallbacks repeat_multi_core(
             .set_page_size(src0_cb_index, single_page_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    uint32_t num_dims = output.get_legacy_shape().rank();
+    uint32_t num_dims = output.get_shape().with_tile_padding().rank();
 
     auto input_buffer = input_tensor.buffer();
     uint32_t src_addr = input_buffer->address();
@@ -70,11 +70,11 @@ operation::ProgramWithCallbacks repeat_multi_core(
     }
 
     for (uint32_t i = repeat_dim + 1; i < num_dims; ++i) {
-        num_accum_pages *= output.get_legacy_shape()[i];
+        num_accum_pages *= output.get_shape().with_tile_padding()[i];
     }
     if (rm_layout) {
         if (num_dims > 1 && repeat_dim < num_dims - 1) {
-            num_accum_pages /= output.get_legacy_shape()[-1];
+            num_accum_pages /= output.get_shape().with_tile_padding()[-1];
         }
     } else {
         if (repeat_dim < num_dims - 2) {
@@ -88,11 +88,11 @@ operation::ProgramWithCallbacks repeat_multi_core(
         if (repeat_dim == num_dims - 1) {
             num_pages_per_block = num_accum_pages;
         } else {
-            uint32_t dim_pages = input_tensor.get_legacy_shape()[repeat_dim];
+            uint32_t dim_pages = input_tensor.get_shape().with_tile_padding()[repeat_dim];
             num_pages_per_block = num_accum_pages * dim_pages;
         }
     } else {
-        uint32_t dim_pages = input_tensor.get_legacy_shape()[repeat_dim] / scale_factor;
+        uint32_t dim_pages = input_tensor.get_shape().with_tile_padding()[repeat_dim] / scale_factor;
         num_pages_per_block = num_accum_pages * dim_pages;
     }
 

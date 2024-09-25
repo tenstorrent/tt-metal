@@ -133,7 +133,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         TT_ASSERT(beta.value().get_layout() == Layout::ROW_MAJOR);
     }
 
-    bool is_height_sharding = a.get_legacy_shape()[3] == a.shard_spec().value().shape[1];
+    bool is_height_sharding = a.get_shape().with_tile_padding()[3] == a.shard_spec().value().shape[1];
     // convert data format
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
@@ -166,7 +166,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     bool tilize_in = a.get_layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.get_layout() == Layout::ROW_MAJOR;
     // tensor shape
-    const auto shape = a.get_legacy_shape();
+    const auto shape = a.get_shape().with_tile_padding();
     uint32_t H = shape[2] * num_batches;
     uint32_t Ht = H / TILE_HEIGHT;
     uint32_t W = shape[3];
@@ -268,7 +268,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     }
 
     if (input_mask.has_value()) {
-        TT_ASSERT(input_mask.value().get_legacy_shape()[3] == block_wt * TILE_WIDTH && "input mask must have the same width as block_wt");
+        TT_ASSERT(input_mask.value().get_shape().with_tile_padding()[3] == block_wt * TILE_WIDTH && "input mask must have the same width as block_wt");
     }
 
     // get sharded addr
@@ -516,7 +516,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     };
 
     if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().get_legacy_shape()[3] * gamma.value().element_size();
+        auto gamma_stick_size = gamma.value().get_shape().with_tile_padding()[3] * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
         writer_mcast_sender_compile_time_args.push_back((std::uint32_t) gamma_stick_size_is_power_of_two);
         if (gamma_stick_size_is_power_of_two) {
@@ -526,7 +526,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
             writer_mcast_sender_compile_time_args.push_back(gamma_stick_size);
         }
     } else if (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR) {
-        auto beta_stick_size = beta.value().get_legacy_shape()[3] * beta.value().element_size();
+        auto beta_stick_size = beta.value().get_shape().with_tile_padding()[3] * beta.value().element_size();
         bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
         writer_mcast_sender_compile_time_args.push_back((std::uint32_t) beta_stick_size_is_power_of_two);
         if (beta_stick_size_is_power_of_two) {

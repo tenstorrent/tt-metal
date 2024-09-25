@@ -44,7 +44,7 @@ static inline Tensor move(uint8_t queue_id, const Tensor& input_tensor, const st
 
     DeallocateBuffer(*input_tensor.buffer());
     auto output_tensor = create_device_tensor(
-        input_tensor.get_legacy_shape(),
+        input_tensor.get_shape().with_tile_padding(),
         input_tensor.get_dtype(),
         input_tensor.get_layout(),
         input_tensor.device(),
@@ -142,7 +142,7 @@ static inline Tensor move_sharded(
             auto shard_spec = input_tensor.shard_spec().value();
             auto shard_shape = shard_spec.shape;
             auto shard_grid = shard_spec.grid;
-            auto input_shape = input_tensor.get_legacy_shape();
+            auto input_shape = input_tensor.get_shape().with_tile_padding();
             auto input_dtype = input_tensor.get_dtype();
             auto input_layout = input_tensor.get_layout();
 

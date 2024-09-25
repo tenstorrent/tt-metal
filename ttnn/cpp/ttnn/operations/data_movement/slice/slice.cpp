@@ -40,7 +40,7 @@ ttnn::Tensor SliceOperation::invoke(
 
     // Create modified vectors with appropriate size (max rank 4) and wrap indices
     Tensor input_4d = (input_rank < 4) ? ttnn::unsqueeze_to_4D(input_tensor) : input_tensor;
-    auto padded_4d_shape = input_4d.get_legacy_shape();
+    auto padded_4d_shape = input_4d.get_shape().with_tile_padding();
     std::array<uint32_t, 4> modified_begins = {0, 0, 0, 0};
     std::array<uint32_t, 4> modified_ends = {padded_4d_shape[0], padded_4d_shape[1], padded_4d_shape[2], padded_4d_shape[3]};
     std::array<uint32_t, 4> modified_step = {1, 1, 1, 1};
@@ -89,25 +89,25 @@ ttnn::Tensor SliceOperation::invoke(
 
     // Early exit if slice is a no-op (ends = padding ends and step = 1 for all dimensions)
     bool no_step = std::all_of(step.begin(), step.end(), [](int i) {return i == 1;});
-    if (tt::tt_metal::LegacyShape(padded_shape) == input_tensor.get_legacy_shape() and no_step) {
+    if (ttnn::Shape(padded_shape) == input_tensor.get_shape().with_tile_padding() and no_step) {
         return ttnn::reshape(input_tensor, output_shape);
     }
 
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         TT_FATAL(no_step, "Host tensor slice does not support strides");
         // if we support negative strides, we can't do this early exit
-        if (input_tensor.get_legacy_shape() == actual_shape) {
+        if (input_tensor.get_shape().with_tile_padding() == actual_shape) {
             return input_tensor;
         } else {
             auto input_4d_rm = ttnn::to_layout(input_4d, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (Device *)nullptr);
-            auto output_4d =  input_4d_rm.unpad(tt::tt_metal::LegacyShape(modified_begins), tt::tt_metal::LegacyShape(modified_ends));
+            auto output_4d =  input_4d_rm.unpad(ttnn::Shape(modified_begins), ttnn::Shape(modified_ends));
             auto output_4d_rm = ttnn::to_layout(output_4d, input_tensor.get_layout(), std::nullopt, std::nullopt, (Device *)nullptr);
             return ttnn::reshape(output_4d_rm, output_shape);
         }
     }
     else {
         // TODO: Generalize this early exit of slice for other cases
-        auto& input_tensor_shape = input_4d.get_legacy_shape();
+        auto& input_tensor_shape = input_4d.get_shape().with_tile_padding();
         auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config_arg.value_or(input_tensor.memory_config());
         if (input_4d.is_sharded() && input_4d.memory_config() == memory_config &&
             input_tensor_shape.rank() > 1) {
@@ -115,7 +115,7 @@ ttnn::Tensor SliceOperation::invoke(
             uint32_t i;
             // Require all leading dims to be 1 (TODO: This can be relaxed to support outermost non-1 dim unpadding)
             bool in_place_unpad = true;
-            for (i = 0; i < input_4d.get_legacy_shape().rank() - 2; ++i) {
+            for (i = 0; i < input_4d.get_shape().with_tile_padding().rank() - 2; ++i) {
                 in_place_unpad &=
                     modified_begins[i] == 0 && modified_ends[i] == 1 && input_tensor_shape[i] == 1;
             }
@@ -131,9 +131,9 @@ ttnn::Tensor SliceOperation::invoke(
 
         auto res = operation::run(
                    SliceDeviceOperation{
-                    tt::tt_metal::LegacyShape(modified_begins),
-                    tt::tt_metal::LegacyShape(padded_ends),
-                    no_step ? std::nullopt : std::optional<tt::tt_metal::LegacyShape>(tt::tt_metal::LegacyShape(modified_step)),
+                    ttnn::Shape(modified_begins),
+                    ttnn::Shape(padded_ends),
+                    no_step ? std::nullopt : std::optional<ttnn::Shape>(ttnn::Shape(modified_step)),
                     memory_config},
                     {input_4d}, {}, {optional_output_tensor}, queue_id)
             .at(0);

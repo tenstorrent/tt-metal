@@ -91,9 +91,6 @@ Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, L
     this->tensor_attributes->metadata_populated = true;
 }
 
-Tensor::Tensor(const Storage storage, const tt::tt_metal::LegacyShape shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) :
-    Tensor(storage, ttnn::Shape{shape}, dtype, layout, tile) {}
-
 Tensor::~Tensor() {
     ZoneScoped;
     this->deallocate_through_destructor = true;
@@ -433,11 +430,11 @@ void Tensor::print() const {
     tensor_ops::tensor_print(*this);
 }
 
-Tensor Tensor::pad(const tt::tt_metal::LegacyShape& output_tensor_shape, const tt::tt_metal::LegacyShape& input_tensor_start, float pad_value) const {
+Tensor Tensor::pad(const ttnn::Shape& output_tensor_shape, const ttnn::Shape& input_tensor_start, float pad_value) const {
     return tensor_ops::tensor_pad(*this, output_tensor_shape, input_tensor_start, pad_value);
 }
 
-Tensor Tensor::unpad(const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end) const {
+Tensor Tensor::unpad(const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) const {
     return tensor_ops::tensor_unpad(*this, output_tensor_start, output_tensor_end);
 }
 
@@ -445,7 +442,7 @@ Tensor Tensor::pad_to_tile(float pad_value) const {
     return tensor_ops::tensor_pad_to_tile(*this, pad_value);
 }
 
-Tensor Tensor::unpad_from_tile(const tt::tt_metal::LegacyShape& output_tensor_shape) const {
+Tensor Tensor::unpad_from_tile(const ttnn::Shape& output_tensor_shape) const {
     return tensor_ops::tensor_unpad_from_tile(*this, output_tensor_shape);
 }
 
@@ -459,7 +456,7 @@ Tensor Tensor::reshape(int N, int C, int H, int W) const {
     return tensor_ops::tensor_reshape(*this, N, C, H, W);
 }
 
-Tensor Tensor::reshape(const tt::tt_metal::LegacyShape& new_shape) const {
+Tensor Tensor::reshape(const ttnn::Shape& new_shape) const {
     return tensor_ops::tensor_reshape(*this, new_shape);
 }
 
@@ -510,9 +507,9 @@ StorageType Tensor::storage_type() const {
         this->get_storage());
 }
 
-const tt::tt_metal::LegacyShape Tensor::strides() const { return tt::tt_metal::LegacyShape(tt::tt_metal::compute_strides(this->get_legacy_shape())); }
+const ttnn::Shape Tensor::strides() const { return ttnn::Shape(tt::tt_metal::compute_strides(this->get_shape().with_tile_padding())); }
 
-uint32_t Tensor::volume() const { return tt::tt_metal::compute_volume(this->get_legacy_shape()); }
+uint32_t Tensor::volume() const { return tt::tt_metal::compute_volume(this->get_shape().with_tile_padding()); }
 
 uint32_t Tensor::intended_volume() const { return tt::tt_metal::compute_volume(this->get_shape()); }
 
@@ -541,7 +538,7 @@ Tensor create_device_tensor(
         auto device_buffer = tensor_impl::allocate_buffer_on_device(
             packed_size_in_bytes, device, shape, data_type, layout, memory_config, shard_spec_buffer, tile);
 
-        auto output = Tensor(DeviceStorage{device_buffer}, shape, data_type, layout, tile);
+        auto output = Tensor(DeviceStorage{device_buffer}, ttnn::Shape(shape), data_type, layout, tile);
         output = tt::tt_metal::set_tensor_id(output);
         GraphTracker::instance().track_function_end(output);
         return output;
@@ -550,7 +547,7 @@ Tensor create_device_tensor(
             tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
         auto device_buffer = tensor_impl::allocate_buffer_on_device(
             packed_size_in_bytes, device, shape, data_type, layout, memory_config, std::nullopt, tile);
-        auto output = Tensor(DeviceStorage{device_buffer}, shape, data_type, layout, tile);
+        auto output = Tensor(DeviceStorage{device_buffer}, ttnn::Shape(shape), data_type, layout, tile);
         output = tt::tt_metal::set_tensor_id(output);
         GraphTracker::instance().track_function_end(output);
         return output;

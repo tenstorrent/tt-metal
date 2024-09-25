@@ -39,33 +39,33 @@ void MorehGroupNormBackwardInputGrad::validate_with_output_tensors(
     check_tensor(gamma, "moreh_groupnorm_backward_input_grad", "gamma");
 
     // output_grad (N, C, H, W)
-    auto C = output_grad.get_legacy_shape()[1];
+    auto C = output_grad.get_shape().with_tile_padding()[1];
     TT_ASSERT(C % this->num_groups == 0, "output_grad_shape[1] must be divisible by num_groups.");
     // input (N, C, H, W)
-    C = input.get_legacy_shape()[1];
+    C = input.get_shape().with_tile_padding()[1];
     TT_ASSERT(C % this->num_groups == 0, "input_shape[1] must be divisible by num_groups.");
     // input_grad (N, C, H, W)
     if (input_grad.has_value()) {
-        C = input_grad.value().get_legacy_shape()[1];
+        C = input_grad.value().get_shape().with_tile_padding()[1];
         TT_ASSERT(C % this->num_groups == 0, "input_grad_shape[1] must be divisible by num_groups.");
     }
     // gamma (1, 1, 1, C)
     if (gamma.has_value()) {
-        C = gamma.value().get_legacy_shape().without_padding()[-1];
+        C = gamma.value().get_shape()[-1];
         TT_ASSERT(C % this->num_groups == 0, "gamma_shape[-1] must be divisible by num_groups.");
     }
 
     // mean (1, 1, N, num_groups)
     TT_ASSERT(
-        mean.get_legacy_shape().without_padding()[-1] == this->num_groups, "mean_shape[-1] must match num_groups.");
+        mean.get_shape()[-1] == this->num_groups, "mean_shape[-1] must match num_groups.");
     // rstd (1, 1, N, num_groups)
     TT_ASSERT(
-        rstd.get_legacy_shape().without_padding()[-1] == this->num_groups, "rstd_shape[-1] must match num_groups.");
+        rstd.get_shape()[-1] == this->num_groups, "rstd_shape[-1] must match num_groups.");
 }
 
-std::vector<tt::tt_metal::LegacyShape> MorehGroupNormBackwardInputGrad::compute_output_shapes(
+std::vector<ttnn::Shape> MorehGroupNormBackwardInputGrad::compute_output_shapes(
     const std::vector<Tensor> &input_tensors) const {
-    return {input_tensors.at(0).get_legacy_shape()};
+    return {input_tensors.at(0).get_shape().with_tile_padding()};
 }
 
 std::vector<Tensor> MorehGroupNormBackwardInputGrad::create_output_tensors(
@@ -146,36 +146,36 @@ void MorehGroupNormBackwardGammaBetaGrad::validate_with_output_tensors(
     check_tensor(beta_grad, "moreh_groupnorm_backward_gamma_beta_grad", "beta_grad");
 
     // output_grad (N, C, H, W)
-    auto C = output_grad.get_legacy_shape()[1];
+    auto C = output_grad.get_shape().with_tile_padding()[1];
     TT_ASSERT(C % this->num_groups == 0, "output_grad_shape[1] must be divisible by num_groups.");
     // input (N, C, H, W)
-    C = input.get_legacy_shape()[1];
+    C = input.get_shape().with_tile_padding()[1];
     TT_ASSERT(C % this->num_groups == 0, "input_shape[1] must be divisible by num_groups.");
     // gamma_grad (1, 1, 1, C)
     if (gamma_grad.has_value()) {
-        C = gamma_grad.value().get_legacy_shape().without_padding()[-1];
+        C = gamma_grad.value().get_shape()[-1];
         TT_ASSERT(C % this->num_groups == 0, "gamma_grad_shape[-1] must be divisible by num_groups.");
     }
     // beta_grad (1, 1, 1, C)
     if (beta_grad.has_value()) {
-        C = beta_grad.value().get_legacy_shape().without_padding()[-1];
+        C = beta_grad.value().get_shape()[-1];
         TT_ASSERT(C % this->num_groups == 0, "beta_grad_shape[-1] must be divisible by num_groups.");
     }
 
     // mean (1, 1, N, num_groups)
     TT_ASSERT(
-        mean.get_legacy_shape().without_padding()[-1] == this->num_groups, "mean_shape[-1] must match num_groups.");
+        mean.get_shape()[-1] == this->num_groups, "mean_shape[-1] must match num_groups.");
     // rstd (1, 1, N, num_groups)
     TT_ASSERT(
-        rstd.get_legacy_shape().without_padding()[-1] == this->num_groups, "rstd_shape[-1] must match num_groups.");
+        rstd.get_shape()[-1] == this->num_groups, "rstd_shape[-1] must match num_groups.");
 }
 
-std::vector<tt::tt_metal::LegacyShape> MorehGroupNormBackwardGammaBetaGrad::compute_output_shapes(
+std::vector<ttnn::Shape> MorehGroupNormBackwardGammaBetaGrad::compute_output_shapes(
     const std::vector<Tensor> &input_tensors) const {
     using namespace tt::constants;
     const auto &output_grad = input_tensors.at(0);
     // output_grad (N, C, H, W)
-    const auto &output_grad_shape = output_grad.get_legacy_shape();
+    const auto &output_grad_shape = output_grad.get_shape().with_tile_padding();
 
     // gamma_grad, beta_grad (1, 1, 1, C)
     auto dgamma_dbeta_origin_shape = output_grad_shape;
@@ -189,7 +189,7 @@ std::vector<tt::tt_metal::LegacyShape> MorehGroupNormBackwardGammaBetaGrad::comp
     dgamma_dbeta_padding[2] = Padding::PadDimension{0, TILE_HEIGHT - 1};
     dgamma_dbeta_padding[3] = Padding::PadDimension{0, TILE_WIDTH - (c % TILE_WIDTH)};
 
-    tt::tt_metal::LegacyShape dgamma_dbeta_shape(dgamma_dbeta_origin_shape, dgamma_dbeta_padding);
+    ttnn::Shape dgamma_dbeta_shape(dgamma_dbeta_origin_shape, dgamma_dbeta_padding);
     return {dgamma_dbeta_shape, dgamma_dbeta_shape};
 }
 

@@ -17,9 +17,9 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Can only untilize tile major data");
 
     TT_FATAL(input_tensor_a.volume() % tt::constants::TILE_HW == 0, "Error");
-    for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
-        TT_FATAL(input_tensor_a.get_legacy_shape()[i] > 0, "Error");
-        TT_FATAL(this->output_tensor_end[i] < input_tensor_a.get_legacy_shape()[i], "Error");
+    for (uint32_t i = 0; i < input_tensor_a.get_shape().with_tile_padding().rank(); i++) {
+        TT_FATAL(input_tensor_a.get_shape().with_tile_padding()[i] > 0, "Error");
+        TT_FATAL(this->output_tensor_end[i] < input_tensor_a.get_shape().with_tile_padding()[i], "Error");
     }
 
     TT_FATAL(((this->output_tensor_end[-1] + 1) % 2 == 0), "Can only unpad to row major tensor of even width");
@@ -30,7 +30,7 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
             TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
             TT_FATAL(
                 input_tensor_a.volume() /
-                        (input_tensor_a.get_legacy_shape()[-2] * input_tensor_a.get_legacy_shape()[-1]) ==
+                        (input_tensor_a.get_shape().with_tile_padding()[-2] * input_tensor_a.get_shape().with_tile_padding()[-1]) ==
                     1,
                 "Can only write unbatched output interleaved");
         } else if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -43,23 +43,23 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
             // Minor host code changes required to remove this restriction
             TT_FATAL(input_tensor_a.shard_spec().value().grid.ranges().size() == 1, "Error");
             for (uint32_t i = 0; i < output_shape.rank() - 2; i++) {
-                TT_FATAL(input_tensor_a.get_legacy_shape()[i] == output_shape[i], "Error");
+                TT_FATAL(input_tensor_a.get_shape().with_tile_padding()[i] == output_shape[i], "Error");
             }
             if (output_mem_config.is_sharded()) {
                 TT_FATAL(this->output_mem_config.memory_layout == input_tensor_a.memory_config().memory_layout, "Error");
                 TT_FATAL(
-                    input_tensor_a.get_legacy_shape()[-1] == output_shape[-1] ||
+                    input_tensor_a.get_shape().with_tile_padding()[-1] == output_shape[-1] ||
                     (tt::div_up(output_shape[-1], input_tensor_a.shard_spec().value().shape[1]) ==
                      input_tensor_a.shard_spec().value().grid.num_cores()), "Error");
             } else {
                 TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
                 TT_FATAL(
                     input_tensor_a.volume() /
-                            (input_tensor_a.get_legacy_shape()[-2] * input_tensor_a.get_legacy_shape()[-1]) ==
+                            (input_tensor_a.get_shape().with_tile_padding()[-2] * input_tensor_a.get_shape().with_tile_padding()[-1]) ==
                         1,
                     "Can only write unbatched output interleaved");
                 TT_FATAL(
-                    input_tensor_a.get_legacy_shape()[-1] - output_shape[-1] <
+                    input_tensor_a.get_shape().with_tile_padding()[-1] - output_shape[-1] <
                     input_tensor_a.shard_spec().value().shape[1], "Error");
             }
         } else {
@@ -71,15 +71,15 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> UntilizeWithUnpadding::compute_output_shapes(
+std::vector<ttnn::Shape> UntilizeWithUnpadding::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     std::vector<uint32_t> out_shape;
-    auto rank = input_tensors[0].get_legacy_shape().rank();
+    auto rank = input_tensors[0].get_shape().with_tile_padding().rank();
     out_shape.reserve(rank);
     for (uint32_t i = 0; i < rank; i++) {
         out_shape.push_back(this->output_tensor_end[i] + 1);
     }
-    tt::tt_metal::LegacyShape output_tensor_shape(out_shape);
+    ttnn::Shape output_tensor_shape(out_shape);
     return {output_tensor_shape};
 }
 

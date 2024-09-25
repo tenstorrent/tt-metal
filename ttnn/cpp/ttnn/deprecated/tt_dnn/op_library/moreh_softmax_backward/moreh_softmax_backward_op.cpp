@@ -35,7 +35,7 @@ void MorehSoftmaxBackward::validate_with_output_tensors(
         output_grad_tensor.get_dtype() == DataType::BFLOAT16 || output_grad_tensor.get_dtype() == DataType::BFLOAT8_B);
 
     // validate parameters
-    auto rank = output_tensor.get_legacy_shape().rank();
+    auto rank = output_tensor.get_shape().with_tile_padding().rank();
 
     TT_ASSERT(
         this->dim >= 0 && this->dim < rank,
@@ -49,8 +49,8 @@ void MorehSoftmaxBackward::validate_with_output_tensors(
     TT_ASSERT(output_tensors.size() == 1, "Must have 1 output tensors");
 }
 
-std::vector<tt::tt_metal::LegacyShape> MorehSoftmaxBackward::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    return {input_tensors.at(0).get_legacy_shape()};
+std::vector<ttnn::Shape> MorehSoftmaxBackward::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    return {input_tensors.at(0).get_shape().with_tile_padding()};
 }
 
 std::vector<Tensor> MorehSoftmaxBackward::create_output_tensors(
@@ -58,7 +58,7 @@ std::vector<Tensor> MorehSoftmaxBackward::create_output_tensors(
     if (!output_tensors.empty() && output_tensors.at(0).has_value()) {
         return {output_tensors.at(0).value()};
     }
-    const auto& output_shape = input_tensors.at(0).get_legacy_shape();
+    const auto& output_shape = input_tensors.at(0).get_shape().with_tile_padding();
 
     return {operation::generic_create_output_tensors(
         *this, input_tensors, input_tensors.at(0).get_dtype(), Layout::TILE, this->output_mem_config)};
@@ -100,7 +100,7 @@ MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackward::get_parallel
     const std::vector<Tensor>& input_tensors) const {
     auto& output = input_tensors.at(0);
 
-    auto rank = output.get_legacy_shape().rank();
+    auto rank = output.get_shape().with_tile_padding().rank();
 
     if (this->strategy == MorehSoftmaxBackwardOpParallelizationStrategy::NONE) {
         if (rank - 1 == this->dim) {

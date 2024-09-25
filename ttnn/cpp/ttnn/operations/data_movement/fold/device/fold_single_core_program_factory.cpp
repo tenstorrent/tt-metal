@@ -20,11 +20,11 @@ Fold::SingleCore::cached_program_t fold_single_core(
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
 
-    uint32_t pixel_size = input.get_legacy_shape()[-1] * input.element_size();
-    uint32_t num_pixels = input.volume() / input.get_legacy_shape()[-1];
+    uint32_t pixel_size = input.get_shape().with_tile_padding()[-1] * input.element_size();
+    uint32_t num_pixels = input.volume() / input.get_shape().with_tile_padding()[-1];
 
     // chunk consists of channel values of stride_w neighboring pixels along the W dimension
-    uint32_t width = input.get_legacy_shape()[2];
+    uint32_t width = input.get_shape().with_tile_padding()[2];
     uint32_t chunk_size = stride_w * pixel_size;
     uint32_t row_size = width * pixel_size;
     uint32_t dst_pixel_size = stride_h * chunk_size;

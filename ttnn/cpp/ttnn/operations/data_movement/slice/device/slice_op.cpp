@@ -8,14 +8,14 @@
 
 namespace ttnn::operations::data_movement {
 
-inline __attribute__((always_inline)) uint32_t get_upper_dims_compressed(const tt::tt_metal::LegacyShape& shape) {
+inline __attribute__((always_inline)) uint32_t get_upper_dims_compressed(const ttnn::Shape& shape) {
     return std::accumulate(shape.begin(), shape.end() - 2, 1, std::multiplies<uint32_t>{});
 }
 
 inline __attribute__((always_inline)) uint32_t get_upper_start_offset(const Tensor &tensor, const Shape &slice_start) {
     // offset for every dim except last 2
     uint32_t start_offset = 0;
-    const auto& shape = tensor.get_legacy_shape();
+    const auto& shape = tensor.get_shape().with_tile_padding();
 
     uint32_t num_pages = tensor.volume();
     if (tensor.get_layout() == Layout::TILE) {
@@ -38,7 +38,7 @@ inline __attribute__((always_inline)) uint32_t get_upper_start_offset(const Tens
 uint32_t get_tiled_start_offset(const Tensor &input_tensor, const Shape &slice_start) {
     using namespace tt::constants;
     uint32_t num_input_pages = input_tensor.volume() / (TILE_HW);
-    const auto& shape = input_tensor.get_legacy_shape();
+    const auto& shape = input_tensor.get_shape().with_tile_padding();
     uint32_t upper_dims_compressed = get_upper_dims_compressed(shape);
     uint32_t num_pages_width =
         num_input_pages / (upper_dims_compressed * (shape[-2] / TILE_HEIGHT));
@@ -53,8 +53,8 @@ uint32_t get_tiled_start_offset(const Tensor &input_tensor, const Shape &slice_s
 uint32_t get_rm_start_offset(const Tensor &tensor, const Shape &slice_start) {
     uint32_t start_offset = 0;
 
-    if (tensor.get_legacy_shape().rank() >= 2) {
-        const auto& shape = tensor.get_legacy_shape();
+    if (tensor.get_shape().with_tile_padding().rank() >= 2) {
+        const auto& shape = tensor.get_shape().with_tile_padding();
         uint32_t num_pages = tensor.volume() / shape[-1];
         uint32_t upper_dims_compressed = get_upper_dims_compressed(shape);
         start_offset = get_upper_start_offset(tensor, slice_start);
@@ -73,17 +73,17 @@ void SliceDeviceOperation::validate_with_output_tensors(
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE || input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Error");
-    TT_FATAL(input_tensor_a.get_legacy_shape().rank() == this->slice_start.rank() && this->slice_start.rank() == this->slice_end.rank(), "Error");
-    for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
-        TT_FATAL(this->slice_start[i] < input_tensor_a.get_legacy_shape()[i], "Error");
-        TT_FATAL(this->slice_end[i] <= input_tensor_a.get_legacy_shape()[i], "Ends {} must be less than or equal to the shape of the tensor {}", this->slice_end[i], input_tensor_a.get_legacy_shape()[i]);
+    TT_FATAL(input_tensor_a.get_shape().with_tile_padding().rank() == this->slice_start.rank() && this->slice_start.rank() == this->slice_end.rank(), "Error");
+    for (uint32_t i = 0; i < input_tensor_a.get_shape().with_tile_padding().rank(); i++) {
+        TT_FATAL(this->slice_start[i] < input_tensor_a.get_shape().with_tile_padding()[i], "Error");
+        TT_FATAL(this->slice_end[i] <= input_tensor_a.get_shape().with_tile_padding()[i], "Ends {} must be less than or equal to the shape of the tensor {}", this->slice_end[i], input_tensor_a.get_shape().with_tile_padding()[i]);
         // Check if start shape is <= end shape
         TT_FATAL(this->slice_start[i] <= this->slice_end[i], "Error");
     }
     if(!output_tensors.empty() && output_tensors[0].has_value()){
         const auto output_shape_required = this->compute_output_shapes(input_tensors)[0];
         const auto& out_tensor = output_tensors[0].value();
-        TT_FATAL(out_tensor.get_legacy_shape() == output_shape_required, "The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape());
+        TT_FATAL(out_tensor.get_shape().with_tile_padding() == output_shape_required, "The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_shape().with_tile_padding());
     }
     auto output_tensor_shape = this->compute_output_shapes(input_tensors)[0];
     if (step.has_value()) { // if all ones modify before passing in to function
@@ -106,7 +106,7 @@ void SliceDeviceOperation::validate_with_output_tensors(
             "An unpadding slice operations for a RowMajor layout on the output tensor requires the last dimension to be on a 32 bit boundary. For example, the final dimension needs to be divisible by 2 for bfloat16. The resulting tensor shape is {}, which is not 4B aligned as the last dimension is {}",
                         output_tensor_shape[-1], input_tensor_a.element_size());
         if (this->step.has_value()) {
-            for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
+            for (uint32_t i = 0; i < input_tensor_a.get_shape().with_tile_padding().rank(); i++) {
                 TT_FATAL(this->step.value()[i] > 0, "Step({}) = {} should be positive", i, this->step.value()[i]);
             }
         }
@@ -116,9 +116,9 @@ void SliceDeviceOperation::validate_with_output_tensors(
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> SliceDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<ttnn::Shape> SliceDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     std::vector<uint32_t> out_shape;
-    auto rank = input_tensors[0].get_legacy_shape().rank();
+    auto rank = input_tensors[0].get_shape().with_tile_padding().rank();
     out_shape.reserve(rank);
     if (!step.has_value()) {
         for (uint32_t i = 0; i < rank; i++) {
@@ -134,7 +134,7 @@ std::vector<tt::tt_metal::LegacyShape> SliceDeviceOperation::compute_output_shap
             out_shape.push_back(output_dim_i(i));
         }
     }
-    tt::tt_metal::LegacyShape output_tensor_shape(out_shape);
+    ttnn::Shape output_tensor_shape(out_shape);
     return {output_tensor_shape};
 }
 

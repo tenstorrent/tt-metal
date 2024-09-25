@@ -24,8 +24,8 @@ void MorehDotBackwardOperation::validate_on_program_cache_hit(
 }
 
 void grad_tensor_validate(const Tensor& tensor, const Tensor& grad_tensor) {
-    const auto& tensor_shape = tensor.get_shape().value.without_padding();
-    const auto& grad_tensor_shape = grad_tensor.get_shape().value.without_padding();
+    const auto& tensor_shape = tensor.get_shape();
+    const auto& grad_tensor_shape = grad_tensor.get_shape();
     TT_FATAL(tensor_shape == grad_tensor_shape, "Tensor shape and grad tensor shape should be the same.");
     TT_FATAL(grad_tensor.storage_type() == StorageType::DEVICE, "Operands to dot backward need to be on device!");
     TT_FATAL(grad_tensor.device() == tensor.device(), "Operands to dot backward need to be on the same device!");

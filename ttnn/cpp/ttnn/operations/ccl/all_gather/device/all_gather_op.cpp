@@ -82,7 +82,7 @@ AllGatherConfig::AllGatherConfig(Tensor const& input_tensor, Tensor const& outpu
         // See issue #6448
         int outer_dims_size = 1;
         for (std::size_t i = 0; i < dim; i++) {
-            outer_dims_size *= input_tensor.get_legacy_shape()[i];
+            outer_dims_size *= input_tensor.get_shape().with_tile_padding()[i];
         }
         if (outer_dims_size > 1) {
             this->enable_bidirectional = false;
@@ -152,10 +152,10 @@ void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> AllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    auto shape = input_tensors[0].get_legacy_shape();
+std::vector<ttnn::Shape> AllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    auto shape = input_tensors[0].get_shape().with_tile_padding();
     shape[this->dim] *= this->ring_size;
-    return std::vector<tt::tt_metal::LegacyShape>(input_tensors.size(), shape);
+    return std::vector<ttnn::Shape>(input_tensors.size(), shape);
 }
 
 std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor> &input_tensors) const {

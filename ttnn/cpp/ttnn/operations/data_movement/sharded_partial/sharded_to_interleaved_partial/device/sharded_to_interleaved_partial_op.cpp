@@ -18,15 +18,15 @@ void ShardedToInterleavedPartialDeviceOperation::validate(const std::vector<Tens
     // Validate output tensor
     TT_FATAL(slice_index >= 0 && slice_index < num_slices, "Slice index and num_slices don't match! Index = {} num_slices = {}", slice_index, num_slices);
     TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Currently, only tile layout is supported for partial I->S");
-    TT_FATAL((input_tensor.volume() / input_tensor.get_legacy_shape()[-1]) % num_slices == 0, "Total height of a tensor must be divisible by num_slices!");
+    TT_FATAL((input_tensor.volume() / input_tensor.get_shape().with_tile_padding()[-1]) % num_slices == 0, "Total height of a tensor must be divisible by num_slices!");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
 
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Error");
     if (input_tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-        if (input_tensor.get_legacy_shape()[-1] % shard_spec.shape[1] != 0 ||
-            ((input_tensor.volume() / input_tensor.get_legacy_shape()[-1]) % shard_spec.shape[0]) != 0) {
+        if (input_tensor.get_shape().with_tile_padding()[-1] % shard_spec.shape[1] != 0 ||
+            ((input_tensor.volume() / input_tensor.get_shape().with_tile_padding()[-1]) % shard_spec.shape[0]) != 0) {
             TT_FATAL(input_tensor.shard_spec().value().grid.ranges().size() == 1, "Error");
         }
     }
@@ -37,9 +37,9 @@ void ShardedToInterleavedPartialDeviceOperation::validate(const std::vector<Tens
 }
 
 
-std::vector<tt::tt_metal::LegacyShape> ShardedToInterleavedPartialDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<ttnn::Shape> ShardedToInterleavedPartialDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& output_tensor = input_tensors.at(1);
-    return {output_tensor.get_legacy_shape()};
+    return {output_tensor.get_shape().with_tile_padding()};
 }
 
 

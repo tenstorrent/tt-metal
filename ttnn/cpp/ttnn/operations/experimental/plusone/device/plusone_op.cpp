@@ -14,13 +14,13 @@ void PlusOne::validate_with_output_tensors(
     TT_FATAL(input_tensor_a.get_dtype() == DataType::INT32, "Only INT32 is supported for inputs!");
     TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for inputs!");
 
-    auto input_shape = input_tensor_a.get_legacy_shape();
+    auto input_shape = input_tensor_a.get_shape().with_tile_padding();
     TT_FATAL(input_shape.size()==1, "must have 1 dimension");
 
 }
 
-std::vector<tt::tt_metal::LegacyShape> PlusOne::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    auto input_shape = input_tensors[0].get_legacy_shape();
+std::vector<ttnn::Shape> PlusOne::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    auto input_shape = input_tensors[0].get_shape().with_tile_padding();
     return {input_shape};
 }
 

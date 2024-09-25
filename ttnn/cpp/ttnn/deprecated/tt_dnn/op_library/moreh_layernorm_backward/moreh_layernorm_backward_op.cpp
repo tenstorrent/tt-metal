@@ -55,17 +55,17 @@ void MorehLayerNormBackwardInputGrad::validate_with_output_tensors(
     }
 
     TT_ASSERT(this->normalized_dims > 0);
-    TT_ASSERT(this->normalized_dims <= output_grad.get_legacy_shape().rank());
+    TT_ASSERT(this->normalized_dims <= output_grad.get_shape().with_tile_padding().rank());
 
     if (gamma.has_value()) {
         check_tensor(gamma.value(), "moreh_layernorm_backward_input_grad");
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> MorehLayerNormBackwardInputGrad::compute_output_shapes(
+std::vector<ttnn::Shape> MorehLayerNormBackwardInputGrad::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     auto input = input_tensors.at(0);
-    auto input_shape = input.get_legacy_shape();
+    auto input_shape = input.get_shape().with_tile_padding();
 
     // The shapes of the input and output are always the same.
     return {input_shape};
@@ -118,7 +118,7 @@ void MorehLayerNormBackwardGammaBetaGrad::validate_with_output_tensors(
     check_tensor(rstd, "moreh_layernorm_backward_gamma_beta_grad");
 
     TT_ASSERT(this->normalized_dims > 0);
-    TT_ASSERT(this->normalized_dims <= output_grad.get_legacy_shape().rank());
+    TT_ASSERT(this->normalized_dims <= output_grad.get_shape().with_tile_padding().rank());
 
     const auto& gamma_grad = output_tensors.at(0);
     const auto& beta_grad = output_tensors.at(1);
@@ -131,7 +131,7 @@ void MorehLayerNormBackwardGammaBetaGrad::validate_with_output_tensors(
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> MorehLayerNormBackwardGammaBetaGrad::compute_output_shapes(
+std::vector<ttnn::Shape> MorehLayerNormBackwardGammaBetaGrad::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     TT_THROW("The compute_output_shapes function in MorehLayerNormBackwardGammaBetaGrad is not implemented.");
     return {};

@@ -22,8 +22,8 @@ void MorehDotOperation::validate(
     TT_FATAL(tt::operations::primary::is_1d_tensor(input_tensor_a), "Invalid input tensor dimensions.");
     TT_FATAL(tt::operations::primary::is_1d_tensor(input_tensor_b), "Invalid input tensor dimensions.");
 
-    const auto& a_shape_wo_padding = input_tensor_a.get_legacy_shape().without_padding();
-    const auto& b_shape_wo_padding = input_tensor_b.get_legacy_shape().without_padding();
+    const auto& a_shape_wo_padding = input_tensor_a.get_shape();
+    const auto& b_shape_wo_padding = input_tensor_b.get_shape();
     TT_FATAL(a_shape_wo_padding[3] == b_shape_wo_padding[3], "Shape without padding must be the same.");
 
     TT_FATAL(
@@ -52,11 +52,11 @@ MorehDotOperation::shape_return_value_t MorehDotOperation::compute_output_shapes
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
 
     const auto& input_tensor = tensor_args.input_tensor_a;
-    auto output_shape = input_tensor.get_shape().value;
+    auto output_shape = input_tensor.get_shape();
     auto padding = output_shape.padding();
     output_shape[3] = tt::constants::TILE_WIDTH;
     padding[3] = Padding::PadDimension{0, 31};
-    return ttnn::Shape{tt::tt_metal::LegacyShape(output_shape, padding)};
+    return ttnn::Shape(output_shape, padding);
 }
 
 

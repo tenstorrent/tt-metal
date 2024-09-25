@@ -78,7 +78,7 @@ MorehSumOperation::shape_return_value_t MorehSumOperation::compute_output_shapes
 
     ttnn::Shape output_shape = input_shape;
     if (operation_attributes.keep_batch_dim) {
-        auto shape = input_shape.value;
+        auto shape = input_shape;
         auto padding = shape.padding();
 
         if (is_tile_dim) {
@@ -90,7 +90,7 @@ MorehSumOperation::shape_return_value_t MorehSumOperation::compute_output_shapes
             shape[operation_attributes.dim] = 1;
         }
 
-        output_shape = ttnn::Shape{tt::tt_metal::LegacyShape(shape, padding)};
+        output_shape = ttnn::Shape(shape, padding);
     } else {
         std::vector<uint32_t> shape;
         std::vector<Padding::PadDimension> pad_dimensions;
@@ -110,7 +110,7 @@ MorehSumOperation::shape_return_value_t MorehSumOperation::compute_output_shapes
         }
 
         auto padding = Padding(pad_dimensions, input_padding.pad_value());
-        output_shape = ttnn::Shape{tt::tt_metal::LegacyShape(shape, padding)};
+        output_shape = ttnn::Shape(shape, padding);
     }
 
     log_debug(tt::LogOp, "{}:{} output_shape {}", __func__, __LINE__, output_shape);

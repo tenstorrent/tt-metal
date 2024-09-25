@@ -23,10 +23,10 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
             input_tensor.get_dtype());
     }
 
-    const auto q_shape = input_tensors.at(0).get_legacy_shape();
     const auto q_shape_unpadded = input_tensors.at(0).get_shape();
-    const auto k_shape = input_tensors.at(1).get_legacy_shape();
-    const auto v_shape = input_tensors.at(2).get_legacy_shape();
+    const auto q_shape = q_shape_unpadded.with_tile_padding();
+    const auto k_shape = input_tensors.at(1).get_shape();
+    const auto v_shape = input_tensors.at(2).get_shape();
 
     // Input 0 must be sharded by height or DRAM interleaved. All other inputs must be in DRAM.
     const auto Q_memcfg = input_tensors.at(0).memory_config();
@@ -59,8 +59,8 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
         TT_FATAL(page_table_tensor.get_dtype() == DataType::INT32, "Error");
         TT_FATAL(page_table_tensor.get_layout() == Layout::ROW_MAJOR, "Error");
 
-        const auto cur_pos_shape = cur_pos_tensor.get_legacy_shape();
-        const auto page_table_shape = page_table_tensor.get_legacy_shape();
+        const auto cur_pos_shape = cur_pos_tensor.get_shape().with_tile_padding();
+        const auto page_table_shape = page_table_tensor.get_shape().with_tile_padding();
 
         const auto B = q_shape[1];
         TT_FATAL(cur_pos_shape[0] == B, "cur_pos must have batch size equal to Q");
@@ -129,9 +129,9 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
         this->compute_kernel_config);
 }
 
-std::vector<tt::tt_metal::LegacyShape> ScaledDotProductAttentionDecode::compute_output_shapes(
+std::vector<ttnn::Shape> ScaledDotProductAttentionDecode::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
-    return {input_tensors.at(0).get_legacy_shape()};
+    return {input_tensors.at(0).get_shape().with_tile_padding()};
 }
 
 std::vector<Tensor> ScaledDotProductAttentionDecode::create_output_tensors(
@@ -153,7 +153,7 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
 
     auto scale = this->scale;
     if (not scale.has_value()) {
-        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_legacy_shape()[-1]));
+        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_shape().with_tile_padding()[-1]));
     }
 
     // TODO: get this from program_config

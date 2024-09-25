@@ -13,7 +13,7 @@ namespace ttnn::operations::data_movement {
 ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
     uint8_t queue_id,
     const ttnn::Tensor &input_tensor,
-    const tt::tt_metal::LegacyShape &output_tensor_end,
+    const ttnn::Shape &output_tensor_end,
     const std::optional<MemoryConfig> &memory_config,
     bool use_multicore,
     bool use_pack_untilize) {
@@ -36,7 +36,7 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
 
 ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
     const ttnn::Tensor &input_tensor,
-    const tt::tt_metal::LegacyShape &output_tensor_end,
+    const ttnn::Shape &output_tensor_end,
     const std::optional<MemoryConfig> &memory_config,
     bool use_multicore,
     bool use_pack_untilize) {

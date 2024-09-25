@@ -39,7 +39,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt::tt_metal::LegacyShape shape = {1, 32, 61, 32};
+        ttnn::Shape shape = {1, 32, 61, 32};
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a = ttnn::numpy::arange<bfloat16>(0, tt_metal::compute_volume(shape), 1).reshape(shape).to(device);
         Tensor b = ttnn::tilize_with_zero_padding(a);
@@ -51,7 +51,7 @@ int main(int argc, char **argv) {
         Tensor host_a = a.cpu(); // Move tensor a to host to validate
         Tensor g = Tensor(host_a.get_storage(), shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
         // TODO: Update when tensor.pad_to_tile() function is added
-        auto padded_shape = g.get_legacy_shape();
+        auto padded_shape = g.get_shape();
         padded_shape[2] = round_up(padded_shape[2], TILE_HEIGHT);
         padded_shape[3] = round_up(padded_shape[3], TILE_WIDTH);
         Tensor padded_g = g.pad(padded_shape, {0,0,0,0}, 0);

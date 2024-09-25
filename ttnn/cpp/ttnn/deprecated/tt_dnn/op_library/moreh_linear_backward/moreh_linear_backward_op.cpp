@@ -42,8 +42,8 @@ void MorehBiasAddBackward::validate_with_output_tensors(
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> MorehBiasAddBackward::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    return {input_tensors.at(1).get_legacy_shape()};
+std::vector<ttnn::Shape> MorehBiasAddBackward::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    return {input_tensors.at(1).get_shape().with_tile_padding()};
 }
 
 std::vector<Tensor> MorehBiasAddBackward::create_output_tensors(
@@ -131,7 +131,7 @@ std::vector<std::optional<Tensor>> moreh_linear_backward(
             const auto& temp_weight_grad =
                 moreh_matmul(output_grad, input, true, false, std::nullopt, std::nullopt, weight_grad_mem_config);
             TT_ASSERT(weight_grad.has_value(), "weight_grad tensor should not be std::nullopt");
-            std::vector<int64_t> dims = find_reduce_dim(temp_weight_grad.get_legacy_shape(), weight_grad.value().get_legacy_shape());
+            std::vector<int64_t> dims = find_reduce_dim(temp_weight_grad.get_shape().with_tile_padding(), weight_grad.value().get_shape().with_tile_padding());
             moreh_sum(temp_weight_grad, dims, true, weight_grad.value(), weight_grad_mem_config, compute_kernel_config);
         }
         result[1] = weight_grad_tensor;

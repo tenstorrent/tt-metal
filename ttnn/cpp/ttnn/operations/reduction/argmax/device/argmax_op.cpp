@@ -34,27 +34,27 @@ void ArgMax::validate_with_output_tensors(
     }
 
     if (this->dim.has_value()) {
-        const uint32_t input_rank = input_tensor_a.get_legacy_shape().rank();
+        const uint32_t input_rank = input_tensor_a.get_shape().with_tile_padding().rank();
         const uint32_t normalized_dim = dim.value() < 0 ? dim.value() + input_rank : dim.value();
 
         // TODO: Add support for normalized_dim = 0, 1, 2
         TT_FATAL(normalized_dim == (input_rank - 1), "Only argmax on last dim is supported!");
     }
 
-    auto input_shape = input_tensor_a.get_legacy_shape();
+    auto input_shape = input_tensor_a.get_shape().with_tile_padding();
     TT_FATAL(input_shape[0]==1, "dim 0 must be 1");
     TT_FATAL(input_shape[1]==1, "dim 1 must be 1");
 
 }
 
-std::vector<tt::tt_metal::LegacyShape> ArgMax::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    auto input_shape = input_tensors[0].get_legacy_shape();
+std::vector<ttnn::Shape> ArgMax::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    auto input_shape = input_tensors[0].get_shape().with_tile_padding();
     if (this->dim.has_value()) {
-        tt::tt_metal::LegacyShape output_shape({input_shape[0], input_shape[1], 1, input_shape[2]});
+        ttnn::Shape output_shape({input_shape[0], input_shape[1], 1, input_shape[2]});
         return {output_shape};
     }
     else {
-        tt::tt_metal::LegacyShape output_shape({1, 1, 1, 1});
+        ttnn::Shape output_shape({1, 1, 1, 1});
         return {output_shape};
     }
 }
@@ -75,7 +75,7 @@ operation::ProgramWithCallbacks ArgMax::create_program(
     const auto &input_tensor = input_tensors.at(0);
     const auto &output_tensor = output_tensors.at(0);
     const auto normalized_dim = dim.has_value()
-    ? *dim + input_tensor.get_legacy_shape().rank() * (*dim < 0)
+    ? *dim + input_tensor.get_shape().with_tile_padding().rank() * (*dim < 0)
     : dim;
     if (use_multicore) {
         return detail::argmax_multi_core(input_tensor, output_tensor, normalized_dim);

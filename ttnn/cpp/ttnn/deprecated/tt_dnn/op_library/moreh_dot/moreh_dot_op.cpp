@@ -18,7 +18,7 @@ namespace operations {
 namespace primary {
 
 inline bool is_1d_tensor(const Tensor& tensor) {
-    const auto& shape = tensor.get_legacy_shape().without_padding();
+    const auto& shape = tensor.get_shape();
     // because TT Tensor only support 4d shape, so if the first 3 dims are 1, assume it's 1d.
     return shape[0] == 1 && shape[1] == 1 && shape[2] == 1;
 }
@@ -30,8 +30,8 @@ void MorehDot::validate(const std::vector<Tensor>& input_tensors) const {
     TT_ASSERT(is_1d_tensor(input_tensor_a));
     TT_ASSERT(is_1d_tensor(input_tensor_b));
 
-    const auto& a_shape_wo_padding = input_tensor_a.get_legacy_shape().without_padding();
-    const auto& b_shape_wo_padding = input_tensor_b.get_legacy_shape().without_padding();
+    const auto& a_shape_wo_padding = input_tensor_a.get_shape();
+    const auto& b_shape_wo_padding = input_tensor_b.get_shape();
     TT_ASSERT(a_shape_wo_padding[3] == b_shape_wo_padding[3]);
 
     TT_ASSERT(
@@ -46,13 +46,13 @@ void MorehDot::validate(const std::vector<Tensor>& input_tensors) const {
         "Operands to matmul need to be allocated in buffers on device!");
 }
 
-std::vector<tt::tt_metal::LegacyShape> MorehDot::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::Shape> MorehDot::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto output_shape = input_tensor.get_legacy_shape();
+    auto output_shape = input_tensor.get_shape().with_tile_padding();
     auto padding = output_shape.padding();
     output_shape[3] = TILE_WIDTH;
     padding[3] = Padding::PadDimension{0, 31};
-    return {tt::tt_metal::LegacyShape(output_shape, padding)};
+    return {ttnn::Shape(output_shape, padding)};
 }
 
 std::vector<Tensor> MorehDot::create_output_tensors(const std::vector<Tensor>& input_tensors) const {

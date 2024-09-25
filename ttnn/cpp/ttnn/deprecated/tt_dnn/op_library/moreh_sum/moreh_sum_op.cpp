@@ -75,14 +75,14 @@ void MorehSum::validate_with_output_tensors(
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> MorehSum::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::Shape> MorehSum::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input = input_tensors.at(0);
-    const auto& input_shape = input.get_legacy_shape();
+    const auto& input_shape = input.get_shape().with_tile_padding();
     const auto input_rank = input_shape.rank();
     const bool is_tile_dim = (this->dim == input_rank - 1 || this->dim == input_rank - 2);
     log_debug(LogOp, "{}:{} dim {}, keep_batch_dim {}", __func__, __LINE__, this->dim, this->keep_batch_dim);
 
-    tt::tt_metal::LegacyShape output_shape = input_shape;
+    ttnn::Shape output_shape = input_shape;
     if (this->keep_batch_dim) {
         auto shape = input_shape;
         auto padding = shape.padding();
@@ -96,7 +96,7 @@ std::vector<tt::tt_metal::LegacyShape> MorehSum::compute_output_shapes(const std
             shape[this->dim] = 1;
         }
 
-        output_shape = tt::tt_metal::LegacyShape(shape, padding);
+        output_shape = ttnn::Shape(shape, padding);
     } else {
         std::vector<uint32_t> shape;
         std::vector<Padding::PadDimension> pad_dimensions;
@@ -116,7 +116,7 @@ std::vector<tt::tt_metal::LegacyShape> MorehSum::compute_output_shapes(const std
         }
 
         auto padding = Padding(pad_dimensions, input_padding.pad_value());
-        output_shape = tt::tt_metal::LegacyShape(shape, padding);
+        output_shape = ttnn::Shape(shape, padding);
     }
 
     log_debug(LogOp, "{}:{} output_shape {}", __func__, __LINE__, output_shape);
@@ -140,7 +140,7 @@ operation::ProgramWithCallbacks MorehSum::create_program(
     auto& input = inputs.at(0);
     auto& output = outputs.at(0);
 
-    const auto input_rank = input.get_legacy_shape().rank();
+    const auto input_rank = input.get_shape().with_tile_padding().rank();
     const auto dtype = input.dtype();
     log_debug(LogOp, "{}:{} dtype {}", __func__, __LINE__, dtype);
     auto call_moreh_sum_impl = [&](auto moreh_sum_w_impl, auto moreh_sum_h_impl, auto moreh_sum_nc_impl) {
@@ -168,7 +168,7 @@ Tensor moreh_sum(
     const MemoryConfig& output_mem_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     uint8_t queue_id) {
-    std::vector<int64_t> dims = get_dim(dim, input.get_legacy_shape().rank());
+    std::vector<int64_t> dims = get_dim(dim, input.get_shape().with_tile_padding().rank());
     std::sort(dims.begin(), dims.end());
 
     auto temp_input = input;

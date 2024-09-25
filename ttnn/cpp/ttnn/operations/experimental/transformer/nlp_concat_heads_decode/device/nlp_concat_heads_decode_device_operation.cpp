@@ -10,7 +10,7 @@ namespace ttnn::operations::experimental::transformer {
 // NLP ConcatHeads op for decode
 void NLPConcatHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
+    const auto input_shape = input_tensor.get_shape().with_tile_padding();
 
     // input tensor and shape
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
@@ -26,16 +26,16 @@ void NLPConcatHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
     TT_FATAL(input_tensor.is_sharded(), "Error");
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
     auto shard_spec = input_tensor.shard_spec().value();
-    TT_FATAL(shard_spec.shape[1] == input_tensor.get_legacy_shape()[-1], "Error");
-    TT_FATAL(shard_spec.shape[0] == input_tensor.get_legacy_shape()[-2], "Error");
+    TT_FATAL(shard_spec.shape[1] == input_tensor.get_shape().with_tile_padding()[-1], "Error");
+    TT_FATAL(shard_spec.shape[0] == input_tensor.get_shape().with_tile_padding()[-2], "Error");
     auto shard_grid = shard_spec.grid.bounding_box().grid_size();
     auto num_cores = shard_grid.x * shard_grid.y;
     TT_FATAL(num_cores == input_shape[1], "num_cores must be equal to num users");
 }
 
-std::vector<tt::tt_metal::LegacyShape> NLPConcatHeadsDecodeDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::Shape> NLPConcatHeadsDecodeDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
+    const auto input_shape = input_tensor.get_shape().with_tile_padding();
 
     auto num_heads = this->num_heads;
     auto sequence_length = input_shape[0];
@@ -54,7 +54,7 @@ std::vector<tt::tt_metal::LegacyShape> NLPConcatHeadsDecodeDeviceOperation::comp
 std::vector<Tensor> NLPConcatHeadsDecodeDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto num_heads = this->num_heads;
-    const auto input_shape = input_tensor.get_legacy_shape();
+    const auto input_shape = input_tensor.get_shape().with_tile_padding();
     auto sequence_length = input_shape[0];
     auto head_dim = input_shape[3];
     auto output_shape = this->compute_output_shapes(input_tensors).at(0);

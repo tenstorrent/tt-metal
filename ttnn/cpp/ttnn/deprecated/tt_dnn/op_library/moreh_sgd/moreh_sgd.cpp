@@ -33,7 +33,7 @@ operation::ProgramWithCallbacks moreh_sgd_(
     const CoreRange core_range,
     const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     // split work
-    auto shape = param_in.get_legacy_shape();
+    auto shape = param_in.get_shape().with_tile_padding();
     auto H = shape[-2];
     auto W = shape[-1];
     auto num = param_in.volume() / H / W;

@@ -21,7 +21,7 @@ void validate_maxpool(const Tensor& input, const sliding_window::SlidingWindowCo
     TT_FATAL(input.get_layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR supported for now");
 
     // NOTE: This is not a hard requirement. If need to support non-power-of-2, simply change the address generator in reader to generic one.
-    uint32_t in_nbytes_c = (input.get_legacy_shape()[3]) * (input.get_dtype() == DataType::BFLOAT16 ? 2 : 1);
+    uint32_t in_nbytes_c = (input.get_shape().with_tile_padding()[3]) * (input.get_dtype() == DataType::BFLOAT16 ? 2 : 1);
     bool is_pow2 = (in_nbytes_c & (in_nbytes_c - 1)) == 0;
     TT_FATAL(is_pow2, "Row size (nchannels * bytes = {}) should be power of 2 ({}).", in_nbytes_c, is_pow2);
 
@@ -49,7 +49,7 @@ MaxPool2D::shape_return_value_t MaxPool2D::compute_output_shapes(const operation
     // NOTE: Only for RM
     // NOTE2: Assuming { N, 1, H * W, C }
     // NOTE3: Assuming output data type is same as input
-    const auto input_shape = input.get_legacy_shape();
+    const auto input_shape = input.get_shape().with_tile_padding();
 
     // confirm that the output size supplied to the function matches
     uint32_t out_h = sliding_window_config.get_output_shape()[1];
@@ -70,7 +70,7 @@ MaxPool2D::shape_return_value_t MaxPool2D::compute_output_shapes(const operation
     const auto padding = Padding(
         {{0, 0}, {0, 0}, {0, out_nhw_padded - out_nhw}, {0, out_c_padded - out_c}},
         Padding::PadValue::NegativeInfinity);
-    auto out_shape = Shape(tt::tt_metal::LegacyShape(out_dims, padding));
+    auto out_shape = Shape(ttnn::Shape(out_dims, padding));
     return out_shape;
 }
 
@@ -91,7 +91,7 @@ MaxPool2D::tensor_return_value_t MaxPool2D::create_output_tensors(const operatio
         uint32_t out_nhw_padded = output_shape[0] * output_shape[1] * output_shape[2];
         uint32_t out_nhw_per_core = out_nhw_padded / ncores;
         CoreRangeSet shard_grid = sliding_window_config.core_range_set;
-        std::array<uint32_t, 2> shard_shape = {out_nhw_per_core, input.get_legacy_shape()[-1]};
+        std::array<uint32_t, 2> shard_shape = {out_nhw_per_core, input.get_shape().with_tile_padding()[-1]};
         mem_config.shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR, false};
     }
 

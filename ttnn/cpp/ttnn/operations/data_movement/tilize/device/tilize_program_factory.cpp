@@ -26,7 +26,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::Device* device = a.device();
-    auto output_shape = output.get_legacy_shape();
+    auto output_shape = output.get_shape().with_tile_padding();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -39,7 +39,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
 
     uint32_t num_tiles = a.volume() / TILE_HW;
 
-    auto width = a.get_legacy_shape()[-1];
+    auto width = a.get_shape().with_tile_padding()[-1];
     uint32_t stick_s = width;
     uint32_t num_sticks = a.volume() / width;
     uint32_t stick_size = stick_s * a.element_size();  // Assuming bfloat16 dataformat
@@ -164,9 +164,9 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
     int32_t ntiles = a.volume() / TILE_HW;
-    uint32_t ntiles_per_block = a.get_legacy_shape()[-1] / TILE_WIDTH;
+    uint32_t ntiles_per_block = a.get_shape().with_tile_padding()[-1] / TILE_WIDTH;
     uint32_t nblocks = std::ceil((float)ntiles / ntiles_per_block);
-    uint32_t block_size_nbytes = a.get_legacy_shape()[-1] * a.element_size();
+    uint32_t block_size_nbytes = a.get_shape().with_tile_padding()[-1] * a.element_size();
 
     Device* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();

@@ -39,42 +39,42 @@ void MorehGroupNorm::validate_with_output_tensors(
     check_tensor(beta, "moreh_groupnorm", "beta");
 
     // input (N, C, H, W)
-    auto C = input.get_legacy_shape()[1];
+    auto C = input.get_shape().with_tile_padding()[1];
     TT_ASSERT(C % this->num_groups == 0, "input_shape[1] must be divisible by num_groups.");
     // output (N, C, H, W)
     if (output.has_value()) {
-        C = output.value().get_legacy_shape()[1];
+        C = output.value().get_shape().with_tile_padding()[1];
         TT_ASSERT(C % this->num_groups == 0, "output_shape[1] must be divisible by num_groups.");
     }
     // gamma (1, 1, 1, C)
     if (gamma.has_value()) {
-        C = gamma.value().get_legacy_shape().without_padding()[-1];
+        C = gamma.value().get_shape()[-1];
         TT_ASSERT(C % this->num_groups == 0, "gamma_shape[-1] must be divisible by num_groups.");
     }
     // beta (1, 1, 1, C)
     if (beta.has_value()) {
-        C = beta.value().get_legacy_shape().without_padding()[-1];
+        C = beta.value().get_shape()[-1];
         TT_ASSERT(C % this->num_groups == 0, "beta_shape[-1] must be divisible by num_groups.");
     }
 
     // mean (1, 1, N, num_groups)
     if (mean.has_value()) {
         TT_ASSERT(
-            mean.value().get_legacy_shape().without_padding()[-1] == this->num_groups,
+            mean.value().get_shape()[-1] == this->num_groups,
             "mean_shape[-1] must match num_groups.");
     }
     // rstd (1, 1, N, num_groups)
     if (rstd.has_value()) {
         TT_ASSERT(
-            rstd.value().get_legacy_shape().without_padding()[-1] == this->num_groups,
+            rstd.value().get_shape()[-1] == this->num_groups,
             "rstd_shape[-1] must match num_groups.");
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> MorehGroupNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<ttnn::Shape> MorehGroupNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     using namespace tt::constants;
     // mean, rstd (1, 1, N, num_groups)
-    const auto output_shape = input_tensors.at(0).get_legacy_shape();
+    const auto output_shape = input_tensors.at(0).get_shape().with_tile_padding();
     const auto N = output_shape[0];
     const auto num_groups = this->num_groups;
     const std::vector<uint32_t> mean_rstd_origin_shape{
@@ -87,7 +87,7 @@ std::vector<tt::tt_metal::LegacyShape> MorehGroupNorm::compute_output_shapes(con
     mean_rstd_padding[2] = Padding::PadDimension{0, TILE_HEIGHT - (N % TILE_HEIGHT)};
     mean_rstd_padding[3] = Padding::PadDimension{0, TILE_WIDTH - (num_groups % TILE_WIDTH)};
 
-    tt::tt_metal::LegacyShape mean_rstd_shape(mean_rstd_origin_shape, mean_rstd_padding);
+    ttnn::Shape mean_rstd_shape(mean_rstd_origin_shape, mean_rstd_padding);
     return {output_shape, mean_rstd_shape, mean_rstd_shape};
 }
 

@@ -56,7 +56,7 @@ Tensor tensor_to(const Tensor& input_tensor, Device* target_device, const Memory
         } else {
             tensor_impl::validate_on_device_dtype_and_layout(
                 target_device,
-                async_safe_tensor.get_legacy_shape(),
+                async_safe_tensor.get_shape().value,
                 async_safe_tensor.get_dtype(),
                 async_safe_tensor.get_layout());
             auto local_tensor =
@@ -253,7 +253,7 @@ void tensor_print(const Tensor& input_tensor) {
     GraphTracker::instance().track_function_end();
 }
 
-Tensor tensor_pad(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& output_tensor_shape, const tt::tt_metal::LegacyShape& input_tensor_start, float pad_value) {
+Tensor tensor_pad(const Tensor& input_tensor, const ttnn::Shape& output_tensor_shape, const ttnn::Shape& input_tensor_start, float pad_value) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::pad", input_tensor, output_tensor_shape, input_tensor_start, pad_value);
     TT_ASSERT(
@@ -261,7 +261,7 @@ Tensor tensor_pad(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& o
         input_tensor.storage_type() == StorageType::BORROWED && "Tensor must be on host for padding");
     TT_ASSERT(input_tensor.get_layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for padding");
 
-    auto input_shape = input_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_shape().with_tile_padding();
     auto dimensions_pads = std::vector<Padding::PadDimension>();
     for (auto index = 0; index < input_shape.rank(); index++) {
         auto front = input_tensor_start[index];
@@ -269,7 +269,7 @@ Tensor tensor_pad(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& o
         dimensions_pads.push_back(Padding::PadDimension{.front = front, .back = back});
     }
     const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-    auto output_shape_with_padding = tt::tt_metal::LegacyShape(output_tensor_shape, padding);
+    auto output_shape_with_padding = ttnn::Shape(output_tensor_shape, padding);
 
     auto output = tensor_impl::pad_wrapper(input_tensor, output_shape_with_padding, input_tensor_start, pad_value);
     output = tt::tt_metal::set_tensor_id(output);
@@ -277,7 +277,7 @@ Tensor tensor_pad(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& o
     return output;
 }
 
-Tensor tensor_unpad(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end) {
+Tensor tensor_unpad(const Tensor& input_tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::unpad", input_tensor, output_tensor_start, output_tensor_end);
     TT_ASSERT(input_tensor.get_layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for unpadding");
@@ -290,8 +290,8 @@ Tensor tensor_unpad(const Tensor& input_tensor, const tt::tt_metal::LegacyShape&
 Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value)  {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::pad_to_tile", input_tensor, pad_value);
-    uint32_t height = input_tensor.get_legacy_shape()[-2];
-    uint32_t width = input_tensor.get_legacy_shape()[-1];
+    uint32_t height = input_tensor.get_shape().with_tile_padding()[-2];
+    uint32_t width = input_tensor.get_shape().with_tile_padding()[-1];
     uint32_t padded_height = round_up(height, constants::TILE_HEIGHT);
     uint32_t padded_width = round_up(width, constants::TILE_WIDTH);
 
@@ -299,9 +299,9 @@ Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value)  {
     std::vector<uint32_t> padded_shape;
     std::vector<uint32_t> input_tensor_start;
 
-    for (auto index = 0; index < input_tensor.get_legacy_shape().rank() - 2; index++) {
-        shape.push_back(input_tensor.get_legacy_shape().without_padding()[index]);
-        padded_shape.push_back(input_tensor.get_legacy_shape()[index]);
+    for (auto index = 0; index < input_tensor.get_shape().with_tile_padding().rank() - 2; index++) {
+        shape.push_back(input_tensor.get_shape()[index]);
+        padded_shape.push_back(input_tensor.get_shape().with_tile_padding()[index]);
         input_tensor_start.push_back(0);
     }
 
@@ -312,31 +312,31 @@ Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value)  {
     input_tensor_start.push_back(0);
     input_tensor_start.push_back(0);
 
-    auto output = input_tensor.pad(tt::tt_metal::LegacyShape(shape, padded_shape), tt::tt_metal::LegacyShape{input_tensor_start}, pad_value);
+    auto output = input_tensor.pad(ttnn::Shape(shape, padded_shape), input_tensor_start, pad_value);
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
 }
 
-Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& output_tensor_shape) {
+Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::Shape& output_tensor_shape) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::unpad_from_tile", input_tensor, output_tensor_shape);
 
-    for (auto index = 0; index < input_tensor.get_legacy_shape().rank() - 2; index++) {
+    for (auto index = 0; index < input_tensor.get_shape().with_tile_padding().rank() - 2; index++) {
         TT_ASSERT(
-            input_tensor.get_legacy_shape().without_padding()[index] == output_tensor_shape[index],
+            input_tensor.get_shape()[index] == output_tensor_shape[index],
             "Input shape must match output shape apart from last 2 dims");
     }
     TT_ASSERT(
-        input_tensor.get_legacy_shape()[-2] % constants::TILE_HEIGHT == 0 && input_tensor.get_legacy_shape()[-1] % constants::TILE_WIDTH == 0,
+        input_tensor.get_shape().with_tile_padding()[-2] % constants::TILE_HEIGHT == 0 && input_tensor.get_shape().with_tile_padding()[-1] % constants::TILE_WIDTH == 0,
         "Last 2 dims of input shape must be multiples of 32");
     TT_ASSERT(
-        input_tensor.get_legacy_shape()[-2] - constants::TILE_HEIGHT < output_tensor_shape[-2] &&
-            input_tensor.get_legacy_shape()[-1] - constants::TILE_WIDTH < output_tensor_shape[-1],
+        input_tensor.get_shape().with_tile_padding()[-2] - constants::TILE_HEIGHT < output_tensor_shape[-2] &&
+            input_tensor.get_shape().with_tile_padding()[-1] - constants::TILE_WIDTH < output_tensor_shape[-1],
         "Last 2 dims of output must be within range to have been padded to input");
     std::vector<uint32_t> output_tensor_start{};
     std::vector<uint32_t> output_tensor_end{};
-    for (auto index = 0; index < input_tensor.get_legacy_shape().rank(); index++) {
+    for (auto index = 0; index < input_tensor.get_shape().with_tile_padding().rank(); index++) {
         output_tensor_start.push_back(0);
         output_tensor_end.push_back(output_tensor_shape[index]);
     }
@@ -356,7 +356,7 @@ Tensor tensor_reshape(const Tensor& input_tensor, int N, int C, int H, int W) {
     return output;
 }
 
-Tensor tensor_reshape(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& new_shape) {
+Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::reshape", input_tensor, new_shape);
     TT_ASSERT(
@@ -382,7 +382,7 @@ Tensor tensor_reshape(const Tensor& input_tensor, const tt::tt_metal::LegacyShap
             }
             if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 MultiDeviceStorage updated_storage = std::get<T>(tensor.get_storage());
-                std::unordered_map<int, tt::tt_metal::LegacyShape> new_shapes;
+                std::unordered_map<int, ttnn::Shape> new_shapes;
 
                 for (auto device_id : updated_storage.ordered_device_ids) {
                     new_shapes.insert({device_id, new_shape});

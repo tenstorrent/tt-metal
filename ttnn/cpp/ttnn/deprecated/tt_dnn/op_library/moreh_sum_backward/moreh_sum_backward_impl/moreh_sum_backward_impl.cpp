@@ -18,7 +18,7 @@ namespace primary {
 
 namespace {
 
-void get_tensor_dim(std::vector<uint32_t> &dim, const tt::tt_metal::LegacyShape &shape) {
+void get_tensor_dim(std::vector<uint32_t> &dim, const ttnn::Shape &shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -37,13 +37,13 @@ void get_tensor_dim(std::vector<uint32_t> &dim, const tt::tt_metal::LegacyShape 
     }
 }
 
-tt::tt_metal::LegacyShape get_output_grad_shape(
+ttnn::Shape get_output_grad_shape(
     const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keep_batch_dim) {
     if (keep_batch_dim) {
-        return output_grad.get_legacy_shape();
+        return output_grad.get_shape().with_tile_padding();
     }
 
-    auto shape = input_grad.get_legacy_shape();
+    auto shape = input_grad.get_shape().with_tile_padding();
     auto rank = shape.rank();
     auto padding = shape.padding();
     for (auto dim : dims) {
@@ -57,7 +57,7 @@ tt::tt_metal::LegacyShape get_output_grad_shape(
         }
     }
 
-    return tt::tt_metal::LegacyShape(shape, padding);
+    return ttnn::Shape(shape, padding);
 }
 }  // namespace
 
@@ -79,15 +79,15 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(
     const auto cb_data_format = datatype_to_dataformat_converter(output_grad.get_dtype());
     const auto single_tile_size = detail::TileSize(cb_data_format);
 
-    const auto &input_grad_shape = input_grad.get_legacy_shape();
-    const auto &input_grad_shape_wo_padding = input_grad_shape.without_padding();
+    const auto &input_grad_shape = input_grad.get_shape().with_tile_padding();
+    const auto &input_grad_shape_wo_padding = input_grad.get_shape();
     const uint32_t input_grad_rank = input_grad_shape.rank();
 
     std::vector<uint32_t> input_grad_dim(input_grad_rank, 1);
     log_debug(LogOp, "input_grad");
     get_tensor_dim(input_grad_dim, input_grad_shape);
-    const auto &output_grad_shape = get_output_grad_shape(output_grad, input_grad, dims, keep_batch_dim);
-    const auto &output_grad_shape_wo_padding = output_grad_shape.without_padding();
+    const auto &output_grad_shape_wo_padding = get_output_grad_shape(output_grad, input_grad, dims, keep_batch_dim);
+    const auto &output_grad_shape = output_grad_shape_wo_padding.with_tile_padding();
 
     std::vector<uint32_t> output_grad_dim(input_grad_rank, 1);
     log_debug(LogOp, "output_grad");

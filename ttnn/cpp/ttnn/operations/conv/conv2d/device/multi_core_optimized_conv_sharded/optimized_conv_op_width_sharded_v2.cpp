@@ -63,7 +63,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     tt_metal::Device* device = a.device();
     TT_FATAL(a.get_layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
-    TT_FATAL(output_channels <= b.get_legacy_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
+    TT_FATAL(output_channels <= b.get_shape().with_tile_padding()[3], "Invalid weight shape. Incorrect weight tensor.");
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
     uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
     uint32_t weight_block_w_ntiles = parallelization_config.per_core_out_matrix_width_ntiles;
@@ -162,10 +162,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
     // Tensor b has weights and it should be tiled layout after converting conv weights into weight matrix
     TT_FATAL(b.get_layout() == Layout::TILE, "Conv weights should be in tiled layout");
-    TT_FATAL(b.get_legacy_shape()[0] == 1, "Conv weight matrix shape is invalid");
-    TT_FATAL(b.get_legacy_shape()[1] == 1, "Conv weight matrix shape is invalid");
-    uint32_t weight_matrix_height = b.get_legacy_shape()[2];
-    uint32_t weight_matrix_width = b.get_legacy_shape()[3];
+    TT_FATAL(b.get_shape().with_tile_padding()[0] == 1, "Conv weight matrix shape is invalid");
+    TT_FATAL(b.get_shape().with_tile_padding()[1] == 1, "Conv weight matrix shape is invalid");
+    uint32_t weight_matrix_height = b.get_shape().with_tile_padding()[2];
+    uint32_t weight_matrix_width = b.get_shape().with_tile_padding()[3];
     uint32_t weight_matrix_height_ntiles = weight_matrix_height / TILE_HEIGHT;
     uint32_t weight_matrix_width_ntiles = weight_matrix_width / TILE_WIDTH;
 
@@ -234,7 +234,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] =
         optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(
-            ashape_with_channels_padded.value, sliding_window_config, out_block_h_ntiles, extra_padding_for_32B_alignment);
+            ashape_with_channels_padded, sliding_window_config, out_block_h_ntiles, extra_padding_for_32B_alignment);
     TT_FATAL(act_matrix_shape.size() == 3, "Error");
     TT_FATAL(act_matrix_shape[0] == 1, "Error");
     uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
@@ -248,7 +248,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         // Tensor bias is of shape {output_channels}
         TT_FATAL(bias.has_value(), "Error");
         TT_FATAL(bias.value().buffer() != nullptr, "Error");
-        auto bias_shape_without_padding = bias.value().get_legacy_shape().without_padding();
+        auto bias_shape_without_padding = bias.value().get_shape();
         TT_FATAL(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
     }
 
@@ -394,7 +394,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         bias_buffer = bias.value().buffer();
         bias_dram_addr = bias_buffer->address();
         bias_ntiles =
-            bias.value().get_legacy_shape()[3] / constants::TILE_WIDTH;  // TODO: support non tile multiple sizes
+            bias.value().get_shape().with_tile_padding()[3] / constants::TILE_WIDTH;  // TODO: support non tile multiple sizes
         bias_in_dram = bias_buffer->buffer_type() == BufferType::DRAM;
     }
 

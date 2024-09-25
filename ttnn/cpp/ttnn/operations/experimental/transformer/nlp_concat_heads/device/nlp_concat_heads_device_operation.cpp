@@ -9,7 +9,7 @@ namespace ttnn::operations::experimental::transformer {
 // Generic NLP ConcatHeads op
 void NLPConcatHeadsDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
+    const auto input_shape = input_tensor.get_shape().with_tile_padding();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
@@ -19,20 +19,20 @@ void NLPConcatHeadsDeviceOperation::validate(const std::vector<Tensor>& input_te
     if (input_tensor.is_sharded()) {
         TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED, "Error");
         auto shard_spec = input_tensor.shard_spec().value();
-        TT_FATAL(shard_spec.shape[1] == input_tensor.get_legacy_shape()[-1], "Error");
-        TT_FATAL(shard_spec.shape[0] % input_tensor.get_legacy_shape()[-2] == 0, "Error");
-        TT_FATAL(input_tensor.get_legacy_shape()[1] % (shard_spec.shape[0] / input_tensor.get_legacy_shape()[-2]) == 0, "Error");
+        TT_FATAL(shard_spec.shape[1] == input_tensor.get_shape().with_tile_padding()[-1], "Error");
+        TT_FATAL(shard_spec.shape[0] % input_tensor.get_shape().with_tile_padding()[-2] == 0, "Error");
+        TT_FATAL(input_tensor.get_shape().with_tile_padding()[1] % (shard_spec.shape[0] / input_tensor.get_shape().with_tile_padding()[-2]) == 0, "Error");
         TT_FATAL(this->output_mem_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED, "Error");
     } else {
         TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> NLPConcatHeadsDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    std::vector<tt::tt_metal::LegacyShape> output_shape_vec;
+std::vector<ttnn::Shape> NLPConcatHeadsDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    std::vector<ttnn::Shape> output_shape_vec;
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
-    output_shape_vec = {(tt::tt_metal::LegacyShape) {input_shape[0], 1, input_shape[2], input_shape[1] * input_shape[3]}};
+    const auto input_shape = input_tensor.get_shape().with_tile_padding();
+    output_shape_vec = {(ttnn::Shape) {input_shape[0], 1, input_shape[2], input_shape[1] * input_shape[3]}};
 
     auto num_heads = input_shape[1];
     auto sequence_length = input_shape[2];
@@ -48,7 +48,7 @@ std::vector<Tensor> NLPConcatHeadsDeviceOperation::create_output_tensors(const s
     if (this->output_mem_config.is_sharded()) {
         ShardSpec shard_spec = input_tensor.shard_spec().value();
         uint32_t num_cores = shard_spec.num_cores();
-        uint32_t heads_per_shard = shard_spec.shape[0] / input_tensor.get_legacy_shape()[-2];
+        uint32_t heads_per_shard = shard_spec.shape[0] / input_tensor.get_shape().with_tile_padding()[-2];
         shard_spec.shape = {shard_spec.shape[0] / heads_per_shard, shard_spec.shape[1] * heads_per_shard};
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = shard_spec;

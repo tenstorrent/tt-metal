@@ -23,7 +23,7 @@ MorehNormOperation::ProgramFactoryH::cached_program_t MorehNormOperation::Progra
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_shape = input.get_legacy_shape();
+    const auto input_shape = input.get_shape().with_tile_padding();
     const auto input_rank = input_shape.rank();
 
     const auto H = input_shape[-2];
@@ -34,7 +34,7 @@ MorehNormOperation::ProgramFactoryH::cached_program_t MorehNormOperation::Progra
 
     const auto num_units = input.volume() / H / W * Wt;
 
-    const auto origin_h = input_shape.without_padding()[-2];
+    const auto origin_h = input.get_shape()[-2];
 
     auto [floored_p, decimal, p_is_negative] = get_floored_p_and_decimal_and_p_is_negative(p);
     auto [floored_recip_p, recip_p_decimal, recip_p_is_negative] =

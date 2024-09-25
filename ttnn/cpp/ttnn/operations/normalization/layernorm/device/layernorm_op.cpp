@@ -31,20 +31,20 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
 
     if (b.has_value()) {
         TT_FATAL(b.value().get_layout() == Layout::TILE, "layot is not tile!");
-        TT_FATAL(a.get_legacy_shape() == b.value().get_legacy_shape(), "shape is not same!");
+        TT_FATAL(a.get_shape().with_tile_padding() == b.value().get_shape().with_tile_padding(), "shape is not same!");
         TT_FATAL(b.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         TT_FATAL(a.device() == b.value().device(), "device is not same!");
     }
 
     if (gamma.has_value()) {
         if (gamma.value().get_layout() == Layout::TILE) {
-            TT_FATAL(a.get_legacy_shape()[-1] == gamma.value().get_legacy_shape()[-1], "{} != {}", a.get_legacy_shape()[-1], gamma.value().get_legacy_shape()[-1]);
+            TT_FATAL(a.get_shape().with_tile_padding()[-1] == gamma.value().get_shape().with_tile_padding()[-1], "{} != {}", a.get_shape().with_tile_padding()[-1], gamma.value().get_shape().with_tile_padding()[-1]);
             TT_FATAL(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device(), "Error");
-            TT_FATAL(gamma.value().get_legacy_shape()[-2] == TILE_HEIGHT, "Error");
+            TT_FATAL(gamma.value().get_shape().with_tile_padding()[-2] == TILE_HEIGHT, "Error");
         } else {
             TT_FATAL(gamma.value().get_layout() == Layout::ROW_MAJOR, "Error");
-            TT_FATAL((gamma.value().get_legacy_shape()[-1] == TILE_WIDTH && gamma.value().volume() / TILE_WIDTH == a.get_legacy_shape()[-1] / TILE_WIDTH), "Error");
+            TT_FATAL((gamma.value().get_shape().with_tile_padding()[-1] == TILE_WIDTH && gamma.value().volume() / TILE_WIDTH == a.get_shape().with_tile_padding()[-1] / TILE_WIDTH), "Error");
             TT_FATAL(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device(), "Error");
             TT_FATAL(gamma.value().get_dtype() == DataType::FLOAT32 or gamma.value().get_dtype() == DataType::BFLOAT16, "Error");
@@ -56,13 +56,13 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
 
     if (beta.has_value()) {
         if (beta.value().get_layout() == Layout::TILE) {
-            TT_FATAL(a.get_legacy_shape()[-1] == beta.value().get_legacy_shape()[-1], "Error");
+            TT_FATAL(a.get_shape().with_tile_padding()[-1] == beta.value().get_shape().with_tile_padding()[-1], "Error");
             TT_FATAL(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == beta.value().device(), "Error");
-            TT_FATAL(beta.value().get_legacy_shape()[-2] == TILE_HEIGHT, "Error");
+            TT_FATAL(beta.value().get_shape().with_tile_padding()[-2] == TILE_HEIGHT, "Error");
         } else {
             TT_FATAL(beta.value().get_layout() == Layout::ROW_MAJOR, "Error");
-            TT_FATAL((beta.value().get_legacy_shape()[-1] == TILE_WIDTH && beta.value().volume() / TILE_WIDTH == a.get_legacy_shape()[-1] / TILE_WIDTH), "Error");
+            TT_FATAL((beta.value().get_shape().with_tile_padding()[-1] == TILE_WIDTH && beta.value().volume() / TILE_WIDTH == a.get_shape().with_tile_padding()[-1] / TILE_WIDTH), "Error");
             TT_FATAL(beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == beta.value().device(), "Error");
             TT_FATAL(beta.value().get_dtype() == DataType::FLOAT32 or beta.value().get_dtype() == DataType::BFLOAT16, "Error");
@@ -74,7 +74,7 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
         TT_FATAL(this->output_mem_config.is_sharded() && this->output_mem_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED, "Error");
     }
     if (this->distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER || this->distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
-        TT_FATAL(a.get_legacy_shape()[-2] == TILE_HEIGHT, "Only activations with batch size = 32 are supported");
+        TT_FATAL(a.get_shape().with_tile_padding()[-2] == TILE_HEIGHT, "Only activations with batch size = 32 are supported");
     }
     if (this->distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
         TT_FATAL(stats.has_value(), "Post all gather layernorm requires stats");
@@ -84,9 +84,9 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
         TT_FATAL(stats.value().storage_type() == StorageType::DEVICE || stats.value().storage_type() == StorageType::MULTI_DEVICE, "Operands to layernorm need to be on device!");
         TT_FATAL(stats.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         if(this->norm_type == LayerNormType::LAYERNORM) {
-            TT_FATAL(stats.value().get_legacy_shape()[-1] % (2 * TILE_WIDTH) == 0, "Stats is expected to have E(x) and E(x^2) for each device stacked interleaved in the last dimension");
+            TT_FATAL(stats.value().get_shape().with_tile_padding()[-1] % (2 * TILE_WIDTH) == 0, "Stats is expected to have E(x) and E(x^2) for each device stacked interleaved in the last dimension");
         } else {
-            TT_FATAL(stats.value().get_legacy_shape()[-1] % TILE_WIDTH == 0, "Stats is expected to have E(x) for each device stacked in the last dimension");
+            TT_FATAL(stats.value().get_shape().with_tile_padding()[-1] % TILE_WIDTH == 0, "Stats is expected to have E(x) for each device stacked in the last dimension");
         }
     }
     std::visit(
@@ -102,7 +102,7 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
                 TT_FATAL(a.memory_config().memory_layout == this->output_mem_config.memory_layout, "Error");
 
                 // tensor shape
-                const auto shape = a.get_legacy_shape();
+                const auto shape = a.get_shape().with_tile_padding();
                 uint32_t M = a.volume() / shape[-1];
                 uint32_t K = shape[-1];
                 uint32_t Mt = M / TILE_WIDTH;
@@ -153,19 +153,19 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
 
 
 }
-std::vector<tt::tt_metal::LegacyShape> LayerNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<ttnn::Shape> LayerNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     if (this->distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER)
     {
-        auto output_shape = input_tensor.get_legacy_shape();
+        auto output_shape = input_tensor.get_shape().with_tile_padding();
         auto padding = output_shape.padding();
         uint32_t num_tiles_w = this->norm_type == LayerNormType::LAYERNORM ? 2 : 1;
         output_shape[3] = num_tiles_w * TILE_WIDTH;
-        return {tt::tt_metal::LegacyShape(output_shape, padding)};
+        return {ttnn::Shape(output_shape, padding)};
     }
     else
     {
-        return {input_tensor.get_legacy_shape()};
+        return {input_tensor.get_shape().with_tile_padding()};
     }
 }
 std::vector<Tensor> LayerNorm::create_output_tensors(const std::vector<Tensor> &input_tensors) const {

@@ -24,22 +24,22 @@ void SplitDeviceOperation::validate(const std::vector<Tensor> &input_tensors) co
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Split does not currently support sharding");
 
 
-    TT_FATAL(input_tensor.get_legacy_shape()[0] == 1, "shape[0] must be 1 (batch 1 only)");
-    TT_FATAL(input_tensor.get_legacy_shape()[this->dim] % this->num_splits == 0, "Dim being split must be evenly divisible by number of splits");
-    TT_FATAL(this->dim <= input_tensor.get_legacy_shape().rank() && this->dim >= 0, "Dim being split must be from 0 to rank - 1");
-    TT_FATAL(input_tensor.get_legacy_shape().rank() == 4, "Tensor needs to be rank 4");
+    TT_FATAL(input_tensor.get_shape().with_tile_padding()[0] == 1, "shape[0] must be 1 (batch 1 only)");
+    TT_FATAL(input_tensor.get_shape().with_tile_padding()[this->dim] % this->num_splits == 0, "Dim being split must be evenly divisible by number of splits");
+    TT_FATAL(this->dim <= input_tensor.get_shape().with_tile_padding().rank() && this->dim >= 0, "Dim being split must be from 0 to rank - 1");
+    TT_FATAL(input_tensor.get_shape().with_tile_padding().rank() == 4, "Tensor needs to be rank 4");
     TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Tensor needs to be in TILE Layout");
 
 }
 
 
-std::vector<tt::tt_metal::LegacyShape> SplitDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<ttnn::Shape> SplitDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto &input_tensor = input_tensors.at(0);
-    auto input_shape_array = input_tensor.get_legacy_shape().to_array_4D();
+    auto input_shape_array = input_tensor.get_shape().with_tile_padding().to_array_4D();
     auto output_shape_array = input_shape_array;
     output_shape_array[this->dim] /= this->num_splits;
-    tt::tt_metal::LegacyShape output_shape(output_shape_array);
-    std::vector<tt::tt_metal::LegacyShape> output_shape_vector(this->num_splits, output_shape);
+    ttnn::Shape output_shape(output_shape_array);
+    std::vector<ttnn::Shape> output_shape_vector(this->num_splits, output_shape);
     return output_shape_vector;
 }
 

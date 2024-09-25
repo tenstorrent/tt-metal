@@ -23,10 +23,10 @@ ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
             if (ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE)) {
                 // Page size depends on the width, so only modify the shape if the width is the same
                 if (tensor_shape.with_tile_padding()[-1] == shape.with_tile_padding()[-1]) {
-                    return tensor.reshape(shape.value);
+                    return tensor.reshape(shape);
                 }
             } else {
-                return tensor.reshape(shape.value);
+                return tensor.reshape(shape);
             }
         } else if (tensor_shape.rank() >= 2 and shape.rank() >= 2) {
             // Handle the case when the tensor is not contiguous but the last two dimensions are the same and so reshape
@@ -34,7 +34,7 @@ ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
             if (tensor_shape[-1] == shape[-1] and tensor_shape[-2] == shape[-2] and
                 tensor_shape.with_tile_padding()[-1] == shape.with_tile_padding()[-1] and
                 tensor_shape.with_tile_padding()[-2] == shape.with_tile_padding()[-2]) {
-                return tensor.reshape(shape.value);
+                return tensor.reshape(shape);
             }
         }
     } else if (layout == ttnn::Layout::TILE) {
@@ -51,10 +51,10 @@ ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
 
         if (ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE)) {
             if (tensor_shape.with_tile_padding()[-1] == new_width) {
-                return tensor.reshape(shape.value);
+                return tensor.reshape(shape);
             }
         } else {
-            return tensor.reshape(shape.value);
+            return tensor.reshape(shape);
         }
     }
     TT_THROW("Unable to reshape given tensor!");

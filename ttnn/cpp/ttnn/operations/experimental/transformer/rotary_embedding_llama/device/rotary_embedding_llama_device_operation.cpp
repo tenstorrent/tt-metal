@@ -28,10 +28,10 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
         TT_FATAL((input.get_layout() == Layout::TILE), "Inputs to rotary embedding must be tilized");
     }
 
-    TT_FATAL(input_tensor.get_legacy_shape()[-1] % TILE_WIDTH  == 0, "Input X dim must be divisible into tiles");
-    uint32_t seq_len = input_tensor.get_legacy_shape()[-2];
-    uint32_t B = input_tensor.get_legacy_shape()[0];
-    uint32_t head_dim = input_tensor.get_legacy_shape()[-1];
+    TT_FATAL(input_tensor.get_shape().with_tile_padding()[-1] % TILE_WIDTH  == 0, "Input X dim must be divisible into tiles");
+    uint32_t seq_len = input_tensor.get_shape().with_tile_padding()[-2];
+    uint32_t B = input_tensor.get_shape().with_tile_padding()[0];
+    uint32_t head_dim = input_tensor.get_shape().with_tile_padding()[-1];
 
     TT_FATAL(head_dim <= 128 || std::get<ttnn::WormholeComputeKernelConfig>(this->compute_kernel_config).fp32_dest_acc_en == false, "If head_dim is > 128, fp32_dest_acc_en must be False");
     TT_FATAL(((seq_len & (seq_len - 1)) == 0), "Sequence must be a power of 2");
@@ -43,12 +43,12 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
     TT_FATAL(input_tensor.get_dtype() == cos.get_dtype()  && cos.get_dtype() == sin.get_dtype()
         && sin.get_dtype() == trans_mat.get_dtype() && trans_mat.get_dtype() == DataType::BFLOAT16, "All input tensors must have dtype = bfloat16");
     TT_FATAL(cos.get_dtype() == sin.get_dtype(), "Cos and Sin dtypes must match");
-    TT_FATAL(cos.get_legacy_shape() == sin.get_legacy_shape(), "Cos and Sin dims must match");
-    TT_FATAL(cos.get_legacy_shape()[0] == 1 && cos.get_legacy_shape()[1] == 1 && cos.get_legacy_shape()[-1] == head_dim, "Cos dims must match input dims");
+    TT_FATAL(cos.get_shape().with_tile_padding() == sin.get_shape().with_tile_padding(), "Cos and Sin dims must match");
+    TT_FATAL(cos.get_shape().with_tile_padding()[0] == 1 && cos.get_shape().with_tile_padding()[1] == 1 && cos.get_shape().with_tile_padding()[-1] == head_dim, "Cos dims must match input dims");
 
-    TT_FATAL(trans_mat.get_legacy_shape()[0] == 1 && trans_mat.get_legacy_shape()[1] == 1, "Transformation matrix must have 1st & 2nd dim equal to 1");
-    TT_FATAL(trans_mat.get_legacy_shape()[-2] == TILE_HEIGHT, "Transformation matrix must have 3rd dim equal to TILE_HEIGHT");
-    TT_FATAL(trans_mat.get_legacy_shape()[-1] == TILE_WIDTH, "Transformation matrix must have 4rd dim equal to TILE_WIDTH");
+    TT_FATAL(trans_mat.get_shape().with_tile_padding()[0] == 1 && trans_mat.get_shape().with_tile_padding()[1] == 1, "Transformation matrix must have 1st & 2nd dim equal to 1");
+    TT_FATAL(trans_mat.get_shape().with_tile_padding()[-2] == TILE_HEIGHT, "Transformation matrix must have 3rd dim equal to TILE_HEIGHT");
+    TT_FATAL(trans_mat.get_shape().with_tile_padding()[-1] == TILE_WIDTH, "Transformation matrix must have 4rd dim equal to TILE_WIDTH");
 
 
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
@@ -56,9 +56,9 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
 
 }
 
-std::vector<tt::tt_metal::LegacyShape> RotaryEmbeddingLlama::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::Shape> RotaryEmbeddingLlama::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto shape = input_tensor.get_legacy_shape();
+    auto shape = input_tensor.get_shape().with_tile_padding();
     return {shape};
 }
 

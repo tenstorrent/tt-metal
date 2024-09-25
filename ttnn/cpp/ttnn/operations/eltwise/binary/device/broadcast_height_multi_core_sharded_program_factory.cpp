@@ -38,8 +38,8 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
     auto& output = tensor_return_value;
     auto bcast_math = binary_op_type_to_bcast_op_math(operation_attributes.binary_op_type);
 
-    const auto ashape = a.get_legacy_shape();
-    const auto bshape = b.get_legacy_shape();
+    const auto ashape = a.get_shape().with_tile_padding();
+    const auto bshape = b.get_shape().with_tile_padding();
     uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
     uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
     uint32_t H = ashape[-2];
@@ -117,7 +117,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
                                           .set_globally_allocated_address(*output.buffer());
     auto out_cb = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
-    uint32_t num_input_tiles = (b.get_legacy_shape()[-1] * output.element_size() + TILE_HW - 1)/ TILE_HW;
+    uint32_t num_input_tiles = (b.get_shape().with_tile_padding()[-1] * output.element_size() + TILE_HW - 1)/ TILE_HW;
     uint32_t src1_cb_index = CB::c_in1;
     tt_metal::CircularBufferConfig src1_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * input1_tile_size, {{src1_cb_index, b_df}})
         .set_page_size(src1_cb_index, input1_tile_size);
@@ -240,9 +240,9 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreSharded::override_runtime_a
         auto all_cores = shard_spec.grid;
         uint32_t ncores = shard_spec.num_cores();
         uint32_t Wt = 0, Ht =0;
-        const auto ashape = input_tensor_a.get_legacy_shape();
+        const auto ashape = input_tensor_a.get_shape().with_tile_padding();
         uint32_t N  = ashape[0], C  = ashape[1], H  = ashape[2], W  = ashape[3];
-        uint32_t bN = input_tensor_b.get_legacy_shape()[0];
+        uint32_t bN = input_tensor_b.get_shape().with_tile_padding()[0];
         uint32_t NC = N*C;
         if(a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED){
             Wt = shard_spec.shape[1] / TILE_WIDTH;

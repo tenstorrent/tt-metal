@@ -58,14 +58,14 @@ operation::ProgramWithCallbacks moreh_groupnorm_impl(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_shape = input.get_legacy_shape();
+    const auto input_shape = input.get_shape().with_tile_padding();
 
     const auto n = input_shape[0];
     const auto c = input_shape[1];
     const auto h = input_shape[2];
     const auto w = input_shape[3];
 
-    const auto origin_input_shape = input_shape.without_padding();
+    const auto origin_input_shape = input.get_shape();
 
     const auto origin_h = origin_input_shape[2];
     const auto origin_w = origin_input_shape[3];

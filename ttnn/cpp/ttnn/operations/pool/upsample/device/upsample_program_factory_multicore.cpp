@@ -29,15 +29,15 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     // NOTE: input is assumed to have channels last format: {N, H, W, C}, {N, 1, H * W, C}, {1, 1, N * H * W, C}
     // NOTE: Bfp8_b/TILE is not yet supported
 
-    uint32_t input_stick_nbytes = input.get_legacy_shape()[-1] * input.element_size();
-    uint32_t output_stick_nbytes = output.get_legacy_shape()[-1] * output.element_size();
+    uint32_t input_stick_nbytes = input.get_shape().with_tile_padding()[-1] * input.element_size();
+    uint32_t output_stick_nbytes = output.get_shape().with_tile_padding()[-1] * output.element_size();
     TT_FATAL(input_stick_nbytes == output_stick_nbytes, "Input and output sticks should have same size");
 
-    uint32_t output_nsticks = output.volume() / output.get_legacy_shape()[-1];
-    uint32_t input_nsticks = input.volume() / input.get_legacy_shape()[-1];
+    uint32_t output_nsticks = output.volume() / output.get_shape().with_tile_padding()[-1];
+    uint32_t input_nsticks = input.volume() / input.get_shape().with_tile_padding()[-1];
 
-    uint32_t in_w = input.get_legacy_shape()[2];
-    uint32_t out_w = output.get_legacy_shape()[2];
+    uint32_t in_w = input.get_shape().with_tile_padding()[2];
+    uint32_t out_w = output.get_shape().with_tile_padding()[2];
 
     auto shard_spec = input.shard_spec().value();
     auto all_cores = shard_spec.grid;

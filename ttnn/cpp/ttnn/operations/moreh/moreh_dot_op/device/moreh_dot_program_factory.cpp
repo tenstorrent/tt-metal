@@ -33,7 +33,7 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
     uint32_t single_tile_size_output = tt::tt_metal::detail::TileSize(cb_data_format_output);
 
     uint32_t num_tiles = input_tensor_a.volume() / tt::constants::TILE_HW;
-    const auto &a_shape_wo_padding = input_tensor_a.get_shape().value.without_padding();
+    const auto &a_shape_wo_padding = input_tensor_a.get_shape();
     uint32_t pad_h = a_shape_wo_padding[2] % tt::constants::TILE_HEIGHT;
     uint32_t pad_w = a_shape_wo_padding[3] % tt::constants::TILE_WIDTH;
     uint32_t mask_h = (pad_h == 0) ? (tt::constants::TILE_HEIGHT) : (pad_h);

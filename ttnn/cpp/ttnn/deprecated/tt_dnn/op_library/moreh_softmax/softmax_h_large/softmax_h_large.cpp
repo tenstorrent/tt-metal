@@ -21,7 +21,7 @@ namespace primary {
 operation::ProgramWithCallbacks moreh_softmax_h_large(const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op, const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     log_info(LogTest, "Large tensor algorithm selected");
     // split work
-    auto shape = input.get_legacy_shape();
+    auto shape = input.get_shape().with_tile_padding();
     auto H = shape[-2];
     auto W = shape[-1];
     auto Ht = H / TILE_HEIGHT;
@@ -113,7 +113,7 @@ operation::ProgramWithCallbacks moreh_softmax_h_large(const Tensor &input, const
         }
 
         float scaler = 1.0f;
-        uint32_t mask_h = shape.without_padding()[-2] % TILE_HEIGHT;
+        uint32_t mask_h = shape[-2] % TILE_HEIGHT;
         if(mask_h == 0) mask_h = TILE_HEIGHT;
         vector<uint32_t> reader_args = {
             input.buffer()->address(), num_tiles_per_core, tile_offset, Ht, Wt, *reinterpret_cast<uint32_t *>(&scaler), mask_h};

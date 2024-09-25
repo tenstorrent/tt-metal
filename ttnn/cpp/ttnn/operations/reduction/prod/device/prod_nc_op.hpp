@@ -23,7 +23,7 @@ using namespace tt_metal;
 struct Prod {
     int64_t dim;
     void validate(const std::vector<Tensor> &inputs) const;
-    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &inputs) const;
+    std::vector<ttnn::Shape> compute_output_shapes(const std::vector<Tensor> &inputs) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &inputs) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &inputs, std::vector<Tensor> &outputs) const;

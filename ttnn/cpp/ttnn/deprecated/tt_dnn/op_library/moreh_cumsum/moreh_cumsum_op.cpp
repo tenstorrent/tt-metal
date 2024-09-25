@@ -19,10 +19,10 @@ void MorehCumSum::validate(const std::vector<Tensor>& inputs) const {
     const auto& input = inputs.at(0);
     const auto& output = inputs.at(1);
 
-    auto input_shape = input.get_legacy_shape();
-    const auto& output_shape = output.get_legacy_shape();
-    auto input_shape_wo_padding = input.get_legacy_shape().without_padding();
-    const auto& output_shape_wo_padding = output.get_legacy_shape().without_padding();
+    auto input_shape = input.get_shape().with_tile_padding();
+    const auto& output_shape = output.get_shape().with_tile_padding();
+    auto input_shape_wo_padding = input.get_shape();
+    const auto& output_shape_wo_padding = output.get_shape();
 
     for (int i = 0; i < input_shape.rank(); ++i) {
         TT_ASSERT(input_shape[i] == output_shape[i]);
@@ -35,7 +35,7 @@ std::vector<Tensor> MorehCumSum::create_output_tensors(const std::vector<Tensor>
     return {};
 }
 
-std::vector<tt::tt_metal::LegacyShape> MorehCumSum::compute_output_shapes(const std::vector<Tensor>& inputs) const {
+std::vector<ttnn::Shape> MorehCumSum::compute_output_shapes(const std::vector<Tensor>& inputs) const {
     // Inplace
     return {};
 }

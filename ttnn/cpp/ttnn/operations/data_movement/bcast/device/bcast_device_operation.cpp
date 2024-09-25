@@ -39,17 +39,17 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(const std::vector<Tens
     TT_FATAL(input_tensor_a.device() != nullptr and input_tensor_b.device() != nullptr, "Operands to bcast need to be on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to bcast need to be on the same device!");
 
-    const auto input_shape_a = input_tensor_a.get_legacy_shape();
-    const auto input_shape_b = input_tensor_b.get_legacy_shape();
+    const auto input_shape_a = input_tensor_a.get_shape().with_tile_padding();
+    const auto input_shape_b = input_tensor_b.get_shape().with_tile_padding();
 
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Error");
     TT_FATAL(input_tensor_b.get_layout() == Layout::TILE, "Error");
     TT_FATAL(is_floating_point(input_tensor_a.get_dtype()), "Unsupported data format");
     if(!output_tensors.empty() && output_tensors.at(0).has_value()){
         TT_FATAL(is_floating_point(output_tensors.at(0).value().get_dtype()), "Unsupported data format");
-        const std::vector<tt::tt_metal::LegacyShape> output_shape_required = this->compute_output_shapes(input_tensors);
+        const std::vector<ttnn::Shape> output_shape_required = this->compute_output_shapes(input_tensors);
         const auto& out_tensor = output_tensors.at(0).value();
-        TT_FATAL(out_tensor.get_legacy_shape() == output_shape_required.at(0), "The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape());
+        TT_FATAL(out_tensor.get_shape().with_tile_padding() == output_shape_required.at(0), "The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_shape().with_tile_padding());
     }
     if (this->in_place) {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout, "Error");
@@ -109,9 +109,9 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(const std::vector<Tens
 }
 
 
-std::vector<tt::tt_metal::LegacyShape> EltwiseBinaryBroadcast::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<ttnn::Shape> EltwiseBinaryBroadcast::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.get_legacy_shape()};
+    return {input_tensor.get_shape().with_tile_padding()};
 }
 
 
@@ -162,7 +162,7 @@ operation::ProgramWithCallbacks EltwiseBinaryBroadcast::create_program(const std
 const operation::Hash EltwiseBinaryBroadcast::compute_program_hash(
     const std::vector<Tensor> &input_tensors) const {
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
-    bool bcast_scalar = (input_tensors.at(1).get_legacy_shape()[-2] * input_tensors.at(1).get_legacy_shape()[-1] == 1) && this->dim == BcastOpDim::HW;
+    bool bcast_scalar = (input_tensors.at(1).get_shape().with_tile_padding()[-2] * input_tensors.at(1).get_shape().with_tile_padding()[-1] == 1) && this->dim == BcastOpDim::HW;
     return operation::hash_operation<EltwiseBinaryBroadcast>(
         *this,
         parallelization_strategy,
@@ -180,12 +180,12 @@ BcastOpParallelizationStrategy EltwiseBinaryBroadcast::get_parallelization_strat
     const auto& input_tensor_b = input_tensors.at(1);
 
     uint32_t num_tiles = input_tensor_a.volume() / TILE_HW;
-    uint32_t Ht = input_tensor_a.get_legacy_shape()[-2] / TILE_HEIGHT;
-    uint32_t Wt = input_tensor_a.get_legacy_shape()[-1] / TILE_WIDTH;
+    uint32_t Ht = input_tensor_a.get_shape().with_tile_padding()[-2] / TILE_HEIGHT;
+    uint32_t Wt = input_tensor_a.get_shape().with_tile_padding()[-1] / TILE_WIDTH;
 
     if(this->dim == BcastOpDim::H){
         if(input_tensor_a.is_sharded())
-            if (input_tensor_a.get_legacy_shape()[0] == input_tensor_b.get_legacy_shape()[0] || input_tensor_a.get_legacy_shape()[0] > 1 and input_tensor_b.get_legacy_shape()[0] == 1){
+            if (input_tensor_a.get_shape().with_tile_padding()[0] == input_tensor_b.get_shape().with_tile_padding()[0] || input_tensor_a.get_shape().with_tile_padding()[0] > 1 and input_tensor_b.get_shape().with_tile_padding()[0] == 1){
                 return BcastOpParallelizationStrategy::MULTI_CORE_H_SHARDED_OPTIMISED;
             } else {
                 return BcastOpParallelizationStrategy::MULTI_CORE_H_SHARDED;

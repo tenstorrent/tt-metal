@@ -50,8 +50,8 @@ ttnn::Tensor ExecuteTranspose::invoke(
     const int64_t& dim2,
     const std::optional<MemoryConfig>& memory_config_arg) {
 
-    uint32_t normalized_dim1 = input_tensor.get_legacy_shape().get_normalized_index(dim1);
-    uint32_t normalized_dim2 = input_tensor.get_legacy_shape().get_normalized_index(dim2);
+    uint32_t normalized_dim1 = input_tensor.get_shape().with_tile_padding().get_normalized_index(dim1);
+    uint32_t normalized_dim2 = input_tensor.get_shape().with_tile_padding().get_normalized_index(dim2);
     bool wh = normalized_dim2 == 2 && normalized_dim1 == 0;
     bool typecast = input_tensor.get_dtype() == DataType::BFLOAT8_B and input_tensor.get_layout() == Layout::TILE and !wh and !input_tensor.is_sharded();
     Tensor b = typecast ? ttnn::typecast(input_tensor, DataType::BFLOAT16) : input_tensor;
@@ -62,15 +62,15 @@ ttnn::Tensor ExecuteTranspose::invoke(
         [dim1, dim2, memory_config_arg] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto& a = input_tensors.at(0);
             auto memory_config = memory_config_arg.value_or(a.memory_config());
-            uint32_t normalized_dim1 = a.get_legacy_shape().get_normalized_index(dim1);
-            uint32_t normalized_dim2 = a.get_legacy_shape().get_normalized_index(dim2);
+            uint32_t normalized_dim1 = a.get_shape().with_tile_padding().get_normalized_index(dim1);
+            uint32_t normalized_dim2 = a.get_shape().with_tile_padding().get_normalized_index(dim2);
 
             TT_FATAL(normalized_dim1 <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
             TT_FATAL(normalized_dim2 <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
 
             if (
                 (normalized_dim1 == normalized_dim2) ||
-                (a.get_legacy_shape()[normalized_dim1] == 1 && a.get_legacy_shape()[normalized_dim2] == 1)
+                (a.get_shape().with_tile_padding()[normalized_dim1] == 1 && a.get_shape().with_tile_padding()[normalized_dim2] == 1)
             ) {
                 return {ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(a, memory_config)};
             }

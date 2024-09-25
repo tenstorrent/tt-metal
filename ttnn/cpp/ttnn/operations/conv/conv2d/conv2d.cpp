@@ -402,7 +402,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
     }
     if (needs_shard_or_reshard) {
         uint32_t input_num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
-        // TT_ASSERT(input_tensor.get_legacy_shape() == input_tensor.get_shape());
+        // TT_ASSERT(input_tensor.get_shape().with_tile_padding() == input_tensor.get_shape());
         uint32_t tensor_height = input_tensor.get_shape()[0] * input_tensor.get_shape()[1] * input_tensor.get_shape()[2];
         uint32_t input_tensor_height_snapped_to_tile = (conv_config.shard_layout == TensorMemoryLayout::WIDTH_SHARDED)? tensor_height : tt::round_up(tensor_height, input_num_cores_nhw * 32);
         TT_ASSERT(input_tensor_height_snapped_to_tile >= tensor_height);
@@ -416,7 +416,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
             1,
             input_tensor_height_snapped_to_tile,
             input_tensor_width_snapped_to_channels_alignment});  // TODO: resolve ttnn::types::Shape and
-                                                                 // tt::tt_metal::LegacyShape issue to clean up next line
+                                                                 // ttnn::Shape issue to clean up next line
         auto input_tensor_sharded_memory_config = create_sharded_memory_config_from_parallel_config(
             ttnn::Shape(std::array<uint32_t, 4>{
                 input_padded_shape[0], input_padded_shape[1], input_padded_shape[2], input_padded_shape[3]}),
@@ -497,13 +497,13 @@ void validate_weight_and_bias_tensors(
     TT_ASSERT(weight_tensor.get_layout() == Layout::ROW_MAJOR);
     TT_ASSERT(weight_tensor.get_shape().rank() == 4);
     // TODO: enable this assert
-    // TT_ASSERT(weight_tensor.get_shape() == weight_tensor.get_legacy_shape());
+    // TT_ASSERT(weight_tensor.get_shape() == weight_tensor.get_shape().with_tile_padding());
     if (bias_tensor.has_value()) {
         TT_ASSERT(!ttnn::has_storage_type_of(bias_tensor.value(), ttnn::DEVICE_STORAGE_TYPE));
         TT_ASSERT(bias_tensor.value().get_shape().rank() == 4);
         TT_ASSERT(bias_tensor.value().get_layout() == Layout::ROW_MAJOR);
         // TODO: enable this assert
-        // TT_ASSERT(bias_tensor.value().get_shape() == bias_tensor.value().get_legacy_shape());
+        // TT_ASSERT(bias_tensor.value().get_shape() == bias_tensor.value().get_shape().with_tile_padding());
     }
 }
 
@@ -556,7 +556,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t window_h = weights_shape[2];
     uint32_t window_w = weights_shape[3];
     uint32_t out_channel_padding = tt::round_up(out_channels, 32) - out_channels;
-    tt::tt_metal::LegacyShape weights_channels_padded_shape = tt::tt_metal::LegacyShape(std::array<uint32_t, 4>(
+    ttnn::Shape weights_channels_padded_shape = ttnn::Shape(std::array<uint32_t, 4>(
         {tt::round_up(out_channels, 32), tt::round_up(in_channels, input_channels_alignment), window_h, window_w}));
     if (weights_bias_dtype == DataType::BFLOAT8_B) {
         TT_ASSERT(weight_tensor_.get_dtype() == DataType::FLOAT32);
@@ -601,7 +601,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         bias_tensor_ = bias_tensor.value();
         auto bias_shape = bias_tensor_.get_shape();
         TT_ASSERT(bias_shape[3] == out_channels && bias_shape[0] == 1 && bias_shape[1] == 1 && bias_shape[2] == 1);
-        tt::tt_metal::LegacyShape bias_channels_padded_shape = tt::tt_metal::LegacyShape(
+        ttnn::Shape bias_channels_padded_shape = ttnn::Shape(
             std::array<uint32_t, 4>({1, 1, 32, tt::round_up(out_channels, weight_block_w_ntiles * 32)}));
         bias_tensor_ = ttnn::pad(bias_tensor_, bias_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
         bias_tensor_ = ttnn::to_layout(

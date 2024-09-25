@@ -29,7 +29,7 @@ operation::ProgramWithCallbacks moreh_dot_single_core(const Tensor &a, const Ten
 
     uint32_t num_tiles = a.volume() / TILE_HW;
     float scaler = 1.0f;
-    const auto &a_shape_wo_padding = a.get_legacy_shape().without_padding();
+    const auto &a_shape_wo_padding = a.get_shape();
     uint32_t pad_h = a_shape_wo_padding[2] % TILE_HEIGHT;
     uint32_t pad_w = a_shape_wo_padding[3] % TILE_WIDTH;
     uint32_t mask_h = (pad_h == 0) ? (TILE_HEIGHT) : (pad_h);

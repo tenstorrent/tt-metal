@@ -14,7 +14,7 @@ namespace tt_metal {
 template <typename T>
 Tensor to_weight_special_padding_tile_layout(
     const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, DataType output_dtype) {
-    auto w_shape = conv_weight_tensor.get_legacy_shape();
+    auto w_shape = conv_weight_tensor.get_shape().with_tile_padding();
     auto compute = [&w_shape, &in1_block_h, &in1_block_w, &output_dtype](const auto& input_buffer) {
         uint32_t in1_block_h_datums = in1_block_h * constants::TILE_HEIGHT;
         uint32_t in1_block_w_datums = in1_block_w * constants::TILE_WIDTH;
@@ -28,7 +28,7 @@ Tensor to_weight_special_padding_tile_layout(
         assert(in1_block_h_datums >= w_shape[1] * w_shape[3]);
         uint32_t block_height_padding = in1_block_h_datums - (w_shape[1] * w_shape[3]);
         auto weight_matrix_rows = ((w_shape[1] * w_shape[3]) + block_height_padding) * w_shape[2];
-        tt::tt_metal::LegacyShape output_shape = {1, 1, weight_matrix_rows, weight_matrix_cols};
+        ttnn::Shape output_shape = {1, 1, weight_matrix_rows, weight_matrix_cols};
         auto output_buffer = owned_buffer::create<T>(compute_volume(output_shape));
         for (auto r = 0; r < w_shape[2]; r++) {
             for (auto s = 0; s < w_shape[3]; s++) {
@@ -96,7 +96,7 @@ Tensor to_weight_special_padding_tile_layout(
 template <typename T>
 Tensor to_weight_tile_layout(
     const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, DataType output_dtype) {
-    auto w_shape = conv_weight_tensor.get_legacy_shape();
+    auto w_shape = conv_weight_tensor.get_shape().with_tile_padding();
     auto compute = [&w_shape, &in1_block_h, &in1_block_w, &output_dtype](const auto& input_buffer) {
         auto weight_matrix_cols = w_shape[0];
         // width padding
@@ -112,7 +112,7 @@ Tensor to_weight_tile_layout(
             weight_matrix_rows =
                 (uint32_t)std::ceil((double)weight_matrix_rows / (double)in1_block_h_datums) * in1_block_h_datums;
         }
-        tt::tt_metal::LegacyShape output_shape = {1, 1, weight_matrix_rows, weight_matrix_cols};
+        ttnn::Shape output_shape = {1, 1, weight_matrix_rows, weight_matrix_cols};
         auto output_buffer = owned_buffer::create<T>(compute_volume(output_shape));
         for (auto r = 0; r < w_shape[2]; r++) {
             for (auto s = 0; s < w_shape[3]; s++) {
@@ -243,8 +243,8 @@ Helper function to aid in converting grouped weight tensor to ungrouped weight t
 template <typename T>
 static Tensor conv_group_weight_zero_pad_helper(
     Tensor& conv_weight_tensor,
-    tt::tt_metal::LegacyShape& original_weight_shape,
-    tt::tt_metal::LegacyShape& output_weight_shape,
+    ttnn::Shape& original_weight_shape,
+    ttnn::Shape& output_weight_shape,
     uint32_t num_groups,
     DataType output_dtype) {
     owned_buffer::Buffer<T> output_buffer = owned_buffer::create<T>(compute_volume(output_weight_shape));
@@ -289,8 +289,8 @@ Helper function to aid in converting depthwise weight tensor to broadcasted weig
 template <typename T>
 static Tensor conv_depthwise_weight_bcast_helper(
     Tensor& conv_weight_tensor,
-    tt::tt_metal::LegacyShape& original_weight_shape,
-    tt::tt_metal::LegacyShape& output_weight_shape,
+    ttnn::Shape& original_weight_shape,
+    ttnn::Shape& output_weight_shape,
     DataType output_dtype) {
     owned_buffer::Buffer<T> output_buffer = owned_buffer::create<T>(compute_volume(output_weight_shape));
     auto conv_weight_tensor_buffer = borrowed_buffer::get_as<T>(conv_weight_tensor);
@@ -330,12 +330,12 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
     // Define output tensor shape. This is going to be channel dimension of weight tensor * num_groups - this value
     // should match number of input channels being convolved with the weight tensor
     auto original_conv_weight_tensor_shape_test = conv_weight_tensor.get_shape();
-    tt::tt_metal::LegacyShape original_conv_weight_tensor_shape = {
+    ttnn::Shape original_conv_weight_tensor_shape = {
         original_conv_weight_tensor_shape_test[0],
         original_conv_weight_tensor_shape_test[1],
         original_conv_weight_tensor_shape_test[2],
         original_conv_weight_tensor_shape_test[3]};
-    tt::tt_metal::LegacyShape output_conv_weight_tensor_shape = {
+    ttnn::Shape output_conv_weight_tensor_shape = {
         original_conv_weight_tensor_shape[0],
         original_conv_weight_tensor_shape[1] * num_groups,
         original_conv_weight_tensor_shape[2],
@@ -402,12 +402,12 @@ Tensor convert_conv_weight_tensor_to_depthwise_layout(
         "Convolution weights should be in row major layout for repeating the required dimensions");
     auto original_conv_weight_tensor_shape_test = conv_weight_tensor.get_shape();
     uint32_t num_input_channels_to_repeat = act_block_h_ntiles * constants::TILE_HEIGHT;
-    tt::tt_metal::LegacyShape original_conv_weight_tensor_shape = {
+    ttnn::Shape original_conv_weight_tensor_shape = {
         original_conv_weight_tensor_shape_test[0],
         original_conv_weight_tensor_shape_test[1],
         original_conv_weight_tensor_shape_test[2],
         original_conv_weight_tensor_shape_test[3]};
-    tt::tt_metal::LegacyShape output_conv_weight_tensor_shape = {
+    ttnn::Shape output_conv_weight_tensor_shape = {
         original_conv_weight_tensor_shape[0],
         num_input_channels_to_repeat,
         original_conv_weight_tensor_shape[2],
@@ -455,7 +455,7 @@ Tensor convert_conv_weight_tensor_to_depthwise_layout(
     TT_THROW("Unsupported weight data type given when trying to add zero padding to weight tensor");
 }
 
-const tt::tt_metal::LegacyShape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volume) {
+const ttnn::Shape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volume) {
     vector<int> ns{N, C, H, W};
     int neg_idx = -1;
     for (int i = 0; i < ns.size(); i++) {
@@ -509,7 +509,7 @@ Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id)
         if (tensor_storage.has_buffer_for_device_id(device_id)) {
             return Tensor{
                 DeviceStorage{tensor_storage.get_buffer_for_device_id(device_id)},
-                multi_device_tensor.get_legacy_shape(),
+                multi_device_tensor.get_shape().with_tile_padding(),
                 multi_device_tensor.get_dtype(),
                 multi_device_tensor.get_layout()};
         }
@@ -581,7 +581,7 @@ Tensor create_multi_device_tensor(
 
     if (storage_type == StorageType::MULTI_DEVICE) {
         std::vector<int> ordered_device_ids;
-        std::unordered_map<int, tt::tt_metal::LegacyShape> shapes;
+        std::unordered_map<int, ttnn::Shape> shapes;
         std::unordered_map<int, DeviceBuffer> device_buffers;
         for (const auto& tensor : tensors) {
             TT_ASSERT(std::holds_alternative<DeviceStorage>(tensor.get_storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(tensor.get_storage()));
@@ -589,24 +589,24 @@ Tensor create_multi_device_tensor(
             auto device_id = device->id();
             ordered_device_ids.push_back(device_id);
             device_buffers.insert({device_id, std::get<DeviceStorage>(tensor.get_storage()).buffer});
-            shapes.insert({device_id, tensor.get_legacy_shape()});
+            shapes.insert({device_id, tensor.get_shape().with_tile_padding()});
         }
         return Tensor{
             MultiDeviceStorage{strategy, ordered_device_ids, device_buffers, shapes},
-            tensors.at(0).get_legacy_shape(),
+            tensors.at(0).get_shape().with_tile_padding(),
             tensors.at(0).get_dtype(),
             tensors.at(0).get_layout()};
     } else if (storage_type == StorageType::MULTI_DEVICE_HOST) {
         std::vector<OwnedBuffer> owned_buffers;
-        std::vector<tt::tt_metal::LegacyShape> shapes;
+        std::vector<ttnn::Shape> shapes;
         for (const auto& tensor : tensors) {
             TT_ASSERT(std::holds_alternative<OwnedStorage>(tensor.get_storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(tensor.get_storage()));
             owned_buffers.push_back(std::get<OwnedStorage>(tensor.get_storage()).buffer);
-            shapes.push_back(tensor.get_legacy_shape());
+            shapes.push_back(tensor.get_shape().with_tile_padding());
         }
         return Tensor{
             MultiDeviceHostStorage{strategy, owned_buffers, shapes},
-            tensors.at(0).get_legacy_shape(),
+            tensors.at(0).get_shape().with_tile_padding(),
             tensors.at(0).get_dtype(),
             tensors.at(0).get_layout()};
     } else {
@@ -707,12 +707,12 @@ void insert_buffer_and_shape_for_device(
                 s.insert_buffer_and_shape_for_device(
                     buffer_index.value(),
                     std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer(),
-                    shard.tensor_attributes->shape.value);
+                    shard.tensor_attributes->shape);
             } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 s.insert_buffer_and_shape_for_device(
                     target_device,
                     std::get<DeviceStorage>(shard.tensor_attributes->storage).get_buffer(),
-                    shard.tensor_attributes->shape.value);
+                    shard.tensor_attributes->shape);
             } else if constexpr (std::is_same_v<T, OwnedStorage>) {
                 s.insert_buffer(std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer());
             } else if constexpr (std::is_same_v<T, DeviceStorage>) {

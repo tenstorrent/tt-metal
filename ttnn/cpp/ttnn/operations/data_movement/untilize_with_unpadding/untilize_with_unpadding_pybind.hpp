@@ -44,7 +44,7 @@ void bind_untilize_with_unpadding(py::module &module) {
         ttnn::pybind_overload_t{
             [](const OperationType &self,
                const ttnn::Tensor &input_tensor,
-               const tt::tt_metal::LegacyShape &output_tensor_end,
+               const ttnn::Shape &output_tensor_end,
                const std::optional<MemoryConfig> &memory_config,
                bool use_multicore,
                bool use_pack_untilize,

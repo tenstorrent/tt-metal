@@ -207,7 +207,7 @@ struct ExecuteUnaryBackwardRepeat {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
-        const tt::tt_metal::LegacyShape &parameter_a,
+        const ttnn::Shape &parameter_a,
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 

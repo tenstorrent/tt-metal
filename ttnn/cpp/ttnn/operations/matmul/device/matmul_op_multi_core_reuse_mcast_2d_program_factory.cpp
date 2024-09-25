@@ -1249,7 +1249,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
     std::optional<UnaryWithParam> fused_activation,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler) {
-    const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+    const auto &ashape = a.get_shape().with_tile_padding(), bshape = b.get_shape().with_tile_padding();
     auto in0_tile = a.get_tile();
     auto in1_tile = b.get_tile();
     // cannot use the output tensor tile directly as that might be changed by user override

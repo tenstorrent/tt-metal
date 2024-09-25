@@ -14,8 +14,8 @@
 namespace ttnn::operations::experimental::reduction {
 
 Tensor create_mask(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
-    auto& padded_shape = input_a.get_legacy_shape();
-    auto& unpadded_shape = padded_shape.without_padding();
+    auto& unpadded_shape = input_a.get_shape();
+    auto& padded_shape = unpadded_shape.with_tile_padding();
     if (padded_shape == unpadded_shape)
         return input_a;
     float t_inf = -std::numeric_limits<float>::infinity();
@@ -34,7 +34,7 @@ Tensor ArgmaxOperation::invoke(const Tensor& input_t, int64_t _dim, bool all, co
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input = input_tensors.at(0);
-            auto& input_shape = input.get_legacy_shape();
+            auto& input_shape = input.get_shape().with_tile_padding();
             TT_FATAL(input_shape.rank() == 4, "supported for rank-4 tensors at this time");
 
             Tensor input_a = create_mask(input, output_memory_config);

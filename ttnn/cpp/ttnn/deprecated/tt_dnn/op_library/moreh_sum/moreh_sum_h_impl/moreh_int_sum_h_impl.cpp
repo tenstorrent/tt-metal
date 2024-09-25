@@ -29,7 +29,7 @@ operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const 
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format{datatype_to_dataformat_converter(output.get_dtype())};
-    const auto shape{input.get_legacy_shape()};
+    const auto shape{input.get_shape().with_tile_padding()};
 
     const auto [W, H, other_dims_product] = extract_spatial_dims(shape);
     uint32_t Wt{W / TILE_WIDTH};
@@ -40,7 +40,7 @@ operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const 
 
 
     // check mask for h-dim
-    const auto input_shape_without_padding {shape.without_padding()};
+    const auto input_shape_without_padding {input.get_shape()};
     const auto origin_H {input_shape_without_padding[-2]};
     const bool do_mask_h {(origin_H % TILE_HEIGHT) != 0};
     const auto mask_h {do_mask_h ? origin_H % TILE_HEIGHT: TILE_HEIGHT};
@@ -211,7 +211,7 @@ operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const 
 
 
 
-    // const Shape shape { input.get_legacy_shape() };
+    // const Shape shape { input.get_shape().with_tile_padding() };
     // const auto [W, H, other_dims_product] = extract_spatial_dims(shape);
 
     // uint32_t Wt{W / TILE_WIDTH};
@@ -219,7 +219,7 @@ operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const 
     // uint32_t HtWt{Ht * Wt};
 
     // // check mask for h-dim
-    // const auto input_shape_without_padding = shape.without_padding();
+    // const auto input_shape_without_padding = input.get_shape().;
     // const auto origin_H = input_shape_without_padding[-2];
     // const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0;
     // const auto mask_h = do_mask_h ? origin_H % TILE_HEIGHT : TILE_HEIGHT;

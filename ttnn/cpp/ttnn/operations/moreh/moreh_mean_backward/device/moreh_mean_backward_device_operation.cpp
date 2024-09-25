@@ -59,7 +59,7 @@ MorehMeanBackwardOperation::shape_return_value_t MorehMeanBackwardOperation::com
     }
 
     const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-    auto output_shape = Shape(tt::tt_metal::LegacyShape(shape, padding));
+    auto output_shape = Shape(ttnn::Shape(shape, padding));
 
     return output_shape;
 }

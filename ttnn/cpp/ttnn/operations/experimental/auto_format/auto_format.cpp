@@ -43,7 +43,7 @@ Tensor AutoFormat::move_tensor_to_mem_config(const Tensor& input, const MemoryCo
 Tensor AutoFormat::move_tensor_to_device_and_pad(const Tensor& input, Device *device, Layout target_layout, std::optional<MemoryConfig> target_mem_config){
     using namespace tt::constants;
     const auto intended_shape = input.get_shape();
-    const auto device_shape = input.get_legacy_shape();
+    const auto device_shape = input.get_shape().with_tile_padding();
     const auto new_intended_shape = std::array<std::uint32_t, 4>{intended_shape[0], intended_shape[1], intended_shape[-2], intended_shape[-1]};
     const auto new_device_shape =  std::array<std::uint32_t, 4>{
         device_shape[0],
@@ -51,18 +51,18 @@ Tensor AutoFormat::move_tensor_to_device_and_pad(const Tensor& input, Device *de
         (device_shape[-2] % TILE_HEIGHT != 0 ? (device_shape[-2] / TILE_HEIGHT + 1) * TILE_HEIGHT : device_shape[-2]),
         (device_shape[-1] % TILE_WIDTH != 0 ? (device_shape[-1] / TILE_WIDTH + 1) * TILE_WIDTH : device_shape[-1])
         };
-    const auto new_shape = tt::tt_metal::LegacyShape(new_intended_shape, new_device_shape);
+    const auto new_shape = ttnn::Shape(new_intended_shape, new_device_shape);
     return AutoFormat::format_input_tensor(input, device, new_shape, 0.0, target_layout, target_mem_config);
 }
 
 Tensor AutoFormat::format_input_tensor(
     const Tensor& input,
     Device* device,
-    const tt::tt_metal::LegacyShape& padded_shape,
+    const ttnn::Shape& padded_shape,
     float pad_value,
     Layout target_layout,
     std::optional<MemoryConfig> target_mem_config) {
-    bool pad_input = input.get_legacy_shape() != padded_shape;
+    bool pad_input = input.get_shape().with_tile_padding() != padded_shape;
     bool convert_layout = input.get_layout() != target_layout;
 
     if (!pad_input && !convert_layout) {
@@ -77,7 +77,7 @@ Tensor AutoFormat::format_input_tensor(
     }
 
     Tensor formatted_input = input;
-    auto shape = formatted_input.get_legacy_shape();
+    auto shape = formatted_input.get_shape().with_tile_padding();
 
     // TODO: Profile if it is faster to put host tensor to device and then pad/convert if possible
     // Device side conversions
@@ -122,11 +122,11 @@ Tensor AutoFormat::format_input_tensor(
 
 Tensor AutoFormat::format_output_tensor(
     const Tensor& output,
-    const tt::tt_metal::LegacyShape& shape,
+    const ttnn::Shape& shape,
     Device* device,
     Layout target_layout,
     std::optional<MemoryConfig> target_mem_config) {
-    bool unpad_output = output.get_legacy_shape() != shape;
+    bool unpad_output = output.get_shape().with_tile_padding() != shape;
     bool convert_layout = output.get_layout() != target_layout;
 
     if (!unpad_output && !convert_layout) {
@@ -145,7 +145,7 @@ Tensor AutoFormat::format_output_tensor(
         if (!unpad_output && convert_layout) {
             // If target layout is tile but shape does not support tile, we don't do any conversions
             if (target_layout == Layout::TILE && formatted_output.get_layout() == Layout::ROW_MAJOR) {
-                if (AutoFormat::legal_tile_shape(formatted_output.get_legacy_shape())) {
+                if (AutoFormat::legal_tile_shape(formatted_output.get_shape().with_tile_padding())) {
                     formatted_output = ttnn::tilize(formatted_output, mem_config);
                 }
                 return formatted_output;
@@ -223,7 +223,7 @@ Tensor AutoFormat::format_output_tensor(
 
     if (convert_layout) {
         // Default to RM layout if we can't match the formatted_input layout
-        if (target_layout == Layout::TILE && !AutoFormat::legal_tile_shape(formatted_output.get_legacy_shape())) {
+        if (target_layout == Layout::TILE && !AutoFormat::legal_tile_shape(formatted_output.get_shape().with_tile_padding())) {
             if (formatted_output.get_layout() != Layout::ROW_MAJOR) {
                 formatted_output = formatted_output.to(Layout::ROW_MAJOR);
             }
@@ -235,7 +235,7 @@ Tensor AutoFormat::format_output_tensor(
     // Send formatted_output to device if possible
     // Check that shape is supported on device
     if (formatted_output.storage_type() != StorageType::DEVICE) {
-        if (AutoFormat::legal_device_shape(formatted_output.get_legacy_shape(), formatted_output.get_layout())) {
+        if (AutoFormat::legal_device_shape(formatted_output.get_shape().with_tile_padding(), formatted_output.get_layout())) {
             formatted_output = AutoFormat::move_tensor_to_device(formatted_output, device, mem_config);
         }
     }

@@ -21,7 +21,7 @@ namespace operations {
 namespace matmul {
 
 using ttnn::operations::unary::UnaryWithParam;
-using tt::tt_metal::LegacyShape;
+using ttnn::Shape;
 
 /*
  * GENERAL MATMUL AND BMM
@@ -169,8 +169,8 @@ struct Matmul {
     void validate(
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors) const;
-    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes_dram_sharded(
+    std::vector<ttnn::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+    std::vector<ttnn::Shape> compute_output_shapes_dram_sharded(
         const std::vector<Tensor> &input_tensors, uint32_t N_unpadded) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(

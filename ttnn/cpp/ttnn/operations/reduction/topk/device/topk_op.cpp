@@ -27,7 +27,7 @@ namespace ttnn::operations::reduction {
 
 void TopK::validate_with_output_tensors(
     const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
-    auto input_shape = input_tensors.at(0).get_legacy_shape();
+    auto input_shape = input_tensors.at(0).get_shape().with_tile_padding();
     TT_FATAL(input_shape.rank() == 4, "Input shape must be 4D, got {}", input_shape.rank());
     TT_FATAL(this->k == 32, "K must be equal to 32, pad with -infinity if necessary to get 32, got {}", this->k);
     TT_FATAL(this->dim == -1 || this->dim == 3, "Only the last dim is supported right now, got {}", this->dim);
@@ -51,9 +51,9 @@ void TopK::validate_with_output_tensors(
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> TopK::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::Shape> TopK::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
+    const auto input_shape = input_tensor.get_shape().with_tile_padding();
     return {{input_shape[0], input_shape[1], input_shape[2], this->k}, {input_shape[0], input_shape[1], input_shape[2], this->k}};
 }
 
@@ -73,7 +73,7 @@ std::vector<Tensor> TopK::create_output_tensors(
 
 operation::ProgramWithCallbacks TopK::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    if (input_tensor.get_legacy_shape()[dim] < topk_utils::multi_core_min_width) {
+    if (input_tensor.get_shape().with_tile_padding()[dim] < topk_utils::multi_core_min_width) {
         return detail::topk_single_core_interleaved(input_tensor, this->k, this->dim, output_tensors.at(0), output_tensors.at(1));
     } else {
         return detail::topk_multicore_interleaved(input_tensor, this->k, this->dim, output_tensors.at(0), output_tensors.at(1));

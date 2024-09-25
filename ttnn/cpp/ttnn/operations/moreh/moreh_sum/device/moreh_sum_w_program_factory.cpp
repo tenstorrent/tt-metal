@@ -28,14 +28,14 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
     float scaler = 1.0f;
 
     const auto shape = input.get_shape();
-    const auto [W, H, other_dims_product] = tt::operations::primary::extract_spatial_dims(shape.value);
+    const auto [W, H, other_dims_product] = tt::operations::primary::extract_spatial_dims(shape);
 
     uint32_t HW = H * W;
     uint32_t Wt = W / tt::constants::TILE_WIDTH;
     uint32_t Ht = H / tt::constants::TILE_HEIGHT;
 
     // check mask for w-dim
-    const auto input_shape_without_padding = shape.value.without_padding();
+    const auto input_shape_without_padding = input.get_shape();
     const auto origin_W = input_shape_without_padding[-1];
     const bool do_mask_w = (origin_W % tt::constants::TILE_WIDTH) != 0;
     const auto mask_w = do_mask_w ? origin_W % tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH;

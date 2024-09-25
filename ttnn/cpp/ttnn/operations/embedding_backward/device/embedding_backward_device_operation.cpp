@@ -18,8 +18,8 @@ void EmbeddingBackward::validate(const std::vector<Tensor> &input_tensors) const
 
     const auto &index_tensor = input_tensors.at(0);
     const auto &grad_tensor = input_tensors.at(1);
-    const auto &index_tensor_shape = index_tensor.get_legacy_shape();
-    const auto &grad_tensor_shape = grad_tensor.get_legacy_shape();
+    const auto &index_tensor_shape = index_tensor.get_shape().with_tile_padding();
+    const auto &grad_tensor_shape = grad_tensor.get_shape().with_tile_padding();
 
     TT_FATAL(
         index_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0,
@@ -68,12 +68,12 @@ void EmbeddingBackward::validate(const std::vector<Tensor> &input_tensors) const
         "Number of rows in gradient tensor must be equal to number of indices in index tensor");
 }
 
-std::vector<tt::tt_metal::LegacyShape> EmbeddingBackward::compute_output_shapes(
+std::vector<ttnn::Shape> EmbeddingBackward::compute_output_shapes(
     const std::vector<Tensor> &input_tensors) const {
     const auto &grad_tensor = input_tensors.at(1);
-    auto embedding_dim = grad_tensor.get_legacy_shape()[-1];
+    auto embedding_dim = grad_tensor.get_shape().with_tile_padding()[-1];
 
-    tt::tt_metal::LegacyShape output_shape({1, 1, this->num_embeddings, embedding_dim});
+    ttnn::Shape output_shape({1, 1, this->num_embeddings, embedding_dim});
     return {output_shape};
 }
 
