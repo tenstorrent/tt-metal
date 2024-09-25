@@ -128,7 +128,7 @@ KernelHandle CreateKernel(
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config);
 
 /**
- * Creates a data movement kernel with no compile time arguments and adds it to the program.
+ * Creates a compute or data movement kernel with the given compile time arguments and adds it to the program.
  *
  * Return value: Kernel ID (uintptr_t)
  *
