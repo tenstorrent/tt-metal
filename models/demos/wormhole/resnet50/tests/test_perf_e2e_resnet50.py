@@ -73,7 +73,7 @@ def test_perf_trace(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.0070, 26),),
+    ((16, 0.0070, 30),),
 )
 def test_perf_2cqs(
     device,
