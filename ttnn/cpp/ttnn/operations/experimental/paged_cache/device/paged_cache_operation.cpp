@@ -17,7 +17,6 @@ void PagedUpdateCacheDeviceOperation::validate(const std::vector<Tensor>& input_
     TT_FATAL(input_tensor.device() == cache_tensor.device(), "Operands to update_cache need to be on the same device!");
     TT_FATAL(input_tensor.buffer() != nullptr and cache_tensor.buffer() != nullptr, "Operands to update_cache need to be allocated in buffers on device!");
     TT_FATAL((input_tensor.get_layout() == Layout::TILE && cache_tensor.get_layout() == Layout::TILE), "Inputs to update_cache must be tilized");
-    TT_FATAL(input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16, "Data type of input tensor must be FLOAT32 or BFLOAT16");
     TT_FATAL(cache_tensor.get_dtype() == DataType::FLOAT32 || cache_tensor.get_dtype() == DataType::BFLOAT16 || cache_tensor.get_dtype() == DataType::BFLOAT8_B, "Data type of cache tensor must be FLOAT32, BFLOAT16 or BFLOAT8_B");
 
     // input_tensor: [1, b, padded_heads, head_dim]
@@ -27,7 +26,7 @@ void PagedUpdateCacheDeviceOperation::validate(const std::vector<Tensor>& input_
     TT_FATAL(input_tensor.get_legacy_shape()[-1] == cache_tensor.get_legacy_shape()[-1], "Last dim of input tensor must match last dim of cache tensor");
 
     if (this->op_type == PagedUpdateCacheOpType::UPDATE) {
-
+        TT_FATAL(input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16, "Data type of input tensor for update cache must be FLOAT32 or BFLOAT16, got {}", input_tensor.get_dtype());
         const bool paged_cache = optional_input_tensors.at(1).has_value();
         uint32_t batch_size;
         if (!paged_cache) {
@@ -84,6 +83,7 @@ void PagedUpdateCacheDeviceOperation::validate(const std::vector<Tensor>& input_
         // else TT_FATAL(this->batch_offset == 0, "Error");
         TT_FATAL(this->batch_offset == 0, "Error");
     } else {
+        TT_FATAL(input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16 || cache_tensor.get_dtype() == DataType::BFLOAT8_B, "Data type of input tensor for fill cache must be FLOAT32, BFLOAT16, or BFLOAT8_b, got {}", input_tensor.get_dtype());
 
         TT_FATAL(this->op_type == PagedUpdateCacheOpType::FILL, "Error");
         const auto& page_table_tensor = input_tensors.at(2);

@@ -665,7 +665,7 @@ def test_paged_fill_cache(
 @pytest.mark.parametrize("max_seq_len", [2048])
 @pytest.mark.parametrize("num_users", [32])
 @pytest.mark.parametrize("num_heads", [1])
-@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_paged_fill_cache_program_cache(
     block_size, head_dim, user_seq_len, max_seq_len, num_users, num_heads, input_dtype, device, use_program_cache
 ):
