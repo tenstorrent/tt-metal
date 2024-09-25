@@ -74,7 +74,7 @@ def test_getitem_RAW_MJOR_one_index(shape_index_dim, dtype, index_size, device):
 
     tt_npu = ttnn.operations.moreh.getitem(dev_x, [dev_idx], [index_dim])
 
-    assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
+    assert list(tt_npu.shape.with_tile_padding()) == list(tt_cpu.shape)
     tt_dev = tt_npu.cpu().to_torch()
 
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev)
@@ -136,7 +136,7 @@ def test_getitem_RAW_MAJOR_two_indices(shape_index_dims, dtype, index_size, devi
         tt_cpu = x[:, :, indices[0], indices[1]]
     tt_npu = ttnn.operations.moreh.getitem(dev_x, dev_indices, index_dims)
 
-    assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
+    assert list(tt_npu.shape.with_tile_padding()) == list(tt_cpu.shape)
     tt_dev = tt_npu.cpu().to_torch()
 
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev)
@@ -196,7 +196,7 @@ def test_getitem_RAW_MAJOR_three_indices(shape_index_dims, dtype, index_size, de
         tt_cpu = x[:, indices[0], indices[1], indices[2]]
     tt_npu = ttnn.operations.moreh.getitem(dev_x, dev_indices, index_dims)
 
-    assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
+    assert list(tt_npu.shape.with_tile_padding()) == list(tt_cpu.shape)
     tt_dev = tt_npu.cpu().to_torch()
 
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev)

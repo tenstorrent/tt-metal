@@ -131,7 +131,7 @@ def run_bert_large_matmul_test(
         logger.debug(f"bias ({bias_shape}): {bias_t.memory_config().buffer_type} and {bias_t.get_dtype()}")
     logger.debug(f"out ({expected_output_shape}): {t2.memory_config().buffer_type} and {t2.get_dtype()}")
 
-    assert t2.get_legacy_shape() == expected_output_shape
+    assert t2.shape.with_tile_padding() == expected_output_shape
     tt_host_rm = t2.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
     pyt_got_back_rm = tt_host_rm.to_torch()
 
@@ -221,7 +221,7 @@ def run_bert_large_bmm_test(
     logger.debug(f"in1 ({b_shape}): {b_t.memory_config().buffer_type} and {b_t.get_dtype()}")
     logger.debug(f"out ({expected_output_shape}): {t2.memory_config().buffer_type} and {t2.get_dtype()}")
 
-    assert t2.get_legacy_shape() == expected_output_shape
+    assert t2.shape.with_tile_padding() == expected_output_shape
     tt_host_rm = t2.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
     pyt_got_back_rm = tt_host_rm.to_torch()
 

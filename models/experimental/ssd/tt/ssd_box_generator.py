@@ -122,8 +122,8 @@ class TtDefaultBoxGenerator(nn.Module):
         return default_boxes_tensor
 
     def forward(self, image: ttnn.Tensor, feature_maps: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
-        grid_sizes = [feature_map.get_legacy_shape()[-2:] for feature_map in feature_maps]
-        image_size = image.get_legacy_shape()[-2:]
+        grid_sizes = [feature_map.shape.with_tile_padding()[-2:] for feature_map in feature_maps]
+        image_size = image.shape.with_tile_padding()[-2:]
         image_sizes = [image_size]
         default_boxes = self._grid_default_boxes(grid_sizes, image_size)
         default_boxes = tt_to_torch_tensor(default_boxes).squeeze(0).squeeze(0)

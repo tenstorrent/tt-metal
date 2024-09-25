@@ -74,7 +74,7 @@ Tensor API
 ==========
 
 .. autoclass:: ttnn.Tensor
-    :members: to, buffer, storage_type, device, get_layout, get_dtype, get_legacy_shape, pad, unpad, pad_to_tile, unpad_from_tile
+    :members: to, buffer, storage_type, device, get_layout, get_dtype, pad, unpad, pad_to_tile, unpad_from_tile
     :special-members: __init__
 
 MemoryConfig

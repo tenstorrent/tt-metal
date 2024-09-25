@@ -46,7 +46,7 @@ def test_softmax_for_dim_hw(shape_dim, compute_kernel_options, device):
     tt_cpu = torch.softmax(x, dim)
     tt_npu = ttnn.experimental.operations.primary.moreh_softmax(dev_x, dim, compute_kernel_config=compute_kernel_config)
 
-    assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
+    assert list(tt_npu.shape.with_tile_padding()) == list(tt_cpu.shape)
     tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
@@ -86,7 +86,7 @@ def test_softmax_large_algorithm_for_dim_hw(shape_dim, compute_kernel_options, d
         dev_x, dim, None, strategy, compute_kernel_config=compute_kernel_config
     )
 
-    assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
+    assert list(tt_npu.shape.with_tile_padding()) == list(tt_cpu.shape)
     tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
@@ -120,7 +120,7 @@ def test_softmax_not_multiple_of_32_for_dim_hw(shape_dim, compute_kernel_options
     tt_npu = ttnn.experimental.operations.primary.moreh_softmax(dev_x, dim, compute_kernel_config=compute_kernel_config)
     tt_npu = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(shape)
 
-    assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
+    assert list(tt_npu.shape.with_tile_padding()) == list(tt_cpu.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
@@ -156,7 +156,7 @@ def test_softmax_for_dim_nc(shape_dim, compute_kernel_options, device):
     tt_npu = ttnn.experimental.operations.primary.moreh_softmax(dev_x, dim, compute_kernel_config=compute_kernel_config)
     tt_npu = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(shape)
 
-    assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
+    assert list(tt_npu.shape.with_tile_padding()) == list(tt_cpu.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
@@ -199,7 +199,7 @@ def test_softmax_backward_for_dim_hw(shape_dim, compute_kernel_options, device):
         dev_y, dev_dy, dim, compute_kernel_config=compute_kernel_config
     )
 
-    assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
+    assert list(tt_npu.shape.with_tile_padding()) == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
@@ -242,7 +242,7 @@ def test_softmax_backward_large_algorithmfor_dim_hw(shape_dim, compute_kernel_op
         dev_y, dev_dy, dim, None, strategy, compute_kernel_config=compute_kernel_config
     )
 
-    assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
+    assert list(tt_npu.shape.with_tile_padding()) == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
@@ -282,7 +282,7 @@ def test_softmax_backward_not_multiple_of_32_for_dim_hw(shape_dim, compute_kerne
     )
     tt_npu = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(shape)
 
-    assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
+    assert list(tt_npu.shape.with_tile_padding()) == list(x.grad.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
@@ -323,7 +323,7 @@ def test_softmax_backward_for_dim_nc(shape_dim, compute_kernel_options, device):
         dev_y, dev_dy, dim, compute_kernel_config=compute_kernel_config
     )
     tt_npu = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
-    assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
+    assert list(tt_npu.shape.with_tile_padding()) == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
@@ -357,7 +357,7 @@ def test_softmax_callback(shape_dim_strategy, device):
     for i in range(2):
         tt_npu = ttnn.experimental.operations.primary.moreh_softmax(dev_x, dim, None, strategy)
 
-    assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
+    assert list(tt_npu.shape.with_tile_padding()) == list(tt_cpu.shape)
     tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
@@ -394,7 +394,7 @@ def test_softmax_backward_callback(shape_dim_strategy, device):
     for i in range(2):
         tt_npu = ttnn.experimental.operations.primary.moreh_softmax_backward(dev_y, dev_dy, dim, None, strategy)
 
-    assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
+    assert list(tt_npu.shape.with_tile_padding()) == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
@@ -431,7 +431,7 @@ def test_softmax_optional_output_tensor(shape_dim, optional_output_tensor, devic
     else:
         tt_npu = ttnn.experimental.operations.primary.moreh_softmax(dev_x, dim)
 
-    assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
+    assert list(tt_npu.shape.with_tile_padding()) == list(tt_cpu.shape)
     tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
@@ -470,7 +470,7 @@ def test_softmax_backward_optional_output_tensor(shape_dim, optional_output_tens
     else:
         tt_npu = ttnn.experimental.operations.primary.moreh_softmax_backward(dev_y, dev_dy, dim)
 
-    assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
+    assert list(tt_npu.shape.with_tile_padding()) == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05

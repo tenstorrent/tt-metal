@@ -112,7 +112,7 @@ class TtTrOCRAttention(nn.Module):
             attention_mask = torch_to_tt_tensor_rm(attention_mask, self.device, put_on_device=False)
 
         is_cross_attention = key_value_states is not None
-        bsz, tgt_len, embed_dim = hidden_states.get_legacy_shape()[1:]
+        bsz, tgt_len, embed_dim = hidden_states.shape.with_tile_padding()[1:]
 
         # get query proj
         query_states = ttnn.multiply(self.q_proj(hidden_states), self.scaling)
@@ -154,20 +154,20 @@ class TtTrOCRAttention(nn.Module):
         key_states = fallback_ops.reshape(key_states, *proj_shape)
         value_states = fallback_ops.reshape(value_states, *proj_shape)
 
-        src_len = key_states.get_legacy_shape()[2]
+        src_len = key_states.shape.with_tile_padding()[2]
         key_states = ttnn.transpose(key_states, -2, -1)
         attn_weights = ttnn.matmul(query_states, key_states)
 
-        if attn_weights.get_legacy_shape() != [1, bsz * self.num_heads, tgt_len, src_len]:
+        if attn_weights.shape.with_tile_padding() != [1, bsz * self.num_heads, tgt_len, src_len]:
             raise ValueError(
                 f"Attention weights should be of size {(bsz * self.num_heads, tgt_len, src_len)}, but is"
-                f" {attn_weights.get_legacy_shape()}"
+                f" {attn_weights.shape.with_tile_padding()}"
             )
 
         if attention_mask is not None:
-            if attention_mask.get_legacy_shape() != [bsz, 1, tgt_len, src_len]:
+            if attention_mask.shape.with_tile_padding() != [bsz, 1, tgt_len, src_len]:
                 raise ValueError(
-                    f"Attention mask should be of size {(bsz, 1, tgt_len, src_len)}, but is {attention_mask.get_legacy_shape()}"
+                    f"Attention mask should be of size {(bsz, 1, tgt_len, src_len)}, but is {attention_mask.shape.with_tile_padding()}"
                 )
 
             attn_weights = fallback_ops.reshape(attn_weights, bsz, self.num_heads, tgt_len, src_len)
@@ -202,10 +202,10 @@ class TtTrOCRAttention(nn.Module):
 
         attn_output = ttnn.matmul(attn_weights, value_states)
 
-        if attn_output.get_legacy_shape() != [1, bsz * self.num_heads, tgt_len, self.head_dim]:
+        if attn_output.shape.with_tile_padding() != [1, bsz * self.num_heads, tgt_len, self.head_dim]:
             raise ValueError(
                 f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is"
-                f" {attn_output.get_legacy_shape()}"
+                f" {attn_output.shape.with_tile_padding()}"
             )
 
         attn_output = fallback_ops.reshape(attn_output, bsz, self.num_heads, tgt_len, self.head_dim)

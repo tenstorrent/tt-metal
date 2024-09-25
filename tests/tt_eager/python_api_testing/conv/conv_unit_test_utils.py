@@ -40,7 +40,7 @@ def create_conv_bias_tensor(torch_tensor, N, K, padded_K, pad=0):
         bias_padded_shape, (0, 0, 0, 0), 0.0
     )
     tt_tensor = tt_tensor.pad_to_tile(pad).to(ttnn.TILE_LAYOUT)
-    print(f"tt_tensor shape: {tt_tensor.get_legacy_shape()}")
+    print(f"tt_tensor shape: {tt_tensor.shape.with_tile_padding()}")
     return tt_tensor
 
 

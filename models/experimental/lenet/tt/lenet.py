@@ -126,7 +126,7 @@ class TtLeNet5(nn.Module):
         out = self.maxp2(out)  # HOST (fallback)
 
         # using fallback since last dimension of tensor is not divisible by 2
-        out_shape = out.get_legacy_shape()
+        out_shape = out.shape.with_tile_padding()
         out = fallback_ops.reshape(
             out, out_shape[0], 1, 1, out_shape[1] * out_shape[2] * out_shape[3]
         )  # HOST (fallback)

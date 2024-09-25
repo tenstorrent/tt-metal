@@ -1406,17 +1406,6 @@ void pytensor_module(py::module &m_tensor) {
 
         )doc")
         .def(
-            "get_legacy_shape",
-            [](const Tensor &self) { return self.get_legacy_shape(); },
-            R"doc(
-            Get the shape of the tensor as Shape class.
-
-            .. code-block:: python
-
-                shape = tt_tensor.get_legacy_shape()
-
-        )doc")
-        .def(
             "volume", [](const Tensor &self) { return self.volume(); }, R"doc(
             Get the volume of the tensor.
 

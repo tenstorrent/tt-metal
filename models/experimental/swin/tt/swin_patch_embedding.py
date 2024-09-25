@@ -57,7 +57,7 @@ class TtSwinPatchEmbeddings(nn.Module):
         return pixel_values
 
     def forward(self, pixel_values: Optional[ttnn.Tensor]) -> Tuple[ttnn.Tensor, Tuple[int]]:
-        _, num_channels, height, width = pixel_values.get_legacy_shape()
+        _, num_channels, height, width = pixel_values.shape.with_tile_padding()
         if num_channels != self.num_channels:
             raise ValueError(
                 "Make sure that the channel dimension of the pixel values match with the one set in the configuration."
@@ -65,7 +65,7 @@ class TtSwinPatchEmbeddings(nn.Module):
         # pad the input to be divisible by self.patch_size, if needed
         pixel_values = self.maybe_pad(pixel_values, height, width)
         embeddings = self.projection(pixel_values)
-        batch, channel, height, width = embeddings.get_legacy_shape()
+        batch, channel, height, width = embeddings.shape.with_tile_padding()
         output_dimensions = (height, width)
         embeddings = fallback_ops.reshape(embeddings, 1, batch, channel, height * width)
         embeddings = ttnn.transpose(embeddings, -2, -1)

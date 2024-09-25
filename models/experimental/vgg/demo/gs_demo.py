@@ -49,7 +49,7 @@ def test_gs_demo(device, imagenet_sample_input, imagenet_label_dict, batch_size,
         tt_images = ttnn.concat(tt_images)
 
         tt_output = tt_vgg(tt_images)
-        tt_output = unpad_from_zero(tt_output, tt_output.get_legacy_shape())
+        tt_output = unpad_from_zero(tt_output, tt_output.shape.with_tile_padding())
         tt_output = tt_output.cpu()
 
         logger.info(f"GS's predicted Output: {class_labels[torch.argmax(tt_output).item()]}\n")

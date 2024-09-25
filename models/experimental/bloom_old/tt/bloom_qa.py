@@ -17,7 +17,7 @@ class TtBloomForQuestionAnswering:
         # self.qa_outputs_weight = bloom_utils.tt_load_layer_weights("qa_outputs.weight", state_dict)
         # self.qa_outputs_bias = bloom_utils.tt_load_layer_weights("qa_outputs.bias", state_dict)
 
-        # out_features = self.qa_outputs_bias.get_legacy_shape()[-1]
+        # out_features = self.qa_outputs_bias.shape.with_tile_padding()[-1]
         # self.qa_outputs = TtLinear(config.hidden_size, out_features, self.qa_outputs_weight, self.qa_outputs_bias, device)
 
         self.qa_outputs = torch.nn.Linear(config.hidden_size, 2)

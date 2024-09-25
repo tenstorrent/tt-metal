@@ -144,7 +144,7 @@ def run_falcon_matmul_test(
     logger.debug(f"in1 ({b_shape}): {b_t.memory_config().buffer_type} and {b_t.get_dtype()}")
     logger.debug(f"out ({expected_output_shape}): {out.memory_config().buffer_type} and {out.get_dtype()}")
 
-    assert out.get_legacy_shape() == expected_output_shape
+    assert out.shape.with_tile_padding() == expected_output_shape
     pyt_got_back_rm = tt2torch_tensor(out)
 
     ref_bmm = torch.matmul(A, B)

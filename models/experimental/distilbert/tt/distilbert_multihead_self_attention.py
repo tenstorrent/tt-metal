@@ -28,8 +28,8 @@ class TtMultiHeadSelfAttention(nn.Module):
         self.query_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.q_lin.weight"], self.device)
         self.query_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.q_lin.bias"], self.device)
         self.query_linear = TtLinear(
-            self.query_weight.get_legacy_shape()[-1],
-            self.query_weight.get_legacy_shape()[-2],
+            self.query_weight.shape.with_tile_padding()[-1],
+            self.query_weight.shape.with_tile_padding()[-2],
             self.query_weight,
             self.query_bias,
         )
@@ -37,8 +37,8 @@ class TtMultiHeadSelfAttention(nn.Module):
         self.key_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.k_lin.weight"], self.device)
         self.key_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.k_lin.bias"], self.device)
         self.key_linear = TtLinear(
-            self.key_weight.get_legacy_shape()[-1],
-            self.key_weight.get_legacy_shape()[-2],
+            self.key_weight.shape.with_tile_padding()[-1],
+            self.key_weight.shape.with_tile_padding()[-2],
             self.key_weight,
             self.key_bias,
         )
@@ -46,8 +46,8 @@ class TtMultiHeadSelfAttention(nn.Module):
         self.value_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.v_lin.weight"], self.device)
         self.value_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.v_lin.bias"], self.device)
         self.value_linear = TtLinear(
-            self.value_weight.get_legacy_shape()[-1],
-            self.value_weight.get_legacy_shape()[-2],
+            self.value_weight.shape.with_tile_padding()[-1],
+            self.value_weight.shape.with_tile_padding()[-2],
             self.value_weight,
             self.value_bias,
         )
@@ -55,8 +55,8 @@ class TtMultiHeadSelfAttention(nn.Module):
         self.out_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.out_lin.weight"], self.device)
         self.out_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.out_lin.bias"], self.device)
         self.out_linear = TtLinear(
-            self.out_weight.get_legacy_shape()[-1],
-            self.out_weight.get_legacy_shape()[-2],
+            self.out_weight.shape.with_tile_padding()[-1],
+            self.out_weight.shape.with_tile_padding()[-2],
             self.out_weight,
             self.out_bias,
         )
@@ -79,8 +79,8 @@ class TtMultiHeadSelfAttention(nn.Module):
         head_mask: Optional[ttnn.Tensor] = None,
         output_attention: bool = False,
     ) -> Tuple[ttnn.Tensor]:
-        _, bs, q_length, dim = query.get_legacy_shape()
-        k_length = key.get_legacy_shape()[-2]
+        _, bs, q_length, dim = query.shape.with_tile_padding()
+        k_length = key.shape.with_tile_padding()[-2]
 
         dim_per_head = self.dim // self.n_heads
 
@@ -99,7 +99,7 @@ class TtMultiHeadSelfAttention(nn.Module):
         k = shape(self.key_linear(key))
         v = shape(self.value_linear(value))
 
-        dim_per_head_tensor = self.const_tensor(q.get_legacy_shape(), dim_per_head)
+        dim_per_head_tensor = self.const_tensor(q.shape.with_tile_padding(), dim_per_head)
         dim_per_head_tensor = ttnn.sqrt(dim_per_head_tensor)
         dim_per_head_tensor = ttnn.reciprocal(dim_per_head_tensor)
 

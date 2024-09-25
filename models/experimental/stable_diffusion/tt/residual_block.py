@@ -179,7 +179,9 @@ class TtResnetBlock2D(nn.Module):
             temb = self.nonlinearity(temb)
 
             temb = self.time_emb_proj(temb)
-            temb = fallback_ops.reshape(temb, temb.get_legacy_shape()[2], temb.get_legacy_shape()[3], 1, 1)
+            temb = fallback_ops.reshape(
+                temb, temb.shape.with_tile_padding()[2], temb.shape.with_tile_padding()[3], 1, 1
+            )
 
         if temb is not None and self.time_embedding_norm == "default":
             hidden_states = ttnn.add(hidden_states, temb)
@@ -197,7 +199,7 @@ class TtResnetBlock2D(nn.Module):
 
         # create a tensor of size output_scale_factor
         output_sc_recip = 1 / self.output_scale_factor
-        output_sc_recip = ttnn.full(input_tensor.get_legacy_shape(), output_sc_recip)
+        output_sc_recip = ttnn.full(input_tensor.shape.with_tile_padding(), output_sc_recip)
         output_tensor = ttnn.add(input_tensor, hidden_states)
         output_tensor = ttnn.mul(output_tensor, output_sc_recip)
 

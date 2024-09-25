@@ -22,8 +22,8 @@ class TtFFN(nn.Module):
         self.linear_1_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.ffn.lin1.weight"], self.device)
         self.linear_1_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.ffn.lin1.bias"], self.device)
         self.linear1 = TtLinear(
-            self.linear_1_weight.get_legacy_shape()[-1],
-            self.linear_1_weight.get_legacy_shape()[-2],
+            self.linear_1_weight.shape.with_tile_padding()[-1],
+            self.linear_1_weight.shape.with_tile_padding()[-2],
             self.linear_1_weight,
             self.linear_1_bias,
         )
@@ -31,8 +31,8 @@ class TtFFN(nn.Module):
         self.linear_2_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.ffn.lin2.weight"], self.device)
         self.linear_2_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.ffn.lin2.bias"], self.device)
         self.linear2 = TtLinear(
-            self.linear_2_weight.get_legacy_shape()[-1],
-            self.linear_2_weight.get_legacy_shape()[-2],
+            self.linear_2_weight.shape.with_tile_padding()[-1],
+            self.linear_2_weight.shape.with_tile_padding()[-2],
             self.linear_2_weight,
             self.linear_2_bias,
         )

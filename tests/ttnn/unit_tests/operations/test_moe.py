@@ -42,7 +42,7 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
     for i in range(3):
         weights_1SB1 = ttnn.moe(ttnn_input, ttnn_expert_mask, ttnn_topE_mask, k)
 
-        assert list(weights_1SB1.get_legacy_shape()) == [N, C, H, k]
+        assert list(weights_1SB1.shape.with_tile_padding()) == [N, C, H, k]
 
         ttnn_weights_1SB1 = ttnn.to_torch(weights_1SB1)
 

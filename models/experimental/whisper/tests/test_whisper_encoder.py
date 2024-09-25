@@ -92,7 +92,7 @@ def run_whisper_encoder(device, for_audio_classification=False, encoder_layers=1
             output_hidden_states=False,
         )
 
-        logger.debug(f"Encoder returned {ttm_output.last_hidden_state.get_legacy_shape()}")
+        logger.debug(f"Encoder returned {ttm_output.last_hidden_state.shape.with_tile_padding()}")
 
         # TT Output To Torch
         ttm_output_pt = tt2torch_tensor(ttm_output.last_hidden_state)

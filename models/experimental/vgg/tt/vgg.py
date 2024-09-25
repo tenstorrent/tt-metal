@@ -47,24 +47,24 @@ class TtVGG(nn.Module):
         linear3_bias = ttnn.load_tensor(f"{tt_cache_path}classifier.6.bias{tt_dtype}.bin")
 
         linear1 = TtLinear(
-            in_features=linear1_weight.get_legacy_shape()[-1],
-            out_features=linear1_weight.get_legacy_shape()[-2],
+            in_features=linear1_weight.shape.with_tile_padding()[-1],
+            out_features=linear1_weight.shape.with_tile_padding()[-2],
             weight=linear1_weight,
             bias=linear1_bias,
             output_mem_config=self.output_mem_config,
         )
 
         linear2 = TtLinear(
-            in_features=linear2_weight.get_legacy_shape()[-1],
-            out_features=linear2_weight.get_legacy_shape()[-2],
+            in_features=linear2_weight.shape.with_tile_padding()[-1],
+            out_features=linear2_weight.shape.with_tile_padding()[-2],
             weight=linear2_weight,
             bias=linear2_bias,
             output_mem_config=self.output_mem_config,
         )
 
         linear3 = TtLinear(
-            in_features=linear3_weight.get_legacy_shape()[-1],
-            out_features=linear3_weight.get_legacy_shape()[-2],
+            in_features=linear3_weight.shape.with_tile_padding()[-1],
+            out_features=linear3_weight.shape.with_tile_padding()[-2],
             weight=linear3_weight,
             bias=linear3_bias,
             output_mem_config=self.output_mem_config,
@@ -85,7 +85,7 @@ class TtVGG(nn.Module):
             else:
                 tt_x = layer(tt_x)
 
-        batch, c, w, h = tt_x.get_legacy_shape()
+        batch, c, w, h = tt_x.shape.with_tile_padding()
         tt_x = self.avgpool(tt_x)
 
         tt_x = fallback_ops.reshape(tt_x, batch, 1, 1, c * w * h)

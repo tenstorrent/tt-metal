@@ -43,7 +43,7 @@ def window_partition(input_feature, window_size, device, put_on_device=True):
     """
     Partitions the given input into windows.
     """
-    batch_size, height, width, num_channels = input_feature.get_legacy_shape()
+    batch_size, height, width, num_channels = input_feature.shape.with_tile_padding()
     input_feature = tt_to_torch_tensor(input_feature)
     input_feature = input_feature.view(
         batch_size,
@@ -63,7 +63,7 @@ def window_reverse(windows, window_size, height, width, device, put_on_device=Tr
     """
     Merges windows to produce higher resolution features.
     """
-    num_channels = windows.get_legacy_shape()[-1]
+    num_channels = windows.shape.with_tile_padding()[-1]
     windows = tt_to_torch_tensor(windows)
     windows = windows.view(
         -1,

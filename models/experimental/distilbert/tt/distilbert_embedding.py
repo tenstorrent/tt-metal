@@ -58,7 +58,7 @@ class TtDistilBert_Embeddings(nn.Module):
             input_embeds = self.word_embeddings(input_ids)
             input_embeds = torch_to_tt_tensor_rm(input_embeds, self.device, put_on_device=True)
 
-        seq_length = input_embeds.get_legacy_shape()[-2]
+        seq_length = input_embeds.shape.with_tile_padding()[-2]
 
         if hasattr(self, "position_ids"):
             position_ids = self.position_ids[:, :seq_length]

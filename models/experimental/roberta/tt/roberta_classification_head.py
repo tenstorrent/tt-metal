@@ -32,14 +32,14 @@ class TtRobertaClassificationHead(nn.Module):
         self.out_proj_weight = torch2tt_tensor(state_dict[f"{base_address}.out_proj.weight"], self.device)
         self.out_proj_bias = torch2tt_tensor(state_dict[f"{base_address}.out_proj.bias"], self.device)
         self.dense_linear = TTLinear(
-            self.dense_weight.get_legacy_shape()[-1],
-            self.dense_weight.get_legacy_shape()[-2],
+            self.dense_weight.shape.with_tile_padding()[-1],
+            self.dense_weight.shape.with_tile_padding()[-2],
             self.dense_weight,
             self.dense_bias,
         )
         self.out_proj_linear = TTLinear(
-            self.out_proj_weight.get_legacy_shape()[-1],
-            self.out_proj_weight.get_legacy_shape()[-2],
+            self.out_proj_weight.shape.with_tile_padding()[-1],
+            self.out_proj_weight.shape.with_tile_padding()[-2],
             self.out_proj_weight,
             self.out_proj_bias,
         )

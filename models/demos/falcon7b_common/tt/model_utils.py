@@ -71,7 +71,7 @@ def get_falcon_default_core_grid(device):
 
 
 def layernorm(ln_input, ln_eps, ln_gamma, ln_betta, model_config):
-    h_dim = ln_input.get_legacy_shape()[-2]  # corresponds to batch size (decode) or seq_len (prefill)
+    h_dim = ln_input.shape.with_tile_padding()[-2]  # corresponds to batch size (decode) or seq_len (prefill)
     if h_dim in [32, 128, 256, 1024, 2048]:
         ln_output = ttnn.interleaved_to_sharded(ln_input, model_config["LAYERNORM_BLOCK_SHARDED_MEM_CFG"][h_dim])
         ln_output = ttnn.layer_norm(

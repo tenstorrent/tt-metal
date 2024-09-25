@@ -68,7 +68,7 @@ def run_falcon_lm_head_matmul_2d(
     for i in range(num_slices):
         b_t_slices[i].deallocate(True)
 
-    assert out.get_legacy_shape() == expected_output_shape
+    assert out.shape.with_tile_padding() == expected_output_shape
 
     # check pcc
     out = tt2torch_tensor(out)

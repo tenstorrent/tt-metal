@@ -60,7 +60,7 @@ def linear(
     if bias is not None:
         tt_bias = setup_tt_tensor(bias, device, layout[2], input_mem_config[2], dtype[2])
 
-    _, __, out_features, in_features = tt_weight.get_legacy_shape()
+    _, __, out_features, in_features = tt_weight.shape.with_tile_padding()
     tt_linear = tt_Linear(in_features, out_features, tt_weight, tt_bias)
 
     t1 = tt_linear(t0)

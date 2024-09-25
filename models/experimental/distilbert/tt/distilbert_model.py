@@ -101,7 +101,7 @@ class TtDistilBertModel(nn.Module):
         elif input_ids is not None:
             input_shape = list(input_ids.shape)
         elif inputs_embeds is not None:
-            input_shape = inputs_embeds.get_legacy_shape()[:-1]
+            input_shape = inputs_embeds.shape.with_tile_padding()[:-1]
 
         if attention_mask is not None:
             input_shape[0:0] = [1, 1]

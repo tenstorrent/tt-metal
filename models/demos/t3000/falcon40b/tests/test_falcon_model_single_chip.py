@@ -502,9 +502,9 @@ def test_sharded_nlp_create_qkv_heads_test(
         memory_config=out_mem_config,
     )
 
-    assert list(q.get_legacy_shape()) == [seq_len, num_q_heads, batch, head_dim]
-    assert list(k.get_legacy_shape()) == [seq_len, num_kv_heads, batch, head_dim]
-    assert list(v.get_legacy_shape()) == [seq_len, num_kv_heads, batch, head_dim]
+    assert list(q.shape.with_tile_padding()) == [seq_len, num_q_heads, batch, head_dim]
+    assert list(k.shape.with_tile_padding()) == [seq_len, num_kv_heads, batch, head_dim]
+    assert list(v.shape.with_tile_padding()) == [seq_len, num_kv_heads, batch, head_dim]
 
     pyt_got_back_rm_q = tt2torch_tensor(q)
     pyt_got_back_rm_k = tt2torch_tensor(k)

@@ -71,7 +71,7 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
         )
 
     def forward(self, layer: ttnn.Tensor, token_idx: Optional[int] = None) -> ttnn.Tensor:
-        seq_len = layer.get_legacy_shape()[2]
+        seq_len = layer.shape.with_tile_padding()[2]
         assert seq_len <= self.max_seq_len_cached, "seq_len exceeds max_seq_len_cached in RotaryEmbedding!"
 
         output = ttnn.experimental.rotary_embedding(
@@ -196,7 +196,7 @@ class TtFalconAttentionPrefill(nn.Module):
         """
         assert not output_attentions
 
-        seq_len = hidden_states.get_legacy_shape()[2]
+        seq_len = hidden_states.shape.with_tile_padding()[2]
 
         if self.model_config["PREFILL_OPTIMIZED_MODE"] and seq_len in [128, 1024, 2048]:
             attn_output, layer_present = self._optimized_forward(
@@ -325,7 +325,7 @@ class TtFalconAttentionPrefill(nn.Module):
         layer_past: Optional[Tuple[ttnn.Tensor]] = None,
         use_cache: bool = False,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor]]]:
-        seq_len = hidden_states.get_legacy_shape()[2]
+        seq_len = hidden_states.shape.with_tile_padding()[2]
 
         #################
         ### FUSED QKV ###
@@ -573,8 +573,8 @@ class TtFalconAttentionDecode(nn.Module):
 
         padded_layer_past_len = nearest_32(layer_past_len + 1)
 
-        batch = hidden_states.get_legacy_shape()[2]
-        q_len = hidden_states.get_legacy_shape()[0]
+        batch = hidden_states.shape.with_tile_padding()[2]
+        q_len = hidden_states.shape.with_tile_padding()[0]
         # We always store max_position_embeddings for kv_cache,
         # so we need separate variable to store the actual len of the kv_cache
         assert layer_past is not None
@@ -795,7 +795,7 @@ class TtFalconAttentionDecode(nn.Module):
             )
 
             # UNPAD
-            attn_output_shape = attn_output.get_legacy_shape()
+            attn_output_shape = attn_output.shape.with_tile_padding()
             attn_output = ttnn.slice(
                 attn_output,
                 [0, 0, 0, 0],

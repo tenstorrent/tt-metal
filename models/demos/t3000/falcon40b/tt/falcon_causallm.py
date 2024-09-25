@@ -118,7 +118,7 @@ class TtFalconCausalLM(TtFalconModelShared):
         overwrite_subblock_w = 1 if hidden_states.shape[2] < 512 else 4
 
         should_deallocate_ln_tensors = determine_tensor_deallocation(
-            self.model_config["layernorm_params"]["slice_size"], hidden_states.get_legacy_shape()[2]
+            self.model_config["layernorm_params"]["slice_size"], hidden_states.shape.with_tile_padding()[2]
         )
         # LM Head
         lm_logits = falcon_prefill_matmul(
