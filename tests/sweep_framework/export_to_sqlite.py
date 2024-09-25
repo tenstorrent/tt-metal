@@ -67,23 +67,25 @@ def get_suites(vector_index, user, es_client):
     return suites
 
 
-def join_entries(vector_entries, result_entries):
+def join_entries(all_vector_entries, all_result_entries):
     # Note: Will only save data for which vector entries exist.
     joined_entries = {}
     results_per_id = {}
-    for entry in vector_entries:
-        vector_id = entry["vector_id"]
-        joined_entries[vector_id] = entry
-        results_per_id[vector_id] = 0
+    for entries in all_vector_entries.values():
+        for entry in entries:
+            vector_id = entry["vector_id"]
+            joined_entries[vector_id] = entry
+            results_per_id[vector_id] = 0
 
     missing_vectors = []
-    for entry in result_entries:
-        vector_id = entry["vector_id"]
-        if vector_id not in joined_entries:
-            missing_vectors.append(vector_id)
-        else:
-            joined_entries[vector_id].update(entry)
-            results_per_id[vector_id] += 1
+    for entries in all_result_entries.values():
+        for entry in entries:
+            vector_id = entry["vector_id"]
+            if vector_id not in joined_entries:
+                missing_vectors.append(vector_id)
+            else:
+                joined_entries[vector_id].update(entry)
+                results_per_id[vector_id] += 1
 
     missing_results = []
     multiple_results = []
@@ -94,16 +96,17 @@ def join_entries(vector_entries, result_entries):
             multiple_results.append[key]
 
     log(
-        f"Joined {len(vector_entries)} vector entries with {len(result_entries)} result entries to create {len(joined_entries)} entries. There are {len(missing_vectors)} missing vectors (results for missing vectors are ignored), {len(missing_results)} missing results, and {len(multiple_results)} multiple results.\nMissing results: {missing_results}\nMultiple results: {multiple_results}"
+        f"Joined {len(all_vector_entries)} vector entries with {len(all_result_entries)} result entries to create {len(joined_entries)} entries. There are {len(missing_vectors)} missing vectors (results for missing vectors are ignored), {len(missing_results)} missing results, and {len(multiple_results)} multiple results.\nMissing results: {missing_results}\nMultiple results: {multiple_results}"
     )
-    return list(joined_entries.values())
+    return {"joined": list(joined_entries.values())}
 
 
-def write_table(entries, table, sqlite_client):
+def write_table(all_entries, table, sqlite_client):
     # Different entries may have different number of keys. Find the union of all keys.
     column_set = set()
-    for entry in entries:
-        column_set = column_set.union(entry.keys())
+    for entries in all_entries.values():
+        for entry in entries:
+            column_set = column_set.union(entry.keys())
 
     # Create a map from column names to column indices
     column_count = len(column_set)
@@ -118,17 +121,18 @@ def write_table(entries, table, sqlite_client):
     # Generate sqlite data by putting the values of each entry into the right column
     sqlite_data = []
     missing_columns = {}
-    for entry in entries:
-        row = ["" for i in range(column_count)]
-        for key, value in entry.items():
-            row[columns[key]] = str(value)
-        sqlite_data.append(row)
-        difference = column_count - len(entry)
-        if difference > 0:
-            if difference in missing_columns:
-                missing_columns[difference] += 1
-            else:
-                missing_columns[difference] = 1
+    for entries in all_entries.values():
+        for entry in entries:
+            row = ["" for i in range(column_count)]
+            for key, value in entry.items():
+                row[columns[key]] = str(value)
+            sqlite_data.append(row)
+            difference = column_count - len(entry)
+            if difference > 0:
+                if difference in missing_columns:
+                    missing_columns[difference] += 1
+                else:
+                    missing_columns[difference] = 1
 
     # Write to the database, deleting the table if it exists
     placeholders = ("?, " * column_count).strip()[:-1]
@@ -170,6 +174,8 @@ def export_to_sqlite(sweeps_path, dump_path, filter_string, user, es_client):
         result_table = table_prefix + "_result"
         joined_table = table_prefix
         suites = get_suites(vector_index, user, es_client)
+        all_vector_entries = {}
+        all_result_entries = {}
         for suite_name in suites:
             vector_query = get_vector_query(sweep_name, suite_name, user)
             vector_response = es_client.search(index=vector_index, size=10000, query=vector_query)
@@ -196,9 +202,11 @@ def export_to_sqlite(sweeps_path, dump_path, filter_string, user, es_client):
                 log(f"WARNING: vectors reached limit of elastic query length. Data may be lost")
             if result_count >= 10000:
                 log(f"WARNING: results reached limit of elastic query length. Data may be lost")
-            write_table(vector_entries, vector_table, sqlite_client)
-            write_table(result_entries, result_table, sqlite_client)
-            write_table(join_entries(vector_entries, result_entries), joined_table, sqlite_client)
+            all_vector_entries[suite_name] = vector_entries
+            all_result_entries[suite_name] = result_entries
+        write_table(all_vector_entries, vector_table, sqlite_client)
+        write_table(all_result_entries, result_table, sqlite_client)
+        write_table(join_entries(all_vector_entries, all_result_entries), joined_table, sqlite_client)
         try:
             sqlite_connection.commit()
             sqlite_connection.close()
