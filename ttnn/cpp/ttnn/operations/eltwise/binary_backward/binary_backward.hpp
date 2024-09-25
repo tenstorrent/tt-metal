@@ -112,18 +112,37 @@ struct ExecuteBackwardMul  {
 
 struct ExecuteBackwardAssign  {
 
-    static std::vector<ttnn::Tensor> invoke(
+    static std::vector<std::optional<ttnn::Tensor>> invoke(
         uint8_t queue_id,
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_a_grad = std::nullopt);
 
-    static std::vector<ttnn::Tensor> invoke(
+    static std::vector<std::optional<ttnn::Tensor>> invoke(
         uint8_t queue_id,
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         const Tensor &other_tensor_arg,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+        const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_a_grad = std::nullopt,
+        std::optional<Tensor> input_b_grad = std::nullopt);
+
+    static std::vector<std::optional<ttnn::Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_a_grad = std::nullopt);
+
+    static std::vector<std::optional<ttnn::Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const Tensor &other_tensor_arg,
+        const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_a_grad = std::nullopt,
+        std::optional<Tensor> input_b_grad = std::nullopt);
 
 };
 
