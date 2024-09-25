@@ -421,11 +421,11 @@ class TtLlamaAttention(nn.Module):
 
         k_fill = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
         # sharding k_fill to deal with update_cache memory limitation
-        if seq_len > 128:
+        if seq_len > 256:
             k_fill = ttnn.interleaved_to_sharded(k_fill, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         v_fill = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
         # sharding v_fill to deal with update_cache memory limitation
-        if seq_len > 128:
+        if seq_len > 256:
             v_fill = ttnn.interleaved_to_sharded(v_fill, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         ttnn.fill_cache(
             keys_BKSD,
@@ -456,9 +456,7 @@ class TtLlamaAttention(nn.Module):
             scale=self.scale,
             program_config=self.model_config["SDPA_PROGCFG"](seq_len),
         )
-
         attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
-
         # deallocate keys and values
         q_heads_84SD.deallocate(True)
         k_heads_K1SD.deallocate(True)

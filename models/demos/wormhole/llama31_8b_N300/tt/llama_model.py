@@ -78,13 +78,12 @@ class TtTransformer(nn.Module):
     ):
         for layer in self.layers:
             x = layer(x, current_pos, current_pos_attn, rot_mat, transformation_mats, user_id, mode)
-
         if mode == "prefill" and get_last_token == -1:
             return x
 
         # slicing for the last token
         if get_last_token != -1:
-            x = ttnn.slice(x, ttnn.Shape((0, 0, get_last_token, 0)), ttnn.Shape((0, 0, get_last_token + 31, 4095)))
+            x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, 4096))
 
         x = self.norm(x)
 
