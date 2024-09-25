@@ -40,6 +40,7 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(const Tensor& cache_
     const uint32_t block_size_t = block_size / TILE_HEIGHT;
 
     uint32_t num_blocks_of_work = num_heads * input_seq_len_t;
+    uint32_t num_blocks_of_work_per_head = input_seq_len_t;
 
     // Pagetable-specific parameters
     uint32_t page_table_stick_size_B = page_table_tensor.buffer()->aligned_page_size();
@@ -92,6 +93,7 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(const Tensor& cache_
         (uint32_t) src0_cb_index,
         (uint32_t) page_table_cb_index,
         num_heads,
+        num_blocks_of_work_per_head,
         block_size_t,
         Wt,
         log2_page_table_stick_size_B,
