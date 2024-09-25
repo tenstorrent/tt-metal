@@ -15,17 +15,36 @@ namespace ttnn::operations::transformer {
 void py_bind_sdpa_decode(py::module &module) {
     auto doc =
         R"doc(
-        "A version of scaled dot product attention specifically for decode."
-        "The implementation is Flash-Decode and it currently only supports MQA on decoding single token.\n"
+        A version of scaled dot product attention specifically for decode.
+        The implementation is Flash-Decode and it currently only supports MQA on decoding single token.
 
-        "Q:      [1 x b x pnh x dh]"
-        "K:      [1 x b x   s x dh]"
-        "V:      [1 x b x   s x dh]"
-        "cur_pos: list of integers of length b"
-        "cur_pos_tensor: [b] tensor of integers of length b"
-        "output: [1 x b x pnh x dh]"
+
+        Accepts a `SDPAMultiCoreProgramConfig` which specifies the grid size and chunk tiles in the K/V/Mask sequence lengths (Q chunk tiles is not used). The op parallelizes over `b` and K/V/Mask's `s` dimension.
+
+
+        Args:
+            input_tensor_q (ttnn.Tensor): the input tensor [1 x b x pnh x dh]
+            input_tensor_k (ttnn.Tensor): the input tensor [1 x b x   s x dh]
+            input_tensor_v (ttnn.Tensor): the input tensor [1 x b x   s x dh]
+            cur_pos (List of int): list of integers of length b.
+
+
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
+            cur_pos_tensor (ttnn.Tensor, optional): [b] tensor of integers of length b. Defaults to `None`.
+            scale (float, optional): Defaults to `None`.
+            program_config (SDPAProgramConfig, optional): Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+
+
+        Returns:
+            ttnn.Tensor: the output tensor [1 x b x pnh x dh].
+
 
         "Accepts a `SDPAMultiCoreProgramConfig` which specifies the grid size and chunk tiles in the K/V/Mask sequence lengths (Q chunk tiles is not used). The op parallelizes over `b` and K/V/Mask's `s` dimension."
+        "If a position is given as (-1), compute for the corresponding index in the batch is skipped."
         )doc";
 
     using OperationType = decltype(ttnn::transformer::scaled_dot_product_attention_decode);

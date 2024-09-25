@@ -413,7 +413,8 @@ def run_test_sdpa_decode_single_iter(
     )  # b, nh, 1, d
     expect = expect.squeeze().unsqueeze(0)
 
-    out_pass, out_pcc = comp_pcc(expect, tt_back, min_pcc)
+    non_skip_indices = torch.tensor(start_indices) != -1
+    out_pass, out_pcc = comp_pcc(expect[:, non_skip_indices], tt_back[:, non_skip_indices], min_pcc)
 
     logger.debug(f"python vs pytorch: {out_pcc}")
     assert out_pass
@@ -458,6 +459,46 @@ def test_sdpa_decode(
         run_test_sdpa_decode_multi_pos(
             device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, cur_pos_tensor, sharded_in=False, sharded_out=False
         )
+
+
+@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
+@pytest.mark.skip("Skipping due to potential nd pcc issue #9370")
+@pytest.mark.parametrize(
+    "dtype, q_dtype",
+    [
+        [ttnn.bfloat16, ttnn.bfloat16],
+    ],
+    ids=[
+        "all_bfp16",
+    ],
+)
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, grid_size, single_iter, cur_pos_tensor",
+    ([32, 8, 1, 32768, 128, (8, 6), True, True],),  # Llama2-70B
+)
+def test_sdpa_decode_ignore_users(
+    device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single_iter, cur_pos_tensor, use_program_cache
+):
+    ttnn.device.DisablePersistentKernelCache()
+
+    # Set odd users to -1 to test skipping users
+    start_indices = [100 if bb % 2 == 0 else -1 for bb in range(b)]
+
+    run_test_sdpa_decode_single_iter(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        dtype,
+        grid_size,
+        q_dtype,
+        cur_pos_tensor,
+        sharded_in=False,
+        sharded_out=False,
+        start_indices=start_indices,
+    )
 
 
 def run_test_sdpa_decode_paged_attention(

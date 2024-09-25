@@ -41,7 +41,7 @@ def test_llama_model_inference(device, seq_len, use_program_cache, reset_seeds):
     cache_pcc = False  # Flag to measure KV cache PCC for all layers
 
     dtype = ttnn.bfloat8_b
-    pcc = 0.94
+    pcc = 0.97
 
     # Use instruct weights instead of general weights
     instruct = False

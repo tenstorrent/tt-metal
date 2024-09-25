@@ -328,10 +328,10 @@ operation::ProgramWithCallbacks slice_rm_strided_single_core(const Tensor& a, Te
         output_tensor_start[2],
         output_tensor_start[1],
         output_tensor_start[0],
-        output_tensor_end[3] + 1,
-        output_tensor_end[2] + 1,
-        output_tensor_end[1] + 1,
-        output_tensor_end[0] + 1,
+        output_tensor_end[3],
+        output_tensor_end[2],
+        output_tensor_end[1],
+        output_tensor_end[0],
 
     });
 

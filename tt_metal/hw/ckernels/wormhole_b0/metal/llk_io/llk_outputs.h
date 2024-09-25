@@ -30,30 +30,30 @@ inline const unsigned char get_output_dst_format(const std::uint32_t output_id)
 
 inline const uint32_t get_output_num_faces(const std::uint32_t output_id)
 {
-   return 4;
+   return (uint32_t)pack_tile_num_faces[output_id];
 }
 
 inline const uint32_t get_output_partial_face(const std::uint32_t output_id)
 {
-   return 0;
+   return (uint32_t)pack_partial_face[output_id];
 }
 
 inline const uint32_t get_output_face_r_dim(const std::uint32_t output_id)
 {
-   return 16;
+   return (uint32_t)pack_tile_face_r_dim[output_id];
 }
 
 inline const uint32_t get_output_narrow_tile(const std::uint32_t output_id)
 {
-   return 0;
+   return (uint32_t)pack_narrow_tile[output_id];
 }
 
 inline const uint32_t get_output_tile_r_dim(const std::uint32_t output_id)
 {
-   return 32;
+   return (uint32_t)pack_tile_r_dim[output_id];
 }
 
 inline const uint32_t get_output_tile_c_dim(const std::uint32_t output_id)
 {
-   return 32;
+   return (uint32_t)pack_tile_c_dim[output_id];
 }

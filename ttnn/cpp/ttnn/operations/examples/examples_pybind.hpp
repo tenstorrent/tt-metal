@@ -6,10 +6,9 @@
 
 #include <pybind11/pybind11.h>
 
-#include "ttnn/operations/examples/example/example_pybind.hpp"
-
+namespace py = pybind11;
 namespace ttnn::operations::examples {
 
-void py_module(py::module& module) { bind_example_operation(module); }
+void py_module(py::module& module);
 
 }  // namespace ttnn::operations::examples

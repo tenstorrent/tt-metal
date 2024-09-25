@@ -96,7 +96,7 @@ class TtLlamaRotary(torch.nn.Module):
         xq = ttnn.slice(
             xq,
             [0, 0, 0, 0],
-            [1 - 1, 8 - 1, 128 - 1, self.head_dim - 1],
+            [1, 8, 128, self.head_dim],
         )
 
         xk = ttnn.pad(xk, [1, 32, 128, self.head_dim], [0, 0, 0, 0], 0.0)
@@ -113,7 +113,7 @@ class TtLlamaRotary(torch.nn.Module):
         xk = ttnn.slice(
             xk,
             [0, 0, 0, 0],
-            [1 - 1, 1 - 1, 128 - 1, self.head_dim - 1],
+            [1, 1, 128, self.head_dim],
         )
 
         return xq, xk

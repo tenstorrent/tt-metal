@@ -581,7 +581,7 @@ class resnet50:
             reshard_if_not_optimal=False,
         )
         if whb0_and_b16:
-            self.conv1_config.act_block_h_override = 64
+            self.conv1_config.act_block_h_override = 256
 
         self.conv1_kernel_size = (4, 4)
         self.conv1_stride = (1, 1)
@@ -1020,7 +1020,7 @@ class resnet50:
 
         if is_wormhole_b0() and self.batch_size == 16:
             xshape = x.shape_without_padding()
-            x = ttnn.slice(x, [0, 0, 0, 0], [xshape[0] - 1, xshape[1] - 1, xshape[2] - 1, xshape[3] - 1])
+            x = ttnn.slice(x, [0, 0, 0, 0], [xshape[0], xshape[1], xshape[2], xshape[3]])
 
         layer4_module1_input_shape = ttnn.Shape(x.get_legacy_shape())
 

@@ -20,15 +20,9 @@ namespace tt {
 // llrt = lower-level runtime
 namespace llrt {
 
-namespace fs = std::filesystem;
-
-using std::endl;
-using std::move;
-using std::string;
-using std::to_string;
+using std::uint16_t;
 using std::uint32_t;
-using std::unordered_map;
-using std::vector;
+using std::uint64_t;
 
 struct HexNameToMemVectorCache {
     using lock = std::unique_lock<std::mutex>;
@@ -51,17 +45,15 @@ struct HexNameToMemVectorCache {
         cache_[path] = mem;
     }
 
-    unordered_map<string, ll_api::memory> cache_;
+    std::unordered_map<std::string, ll_api::memory> cache_;
     std::mutex mutex_;
 };
 
-ll_api::memory get_risc_binary(string path) {
+ll_api::memory get_risc_binary(std::string path) {
 
     if (HexNameToMemVectorCache::inst().exists(path)) {
         return HexNameToMemVectorCache::inst().get(path);
     }
-
-    fs::path bin_file(path);
 
     std::ifstream hex_istream(path);
     ll_api::memory mem(hex_istream);
@@ -139,8 +131,8 @@ void write_hex_vec_to_core(chip_id_t chip, const CoreCoord &core, const std::vec
     tt::Cluster::instance().write_core(hex_vec.data(), hex_vec.size() * sizeof(uint32_t), tt_cxy_pair(chip, core), addr, small_access);
 }
 
-std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t sz_bytes) {
-    vector<std::uint32_t> read_hex_vec;
+std::vector<uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t sz_bytes) {
+    std::vector<uint32_t> read_hex_vec;
     tt::Cluster::instance().read_core(read_hex_vec, sz_bytes, tt_cxy_pair(chip, core), addr);
     return read_hex_vec;
 }

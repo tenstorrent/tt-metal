@@ -73,14 +73,15 @@ Tensor to_layout_impl(
         TT_THROW("ttnn::to_layout: Unsupported layout conversion from {} to {}!", tensor_arg.get_layout(), layout);
     }
 
-    const auto requires_padding_change = [](ttnn::Layout layout, const ttnn::Shape& shape) -> bool {
+    const auto requires_padding_change = [](ttnn::Tensor& tensor, ttnn::Layout layout, const ttnn::Shape& shape) -> bool {
         const auto intended_shape = shape;
         const auto padded_shape = shape.with_tile_padding();
         if (layout == ttnn::ROW_MAJOR_LAYOUT and intended_shape != padded_shape) {
             return true;
         } else if (
-            layout == ttnn::TILE_LAYOUT and (padded_shape.rank() < 2 or padded_shape[-1] % ttnn::TILE_SIZE != 0 or
-                                             padded_shape[-2] % ttnn::TILE_SIZE != 0)) {
+            auto tile = tensor.tile();
+            layout == ttnn::TILE_LAYOUT and (padded_shape.rank() < 2 or padded_shape[-1] % tile.get_tile_shape()[1] != 0 or
+                                             padded_shape[-2] % tile.get_tile_shape()[0] != 0)) {
             return true;
         } else {
             return false;
@@ -116,7 +117,7 @@ Tensor to_layout_impl(
         bool use_multicore_untilize = true;
         bool use_multicore_tilize = use_multicore_device_tilize(tensor, dtype);
 
-        if (not requires_padding_change(layout, tensor.get_shape())) {
+        if (not requires_padding_change(tensor, layout, tensor.get_shape())) {
             if (layout == ttnn::ROW_MAJOR_LAYOUT) {
                 TT_ASSERT(not dtype.has_value(), "dtype cannot be specified when converting to ROW_MAJOR_LAYOUT!");
                 return ttnn::untilize(tensor, output_memory_config, use_multicore_untilize);
@@ -182,7 +183,7 @@ Tensor to_layout_impl(
         }
     } else {
         TT_ASSERT(not dtype.has_value(), "dtype cannot be specified when converting layout on host!");
-        if (not requires_padding_change(layout, tensor.get_shape())) {
+        if (not requires_padding_change(tensor, layout, tensor.get_shape())) {
             return device ? tensor.to(layout, device) : tensor.to(layout);
         } else if (layout == ttnn::ROW_MAJOR_LAYOUT) {
             tensor = device ? tensor.to(layout, device) : tensor.to(layout);

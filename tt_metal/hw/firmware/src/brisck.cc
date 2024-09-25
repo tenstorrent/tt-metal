@@ -13,6 +13,7 @@
 #include "ckernel_structs.h"
 #include "stream_io_map.h"
 #include "c_tensix_core.h"
+#include "tdma_xmov.h"
 #include "noc_nonblocking_api.h"
 #include "firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"

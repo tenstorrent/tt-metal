@@ -121,8 +121,13 @@ MorehNllLossUnreducedBackwardDeviceOperation::invoke(
         operation_attributes_t{
             ignore_index < 0 ? std::numeric_limits<uint32_t>::max() : ignore_index,
             memory_config.value_or(target_tensor.memory_config()),
-            compute_kernel_config},
-        tensor_args_t{target_tensor, output_grad_tensor, weight_tensor, input_grad_tensor}};
+            init_device_compute_kernel_config(
+                target_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
+        tensor_args_t{
+            target_tensor,
+            output_grad_tensor,
+            weight_tensor,
+            input_grad_tensor}};  // namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward
 }
 
 }  // namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward

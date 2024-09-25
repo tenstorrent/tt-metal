@@ -23,7 +23,8 @@ auto generic_create_output_tensors(
     const Tensors& input_tensors,
     const std::optional<DataType> output_dtype,
     const Layout output_layout,
-    const std::optional<MemoryConfig>& output_mem_config) -> ProgramOutputTensors<ConcreteOperation> {
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tile>& tile = std::nullopt) -> ProgramOutputTensors<ConcreteOperation> {
     const auto& input_tensor = input_tensors.at(0);
     const auto& output_shapes = operation.compute_output_shapes(input_tensors);
 
@@ -36,7 +37,7 @@ auto generic_create_output_tensors(
             output_dtype.value_or(input_tensors.at(0).get_dtype()),
             output_layout,
             input_tensor.device(),
-            output_mem_config.value_or(input_tensors.at(0).memory_config())));
+            output_mem_config.value_or(input_tensors.at(0).memory_config()), tile));
     }
     return output_tensors;
 }
