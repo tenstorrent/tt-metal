@@ -97,7 +97,6 @@ void PagedUpdateCacheDeviceOperation::validate(const std::vector<Tensor>& input_
         auto input_shape = input_tensor.get_legacy_shape();
         auto page_table_shape = page_table_tensor.get_legacy_shape();
 
-        TT_FATAL(cache_shape[1] == 1, "Error");
         TT_FATAL(this->batch_idx <= cache_shape[0], "Error");
         TT_FATAL(input_shape[2] <= cache_shape[2] * page_table_shape[1], "Input seq_len must fit in max_num_blocks_per_seq");
     }

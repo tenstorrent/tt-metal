@@ -639,7 +639,7 @@ def run_test_paged_fill_cache(
 @pytest.mark.parametrize("user_seq_len", [128, 160, 1984, 2048])
 @pytest.mark.parametrize("max_seq_len", [2048])
 @pytest.mark.parametrize("num_users", [32])
-@pytest.mark.parametrize("num_heads", [1])
+@pytest.mark.parametrize("num_heads", [1, 8])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_paged_fill_cache(
     block_size,
