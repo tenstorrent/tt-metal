@@ -555,8 +555,8 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t in_channels = weights_shape[1];
     uint32_t window_h = weights_shape[2];
     uint32_t window_w = weights_shape[3];
-    tt::tt_metal::LegacyShape weights_channels_padded_shape = tt::tt_metal::LegacyShape(std::array<uint32_t, 4>(
-        {tt::round_up(out_channels, 32), tt::round_up(in_channels, input_channels_alignment), window_h, window_w}));
+    uint32_t out_channel_padding = tt::round_up(out_channels, 32) - out_channels;
+    uint32_t in_channel_padding = tt::round_up(in_channels, input_channels_alignment) - in_channels;
 
     if (weights_bias_dtype == DataType::BFLOAT8_B) {
         TT_ASSERT(weight_tensor_.get_dtype() == DataType::FLOAT32);
@@ -571,8 +571,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         }
     }
 
-    weight_tensor_ = ttnn::pad(weight_tensor_, weights_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
-
     // for conv op, pad the weights to block shape
     if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
         weight_tensor_ = tt::tt_metal::convert_conv_weight_tensor_to_special_padding_tiled_layout(
@@ -581,6 +579,17 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         weight_tensor_ = tt::tt_metal::convert_conv_weight_tensor_to_tiled_layout(
             weight_tensor_, weight_block_h_ntiles, weight_block_w_ntiles, weights_bias_dtype);
     }
+    //convert_conv_weight_tensor adds the padding to the base shape.
+    //Reshape the weights to remove padding from the base shape.
+    weight_tensor_.set_shape(
+        ttnn::Shape(std::array<uint32_t,4>{1, 1, in_channels * window_h * window_w, out_channels},
+        std::array<std::array<uint32_t, 2>, 4>{
+            std::array<uint32_t, 2>{0, 0},
+            std::array<uint32_t, 2>{0, 0},
+            std::array<uint32_t, 2>{0, in_channel_padding},
+            std::array<uint32_t, 2>{0, out_channel_padding}
+    }));
+
     weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
     if (bias_tensor.has_value()) {
         bias_tensor_ = bias_tensor.value();
