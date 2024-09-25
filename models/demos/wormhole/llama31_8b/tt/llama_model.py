@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import os
 import ttnn
 import torch
@@ -55,13 +56,31 @@ class TtTransformer(nn.Module):
             weight_key="norm",
         )
 
+        # output_weight: 4096 x 128256: width-sharded on 12 banks
+        output_shard_shape = (
+            4096,
+            128256 // 12,
+        )
+        output_shard_spec = ttnn.ShardSpec(
+            args.dram_weight_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False
+        )
+        output_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, output_shard_spec
+        )
         self.output_weight = ttnn.as_tensor(
             state_dict["output.weight"].permute(1, 0),
             device=device,
+            memory_config=output_mem_config,
             layout=ttnn.TILE_LAYOUT,
             dtype=dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=None if args.dummy_weights else weight_cache_path / "output.weight",
+            cache_file_name=None if args.dummy_weights else weight_cache_path / "output_sharded",
+        )
+
+        self.compute_kernel_config_output = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,  # Save as much L1 as possible
+            packer_l1_acc=True,
         )
 
     def forward(
@@ -86,12 +105,13 @@ class TtTransformer(nn.Module):
 
         x = self.norm(x)
 
+        x = ttnn.interleaved_to_sharded(x, self.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"])
         output = ttnn.linear(
             x,
             self.output_weight,
-            compute_kernel_config=self.args.compute_kernel_config_hifi4,
+            compute_kernel_config=self.compute_kernel_config_output,
             program_config=self.model_config["OUTPUT_MM_PROGCFG"],
-            memory_config=self.model_config["OUTPUT_MM_MEMCFG"],
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             dtype=self.dtype,
         )
 

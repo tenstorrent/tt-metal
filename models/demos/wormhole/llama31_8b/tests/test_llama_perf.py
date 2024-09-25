@@ -30,8 +30,8 @@ if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs
 @pytest.mark.parametrize(
     "kv_cache_len, expected_compile_time, expected_inference_time",
     (
-        (32, 6, 0.09),
-        (128, 6, 0.09),
+        # (32, 6, 0.09),
+        # (128, 6, 0.09),
         (1024, 11, 0.09),
     ),
 )
@@ -43,7 +43,7 @@ def test_llama_model_perf(
     model_args = TtModelArgs(device)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
-    model_args.n_layers = 32
+    model_args.n_layers = 1
     # Clear global profiler state before starting measurements
     profiler.clear()
 

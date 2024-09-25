@@ -309,30 +309,14 @@ class TtModelArgs:
                 fuse_batch=seq_len <= 2048,
             )
 
-            if self.di_dt_workaround:
-                self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(7, 8),
-                    in0_block_w=1,
-                    per_core_M=1,
-                    per_core_N=72,  # vocab size = 128k = 4008 tiles. 4008/56cores = 72
-                    out_subblock_h=1,
-                    out_subblock_w=1,
-                    fuse_batch=True,
-                    fused_activation=None,
-                    mcast_in0=True,
-                )
-            else:
-                self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=2,
-                    out_subblock_h=1,
-                    out_subblock_w=4,
-                    per_core_M=1,
-                    per_core_N=72,  # vocab size = 128k = 4008 tiles. 4008/56cores = 72
-                    fuse_batch=True,
-                    fused_activation=None,
-                    mcast_in0=True,
-                )
+            # Update OUTPUT_MM_PROGCFG for DECODE (DRAM-sharded)
+            self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                # Grid size = [4, 8]
+                in0_block_w=4,  # K(4096) / TILE_WIDTH(32) / Grid_Size(32)
+                per_core_M=1,  # M(32) / TILE_HEIGHT(32)
+                per_core_N=126,  # N(128256) / TILE_WIDTH(32) / Grid_Size(32)
+                fused_activation=None,
+            )
 
             self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
                 (seq_len // 8, self.head_dim),
