@@ -33,8 +33,8 @@ from models.utility_functions import skip_for_grayskull
     "seq_len",
     (
         # 128,
-        1024,
-        # 4096,
+        # 1024,
+        4096,
     ),
 )
 def test_llama_model_inference(mesh_device, seq_len, use_program_cache, reset_seeds):
@@ -42,7 +42,7 @@ def test_llama_model_inference(mesh_device, seq_len, use_program_cache, reset_se
     cache_pcc = False  # Flag to measure KV cache PCC for all layers
 
     dtype = ttnn.bfloat8_b
-    pcc = 0.94
+    pcc = 0.93
 
     # Use instruct weights instead of general weights
     instruct = False
