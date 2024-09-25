@@ -81,7 +81,7 @@ void bind_primitive_binary_operation(py::module& module, const binary_operation_
 
 
 template <typename binary_operation_t>
-void bind_binary_operation(py::module& module, const binary_operation_t& operation, const std::string& description) {
+void bind_binary_operation(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -105,6 +105,8 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
 
         Supports broadcasting.
 
+        {3}
+
         Example:
 
             >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
@@ -113,7 +115,8 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
-        description);
+        description,
+        info_doc);
 
     bind_registered_operation(
         module,
@@ -793,7 +796,14 @@ void py_module(py::module& module) {
     detail::bind_binary_operation(
         module,
         ttnn::squared_difference,
-        R"doc(Compute squared difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
+        R"doc(Compute squared difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_operation(
         module,
