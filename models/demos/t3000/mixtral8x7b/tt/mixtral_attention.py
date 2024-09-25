@@ -240,9 +240,6 @@ class TtMixtralAttention(LightweightModule):
         k_heads_1B1D.deallocate(True)
         v_heads_1B1D.deallocate(True)
 
-        keys_1BPD = ttnn.reshape(keys_1BPD, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
-        values_1BPD = ttnn.reshape(values_1BPD, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
-
         attn_output_1B4D = ttnn.transformer.scaled_dot_product_attention_decode(
             q_heads_1B4D,
             keys_1BPD,

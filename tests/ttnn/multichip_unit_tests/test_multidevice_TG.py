@@ -924,7 +924,7 @@ def run_test_sdpa_decode_single_iter(
     V = torch.randn(nkv, b, s, d)
 
     tt_K = ttnn.from_torch(
-        K,
+        K.permute(1, 0, 2, 3),
         device=mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
@@ -933,7 +933,7 @@ def run_test_sdpa_decode_single_iter(
     )
 
     tt_V = ttnn.from_torch(
-        V,
+        V.permute(1, 0, 2, 3),
         device=mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
