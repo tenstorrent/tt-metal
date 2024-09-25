@@ -337,8 +337,8 @@ class TtModelArgs:
 
             self.model_config["MLP_KERNEL_CONFIG_HIFI2"] = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,  # full precision for bfp8 @ bfp8
-                math_approx_mode=True,
-                fp32_dest_acc_en=True,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
                 packer_l1_acc=True,
             )
 
