@@ -35,7 +35,7 @@ void LayerNormPreAllGather::validate(const std::vector<Tensor> &input_tensors) c
 std::vector<tt::tt_metal::LegacyShape> LayerNormPreAllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
 
-    auto output_shape = input_tensor.get_legacy_shape();
+    auto output_shape = input_tensor.get_shape().with_tile_padding();
     auto padding = output_shape.padding();
     uint32_t num_tiles_w = 1;
     if (this->norm_type == LayerNormDistributedType::LAYERNORM) {

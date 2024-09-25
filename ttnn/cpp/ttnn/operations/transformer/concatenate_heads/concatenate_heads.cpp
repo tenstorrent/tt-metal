@@ -14,7 +14,7 @@ struct ConcatenateHeads : public ttnn::operations::experimental::transformer::NL
 
         const auto& input_tensor = input_tensors.at(0);
         const auto head_size = input_tensor.get_shape()[-1];
-        const auto padded_head_size = input_tensor.get_legacy_shape()[-1];
+        const auto padded_head_size = input_tensor.get_shape().with_tile_padding()[-1];
 
         TT_FATAL(
             head_size % ttnn::types::TILE_SIZE == 0,
@@ -53,7 +53,7 @@ struct ConcatenateHeads : public ttnn::operations::experimental::transformer::NL
         if (this->output_mem_config.is_sharded()) {
             ShardSpec shard_spec = input_tensor.shard_spec().value();
             uint32_t num_cores = shard_spec.num_cores();
-            uint32_t heads_per_shard = shard_spec.shape[0] / input_tensor.get_legacy_shape()[-2];
+            uint32_t heads_per_shard = shard_spec.shape[0] / input_tensor.get_shape().with_tile_padding()[-2];
             shard_spec.shape = {shard_spec.shape[0] / heads_per_shard, shard_spec.shape[1] * heads_per_shard};
             auto mem_config = this->output_mem_config;
             mem_config.shard_spec = shard_spec;

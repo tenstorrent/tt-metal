@@ -21,10 +21,10 @@ void Pad::validate_with_output_tensors(
             "On device padding only supports padding at end of dims"
         );
     }
-    TT_FATAL(input_tensor.get_legacy_shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0], "Output size cannot fit input with offset");
-    TT_FATAL(input_tensor.get_legacy_shape()[1] + this->input_tensor_start[1] <= this->output_tensor_shape[1], "Output size cannot fit input with offset");
-    TT_FATAL(input_tensor.get_legacy_shape()[2] + this->input_tensor_start[2] <= this->output_tensor_shape[2], "Output size cannot fit input with offset");
-    TT_FATAL(input_tensor.get_legacy_shape()[3] + this->input_tensor_start[3] <= this->output_tensor_shape[3], "Output size cannot fit input with offset");
+    TT_FATAL(input_tensor.get_shape().with_tile_padding()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0], "Output size cannot fit input with offset");
+    TT_FATAL(input_tensor.get_shape().with_tile_padding()[1] + this->input_tensor_start[1] <= this->output_tensor_shape[1], "Output size cannot fit input with offset");
+    TT_FATAL(input_tensor.get_shape().with_tile_padding()[2] + this->input_tensor_start[2] <= this->output_tensor_shape[2], "Output size cannot fit input with offset");
+    TT_FATAL(input_tensor.get_shape().with_tile_padding()[3] + this->input_tensor_start[3] <= this->output_tensor_shape[3], "Output size cannot fit input with offset");
 
     if (input_tensor.get_layout() == Layout::TILE) {
         TT_FATAL((this->output_tensor_shape[2] % TILE_HEIGHT == 0), "Can only pad tilized tensor with full tiles");

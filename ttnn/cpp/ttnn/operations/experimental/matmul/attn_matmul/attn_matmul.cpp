@@ -52,7 +52,7 @@ namespace ttnn::operations::experimental::matmul {
         std::optional<Tensor> optional_output_tensor) {
 
         TT_FATAL(num_tokens > 0, "Number of tokens must be at least 1!");
-        TT_FATAL(num_tokens <= input_tensor_b.get_legacy_shape()[2], "Number of tokens must be smaller or equal to the max cache length (B.shape[2])!");
+        TT_FATAL(num_tokens <= input_tensor_b.get_shape().with_tile_padding()[2], "Number of tokens must be smaller or equal to the max cache length (B.shape[2])!");
         const uint32_t num_tokens_rounded_up_to_32 = ((num_tokens - 1) / 32 + 1) * 32;
         auto arch = input_tensor_a.storage_type() == StorageType::DEVICE ? input_tensor_a.device()->arch() : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
         auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config);

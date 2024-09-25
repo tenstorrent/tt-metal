@@ -18,7 +18,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
 
     tt::tt_metal::Program program{};
 
-    const auto& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+    const auto& ashape = a.get_shape().with_tile_padding(), bshape = b.get_shape().with_tile_padding();
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::Device *device = a.device();
@@ -73,7 +73,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
     tt::tt_metal::Buffer *src0_buffer = a.buffer();
     tt::tt_metal::Buffer *src1_buffer = b.buffer();
 
-    auto cshape = output.get_legacy_shape();
+    auto cshape = output.get_shape().with_tile_padding();
 
     // A block of work is one MtNt
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -267,8 +267,8 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
 
         auto dst_dram_buffer = output_tensors.at(0).buffer();
 
-        auto ashape = input_tensors.at(0).get_legacy_shape();
-        auto bshape = input_tensors.at(1).get_legacy_shape();
+        auto ashape = input_tensors.at(0).get_shape().with_tile_padding();
+        auto bshape = input_tensors.at(1).get_shape().with_tile_padding();
 
         // C = torch.matmul(A.transpose(0, 2) * B).transpose(0, 2)
         // MN = MK*KN

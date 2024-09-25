@@ -66,7 +66,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_shape = input.get_legacy_shape();
+    const auto input_shape = input.get_shape().with_tile_padding();
     const auto input_shape_without_padding = input_shape.without_padding();
     const auto input_rank = input_shape.rank();
 
@@ -88,7 +88,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     uint32_t mean_rstd_width = 0;
 
     if (mean_has_value) {
-        const auto mean_rstd_shape = mean.value().get_legacy_shape();
+        const auto mean_rstd_shape = mean.value().get_shape().with_tile_padding();
         const auto mean_rstd_shape_without_padding = mean_rstd_shape.without_padding();
         mean_rstd_height = mean_rstd_shape_without_padding[-2];
         mean_rstd_width = mean_rstd_shape_without_padding[-1];
@@ -381,7 +381,7 @@ void MorehLayerNorm::validate_with_output_tensors(
     check_tensor(input, "moreh_layernorm");
 
     TT_ASSERT(this->normalized_dims > 0);
-    TT_ASSERT(this->normalized_dims <= input.get_legacy_shape().rank());
+    TT_ASSERT(this->normalized_dims <= input.get_shape().with_tile_padding().rank());
 
     if (gamma.has_value()) {
         check_tensor(gamma.value(), "moreh_layernorm");
@@ -409,7 +409,7 @@ std::vector<tt::tt_metal::LegacyShape> MorehLayerNorm::compute_output_shapes(con
     auto input = input_tensors.at(0);
 
     // compute mean_rstd_shape
-    tt::tt_metal::LegacyShape input_shape = input.get_legacy_shape();
+    tt::tt_metal::LegacyShape input_shape = input.get_shape().with_tile_padding();
     auto input_shape_without_padding = input_shape.without_padding();
     auto input_rank = input_shape.rank();
     auto output_rank = input_rank - normalized_dims;

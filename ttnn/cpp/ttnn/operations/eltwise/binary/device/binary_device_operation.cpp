@@ -30,9 +30,9 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
             return BroadcastHeightAndWidthMultiCore{};
         } else if (height_b == 1) {
             if(tensor_args.input_tensor_a.is_sharded()){
-                if (tensor_args.input_tensor_a.get_legacy_shape()[0] == tensor_args.input_tensor_b.get_legacy_shape()[0]
-                        || tensor_args.input_tensor_a.get_legacy_shape()[0] > 1
-                        and tensor_args.input_tensor_b.get_legacy_shape()[0] == 1){
+                if (tensor_args.input_tensor_a.get_shape().with_tile_padding()[0] == tensor_args.input_tensor_b.get_shape().with_tile_padding()[0]
+                        || tensor_args.input_tensor_a.get_shape().with_tile_padding()[0] > 1
+                        and tensor_args.input_tensor_b.get_shape().with_tile_padding()[0] == 1){
                         return BroadcastHeightMultiCoreShardedOptimized{};
                 } else {
                         return BroadcastHeightMultiCoreSharded{};
@@ -90,7 +90,7 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
         if (attributes.memory_config.is_sharded()) {
             TT_FATAL(attributes.memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
-            uint32_t num_blocks = input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1] / TILE_HEIGHT;
+            uint32_t num_blocks = input_tensor_a.volume() / input_tensor_a.get_shape().with_tile_padding()[-1] / TILE_HEIGHT;
             auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
             uint32_t num_cores = core_grid.x * core_grid.y;
             TT_FATAL(num_blocks < num_cores or num_blocks % num_cores == 0, "Error");
@@ -194,13 +194,13 @@ BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_outpu
             } else if (input_tensor_b.memory_config().is_sharded()) {
                 shard_spec = input_tensor_b.shard_spec().value();
             } else {
-                uint32_t num_blocks = input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1] / TILE_HEIGHT;
+                uint32_t num_blocks = input_tensor_a.volume() / input_tensor_a.get_shape().with_tile_padding()[-1] / TILE_HEIGHT;
                 auto core_grid = input_tensor_a.device()->compute_with_storage_grid_size();
                 uint32_t num_grid_cores = core_grid.x * core_grid.y;
                 uint32_t target_num_cores = num_blocks < num_grid_cores ? num_blocks : num_grid_cores;
                 shard_spec.grid = tt::tt_metal::num_cores_to_corerange_set(target_num_cores, core_grid, true);
                 shard_spec.shape = {
-                    num_blocks / target_num_cores * TILE_HEIGHT, input_tensor_a.get_legacy_shape()[-1]};
+                    num_blocks / target_num_cores * TILE_HEIGHT, input_tensor_a.get_shape().with_tile_padding()[-1]};
                 shard_spec.orientation = ShardOrientation::ROW_MAJOR;
             }
             auto memory_config = operation_attributes.memory_config;

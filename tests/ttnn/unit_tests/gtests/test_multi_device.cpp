@@ -17,12 +17,12 @@ Tensor create_host_multi_device_tensor(const Tensor& tensor, const ReplicateTens
 
     for (int i = 0; i < strategy.replication_factor; i++) {
         owned_buffers.push_back(std::get<OwnedStorage>(tensor.get_storage()).buffer);
-        shapes.push_back(tensor.get_legacy_shape());
+        shapes.push_back(tensor.get_shape().with_tile_padding());
     }
 
     return Tensor{
         MultiDeviceHostStorage(strategy, owned_buffers, shapes),
-        tensor.get_legacy_shape(),
+        tensor.get_shape().with_tile_padding(),
         tensor.get_dtype(),
         tensor.get_layout()};
 }

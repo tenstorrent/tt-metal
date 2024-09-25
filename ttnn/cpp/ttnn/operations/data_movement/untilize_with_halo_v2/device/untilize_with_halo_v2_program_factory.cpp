@@ -37,8 +37,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     bool skip_untilize = input_tensor.get_layout() == Layout::ROW_MAJOR;
 
-    auto input_shape = input_tensor.get_legacy_shape();
-    auto output_shape = output_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_shape().with_tile_padding();
+    auto output_shape = output_tensor.get_shape().with_tile_padding();
 
     tt::DataFormat in_df = datatype_to_dataformat_converter(input_tensor.get_dtype());
     tt::DataFormat out_df = datatype_to_dataformat_converter(output_tensor.get_dtype());

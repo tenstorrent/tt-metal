@@ -16,7 +16,7 @@ namespace primary {
 
 inline void moreh_linear_validate(
     const Tensor& weight) {
-    const auto& weight_shape = weight.get_legacy_shape();
+    const auto& weight_shape = weight.get_shape().with_tile_padding();
     const auto& weight_rank = weight_shape.rank();
     TT_FATAL(weight_rank == 2, "weight rank {} must be 2.", weight_rank);
 }

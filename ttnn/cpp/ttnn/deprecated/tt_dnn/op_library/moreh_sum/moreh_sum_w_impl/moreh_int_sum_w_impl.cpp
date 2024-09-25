@@ -29,7 +29,7 @@ operation::ProgramWithCallbacks moreh_sum_int_w_impl(const Tensor &input, const 
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format{datatype_to_dataformat_converter(output.get_dtype())};
-    const auto shape{input.get_legacy_shape()};
+    const auto shape{input.get_shape().with_tile_padding()};
 
     const auto [W, H, other_dims_product] = extract_spatial_dims(shape);
     uint32_t Wt{W / TILE_WIDTH};

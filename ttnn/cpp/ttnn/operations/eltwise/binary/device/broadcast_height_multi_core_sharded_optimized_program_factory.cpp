@@ -38,8 +38,8 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
     auto& output = tensor_return_value;
     auto bcast_math = binary_op_type_to_bcast_op_math(operation_attributes.binary_op_type);
 
-    const auto ashape = a.get_legacy_shape();
-    const auto bshape = b.get_legacy_shape();
+    const auto ashape = a.get_shape().with_tile_padding();
+    const auto bshape = b.get_shape().with_tile_padding();
     uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
     uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
     uint32_t H = ashape[-2];
@@ -273,9 +273,9 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreShardedOptimized::override_
         auto all_cores = shard_spec.grid;
         uint32_t ncores = shard_spec.num_cores();
         uint32_t Wt = 0, Ht =0;
-        const auto ashape = input_tensor_a.get_legacy_shape();
+        const auto ashape = input_tensor_a.get_shape().with_tile_padding();
         uint32_t N  = ashape[0], C  = ashape[1], H  = ashape[2], W  = ashape[3];
-        uint32_t bN = input_tensor_b.get_legacy_shape()[0];
+        uint32_t bN = input_tensor_b.get_shape().with_tile_padding()[0];
         uint32_t NC = N*C;
         if(a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED){
             Wt = shard_spec.shape[1] / TILE_WIDTH;

@@ -26,7 +26,7 @@ static ttnn::Tensor pad_impl(
 
     // on host
     if (input_tensor.storage_type() != StorageType::DEVICE) {
-        if (input_tensor.get_legacy_shape() == output_padded_shape) {
+        if (input_tensor.get_shape().with_tile_padding() == output_padded_shape) {
             return input_tensor;
         }
         else {

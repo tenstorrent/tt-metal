@@ -17,7 +17,7 @@ using namespace tt::tt_metal;
 
 operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_falcon7b(const Tensor &a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
 
-    const auto& ashape = a.get_legacy_shape();
+    const auto& ashape = a.get_shape().with_tile_padding();
 
     tt_metal::Device *device = a.device();
 

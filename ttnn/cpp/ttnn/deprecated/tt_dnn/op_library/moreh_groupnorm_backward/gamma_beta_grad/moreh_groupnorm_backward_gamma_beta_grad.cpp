@@ -42,7 +42,7 @@ operation::ProgramWithOptionalOutputTensors moreh_groupnorm_backward_gamma_beta_
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto output_grad_shape = output_grad.get_legacy_shape();
+    const auto output_grad_shape = output_grad.get_shape().with_tile_padding();
 
     const auto n = output_grad_shape[0];
     const auto c = output_grad_shape[1];

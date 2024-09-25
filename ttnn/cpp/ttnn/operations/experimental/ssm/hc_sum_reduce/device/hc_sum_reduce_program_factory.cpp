@@ -26,8 +26,8 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
     TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
     const bool output_is_dram = out_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
-    auto ashape = a.get_legacy_shape();
-    auto num_output_blocks_total = a.get_legacy_shape()[-1] / (TILE_WIDTH * TILE_WIDTH);
+    auto ashape = a.get_shape().with_tile_padding();
+    auto num_output_blocks_total = a.get_shape().with_tile_padding()[-1] / (TILE_WIDTH * TILE_WIDTH);
 
     const bool row_major = false;
     const auto

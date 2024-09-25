@@ -12,7 +12,7 @@ namespace ttnn::operations::moreh::moreh_matmul {
 
 inline bool is_dot_forward(const Tensor& input, const Tensor& other, bool transpose_input, bool transpose_other) {
     // TODO: non-4d support for dot.
-    if (input.get_legacy_shape().rank() != 4 || other.get_legacy_shape().rank() != 4) {
+    if (input.get_shape().with_tile_padding().rank() != 4 || other.get_shape().with_tile_padding().rank() != 4) {
         return false;
     }
 

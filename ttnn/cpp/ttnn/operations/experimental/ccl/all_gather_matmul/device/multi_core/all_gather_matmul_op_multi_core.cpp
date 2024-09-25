@@ -99,7 +99,7 @@ DatacopyParams setup_datacopy(
     bool datacopy_output_is_dram = datacopy_output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
     uint32_t last_output_page_offset = (ring_size - 1) * tensor_slicer.output_page_offset;
-    uint32_t num_rows = input_tensor.get_legacy_shape()[2] / tile_size ;
+    uint32_t num_rows = input_tensor.get_shape().with_tile_padding()[2] / tile_size ;
     bool is_clockwise_dir = true; // Specifically for the first half of the all gather
 
     uint32_t datacopy_buffer_size = 200;
@@ -112,8 +112,8 @@ DatacopyParams setup_datacopy(
         static_cast<uint32_t>(page_size),
         static_cast<uint32_t>(ring_index),
         static_cast<uint32_t>(ring_size),
-        static_cast<uint32_t>(all_gather_output_tensor.get_legacy_shape()[3] / tile_size), // tesnor width
-        static_cast<uint32_t>(all_gather_output_tensor.get_legacy_shape()[2] / tile_size), // tensor height
+        static_cast<uint32_t>(all_gather_output_tensor.get_shape().with_tile_padding()[3] / tile_size), // tesnor width
+        static_cast<uint32_t>(all_gather_output_tensor.get_shape().with_tile_padding()[2] / tile_size), // tensor height
         static_cast<uint32_t>(tensor_slicer.num_cols), // tensor slice width in tiles
         static_cast<uint32_t>(num_rows), // tnesor slice height in tiles
         static_cast<uint32_t>(tensor_slicer.output_page_offset),
@@ -242,7 +242,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
     );
     bool is_clockwise_direction = true;
     const uint32_t num_transfers = 4;
-    const uint32_t weight_tensor_width = weight_tensor.get_legacy_shape()[3] / 32;
+    const uint32_t weight_tensor_width = weight_tensor.get_shape().with_tile_padding()[3] / 32;
 
     ////////////////////////////////////////////////////////
 

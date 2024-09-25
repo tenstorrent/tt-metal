@@ -29,7 +29,7 @@ operation::ProgramWithCallbacks plusone_single_core(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_units);
 
-    const auto &input_shape = input.get_legacy_shape();
+    const auto &input_shape = input.get_shape().with_tile_padding();
     const uint32_t W = input_shape[0];
 
     uint32_t src0_cb_index = tt::CB::c_in0;

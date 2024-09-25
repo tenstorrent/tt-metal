@@ -23,7 +23,7 @@ MorehNormOperation::ProgramFactoryH::cached_program_t MorehNormOperation::Progra
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_shape = input.get_legacy_shape();
+    const auto input_shape = input.get_shape().with_tile_padding();
     const auto input_rank = input_shape.rank();
 
     const auto H = input_shape[-2];

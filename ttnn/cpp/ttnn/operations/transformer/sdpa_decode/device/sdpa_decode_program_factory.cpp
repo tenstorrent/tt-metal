@@ -47,8 +47,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     const bool is_paged_attention = page_table_tensor.has_value();
 
-    const auto q_shape = input_tensor_q.get_legacy_shape();
     const auto q_shape_unpadded = input_tensor_q.get_shape();
+    const auto q_shape = q_shape_unpadded.with_tile_padding();
     const auto k_shape = input_tensor_k.get_legacy_shape();
     // Use k_shape for S and DH since Q might be different for decode
     uint32_t B = q_shape[1], PNH = q_shape[2], S = k_shape[2], DH = k_shape[3];
@@ -58,7 +58,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     uint32_t page_block_size_t = 0;
 
     if (is_paged_attention) {
-        const auto page_table_shape = page_table_tensor.value().get_legacy_shape();
+        const auto page_table_shape = page_table_tensor.value().get_shape().with_tile_padding();
         uint32_t max_blocks_per_seq = page_table_shape[1];
         uint32_t block_size = k_shape[2];
         S = max_blocks_per_seq * block_size;

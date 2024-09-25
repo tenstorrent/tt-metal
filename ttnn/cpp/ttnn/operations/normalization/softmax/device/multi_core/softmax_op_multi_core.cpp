@@ -36,7 +36,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     DeviceComputeKernelConfig compute_kernel_config
 ) {
 
-    const auto shape = input_tensor.get_legacy_shape();
+    const auto shape = input_tensor.get_shape().with_tile_padding();
     uint32_t W = shape[-1], H = (input_tensor.volume() / (shape[0] * shape[-1])), NC = shape[0];
     uint32_t HW = H*W;
 
@@ -54,7 +54,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
     uint32_t mask_H = H;
     if (mask.has_value()) {
-        mask_H = mask.value().get_legacy_shape()[2];
+        mask_H = mask.value().get_shape().with_tile_padding()[2];
     }
     uint32_t mask_Ht = mask_H/TILE_HEIGHT;
 
@@ -156,7 +156,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         reader_compile_time_args.push_back(mask_is_dram);
     }
     if (causal_mask) {
-        uint32_t num_tiles_causal_mask = mask.value().get_legacy_shape()[-1] * mask.value().get_legacy_shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
+        uint32_t num_tiles_causal_mask = mask.value().get_shape().with_tile_padding()[-1] * mask.value().get_shape().with_tile_padding()[-2] / TILE_WIDTH / TILE_HEIGHT;
         reader_compile_time_args.push_back(num_tiles_causal_mask);
     }
 
@@ -305,7 +305,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         auto mask_buffer_address = optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer()->address() : 0;
         auto dst_buffer_address = output_tensors.size() == 1 ? output_tensors.at(0).buffer()->address() : src_buffer_address;
 
-        const auto shape = input_tensors.at(0).get_legacy_shape();
+        const auto shape = input_tensors.at(0).get_shape().with_tile_padding();
         uint32_t W = shape[-1], H = (input_tensors.at(0).volume() / (shape[0] * shape[-1])), NC = shape[0];
         uint32_t HW = H*W;
 
@@ -504,7 +504,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
 
     // tensor shape
     const auto shard_orient = input_tensor.shard_spec().value().orientation;
-    const auto shape = input_tensor.get_legacy_shape();
+    const auto shape = input_tensor.get_shape().with_tile_padding();
     uint32_t M = shape[2] * shape[0];
     uint32_t K = shape[3] * shape[1];
     uint32_t Mt = M / TILE_WIDTH;
@@ -513,7 +513,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
 
     uint32_t mask_H = shape[2];
     if (mask.has_value()) {
-        mask_H = mask->get_legacy_shape()[2];
+        mask_H = mask->get_shape().with_tile_padding()[2];
     }
     uint32_t mask_Ht = mask_H/TILE_HEIGHT;
     // block
@@ -595,7 +595,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     // hw_dims_only_causal_mask does not support RM Layout atm
     bool use_row_major_kernel = (mask.has_value() and mask->get_layout() == Layout::ROW_MAJOR);
     if (use_row_major_kernel) {
-        auto mask_stick_size = mask->get_legacy_shape()[3] * mask->element_size();
+        auto mask_stick_size = mask->get_shape().with_tile_padding()[3] * mask->element_size();
         bool mask_stick_size_is_power_of_two = is_power_of_two_at_least_32(mask_stick_size);
         reader_compile_time_args.push_back((std::uint32_t) mask_stick_size_is_power_of_two);
         if (mask_stick_size_is_power_of_two) {
@@ -713,7 +713,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     uint32_t num_tiles_in_attn_mask = 0;
     uint32_t num_tiles_of_attn_mask_needed_per_core = 0;
     if (hw_dims_only_causal_mask) {
-        num_tiles_in_attn_mask = mask.value().get_legacy_shape()[-1] * mask.value().get_legacy_shape()[-2] / TILE_HW;
+        num_tiles_in_attn_mask = mask.value().get_shape().with_tile_padding()[-1] * mask.value().get_shape().with_tile_padding()[-2] / TILE_HW;
         num_tiles_of_attn_mask_needed_per_core = block_ht * block_wt;
     }
     uint32_t num_cores_per_batch_index = 0;
@@ -745,9 +745,9 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
                         num_cores_per_batch_index = 0;
                         if (mask.has_value()) {
                             if (causal_mask) {
-                                mask_start_tile_id += mask->get_legacy_shape()[-1] * mask->get_legacy_shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
+                                mask_start_tile_id += mask->get_shape().with_tile_padding()[-1] * mask->get_shape().with_tile_padding()[-2] / TILE_WIDTH / TILE_HEIGHT;
                             } else {
-                                mask_start_tile_id += use_row_major_kernel ? mask->get_legacy_shape()[-2] : mask->get_legacy_shape()[-1] / TILE_WIDTH;
+                                mask_start_tile_id += use_row_major_kernel ? mask->get_shape().with_tile_padding()[-2] : mask->get_shape().with_tile_padding()[-1] / TILE_WIDTH;
                             }
                         }
                     }
@@ -781,9 +781,9 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
                         num_cores_per_batch_index = 0;
                         if (mask.has_value()) {
                             if (causal_mask) {
-                                mask_start_tile_id += mask->get_legacy_shape()[-1] * mask->get_legacy_shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
+                                mask_start_tile_id += mask->get_shape().with_tile_padding()[-1] * mask->get_shape().with_tile_padding()[-2] / TILE_WIDTH / TILE_HEIGHT;
                             } else {
-                                mask_start_tile_id += use_row_major_kernel ? mask->get_legacy_shape()[-2] : mask->get_legacy_shape()[-1] / TILE_WIDTH;
+                                mask_start_tile_id += use_row_major_kernel ? mask->get_shape().with_tile_padding()[-2] : mask->get_shape().with_tile_padding()[-1] / TILE_WIDTH;
                             }
                         }
                     }

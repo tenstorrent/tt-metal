@@ -48,7 +48,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     DeviceComputeKernelConfig compute_kernel_config
 ) {
     const bool is_rmsnorm = norm_type == LayerNormDistributedType::RMSNORM;
-    const auto shape = a.get_legacy_shape();
+    const auto shape = a.get_shape().with_tile_padding();
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H*W;
     const uint32_t NC = a.volume() / HW;

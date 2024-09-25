@@ -356,7 +356,7 @@ std::vector<Device*> Tensor::get_workers(bool blocking) const {
 }
 
 // Getters - Spin until tensor is populated before querying tensor metadata
-const tt::tt_metal::LegacyShape& Tensor::get_legacy_shape() const {
+const tt::tt_metal::LegacyShape& Tensor::get_shape().with_tile_padding() const {
     this->wait_for_tensor_metadata_populated();
     return this->tensor_attributes->shape.value;
 }
@@ -510,9 +510,9 @@ StorageType Tensor::storage_type() const {
         this->get_storage());
 }
 
-const tt::tt_metal::LegacyShape Tensor::strides() const { return tt::tt_metal::LegacyShape(tt::tt_metal::compute_strides(this->get_legacy_shape())); }
+const tt::tt_metal::LegacyShape Tensor::strides() const { return tt::tt_metal::LegacyShape(tt::tt_metal::compute_strides(this->get_shape().with_tile_padding())); }
 
-uint32_t Tensor::volume() const { return tt::tt_metal::compute_volume(this->get_legacy_shape()); }
+uint32_t Tensor::volume() const { return tt::tt_metal::compute_volume(this->get_shape().with_tile_padding()); }
 
 uint32_t Tensor::intended_volume() const { return tt::tt_metal::compute_volume(this->get_shape()); }
 

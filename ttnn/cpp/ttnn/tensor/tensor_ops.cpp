@@ -56,7 +56,7 @@ Tensor tensor_to(const Tensor& input_tensor, Device* target_device, const Memory
         } else {
             tensor_impl::validate_on_device_dtype_and_layout(
                 target_device,
-                async_safe_tensor.get_legacy_shape(),
+                async_safe_tensor.get_shape().with_tile_padding(),
                 async_safe_tensor.get_dtype(),
                 async_safe_tensor.get_layout());
             auto local_tensor =
@@ -261,7 +261,7 @@ Tensor tensor_pad(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& o
         input_tensor.storage_type() == StorageType::BORROWED && "Tensor must be on host for padding");
     TT_ASSERT(input_tensor.get_layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for padding");
 
-    auto input_shape = input_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_shape().with_tile_padding();
     auto dimensions_pads = std::vector<Padding::PadDimension>();
     for (auto index = 0; index < input_shape.rank(); index++) {
         auto front = input_tensor_start[index];
@@ -290,8 +290,8 @@ Tensor tensor_unpad(const Tensor& input_tensor, const tt::tt_metal::LegacyShape&
 Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value)  {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::pad_to_tile", input_tensor, pad_value);
-    uint32_t height = input_tensor.get_legacy_shape()[-2];
-    uint32_t width = input_tensor.get_legacy_shape()[-1];
+    uint32_t height = input_tensor.get_shape().with_tile_padding()[-2];
+    uint32_t width = input_tensor.get_shape().with_tile_padding()[-1];
     uint32_t padded_height = round_up(height, constants::TILE_HEIGHT);
     uint32_t padded_width = round_up(width, constants::TILE_WIDTH);
 
@@ -299,9 +299,9 @@ Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value)  {
     std::vector<uint32_t> padded_shape;
     std::vector<uint32_t> input_tensor_start;
 
-    for (auto index = 0; index < input_tensor.get_legacy_shape().rank() - 2; index++) {
-        shape.push_back(input_tensor.get_legacy_shape().without_padding()[index]);
-        padded_shape.push_back(input_tensor.get_legacy_shape()[index]);
+    for (auto index = 0; index < input_tensor.get_shape().with_tile_padding().rank() - 2; index++) {
+        shape.push_back(input_tensor.get_shape()[index]);
+        padded_shape.push_back(input_tensor.get_shape().with_tile_padding()[index]);
         input_tensor_start.push_back(0);
     }
 
@@ -322,21 +322,21 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Le
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::unpad_from_tile", input_tensor, output_tensor_shape);
 
-    for (auto index = 0; index < input_tensor.get_legacy_shape().rank() - 2; index++) {
+    for (auto index = 0; index < input_tensor.get_shape().with_tile_padding().rank() - 2; index++) {
         TT_ASSERT(
-            input_tensor.get_legacy_shape().without_padding()[index] == output_tensor_shape[index],
+            input_tensor.get_shape()[index] == output_tensor_shape[index],
             "Input shape must match output shape apart from last 2 dims");
     }
     TT_ASSERT(
-        input_tensor.get_legacy_shape()[-2] % constants::TILE_HEIGHT == 0 && input_tensor.get_legacy_shape()[-1] % constants::TILE_WIDTH == 0,
+        input_tensor.get_shape().with_tile_padding()[-2] % constants::TILE_HEIGHT == 0 && input_tensor.get_shape().with_tile_padding()[-1] % constants::TILE_WIDTH == 0,
         "Last 2 dims of input shape must be multiples of 32");
     TT_ASSERT(
-        input_tensor.get_legacy_shape()[-2] - constants::TILE_HEIGHT < output_tensor_shape[-2] &&
-            input_tensor.get_legacy_shape()[-1] - constants::TILE_WIDTH < output_tensor_shape[-1],
+        input_tensor.get_shape().with_tile_padding()[-2] - constants::TILE_HEIGHT < output_tensor_shape[-2] &&
+            input_tensor.get_shape().with_tile_padding()[-1] - constants::TILE_WIDTH < output_tensor_shape[-1],
         "Last 2 dims of output must be within range to have been padded to input");
     std::vector<uint32_t> output_tensor_start{};
     std::vector<uint32_t> output_tensor_end{};
-    for (auto index = 0; index < input_tensor.get_legacy_shape().rank(); index++) {
+    for (auto index = 0; index < input_tensor.get_shape().with_tile_padding().rank(); index++) {
         output_tensor_start.push_back(0);
         output_tensor_end.push_back(output_tensor_shape[index]);
     }

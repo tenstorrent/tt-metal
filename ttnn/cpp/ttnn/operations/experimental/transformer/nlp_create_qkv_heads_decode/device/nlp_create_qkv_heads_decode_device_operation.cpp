@@ -13,7 +13,7 @@ namespace ttnn::operations::experimental::transformer {
 void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
+    const auto input_shape = input_tensor.get_shape().with_tile_padding();
     // TODO: Rewrite validation for this decode case
     // NOTE: Checks for head_dim and shape[3] is done in nlp_create_qkv_heads because it's needed to infer head_dim
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
@@ -29,7 +29,7 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
     const auto QKV_memcfg = input_tensor.memory_config();
     if (input_tensor.is_sharded()) {
         TT_FATAL(QKV_memcfg.memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Error");
-        TT_FATAL(input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_legacy_shape()[-1], "Error");
+        TT_FATAL(input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_shape().with_tile_padding()[-1], "Error");
         TT_FATAL(input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR, "Error");
     }
     auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
@@ -48,7 +48,7 @@ std::vector<tt::tt_metal::LegacyShape> NLPCreateHeadsDecodeDeviceOperation::comp
     using namespace tt::constants;
     std::vector<tt::tt_metal::LegacyShape> output_shape_vec;
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
+    const auto input_shape = input_tensor.get_shape().with_tile_padding();
 
     auto batch = input_tensor.get_shape()[2];
     auto head_dim = this->head_dim;
@@ -67,7 +67,7 @@ std::vector<tt::tt_metal::LegacyShape> NLPCreateHeadsDecodeDeviceOperation::comp
 std::vector<Tensor> NLPCreateHeadsDecodeDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
+    const auto input_shape = input_tensor.get_shape().with_tile_padding();
     auto output_shapes = this->compute_output_shapes(input_tensors);
     const auto& q_output_shape = output_shapes[0];
 

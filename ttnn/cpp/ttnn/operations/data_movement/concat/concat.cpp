@@ -41,7 +41,7 @@ namespace data_movement {
         const ttnn::Tensor& first_tensor = input_tensors.front();
         const int rank = first_tensor.get_shape().rank();
 
-        dim = first_tensor.get_legacy_shape().get_normalized_index(dim);
+        dim = first_tensor.get_shape().with_tile_padding().get_normalized_index(dim);
 
         TT_FATAL(
             dim >= 0 and dim < rank,

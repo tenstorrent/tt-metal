@@ -200,7 +200,7 @@ void dump_tensor(const std::string& file_name, const Tensor& tensor, const std::
         throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
     }
 
-    auto shape = tensor.get_legacy_shape();
+    auto shape = tensor.get_shape().with_tile_padding();
     auto data_type = tensor.get_dtype();
     auto layout = tensor.get_layout();
     auto storage_type = tensor.storage_type();

@@ -22,8 +22,8 @@ void MorehDotOperation::validate(
     TT_FATAL(tt::operations::primary::is_1d_tensor(input_tensor_a), "Invalid input tensor dimensions.");
     TT_FATAL(tt::operations::primary::is_1d_tensor(input_tensor_b), "Invalid input tensor dimensions.");
 
-    const auto& a_shape_wo_padding = input_tensor_a.get_legacy_shape().without_padding();
-    const auto& b_shape_wo_padding = input_tensor_b.get_legacy_shape().without_padding();
+    const auto& a_shape_wo_padding = input_tensor_a.get_shape();
+    const auto& b_shape_wo_padding = input_tensor_b.get_shape();
     TT_FATAL(a_shape_wo_padding[3] == b_shape_wo_padding[3], "Shape without padding must be the same.");
 
     TT_FATAL(

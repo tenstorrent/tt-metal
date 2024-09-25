@@ -28,9 +28,9 @@ using namespace tt;
 using sliding_window::SlidingWindowConfig;
 
 Tensor HaloTensorCreation(const Tensor &input){
-    int batch_size = input.get_legacy_shape()[0];
-    int input_height = input.get_legacy_shape()[1];
-    int input_width = input.get_legacy_shape()[2];
+    int batch_size = input.get_shape().with_tile_padding()[0];
+    int input_height = input.get_shape().with_tile_padding()[1];
+    int input_width = input.get_shape().with_tile_padding()[2];
     int num_cores_nhw = input.shard_spec().value().num_cores();
 
     ttnn::Tensor input_tensor = input;  // tensor to return
@@ -71,23 +71,23 @@ operation::ProgramWithCallbacks bilinear_multi_core(const Tensor &input, Tensor&
     Program program = CreateProgram();
     Device *device = input.device();
 
-    auto input_shape = input.get_legacy_shape();
-    auto output_shape = output.get_legacy_shape();
+    auto input_shape = input.get_shape().with_tile_padding();
+    auto output_shape = output.get_shape().with_tile_padding();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
     // NOTE: input is assumed to have channels last format: {N, H, W, C}, {N, 1, H * W, C}, {1, 1, N * H * W, C}
     // NOTE: Bfp8_b/TILE is not yet supported
-    uint32_t input_stick_nbytes = input.get_legacy_shape()[-1] * input.element_size();
-    uint32_t output_stick_nbytes = output.get_legacy_shape()[-1] * output.element_size();
+    uint32_t input_stick_nbytes = input.get_shape().with_tile_padding()[-1] * input.element_size();
+    uint32_t output_stick_nbytes = output.get_shape().with_tile_padding()[-1] * output.element_size();
     TT_FATAL(input_stick_nbytes == output_stick_nbytes, "Input and output sticks should have same size");
 
-    uint32_t output_nsticks = output.volume() / output.get_legacy_shape()[-1];
-    uint32_t input_nsticks = input.volume() / input.get_legacy_shape()[-1];
+    uint32_t output_nsticks = output.volume() / output.get_shape().with_tile_padding()[-1];
+    uint32_t input_nsticks = input.volume() / input.get_shape().with_tile_padding()[-1];
 
-    uint32_t in_w = input.get_legacy_shape()[2];
-    uint32_t out_w =output.get_legacy_shape()[2];
+    uint32_t in_w = input.get_shape().with_tile_padding()[2];
+    uint32_t out_w =output.get_shape().with_tile_padding()[2];
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
         get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);

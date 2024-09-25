@@ -340,8 +340,8 @@ void expand_to_max_dim(std::vector<uint32_t> &dim, const tt::tt_metal::LegacySha
 }
 
 void validate_input_with_dim(const Tensor &input, const int64_t &dim) {
-    auto input_shape = input.get_legacy_shape();
-    auto input_shape_wo_padding = input.get_legacy_shape().without_padding();
+    auto input_shape = input.get_shape().with_tile_padding();
+    auto input_shape_wo_padding = input.get_shape();
     const auto input_rank = input_shape.rank();
     log_debug(LogOp, "{}:{} input_rank {}", __func__, __LINE__, input_rank);
     TT_FATAL(
@@ -352,11 +352,11 @@ void validate_input_with_dim(const Tensor &input, const int64_t &dim) {
 }
 
 void validate_output_with_keepdim(const Tensor &input, const Tensor &output, const int64_t &dim, const bool &keep_dim) {
-    auto input_shape = input.get_legacy_shape();
+    auto input_shape = input.get_shape().with_tile_padding();
     auto input_shape_wo_padding = input_shape.without_padding();
     const auto input_rank = input_shape.rank();
 
-    const auto &output_shape = output.get_legacy_shape();
+    const auto &output_shape = output.get_shape().with_tile_padding();
     const auto &output_shape_wo_padding = output_shape.without_padding();
     const auto output_rank = output_shape.rank();
 

@@ -18,7 +18,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
 
     tt::tt_metal::Program program{};
 
-    const auto& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+    const auto& ashape = a.get_shape().with_tile_padding(), bshape = b.get_shape().with_tile_padding();
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::Device *device = a.device();
@@ -307,7 +307,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         tt::tt_metal::Buffer *src1_buffer = b.buffer();
         tt::tt_metal::Buffer *dst_buffer = output.buffer();
 
-        const auto& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+        const auto& ashape = a.get_shape().with_tile_padding(), bshape = b.get_shape().with_tile_padding();
 
         tt::tt_metal::Device *device = a.device();
 

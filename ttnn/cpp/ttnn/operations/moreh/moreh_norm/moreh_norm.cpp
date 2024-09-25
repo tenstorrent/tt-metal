@@ -16,7 +16,7 @@ Tensor MorehNorm::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     if (!dim.has_value()) {
-        std::vector<int64_t> dims(input.get_legacy_shape().rank());
+        std::vector<int64_t> dims(input.get_shape().with_tile_padding().rank());
         std::iota(dims.begin(), dims.end(), 0);
         dim = std::make_optional(dims);
     }
@@ -25,7 +25,7 @@ Tensor MorehNorm::invoke(
 
     auto dims = std::get<std::vector<int64_t>>(dim.value());
     if (dims.empty()) {
-        std::vector<int64_t> all_dims(input.get_legacy_shape().rank());
+        std::vector<int64_t> all_dims(input.get_shape().with_tile_padding().rank());
         std::iota(all_dims.begin(), all_dims.end(), 0);
         dims = all_dims;
     }

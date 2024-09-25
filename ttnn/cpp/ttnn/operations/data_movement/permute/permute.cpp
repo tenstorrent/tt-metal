@@ -51,8 +51,8 @@ ttnn::Tensor permute_impl(const ttnn::Tensor &a, const std::vector<uint32_t>& di
     bool pad_n = H == 0 || W == 0;
     bool pad_c = H == 1 || W == 1;
     // Convert tensor back to original
-    auto a_pad_shape = AutoFormat::pad_to_tile_shape(a.get_legacy_shape(), pad_c, pad_n);
-    auto out_shape = a.get_legacy_shape();
+    auto a_pad_shape = AutoFormat::pad_to_tile_shape(a.get_shape().with_tile_padding(), pad_c, pad_n);
+    auto out_shape = a.get_shape().with_tile_padding();
     out_shape = {out_shape[N], out_shape[C], out_shape[H], out_shape[W]};
 
     auto formatted_input_tensor = a;
@@ -128,7 +128,7 @@ ttnn::Tensor permute_launch(const ttnn::Tensor &a, const std::vector<std::int64_
         [dims, output_mem_config]  (const std::vector<ttnn::Tensor>& input_tensors, const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors, const std::vector<std::optional<ttnn::Tensor>>& optional_output_tensors) mutable -> std::vector<ttnn::Tensor> {
             auto& a = input_tensors.at(0);
             std::vector<uint32_t> normalized_dims(dims.size());
-            std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [a](std::int64_t idx) {return a.get_legacy_shape().get_normalized_index(idx);});
+            std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [a](std::int64_t idx) {return a.get_shape().with_tile_padding().get_normalized_index(idx);});
             std::vector<uint32_t> seq_dims(dims.size());
             std::iota(seq_dims.begin(), seq_dims.end(), 0);
             if (normalized_dims == seq_dims) {

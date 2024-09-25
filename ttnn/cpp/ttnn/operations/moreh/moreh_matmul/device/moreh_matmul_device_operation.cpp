@@ -58,7 +58,7 @@ void MorehMatmulOperation::validate_inputs(
 
     // check output dims
     if (output.has_value()) {
-        const auto &output_shape = output.value().get_legacy_shape().without_padding();
+        const auto &output_shape = output.value().get_shape();
         const auto &output_wo_shape = output_shape.without_padding();
         uint32_t output_m = output_wo_shape[-2];
         uint32_t output_n = output_wo_shape[-1];
@@ -80,7 +80,7 @@ void MorehMatmulOperation::validate_inputs(
 
     // check bias size
     if (bias.has_value()) {
-        const auto &bias_wo_shape = bias.value().get_legacy_shape().without_padding();
+        const auto &bias_wo_shape = bias.value().get_shape();
         uint32_t bias_rank = bias_wo_shape.rank();
         uint32_t bias_w = bias_wo_shape[-1];
         TT_FATAL(bias_rank == 2, "bias rank {} must be 2 (tilized).", bias_rank);

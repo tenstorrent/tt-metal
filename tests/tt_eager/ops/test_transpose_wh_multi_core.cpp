@@ -23,7 +23,7 @@ using namespace constants;
 
 Tensor perform_transpose_wh(Tensor& input_tensor) {
     TT_FATAL(input_tensor.storage_type() == StorageType::OWNED, "Error");
-    auto ashape = input_tensor.get_legacy_shape();
+    auto ashape = input_tensor.get_shape().with_tile_padding();
     TT_FATAL(ashape.rank() == 4, "Error");
     auto bshape = ashape;
     bshape[2] = ashape[3];
