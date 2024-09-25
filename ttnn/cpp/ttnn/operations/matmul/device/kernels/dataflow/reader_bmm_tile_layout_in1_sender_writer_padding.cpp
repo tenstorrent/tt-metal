@@ -132,8 +132,8 @@ void kernel_main() {
 
 //  READER
 #ifdef IN1_SHARDED
-    cb_reserve_back(cb_id_in1, in1_block_num_tiles);
-    cb_push_back(cb_id_in1, in1_block_num_tiles);
+    cb_reserve_back(cb_id_in1, in1_block_num_tiles*num_blocks);
+    cb_push_back(cb_id_in1, in1_block_num_tiles*num_blocks);
 #else
     uint32_t l1_write_addr_in1;
 

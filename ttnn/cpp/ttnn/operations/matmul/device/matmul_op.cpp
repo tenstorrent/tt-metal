@@ -1123,7 +1123,10 @@ void Matmul::validate(
                         TT_FATAL(program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1, "Error");
                     }
                 }
-                TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
+                if (input_tensor_b.memory_config().is_sharded()) {
+                    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Operand B can only be interleaved or width sharded.");
+                    TT_FATAL(program_config.per_core_N == (input_tensor_b.shard_spec().value().shape[1] / TILE_WIDTH), "Shard width must match per core N.");
+                }
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {

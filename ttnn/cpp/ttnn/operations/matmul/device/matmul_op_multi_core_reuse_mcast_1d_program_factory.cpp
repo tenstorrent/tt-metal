@@ -55,6 +55,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     tt::DataFormat bias_data_format,
     tt::DataFormat output_data_format,
     bool in0_is_sharded,
+    bool in1_is_sharded,
     bool output_is_sharded,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler) {
@@ -99,6 +100,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     if (B * num_blocks > 1) {
         in1_CB_tiles = in1_CB_tiles * 2;  // double buffer
     }
+    if (in1_is_sharded) {
+        uint32_t in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / TILE_HEIGHT;
+        in1_CB_tiles = per_core_N * in1_shard_height_in_tiles;
+    }
+
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
     uint32_t out_block_tiles = per_core_M * per_core_N;
@@ -354,6 +360,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
 
     bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, mm_kernel_defines);
 
+    if (in1_is_sharded) {
+        mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
+    }
+
     if (output_is_sharded) {
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
     }
@@ -510,6 +520,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
             .set_page_size(src1_cb_index, in1_single_tile_size)
             .set_tile_dims(src1_cb_index, in1_tile);
+
+    if (in1_is_sharded) {
+        src1_cb_config = src1_cb_config.set_globally_allocated_address(*in1_buffer);
+    }
+
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
     log_debug(
         LogOp,
@@ -778,6 +793,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     auto override_runtime_arguments_callback =
         [mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
          mm_kernel_in1_sender_writer_id,
+         cb_src1,
          cb_src2,
          cb_output,
          start_core,
@@ -803,6 +819,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             auto dst_buffer = output_tensors.at(0).buffer();
 
             bool src0_sharded = input_tensors[0].is_sharded();
+            bool src1_sharded = input_tensors[1].is_sharded();
             bool out_sharded = output_tensors[0].is_sharded();
 
             // Manually unroll sender core
@@ -813,6 +830,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 auto& reader_sender_runtime_args =
                     GetRuntimeArgs(program, mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id, start_core);
                 reader_sender_runtime_args[0] = src_buffer_a->address();
+            }
+
+            if (src1_sharded) {
+                UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer_b);
             }
 
             auto& writer_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in1_sender_writer_id);
@@ -1711,6 +1732,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
             bias_data_format,
             output_data_format,
             a.memory_config().is_sharded(),
+            b.memory_config().is_sharded(),
             output.memory_config().is_sharded(),
             untilize_out,
             fused_op_signaler);
