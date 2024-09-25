@@ -149,7 +149,6 @@ void MAIN {
     const uint32_t total_tiles_per_col = get_arg_val<uint32_t>(2);
     const uint32_t num_chunks_per_row = get_arg_val<uint32_t>(3);
 
-    untilize_init(cb_a_in);
     binary_op_init_common(cb_a_in, cb_bx_in);
 
     // Fill initial hidden states

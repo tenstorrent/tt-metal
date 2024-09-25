@@ -56,6 +56,13 @@ def gen_func_with_cast_tt(gen_func, dtype):
 
             x = ttnn.to_torch(tt_tensor)
 
+        elif dtype == ttnn.bfloat4_b:
+            tt_tensor = ttnn.from_torch(
+                x, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=None, memory_config=None
+            )
+
+            x = ttnn.to_torch(tt_tensor)
+
         elif dtype == ttnn.uint16:
             x = x.to(torch.int16)
 
@@ -64,6 +71,9 @@ def gen_func_with_cast_tt(gen_func, dtype):
 
         elif dtype == ttnn.int32:
             x = x.to(torch.int32)
+
+        elif dtype == ttnn.float32:
+            pass
 
         else:
             logger.warning(f"Unknown dtype {dtype} passed to gen_func_with_cast_tt")

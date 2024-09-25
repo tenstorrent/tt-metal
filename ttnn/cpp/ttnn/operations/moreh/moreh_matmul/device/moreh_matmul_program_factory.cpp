@@ -369,10 +369,10 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
         compute_args_group_1.push_back(static_cast<uint32_t>(is_scalar_bias));
     }
 
-    bool preserve_fp32_precision = false;
+    vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
-        preserve_fp32_precision = true;
+        unpack_to_dest_mode[tt::CB::c_intermed0] = UnpackToDestMode::UnpackToDestFp32;
     }
 
     const auto compute_kernel_1_id = tt::operations::primary::CreateComputeKernel(
@@ -383,7 +383,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode,
-        preserve_fp32_precision);
+        unpack_to_dest_mode);
 
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
@@ -411,7 +411,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
             math_fidelity,
             fp32_dest_acc_en,
             math_approx_mode,
-            preserve_fp32_precision);
+            unpack_to_dest_mode);
     }
     log_debug(
         tt::LogOp,
