@@ -35,7 +35,6 @@ enum class UnaryBackwardOpType {
     SIGMOID_BW,
     RELU_BW,
     LOGIT_BW,
-    RPOW_BW,
     FLOOR_BW,
     ROUND_BW,
     LOG_BW,
@@ -57,14 +56,12 @@ enum class UnaryBackwardOpType {
     COSH_BW,
     LOG2_BW,
     SIGN_BW,
-    DIV_NO_NAN_BW,
     EXP2_BW,
     EXPM1_BW,
     DIGAMMA_BW,
     ERFINV_BW,
     ERF_BW,
     DEG2RAD_BW,
-    POLYGAMMA_BW,
 };
 
 std::vector<Tensor> _acos_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
@@ -102,9 +99,6 @@ std::vector<Tensor> _relu6_bw(const Tensor& grad, const Tensor& input, const std
 std::vector<Tensor> _selu_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _square_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 
-std::vector<Tensor> _rpow_bw( const Tensor& grad, const Tensor& input, float exponent, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _div_no_nan_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _polygamma_bw( const Tensor& grad, const Tensor& input, int n, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _sub_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _gt_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config);
 
@@ -127,13 +121,6 @@ Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_
 // OpHandler struct template
 template <UnaryBackwardOpType OpType>
 struct OpHandler;
-
-template <>
-struct OpHandler<UnaryBackwardOpType::RPOW_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float exponent, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _rpow_bw(grad, input, exponent, output_mem_config);
-    }
-};
 
 template <>
 struct OpHandler<UnaryBackwardOpType::ACOS_BW> {
@@ -370,20 +357,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::SQUARE_BW> {
     static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
         return _square_bw(grad, input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::DIV_NO_NAN_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float exponent, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _div_no_nan_bw(grad, input, exponent, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::POLYGAMMA_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, int n, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _polygamma_bw(grad, input, n, output_mem_config);
     }
 };
 
