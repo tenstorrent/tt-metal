@@ -36,6 +36,7 @@ def test_zeros_like(device, input_shape):
     "input_shape",
     [
         [32, 32],
+        [20, 24],
         [5, 96, 64],
     ],
 )
