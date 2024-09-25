@@ -8,6 +8,7 @@ import torch
 import ttnn
 from ttnn import ShardTensorToMesh
 from models.utility_functions import nearest_32
+from models.demos.t3000.falcon40b.tt.model_utils import matmul_2d_config
 
 
 class TtLlamaMLP_optimized:
@@ -145,9 +146,38 @@ class TtLlamaMLP_optimized:
             pc3 = self.model_config["PREFILL_PADDED_FF3_MM_PROGCFG_128"]
         else:
             # ttnn.linear does not allow None program_config if weights are sharded
-            pc1 = self.model_config["PREFILL_PADDED_FF1_MM_PROGCFG"]
-            pc2 = self.model_config["PREFILL_PADDED_FF2_MM_PROGCFG"]
-            pc3 = self.model_config["PREFILL_PADDED_FF3_MM_PROGCFG"]
+
+            pc1 = matmul_2d_config(
+                m=x.shape[2],
+                k=x.shape[3],
+                n=self.w1.shape[3],
+                overwrite_per_core_k=4,
+                grid=ttnn.CoreGrid(y=min(8, x.shape[2] // 32), x=8),
+                is_fp32_accumulate=True,
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
+                act=ttnn.UnaryOpType.SILU,
+            )
+            pc2 = matmul_2d_config(
+                m=x.shape[2],
+                k=self.w2.shape[2],
+                n=self.w2.shape[3],
+                overwrite_per_core_k=4,
+                grid=ttnn.CoreGrid(y=min(8, x.shape[2] // 32), x=8),
+                is_fp32_accumulate=True,
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
+            )
+            pc3 = matmul_2d_config(
+                m=x.shape[2],
+                k=x.shape[3],
+                n=self.w1.shape[3],
+                overwrite_per_core_k=4,
+                grid=ttnn.CoreGrid(y=min(8, x.shape[2] // 32), x=8),
+                is_fp32_accumulate=True,
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
+            )
 
         w1_out = ttnn.linear(
             x,

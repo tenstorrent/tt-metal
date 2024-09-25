@@ -7,6 +7,7 @@ import math
 import torch
 import ttnn
 from ttnn import ShardTensorToMesh
+from models.demos.t3000.falcon40b.tt.model_utils import matmul_2d_config_from_tensor_shapes
 
 
 class TtLlamaAttention_optimized:
@@ -377,7 +378,14 @@ class TtLlamaAttention_optimized:
             pc_qkv = self.model_config["PREFILL_FUSED_QKV_MM_PROGCFG_128"]
         else:
             # Use default program configs
-            pc_qkv = self.model_config["PREFILL_FUSED_QKV_MM_PROGCFG"]
+            pc_qkv = matmul_2d_config_from_tensor_shapes(
+                xs.shape,
+                self.qkv.shape,
+                grid=ttnn.CoreGrid(y=min(8, xs.shape[2] // 32), x=8),
+                is_fp32_accumulate=True,
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
+            )
 
         fused_query_key_value = ttnn.linear(
             xs,
@@ -494,7 +502,14 @@ class TtLlamaAttention_optimized:
             pc_dense_out = self.model_config["PREFILL_SELFOUT_MM_PROGCFG_128"]
         else:
             # Use default program configs
-            pc_dense_out = self.model_config["PREFILL_SELFOUT_MM_PROGCFG"]
+            pc_dense_out = matmul_2d_config_from_tensor_shapes(
+                attn_output.shape,
+                self.wo.shape,
+                grid=ttnn.CoreGrid(y=min(8, attn_output.shape[2] // 32), x=8),
+                is_fp32_accumulate=True,
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
+            )
 
         attn_output = ttnn.linear(
             attn_output,
