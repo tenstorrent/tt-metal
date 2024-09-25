@@ -20,9 +20,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_linear_backward/moreh_linear_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
-
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss_unreduced/moreh_nll_loss_unreduced_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sgd/moreh_sgd_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_softmax_backward/moreh_softmax_backward_op.hpp"
@@ -188,34 +185,6 @@ void py_module(py::module& m_primary) {
         R"doc(
         "Performs a moreh_matmul_backward operation.
     )doc");
-
-    // moreh_nll_loss
-    m_primary.def(
-        "moreh_nll_loss",
-        &moreh_nll_loss,
-        py::arg("input_tensor").noconvert(),
-        py::arg("target_tensor").noconvert(),
-        py::arg("weight_tensor").noconvert() = std::nullopt,
-        py::arg("divisor_tensor").noconvert() = std::nullopt,
-        py::arg("output_tensor").noconvert() = std::nullopt,
-        py::arg("ignore_index").noconvert(),
-        py::arg("reduction_mean").noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs a nll_loss operation. Returns an output tensor.");
-
-    // moreh_nll_loss_unreduced
-    m_primary.def(
-        "moreh_nll_loss_unreduced",
-        &moreh_nll_loss_unreduced,
-        py::arg("input_tensor").noconvert(),
-        py::arg("target_tensor").noconvert(),
-        py::arg("weight_tensor").noconvert() = std::nullopt,
-        py::arg("output_tensor").noconvert() = std::nullopt,
-        py::arg("ignore_index").noconvert(),
-        py::arg("memory_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs a nll_loss_unreduced operation. Returns an output tensor.");
 
     m_primary.def(
         "moreh_layernorm",
@@ -419,8 +388,6 @@ void py_module(py::module& m_primary) {
         R"doc(
         Performs a moreh_groupnorm_backward operation.
     )doc");
-
-
 }
 
 }  // namespace
