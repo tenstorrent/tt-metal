@@ -110,7 +110,7 @@ class TtTransformerBlock(torch.nn.Module):
             ff_norm = ttnn.reshard(ff_norm, self.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"])
 
             r_interleaved = self.feed_forward.forward(ff_norm, mode)
-            h_interleaved = ttnn.sharded_to_interleaved(h_sharded)  # Final output is interleaved
+            h_interleaved = ttnn.sharded_to_interleaved(h_sharded, ttnn.L1_MEMORY_CONFIG)  # Final output is interleaved
             out = ttnn.add(h_interleaved, r_interleaved, memory_config=skip_mem_cfg)
             return out
         else:  # prefill  (Interleaved configs)

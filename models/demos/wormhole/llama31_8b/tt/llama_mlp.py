@@ -135,7 +135,7 @@ class TtLlamaMLP(torch.nn.Module):
         w2_in.deallocate(True)
 
         if mode == "decode":
-            w2_out = ttnn.sharded_to_interleaved(w2_out)
+            w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.L1_MEMORY_CONFIG)
 
         if seq_len >= 2048:  # Reshape back to intended shape
             w2_out = ttnn.reshape(w2_out, [1, 1, seq_len, -1])

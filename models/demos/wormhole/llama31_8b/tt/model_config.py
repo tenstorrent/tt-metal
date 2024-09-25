@@ -141,6 +141,16 @@ class TtModelArgs:
                 k_chunk_size=256 if seqlen > 8192 * 2 else (128 if seqlen >= 8192 else 64),
             )
             # in0: [32, 4096]
+            # in1: [4096, 6144]
+            self.model_config["XQKV_DECODE_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                # grid_size = [4, 8] # SHARDED_SKIP_INPUT_MEMCFG
+                in0_block_w=4,  # K(4096) / TILE_WIDTH(32) /grid_size(32)
+                per_core_M=1,  # M(32) / TILE_HEIGHT(32)
+                per_core_N=6,  # N(4096) / TILE_WIDTH(32) / grid_size(32)
+                fused_activation=None,
+            )
+
+            # in0: [32, 4096]
             # in1: [4096, 4096]
             self.model_config["ATTN_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
                 # grid_size = [4, 8] # nlp_concat_heads_decode has 32 heads, and 1x1 shards

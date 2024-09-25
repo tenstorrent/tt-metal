@@ -72,6 +72,17 @@ class TtLlamaAttention(nn.Module):
         self.layer_past_list = []
 
         for i in range(self.num_devices):
+            # wo: 4096 x 4096: width-sharded on 12 banks, 4224 over 12 banks.
+            wqkv_shard_shape = (
+                4096,
+                6144 // 12,
+            )
+            wqkv_shard_spec = ttnn.ShardSpec(
+                configuration.dram_weight_grid, wqkv_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False
+            )
+            wqkv_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, wqkv_shard_spec
+            )
             wqkv = ttnn.as_tensor(
                 torch.concat(
                     [
@@ -95,9 +106,9 @@ class TtLlamaAttention(nn.Module):
                 ),
                 device=self.devices[i],
                 dtype=self.dtype,
-                memory_config=self.model_config["ATTN_WEIGHTS_MEMCFG"],
+                memory_config=wqkv_mem_config,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
-                cache_file_name=cache_name("wqkv"),
+                cache_file_name=cache_name("wqkv_sharded"),
             )
 
             # wo: 4096 x 4096: width-sharded on 12 banks, 4224 over 12 banks.
@@ -238,14 +249,17 @@ class TtLlamaAttention(nn.Module):
             ###
             # QKV matmuls
             ###
+            x = ttnn.interleaved_to_sharded(x, self.model_config["SHARDED_SKIP_INPUT_MEMCFG"])
             xqkv_fused = ttnn.linear(
                 x,
                 wqkv,
-                memory_config=self.model_config["XQKV_MM_OUTPUT_MEMCFG"],
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                program_config=self.model_config["XQKV_DECODE_PROGCFG"],
                 compute_kernel_config=self.compute_kernel_config,
                 dtype=self.dtype,
-                core_grid=self.grid_size,
             )
+
+            xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused, ttnn.L1_MEMORY_CONFIG)
 
             # Reshape such that true unpadded batch is tracked in shape
             fqkv_shape = xqkv_fused.shape
