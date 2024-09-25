@@ -266,7 +266,7 @@ def prepare_inputs_ttnn_prefill(x_bsh, mesh_device):
     return xs_1BSH
 
 
-def get_single_rot_mat(dhead, mesh_device, start_pos=0, theta: float = 500000.0, use_scaled=True):
+def get_single_rot_mat(dhead, mesh_device, start_pos=0, theta: float = 500000.0, use_scaled=True, on_host=False):
     freqs_unscaled = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
     if use_scaled:
         freqs = apply_scaling(freqs_unscaled)
@@ -291,13 +291,13 @@ def get_single_rot_mat(dhead, mesh_device, start_pos=0, theta: float = 500000.0,
 
     return ttnn.from_torch(
         current_rot_mat.T.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
-        device=mesh_device,
+        device=mesh_device if not on_host else None,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     ), ttnn.from_torch(
         rot_matrix.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
-        device=mesh_device,
+        device=mesh_device if not on_host else None,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),

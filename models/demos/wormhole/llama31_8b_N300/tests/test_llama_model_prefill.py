@@ -13,6 +13,7 @@ from models.demos.wormhole.llama31_8b_N300.tt.llama_common import (
     get_rot_transformation_mat,
     sample,
     HostEmbedding,
+    encode_prompt_llama_instruct,
 )
 from models.demos.wormhole.llama31_8b_N300.tt.llama_model import TtTransformer
 from models.demos.wormhole.llama31_8b_N300.tt.model_config import TtModelArgs
@@ -78,7 +79,6 @@ def test_llama_model_inference(mesh_device, seq_len, use_program_cache, reset_se
     if run_ref_pt:
         reference_model = Transformer(model_args)
         reference_model.load_state_dict(state_dict)
-
     # Embedding on host
     embd = HostEmbedding(model_args)
     embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
@@ -94,6 +94,7 @@ def test_llama_model_inference(mesh_device, seq_len, use_program_cache, reset_se
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+
     # Load TTNN model
     tt_model = TtTransformer(
         args=model_args,

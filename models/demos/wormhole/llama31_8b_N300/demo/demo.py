@@ -115,7 +115,7 @@ def preprocess_inputs_prefill(
     )
 
 
-def run_llama_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_env, num_batches, print_to_file, is_n300):
+def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_ci_env, num_batches, print_to_file):
     # Creat batch output file
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output_directory = "models/demos/wormhole/llama31_8b_N300/demo/output"
@@ -151,7 +151,7 @@ def run_llama_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_env
     model_args = TtModelArgs(device_mesh.get_devices()[0], instruct=instruct_mode)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
-    model_args.n_layers = 2
+    model_args.n_layers = 32
 
     logger.info("Loading weights...")
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
@@ -216,17 +216,15 @@ def run_llama_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_env
 
         # head_dim = model_args.dim // model_args.n_heads
         transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
-        print("TRANSFORMATION MATS TORCH", transformation_mat_torch.shape)
-        print("TENSOR MESH", device_mesh)
-        # transformation_mats = ttnn.from_torch(
-        #     transformation_mat_torch,
-        #     dtype=ttnn.bfloat16,
-        #     layout=ttnn.TILE_LAYOUT,
-        #     device=device_mesh,
-        #     mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        # )
-        # print("TRANSFORMATION MATS", transformation_mats)
+
+        transformation_mats = ttnn.from_torch(
+            transformation_mat_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device_mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
         # First user is used for compile time
         num_users_generated_prefill = batch_size - 1 if batch_size > 1 else 1  # First user is used for compile time
@@ -237,7 +235,6 @@ def run_llama_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_env
             rot_mats_prefill = get_prefill_rot_mat(
                 model_args.head_dim, model_args.max_seq_len, device_mesh, seq_len=prefill_seq_len
             )
-            print("ROT MATS PREFILL", rot_mats_prefill)
             if decoding_pos[batch_id] < prefill_seq_len:
                 pt_prefill_input[batch_id][
                     :, decoding_pos[batch_id] :, :
@@ -248,7 +245,6 @@ def run_llama_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_env
                 device_mesh,
             )
 
-            print("PREFILL INPUT", prefill_input)
             tt_out = tt_model(
                 prefill_input,
                 None,  # Current position
@@ -329,7 +325,7 @@ def run_llama_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_env
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
         tt_out = tt_model(decode_input, current_pos, current_pos_attn, rot_mat=current_rot_mat)
         tt_out_gathered = ttnn.line_all_gather(tt_out, dim=3, num_links=1)
-        tt_out_rm = ttnn.untilize(tt_out, use_multicore=True)
+        tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
         tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
         new_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         current_rot_mat = ttnn.copy(new_rot_mat, current_rot_mat)
@@ -338,47 +334,57 @@ def run_llama_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_env
         # ttnn.plus_one(current_pos_attn)
 
         ttnn.end_trace_capture(device_mesh, trace_id, cq_id=0)
-
-        current_pos_reset = ttnn.from_torch(torch.tensor(decoding_pos, dtype=torch.int32), dtype=ttnn.int32)
-        current_pos_attn_reset = ttnn.from_torch(torch.tensor(decoding_pos * 8, dtype=torch.int32), dtype=ttnn.int32)
+        current_pos_reset = ttnn.from_torch(
+            torch.tensor(decoding_pos, dtype=torch.int32),
+            dtype=ttnn.int32,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
+        )
+        current_pos_attn_reset = ttnn.from_torch(
+            torch.tensor(decoding_pos * 4, dtype=torch.int32),
+            dtype=ttnn.int32,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
+        )
         tt_out_tok_reset = ttnn.from_torch(
             torch.nn.functional.pad(pt_out_batched.unsqueeze(0).unsqueeze(0).unsqueeze(0), (0, 31), "constant", 0),
             dtype=ttnn.uint32,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
         )
 
         ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos)
         ttnn.copy_host_to_device_tensor(current_pos_attn_reset, current_pos_attn)
         ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
-
         # Start decoding
         iteration = 0
         users_decoding = True  # reset to handle next batch
 
-        ttnn.record_event(1, write_event)
+        # ttnn.record_event(1, write_event)
 
         while users_decoding:
             iteration_time_start = time()
             # Execute trace
-            ttnn.wait_for_event(0, write_event)
+            # ttnn.wait_for_event(0, write_event)
             ttnn.execute_trace(device_mesh, trace_id, cq_id=0, blocking=True)
-
             # FIXME: remove when ttnn.plus_one is merged
             current_pos_reset = ttnn.from_torch(
-                torch.tensor(decoding_pos, dtype=torch.int32) + iteration + 1, dtype=ttnn.int32
+                torch.tensor(decoding_pos, dtype=torch.int32) + iteration + 1,
+                dtype=ttnn.int32,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
             )
             current_pos_attn_reset = ttnn.from_torch(
-                torch.tensor(decoding_pos * 8, dtype=torch.int32) + iteration + 1, dtype=ttnn.int32
+                torch.tensor(decoding_pos * 4, dtype=torch.int32) + iteration + 1,
+                dtype=ttnn.int32,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
             )
             ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos)
             ttnn.copy_host_to_device_tensor(current_pos_attn_reset, current_pos_attn)
-
-            ttnn.record_event(0, op_event)
+            # ttnn.record_event(0, op_event)
 
             # Write to host
-            ttnn.wait_for_event(1, op_event)
-            tt_output_torch = ttnn.to_torch(tt_out_tok.cpu(blocking=False, cq_id=1))[0, 0, 0, :batch_size]
-            ttnn.record_event(1, write_event)
-
+            # ttnn.wait_for_event(1, op_event)
+            tt_output_torch = ttnn.to_torch(
+                tt_out_tok.cpu(blocking=False, cq_id=0), mesh_composer=ttnn.ConcatMeshToTensor(device_mesh, dim=1)
+            )[0, 0, 0, :batch_size]
+            # ttnn.record_event(1, write_event)
             # Save output token to print out later
             for user in range(batch_size):
                 user_tok = tt_output_torch[user].tolist()
@@ -416,8 +422,9 @@ def run_llama_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_env
             if iteration % 100 == 0:
                 current_rot_mat_reset, rot_matrix_reset = get_single_rot_mat(
                     model_args.head_dim,
-                    device=None,
+                    device_mesh,
                     start_pos=decoding_pos[0] + iteration,
+                    on_host=True,
                 )
                 ttnn.copy_host_to_device_tensor(current_rot_mat_reset, current_rot_mat)
 
@@ -459,7 +466,7 @@ def run_llama_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_env
     [
         # ("models/demos/wormhole/llama31_8b/demo/input_data_prefill_128.json", False, 1),
         # ("models/demos/wormhole/llama31_8b/demo/input_data_prefill_128.json", False, 3),
-        ("models/demos/wormhole/llama31_8b/demo/input_data_questions_prefill_128.json", True, 1),
+        ("models/demos/wormhole/llama31_8b_N300/demo/input_data_questions_prefill_128.json", True, 1),
         # ("models/demos/wormhole/llama31_8b/demo/input_data_questions_prefill_128.json", True, 3),
     ],
     ids=[
@@ -469,14 +476,12 @@ def run_llama_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_env
         # "instruct_weights-3_batch",
     ],
 )
-# @pytest.mark.parametrize("device_params", [{"trace_region_size": 6283, "num_command_queues": 2}], indirect=True)
-def test_llama_demo(
-    mesh_device, use_program_cache, input_prompts, instruct_weights, is_ci_env, is_single_card_n300, num_batches
-):
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 3343360}], indirect=True)
+def test_llama_demo(mesh_device, use_program_cache, input_prompts, instruct_weights, is_ci_env, num_batches):
     if is_ci_env and instruct_weights == False:
         pytest.skip("CI demo test only runs instruct weights to reduce CI pipeline load (both are supported)")
 
-    return run_llama_demo(
+    return run_llama_demo_n300(
         user_input=input_prompts,
         batch_size=1,
         device_mesh=mesh_device,
@@ -484,5 +489,4 @@ def test_llama_demo(
         is_ci_env=is_ci_env,
         num_batches=num_batches,
         print_to_file=False,
-        is_n300=is_single_card_n300,
     )
