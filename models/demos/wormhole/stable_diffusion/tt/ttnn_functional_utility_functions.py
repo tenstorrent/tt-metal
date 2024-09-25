@@ -31,7 +31,7 @@ def pre_process_input(device, tensor):
     return tensor
     import math
 
-    assert input_channels == tensor.get_legacy_shape()[3]
+    assert input_channels == tensor.shape.with_tile_padding()[3]
     padded_input_channels = math.ceil(input_channels / 32) * 32
     if padded_input_channels != input_channels:
         tensor = fallback_ops.pad(

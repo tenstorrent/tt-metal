@@ -73,13 +73,13 @@ def run_create_qkv_heads_test(
         memory_config=out_mem_config,
     )
 
-    assert list(q.get_legacy_shape()) == [batch, num_q_heads, seq_len, head_dim]
+    assert list(q.shape.with_tile_padding()) == [batch, num_q_heads, seq_len, head_dim]
     if transpose_k:
-        assert list(k.get_legacy_shape()) == [batch, num_kv_heads, head_dim, seq_len]
+        assert list(k.shape.with_tile_padding()) == [batch, num_kv_heads, head_dim, seq_len]
     else:
-        assert list(k.get_legacy_shape()) == [batch, num_kv_heads, seq_len, head_dim]
+        assert list(k.shape.with_tile_padding()) == [batch, num_kv_heads, seq_len, head_dim]
 
-    assert list(v.get_legacy_shape()) == [batch, num_kv_heads, seq_len, head_dim]
+    assert list(v.shape.with_tile_padding()) == [batch, num_kv_heads, seq_len, head_dim]
 
     pyt_got_back_rm_q = tt2torch_tensor(q)
     pyt_got_back_rm_k = tt2torch_tensor(k)
@@ -251,13 +251,13 @@ def run_create_q_and_kv_heads_test(
         memory_config=out_mem_config,
     )
 
-    assert list(q.get_legacy_shape()) == [batch, num_q_heads, q_seq_len, head_dim]
+    assert list(q.shape.with_tile_padding()) == [batch, num_q_heads, q_seq_len, head_dim]
     if transpose_k:
-        assert list(k.get_legacy_shape()) == [batch, num_kv_heads, head_dim, kv_seq_len]
+        assert list(k.shape.with_tile_padding()) == [batch, num_kv_heads, head_dim, kv_seq_len]
     else:
-        assert list(k.get_legacy_shape()) == [batch, num_kv_heads, kv_seq_len, head_dim]
+        assert list(k.shape.with_tile_padding()) == [batch, num_kv_heads, kv_seq_len, head_dim]
 
-    assert list(v.get_legacy_shape()) == [batch, num_kv_heads, kv_seq_len, head_dim]
+    assert list(v.shape.with_tile_padding()) == [batch, num_kv_heads, kv_seq_len, head_dim]
 
     pyt_got_back_rm_q = tt2torch_tensor(q)
     pyt_got_back_rm_k = tt2torch_tensor(k)

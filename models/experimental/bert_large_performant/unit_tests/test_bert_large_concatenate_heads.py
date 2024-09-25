@@ -43,7 +43,7 @@ def run_bert_large_concatenate_heads_test(device, batch, dtype, in0_mem_config, 
     logger.debug(f"in0: {a_t.memory_config().buffer_type} and {a_t.get_dtype()}")
     logger.debug(f"out: {out.memory_config().buffer_type} and {out.get_dtype()}")
 
-    assert out.get_legacy_shape() == [batch, 1, 384, 1024]
+    assert out.shape.with_tile_padding() == [batch, 1, 384, 1024]
     tt_host_rm_out = out.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
     pyt_got_back_rm_out = tt_host_rm_out.to_torch()
 

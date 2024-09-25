@@ -523,7 +523,7 @@ class TtBloomModel(torch.nn.Module):
             i = i + 1
 
         # Add last hidden state
-        hidden_states = self.ln_f(hidden_states, overrideH=hidden_states.get_legacy_shape()[-2])
+        hidden_states = self.ln_f(hidden_states, overrideH=hidden_states.shape.with_tile_padding()[-2])
 
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
