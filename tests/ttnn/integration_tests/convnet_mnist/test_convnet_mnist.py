@@ -16,22 +16,9 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def model_location_generator(rel_path):
-    internal_weka_path = Path("/mnt/MLPerf")
-    has_internal_weka = (internal_weka_path / "bit_error_tests").exists()
-
-    if has_internal_weka:
-        return Path("/mnt/MLPerf") / rel_path
-    else:
-        return Path("/opt/tt-metal-models") / rel_path
-
-
-@pytest.mark.skip("#16824: Failing when whole suite is run on all archs")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_convnet_mnist(device, reset_seeds):
-    model_path = model_location_generator("tt_dnn-models/ConvNetMNIST/")
-    state_dict = str(model_path / "convnet_mnist.pt")
-    state_dict = torch.load(state_dict)
+def test_convnet_mnist(reset_seeds, device, model_location_generator):
+    state_dict = torch.load(model_location_generator("convnet_mnist.pt", model_subdir="ConvNetMNIST"))
 
     test_input, images, outputs = get_test_data(8)
 
