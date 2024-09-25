@@ -167,7 +167,7 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
 }
 
 template <typename binary_operation_t>
-void bind_binary_composite(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math) {
+void bind_binary_composite(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math, const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -185,6 +185,8 @@ void bind_binary_composite(py::module& module, const binary_operation_t& operati
         Returns:
             ttnn.Tensor: the output tensor.
 
+        {4}
+
         Example:
             >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
             >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
@@ -195,7 +197,8 @@ void bind_binary_composite(py::module& module, const binary_operation_t& operati
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description,
-        math);
+        math,
+        info_doc);
 
     bind_registered_operation(
         module,
@@ -825,7 +828,14 @@ void py_module(py::module& module) {
         ttnn::xlogy,
         R"doc(Compute xlogy :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = \mathrm{input\_tensor\_a}_i \cdot \log(\mathrm{input\_tensor\_b}_i)
-        )doc");
+        )doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_composite(
         module,
