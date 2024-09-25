@@ -24,46 +24,31 @@ using std::uint16_t;
 using std::uint32_t;
 using std::uint64_t;
 
-struct HexNameToMemVectorCache {
-    using lock = std::unique_lock<std::mutex>;
-    // maps from RisckCacheMapKey to hex file path
-    static HexNameToMemVectorCache &inst() {
-        static HexNameToMemVectorCache inst_;
-        return inst_;
-    }
-
-    bool exists(const string &path) {
-        lock l(mutex_);
-        return cache_.find(path) != cache_.end();
-    }
-    ll_api::memory &get(const string &path) {
-        lock l(mutex_);
-        return cache_[path];
-    }
-    void add(const string &path, ll_api::memory &mem) {
-        lock l(mutex_);
-        cache_[path] = mem;
-    }
-
-    std::unordered_map<std::string, ll_api::memory> cache_;
-    std::mutex mutex_;
-};
-
 ll_api::memory get_risc_binary(std::string const &path) {
+  static struct {
+    std::unordered_map<std::string, std::unique_ptr<ll_api::memory>> map;
+    std::mutex mutex;
+    std::condition_variable cvar;
+  } cache;
 
-  // FIXME: There is a race and dangling object problem here if
-  // multiple threads concurrently load the same path.
-  
-    if (HexNameToMemVectorCache::inst().exists(path)) {
-        return HexNameToMemVectorCache::inst().get(path);
-    }
-    
-    ll_api::memory mem(path);
-  
-    // add this path to binary cache
-    HexNameToMemVectorCache::inst().add(path, mem);
+  std::unique_lock lock(cache.mutex);
+  auto [slot, inserted] = cache.map.try_emplace(path);
+  if (inserted) {
+    // We're the first with PATH. Create and insert.
+    lock.unlock();
+    std::ifstream hex_istream(path);
+    auto *ptr = new ll_api::memory(hex_istream);
+    lock.lock();
+    // maps have iterator stability, so SLOT is still valid.
+    slot->second = decltype(slot->second)(ptr);
+    // We can't wake just those waiting on this slot, so wake them
+    // all. Should be a rare event anyway.
+    cache.cvar.notify_all();
+  } else if (!slot->second)
+    // Someone else is creating the initial entry, wait for them.
+    cache.cvar.wait(lock, [=] { return bool(slot->second); });
 
-    return mem;
+  return *slot->second.get();
 }
 
 // Return the code size in 16 byte units
