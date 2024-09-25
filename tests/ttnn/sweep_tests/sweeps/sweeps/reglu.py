@@ -17,11 +17,25 @@ parameters = {
     "batch_sizes": [(1,)],
     "height": [32, 384, 1024],
     "width": [64, 1024, 4096],
-    "input_dtype": [ttnn.bfloat16],
+    "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-    "layout": [ttnn.TILE_LAYOUT],
+    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
 }
+
+
+def skip(
+    batch_sizes,
+    height,
+    width,
+    input_dtype,
+    input_memory_config,
+    output_memory_config,
+    layout,
+) -> Tuple[bool, Optional[str]]:
+    if layout == ttnn.ROW_MAJOR_LAYOUT:
+        return True, "This combination is not supported"
+    return False, None
 
 
 def torch_reglu(input_tensor, *args, **kwargs):
@@ -42,7 +56,7 @@ def run(
     *,
     device,
 ) -> Tuple[bool, Optional[str]]:
-    input_shape = (*batch_sizes, height, width)
+    input_shape = (1, *batch_sizes, height, width)
 
     low = -100.0
     high = 100.0
