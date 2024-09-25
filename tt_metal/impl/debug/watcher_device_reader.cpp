@@ -71,8 +71,17 @@ static string get_noc_target_str(Device *device, CoreDescriptor &core, int noc, 
             default: return {"Unknown", ""};
         }
     };
-    string out = fmt::format("{} using noc{} tried to access ", get_riscv_name(core.coord, san->which), noc);
-    if (san->multicast) {
+    string out = fmt::format(
+        "{} using noc{} tried to {} {} {} bytes {} ",
+        get_riscv_name(core.coord, san->which_risc),
+        noc,
+        string(san->is_multicast ? "multicast" : "unicast"),
+        string(san->is_write ? "write" : "read"),
+        san->len,
+        string(san->is_write ? "from" : "to"));
+    out += fmt::format("local L1[{:#08x}] {} ", san->l1_addr, string(san->is_write ? "to" : "from"));
+
+    if (san->is_multicast) {
         CoreCoord target_phys_noc_core_start = {
             NOC_MCAST_ADDR_START_X(san->noc_addr), NOC_MCAST_ADDR_START_Y(san->noc_addr)};
         CoreCoord target_phys_noc_core_end = {NOC_MCAST_ADDR_END_X(san->noc_addr), NOC_MCAST_ADDR_END_Y(san->noc_addr)};
@@ -90,7 +99,7 @@ static string get_noc_target_str(Device *device, CoreDescriptor &core, int noc, 
             "{} core w/ physical coords {} {}", type_and_mem.first, target_phys_noc_core.str(), type_and_mem.second);
     }
 
-    out += fmt::format("[addr=0x{:08x},len={}]", NOC_LOCAL_ADDR(san->noc_addr), san->len);
+    out += fmt::format("[addr=0x{:08x}]", NOC_LOCAL_ADDR(san->noc_addr));
     return out;
 }
 const launch_msg_t* get_valid_launch_message(const mailboxes_t *mbox_data) {
@@ -385,63 +394,71 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
     const launch_msg_t *launch_msg = get_valid_launch_message(mbox_data);
     const debug_sanitize_noc_addr_msg_t *san = &mbox_data->watcher.sanitize_noc[noc];
     string error_msg;
-    string error_reason = "Watcher detected NOC error and stopped device: ";
+    string error_reason;
 
-    switch (san->invalid) {
-        case DebugSanitizeNocInvalidOK:
+    switch (san->return_code) {
+        case DebugSanitizeNocOK:
             if (san->noc_addr != DEBUG_SANITIZE_NOC_SENTINEL_OK_64 ||
                 san->l1_addr != DEBUG_SANITIZE_NOC_SENTINEL_OK_32 || san->len != DEBUG_SANITIZE_NOC_SENTINEL_OK_32 ||
-                san->multicast != DEBUG_SANITIZE_NOC_SENTINEL_OK_16 ||
-                san->which != DEBUG_SANITIZE_NOC_SENTINEL_OK_16) {
+                san->which_risc != DEBUG_SANITIZE_NOC_SENTINEL_OK_16 ||
+                san->is_multicast != DEBUG_SANITIZE_NOC_SENTINEL_OK_8 ||
+                san->is_write != DEBUG_SANITIZE_NOC_SENTINEL_OK_8 ||
+                san->is_target != DEBUG_SANITIZE_NOC_SENTINEL_OK_8) {
                 error_msg = fmt::format(
                     "Watcher unexpected noc debug state on core {}, reported valid got noc{}{{0x{:08x}, {} }}",
                     core.coord.str().c_str(),
-                    san->which,
+                    san->which_risc,
                     san->noc_addr,
                     san->len);
-                error_reason += "corrupted noc sanitization state - sanitization memory overwritten.";
+                error_msg += " (corrupted noc sanitization state - sanitization memory overwritten)";
             }
             break;
-        case DebugSanitizeNocInvalidL1:
-            error_msg = fmt::format(
-                "{} using noc{} accesses local L1[addr=0x{:08x},len={}]",
-                get_riscv_name(core.coord, san->which),
-                noc,
-                san->l1_addr,
-                san->len);
-            error_reason += "bad NOC L1/reg address.";
-            break;
-        case DebugSanitizeNocInvalidUnicast:
+        case DebugSanitizeNocAddrUnderflow:
             error_msg = get_noc_target_str(device, core, noc, san);
-            error_reason += "bad NOC unicast transaction.";
+            error_msg += string(san->is_target ? " (NOC target" : " (Local L1") + " address underflow).";
             break;
-        case DebugSanitizeNocInvalidMulticast:
+        case DebugSanitizeNocAddrOverflow:
             error_msg = get_noc_target_str(device, core, noc, san);
-            error_reason += "bad NOC multicast transaction.";
+            error_msg += string(san->is_target ? " (NOC target" : " (Local L1") + " address overflow).";
             break;
-        case DebugSanitizeNocInvalidAlignment:
+        case DebugSanitizeNocAddrZeroLength:
             error_msg = get_noc_target_str(device, core, noc, san);
-            error_msg += fmt::format(", misaligned with local L1[addr=0x{:08x}]", san->l1_addr);
-            error_reason += "bad alignment in NOC transaction.";
+            error_msg += " (zero length transaction).";
+            break;
+        case DebugSanitizeNocTargetInvalidXY:
+            error_msg = get_noc_target_str(device, core, noc, san);
+            error_msg += " (NOC target address did not map to any known Tensix/Ethernet/DRAM/PCIE core).";
+            break;
+        case DebugSanitizeNocMulticastNonWorker:
+            error_msg = get_noc_target_str(device, core, noc, san);
+            error_msg += " (multicast to non-worker core).";
+            break;
+        case DebugSanitizeNocMulticastInvalidRange:
+            error_msg = get_noc_target_str(device, core, noc, san);
+            error_msg += " (multicast invalid range).";
+            break;
+        case DebugSanitizeNocAlignment:
+            error_msg = get_noc_target_str(device, core, noc, san);
+            error_msg += " (invalid address alignment in NOC transaction).";
             break;
         default:
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",
                 core.coord.str(),
-                san->invalid);
-            error_reason += "corrupted noc sanitization state - unknown failure code.";
+                san->return_code);
+            error_msg += " (corrupted noc sanitization state - unknown failure code).";
     }
 
     // If we logged an error, print to stdout and throw.
     if (!error_msg.empty()) {
-        log_warning(error_reason.c_str());
+        log_warning("Watcher detected NOC error and stopped device:");
         log_warning("{}: {}", core_str, error_msg);
         DumpWaypoints(core, mbox_data, true);
         DumpRingBuffer(core, mbox_data, true);
         LogRunningKernels(core, launch_msg);
         // Save the error string for checking later in unit tests.
         set_watcher_exception_message(fmt::format("{}: {}", core_str, error_msg));
-        TT_THROW("{}", error_reason);
+        TT_THROW("{}: {}", core_str, error_msg);
     }
 }
 
