@@ -361,7 +361,7 @@ class TtModelArgs:
             )
 
             self.model_config["MLP_KERNEL_CONFIG"] = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,  # DRAM-bound so keep full precision here
+                math_fidelity=ttnn.MathFidelity.LoFi,  # DRAM-bound so keep full precision here
                 math_approx_mode=True,
                 fp32_dest_acc_en=False,
                 packer_l1_acc=True,
