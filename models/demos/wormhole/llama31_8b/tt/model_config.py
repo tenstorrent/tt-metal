@@ -127,9 +127,15 @@ class TtModelArgs:
                 }
             )
 
-            # Compute kernel shared by attention and MLP. FP32 acc is needed for accuracy
-            self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,  # DRAM-bound so keep full precision here
+            # Compute kernels. FP32 acc is needed for accuracy.
+            self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+            self.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
@@ -329,10 +335,17 @@ class TtModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
 
-            self.model_config["MLP_KERNEL_CONFIG"] = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,  # DRAM-bound so keep full precision here
+            self.model_config["MLP_KERNEL_CONFIG_HIFI2"] = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,  # full precision for bfp8 @ bfp8
                 math_approx_mode=True,
-                fp32_dest_acc_en=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+
+            self.model_config["MLP_KERNEL_CONFIG_HIFI4"] = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,  # full precision for bf16 @ bfp8
+                math_approx_mode=True,
+                fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             )
 
@@ -386,9 +399,6 @@ class TtModelArgs:
 
     def get_model_config(self):
         return self.model_config
-
-    def get_compute_kernel_config(self):
-        return self.compute_kernel_config
 
     def load_state_dict(self):
         """Generate or load state_dict for n_layers of the model"""

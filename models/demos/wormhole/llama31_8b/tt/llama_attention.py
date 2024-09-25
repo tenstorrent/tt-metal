@@ -47,8 +47,10 @@ class TtLlamaAttention(nn.Module):
         self.sliding_window = configuration.sliding_window
         self.grid_size = configuration.max_grid_size
 
+        self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
+        self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
+
         self.model_config = configuration.get_model_config()
-        self.compute_kernel_config = configuration.get_compute_kernel_config()
 
         self.rot_mat = rot_mat  # Rotational matrix in the form of a list of 8K tensors [1,1,head_dim,head_dim] for positional embedding on device
 
@@ -215,11 +217,6 @@ class TtLlamaAttention(nn.Module):
             per_core_M=1,
             per_core_N=32,
         )
-        self.compute_kernel_config_attn = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
         self.attention_grid = ttnn.CoreCoord(8, 4)
         self.scale = self.head_dim**-0.5
 
@@ -248,6 +245,7 @@ class TtLlamaAttention(nn.Module):
             assert self.max_batch_size * self.n_kv_heads < 64
             ###
             # QKV matmuls
+            # Use HiFi2 for DRAM-sharded matmuls as htey are otherwise flop-bound. Loses 1 bit of activation precision.
             ###
             x = ttnn.interleaved_to_sharded(x, self.model_config["SHARDED_SKIP_INPUT_MEMCFG"])
             xqkv_fused = ttnn.linear(
@@ -255,7 +253,7 @@ class TtLlamaAttention(nn.Module):
                 wqkv,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=self.model_config["XQKV_DECODE_PROGCFG"],
-                compute_kernel_config=self.compute_kernel_config,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
                 dtype=self.dtype,
             )
 
@@ -294,7 +292,7 @@ class TtLlamaAttention(nn.Module):
                 rotary_mat,
                 # program_config=self.q_heads_program_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_kernel_config,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
                 dtype=ttnn.bfloat16,
             )
 
@@ -303,7 +301,7 @@ class TtLlamaAttention(nn.Module):
                 rotary_mat,
                 # program_config=self.k_heads_program_config,
                 memory_config=self.model_config["QV_ROT_EMB_OUTPUT_MEMCFG"],
-                compute_kernel_config=self.compute_kernel_config,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
                 dtype=self.dtype,
             )
 
@@ -361,7 +359,7 @@ class TtLlamaAttention(nn.Module):
                 wo,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=self.model_config["ATTN_OUTPUT_PROGCFG"],
-                compute_kernel_config=self.compute_kernel_config,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
             )  # seqlen, 1, batch, hidden_size
 
             ttnn.deallocate(attn_output_cat)
@@ -391,7 +389,7 @@ class TtLlamaAttention(nn.Module):
             wqkv,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
         )
         if seq_len > 2048:
@@ -492,7 +490,7 @@ class TtLlamaAttention(nn.Module):
         output_11SH = ttnn.linear(
             attn_output_11SH,
             wo,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
