@@ -23,6 +23,14 @@ enum class ShardOrientation {
     COL_MAJOR,
 };
 
+enum class BufferType {
+    DRAM,
+    L1,
+    SYSTEM_MEMORY,
+    L1_SMALL,
+    TRACE,
+};
+
 } // namespace tt_metal
 
 } // namespace tt
