@@ -90,13 +90,60 @@ struct ExecuteUnaryBackwardHardtanh {
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
-#define DEFINE_UNARY_BACKWARD_OPERATION_WITH_1_DEFAULT_FLOAT(op_name) \
-struct ExecuteUnaryBackward##op_name { \
-    static std::vector<Tensor> invoke( \
-        const Tensor &grad_tensor_arg, \
-        const Tensor &input_tensor_arg, \
-        float parameter_a, \
-        const std::optional<MemoryConfig> &memory_config = std::nullopt); \
+struct ExecuteUnaryBackward {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float parameter_a,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardHardshrink {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float parameter_a,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardSoftshrink {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float parameter_a,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardLeakyRelu {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float parameter_a,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardElu {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float parameter_a,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardCelu {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float parameter_a,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardLogiteps {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float parameter_a,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
 template <UnaryBackwardOpType unary_backward_op_type>
@@ -308,13 +355,6 @@ struct ExecuteUnaryBackwardGelu{
         std::optional<Tensor> input_grad = std::nullopt);
 
 };
-
-DEFINE_UNARY_BACKWARD_OPERATION_WITH_1_DEFAULT_FLOAT(Hardshrink)
-DEFINE_UNARY_BACKWARD_OPERATION_WITH_1_DEFAULT_FLOAT(Softshrink)
-DEFINE_UNARY_BACKWARD_OPERATION_WITH_1_DEFAULT_FLOAT(LeakyRelu)
-DEFINE_UNARY_BACKWARD_OPERATION_WITH_1_DEFAULT_FLOAT(Elu)
-DEFINE_UNARY_BACKWARD_OPERATION_WITH_1_DEFAULT_FLOAT(Celu)
-DEFINE_UNARY_BACKWARD_OPERATION_WITH_1_DEFAULT_FLOAT(Logiteps)
 
 }  // operations::unary
 
