@@ -24,25 +24,27 @@ template <typename unary_backward_operation_t>
 void bind_unary_backward_two_float(
     py::module& module, const unary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, min: float, max: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {2}
 
         Args:
-            * :attr:`grad_tensor`
-            * :attr:`input_tensor`
-            * :attr:`float`
-            * :attr:`float`
+            grad_tensor (ttnn.Tensor): the input tensor.
+            input_tensor (ttnn.Tensor): the input tensor.
+            threshold (float): the input threshold value.
+            value (float): the input value.
 
         Keyword args:
-            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
 
         {3}
 
         Example:
 
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
             >>> output = {1}(grad_tensor, input, float, float)
         )doc",
         operation.base_name(),
@@ -73,25 +75,27 @@ void bind_unary_backward_two_float(
 
 template <typename unary_backward_operation_t>
 void bind_unary_backward_op(
-    py::module& module, const unary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
+    py::module& module, const unary_backward_operation_t& operation, const std::string& description, const std::string& supported_dtype) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {2}
 
         Args:
-            * :attr:`grad_tensor`
-            * :attr:`input_tensor`
+            grad_tensor (ttnn.Tensor): the input tensor.
+            input_tensor_a (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
 
         {3}
 
         Example:
 
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
             >>> output = {1}(grad_tensor, input)
         )doc",
         operation.base_name(),
@@ -169,23 +173,25 @@ void bind_unary_backward_rsqrt(
 
 template <typename unary_backward_operation_t>
 void bind_unary_backward_op_reciprocal(
-    py::module& module, const unary_backward_operation_t& operation, std::string_view description) {
+    py::module& module, const unary_backward_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor_a: Union[ttnn.Tensor, ComplexTensor], *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor or ComplexTensor
-
+        R"doc(
         {2}
 
         Args:
-            * :attr:`grad_tensor`
-            * :attr:`input_tensor`
+            grad_tensor (ComplexTensor or ttnn.Tensor): the input tensor.
+            input_tensor_a (ComplexTensor or ttnn.Tensor): the input tensor.
 
         Keyword args:
-            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
 
         Example:
 
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
             >>> output = {1}(grad_tensor, input)
         )doc",
         operation.base_name(),
@@ -225,21 +231,23 @@ template <typename unary_backward_operation_t>
 void bind_unary_backward_op_overload_abs(
     py::module& module, const unary_backward_operation_t& operation, std::string_view description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor_a: Union[ttnn.Tensor, ComplexTensor], *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor or ComplexTensor
-
+        R"doc(
         {2}
 
         Args:
-            * :attr:`grad_tensor`
-            * :attr:`input_tensor`
+            grad_tensor (ttnn.Tensor): the input tensor.
+            input_tensor (ComplexTensor or ttnn.Tensor): the input tensor.
 
         Keyword args:
-            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
 
         Example:
 
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
             >>> output = {1}(grad_tensor, input)
         )doc",
         operation.base_name(),
@@ -276,24 +284,26 @@ void bind_unary_backward_op_overload_abs(
 }
 
 template <typename unary_backward_operation_t>
-void bind_unary_backward_float(py::module& module, const unary_backward_operation_t& operation, std::string_view description) {
+void bind_unary_backward_float(py::module& module, const unary_backward_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, scalar: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {2}
 
         Args:
-            * :attr:`grad_tensor`
-            * :attr:`input_tensor`
-            * :attr:`float`
+            grad_tensor (ttnn.Tensor): the input tensor.
+            input_tensor (ttnn.Tensor): the input tensor.
+            float_value (Number): the input tensor.
 
         Keyword args:
-            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
 
         Example:
 
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
             >>> output = {1}(grad_tensor, input, float)
         )doc",
         operation.base_name(),
@@ -333,23 +343,25 @@ void bind_unary_backward_two_float_with_default(
     float parameter_b_value,
     std::string_view description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, {2}: float, {5}: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {8}
 
         Args:
-            * :attr:`grad_tensor`
-            * :attr:`input_tensor`
+            grad_tensor (ComplexTensor or ttnn.Tensor): the input tensor.
+            input_tensor (ComplexTensor or ttnn.Tensor): the input tensor.
 
         Keyword args:
-            * :attr:`{2}` (float): {3} , Default value = {4}
-            * :attr:`{5}` (float): {6} , Default value = {7}
-            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+            {2} (float, optional): {3} , Default to {4}
+            {5} (float, optional): {6} , Default to {7}
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
 
         Example:
 
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
             >>> output = {1}(grad_tensor, input, {2} = {3}, {5} = {6})
         )doc",
         operation.base_name(),
@@ -390,24 +402,27 @@ void bind_unary_backward_float_with_default(
     const std::string& parameter_name_a,
     const std::string& parameter_a_doc,
     float parameter_a_value,
-    std::string_view description) {
+    const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, {2}: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {5}
 
         Args:
-            * :attr:`grad_tensor`
-            * :attr:`input_tensor`
+            grad_tensor (ttnn.Tensor): the input tensor.
+            input_tensor_a (ttnn.Tensor): the input tensor.
+
 
         Keyword args:
-            * :attr:`{2}` (float): {3} , Default value = {4}
-            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+            {2} (float, optional): {3} , Defaults to {4}
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
 
         Example:
 
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
             >>> output = {1}(grad_tensor, input, {2} = {3})
         )doc",
         operation.base_name(),
@@ -446,25 +461,29 @@ void bind_unary_backward_optional_float_params_with_default(
     const std::string& parameter_name_b,
     const std::string& parameter_b_doc,
     std::optional<float> parameter_b_value,
-    std::string_view description) {
+    const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, {2}: float, {5}: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {8}
 
         Args:
-            * :attr:`grad_tensor`
-            * :attr:`input_tensor`
+            grad_tensor (ttnn.Tensor): the input tensor.
+            input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            * :attr:`{2}` (Optional[float]): {3} , Default value = {4}
-            * :attr:`{5}` (Optional[float]): {6} , Default value = {7}
-            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+            {2} (float, optional): {3} , Default value = {4}
+            {5} (float, optional): {6} , Default value = {7}
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
 
         Example:
 
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
             >>> output = {1}(grad_tensor, input, {2} = {3}, {5} = {6})
         )doc",
         operation.base_name(),
@@ -509,18 +528,21 @@ void bind_unary_backward_float_string_default(
     string parameter_b_value,
     std::string_view description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, ( input_tensor: ttnn.Tensor, {2}: float ) or  ( input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor ), {4}: string, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {7}
 
         Args:
-            * :attr:`grad_tensor`
-            * :attr:`input_tensor_a` or :attr:`input_tensor`
-            * :attr:`input_tensor_b` or :attr:`{2}` (float): {3}
+            grad_tensor (ttnn.Tensor): the input tensor.
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (float): the input scalar.
+
 
         Keyword args:
-            * :attr:`{4}` (string): {5} , Default value = {6}
-            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+            round_mode (round_mode, optional): Round mode for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
 
         Example:
 
@@ -567,22 +589,24 @@ void bind_unary_backward_string_default(
     string parameter_a_value,
     std::string_view description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, {2}: string, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {5}
 
         Args:
-            * :attr:`grad_tensor`
-            * :attr:`input_tensor`
+            grad_tensor (ttnn.Tensor): the input tensor.
+            input_tensor_a (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            * :attr:`{2}` (string): {3} , Default value = {4}
-            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+            {2} (string, optional): {3} , Defaults to {4}
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
 
         Example:
 
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
             >>> output = {1}(grad_tensor, input, {2} = {4})
         )doc",
         operation.base_name(),
@@ -619,19 +643,21 @@ void bind_unary_backward_unary_optional_float(
     const std::string& parameter_doc,
     std::string_view description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, exponent: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<std::optional<Tensor>>
-
+        R"doc(
         {4}
 
         Args:
-            * :attr:`grad_tensor`
-            * :attr:`input_tensor`
-            * :attr:`{2}` (float): {3}
+            grad_tensor (ttnn.Tensor): the input grad tensor.
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (ttnn.Tensor or Number): the input tensor.
 
         Keyword args:
-            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
-            * :attr:`input_grad` (Optional[ttnn.Tensor]): preallocated output tensor,
-            * :attr:`queue_id` (Optional[uint8]): command queue id
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            input_grad (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): Command queue id. Defaults to `0`.
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
 
         Example:
 
@@ -677,22 +703,24 @@ void bind_unary_backward_shape(
     const std::string& parameter_a_doc,
     std::string_view description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, {2}: shape, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {4}
 
         Args:
-            * :attr:`grad_tensor`
-            * :attr:`input_tensor`
+            grad_tensor (ttnn.Tensor): the input tensor.
+            input_tensor (ttnn.Tensor): the input tensor.
+            {2} (string): {3} of tensor.
 
         Keyword args:
-            * :attr:`{2}` (string): {3}
-            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
 
         Example:
 
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
             >>> output = {1}(grad_tensor, input, {2})
         )doc",
         operation.base_name(),
@@ -724,25 +752,27 @@ template <typename unary_backward_operation_t>
 void bind_unary_backward_optional(
     py::module& module, const unary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype = "") {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig) -> std::vector<std::optional<Tensor>>
-
+        R"doc(
         {2}
 
         Args:
-            * :attr:`grad_tensor`
-            * :attr:`input_tensor`
+            grad_tensor (ComplexTensor or ttnn.Tensor): the input tensor.
+            input_tensor_a (ComplexTensor or ttnn.Tensor): the input tensor.
 
         Keyword args:
-            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
-            * :attr:`input_grad` (Optional[ttnn.Tensor]): preallocated output tensor,
-            * :attr:`queue_id` (Optional[uint8]): command queue id
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
 
         {3}
 
         Example:
 
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
             >>> output = {1}(grad_tensor, tensor)
         )doc",
         operation.base_name(),
@@ -774,23 +804,25 @@ void bind_unary_backward_optional(
 template <typename unary_backward_operation_t>
 void bind_unary_backward_prod_bw(py::module& module, const unary_backward_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, all_dimensions: bool, dim: int64_t, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         Performs backward operations for prod on input along `all_dimensions` or a particular `dim`.
 
         Args:
-            * :attr:`grad_tensor`
-            * :attr:`input_tensor`
+            grad_tensor (ttnn.Tensor): the input tensor.
+            input_tensor_a (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            * :attr:`all_dimensions` :Can be true (perform prod backward along all dimensions ,ignores dim param) or false (Default value = true)
-            * :attr:`dim` : Dimension to perform prod backward, if :attr:`all_dimensions` = false (Default dimension = 0)
-            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+            all_dimensions (bool, optional): perform prod backward along all dimensions ,ignores dim param . Defaults to `True`.
+            dim (int, optional): Dimension to perform prod backward. Defaults to `0`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
 
         Example:
 
-            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
             >>> output = {1}(grad_tensor, input, all_dimensions, dim)
         )doc",
         operation.base_name(),
@@ -821,23 +853,22 @@ void bind_unary_backward_prod_bw(py::module& module, const unary_backward_operat
 template <typename unary_backward_operation_t>
 void bind_unary_backward_opt(py::module& module, const unary_backward_operation_t& operation, std::string_view description) {
     auto doc = fmt::format(
-R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+        R"doc(
+        {2}
 
-{2}
+        Args:
+            * :attr:`grad_tensor`
+            * :attr:`input_tensor`
 
-Args:
-    * :attr:`grad_tensor`
-    * :attr:`input_tensor`
+        Keyword args:
+            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
 
-Keyword args:
-    * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
+        Example:
 
-Example:
-
-    >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> output = {1}(grad_tensor, input)
-)doc",
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> output = {1}(grad_tensor, input)
+        )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description);
@@ -866,25 +897,27 @@ Example:
 
 template <typename unary_backward_operation_t>
 void bind_unary_backward(
-    py::module& module, const unary_backward_operation_t& operation, std::string_view description) {
+    py::module& module, const unary_backward_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+        R"doc(
+        {2}
 
-{2}
+        Args:
+            grad_tensor (ttnn.Tensor): the input tensor.
+            input_tensor_a (ttnn.Tensor): the input tensor.
 
-Args:
-    * :attr:`grad_tensor`
-    * :attr:`input_tensor`
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
-Keyword args:
-    * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
+        Returns:
+            List of ttnn.Tensor: the output tensor.
 
-Example:
+        Example:
 
-    >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> output = {1}(grad_tensor, input)
-)doc",
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> output = {1}(grad_tensor, input)
+        )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description);

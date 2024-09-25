@@ -13,17 +13,39 @@ on:
           - add
           - line_all_gather
           - logical_and_
-          - eltwise.logical_or_
-          - eltwise.relu
-          - eltwise.gelu
-          - eltwise.cos 
-          - eltwise.sin                          
-          - eltwise.subtract.subtract_interleaved
-          - eltwise.subalpha.subalpha_interleaved
-          - eltwise.rsub.rsub_interleaved
-          - eltwise.frac.frac_interleaved
-          - eltwise.ceil.ceil_interleaved
-          - eltwise.trunc.trunc_interleaved
+          - eltwise.unary.relu.relu_interleaved
+          - eltwise.unary.gelu.gelu_interleaved
+          - eltwise.unary.cos.cos_interleaved
+          - eltwise.unary.sin.sin_interleaved
+          - eltwise.unary.clamp.clamp_interleaved
+          - eltwise.unary.clip.clip_interleaved
+          - eltwise.unary.cbrt.cbrt_interleaved
+          - eltwise.unary.rsub.rsub_interleaved
+          - eltwise.unary.rdiv.rdiv_interleaved
+          - eltwise.unary.frac.frac_interleaved
+          - eltwise.unary.ceil.ceil_interleaved
+          - eltwise.unary.trunc.trunc_interleaved
+          - eltwise.unary.floor.floor_interleaved
+          - eltwise.unary.clone.clone_interleaved
+          - eltwise.unary.exp.exp_interleaved
+          - eltwise.unary.exp2.exp2_interleaved
+          - eltwise.unary.expm1.expm1_interleaved
+          - eltwise.unary.tanh.tanh_interleaved
+          - eltwise.unary.sign.sign_interleaved
+          - eltwise.unary.rad2deg.rad2deg_interleaved
+          - eltwise.unary.deg2rad.deg2rad_interleaved
+          - eltwise.unary.relu6.relu6_interleaved
+          - eltwise.binary.subtract.subtract_interleaved
+          - eltwise.binary.multiply.multiply_interleaved
+          - eltwise.binary.div.div_interleaved
+          - eltwise.binary.div_no_nan.div_no_nan_interleaved
+          - eltwise.binary.logical_or.logical_or_interleaved
+          - eltwise.composite.binary.addalpha.addalpha_interleaved
+          - eltwise.composite.binary.subalpha.subalpha_interleaved
+          - eltwise.ternary.addcmul.addcmul_interleaved
+          - eltwise.ternary.addcdiv.addcdiv_interleaved
+          - eltwise.ternary.mac.mac_interleaved
+          - eltwise.ternary.where.where_interleaved
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
           - matmul.full.matmul_default_interleaved

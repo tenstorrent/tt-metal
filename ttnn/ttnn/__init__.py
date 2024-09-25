@@ -128,6 +128,7 @@ from ttnn.types import (
     CoreRangeSet,
     CoreRange,
     CoreCoord,
+    Tile,
     Layout,
     ROW_MAJOR_LAYOUT,
     TILE_LAYOUT,
@@ -308,6 +309,10 @@ from ttnn.operations.losses import (
 
 from ttnn.operations.reduction import (
     ReduceType,
+)
+
+from ttnn.operations.ccl import (
+    Topology,
 )
 
 from ttnn.operations.conv2d import Conv2dConfig, get_conv_output_dim, get_conv_padded_input_shape_and_mem_config

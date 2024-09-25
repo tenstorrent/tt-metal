@@ -99,7 +99,7 @@ class PytorchLlamaDecoderModel(torch.nn.Module):
         return result
 
 
-def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
+def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode):
     assert len(x.size()) == 3
     batch, seq_len, hidden_size = x.shape
 
@@ -107,7 +107,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
         f"{'llama3_' if llama_decoder_model.llama3 else ''}{name}"
     )
 
-    if llama_decoder_model.model_config["LLM_MODE"] == "prefill":
+    if mode == "prefill":
         assert seq_len % 128 == 0 and seq_len > 0, "Prefill mode only supports seqlen as a multiple of 128 up to 2k"
         assert batch == 1, "prefill mode only supports batch size 1"
         x = x.unsqueeze(1)  # [batch, 1, seq_len, hidden_dim]
@@ -116,7 +116,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
             x,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=llama_decoder_model.model_config["DRAM_MEMCFG"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(llama_decoder_model.mesh_device, dim=3),
             device=llama_decoder_model.mesh_device,
         )
@@ -134,7 +134,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             cache_file_name=cache_name(f"cos_gathered_prefill_{seq_len}"),
-            memory_config=llama_decoder_model.model_config["DRAM_MEMCFG"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=llama_decoder_model.mesh_device,
             mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.mesh_device),
         )
@@ -143,7 +143,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             cache_file_name=cache_name(f"sin_gathered_prefill_{seq_len}"),
-            memory_config=llama_decoder_model.model_config["DRAM_MEMCFG"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=llama_decoder_model.mesh_device,
             mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.mesh_device),
         )
@@ -151,10 +151,9 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
         sin_gathereds = ttnn.to_device(sin_gathereds, llama_decoder_model.mesh_device)
         rot_mats = [cos_gathereds, sin_gathereds]
 
-        attn_masks = None
         cache_idxs_tt = None
 
-    elif llama_decoder_model.model_config["LLM_MODE"] == "decode":
+    elif mode == "decode":
         assert seq_len == 1, "Only supporting decode mode"
         x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
         # Pad x to match the padded batch size
@@ -166,7 +165,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
             x,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=llama_decoder_model.model_config["DRAM_MEMCFG"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(llama_decoder_model.mesh_device, dim=3),
             device=llama_decoder_model.mesh_device,
         )
@@ -185,7 +184,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
             rot_mat,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=llama_decoder_model.model_config["DRAM_MEMCFG"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.mesh_device),
             device=llama_decoder_model.mesh_device,
         )
@@ -202,13 +201,10 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
             mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.mesh_device),
         )
 
-        attn_masks = None
-
     return (
         xs,
         start_pos,
         rot_mats,
-        attn_masks,
         cache_idxs_tt,
     )
 
@@ -253,7 +249,7 @@ def run_test_LlamaDecoder_inference(
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=t3k_mesh_device,
-        memory_config=model_config["DRAM_MEMCFG"],
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
     )
     transformation_mats = ttnn.to_device(transformation_mats, t3k_mesh_device)
@@ -269,8 +265,10 @@ def run_test_LlamaDecoder_inference(
         cache_path=cache_path,
     )
 
+    mode = "prefill" if seq_len > 1 else "decode"
+
     all_tests_pass, all_pccs = True, []
-    if model_config["LLM_MODE"] == "prefill":
+    if mode == "prefill":
         generation_start_pos = 0
         generation_length = 1
     else:
@@ -284,7 +282,7 @@ def run_test_LlamaDecoder_inference(
         start_pos = generation_start_pos + i
 
         # PyTorch output --------------------------------------------------------------------
-        if model_config["LLM_MODE"] == "prefill":
+        if mode == "prefill":
             x_input, start_pos, freqs_cis, attn_mask = pytorch_LlamaDecoder_model.prepare_inputs_prefill(
                 pt_inp, start_pos
             )
@@ -299,22 +297,22 @@ def run_test_LlamaDecoder_inference(
         )
 
         # TT hardware execution -------------------------------------------------------------
-        x_input, start_pos, rot_mat, attn_mask, cache_idxs_tt = tt_llama_decoder_prepare_inputs(
-            tt_LlamaDecoder_model, tt_input, start_pos
+        x_input, start_pos, rot_mat, cache_idxs_tt = tt_llama_decoder_prepare_inputs(
+            tt_LlamaDecoder_model, tt_input, start_pos, mode=mode
         )
 
         tt_out = tt_LlamaDecoder_model(
             x_input,
             rot_mat,
             start_pos,
-            attn_mask,
             cache_idxs=cache_idxs_tt,
+            mode=mode,
         )
 
         tt_out = ttnn.from_device(tt_out)
         tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [batch, seq_len, hidden_dim]
-        if model_config["LLM_MODE"] == "decode":
+        if mode == "decode":
             tt_out = tt_out[:batch]
 
         # check outputs ----------------------------------------------------------------------
@@ -355,17 +353,15 @@ def run_test_LlamaDecoder_inference(
         generation_start_pos,
         generation_length,
         seq_len,
-        model_config["LLM_MODE"] == "prefill",
+        mode == "prefill",
         pcc,
     )
     all_tests_pass = all_tests_pass and cache_test_pass
 
     if all_tests_pass:
         logger.info(f"{llama_version} Decoder output Passed!")
-    else:
-        gc.collect()
-        logger.warning(f"{llama_version} Decoder output Failed!")
-        assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
+
+    assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
@@ -413,8 +409,6 @@ def test_LlamaDecoder_inference(
 
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,
-        batch=batch,
-        seq_len=seq_len,
         max_batch_size=max_batch_size,
         max_context_len=max_context_len,
     )

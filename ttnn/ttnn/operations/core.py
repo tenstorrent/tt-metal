@@ -28,7 +28,6 @@ def _golden_function(input_tensor: ttnn.Tensor, slices):
 )
 def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
     input_rank = len(input_tensor.shape)
-    input_layout = input_tensor.layout
 
     if isinstance(slices, int):
         slices = (slice(None, slices, None),)
@@ -66,47 +65,15 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
             raise RuntimeError(f"Too many slices for tensor of rank {input_rank}")
 
     if input_rank <= 4:
-        input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-
-        while len(slices) != 4:
-            slices = (slice(None, None, None),) + slices
         slice_start = [_slice.start if _slice.start is not None else 0 for _slice in slices]
         slice_end = [
-            (max(input_tensor.shape[index] + _slice.stop, 1) if _slice.stop < 0 else _slice.stop)
-            if _slice.stop is not None
-            else input_tensor.shape[index]
-            for index, _slice in enumerate(slices)
+            _slice.stop if _slice.stop is not None else input_tensor.shape[i] for i, _slice in enumerate(slices)
         ]
         slice_step = [_slice.step if _slice.step is not None else 1 for _slice in slices]
 
-        padded_slice_end = list(slice_end)
-        if input_layout == ttnn.TILE_LAYOUT:
-            padded_slice_end[-1] = int(math.ceil((slice_end[-1]) / ttnn.TILE_SIZE)) * ttnn.TILE_SIZE
-            padded_slice_end[-2] = int(math.ceil((slice_end[-2]) / ttnn.TILE_SIZE)) * ttnn.TILE_SIZE
+        output = ttnn.slice(input_tensor, slice_start, slice_end, slice_step)
 
-        if list(padded_slice_end) == list(input_tensor.shape.with_tile_padding()) and (slice_step is None):
-            output = input_tensor
-        else:
-            padded_slice_end_minus_1 = [x - 1 for x in padded_slice_end]
-            if any([x < 0 for x in padded_slice_end_minus_1]):
-                raise RuntimeError("ttnn.Tensor.__getitem__: cannot return a scalar!")
-
-            if ttnn.is_tensor_storage_on_device(input_tensor):
-                output = ttnn.slice(input_tensor, slice_start, padded_slice_end_minus_1, slice_step)
-            else:
-                if any([x != 1 for x in slice_step]):
-                    raise NotImplementedError("ttnn.Tensor.__getitem__: step is not supported for host tensor!")
-                input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
-                output = input_tensor.unpad(slice_start, padded_slice_end_minus_1)
-                output = ttnn.to_layout(output, input_layout)
-        output_shape = [
-            0
-            if slices[i].stop is not None and slices[i].stop + input_tensor.shape[i] == slices[i].start
-            else len(range(start, end, step))
-            for i, (start, end, step) in enumerate(zip(slice_start, slice_end, slice_step))
-        ][-input_rank:]
-        padded_output_shape = list(output.shape.with_tile_padding())[-input_rank:]
-        return ttnn.reshape(output, shape=ttnn.Shape(output_shape, padded_output_shape))
+        return output
 
     raise NotImplementedError
 
@@ -196,22 +163,6 @@ ttnn.register_python_operation(
 ttnn.register_python_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operations.core.unsqueeze_to_4D)
 
 
-@ttnn.register_python_operation(
-    name="ttnn.squeeze",
-)
-def squeeze(tensor, dim):
-    r"""squeeze(tensor: ttnn.Tensor, dim: int) -> ttnn.Tensor"""
-    if dim != 0:
-        raise RuntimeError("Only dim=0 is supported for squeeze operation!")
-    if tensor.shape[0] != 1:
-        return tensor
-    if len(tensor.shape) == 1:
-        raise RuntimeError("Cannot squeeze a tensor of rank 1 because rank 0 is not supported by ttnn!")
-    _, *shape = tensor.shape
-    _, *full_shape = tensor.shape.with_tile_padding()
-    return ttnn.reshape(tensor, shape=ttnn.Shape(shape, full_shape))
-
-
 def _golden_function(input_tensor, *args, **kwargs):
     return input_tensor
 
@@ -221,29 +172,33 @@ def from_torch(
     tensor: "torch.Tensor",
     dtype: Optional[ttnn.DataType] = None,
     *,
+    tile: Optional[ttnn.Tile] = None,
     layout: Optional[ttnn.Layout] = ttnn.ROW_MAJOR_LAYOUT,
     device: Optional[ttnn.Device] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
     mesh_mapper: Optional[ttnn.TensorToMesh] = None,
 ) -> ttnn.Tensor:
     """
-    from_torch(tensor: torch.Tensor, dtype: Optional[ttnn.DataType] = None, layout: Optional[ttnn.Layout] = ROW_MAJOR_LAYOUT, device: Optional[ttnn.Device] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-
-    Converts the `torch.Tensor` :attr:`tensor` into a `ttnn.Tensor`.
+    Converts the `torch.Tensor` tensor into a `ttnn.Tensor`.
 
     Args:
-        * :attr:`tensor`: the torch.Tensor
-        * :attr:`dtype`: the optional `ttnn` data type.
-        * :attr:`layout`: the optional `ttnn` layout.
-        * :attr:`device`: the optional `ttnn` device.
-        * :attr:`memory_config`: the optional `ttnn` memory configuration.
+        tensor (torch.Tensor): The input tensor.
+        dtype (ttnn.DataType, optional): The desired `ttnn` data type. Defaults to `None`.
 
-    Example::
+    Keyword Args:
+        layout (ttnn.Layout, optional): The desired `ttnn` layout. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
+        device (ttnn.Device, optional): The desired `ttnn` device. Defaults to `None`.
+        memory_config (ttnn.MemoryConfig, optional): The desired `ttnn` memory configuration. Defaults to `None`.
+        mesh_mapper (ttnn.TensorToMesh, optional): The desired `ttnn` mesh mapper. Defaults to `None`.
 
+    Returns:
+        ttnn.Tensor: The resulting `ttnn` tensor.
+
+    Example:
         >>> tensor = ttnn.from_torch(torch.randn((2,3)), dtype=ttnn.bfloat16)
         >>> print(tensor)
         Tensor([ [1.375, -1.30469, -0.714844],
-            [-0.761719, 0.53125, -0.652344]], dtype=bfloat16 )
+            [-0.761719, 0.53125, -0.652344]], dtype=bfloat16)
     """
 
     shape_with_padding = None
@@ -266,7 +221,10 @@ def from_torch(
         shards = mesh_mapper.map(tensor)
         tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config())
     else:
-        tensor = ttnn.Tensor(tensor, dtype)
+        if tile is not None:
+            tensor = ttnn.Tensor(tensor, dtype, {}, tile)
+        else:
+            tensor = ttnn.Tensor(tensor, dtype)
 
     if layout is not None:
         tensor = ttnn.to_layout(tensor, layout, device=device)
@@ -313,15 +271,22 @@ def to_torch(
     cq_id: Optional[int] = 0,
 ) -> "torch.Tensor":
     """
-    to_torch(tensor: ttnn.Tensor, torch_rank: Optional[int] = None) -> torch.Tensor
-
-    Converts the `ttnn.Tensor` :attr:`tensor` into a `torch.Tensor`.
+    Converts the `ttnn.Tensor` tensor into a `torch.Tensor`.
 
     Args:
-        * :attr:`tensor`: ttnn.Tensor to be converted to torch.Tensor
-        * :attr:`torch_rank`: desired rank of the torch.Tensor. Will use torch.squeeze operation to remove dimensions until the desired rank is reached. If not possible, the operation will error out.
+        tensor (ttnn.Tensor): The `ttnn.Tensor` to be converted to `torch.Tensor`.
 
-    Example::
+    Keyword Args:
+        torch_rank (int, optional): Desired rank of the `torch.Tensor`. Defaults to `None`.
+            Will use `torch.squeeze` operation to remove dimensions until the desired rank is reached. If not possible, the operation will raise an error.
+        mesh_composer (ttnn.MeshToTensor, optional): The desired `ttnn` mesh composer. Defaults to `None`.
+        device (ttnn.Device, optional): The `ttnn` device of the input tensor. Defaults to `None`.
+        cq_id (int, optional): The command queue ID to use. Defaults to `0`.
+
+    Returns:
+        torch.Tensor: The converted `torch` tensor.
+
+    Example:
         >>> ttnn_tensor = ttnn.from_torch(torch.randn((2,3)), dtype=ttnn.bfloat16)
         >>> torch_tensor = ttnn.to_torch(ttnn_tensor)
         >>> print(torch_tensor)
@@ -359,9 +324,8 @@ def _golden_function(tensor, *args, **kwargs):
 
 
 doc = """
-to_device(tensor: ttnn.Tensor, device: ttnn.Device, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
 Copies the `ttnn.Tensor` :attr:`tensor` to the `tt_lib.device.Device`.
+
 The tensor may be placed in DRAM or L1 memory.
 
 Currently memory_config must be of an Interleaved tensor (not sharded)
@@ -393,8 +357,6 @@ def _golden_function(tensor, *args, **kwargs):
 
 
 doc = """
-from_device(tensor: ttnn.Tensor) -> ttnn.Tensor
-
 Copies the `ttnn.Tensor` :attr:`tensor` to the host.
 
 Args:
@@ -425,15 +387,13 @@ ttnn.register_python_operation(
 )(ttnn._ttnn.operations.core.copy_host_to_device_tensor)
 
 doc = """
-deallocate(tensor: ttnn.Tensor, force: bool = True) -> None
-
 Releases the resources for `ttnn.Tensor` :attr:`tensor` explicitly.
 
 Args:
-    * :attr:`tensor`: the ttnn.Tensor
-    * :attr:`force`: the optional boolean to force deallocation even if buffer may have multiple references. Defaults to True.
+    tensor (ttnn.Tensor): The tensor whose resources will be released.
+    force (bool, optional): Whether to force deallocation, even if the buffer may have multiple references. Defaults to True.
 
-Example::
+Example:
     >>> device_id = 0
     >>> device = ttnn.open_device(device_id=device_id)
     >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
@@ -485,6 +445,18 @@ ttnn.register_python_operation(name="ttnn.reallocate", golden_function=_golden_f
 
 @ttnn.register_python_operation(name="ttnn.load_tensor")
 def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.Device = None) -> ttnn.Tensor:
+    """
+    Load tensor from a file.
+
+    Args:
+        file_name (str | pathlib.Path): The file name.
+
+    Keyword Args:
+        device (ttnn.Device, optional): The device. Defaults to `None`.
+
+    Returns:
+        ttnn.Tensor: The loaded tensor.
+    """
     file_name = pathlib.Path(file_name)
     if not file_name.exists():
         raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file does not exist.")
@@ -495,6 +467,14 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.Device = No
 
 @ttnn.register_python_operation(name="ttnn.dump_tensor")
 def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor, distribute: Dict[str, str] = None) -> None:
+    """
+    Dump tensor to a file.
+
+    Args:
+        file_name (str | pathlib.Path): The file name.
+        tensor (ttnn.Tensor): The tensor.
+        distribute (Dict[str, str], optional): The distributed strategy. Only applicable to multi-device tensors. Defaults to `None`.
+    """
     if distribute is None:
         distribute = dict()
     file_name = pathlib.Path(file_name)
@@ -515,23 +495,28 @@ def as_tensor(
     use_device_tilizer: bool = False,
 ) -> ttnn.Tensor:
     """
-    as_tensor(tensor: Union[torch.Tensor], dtype: Optional[ttnn.DataType] = None, layout: Optional[ttnn.Layout] = ROW_MAJOR_LAYOUT, device: Optional[ttnn.Device] = None, memory_config: Optional[ttnn.MemoryConfig] = None, cache_file_name: Optional[str | pathlib.Path] = None) -> ttnn.Tensor
-
     Converts the `torch.Tensor` :attr:`tensor` into a `ttnn.Tensor`.
 
     Args:
-        * :attr:`tensor`: the torch.Tensor
-        * :attr:`dtype`: the optional `ttnn` data type.
-        * :attr:`layout`: the optional `ttnn` layout.
-        * :attr:`device`: the optional `ttnn` device.
-        * :attr:`memory_config`: the optional `ttnn` memory configuration.
-        * :attr:`cache_file_name`: the optional cache file name.
-        * :attr:`preprocess`: the optional function to preprocess the tensor before serializing/converting to ttnn.
-        * :attr:`mesh_mapper`: the optional TensorToMesh to define the mapping from torch to multi-device.
-        * :attr:`use_device_tilizer`: the optional flag to use device tilizer instead of host-tilizer. This toggles whether to use host vs. device tilizer:
+        tensor (torch.Tensor): Input tensor
+        dtype (ttnn.DataType, optional): The `ttnn` data type.
+
+    Keyword args:
+        layout (ttnn.Layout, optional): The `ttnn` layout. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
+        device (ttnn.Device, optional): The `ttnn` device. Defaults to `None`.
+        memory_config (ttnn.MemoryConfig, optional): The `ttnn` memory configuration. Defaults to `None`.
+        cache_file_name (str | pathlib.Path, optional): The cache file name. Defaults to `None`.
+        preprocess (Callable[[ttnn.Tensor], ttnn.Tensor], optional): The function to preprocess the tensor before serializing/converting to ttnn. Defaults to `None`.
+        mesh_mapper (ttnn.TensorToMesh, optional): The TensorToMesh to define the mapping from torch to multi-device. Defaults to `None`.
+        use_device_tilizer (bool): The flag that toggles whether to use host vs. device tilizer. Defaults to `False`.
+
             - For Grayskull, the on-device tilizer will truncate mantissa bits for bfp* formats.
             - For Wormhole, the on-device tilizer will raise a runtime error (RTE) for bfp8 but will truncate for bfp4/2 formats.
 
+    Returns:
+        ttnn.Tensor: The resulting `ttnn` tensor.
+
+    Examples:
         >>> tensor = ttnn.as_tensor(torch.randn((2,3)), dtype=ttnn.bfloat16)
         >>> print(tensor)
         Tensor([ [1.375, -1.30469, -0.714844],

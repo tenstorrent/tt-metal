@@ -351,7 +351,6 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw
             this->srcs_.push_back("tt_metal/hw/toolchain/substitutes.cpp");
             if (this->is_fw_) {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/erisc.cc");
-                this->srcs_.push_back("tt_metal/hw/toolchain/erisc-early-exit.S");
             } else {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/erisck.cc");
             }

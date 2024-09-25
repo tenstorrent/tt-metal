@@ -20,7 +20,8 @@ struct ExecuteRMSNormPostAllGather {
         const std::optional<const ttnn::Tensor>& weight = std::nullopt,
         const std::optional<const ttnn::Tensor>& bias = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+        const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        const std::optional<const LayerNormProgramConfig>& program_config = std::nullopt);
 };
 
 }  // namespace operations::normalization
