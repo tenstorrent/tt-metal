@@ -315,9 +315,8 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
         tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
         new_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         current_rot_mat = ttnn.copy(new_rot_mat, current_rot_mat)
-        # FIXME: uncomment when this op is merged
-        # ttnn.plus_one(current_pos)
-        # ttnn.plus_one(current_pos_attn)
+        ttnn.plus_one(current_pos)
+        ttnn.plus_one(current_pos_attn)
 
         # Capture Trace
         trace_id = ttnn.begin_trace_capture(device_mesh, cq_id=0)
@@ -329,9 +328,8 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
         tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
         new_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         current_rot_mat = ttnn.copy(new_rot_mat, current_rot_mat)
-        # FIXME: uncomment when this op is merged
-        # ttnn.plus_one(current_pos)
-        # ttnn.plus_one(current_pos_attn)
+        ttnn.plus_one(current_pos)
+        ttnn.plus_one(current_pos_attn)
 
         ttnn.end_trace_capture(device_mesh, trace_id, cq_id=0)
         current_pos_reset = ttnn.from_torch(
@@ -357,34 +355,21 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
         iteration = 0
         users_decoding = True  # reset to handle next batch
 
-        # ttnn.record_event(1, write_event)
+        ttnn.record_event(1, write_event)
 
         while users_decoding:
             iteration_time_start = time()
             # Execute trace
-            # ttnn.wait_for_event(0, write_event)
+            ttnn.wait_for_event(0, write_event)
             ttnn.execute_trace(device_mesh, trace_id, cq_id=0, blocking=True)
-            # FIXME: remove when ttnn.plus_one is merged
-            current_pos_reset = ttnn.from_torch(
-                torch.tensor(decoding_pos, dtype=torch.int32) + iteration + 1,
-                dtype=ttnn.int32,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
-            )
-            current_pos_attn_reset = ttnn.from_torch(
-                torch.tensor(decoding_pos * 4, dtype=torch.int32) + iteration + 1,
-                dtype=ttnn.int32,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
-            )
-            ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos)
-            ttnn.copy_host_to_device_tensor(current_pos_attn_reset, current_pos_attn)
-            # ttnn.record_event(0, op_event)
+            ttnn.record_event(0, op_event)
 
             # Write to host
-            # ttnn.wait_for_event(1, op_event)
+            ttnn.wait_for_event(1, op_event)
             tt_output_torch = ttnn.to_torch(
-                tt_out_tok.cpu(blocking=False, cq_id=0), mesh_composer=ttnn.ConcatMeshToTensor(device_mesh, dim=1)
+                tt_out_tok.cpu(blocking=False, cq_id=1), mesh_composer=ttnn.ConcatMeshToTensor(device_mesh, dim=1)
             )[0, 0, 0, :batch_size]
-            # ttnn.record_event(1, write_event)
+            ttnn.record_event(1, write_event)
             # Save output token to print out later
             for user in range(batch_size):
                 user_tok = tt_output_torch[user].tolist()
@@ -476,7 +461,7 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
         # "instruct_weights-3_batch",
     ],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 3343360}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 3343360, "num_command_queues": 2}], indirect=True)
 def test_llama_demo(mesh_device, use_program_cache, input_prompts, instruct_weights, is_ci_env, num_batches):
     if is_ci_env and instruct_weights == False:
         pytest.skip("CI demo test only runs instruct weights to reduce CI pipeline load (both are supported)")
