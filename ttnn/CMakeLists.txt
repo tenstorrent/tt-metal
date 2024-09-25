@@ -570,7 +570,16 @@ endfunction()
 set(PRECOMPILED_HEADER_TARGET "")
 
 function(add_ttnn_sublibrary SUBLIBRARY_NAME)
-    add_library(${SUBLIBRARY_NAME} SHARED ${ARGN})
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        add_library(${SUBLIBRARY_NAME} SHARED ${ARGN})
+        install(TARGETS ${SUBLIBRARY_NAME}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT tt_build_artifacts
+        )
+    else()
+        add_library(${SUBLIBRARY_NAME} STATIC ${ARGN})
+    endif()
     target_include_directories(${SUBLIBRARY_NAME} PRIVATE ${TTNN_PUBLIC_INCLUDE_DIRS})
     target_link_libraries(${SUBLIBRARY_NAME} PRIVATE ${TTNN_PUBLIC_LINK_LIBRARIES})
     target_link_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
@@ -582,11 +591,7 @@ function(add_ttnn_sublibrary SUBLIBRARY_NAME)
         target_compile_definitions(${SUBLIBRARY_NAME} PRIVATE DISABLE_NAMESPACE_STATIC_ASSERT)
         target_link_options(${SUBLIBRARY_NAME} PRIVATE "-Wl,--gc-sections" "-Wl,--no-as-needed")
     endif()
-    install(TARGETS ${SUBLIBRARY_NAME}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    COMPONENT tt_build_artifacts
-    )
+
 endfunction()
 
 foreach(SUBLIBRARY_PATH ${TTNN_SUBLIBRARIES})
