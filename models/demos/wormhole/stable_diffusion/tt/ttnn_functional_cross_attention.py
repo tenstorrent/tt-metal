@@ -407,7 +407,7 @@ class cross_attention:
                 v_slice = ttnn.slice(
                     value,
                     (j, i, 0, 0),
-                    (j, i, self.seq_len, self.key_len),
+                    (j + 1, i + 1, self.seq_len, self.key_len),
                     memory_config=self.l1_interleaved_memory_config,
                 )
                 mm_slice = ttnn.matmul(
