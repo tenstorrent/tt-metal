@@ -82,7 +82,7 @@ class TtTransformer(nn.Module):
 
         # slicing for the last token
         if get_last_token != -1:
-            x = ttnn.slice(x, ttnn.Shape((0, 0, get_last_token, 0)), ttnn.Shape((0, 0, get_last_token + 31, 4095)))
+            x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, 4096))
 
         x = self.norm(x)
 

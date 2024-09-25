@@ -243,7 +243,7 @@ class TtLlamaAttention(nn.Module):
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=self.model_config["XQKV_DECODE_PROGCFG"],
                 compute_kernel_config=self.compute_kernel_config_hifi2,
-                dtype=self.dtype,
+                dtype=ttnn.bfloat16,
             )
 
             xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused, ttnn.L1_MEMORY_CONFIG)
@@ -288,9 +288,9 @@ class TtLlamaAttention(nn.Module):
                 k_heads_pre_rot_1BKD,
                 rotary_mat,
                 # program_config=self.k_heads_program_config,
-                memory_config=self.model_config["QV_ROT_EMB_OUTPUT_MEMCFG"],
+                memory_config=k_heads_pre_rot_1BKD.memory_config(),
                 compute_kernel_config=self.compute_kernel_config_hifi2,
-                dtype=self.dtype,
+                dtype=ttnn.bfloat16,
             )
 
             ttnn.deallocate(q_heads_pre_rot_1BQD)
