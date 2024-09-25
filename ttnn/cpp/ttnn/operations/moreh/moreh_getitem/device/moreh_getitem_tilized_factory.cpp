@@ -29,7 +29,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
     auto index_tensors = tensor_args.index_tensors;
     auto output = output_tensor;
     auto index_dims = operation_attributes.index_dims;
-    auto output_memory_config = operation_attributes.output_memory_config;
+    auto memory_config = operation_attributes.memory_config;
     auto TILE_HEIGHT = constants::TILE_HEIGHT;
     auto TILE_WIDTH = constants::TILE_WIDTH;
     // auto core_range = operation_attributes.core_range;
@@ -122,9 +122,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
         auto src_cb_index = CB::c_in0;
         auto rounded_input_page_size = round_up_to_mul32(input_unit_size);
-        auto cb_src0_config =
-            CircularBufferConfig(rounded_input_page_size, {{src_cb_index, src_cb_data_format}})
-                .set_page_size(src_cb_index, rounded_input_page_size);
+        auto cb_src0_config = CircularBufferConfig(rounded_input_page_size, {{src_cb_index, src_cb_data_format}})
+                                  .set_page_size(src_cb_index, rounded_input_page_size);
         auto cb_src0 = CreateCircularBuffer(program, all_cores, cb_src0_config);
 
         for (uint32_t dim = 0; dim < 5; dim++) {
@@ -133,23 +132,20 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
             auto src1_cb_index = CB::c_in1 + dim;
             auto index_page_size = 1024 * 4;
-            auto cb_index_config =
-                CircularBufferConfig(index_page_size, {{src1_cb_index, index_cb_data_format}})
-                    .set_page_size(src1_cb_index, index_page_size);
+            auto cb_index_config = CircularBufferConfig(index_page_size, {{src1_cb_index, index_cb_data_format}})
+                                       .set_page_size(src1_cb_index, index_page_size);
             auto cb_src1 = CreateCircularBuffer(program, all_cores, cb_index_config);
         }
 
         auto out_cb0_index = CB::c_out0;
         auto rounded_output_page_size = round_up_to_mul32(output_unit_size);
-        auto cb_out0_config =
-            CircularBufferConfig(rounded_output_page_size, {{out_cb0_index, output_cb_data_format}})
-                .set_page_size(out_cb0_index, rounded_output_page_size);
+        auto cb_out0_config = CircularBufferConfig(rounded_output_page_size, {{out_cb0_index, output_cb_data_format}})
+                                  .set_page_size(out_cb0_index, rounded_output_page_size);
         auto cb_out0 = CreateCircularBuffer(program, all_cores, cb_out0_config);
 
         auto out_cb1_index = CB::c_out1;
-        auto cb_out1_config =
-            CircularBufferConfig(rounded_output_page_size, {{out_cb1_index, output_cb_data_format}})
-                .set_page_size(out_cb1_index, rounded_output_page_size);
+        auto cb_out1_config = CircularBufferConfig(rounded_output_page_size, {{out_cb1_index, output_cb_data_format}})
+                                  .set_page_size(out_cb1_index, rounded_output_page_size);
         auto cb_out1 = CreateCircularBuffer(program, all_cores, cb_out1_config);
 
         // create read/wrtie kernel
@@ -359,9 +355,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
         auto src_cb_index = CB::c_in0;
         auto rounded_input_page_size = round_up_to_mul32(input_unit_size);
-        auto cb_src0_config =
-            CircularBufferConfig(rounded_input_page_size, {{src_cb_index, src_cb_data_format}})
-                .set_page_size(src_cb_index, rounded_input_page_size);
+        auto cb_src0_config = CircularBufferConfig(rounded_input_page_size, {{src_cb_index, src_cb_data_format}})
+                                  .set_page_size(src_cb_index, rounded_input_page_size);
         auto cb_src0 = CreateCircularBuffer(program, all_cores, cb_src0_config);
 
         for (uint32_t dim = 0; dim < 5; dim++) {
@@ -371,17 +366,15 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             auto src1_cb_index = CB::c_in1 + dim;
             // auto index_page_size = round_up_to_mul32(index_info[dim].unit_size);
             auto index_page_size = 1024 * 4;
-            auto cb_index_config =
-                CircularBufferConfig(index_page_size, {{src1_cb_index, index_cb_data_format}})
-                    .set_page_size(src1_cb_index, index_page_size);
+            auto cb_index_config = CircularBufferConfig(index_page_size, {{src1_cb_index, index_cb_data_format}})
+                                       .set_page_size(src1_cb_index, index_page_size);
             auto cb_src1 = CreateCircularBuffer(program, all_cores, cb_index_config);
         }
 
         auto out_cb_index = CB::c_out0;
         auto rounded_output_page_size = round_up_to_mul32(input_unit_size);
-        auto cb_out0_config =
-            CircularBufferConfig(rounded_input_page_size, {{out_cb_index, output_cb_data_format}})
-                .set_page_size(out_cb_index, rounded_input_page_size);
+        auto cb_out0_config = CircularBufferConfig(rounded_input_page_size, {{out_cb_index, output_cb_data_format}})
+                                  .set_page_size(out_cb_index, rounded_input_page_size);
         auto cb_out0 = CreateCircularBuffer(program, all_cores, cb_out0_config);
 
         // create read/wrtie kernel
@@ -585,7 +578,7 @@ void MorehGetItemOperation::MorehGetItemTilizedFactory::override_runtime_argumen
             runtime_args[2] = index_info[1].address;
             runtime_args[3] = index_info[2].address;
             runtime_args[4] = index_info[3].address;
-            runtime_args[4] = index_info[4].address;
+            runtime_args[5] = index_info[4].address;
         }
 
         {

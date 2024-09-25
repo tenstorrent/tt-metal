@@ -17,16 +17,19 @@ uint32_t get_noc_offset_in_tile(uint32_t stick_h, uint32_t stick_w, uint32_t til
 
     const uint32_t stick_bytes = FACE_WIDTH * element_size;
 
-    if (stick_h < FACE_WIDTH && is_even) noc_offset += stick_h * stick_bytes;
-    else if (stick_h < FACE_WIDTH && is_odd) noc_offset += (16 + stick_h) * stick_bytes;
-    else if (stick_h >= FACE_WIDTH && is_even) noc_offset += (16 + stick_h) * stick_bytes;
-    else if (stick_h >= FACE_WIDTH && is_odd) noc_offset += (32 + stick_h) * stick_bytes;
+    if (stick_h < FACE_WIDTH && is_even)
+        noc_offset += stick_h * stick_bytes;
+    else if (stick_h < FACE_WIDTH && is_odd)
+        noc_offset += (16 + stick_h) * stick_bytes;
+    else if (stick_h >= FACE_WIDTH && is_even)
+        noc_offset += (16 + stick_h) * stick_bytes;
+    else if (stick_h >= FACE_WIDTH && is_odd)
+        noc_offset += (32 + stick_h) * stick_bytes;
 
     return noc_offset;
 }
 
-struct Idx4d
-{
+struct Idx4d {
     uint32_t n;
     uint32_t c;
     uint32_t h;
@@ -59,8 +62,7 @@ Idx4d get_tile_indices(Idx4d stick_index_4d) {
     return tile_index_4d;
 }
 
-struct Idx5d
-{
+struct Idx5d {
     uint32_t n;
     uint32_t c;
     uint32_t d;
@@ -68,7 +70,8 @@ struct Idx5d
     uint32_t w;
 };
 
-Idx5d get_stick_indices(uint32_t stick_idx, uint32_t size_c, uint32_t size_d, uint32_t size_h, uint32_t num_stick_width) {
+Idx5d get_stick_indices(
+    uint32_t stick_idx, uint32_t size_c, uint32_t size_d, uint32_t size_h, uint32_t num_stick_width) {
     Idx5d stick_index_5d;
 
     stick_index_5d.w = stick_idx % num_stick_width;

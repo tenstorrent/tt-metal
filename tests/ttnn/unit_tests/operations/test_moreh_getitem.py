@@ -209,6 +209,68 @@ def test_getitem_RAW_MAJOR_three_indices(shape_index_dims, dtype, index_size, de
 @pytest.mark.parametrize(
     "shape_index_dim",
     (
+        ((10, 70), 0),
+        ((10, 5, 70), 1),
+    ),
+)
+@pytest.mark.parametrize(
+    "dtype",
+    (
+        torch.int32,
+        torch.bfloat16,
+    ),
+    ids=["int32", "bfloat16"],
+)
+@pytest.mark.parametrize(
+    "index_size",
+    (
+        4,
+        100,
+    ),
+)
+def test_getitem_RAW_MAJOR_callback(shape_index_dim, dtype, index_size, device, use_program_cache):
+    shape, index_dim = shape_index_dim
+    torch.manual_seed(2)
+
+    if dtype == torch.int32:
+        tt_dtype = ttnn.int32
+    if dtype == torch.bfloat16:
+        tt_dtype = ttnn.bfloat16
+
+    x = torch.randint(low=0, high=10, size=shape).to(dtype)
+    dev_x = ttnn.Tensor(x, tt_dtype).to(device)
+
+    idx_value_max = shape[index_dim] - 1
+    idx = torch.randint(-idx_value_max - 1, idx_value_max, (index_size,))
+    dev_idx = ttnn.Tensor(idx, ttnn.int32).to(device)
+
+    if index_dim == 0:
+        tt_cpu = x[idx]
+    elif index_dim == 1:
+        tt_cpu = x[:, idx]
+    elif index_dim == 2:
+        tt_cpu = x[:, :, idx]
+    elif index_dim == 3:
+        tt_cpu = x[:, :, :, idx]
+    elif index_dim == 4:
+        tt_cpu = x[:, :, :, :, idx]
+
+    for _ in range(2):
+        tt_npu = ttnn.operations.moreh.getitem(dev_x, [dev_idx], [index_dim])
+
+    assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
+    tt_dev = tt_npu.cpu().to_torch()
+
+    passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev)
+    logger.info(out)
+
+    assert passing
+
+
+@skip_for_blackhole("Mismatching on Blackhole, see #12349")
+@pytest.mark.parametrize(
+    "shape_index_dim",
+    (
         ((7, 70), 0),
         ((5, 64), 1),
         ((10, 7, 70), 0),
@@ -649,6 +711,84 @@ def test_getitem_tilized_five_indices(shape_index_dims, dtype, index_size, row_m
 
     tt_npu = tt_npu.unpad_from_tile(output_5d_shape)
 
+    tt_dev = tt_npu.to_torch().reshape(tt_cpu.shape).to(dtype)
+
+    passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev)
+    logger.info(out)
+
+    assert passing
+
+
+@skip_for_blackhole("Mismatching on Blackhole, see #12349")
+@pytest.mark.parametrize(
+    "shape_index_dim",
+    (((7, 70), 0),),
+    ids=[
+        "2d_W",
+    ],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    (
+        torch.int32,
+        torch.bfloat16,
+    ),
+    ids=["int32", "bfloat16"],
+)
+@pytest.mark.parametrize(
+    "index_size",
+    (4,),
+)
+@pytest.mark.parametrize(
+    "row_major_index",
+    (False,),
+)
+def test_getitem_tilized_one_index_callback(
+    shape_index_dim, dtype, index_size, row_major_index, device, use_program_cache
+):
+    shape, index_dim = shape_index_dim
+    torch.manual_seed(2)
+
+    if dtype == torch.int32:
+        tt_dtype = ttnn.int32
+    if dtype == torch.bfloat16:
+        tt_dtype = ttnn.bfloat16
+
+    x = torch.randint(low=0, high=10, size=shape).to(dtype)
+
+    dev_x = ttnn.Tensor(x, tt_dtype).reshape(shape).pad_to_tile(float("nan")).to(ttnn.TILE_LAYOUT).to(device)
+
+    idx_value_max = shape[index_dim] - 1
+    idx = torch.randint(-idx_value_max - 1, idx_value_max, (index_size,))
+    if row_major_index:
+        dev_idx = ttnn.Tensor(idx, ttnn.int32).to(device)
+    else:
+        dev_idx = (
+            ttnn.Tensor(idx, ttnn.int32)
+            .reshape([1, 1, 1, 1, index_size])
+            .pad_to_tile(float("nan"))
+            .to(ttnn.TILE_LAYOUT)
+            .to(device)
+        )
+
+    if index_dim == 0:
+        tt_cpu = x[idx]
+    elif index_dim == 1:
+        tt_cpu = x[:, idx]
+    elif index_dim == 2:
+        tt_cpu = x[:, :, idx]
+    elif index_dim == 3:
+        tt_cpu = x[:, :, :, idx]
+    elif index_dim == 4:
+        tt_cpu = x[:, :, :, :, idx]
+
+    for _ in range(2):
+        tt_npu = ttnn.operations.moreh.getitem(dev_x, [dev_idx], [index_dim])
+    tt_npu = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
+
+    cpu_5d_shape = to_output_5d_shape(shape, [index_dim], index_size)
+
+    tt_npu = tt_npu.unpad_from_tile(cpu_5d_shape)
     tt_dev = tt_npu.to_torch().reshape(tt_cpu.shape).to(dtype)
 
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev)
