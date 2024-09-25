@@ -392,10 +392,6 @@ constexpr auto acosh_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardWoFloat<
         operations::unary_backward::UnaryBackwardOpType::ACOSH_BW>>();
 
-constexpr auto rpow_bw = ttnn::register_operation<"ttnn::rpow_bw", operations::unary_backward::ExecuteUnaryBackwardRpow>();
-constexpr auto div_no_nan_bw = ttnn::register_operation<"ttnn::div_no_nan_bw", operations::unary_backward::ExecuteUnaryBackwardDivNoNan>();
-constexpr auto polygamma_bw = ttnn::register_operation<"ttnn::polygamma_bw",operations::unary_backward::ExecuteUnaryBackwardPolygamma>();
-
 //ExecuteUnaryBackwardOp : get_function_type1
 constexpr auto acos_bw = ttnn::register_operation<
     "ttnn::acos_bw",
@@ -575,20 +571,9 @@ constexpr auto erfc_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardOp<
         operations::unary_backward::UnaryBackwardOpType::ERFC_BW>>();
 
-constexpr auto logiteps_bw = ttnn::register_operation<"ttnn::logiteps_bw", operations::unary_backward::ExecuteUnaryBackwardLogiteps>();
-constexpr auto celu_bw = ttnn::register_operation<"ttnn::celu_bw", operations::unary_backward::ExecuteUnaryBackwardCelu>();
-constexpr auto elu_bw = ttnn::register_operation<"ttnn::elu_bw", operations::unary_backward::ExecuteUnaryBackwardElu>();
-constexpr auto leaky_relu_bw = ttnn::register_operation<"ttnn::leaky_relu_bw", operations::unary_backward::ExecuteUnaryBackwardLeakyRelu>();
-constexpr auto softshrink_bw = ttnn::register_operation<"ttnn::softshrink_bw", operations::unary_backward::ExecuteUnaryBackwardSoftshrink>();
-constexpr auto hardshrink_bw = ttnn::register_operation<"ttnn::hardshrink_bw", operations::unary_backward::ExecuteUnaryBackwardHardshrink>();
-
 constexpr auto clamp_bw = ttnn::register_operation<
     "ttnn::clamp_bw",
     operations::unary_backward::ExecuteUnaryBackwardClamp>();
-
-constexpr auto hardtanh_bw = ttnn::register_operation<"ttnn::hardtanh_bw", operations::unary_backward::ExecuteUnaryBackwardHardtanh>();
-constexpr auto softplus_bw = ttnn::register_operation<"ttnn::softplus_bw", operations::unary_backward::ExecuteUnaryBackwardSoftplus>();
-
 
 constexpr auto rdiv_bw = ttnn::register_operation<
     "ttnn::rdiv_bw",
@@ -620,10 +605,6 @@ constexpr auto silu_bw = ttnn::register_operation<
     "ttnn::silu_bw",
     operations::unary_backward::ExecuteUnaryBackwardSilu>();
 
-constexpr auto prod_bw = ttnn::register_operation<
-    "ttnn::prod_bw",
-    operations::unary_backward::ExecuteUnaryBackwardProd>();
-
 constexpr auto relu_bw = ttnn::register_operation<
     "ttnn::relu_bw",
     operations::unary_backward::ExecuteUnaryBackwardWoFloat<operations::unary_backward::UnaryBackwardOpType::RELU_BW>>();
@@ -640,13 +621,19 @@ constexpr auto log_bw = ttnn::register_operation<
     "ttnn::log_bw",
     operations::unary_backward::ExecuteUnaryBackwardWoFloat<operations::unary_backward::UnaryBackwardOpType::LOG_BW>>();
 
-// overload
-constexpr auto reciprocal_bw = ttnn::register_operation<
-    "ttnn::reciprocal_bw",
-    operations::unary_backward::ExecuteUnaryBackwardRecip>();
-
-constexpr auto abs_bw = ttnn::register_operation<
-    "ttnn::abs_bw",
-    operations::unary_backward::ExecuteUnaryBackwardAbs>();
+constexpr auto logiteps_bw = ttnn::register_operation<"ttnn::logiteps_bw", operations::unary_backward::ExecuteUnaryBackwardLogiteps>();
+constexpr auto celu_bw = ttnn::register_operation<"ttnn::celu_bw", operations::unary_backward::ExecuteUnaryBackwardCelu>();
+constexpr auto elu_bw = ttnn::register_operation<"ttnn::elu_bw", operations::unary_backward::ExecuteUnaryBackwardElu>();
+constexpr auto leaky_relu_bw = ttnn::register_operation<"ttnn::leaky_relu_bw", operations::unary_backward::ExecuteUnaryBackwardLeakyRelu>();
+constexpr auto softshrink_bw = ttnn::register_operation<"ttnn::softshrink_bw", operations::unary_backward::ExecuteUnaryBackwardSoftshrink>();
+constexpr auto hardshrink_bw = ttnn::register_operation<"ttnn::hardshrink_bw", operations::unary_backward::ExecuteUnaryBackwardHardshrink>();
+constexpr auto hardtanh_bw = ttnn::register_operation<"ttnn::hardtanh_bw", operations::unary_backward::ExecuteUnaryBackwardHardtanh>();
+constexpr auto softplus_bw = ttnn::register_operation<"ttnn::softplus_bw", operations::unary_backward::ExecuteUnaryBackwardSoftplus>();
+constexpr auto rpow_bw = ttnn::register_operation<"ttnn::rpow_bw", operations::unary_backward::ExecuteUnaryBackwardRpow>();
+constexpr auto div_no_nan_bw = ttnn::register_operation<"ttnn::div_no_nan_bw", operations::unary_backward::ExecuteUnaryBackwardDivNoNan>();
+constexpr auto polygamma_bw = ttnn::register_operation<"ttnn::polygamma_bw", operations::unary_backward::ExecuteUnaryBackwardPolygamma>();
+constexpr auto reciprocal_bw = ttnn::register_operation<"ttnn::reciprocal_bw", operations::unary_backward::ExecuteUnaryBackwardRecip>();
+constexpr auto abs_bw = ttnn::register_operation<"ttnn::abs_bw", operations::unary_backward::ExecuteUnaryBackwardAbs>();
+constexpr auto prod_bw = ttnn::register_operation<"ttnn::prod_bw", operations::unary_backward::ExecuteUnaryBackwardProd>();
 
 }  // namespace ttnn
