@@ -13,8 +13,7 @@
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/unpack.h"
-#include "compute_kernel_api/math.h"
+#include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/pack.h"
 #include "debug/dprint.h"
 #include "ckernel_sfpu.h"
@@ -69,8 +68,7 @@ void add_block_bcast_rows_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
         init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(in0_cb, in1_cb);
     }
     else{
-        unpack_reconfig_data_format(in0_cb, in1_cb);
-        math_reconfig_data_format(in0_cb, in1_cb);
+        reconfig_data_format(in0_cb, in1_cb);
         add_bcast_rows_init_short(in0_cb, in1_cb);
     }
     cb_wait_front(in0_cb, num_tiles);
@@ -93,8 +91,7 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
-    unpack_reconfig_data_format(in0_cb, in1_cb);
-    math_reconfig_data_format(in0_cb, in1_cb);
+    reconfig_data_format(in0_cb, in1_cb);
     mul_tiles_init();
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
@@ -137,8 +134,7 @@ void eqz_block_inplace(uint32_t in0_cb, uint32_t num_tiles) {
     // Precondition: in0_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
 
-    unpack_reconfig_data_format_srca(in0_cb);
-    math_reconfig_data_format_srca(in0_cb);
+    reconfig_data_format_srca(in0_cb);
     eqz_tile_init();
     cb_wait_front(in0_cb, num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -180,8 +176,7 @@ void reduce_c() {
     // Postcondition: in0_cb has rows*cols produced
     // Precondition: scale_cb has 1 produced
     // Postcondition: out_cb has rows produced
-    unpack_reconfig_data_format(in0_cb, scale_cb);
-    math_reconfig_data_format(in0_cb, scale_cb);
+    reconfig_data_format(in0_cb, scale_cb);
     reduce_init_delta<false, pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
 
     const uint32_t num_tiles = rows * cols;
@@ -233,14 +228,12 @@ void top_k() {
             cb_wait_front(input_cb_index, 2);
             cb_wait_front(index_cb_index, 2);
 
-            unpack_reconfig_data_format_srca(input_cb_index);
-            math_reconfig_data_format_srca(input_cb_index);
+            reconfig_data_format_srca(input_cb_index);
             transpose_wh_init_short(input_cb_index);
             transpose_wh_tile(input_cb_index, 0, 0);
             transpose_wh_tile(input_cb_index, 1, 1);
 
-            unpack_reconfig_data_format_srca(index_cb_index);
-            math_reconfig_data_format_srca(index_cb_index);
+            reconfig_data_format_srca(index_cb_index);
             transpose_wh_init_short(index_cb_index);
             transpose_wh_tile(index_cb_index, 0, 2);
             transpose_wh_tile(index_cb_index, 1, 3);
@@ -319,8 +312,7 @@ void top_k() {
         constexpr uint32_t Kt =  K % TILE_WIDTH == 0 ? K/TILE_WIDTH : K/TILE_WIDTH + 1;
 
         // transpose value tiles and pack into output buffer
-        unpack_reconfig_data_format_srca(input_transposed_cb_index);
-        math_reconfig_data_format_srca(input_transposed_cb_index);
+        reconfig_data_format_srca(input_transposed_cb_index);
         transpose_wh_init_short(input_transposed_cb_index);
         pack_reconfig_data_format(input_transposed_cb_index);
         cb_wait_front(input_transposed_cb_index, Kt);
@@ -336,8 +328,7 @@ void top_k() {
         cb_pop_front(input_transposed_cb_index, Wt);
 
         // transpose index tiles and pack into output buffer
-        unpack_reconfig_data_format_srca(index_transposed_cb_index);
-        math_reconfig_data_format_srca(index_transposed_cb_index);
+        reconfig_data_format_srca(index_transposed_cb_index);
         transpose_wh_init_short(index_transposed_cb_index);
         pack_reconfig_data_format(index_transposed_cb_index);
         cb_wait_front(index_transposed_cb_index, Kt);

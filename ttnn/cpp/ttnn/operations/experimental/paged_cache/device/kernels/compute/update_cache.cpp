@@ -31,8 +31,7 @@ void MAIN {
 
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
 
-        unpack_reconfig_data_format_srca(in_cb, cache_cb);
-        math_reconfig_data_format_srca(in_cb, cache_cb);
+        reconfig_data_format_srca(in_cb, cache_cb);
         pack_reconfig_data_format(out_cb, untilized_cache_cb);
 
         pack_untilize_init_short<Wt>(cache_cb, untilized_cache_cb);

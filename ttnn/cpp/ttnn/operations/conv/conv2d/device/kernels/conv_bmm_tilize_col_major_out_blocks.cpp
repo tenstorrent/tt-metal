@@ -151,8 +151,7 @@ void MAIN {
 
         for(uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
             #ifdef PRE_TILIZE
-            unpack_reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
-            math_reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
+            reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
 
             tilize_in(in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
 
@@ -172,8 +171,7 @@ void MAIN {
             for(uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
                 #ifdef WIDTH_SHARDED
                 if(in0_block_w_i % in0_nblocks_w_tilize == 0) {
-                    unpack_reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
-                    math_reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
+                    reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
 
                     // DPRINT_MATH(DPRINT<<"Tilize Loop "<<in0_block_h_i<<" "<<in0_block_w_i<<"\n";)
                     tilize_in(in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
@@ -194,8 +192,7 @@ void MAIN {
                         pack_reconfig_l1_acc(0);
                     #endif
 
-                    unpack_reconfig_data_format_srca(in1_cb_id, in0_cb_id);
-                    math_reconfig_data_format_srca(in1_cb_id, in0_cb_id);
+                    reconfig_data_format_srca(in1_cb_id, in0_cb_id);
 
                     tilize_in(in0_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
                     #ifdef SPLIT_READER
@@ -357,8 +354,7 @@ void MAIN {
             #ifdef PACKER_L1_ACC
             pack_reconfig_l1_acc(0);
             #endif
-            unpack_reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
-            math_reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
+            reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
             add_bcast_rows_init_short(matmul_partials_cb, bias_cb_id);
 
             cb_wait_front(bias_cb_id, bias_ntiles_w);
@@ -407,8 +403,7 @@ void MAIN {
                 PACK(( llk_pack_relu_config(ReluType::NO_RELU) ));
                 #endif
                 #ifndef FUSE_BIAS
-                unpack_reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
-                math_reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
+                reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
                 #endif
                 pack_untilize_dst_init_short<out_subblock_w, out_block_w>(out_cb_id);
                 copy_tile_to_dst_init_short();
@@ -424,11 +419,9 @@ void MAIN {
             }
             if constexpr((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {
                 #ifdef FUSE_BIAS
-                unpack_reconfig_data_format(matmul_partials_cb, in1_cb_id, bias_cb_id, mm_in0_cb_id);
-                math_reconfig_data_format(matmul_partials_cb, in1_cb_id, bias_cb_id, mm_in0_cb_id);
+                reconfig_data_format(matmul_partials_cb, in1_cb_id, bias_cb_id, mm_in0_cb_id);
                 #else
-                unpack_reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
-                math_reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
+                reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
                 #endif
 
                 if constexpr (!tilize_in0) {

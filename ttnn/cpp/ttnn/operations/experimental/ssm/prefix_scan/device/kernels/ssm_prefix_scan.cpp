@@ -29,8 +29,7 @@ constexpr uint32_t cb_h_acc = get_compile_time_arg_val(10);
 
 // This function relies on untilizing NUM_TILES_IN_TILIZED_CHUNK tiles so we pad up to that amount
 FORCE_INLINE void pack_block_rows_into_tiles(uint32_t cb_in, uint32_t cb_out, uint32_t num_tiles) {
-    unpack_reconfig_data_format_srca(cb_in);
-    math_reconfig_data_format_srca(cb_in);
+    reconfig_data_format_srca(cb_in);
     pack_reconfig_data_format(cb_out);
 
     untilize_init_short(cb_in);
@@ -48,8 +47,7 @@ FORCE_INLINE void pack_block_rows_into_tiles(uint32_t cb_in, uint32_t cb_out, ui
 
 // This function relies on tilizing NUM_TILES_IN_TILIZED_CHUNK tiles so we pad up to that amount
 FORCE_INLINE void pack_block_tiles_into_rows(uint32_t cb_in, uint32_t cb_out, uint32_t num_tiles) {
-    unpack_reconfig_data_format_srca(cb_in);
-    math_reconfig_data_format_srca(cb_in);
+    reconfig_data_format_srca(cb_in);
     pack_reconfig_data_format(cb_out);
 
     tilize_init_short(cb_in, NUM_TILES_IN_TILIZED_CHUNK);
@@ -66,8 +64,7 @@ FORCE_INLINE void pack_block_tiles_into_rows(uint32_t cb_in, uint32_t cb_out, ui
 }
 
 FORCE_INLINE void mul(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
-    unpack_reconfig_data_format(cb_a, cb_b);
-    math_reconfig_data_format(cb_a, cb_b);
+    reconfig_data_format(cb_a, cb_b);
     pack_reconfig_data_format(cb_out);
 
     mul_tiles_init();
@@ -89,8 +86,7 @@ FORCE_INLINE void mul(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
 }
 
 FORCE_INLINE void sum(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
-    unpack_reconfig_data_format(cb_a, cb_b);
-    math_reconfig_data_format(cb_a, cb_b);
+    reconfig_data_format(cb_a, cb_b);
     pack_reconfig_data_format(cb_out);
 
     add_tiles_init();
@@ -112,8 +108,7 @@ FORCE_INLINE void sum(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
 }
 
 FORCE_INLINE void copy(uint32_t cb_in, uint32_t cb_out) {
-    unpack_reconfig_data_format_srca(cb_in);
-    math_reconfig_data_format_srca(cb_in);
+    reconfig_data_format_srca(cb_in);
     pack_reconfig_data_format(cb_out);
 
     copy_tile_to_dst_init_short();

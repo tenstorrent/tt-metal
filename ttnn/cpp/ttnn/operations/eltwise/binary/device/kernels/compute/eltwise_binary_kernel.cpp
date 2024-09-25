@@ -48,8 +48,7 @@ void MAIN {
         #endif
 
         #ifdef SFPU_OP_INIT_PRE_IN0_0
-        unpack_reconfig_data_format_srca(cb_inp0, cb_in0);
-        math_reconfig_data_format_srca(cb_inp0, cb_in0);
+        reconfig_data_format_srca(cb_inp0, cb_in0);
         pack_reconfig_data_format(cb_out0, cb_inp0);
         cb_wait_front(cb_in0, per_core_block_size);
         cb_reserve_back(cb_inp0, per_core_block_size);
@@ -73,20 +72,17 @@ void MAIN {
         cb_pop_front(cb_in0, per_core_block_size);
         cb_push_back(cb_inp0, per_core_block_size);
         #ifndef SFPU_OP_INIT_PRE_IN1_0
-        unpack_reconfig_data_format_srca(cb_in0, cb_inp0);
-        math_reconfig_data_format_srca(cb_in0, cb_inp0);
+        reconfig_data_format_srca(cb_in0, cb_inp0);
         pack_reconfig_data_format(cb_inp0, cb_out0);
         #endif
         #endif
 
         #ifdef SFPU_OP_INIT_PRE_IN1_0
         #ifndef SFPU_OP_INIT_PRE_IN0_0
-        unpack_reconfig_data_format_srca(cb_inp0, cb_in1);
-        math_reconfig_data_format_srca(cb_inp0, cb_in1);
+        reconfig_data_format_srca(cb_inp0, cb_in1);
         pack_reconfig_data_format(cb_out0, cb_inp1);
         #else
-        unpack_reconfig_data_format_srca(cb_in0, cb_in1);
-        math_reconfig_data_format_srca(cb_in0, cb_in1);
+        reconfig_data_format_srca(cb_in0, cb_in1);
         pack_reconfig_data_format(cb_inp0, cb_inp1);
         #endif
         cb_wait_front(cb_in1, per_core_block_size);
@@ -110,8 +106,7 @@ void MAIN {
 
         cb_pop_front(cb_in1, per_core_block_size);
         cb_push_back(cb_inp1, per_core_block_size);
-        unpack_reconfig_data_format_srca(cb_in1, cb_inp0);
-        math_reconfig_data_format_srca(cb_in1, cb_inp0);
+        reconfig_data_format_srca(cb_in1, cb_inp0);
         pack_reconfig_data_format(cb_inp1, cb_out0);
         #endif
 

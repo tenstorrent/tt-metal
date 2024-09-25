@@ -28,8 +28,7 @@ void MAIN {
         for (uint32_t j = 0; j < num_input_tiles; ++j) {
             cb_wait_front(cb_in0, onetile);
             #if defined FP32_DEST_ACC_EN
-                unpack_reconfig_data_format(cb_in0, cb_in1);
-                math_reconfig_data_format(cb_in0, cb_in1);
+                reconfig_data_format(cb_in0, cb_in1);
             #endif
             add_tiles(cb_in0, cb_in1, idx0, idx0, dst0);
             cb_pop_front(cb_in0, onetile);

@@ -142,13 +142,11 @@ void MAIN {
 
             uint32_t i = in0_block_h_i * in0_num_blocks_w + in0_block_w_i;
             if constexpr (tilize_in0) {
-                unpack_reconfig_data_format_srca(in0_cb_id);
-                math_reconfig_data_format_srca(in0_cb_id);
+                reconfig_data_format_srca(in0_cb_id);
                 pack_reconfig_data_format(tilized_in0_cb_id);
                 tilize_in(in0_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
             }
-            unpack_reconfig_data_format_srca(tilized_in0_cb_id);
-            math_reconfig_data_format_srca(tilized_in0_cb_id);
+            reconfig_data_format_srca(tilized_in0_cb_id);
             pack_reconfig_data_format(eltwise_mul_partials_cb);
             eltwise_mul_and_add_block_v2(tilized_in0_cb_id, in1_cb_id, eltwise_mul_partials_cb, temp_sum_cb, out_cb_id, in0_block_num_tiles, i, num_blocks);
 

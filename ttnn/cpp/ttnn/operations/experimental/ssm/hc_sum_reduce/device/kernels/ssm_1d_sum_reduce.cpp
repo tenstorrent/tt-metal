@@ -72,12 +72,10 @@ void MAIN {
 
         for (uint32_t output_idx = 0; output_idx < num_blocks; output_idx++) {
             for (uint32_t slice_idx = 0; slice_idx < TILE_WIDTH; slice_idx++) {
-                unpack_reconfig_data_format_srca(intermed_cb_id2, input_cb_id);
-                math_reconfig_data_format_srca(intermed_cb_id2, input_cb_id);
+                reconfig_data_format_srca(intermed_cb_id2, input_cb_id);
                 pack_reconfig_data_format(output_cb_id, intermed_cb_id0);
                 transpose(input_cb_id, intermed_cb_id0);  // 32 x B
-                unpack_reconfig_data_format_srca(input_cb_id, intermed_cb_id0);
-                math_reconfig_data_format_srca(input_cb_id, intermed_cb_id0);
+                reconfig_data_format_srca(input_cb_id, intermed_cb_id0);
                 reduce(intermed_cb_id0, scalar_cb_id, intermed_cb_id1);  // 1 x B
             }
             // Get full tile back from writer and transpose it

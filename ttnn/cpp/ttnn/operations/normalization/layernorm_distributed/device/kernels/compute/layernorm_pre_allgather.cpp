@@ -50,8 +50,7 @@ void MAIN {
         /*
          * x**2
          */
-        unpack_reconfig_data_format(cb_inp, cb_inp);
-        math_reconfig_data_format(cb_inp, cb_inp);
+        reconfig_data_format(cb_inp, cb_inp);
         pack_reconfig_data_format(cb_x2);
         mul_tiles_init(cb_inp, cb_inp);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
@@ -69,8 +68,7 @@ void MAIN {
         /*
          * sum(x**2)
          */
-        unpack_reconfig_data_format(cb_x2, cb_reduce);
-        math_reconfig_data_format(cb_x2, cb_reduce);
+        reconfig_data_format(cb_x2, cb_reduce);
         pack_reconfig_data_format(cb_out);
         reduce_init_delta<false>();
         cb_wait_front(cb_x2, Wt);
@@ -91,8 +89,7 @@ void MAIN {
         /*
          * sum(x)
          */
-        unpack_reconfig_data_format(cb_inp, cb_reduce);
-        math_reconfig_data_format(cb_inp, cb_reduce);
+        reconfig_data_format(cb_inp, cb_reduce);
         pack_reconfig_data_format(cb_out);
         reduce_init_delta<false>();
         cb_reserve_back(cb_out, onetile);

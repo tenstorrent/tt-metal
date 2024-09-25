@@ -97,8 +97,7 @@ void MAIN {
     binary_op_init_common(sin_cb, scalar_cb, untilized_sin_cb);
     UNTILIZE_TILES(sin_cb, untilized_sin_cb, Wt);
     UNTILIZE_TILES(cos_cb, untilized_cos_cb, Wt);
-    unpack_reconfig_data_format_srca(cos_cb, untilized_sin_cb);
-    math_reconfig_data_format_srca(cos_cb, untilized_sin_cb);
+    reconfig_data_format_srca(cos_cb, untilized_sin_cb);
     pack_reconfig_data_format(untilized_cos_cb, retilized_sin_cb);
     TILIZE_ROWS(untilized_sin_cb, untilized_sin_sync_cb, retilized_sin_cb, Wt);
     TILIZE_ROWS(untilized_cos_cb, untilized_cos_sync_cb, retilized_cos_cb, Wt);
@@ -115,8 +114,7 @@ void MAIN {
             #endif
             if (j < half_Wt) {
                 // Multiply half of the rotated input by scalar (-1)
-                unpack_reconfig_data_format(rotated_in_cb, scalar_cb);
-                math_reconfig_data_format(rotated_in_cb, scalar_cb);
+                reconfig_data_format(rotated_in_cb, scalar_cb);
                 pack_reconfig_data_format(rotated_in_interm_cb);
                 cb_wait_front(rotated_in_cb, onetile);
                 cb_reserve_back(rotated_in_interm_cb, onetile);
@@ -127,14 +125,12 @@ void MAIN {
                 REL();
                 cb_push_back(rotated_in_interm_cb, onetile);
                 cb_pop_front(rotated_in_cb, onetile);
-                unpack_reconfig_data_format_srcb(scalar_cb, updated_sin_cb);
-                math_reconfig_data_format_srcb(scalar_cb, updated_sin_cb);
+                reconfig_data_format_srcb(scalar_cb, updated_sin_cb);
                 pack_reconfig_data_format(rotated_in_interm_cb, sin_interm_cb);
                 // Multiply rotated input by sin
                 MUL_TILES(rotated_in_interm_cb, updated_sin_cb, sin_interm_cb, onetile, in1_idx);
             } else {
-                unpack_reconfig_data_format(rotated_in_cb, updated_sin_cb);
-                math_reconfig_data_format(rotated_in_cb, updated_sin_cb);
+                reconfig_data_format(rotated_in_cb, updated_sin_cb);
                 pack_reconfig_data_format(out_cb, sin_interm_cb);
                 // Multiply rotated input by sin
                 MUL_TILES(rotated_in_cb, updated_sin_cb, sin_interm_cb, onetile, in1_idx);
@@ -148,8 +144,7 @@ void MAIN {
             cb_wait_front(sin_interm_cb, onetile);
             cb_reserve_back(out_cb, onetile);
 
-            unpack_reconfig_data_format_srca(rotated_in_cb, cos_interm_cb);
-            math_reconfig_data_format_srca(rotated_in_cb, cos_interm_cb);
+            reconfig_data_format_srca(rotated_in_cb, cos_interm_cb);
             pack_reconfig_data_format(cos_interm_cb, out_cb);
             ACQ();
             add_tiles_init();

@@ -8,8 +8,7 @@
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/unpack.h"
-#include "compute_kernel_api/math.h"
+#include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/pack.h"
 
 // topk llk needs a global variable atm
@@ -131,8 +130,7 @@ void MAIN {
         }
 
         // transpose value tiles and pack into output buffer
-        unpack_reconfig_data_format_srca(input_transposed_cb_index);
-        math_reconfig_data_format_srca(input_transposed_cb_index);
+        reconfig_data_format_srca(input_transposed_cb_index);
         transpose_wh_init_short(input_transposed_cb_index);
         pack_reconfig_data_format(input_transposed_cb_index);
         cb_wait_front(input_transposed_cb_index, Kt);
@@ -148,8 +146,7 @@ void MAIN {
         cb_pop_front(input_transposed_cb_index, Wt);
 
         // transpose index tiles and pack into output buffer
-        unpack_reconfig_data_format_srca(index_transposed_cb_index);
-        math_reconfig_data_format_srca(index_transposed_cb_index);
+        reconfig_data_format_srca(index_transposed_cb_index);
         transpose_wh_init_short(index_transposed_cb_index);
         pack_reconfig_data_format(index_transposed_cb_index);
         cb_wait_front(index_transposed_cb_index, Kt);

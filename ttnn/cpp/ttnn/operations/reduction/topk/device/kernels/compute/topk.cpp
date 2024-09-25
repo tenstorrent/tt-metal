@@ -7,8 +7,7 @@
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/unpack.h"
-#include "compute_kernel_api/math.h"
+#include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/pack.h"
 
 // topk llk needs a global variable atm
@@ -52,14 +51,12 @@ void MAIN {
             cb_wait_front(input_cb_index, 2);
             cb_wait_front(index_cb_index, 2);
 
-            unpack_reconfig_data_format_srca(input_cb_index);
-            math_reconfig_data_format_srca(input_cb_index);
+            reconfig_data_format_srca(input_cb_index);
             transpose_wh_init_short(input_cb_index);
             transpose_wh_tile(input_cb_index, 0, 0);
             transpose_wh_tile(input_cb_index, 1, 1);
 
-            unpack_reconfig_data_format_srca(index_cb_index);
-            math_reconfig_data_format_srca(index_cb_index);
+            reconfig_data_format_srca(index_cb_index);
             transpose_wh_init_short(index_cb_index);
             transpose_wh_tile(index_cb_index, 0, 2);
             transpose_wh_tile(index_cb_index, 1, 3);
@@ -137,8 +134,7 @@ void MAIN {
         constexpr uint32_t Kt =  K % TILE_WIDTH == 0 ? K/TILE_WIDTH : K/TILE_WIDTH + 1;
 
         // transpose value tiles and pack into output buffer
-        unpack_reconfig_data_format_srca(input_transposed_cb_index);
-        math_reconfig_data_format_srca(input_transposed_cb_index);
+        reconfig_data_format_srca(input_transposed_cb_index);
         transpose_wh_init_short(input_transposed_cb_index);
         pack_reconfig_data_format(input_transposed_cb_index);
         cb_wait_front(input_transposed_cb_index, Kt);
@@ -154,8 +150,7 @@ void MAIN {
         cb_pop_front(input_transposed_cb_index, Wt);
 
         // transpose index tiles and pack into output buffer
-        unpack_reconfig_data_format_srca(index_transposed_cb_index);
-        math_reconfig_data_format_srca(index_transposed_cb_index);
+        reconfig_data_format_srca(index_transposed_cb_index);
         transpose_wh_init_short(index_transposed_cb_index);
         pack_reconfig_data_format(index_transposed_cb_index);
         cb_wait_front(index_transposed_cb_index, Kt);

@@ -84,8 +84,7 @@ void MAIN {
          * X + Y
          */
         #ifdef FUSE_PRE_ADD
-            unpack_reconfig_data_format(cb_in, cb_inb);
-            math_reconfig_data_format(cb_in, cb_inb);
+            reconfig_data_format(cb_in, cb_inb);
             pack_reconfig_data_format(cb_x);
             add_tiles_init();
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
@@ -106,21 +105,17 @@ void MAIN {
                 cb_pop_front(cb_inb, blk);
             }
             #ifndef RMSNORM
-            unpack_reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);
-            math_reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);
+            reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);
             #else
-            unpack_reconfig_data_format(cb_in, cb_x, cb_inb, cb_x);
-            math_reconfig_data_format(cb_in, cb_x, cb_inb, cb_x);
+            reconfig_data_format(cb_in, cb_x, cb_inb, cb_x);
             #endif
             // by the end of this loop we should end up with Wt tiles in cb_x
         #else
         #ifndef RMSNORM
-        unpack_reconfig_data_format(cb_in, cb_scaler);
-        math_reconfig_data_format(cb_in, cb_scaler);
+        reconfig_data_format(cb_in, cb_scaler);
         pack_reconfig_data_format(cb_ex);
         #else
-        unpack_reconfig_data_format(cb_in, cb_in);
-        math_reconfig_data_format(cb_in, cb_in);
+        reconfig_data_format(cb_in, cb_in);
         pack_reconfig_data_format(cb_xmm2);
         #endif
         #endif
@@ -151,8 +146,7 @@ void MAIN {
          * compute xmm=x-mean. Reuse cb_x since we didn't pop anything from it
          */
         if constexpr (FLOAT32_DTYPE) {
-            unpack_reconfig_data_format(cb_x, cb_ex);
-            math_reconfig_data_format(cb_x, cb_ex);
+            reconfig_data_format(cb_x, cb_ex);
         }
         cb_wait_front(cb_ex, 1); // should have 1 tile
         cb_reserve_back(cb_xmm, Wt);
@@ -170,8 +164,7 @@ void MAIN {
         cb_pop_front(cb_x, Wt);
 
         #ifndef FUSE_PRE_ADD
-        unpack_reconfig_data_format_srca(cb_x, cb_xmm);
-        math_reconfig_data_format_srca(cb_x, cb_xmm);
+        reconfig_data_format_srca(cb_x, cb_xmm);
         #endif
         #endif
 
@@ -193,8 +186,7 @@ void MAIN {
         }
 
         #if defined RMSNORM and not defined FUSED_PRE_ADD
-        unpack_reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
-        math_reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
+        reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
         #endif
 
         /* Var(x)
@@ -203,8 +195,7 @@ void MAIN {
          * TODO(AP): can save space here by reusing CB
          */
         if constexpr (FLOAT32_DTYPE) {
-            unpack_reconfig_data_format(cb_xmm2, cb_scaler);
-            math_reconfig_data_format(cb_xmm2, cb_scaler);
+            reconfig_data_format(cb_xmm2, cb_scaler);
         }
         cb_reserve_back(cb_ex2, 1);
         reduce_init_delta<false>();
@@ -229,8 +220,7 @@ void MAIN {
          * add epsilon E[(x-E[x])^2]+eps
          */
         if constexpr (FLOAT32_DTYPE) {
-            unpack_reconfig_data_format(cb_ex2, cb_eps);
-            math_reconfig_data_format(cb_ex2, cb_eps);
+            reconfig_data_format(cb_ex2, cb_eps);
         }
         ACQ();
         add_tiles_init();
@@ -255,8 +245,7 @@ void MAIN {
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
                         //if (ht == 1) UNPACK(( DPRINT << "wt_2=" << wt << " " ));
                         //if (ht == 1) UNPACK(( DPRINT << "rem_2=" << rem << ENDL() ));
-            unpack_reconfig_data_format(cb_xmm, cb_ex2pe);
-            math_reconfig_data_format(cb_xmm, cb_ex2pe);
+            reconfig_data_format(cb_xmm, cb_ex2pe);
             if constexpr(do_gamma == 0 && do_beta == 0) {
                 pack_reconfig_data_format(cb_out);
             } else {
@@ -264,8 +253,7 @@ void MAIN {
             }
             cb_reserve_back(cb_im_or_out, blk);
             #if defined RMSNORM and not defined FUSE_PRE_ADD
-            unpack_reconfig_data_format_srca(cb_fusion, cb_xmm);
-            math_reconfig_data_format_srca(cb_fusion, cb_xmm);
+            reconfig_data_format_srca(cb_fusion, cb_xmm);
             #endif
             ACQ();
             mul_bcast_cols_init_short();
@@ -279,16 +267,14 @@ void MAIN {
 
             if constexpr(!(do_gamma == 0 && do_beta == 0)) {
                 #if defined RMSNORM and not defined FUSE_PRE_ADD
-                unpack_reconfig_data_format_srca(cb_xmm, cb_fusion);
-                math_reconfig_data_format_srca(cb_xmm, cb_fusion);
+                reconfig_data_format_srca(cb_xmm, cb_fusion);
                 #endif
             }
             if constexpr (do_gamma) {
                 if constexpr(do_beta == 0) {
                     pack_reconfig_data_format(cb_out);
                 }
-                unpack_reconfig_data_format_srcb(cb_ex2pe, cb_gamma);
-                math_reconfig_data_format_srcb(cb_ex2pe, cb_gamma);
+                reconfig_data_format_srcb(cb_ex2pe, cb_gamma);
                 ACQ();
                 uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
                 mul_bcast_rows_init_short();
@@ -308,11 +294,9 @@ void MAIN {
             if constexpr (do_beta) {
                 pack_reconfig_data_format(cb_out);
                 if constexpr(do_gamma) {
-                    unpack_reconfig_data_format_srcb(cb_gamma, cb_beta);
-                    math_reconfig_data_format_srcb(cb_gamma, cb_beta);
+                    reconfig_data_format_srcb(cb_gamma, cb_beta);
                 } else {
-                    unpack_reconfig_data_format_srcb(cb_ex2pe, cb_beta);
-                    math_reconfig_data_format_srcb(cb_ex2pe, cb_beta);
+                    reconfig_data_format_srcb(cb_ex2pe, cb_beta);
                 }
                 ACQ();
                 add_bcast_rows_init_short();

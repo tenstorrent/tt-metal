@@ -217,8 +217,7 @@ void MAIN {
                                 // first move the current result from dst to interim CB
                                 pack_matmul_subblock(out_for_bias_cb_id, out_subblock_num_tiles);
                                 // reconfig unpacker df for src B
-                                // unpack_reconfig_data_format(out_for_bias_cb_id, bias_cb_id);
-                                // math_reconfig_data_format(out_for_bias_cb_id, bias_cb_id);
+                                // reconfig_data_format(out_for_bias_cb_id, bias_cb_id);
                                 // bcast add data from bias_cb_id
                                 cb_wait_front(bias_cb_id, bias_ntiles_w);
                                 cb_wait_front(out_for_bias_cb_id, out_subblock_num_tiles);
@@ -240,8 +239,7 @@ void MAIN {
                                 // reconfig for matmul
                                 mm_init_short();
                                 // reconfig unpacker df for srcB
-                                // unpack_reconfig_data_format(in1_cb_id, in0_cb_id);
-                                // math_reconfig_data_format(in1_cb_id, in0_cb_id);
+                                // reconfig_data_format(in1_cb_id, in0_cb_id);
                             }
                         #endif
 
@@ -267,8 +265,7 @@ void MAIN {
                     #ifndef FUSE_BIAS
                         // untilizing is only supported if there is no bias
                         if (last_out && untilize_out) {
-                            unpack_reconfig_data_format(untilize_mode_final_matmul_partials_cb, untilize_mode_final_matmul_partials_cb);
-                            math_reconfig_data_format(untilize_mode_final_matmul_partials_cb, untilize_mode_final_matmul_partials_cb);
+                            reconfig_data_format(untilize_mode_final_matmul_partials_cb, untilize_mode_final_matmul_partials_cb);
                             reblock_and_untilize(
                                 in1_num_subblocks,
                                 out_subblock_num_tiles,
@@ -279,8 +276,7 @@ void MAIN {
                                 untilize_mode_reblock_cb,
                                 out_cb_id);
                             mm_init_short();
-                            unpack_reconfig_data_format(in1_cb_id, in0_cb_id);
-                            math_reconfig_data_format(in1_cb_id, in0_cb_id);
+                            reconfig_data_format(in1_cb_id, in0_cb_id);
                         } // last_out
                     #endif
                     in0_index_subblock_offset += in0_subblock_num_tiles;
