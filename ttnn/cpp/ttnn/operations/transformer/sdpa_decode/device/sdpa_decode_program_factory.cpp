@@ -600,16 +600,16 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
         uint32_t cur_pos = use_cur_pos_tensor ? -1 : cur_pos_ids.at(cur_batch);
 
-        log_trace("---- core_id: {}, coord: {} ----", i, core);
-        log_trace("worker_id_for_reduce: {}", worker_id_for_reduce);
-        log_trace("worker_id_for_output: {}", worker_id_for_output);
-        log_trace("do_reduce: {}", do_reduce);
-        log_trace("do_output: {}", do_output);
-        log_trace("cur_head: {}", cur_head);
-        log_trace("cur_batch: {}", cur_batch);
-        log_trace("core_num_in_reduce: {}", core_num_in_reduce);
-        log_trace("core_num_in_output: {}", core_num_in_output);
-        log_trace("cur_pos: {}", cur_pos);
+        log_debug("---- core_id: {}, coord: {} ----", i, core);
+        log_debug("worker_id_for_reduce: {}", worker_id_for_reduce);
+        log_debug("worker_id_for_output: {}", worker_id_for_output);
+        log_debug("do_reduce: {}", do_reduce);
+        log_debug("do_output: {}", do_output);
+        log_debug("cur_head: {}", cur_head);
+        log_debug("cur_batch: {}", cur_batch);
+        log_debug("core_num_in_reduce: {}", core_num_in_reduce);
+        log_debug("core_num_in_output: {}", core_num_in_output);
+        log_debug("cur_pos: {}", cur_pos);
 
         // reader runtime args
         std::vector<uint32_t> reader_rt_args = { q_addr, k_addr, v_addr, pos_addr, page_table_addr, do_reduce, do_output, cur_head, cur_batch, core_num_in_reduce, core_num_in_output, cur_pos};
