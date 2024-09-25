@@ -97,7 +97,7 @@ def test_split_rm(refshape_chunks_dim, in_mem_config, out_mem_config, device, dt
         logger.debug(f"buff{index} is on: {buff.memory_config().buffer_type}")
         assert list(buff.shape) == chunk_shape
         tt_host_rm_buff = (
-            buff.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(buff.get_legacy_shape().without_padding())
+            buff.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(buff.shape.with_tile_padding().without_padding())
         )
         pyt_got_back_rm_buff = tt_host_rm_buff.to_torch()
         pyt_buff_list.append(pyt_got_back_rm_buff)

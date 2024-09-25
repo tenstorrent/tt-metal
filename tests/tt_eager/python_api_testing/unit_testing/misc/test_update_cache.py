@@ -44,8 +44,8 @@ class TestUpdateCache:
                 input_shard_spec = ttnn.ShardSpec(
                     shard_grid,
                     [
-                        xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
-                        xt.get_legacy_shape()[-1],
+                        xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
+                        xt.shape.with_tile_padding()[-1],
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
                     False,
@@ -112,8 +112,8 @@ class TestUpdateCache:
             input_shard_spec = ttnn.ShardSpec(
                 shard_grid,
                 [
-                    xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
-                    xt.get_legacy_shape()[-1],
+                    xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
+                    xt.shape.with_tile_padding()[-1],
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
                 False,
@@ -179,8 +179,8 @@ class TestUpdateCacheFP32:
                 input_shard_spec = ttnn.ShardSpec(
                     shard_grid,
                     [
-                        xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
-                        xt.get_legacy_shape()[-1],
+                        xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
+                        xt.shape.with_tile_padding()[-1],
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
                     False,
@@ -245,8 +245,8 @@ class TestUpdateCacheFP32:
             input_shard_spec = ttnn.ShardSpec(
                 shard_grid,
                 [
-                    xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
-                    xt.get_legacy_shape()[-1],
+                    xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
+                    xt.shape.with_tile_padding()[-1],
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
                 False,

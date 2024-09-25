@@ -54,20 +54,20 @@ class TtRobertaSelfAttention(nn.Module):
         self.is_decoder = config.is_decoder
 
         self.query_linear = TTLinear(
-            self.query_weight.get_legacy_shape()[-1],
-            self.query_weight.get_legacy_shape()[-2],
+            self.query_weight.shape.with_tile_padding()[-1],
+            self.query_weight.shape.with_tile_padding()[-2],
             self.query_weight,
             self.query_bias,
         )
         self.key_linear = TTLinear(
-            self.key_weight.get_legacy_shape()[-1],
-            self.key_weight.get_legacy_shape()[-2],
+            self.key_weight.shape.with_tile_padding()[-1],
+            self.key_weight.shape.with_tile_padding()[-2],
             self.key_weight,
             self.key_bias,
         )
         self.value_linear = TTLinear(
-            self.value_weight.get_legacy_shape()[-1],
-            self.value_weight.get_legacy_shape()[-2],
+            self.value_weight.shape.with_tile_padding()[-1],
+            self.value_weight.shape.with_tile_padding()[-2],
             self.value_weight,
             self.value_bias,
         )
@@ -76,7 +76,7 @@ class TtRobertaSelfAttention(nn.Module):
         # x must be 4d originaly
         # 1 is appended to the beggining
         # so create tensor shape by ommiting the first dimension
-        new_x_shape = list(x.get_legacy_shape())[1:-1] + [
+        new_x_shape = list(x.shape.with_tile_padding())[1:-1] + [
             self.num_attention_heads,
             self.attention_head_size,
         ]
@@ -154,7 +154,10 @@ class TtRobertaSelfAttention(nn.Module):
             bc model config self.position_embedding_type = absolute
             Implemented in torch bc of missing ops and embeddings.
             """
-            query_length, key_length = query_layer.get_legacy_shape()[-1], key_layer.get_legacy_shape()[-1]
+            query_length, key_length = (
+                query_layer.shape.with_tile_padding()[-1],
+                key_layer.shape.with_tile_padding()[-1],
+            )
 
             torch_query_layer = tt2torch_tensor(query_layer)
             torch_key_layer = tt2torch_tensor(key_layer)
@@ -180,7 +183,7 @@ class TtRobertaSelfAttention(nn.Module):
             attention_scores = torch2tt_tensor(attention_scores, self.device)
 
         div_const = ttnn.full(
-            attention_scores.get_legacy_shape(),
+            attention_scores.shape.with_tile_padding(),
             1.0 / math.sqrt(self.attention_head_size),
         )
         attention_scores = ttnn.mul(attention_scores, div_const, memory_config=self.mem_config)
@@ -188,7 +191,7 @@ class TtRobertaSelfAttention(nn.Module):
         if attention_mask is not None:
             # Apply the attention mask is (precomputed for all layers in RobertaModel forward() function)
             # attention_scores = ttnn.add(attention_scores, attention_mask)
-            if attention_mask.get_legacy_shape()[0] > 1:
+            if attention_mask.shape.with_tile_padding()[0] > 1:
                 torch_attention_mask = tt2torch_tensor(attention_mask)
                 torch_attention_scores = tt2torch_tensor(attention_scores)
                 torch_attention_scores = torch_attention_scores + torch_attention_mask
@@ -225,7 +228,7 @@ class TtRobertaSelfAttention(nn.Module):
             [
                 1,
             ]
-            + list(context_layer.get_legacy_shape())[:-2]
+            + list(context_layer.shape.with_tile_padding())[:-2]
             + [
                 self.all_head_size,
             ]

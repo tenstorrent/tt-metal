@@ -19,12 +19,12 @@ def Linear(
 
     ``weight`` must be the weight as a tilized list of values.
     """
-    assert weight.get_legacy_shape() == [1, 1, out_features, in_features]
+    assert weight.shape.with_tile_padding() == [1, 1, out_features, in_features]
 
     if bias is None:
         bias = None
     else:
-        assert bias.get_legacy_shape() == [1, 1, 32, out_features]
+        assert bias.shape.with_tile_padding() == [1, 1, 32, out_features]
 
     if bias is not None and bias.get_layout() != ttnn.TILE_LAYOUT:
         bias = ttnn.to_layout(bias, ttnn.TILE_LAYOUT)

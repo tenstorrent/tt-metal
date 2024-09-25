@@ -111,7 +111,7 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_
         compute_kernel_config=compute_kernel_config,
     )
 
-    assert dev_param.get_legacy_shape() == list(model.weight.shape)
+    assert dev_param.shape.with_tile_padding() == list(model.weight.shape)
 
     param_result = dev_param_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
     exp_avg_result = dev_exp_avg_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
