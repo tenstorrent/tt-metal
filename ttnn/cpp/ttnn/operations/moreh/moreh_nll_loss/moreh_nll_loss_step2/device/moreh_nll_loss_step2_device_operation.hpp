@@ -4,45 +4,34 @@
 
 #pragma once
 
-#include <optional>
-#include <variant>
-
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/types.hpp"
+#include "ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_helper.hpp"
 
-namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward {
+namespace ttnn::operations::moreh::moreh_nll_loss_step2 {
 
-struct MorehNllLossUnreducedBackwardDeviceOperation {
-    // Define the operation attributes. This is it to store all variables needed by operations that aren't tensors
+struct MorehNllLossStep2DeviceOperation {
     struct operation_attributes_t {
+        const std::string reduction = NONE;
         const uint32_t ignore_index = std::numeric_limits<uint32_t>::max();
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
     };
 
-    // Define the tensor arguments. This is it to store all tensors passed in and/or out of the operation
-    // Tensor arguments don't need to be just input tensors, they can be output tensors, input/output tensors, optional
-    // tensors, etc.
     struct tensor_args_t {
+        const Tensor& input_tensor;
         const Tensor& target_tensor;
-        const Tensor& output_grad_tensor;
         const std::optional<const Tensor> weight_tensor;
-        const std::optional<const Tensor> input_grad_tensor;
+        const std::optional<const Tensor> divisor_tensor;
+        const std::optional<const Tensor> output_tensor;
     };
 
-    // Define the return types for the shape(s) of the operation
-    // Can be a single ttnn::Shape, std::optional<ttnn::Shape>, std::vector<ttnn::Shape>, std::tuple<ttnn::Shape> etc.
     using shape_return_value_t = ttnn::Shape;
 
-    // Define the return types for the tensor(s) of the operation
-    // Can be a single Tensor, std::optional<Tensor, ...>, std::vector<Tensor>, std::tuple<Tensor, ...> etc.
     using tensor_return_value_t = ttnn::Tensor;
 
     struct Factory {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
             KernelHandle unary_reader_kernel_id;
             KernelHandle unary_writer_kernel_id;
@@ -85,19 +74,21 @@ struct MorehNllLossUnreducedBackwardDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensor,
         const Tensor& target_tensor,
-        const Tensor& output_grad_tensor,
+        const std::string reduction,
         const std::optional<const Tensor> weight_tensor,
-        const std::optional<const Tensor> input_grad_tensor,
+        const std::optional<const Tensor> divisor_tensor,
+        const std::optional<const Tensor> output_tensor,
         const int32_t ignore_index,
         const std::optional<ttnn::MemoryConfig>& memory_config,
-        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
+        const DeviceComputeKernelConfig& compute_kernel_config);
 };
 
-}  // namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward
+}  // namespace ttnn::operations::moreh::moreh_nll_loss_step2
 
 namespace ttnn::prim {
-constexpr auto moreh_nll_loss_unreduced_backward = ttnn::register_operation<
-    "ttnn::prim::moreh_nll_loss_unreduced_backward",
-    ttnn::operations::moreh::moreh_nll_loss_unreduced_backward::MorehNllLossUnreducedBackwardDeviceOperation>();
+constexpr auto moreh_nll_loss_step2 = ttnn::register_operation<
+    "ttnn::prim::moreh_nll_loss_step2",
+    ttnn::operations::moreh::moreh_nll_loss_step2::MorehNllLossStep2DeviceOperation>();
 }  // namespace ttnn::prim

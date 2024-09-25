@@ -124,7 +124,8 @@ MorehNllLossBackwardDeviceOperation::invoke(
             reduction_mean,
             ignore_index < 0 ? std::numeric_limits<uint32_t>::max() : ignore_index,
             memory_config.value_or(target_tensor.memory_config()),
-            compute_kernel_config},
+            init_device_compute_kernel_config(
+                target_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
         tensor_args_t{target_tensor, output_grad_tensor, weight_tensor, divisor_tensor, input_grad_tensor}};
 }
 

@@ -21,7 +21,7 @@ struct MorehNllLossBackwardDeviceOperation {
         const bool reduction_mean;
         const uint32_t ignore_index = std::numeric_limits<uint32_t>::max();
         const MemoryConfig memory_config;
-        std::optional<const DeviceComputeKernelConfig> compute_kernel_config;
+        const DeviceComputeKernelConfig compute_kernel_config;
     };
 
     // Define the tensor arguments. This is it to store all tensors passed in and/or out of the operation

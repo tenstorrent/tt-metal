@@ -18,11 +18,11 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     const Tensor& output_grad,
     const Tensor& input_grad,
     const uint32_t ignore_index,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
 
     // input_grad: (N, C)
-    auto input_grad_shape = input_grad.get_legacy_shape();
+    auto input_grad_shape = input_grad.get_shape().value;
     auto N = input_grad_shape[0];
     auto channel_size = input_grad_shape[1];
 
@@ -40,10 +40,8 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(grid, units_to_divide);
 
-    auto compute_kernel_config_val =
-        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config_val);
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     Program program = Program();
 
@@ -146,11 +144,11 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     const Tensor& output_grad,
     const Tensor& input_grad,
     const uint32_t ignore_index,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
 
     // input_grad: (N, C, W)
-    auto input_grad_shape = input_grad.get_legacy_shape();
+    auto input_grad_shape = input_grad.get_shape().value;
     auto N = input_grad_shape[0];
     auto channel_size = input_grad_shape[1];
 
@@ -158,7 +156,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     auto Ct = channel_size / tt::constants::TILE_HEIGHT;
     auto Wt = W / tt::constants::TILE_WIDTH;
 
-    auto target_shape = target.get_legacy_shape();
+    auto target_shape = target.get_shape().value;
     auto num_inner_tile = target_shape[-1] / tt::constants::TILE_WIDTH;
 
     const bool weight_has_value = weight.has_value();
@@ -172,10 +170,8 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(grid, units_to_divide);
 
-    auto compute_kernel_config_val =
-        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config_val);
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     Program program = Program();
 
@@ -276,9 +272,9 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     const Tensor& output_grad,
     const Tensor& input_grad,
     const uint32_t ignore_index,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
-    auto input_grad_shape = input_grad.get_legacy_shape();
+    auto input_grad_shape = input_grad.get_shape().value;
     auto N = input_grad_shape[0];
     auto channel_size = input_grad_shape[1];
 
@@ -301,10 +297,8 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(grid, units_to_divide);
 
-    auto compute_kernel_config_val =
-        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config_val);
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     Program program = Program();
 
@@ -412,7 +406,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::create(
     const Tensor& output_grad = tensor_args.output_grad_tensor;
 
     const uint32_t ignore_index = operation_attributes.ignore_index;
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = operation_attributes.compute_kernel_config;
+    const DeviceComputeKernelConfig compute_kernel_config = operation_attributes.compute_kernel_config;
 
     const Tensor& input_grad = tensor_return_value;
 
