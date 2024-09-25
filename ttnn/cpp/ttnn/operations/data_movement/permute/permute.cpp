@@ -14,7 +14,7 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
-
+#include "ttnn/cpp/ttnn/operations/copy.hpp"
 
 namespace ttnn::operations::data_movement {
 namespace detail {
@@ -56,6 +56,9 @@ ttnn::Tensor permute_impl(const ttnn::Tensor &a, const std::vector<uint32_t>& di
     out_shape = {out_shape[N], out_shape[C], out_shape[H], out_shape[W]};
 
     auto formatted_input_tensor = a;
+    bool typecast = formatted_input_tensor.get_dtype() == DataType::BFLOAT8_B and formatted_input_tensor.get_layout() == Layout::TILE and (pad_n or pad_c) and !a.is_sharded();
+    formatted_input_tensor = typecast ? ttnn::typecast(formatted_input_tensor, DataType::BFLOAT16) : formatted_input_tensor;
+
     if (!AutoFormat::check_input_tensor_format(a, a_pad_shape)) {
         formatted_input_tensor = AutoFormat::format_input_tensor(a, device, a_pad_shape, 0.0, Layout::TILE);
     }
@@ -114,7 +117,9 @@ ttnn::Tensor permute_impl(const ttnn::Tensor &a, const std::vector<uint32_t>& di
     } else {
         TT_ASSERT(false, "Illegal permute args");
     }
-    return AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
+    output =  AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
+    output = typecast ? ttnn::typecast(output, DataType::BFLOAT8_B) : output;
+    return output;
 }
 
 ttnn::Tensor permute_launch(const ttnn::Tensor &a, const std::vector<std::int64_t>& dims, const MemoryConfig& output_mem_config) {
