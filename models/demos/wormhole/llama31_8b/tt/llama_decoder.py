@@ -99,9 +99,23 @@ class TtTransformerBlock(torch.nn.Module):
         )
         # Attention also returns multiple outputs (multi-device support)
         assert len(r) == 1, "Multiple devices not yet supported"
-        r = r[0]
-        # r = ttnn.reshape(r, (1, 1, 32, 4096))
-        h = ttnn.add(x, r, memory_config=skip_mem_cfg)
-        r = self.feed_forward.forward(self.ffn_norm(h))
-        out = ttnn.add(h, r, memory_config=skip_mem_cfg)
-        return out
+
+        if mode == "decode":  # Sharded config on attn and ffn
+            r_sharded = r[0]
+            x_sharded = ttnn.interleaved_to_sharded(x, self.model_config["SHARDED_SKIP_INPUT_MEMCFG"])
+
+            h_sharded = ttnn.add(x_sharded, r_sharded, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+            ff_norm = self.ffn_norm(h_sharded, in_sharded=True, out_sharded=True)
+            # Reshard the activations (grid_config = [4, 8] after attention) to match the MLP sharded grid_config [8, 8]
+            ff_norm = ttnn.reshard(ff_norm, self.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"])
+
+            r_interleaved = self.feed_forward.forward(ff_norm, mode)
+            h_interleaved = ttnn.sharded_to_interleaved(h_sharded, ttnn.L1_MEMORY_CONFIG)  # Final output is interleaved
+            out = ttnn.add(h_interleaved, r_interleaved, memory_config=skip_mem_cfg)
+            return out
+        else:  # prefill  (Interleaved configs)
+            r = r[0]
+            h = ttnn.add(x, r, memory_config=skip_mem_cfg)
+            r = self.feed_forward.forward(self.ffn_norm(h), mode)
+            out = ttnn.add(h, r, memory_config=skip_mem_cfg)
+            return out

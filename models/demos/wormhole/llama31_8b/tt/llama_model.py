@@ -88,7 +88,7 @@ class TtTransformer(nn.Module):
         output = ttnn.linear(
             x,
             self.output_weight,
-            compute_kernel_config=self.args.get_compute_kernel_config(),
+            compute_kernel_config=self.args.compute_kernel_config_hifi4,
             program_config=self.model_config["OUTPUT_MM_PROGCFG"],
             memory_config=self.model_config["OUTPUT_MM_MEMCFG"],
             dtype=self.dtype,

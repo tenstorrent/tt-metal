@@ -459,7 +459,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
                     for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
                         text = tokenizer.decode(output)
                         if instruct_mode:
-                            split_text = text.split("[/INST]", 1)
+                            split_text = text.split("<|start_header_id|>assistant<|end_header_id|>", 1)
                         else:
                             split_text = text.split(prompt, 1)
                         if len(split_text) > 1:
