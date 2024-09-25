@@ -140,11 +140,11 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
     switch(feature) {
         case SanitizeAddress:
             expected = fmt::format(
-                "Device {} {} core(x={:2},y={:2}) phys(x={:2},y={:2}): {} using noc0 tried to access Unknown core w/ physical coords {} [addr=0x{:08x},len=102400]",
+                "Device {} {} core(x={:2},y={:2}) phys(x={:2},y={:2}): {} using noc0 tried to unicast write 102400 bytes from local L1[{:#08x}] to Unknown core w/ physical coords {} [addr=0x{:08x}] (NOC target address did not map to any known Tensix/Ethernet/DRAM/PCIE core).",
                 device->id(),
                 (is_eth_core) ? "ethnet" : "worker",
                 core.x, core.y, phys_core.x, phys_core.y,
-                (is_eth_core) ? "erisc" : "brisc", output_dram_noc_xy.str(),
+                (is_eth_core) ? "erisc" : "brisc", l1_buffer_addr, output_dram_noc_xy.str(),
                 output_dram_buffer_addr
             );
             break;
@@ -162,13 +162,12 @@ void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, boo
             if (use_ncrisc)
                 risc_name = "ncrisc";
             expected = fmt::format(
-                "Device {} {} core(x={:2},y={:2}) phys(x={:2},y={:2}): {} using noc{} tried to access DRAM core w/ physical coords {} DRAM[addr=0x{:08x},len=102400], misaligned with local L1[addr=0x{:08x}]",
+                "Device {} {} core(x={:2},y={:2}) phys(x={:2},y={:2}): {} using noc{} tried to unicast read 102400 bytes to local L1[{:#08x}] from DRAM core w/ physical coords {} DRAM[addr=0x{:08x}] (invalid address alignment in NOC transaction).",
                 device->id(),
                 (is_eth_core) ? "ethnet" : "worker",
                 core.x, core.y, phys_core.x, phys_core.y,
-                risc_name, noc, target_phys_core,
-                input_dram_buffer_addr,
-                l1_buffer_addr
+                risc_name, noc, l1_buffer_addr, target_phys_core,
+                input_dram_buffer_addr
             );
             }
             break;
