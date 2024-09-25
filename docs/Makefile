@@ -16,6 +16,7 @@ DOCS_VERSION       	?= latest
 
 GITHUB_TOKEN    ?= INSERT_TOKEN_HERE
 TTNN_SWEEPS_DIR = source/ttnn/ttnn_sweeps
+TTNN_API_DIR    = source/ttnn/ttnn/api
 
 # Put it first so that "make" without argument is like "make help".
 help:
@@ -30,6 +31,7 @@ all: clean html server
 clean:
 	@rm -rf $(BUILDDIR)
 	@rm -rf $(DOXYGENDIR)
+	@rm -rf $(TTNN_API_DIR)
 
 build_doxygen: clean
 	@cd .. && doxygen
