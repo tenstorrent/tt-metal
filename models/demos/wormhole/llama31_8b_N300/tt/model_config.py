@@ -35,11 +35,11 @@ class TtModelArgs:
     sliding_window = 8192 * 4 * 4
 
     # Default folder location for weights and cached files
-    DEFAULT_CKPT_DIR = os.getenv("LLAMA_CKPT_DIR", "/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct/")
+    DEFAULT_CKPT_DIR = os.getenv("LLAMA_CKPT_DIR", "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/")
     DEFAULT_TOKENIZER_PATH = os.getenv(
-        "LLAMA_TOKENIZER_PATH", "/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct/"
+        "LLAMA_TOKENIZER_PATH", "/proj_sw/user_dev/hf_data/llama//Meta-Llama-3.1-8B-Instruct/"
     )
-    DEFAULT_CACHE_PATH = os.getenv("LLAMA_CACHE_PATH", "/proj_sw/user_dev/llama_81_n300_cache_instruct")
+    DEFAULT_CACHE_PATH = os.getenv("LLAMA_CACHE_PATH", "/proj_sw/user_dev/hf_data/llama/llama_81_n300_cache_instruct")
 
     OP_KEYS = (
         # Embedding
@@ -267,8 +267,8 @@ class TtModelArgs:
 
             # Width sharded
             self.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
-                (32, 4096 // 64),  # [32, 512] -> [1, 16]
-                ttnn.CoreGrid(y=8, x=8),
+                (32, 4096 // 32),  # [32, 512] -> [1, 16]
+                ttnn.CoreGrid(y=4, x=8),
                 ttnn.ShardStrategy.WIDTH,
                 ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
@@ -277,25 +277,25 @@ class TtModelArgs:
             # W1/W3 = shard[4096, 1216] -> [128, 38]
             self.model_config["DECODE_MLP_W1_PRG_CONFIG"] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
                 # Grid size = [8, 8]
-                in0_block_w=2,  # K = 4096 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+                in0_block_w=4,  # K = 4096 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
                 per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
-                per_core_N=3,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
+                per_core_N=7,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
                 fused_activation=None,
             )
             self.model_config["DECODE_MLP_W3_PRG_CONFIG"] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
                 # Grid size = [8, 8]
-                in0_block_w=2,  # K = 4096 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+                in0_block_w=4,  # K = 4096 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
                 per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
-                per_core_N=3,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
+                per_core_N=7,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
                 fused_activation=None,
             )
             # w2_in = shard[32,1216] -> [1, 38]
             # w2 = shard[14336, 352] -> [448, 44]
             self.model_config["DECODE_MLP_W2_PRG_CONFIG"] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
                 # Grid size = [8, 8]
-                in0_block_w=1,  # K = 7168 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+                in0_block_w=7,  # K = 7168 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
                 per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
-                per_core_N=2,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
+                per_core_N=4,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
                 fused_activation=None,
             )
 
