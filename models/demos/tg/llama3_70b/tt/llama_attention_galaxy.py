@@ -277,6 +277,11 @@ class TtLlamaAttention_galaxy:
             )
             for lp in layer_past
         ]
+        # work around for CI error
+        self.layer_past = [
+            ttnn.reshape(lp, [self.batch_size_per_device_group, self.n_local_kv_heads, -1, self.head_dim])
+            for lp in self.layer_past
+        ]
 
     def load_weights(self):
         assert not hasattr(self, "qkv_list"), "qkv_list is already an attribute of this object"
@@ -463,12 +468,22 @@ class TtLlamaAttention_galaxy:
     ):
         # K CACHE UPDATE
         keys = self.layer_past[0]
-        ttnn.update_cache(keys, key_layer, start_pos, batch_offset=batch_offset)
+        ttnn.experimental.paged_update_cache(
+            keys,
+            key_layer,
+            update_idxs=[start_pos for _ in range(self.batch_size_per_device_group)],
+            batch_offset=batch_offset,
+        )
         key_layer.deallocate(True)
 
         # V CACHE UPDATE
         values = self.layer_past[1]
-        ttnn.update_cache(values, value_layer, start_pos, batch_offset=batch_offset)
+        ttnn.experimental.paged_update_cache(
+            values,
+            value_layer,
+            update_idxs=[start_pos for _ in range(self.batch_size_per_device_group)],
+            batch_offset=batch_offset,
+        )
         value_layer.deallocate(True)
 
         program_config = ttnn.SDPAProgramConfig(
@@ -629,13 +644,10 @@ class TtLlamaAttention_galaxy:
     ):
         # FILL K CACHE
         keys = self.layer_past[0]
-        # Fill cache expects batch in dim0
-        keys_reshaped = ttnn.reshape(keys, [self.batch_size_per_device_group, self.n_local_kv_heads, -1, self.head_dim])
-
         single_user_key_layer = self.prefill_prepare_tensor_for_kv_cache(key_layer, user_id)
 
         # Fill cache with multi-device tensor
-        ttnn.fill_cache(
+        ttnn.experimental.paged_fill_cache(
             keys_reshaped,
             ttnn.experimental.typecast(single_user_key_layer, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             user_id % self.batch_size_per_device_group,
@@ -643,14 +655,9 @@ class TtLlamaAttention_galaxy:
 
         # FILL V CACHE
         values = self.layer_past[1]
-        # Fill cache expects batch in dim0
-        values_reshaped = ttnn.reshape(
-            values, [self.batch_size_per_device_group, self.n_local_kv_heads, -1, self.head_dim]
-        )
-
         single_user_value_layer = self.prefill_prepare_tensor_for_kv_cache(value_layer, user_id)
 
-        ttnn.fill_cache(
+        ttnn.experimental.paged_fill_cache(
             values_reshaped,
             ttnn.experimental.typecast(single_user_value_layer, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             user_id % self.batch_size_per_device_group,
