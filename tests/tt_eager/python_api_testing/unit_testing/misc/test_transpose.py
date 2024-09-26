@@ -610,3 +610,23 @@ def test_tranpose_hc_sharded_with_program_cache(device, n, c, h, w, grid_size, u
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
     assert device.num_program_cache_entries() == 3
+
+
+@pytest.mark.parametrize(
+    "shape, swap_dims",
+    [
+        ((32, 32, 32, 32), (0, 2)),
+        ((32, 32, 32, 32), (1, 2)),
+        ((32, 32, 32, 32), (0, 3)),
+        ((32, 32, 32, 32), (1, 3)),
+    ],
+)
+def test_transpose_bfloat8_b(device, shape, swap_dims):
+    input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output = input.transpose(*swap_dims)
+
+    tt_input = ttnn.from_torch(input, dtype=ttnn.DataType.BFLOAT8_B, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.transpose(tt_input, *swap_dims)
+    tt_output = ttnn.to_torch(tt_output)
+
+    assert_with_pcc(torch_output, tt_output, 0.9999)

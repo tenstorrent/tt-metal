@@ -4,6 +4,13 @@
 >
 > Please refer to the front-page [README](../README.md) for the latest verified release for each model.
 
+## September 23, 2024
+
+### [Llama 3/3.1 - 70B](demos/t3000/llama3_70b)
+- Added support for 128K context length using PagedAttention
+- Added a continuous batching demo for running multiple batches of users consecutively
+- Added the option to enable TT-NN tracing
+
 ## September 9, 2024
 
 ### [Mixtral7Bx8](demos/t3000/mixtral8x7b)
