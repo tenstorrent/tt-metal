@@ -48,9 +48,33 @@ void ttnn_device(py::module& module) {
 
             Returns:
                 ttnn.Device: The device with the given device_id.
+
+            Example:
+                >>> device_id = 0
+                >>> device = ttnn.open_device(device_id=device_id)
+                >>> print(device)
+                <ttnn._ttnn.device.Device object at 0x7fbac5bfc1b0>
         )doc");
 
-    module.def("close_device", &ttnn::close_device, py::arg("device"));
+    module.def(
+        "close_device",
+        &ttnn::close_device,
+        py::arg("device"),
+        R"doc(
+            Close the specified device.
+
+            Args:
+                device (ttnn.Device): the device to be closed.
+
+            Returns:
+                `None`: the device is closed.
+
+            Example:
+                >>> device_id = 0
+                >>> device = ttnn.open_device(device_id = device_id)
+                >>> success = ttnn.close_device(device)
+                Closing device 0
+        )doc");
 
     module.def("enable_program_cache", &ttnn::enable_program_cache, py::arg("device"));
 
@@ -204,25 +228,35 @@ void device_module(py::module& m_device) {
         Returns associated mmio device of give device id.
     )doc");
 
-    m_device.def("SetDefaultDevice", &ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice, R"doc(
-        Sets the default device to use for operations when inputs are not on the device.
+    m_device.def("SetDefaultDevice", &ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice,
+        R"doc(
+            Sets the default device to use for operations when inputs are not on the device.
 
-        Args:
-            device (ttnn.Device): The TT device to use
+            Args:
+                device (ttnn.Device): The TT device to use.
 
-        Note:
-            This functionality is planned for deprecation in the future.
-    )doc");
+            Note:
+                This functionality is planned for deprecation in the future.
 
-    m_device.def("GetDefaultDevice", &ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice, R"doc(
-        Gets the default device to use for ops when inputs aren't on device.
+            Example:
+                device_id = 0
+                device = ttnn.open_device(device_id = device_id)
+                ttnn.SetDefaultDevice(device)
+        )doc");
 
-        Returns:
-            ttnn.Device: The default device to use.
+    m_device.def("GetDefaultDevice", &ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice,
+        R"doc(
+            Gets the default device to use for ops when inputs aren't on device.
 
-        Note:
-            This functionality is planned for deprecation in the future.
-    )doc");
+            Returns:
+                ttnn.Device: The default device to use.
+
+            Note:
+                This functionality is planned for deprecation in the future.
+
+            Example:
+                device = ttnn.GetDefaultDevice()
+        )doc");
 
     m_device.def(
         "format_input_tensor",
@@ -249,6 +283,10 @@ void device_module(py::module& m_device) {
 
         Note:
             This functionality is planned for deprecation in the future.
+
+        Example:
+            >>> input_tensor = ttnn.ones([1, 2, 2, 2], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+            >>> padded_tensor = ttnn.format_input_tensor(input_tensor, device=device, padded_shape=[1, 2, 4, 4], pad_value=0.0, target_layout=ttnn.TILE_LAYOUT, output_mem_config)
         )doc");
 
     m_device.def(
@@ -274,6 +312,10 @@ void device_module(py::module& m_device) {
 
         Note:
             This functionality is planned for deprecation in the future.
+
+        Example:
+            >>> # Assuming we have a padded tensor of shape [1, 2, 4, 4] with padding of [1, 1, 1, 1] of layout=ttnn.TILE_LAYOUT
+            >>> unpadded_tensor = ttnn.format_output_tensor(output_tensor, shape=[1, 2, 2, 2], device=device, target_layout=ttnn.ROW_MAJOR_LAYOUT, output_mem_config)
         )doc");
 
     m_device.def(
@@ -284,7 +326,32 @@ void device_module(py::module& m_device) {
         bool pad_h = true,
         bool pad_w = true) -> tt::tt_metal::LegacyShape {
             return ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(unpadded_shape, pad_c, pad_n, pad_h, pad_w);
-        });
+        },
+        py::arg("unpadded_shape"),
+        py::arg("pad_c") = false,
+        py::arg("pad_n") = false,
+        py::arg("pad_h") = true,
+        py::arg("pad_w") = true,
+        R"doc(
+        Pads the given shape to tile shape based on specified padding options.
+
+        Args:
+            unpadded_shape (List of [int]): The original shape of the tensor to pad.
+            pad_c (bool, optional): Pad the channel dimension. Defaults to `False`.
+            pad_n (bool, optional): Pad the batch dimension. Defaults to `False`.
+            pad_h (bool, optional): Pad the height dimension. Defaults to `True`.
+            pad_w (bool, optional): Pad the width dimension. Defaults to `True`.
+
+        Returns:
+            ttnn.tt_metal.LegacyShape: The padded shape.
+
+        Note:
+            This functionality is planned for deprecation in the future.
+
+        Example:
+            padded_shape = ttnn.pad_to_tile_shape(unpadded_shape=[1, 2, 2, 2], pad_c=False, pad_n=False, pad_h=True, pad_w=True)
+
+        )doc");
 
     m_device.def("EnablePersistentKernelCache", &tt::tt_metal::detail::EnablePersistentKernelCache, R"doc(
         Enable kernel compilation cache to be persistent across runs. When this is called, kernels will not be compiled if the output binary path exists.
@@ -335,14 +402,23 @@ void device_module(py::module& m_device) {
                 device->synchronize();
             },
             R"doc(
-        Synchronize the device with host by waiting for all operations to complete.
-        If cq_id is provided then only the operations associated with that cq_id are waited for,
-        otherwise operations for all command queues are waited on.
+                Synchronize the device with host by waiting for all operations to complete.
+                If cq_id is provided then only the operations associated with that cq_id are waited for,
+                otherwise operations for all command queues are waited on.
 
-        Args:
-            device (ttnn.device.Device): The device to synchronize with.
-            cq_id (int, optional): The command queue ID to synchronize. Defaults to `None`.
-    )doc",
+                Args:
+                    device (ttnn.device.Device): The device to synchronize with.
+                    cq_id (int, optional): The command queue ID to synchronize. Defaults to `None`.
+
+                Returns:
+                `None`: The op ensures that all operations are completed.
+
+                Example:
+                    >>> device_id = 0
+                    >>> device = ttnn.open_device(device_id=device_id)
+                    >>> # Assume some operations are queued on the device
+                    >>> ttnn.synchronize_device(device)
+            )doc",
             py::arg("device"),
             py::arg("cq_id") = std::nullopt);
         m_device.def("SetLazyCommandQueueMode", &tt::tt_metal::detail::SetLazyCommandQueueMode, R"doc(

@@ -99,8 +99,15 @@ def manage_device(device_id: int) -> "ttnn.device.Device":
     Args:
         device_id (int): The device ID to open.
 
-    Yields:
-        ttnn.device.Device: The opened device
+    Returns:
+        ttnn.device.Device: the opened device. The device will be closed automatically when the block is exited, even if an error occurs.
+
+    Example:
+        with manage_device(device_id=0) as device:
+            # Perform operations with the device
+            tensor = ttnn.zeros((2, 3), device=device)
+            print(tensor)
+            ttnn.Tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
     """
     device = open_device(device_id=device_id)
     try:
