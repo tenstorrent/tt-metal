@@ -372,7 +372,7 @@ class TtLlamaAttention(nn.Module):
 
         # reshaping long sequence to matmul fit on device
         if seq_len > 2048:
-            xs_11SH = ttnn.reshape(xs_11SH, [1, 2, seq_len // 2, -1])
+            xs_11SH = ttnn.reshape(xs_11SH, [1, seq_len // 2048, 2048, -1])
         xqkv_fused = ttnn.linear(
             xs_11SH,
             wqkv,
@@ -419,14 +419,20 @@ class TtLlamaAttention(nn.Module):
         keys_BKSD = self.layer_past[0]
         values_BKSD = self.layer_past[1]
 
-        k_fill = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
+        k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
+        ttnn.deallocate(k_heads_1KSD)
         # sharding k_fill to deal with update_cache memory limitation
         if seq_len > 256:
-            k_fill = ttnn.interleaved_to_sharded(k_fill, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
-        v_fill = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
+            k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
+        else:
+            k_fill = k_heads_1KSD_8b
+        v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
+        ttnn.deallocate(v_heads_1VSD)
         # sharding v_fill to deal with update_cache memory limitation
         if seq_len > 256:
-            v_fill = ttnn.interleaved_to_sharded(v_fill, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
+            v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
+        else:
+            v_fill = v_heads_1VSD_8b
         ttnn.fill_cache(
             keys_BKSD,
             k_fill,
@@ -437,30 +443,37 @@ class TtLlamaAttention(nn.Module):
             v_fill,
             user_id,
         )
+        if seq_len > 256:
+            ttnn.deallocate(k_fill)
+            ttnn.deallocate(v_fill)
 
         self.layer_past = [keys_BKSD, values_BKSD]
 
         # SDPA
 
         # reshaping to put group in batch dim to do sdpa on 8 MQAs in parallel
-        k_heads_K1SD = ttnn.reshape(k_heads_1KSD, [self.n_local_kv_heads, 1, -1, self.head_dim])
-        v_heads_V1SD = ttnn.reshape(v_heads_1VSD, [self.n_local_kv_heads, 1, -1, self.head_dim])
-        q_heads_84SD = ttnn.reshape(
-            q_heads_1QSD, [self.n_local_kv_heads, self.n_local_heads // self.n_local_kv_heads, -1, self.head_dim]
+        k_heads_K1SD_8b = ttnn.reshape(k_heads_1KSD_8b, [self.n_local_kv_heads, 1, -1, self.head_dim])
+        v_heads_V1SD_8b = ttnn.reshape(v_heads_1VSD_8b, [self.n_local_kv_heads, 1, -1, self.head_dim])
+
+        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
+        ttnn.deallocate(q_heads_1QSD)
+        q_heads_84SD_8b = ttnn.reshape(
+            q_heads_1QSD_8b, [self.n_local_kv_heads, self.n_local_heads // self.n_local_kv_heads, -1, self.head_dim]
         )
         attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
-            q_heads_84SD,
-            k_heads_K1SD,
-            v_heads_V1SD,
+            q_heads_84SD_8b,
+            k_heads_K1SD_8b,
+            v_heads_V1SD_8b,
             is_causal=True,
             scale=self.scale,
             program_config=self.model_config["SDPA_PROGCFG"](seq_len),
         )
-        attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
         # deallocate keys and values
-        q_heads_84SD.deallocate(True)
-        k_heads_K1SD.deallocate(True)
-        v_heads_V1SD.deallocate(True)
+        q_heads_84SD_8b.deallocate(True)
+        k_heads_K1SD_8b.deallocate(True)
+        v_heads_V1SD_8b.deallocate(True)
+
+        attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
 
         ###
         # Output matmul
@@ -473,7 +486,7 @@ class TtLlamaAttention(nn.Module):
 
         # reshaping long sequence to matmul fit on device
         if seq_len > 2048:
-            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 2, seq_len // 2, -1])
+            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 2048, 2048, -1])
         output_11SH = ttnn.linear(
             attn_output_11SH,
             wo,

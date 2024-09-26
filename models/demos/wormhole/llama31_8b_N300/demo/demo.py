@@ -17,6 +17,7 @@ from models.demos.wormhole.llama31_8b_N300.tt.llama_common import (
     prepare_inputs_ttnn_prefill,
     get_rot_transformation_mat,
     HostEmbedding,
+    encode_prompt_llama_instruct,
 )
 from models.demos.wormhole.llama31_8b_N300.tt.llama_model import TtTransformer
 from models.demos.wormhole.llama31_8b_N300.tt.llama_embedding import TtLlamaEmbedding
@@ -44,20 +45,17 @@ def preprocess_inputs_prefill(
     model_args,
     instruct,
     max_generated_tokens,
-    max_prefill_len=32768 * 4,
+    max_prefill_len=16 * 1024,
 ):
     """
     Run tokenizer on inputs, and create embeddings for the first token of each input
     """
     # The maximum KV-cache len supported is 32k. To avoid going out of memory, clip the max prefill length by the maximum number of tokens that will be generated
-    if max_prefill_len == 32768 * 4:
-        max_prefill_len = 32768 * 4 - max_generated_tokens
+    if max_prefill_len == 16 * 1024:
+        max_prefill_len = 16 * 1024 - max_generated_tokens
 
     if instruct:
-        # Pre append [INST] and post append [/INST] to the encoded prompts if instruct mode
-        encoded_prompts = [
-            tokenizer.encode("[INST] " + prompt + " [/INST]", bos=True, eos=False) for prompt in input_prompts
-        ]
+        encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in input_prompts]
     else:
         encoded_prompts = [tokenizer.encode(prompt) for prompt in input_prompts]
 
@@ -260,6 +258,7 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
                     0, 0, (decoding_pos[batch_id] - 1) % 32, :
                 ]
             )
+            ttnn.deallocate(tt_out)
 
         logger.info(f"Prefill finished !")
 
@@ -311,8 +310,11 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
         tt_out = tt_model(decode_input, current_pos, current_pos_attn, rot_mat=current_rot_mat)
         tt_out_gathered = ttnn.line_all_gather(tt_out, dim=3, num_links=1)
+        ttnn.deallocate(tt_out)
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
+        ttnn.deallocate(tt_out_gathered)
         tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
+        ttnn.deallocate(tt_out_rm)
         new_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         current_rot_mat = ttnn.copy(new_rot_mat, current_rot_mat)
         ttnn.plus_one(current_pos)
@@ -324,8 +326,11 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
         tt_out = tt_model(decode_input, current_pos, current_pos_attn, rot_mat=current_rot_mat)
         tt_out_gathered = ttnn.line_all_gather(tt_out, dim=3, num_links=1)
+        ttnn.deallocate(tt_out)
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
+        ttnn.deallocate(tt_out_gathered)
         tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
+        ttnn.deallocate(tt_out_rm)
         new_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         current_rot_mat = ttnn.copy(new_rot_mat, current_rot_mat)
         ttnn.plus_one(current_pos)

@@ -139,7 +139,7 @@ class TtModelArgs:
             self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 q_chunk_size=256 if seqlen > 2048 else 64,
-                k_chunk_size=256 if seqlen > 2048 else 64,
+                k_chunk_size=512 if seqlen > 2048 else 64,
             )
             self.model_config["ATTN_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
@@ -305,7 +305,7 @@ class TtModelArgs:
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=max(
-                    1, seq_len // (512 if seq_len > 2048 else 256)
+                    1, (8 if seq_len >= 2048 else seq_len // 256)
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=16,  # N / TILE_WIDTH / Grid_Size
                 transpose_mcast=False,
@@ -319,7 +319,7 @@ class TtModelArgs:
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=max(
-                    1, seq_len // (512 if seq_len > 2048 else 256)
+                    1, 8 if seq_len >= 2048 else seq_len // 256
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=12,  # N / TILE_WIDTH / Grid_Size
                 transpose_mcast=False,
