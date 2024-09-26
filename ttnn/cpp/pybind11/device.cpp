@@ -56,25 +56,7 @@ void ttnn_device(py::module& module) {
                 <ttnn._ttnn.device.Device object at 0x7fbac5bfc1b0>
         )doc");
 
-    module.def(
-        "close_device",
-        &ttnn::close_device,
-        py::arg("device"),
-        R"doc(
-            Close the specified device.
-
-            Args:
-                device (ttnn.Device): the device to be closed.
-
-            Returns:
-                `None`: the device is closed.
-
-            Example:
-                >>> device_id = 0
-                >>> device = ttnn.open_device(device_id = device_id)
-                >>> success = ttnn.close_device(device)
-                Closing device 0
-        )doc");
+    module.def("close_device", &ttnn::close_device, py::arg("device"));
 
     module.def("enable_program_cache", &ttnn::enable_program_cache, py::arg("device"));
 
@@ -239,9 +221,9 @@ void device_module(py::module& m_device) {
                 This functionality is planned for deprecation in the future.
 
             Example:
-                device_id = 0
-                device = ttnn.open_device(device_id = device_id)
-                ttnn.SetDefaultDevice(device)
+                >>> device_id = 0
+                >>> device = ttnn.open_device(device_id = device_id)
+                >>> ttnn.SetDefaultDevice(device)
         )doc");
 
     m_device.def("GetDefaultDevice", &ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice,
@@ -255,7 +237,7 @@ void device_module(py::module& m_device) {
                 This functionality is planned for deprecation in the future.
 
             Example:
-                device = ttnn.GetDefaultDevice()
+                >>> device = ttnn.GetDefaultDevice()
         )doc");
 
     m_device.def(
@@ -349,7 +331,7 @@ void device_module(py::module& m_device) {
             This functionality is planned for deprecation in the future.
 
         Example:
-            padded_shape = ttnn.pad_to_tile_shape(unpadded_shape=[1, 2, 2, 2], pad_c=False, pad_n=False, pad_h=True, pad_w=True)
+            >>> padded_shape = ttnn.pad_to_tile_shape(unpadded_shape=[1, 2, 2, 2], pad_c=False, pad_n=False, pad_h=True, pad_w=True)
 
         )doc");
 
@@ -411,7 +393,7 @@ void device_module(py::module& m_device) {
                     cq_id (int, optional): The command queue ID to synchronize. Defaults to `None`.
 
                 Returns:
-                `None`: The op ensures that all operations are completed.
+                    `None`: The op ensures that all operations are completed.
 
                 Example:
                     >>> device_id = 0
