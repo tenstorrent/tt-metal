@@ -32,6 +32,7 @@
 // clang-format on
 
 uint8_t noc_index;
+uint8_t noc_mode;
 
 constexpr uint32_t RISCV_IC_BRISC_MASK = 0x1;
 constexpr uint32_t RISCV_IC_NCRISC_MASK = 0x10;
@@ -356,6 +357,7 @@ int main() {
 
     mailboxes->go_message.signal = RUN_MSG_DONE;
 
+    uint8_t prev_noc_mode = 0;
     while (1) {
         init_sync_registers();
         reset_ncrisc_with_iram();
@@ -410,6 +412,13 @@ int main() {
             run_triscs(enables);
 
             noc_index = launch_msg_address->kernel_config.brisc_noc_id;
+            noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
+
+            // re-initialize the NoCs
+            if (prev_noc_mode != noc_mode) {
+                noc_init_multi_noc();
+            }
+            prev_noc_mode = noc_mode;
 
             uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM0);
             uint32_t tt_l1_ptr *cb_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
@@ -425,7 +434,12 @@ int main() {
                 RECORD_STACK_USAGE();
             } else {
                 // This was not initialized in kernel_init
-                noc_local_state_init(noc_index);
+                if (noc_mode == DEDICATED_NOC_PER_DM) {
+                    noc_local_state_init(noc_index);
+                } else {
+                    noc_local_state_init(NOC_0);
+                    noc_local_state_init(NOC_1);
+                }
             }
             WAYPOINT("D");
 

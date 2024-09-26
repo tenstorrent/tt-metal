@@ -105,6 +105,7 @@ void DataMovementKernel::process_defines(
     const std::function<void(const string &define, const string &value)> callback) const {
     Kernel::process_defines(callback);
     callback("NOC_INDEX", std::to_string(this->config_.noc));
+    callback("NOC_MODE", std::to_string(this->config_.noc_mode));
 }
 
 void ComputeKernel::process_defines(

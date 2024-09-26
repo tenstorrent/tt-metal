@@ -10,10 +10,26 @@
 
 ////
 
+// used for ops with USE_MULTI_MOC defined
+const uint32_t MULTI_NOC_NCRISC_WR_CMD_BUF = 2; // all writes share cmd buf
+const uint32_t MULTI_NOC_NCRISC_WR_REG_CMD_BUF = 2;
+const uint32_t MULTI_NOC_NCRISC_AT_CMD_BUF = 2;
+const uint32_t MULTI_NOC_NCRISC_RD_CMD_BUF = 3;
+
+const uint32_t MULTI_NOC_BRISC_WR_CMD_BUF = 0; // all writes share cmd buf
+const uint32_t MULTI_NOC_BRISC_WR_REG_CMD_BUF = 0;
+const uint32_t MULTI_NOC_BRISC_AT_CMD_BUF = 0;
+const uint32_t MULTI_NOC_BRISC_RD_CMD_BUF = 1;
+
 const uint32_t NCRISC_WR_CMD_BUF = 0;  // for large writes
 const uint32_t NCRISC_RD_CMD_BUF = 1;  // for all reads
 const uint32_t NCRISC_WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
 const uint32_t NCRISC_AT_CMD_BUF = 3; // for atomics
+
+const uint32_t BRISC_WR_CMD_BUF = 0;  // for large writes
+const uint32_t BRISC_RD_CMD_BUF = 1;  // for all reads
+const uint32_t BRISC_WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
+const uint32_t BRISC_AT_CMD_BUF = 3; // for atomics
 
 // 36 bits of address followed by coordinate. First 32 bits of address go into lo register, remaining address bits and coordinates are in the mid register
 constexpr uint32_t NOC_ADDR_COORD_SHIFT = 32; // address is lower 36 bits and upper bits are the coordinates, 32 bits in lo reg and rest goes to mid
@@ -166,6 +182,32 @@ inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
     uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
     NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
     NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_COORDINATE, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
+  }
+}
+
+inline __attribute__((always_inline)) void noc_init_multi_noc() {
+#pragma GCC unroll 0
+  for (int noc = 0; noc < NUM_NOCS; noc++) {
+    uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
+    uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
+    uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+    uint64_t xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
+
+    uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+
+    // program brisc cmd_buf 0
+    NOC_CMD_BUF_WRITE_REG(noc, MULTI_NOC_BRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, MULTI_NOC_BRISC_RD_CMD_BUF, NOC_RET_ADDR_COORDINATE, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
+
+    // program brisc cmd_buf 1
+    NOC_CMD_BUF_WRITE_REG(noc, MULTI_NOC_BRISC_WR_CMD_BUF, NOC_TARG_ADDR_COORDINATE, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
+
+    // program ncrisc cmd_buf 2
+    NOC_CMD_BUF_WRITE_REG(noc, MULTI_NOC_NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, MULTI_NOC_NCRISC_RD_CMD_BUF, NOC_RET_ADDR_COORDINATE, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
+
+    // program ncrisc cmd_buf 3
+    NOC_CMD_BUF_WRITE_REG(noc, MULTI_NOC_NCRISC_WR_CMD_BUF, NOC_TARG_ADDR_COORDINATE, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
   }
 }
 

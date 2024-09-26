@@ -18,6 +18,11 @@ enum NOC : uint8_t {
     NOC_1 = 1,
 };
 
+enum NOC_MODE : uint8_t {
+    DEDICATED_NOC_PER_DM = 0,
+    ANY_NOC_PER_DM = 1,
+};
+
 enum Eth : uint8_t {
     SENDER = 0,
     RECEIVER = 1,
