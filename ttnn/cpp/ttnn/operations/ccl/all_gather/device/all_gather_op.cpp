@@ -209,6 +209,65 @@ Tensor all_gather(
     return output_tensors.at(0);
 }
 
+Tensor all_gather(
+    const Tensor& input_tensor,
+    const uint32_t dim,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<size_t> user_defined_num_workers,
+    const std::optional<size_t> user_defined_num_buffers_per_channel) {
+
+    const auto mesh_view = mesh_device.get_view();
+    std::size_t num_devices = (cluster_axis == 0) ? mesh_view->num_rows() : mesh_view->num_cols();
+
+    ttnn::ccl::Topology ccl_topology = ttnn::ccl::Topology::Ring;
+
+    if (num_devices == 2){
+        ccl_topology = ttnn::ccl::Topology::Linear;
+    }
+
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+
+    operation::launch_op(
+        [dim, num_links, memory_config, mesh_view, cluster_axis, user_defined_num_workers, user_defined_num_buffers_per_channel, num_devices, ccl_topology](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+
+            const auto& input_device_tensor = input_tensors.at(0);
+
+            const auto coordinate = mesh_view->find_device(input_device_tensor.device()->id());
+            const auto view_index = (cluster_axis == 0) ? coordinate.col : coordinate.row;
+            const auto device_index = (cluster_axis == 0) ? coordinate.row : coordinate.col;
+
+            auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
+                auto new_coord = coordinate;
+                if (cluster_axis == 0) {
+                    new_coord.row = line_index % num_devices;
+                } else {
+                    new_coord.col = line_index % num_devices;
+                }
+                return mesh_view->find_device_id(new_coord);
+            };
+
+            bool is_last_chip_in_clockwise_direction = device_index == (num_devices - 1);
+            bool is_last_chip_in_counter_clockwise_direction = device_index == 0;
+            auto receiver_device_id = is_last_chip_in_clockwise_direction ? std::nullopt : get_chip_id(device_index + 1);
+            auto sender_device_id = is_last_chip_in_counter_clockwise_direction ? std::nullopt : get_chip_id(device_index + num_devices - 1);
+
+            return operation::run(
+                ttnn::AllGather{
+                    dim, num_links, num_devices, device_index, user_defined_num_workers, user_defined_num_buffers_per_channel, receiver_device_id, sender_device_id, memory_config.value_or(input_device_tensor.memory_config()), ccl_topology},
+                {input_device_tensor});
+        },
+        {input_tensor},
+        output_tensors);
+    return output_tensors.at(0);
+
+}
+
 
 } // namespace ccl
 } // namespace operations
