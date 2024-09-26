@@ -241,7 +241,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSqrt::invoke(const Tensor
     return ExecuteUnaryBackwardSqrt::invoke(DefaultQueueId, grad, input, output_mem_config, input_grad);
 }
 
-std::vector<Tensor> _multigammaln_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+std::vector<Tensor> ExecuteUnaryBackwardMultigammaln::invoke(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor digamma_result = ttnn::multiply(grad, ttnn::digamma(input, output_mem_config), std::nullopt, output_mem_config);
     Tensor digamma_result_2 = ttnn::multiply(
@@ -284,7 +284,7 @@ std::vector<Tensor> _ge_bw(
     return _unary_comp_bw(grad, output_mem_config);
 }
 
-std::vector<Tensor> _lgamma_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+std::vector<Tensor> ExecuteUnaryBackwardLgamma::invoke(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = ttnn::multiply(grad, ttnn::digamma(input, output_mem_config), std::nullopt, output_mem_config);
