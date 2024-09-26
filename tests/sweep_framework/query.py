@@ -72,6 +72,7 @@ def summary(ctx):
         colored("NOT RUN", "light_grey"),
         colored("FAIL (L1 Out of Mem)", "light_red"),
         colored("FAIL (Watcher)", "light_red"),
+        colored("FAIL (Unsupported Device Perf)", "light_red"),
     ]
 
     client = Elasticsearch(ctx.obj["elastic"], basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
