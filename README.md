@@ -27,7 +27,7 @@
 | [Falcon7B](./models/demos/wormhole/falcon7b)                         | 32    | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.07       | 16.7  | 26           | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31)   |
 | [Mistral-7B](./models/demos/wormhole/mistral7b)                      | 32    | [n150](https://tenstorrent.com/hardware/wormhole)        |            | 9.9   | 25           | [v0.51.0-rc28](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc28) |
 | [Mamba-2.8B](./models/demos/wormhole/mamba)                          | 32    | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.04       | 12.3  | 41           | [v0.51.0-rc26](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc26) |
-| [LLaMA-3.1-8B](./models/demos/wormhole/llama31_8b)                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.20       | 14.9  | 23           | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
+| [LLaMA-3.1-8B](./models/demos/wormhole/llama31_8b)                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.20       | 21.4  | 23           | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
 | [Falcon7B (data parallel)](./models/demos/t3000/falcon7b)            | 256   | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 0.10       | 14.1  | 26           | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
 | [LLaMA-2-70B - (tensor parallel)](./models/demos/t3000/llama2_70b)   | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) |            | 15.1  | 20           | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
 | [LLaMA-3.1-70B (tensor parallel)](./models/demos/t3000/llama3_70b)   | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) |            | 15.1  | 20           | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
@@ -103,10 +103,10 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metalium/lates
 ### Hello World
 - [Hello World! Compute Kernel](./tech_reports/prog_examples/hello_world_compute/hello_world_compute.md)
 - [Hello World! Data Movement Kernel](./tech_reports/prog_examples/hello_world_data_movement/hello_world_data_movement.md)
-### Add Integers  
+### Add Integers
 - [Add 2 Integers in Baby RiscV](./tech_reports/prog_examples/add_2_integers_in_riscv/add_2_integers_in_riscv.md)
 - [Add 2 Integers in Compute Kernel](./tech_reports/prog_examples/add_2_integers_in_compute/add_2_integers_in_compute.md)
-### Simple Tensor Manipulation 
+### Simple Tensor Manipulation
 - [Sharding](./tech_reports/prog_examples/shard_data_rm/shard_data_rm.md)
 - [Padding](./tech_reports/prog_examples/pad_multi_core/pad_multi_core.md)
 ### DRAM Data Movement
