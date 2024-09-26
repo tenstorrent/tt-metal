@@ -85,3 +85,6 @@ jobs:
           path: |
             generated/test_reports/
           prefix: "test_reports_"
+      - name: Generate system logs on failure
+        uses: ./.github/actions/generate-system-logs
+        if: ${{ failure() }}
