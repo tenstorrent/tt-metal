@@ -95,4 +95,6 @@ class TtTransformer(nn.Module):
             dtype=self.dtype,
         )
 
+        ttnn.deallocate(x)
+
         return output

@@ -17,6 +17,7 @@ from models.demos.wormhole.llama31_8b.tt.llama_common import (
     prepare_inputs_ttnn_prefill,
     get_rot_transformation_mat,
     HostEmbedding,
+    encode_prompt_llama_instruct,
 )
 from models.demos.wormhole.llama31_8b.tt.llama_model import TtTransformer
 from models.demos.wormhole.llama31_8b.tt.llama_embedding import TtLlamaEmbedding
@@ -55,9 +56,8 @@ def preprocess_inputs_prefill(
 
     if instruct:
         # Pre append [INST] and post append [/INST] to the encoded prompts if instruct mode
-        encoded_prompts = [
-            tokenizer.encode("[INST] " + prompt + " [/INST]", bos=True, eos=False) for prompt in input_prompts
-        ]
+        encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in input_prompts]
+
     else:
         encoded_prompts = [tokenizer.encode(prompt) for prompt in input_prompts]
 
@@ -253,7 +253,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
                 get_last_token=((decoding_pos[batch_id] - 1) // 32) * 32,
             )
             pt_out.append(ttnn.to_torch(tt_out)[0, 0, (decoding_pos[batch_id] - 1) % 32, :])
-
+            ttnn.deallocate(tt_out)
             ttnn.synchronize_device(device)
         logger.info(f"Prefill finished !")
 
@@ -296,7 +296,9 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
         tt_out = tt_model(decode_input, current_pos, current_pos_attn, rot_mat=current_rot_mat)
         tt_out_rm = ttnn.untilize(tt_out, use_multicore=True)
+        ttnn.deallocate(tt_out)
         tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
+        ttnn.deallocate(tt_out_rm)
         new_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         current_rot_mat = ttnn.copy(new_rot_mat, current_rot_mat)
         ttnn.plus_one(current_pos)
@@ -308,7 +310,9 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
         tt_out = tt_model(decode_input, current_pos, current_pos_attn, rot_mat=current_rot_mat)
         tt_out_rm = ttnn.untilize(tt_out, use_multicore=True)
+        ttnn.deallocate(tt_out)
         tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
+        ttnn.deallocate(tt_out_rm)
         new_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         current_rot_mat = ttnn.copy(new_rot_mat, current_rot_mat)
         ttnn.plus_one(current_pos)
@@ -435,7 +439,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
         "instruct_weights-3_batch",
     ],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 6283264, "num_command_queues": 2}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 7815168, "num_command_queues": 2}], indirect=True)
 def test_llama_demo(
     device, use_program_cache, input_prompts, instruct_weights, is_ci_env, is_single_card_n300, num_batches
 ):

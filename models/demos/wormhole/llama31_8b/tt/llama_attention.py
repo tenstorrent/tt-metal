@@ -236,9 +236,9 @@ class TtLlamaAttention(nn.Module):
             # QKV matmuls
             # Use HiFi2 for DRAM-sharded matmuls as htey are otherwise flop-bound. Loses 1 bit of activation precision.
             ###
-            x = ttnn.interleaved_to_sharded(x, self.model_config["SHARDED_SKIP_INPUT_MEMCFG"])
-            xqkv_fused = ttnn.linear(
-                x,
+            x_sharded = ttnn.interleaved_to_sharded(x, self.model_config["SHARDED_SKIP_INPUT_MEMCFG"])
+            xqkv_fused_sharded = ttnn.linear(
+                x_sharded,
                 wqkv,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=self.model_config["XQKV_DECODE_PROGCFG"],
@@ -246,8 +246,10 @@ class TtLlamaAttention(nn.Module):
                 dtype=ttnn.bfloat16,
             )
 
-            xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(x_sharded)
 
+            xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(xqkv_fused_sharded)
             # Reshape such that true unpadded batch is tracked in shape
             fqkv_shape = xqkv_fused.shape
             xqkv_fused = ttnn.reshape(
@@ -272,12 +274,9 @@ class TtLlamaAttention(nn.Module):
 
             ttnn.deallocate(xqkv_fused)
 
-            # Update rotary matrix on device
-            rotary_mat = rot_mat
-
             q_heads_1BQD = ttnn.linear(
                 q_heads_pre_rot_1BQD,
-                rotary_mat,
+                rot_mat,
                 program_config=self.model_config["ROT_MAT_BMM_PROGCFG"],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
@@ -286,7 +285,7 @@ class TtLlamaAttention(nn.Module):
 
             k_heads_1BKD = ttnn.linear(
                 k_heads_pre_rot_1BKD,
-                rotary_mat,
+                rot_mat,
                 # program_config=self.k_heads_program_config,
                 memory_config=k_heads_pre_rot_1BKD.memory_config(),
                 compute_kernel_config=self.compute_kernel_config_hifi2,
@@ -324,6 +323,7 @@ class TtLlamaAttention(nn.Module):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
+            ttnn.deallocate(q_heads_1BQD)
             attn_output_11BH = ttnn.to_memory_config(
                 attn_output_1G4D, memory_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"]
             )
@@ -331,6 +331,8 @@ class TtLlamaAttention(nn.Module):
                 attn_output_11BH,
                 num_heads=self.n_heads,
             )
+
+            ttnn.deallocate(attn_output_11BH)
             attn_output_cat = ttnn.reshape(attn_output_cat, ttnn.Shape((1, 1, 32, self.hidden_size)))
 
             dense_out = ttnn.linear(

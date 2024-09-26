@@ -100,15 +100,20 @@ class TtTransformerBlock(torch.nn.Module):
         if mode == "decode":  # Sharded config on attn and ffn
             r_sharded = r[0]
             x_sharded = ttnn.interleaved_to_sharded(x, self.model_config["SHARDED_SKIP_INPUT_MEMCFG"])
-
+            ttnn.deallocate(x)
             h_sharded = ttnn.add(x_sharded, r_sharded, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+            ttnn.deallocate(x_sharded)
+            ttnn.deallocate(r_sharded)
             ff_norm = self.ffn_norm(h_sharded, in_sharded=True, out_sharded=True)
             # Reshard the activations (grid_config = [4, 8] after attention) to match the MLP sharded grid_config [8, 8]
             ff_norm = ttnn.reshard(ff_norm, self.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"])
 
             r_interleaved = self.feed_forward.forward(ff_norm, mode)
             h_interleaved = ttnn.sharded_to_interleaved(h_sharded, ttnn.L1_MEMORY_CONFIG)  # Final output is interleaved
+            ttnn.deallocate(h_sharded)
             out = ttnn.add(h_interleaved, r_interleaved, memory_config=skip_mem_cfg)
+            ttnn.deallocate(h_interleaved)
+            ttnn.deallocate(r_interleaved)
             return out
         else:  # prefill  (Interleaved configs)
             r = r[0]
