@@ -41,6 +41,13 @@ jobs:
               timeout: 70
             },
             {
+              name: "WH N300 pgm dispatch nightly",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+              cmd: ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.sh,
+              timeout: 10
+            },
+            {
               name: "GS-only models",
               arch: grayskull,
               runs-on: ["cloud-virtual-machine", "E150", "in-service"],

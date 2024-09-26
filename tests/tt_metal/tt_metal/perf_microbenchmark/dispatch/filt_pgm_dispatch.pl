@@ -26,7 +26,9 @@ while (my $line = <$info>) {
         my @parts = split(' ', $line);
         my $us = $parts[8];
         my $index = index($parts[8], ".");
-        $us = substr($us, 0, $index + 3);
+        my $digits = index($parts[8], "us") - $index;
+        $digits = $digits >= 3 ? 3 : $digits;
+        $us = substr($us, 0, $index + $digits);
         $data->[$j][$i] = $us;
         $j++;
     }
