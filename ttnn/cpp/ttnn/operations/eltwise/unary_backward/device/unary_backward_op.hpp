@@ -21,7 +21,6 @@ enum class UnaryBackwardOpType {
     LGAMMA_BW,
     HARDSIGMOID_BW,
     COS_BW,
-    ACOSH_BW,
     ACOS_BW,
     ATAN_BW,
     RAD2DEG_BW,
@@ -33,7 +32,6 @@ enum class UnaryBackwardOpType {
     I0_BW,
     TAN_BW,
     SIGMOID_BW,
-    RELU_BW,
     RELU6_BW,
     SELU_BW,
     SQUARE_BW,
@@ -102,8 +100,6 @@ std::vector<Tensor> _multigammaln_bw( const Tensor& grad, const Tensor& input, c
 std::vector<Tensor> _lgamma_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _hardsigmoid_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _cos_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _acosh_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _relu_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 
 std::vector<Tensor> _add_bw( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 std::vector<Tensor> _eq_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
@@ -384,20 +380,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::COS_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
         return _cos_bw(grad, input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::ACOSH_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _acosh_bw(grad, input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::RELU_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _relu_bw(grad, input, output_mem_config);
     }
 };
 
