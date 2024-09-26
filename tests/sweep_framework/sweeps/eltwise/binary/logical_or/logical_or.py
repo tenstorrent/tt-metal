@@ -2,9 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+from typing import Optional, Tuple
+from functools import partial
 
+import torch
+import random
 import ttnn
+from tests.sweep_framework.utils import gen_shapes
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import assert_equal, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
@@ -12,20 +17,17 @@ from models.utility_functions import torch_random
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
 
+random.seed(0)
+
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "suite_1": {
-        "input_shape": [
-            [8, 1, 33, 256],
-            [8, 1, 256, 32],
-            [8, 8, 256, 384],
-            [8, 5, 13, 512],
-            [8, 5, 32, 512],
-            [1, 1, 32, 16384],
-        ],
+    "nightly": {
+        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16)
+        + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 16)
+        + gen_shapes([32, 32], [256, 256], [32, 32], 16),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_layout": [ttnn.TILE_LAYOUT],
@@ -51,28 +53,33 @@ def run(
     *,
     device,
 ) -> list:
-    low = -1e6
-    high = 1e6
-    torch_input_tensor_a = torch.rand(input_shape).bfloat16() * (high - low) + low
-    torch_input_tensor_b = torch.rand(input_shape).bfloat16() * (high - low) + low
-    torch_output_tensor = torch_input_tensor_a.logical_and_(torch_input_tensor_b)
+    data_seed = random.randint(0, 20000000)
+    torch.manual_seed(data_seed)
+
+    torch_input_tensor_a = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+    )(input_shape)
+    torch_input_tensor_b = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
+    )(input_shape)
+    torch_output_tensor = torch_input_tensor_a.logical_xor_(torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         dtype=input_a_dtype,
         layout=input_a_layout,
         device=device,
-        memory_config=input_b_memory_config,
+        memory_config=input_a_memory_config,
     )
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b,
         dtype=input_b_dtype,
         layout=input_b_layout,
         device=device,
-        memory_config=input_a_memory_config,
+        memory_config=input_b_memory_config,
     )
     start_time = start_measuring_time()
-    ttnn.logical_and_(input_tensor_a, input_tensor_b)
+    ttnn.logical_xor_(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(input_tensor_a)
     e2e_perf = stop_measuring_time(start_time)
 
