@@ -1381,7 +1381,14 @@ void py_module(py::module& module) {
         +----------------------------+---------------------------------+-------------------+
         |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
         +----------------------------+---------------------------------+-------------------+)doc");
-    detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erf);
+    detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erf,
+    R"doc(Supported dtypes, layouts, and ranks:
+
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+)doc");
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erfc,
     R"doc(Supported dtypes, layouts, and ranks:
 
