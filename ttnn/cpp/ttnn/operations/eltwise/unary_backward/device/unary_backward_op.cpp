@@ -666,7 +666,7 @@ std::vector<Tensor> ExecuteUnaryBackwardCelu::invoke(
 }
 
 
-std::vector<Tensor> _rpow_bw(
+std::vector<Tensor> ExecuteUnaryBackwardRpow::invoke(
     const Tensor& grad, const Tensor& input, float exponent, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     float t_nan = std::nanf("");
@@ -1139,7 +1139,7 @@ std::vector<Tensor> _sign_bw(const Tensor& grad, const Tensor& input, const std:
 }
 
 
-std::vector<Tensor> _div_no_nan_bw(
+std::vector<Tensor> ExecuteUnaryBackwardDivNoNan::invoke(
     const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor zeros = ttnn::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
@@ -1258,7 +1258,7 @@ std::vector<Tensor> _digamma_bw(const Tensor& grad, const Tensor& input, const s
     return grad_tensor;
 }
 
-std::vector<Tensor> _polygamma_bw(
+std::vector<Tensor> ExecuteUnaryBackwardPolygamma::invoke(
     const Tensor& grad, const Tensor& input, int n, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
