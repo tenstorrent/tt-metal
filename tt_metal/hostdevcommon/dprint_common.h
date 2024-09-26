@@ -43,7 +43,6 @@ enum DebugPrintHartIndex : unsigned int {
     DPRINT_PREFIX(WAIT)              \
     DPRINT_PREFIX(BFLOAT16)          \
     DPRINT_PREFIX(SETPRECISION)      \
-    DPRINT_PREFIX(NOC_LOG_XFER)      \
     DPRINT_PREFIX(FIXED)             \
     DPRINT_PREFIX(DEFAULTFLOAT)      \
     DPRINT_PREFIX(HEX)               \
@@ -121,3 +120,5 @@ enum TypedU32_ARRAY_Format {
 };
 
 static_assert(sizeof(DebugPrintMemLayout) == DPRINT_BUFFER_SIZE);
+// We use DebugPrintMemLayout to hold noc xfer data, 32 buckets (one for each bit in noc xfer length field).
+static_assert(sizeof(DebugPrintMemLayout().data) >= sizeof(uint32_t) * 8 * sizeof(uint32_t));

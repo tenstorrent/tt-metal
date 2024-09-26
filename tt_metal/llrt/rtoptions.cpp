@@ -212,9 +212,9 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature) {
         if (core_type_and_cores.second.size() > 0)
             feature_targets[feature].enabled = true;
 
-    const char *print_noc_xfers = std::getenv("TT_METAL_DPRINT_NOC_TRANSFER_DATA");
+    const char *print_noc_xfers = std::getenv("TT_METAL_RECORD_NOC_TRANSFER_DATA");
     if (print_noc_xfers != nullptr)
-        dprint_noc_transfer_data = true;
+        record_noc_transfer_data = true;
 };
 
 void RunTimeOptions::ParseFeatureCoreRange(

@@ -108,6 +108,10 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch) {
         this->defines_ += "-DDEBUG_PRINT_ENABLED ";
     }
 
+    if (tt::llrt::OptionsG.get_record_noc_transfers()) {
+        this->defines_ += "-DNOC_LOGGING_ENABLED ";
+    }
+
     if (tt::llrt::OptionsG.get_kernels_nullified()) {
         this->defines_ += "-DDEBUG_NULL_KERNELS ";
     }
