@@ -94,7 +94,7 @@ def test_llama_model_perf(
 
     # Call the function
     profiler.start(f"end_to_end_inference_with_compile")
-    run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos, generation_length)
+    run_inference(device, tt_model, tt_embd, embd, encoded_prompts, generation_start_pos, generation_length)
     profiler.end(f"end_to_end_inference_with_compile")
     profiler.print()
     compile_and_iter_time = profiler.get("model_run_for_inference_0")
@@ -106,7 +106,7 @@ def test_llama_model_perf(
         signpost("Model perf run")
 
     profiler.start(f"end_to_end_inference")
-    run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos, generation_length)
+    run_inference(device, tt_model, tt_embd, embd, encoded_prompts, generation_start_pos, generation_length)
     profiler.end(f"end_to_end_inference")
     profiler.print()
     iter_time = profiler.get("end_to_end_inference")
@@ -124,7 +124,7 @@ def test_llama_model_perf(
     )
 
 
-def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos, generation_length):
+def run_inference(device, tt_model, tt_embd, embd, encoded_prompts, generation_start_pos, generation_length):
     seqlen = 1  # Generating one token per user at a time
     batch = tt_model.args.max_batch_size
 
