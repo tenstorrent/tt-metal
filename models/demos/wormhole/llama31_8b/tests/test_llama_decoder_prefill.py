@@ -68,7 +68,6 @@ def test_llama_decoder_inference(device, seq_len, use_program_cache, reset_seeds
         weight_cache_path=model_args.weight_cache_path(dtype),
     )
 
-    # TODO Update start_pos (check llama test for reference)
     for i in range(generation_length):
         print(f"[Decoder] Generating token {i}")
         pt_decode_input = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1

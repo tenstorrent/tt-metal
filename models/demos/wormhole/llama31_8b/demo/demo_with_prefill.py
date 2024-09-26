@@ -64,7 +64,7 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, embd,
     else:
         prefill_seq_len = (
             1024 if min_prompt_len > 1024 else (512 if min_prompt_len > 512 else 128)
-        )  # TODO Only supports prefill lengths of 128, 512, 1024
+        )  # TODO Only supports prefill lengths of 128, 512, 1024 (seeing bad PCC above 1k)
         # Initial prefill tensor full of pad tokens
         input_tokens_prefill = torch.full((len(input_prompts), prefill_seq_len), tokenizer.pad_id, dtype=torch.int32)
 
@@ -168,7 +168,6 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
     profiler.end("weight_loading")
     logger.info("Loading weights finished!")
 
-    # TODO Should we keep initial embedding on host?
     embd = HostEmbedding(model_args)
     embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
 

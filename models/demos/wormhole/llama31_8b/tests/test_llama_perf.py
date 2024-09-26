@@ -66,7 +66,6 @@ def test_llama_model_perf(
     # Embedding on host
     embd = HostEmbedding(model_args)
     embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
-    # TODO Add argmax + embedding on device, same as the demo.py code
 
     generation_start_pos = kv_cache_len
     generation_length = 1
