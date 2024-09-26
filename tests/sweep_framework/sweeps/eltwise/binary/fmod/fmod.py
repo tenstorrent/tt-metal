@@ -40,10 +40,16 @@ parameters = {
 }
 
 
+def mesh_device_fixture():
+    device = ttnn.open_device(device_id=0)
+    assert ttnn.device.is_wormhole_b0(device), "This op is available for Wormhole_B0 only"
+    yield (device, "Wormhole_B0")
+    ttnn.close_device(device)
+    del device
+
+
 # TO-DO: Create an issue on this, since these constrictions are not mentioned in the documentation
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    if not is_wormhole_b0():
-        return True, "Supported only for WH_B0"
     if test_vector["input_a_dtype"] == ttnn.bfloat8_b:
         return True, "Input_tensor_a doesn't support bfloat8_b"
     return False, None
