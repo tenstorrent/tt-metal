@@ -33,15 +33,15 @@ class Down1:
         output_tensor_left = self.conv3(device, output_tensor_split)
         output_tensor_left = ttnn.mish(output_tensor_left)
 
-        res_block_split = self.conv4(device, output_tensor_split)
-        res_block_split = ttnn.mish(res_block_split)
-        output_tensor = self.conv5(device, res_block_split)
+        output_tensor_split_2 = self.conv4(device, output_tensor_split)
+        output_tensor_split_2 = ttnn.mish(output_tensor_split_2)
+        output_tensor = self.conv5(device, output_tensor_split_2)
         output_tensor = ttnn.mish(output_tensor)
         output_tensor = self.conv6(device, output_tensor)
         output_tensor = ttnn.mish(output_tensor)
-        output_tensor = res_block_split + output_tensor
+        output_tensor = output_tensor_split_2 + output_tensor
 
-        ttnn.deallocate(res_block_split)
+        ttnn.deallocate(output_tensor_split_2)
         output_tensor = self.conv7(device, output_tensor)
         output_tensor = ttnn.mish(output_tensor)
 
