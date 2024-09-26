@@ -60,7 +60,7 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, embd, instruc
     pt_tokenized_inputs = torch.tensor(input_tokens)
     emb_inputs = embd(pt_tokenized_inputs[:, 0]).view(model_args.max_batch_size, seqlen, -1)
 
-    return emb_inputs, pt_tokenized_inputs, input_mask, None
+    return emb_inputs, pt_tokenized_inputs, input_mask
 
 
 def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
@@ -99,7 +99,6 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     }
     logger.info("Loading weights finished!")
 
-    # TODO Should we keep initial embedding on host?
     embd = HostEmbedding(model_args)
     embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
 
@@ -108,7 +107,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     users_decoding = True
 
     # Preprocess initial prompt inputs
-    tt_decode_input, pt_encoded_input, input_mask, rot_emb_matrix_list = preprocess_inputs(
+    tt_decode_input, pt_encoded_input, input_mask = preprocess_inputs(
         input_prompts, tokenizer, model_args, dtype, embd, instruct_mode, device
     )
     # pre-compute the rotational embedding matrix and send to device
@@ -168,12 +167,15 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
 
         # Run ttnn llama model
         tt_out = tt_model(decode_input, current_pos_tensor, current_pos_attn_tensor, rot_mat=current_rot_mat)
-        tt_out_rm = ttnn.untilize(tt_out, use_multicore=True)
+
+        # Get model output
+        tt_out_rm = ttnn.untilize(tt_out, use_multicore=True)  # Row-major layout
         ttnn.deallocate(tt_out)
         tt_output_torch = (
             ttnn.to_torch(tt_out_rm).permute(2, 1, 0, 3).squeeze(1)[: model_args.max_batch_size, :, :]
         )  # [batch, seq, hidden_dim]
         ttnn.deallocate(tt_out_rm)
+
         # Update rotation matrix for next iteration
         current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         # If temperature is 0, does greedy decoding (top-1)

@@ -224,6 +224,8 @@ class TtLlamaAttention(nn.Module):
     ) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, hidden_dim)
+        current_pos: (batch_size), current token position in the sequence for each user
+        current_pos_attn: (batch_size * kv_heads[8]), current token position in the sequence for each KV_head (Required for SDPA_decode)
         """
         dense_outputs = []
         for i in range(self.num_devices):
@@ -232,6 +234,7 @@ class TtLlamaAttention(nn.Module):
             wo = self.wo_list[i]
             layer_past = self.layer_past_list[i]
             assert self.max_batch_size * self.n_kv_heads < 64
+
             ###
             # QKV matmuls
             # Use HiFi2 for DRAM-sharded matmuls as htey are otherwise flop-bound. Loses 1 bit of activation precision.
@@ -255,8 +258,6 @@ class TtLlamaAttention(nn.Module):
             xqkv_fused = ttnn.reshape(
                 xqkv_fused, ttnn.Shape((1, 1, self.max_batch_size, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3]))
             )
-
-            # ttnn.deallocate(x)
 
             ###
             # Reshape and rotary embeddings

@@ -164,10 +164,8 @@ def get_rotation_mat(dhead, end, start_pos, seqlen, batch):
 
 def prepare_inputs_ttnn(x, hidden_size, device):
     """
-    Prepare inputs for decode mode. Assume that current token is at
-    start_pos, and KV cache has valid data up to start_pos.
+    Prepare inputs for decode mode.
     x: (batch, seq, hidden_dim)
-    start_pos: int
     """
 
     if len(x.shape) == 3:
@@ -197,13 +195,6 @@ def prepare_inputs_ttnn(x, hidden_size, device):
         x = ttnn.permute(x, (1, 2, 0, 3))  # [seq_len, 1, batch, hidden_dim]
     elif len(x.shape) == 4:
         pass  # already in [seq_len, 1, batch, hidden_dim]
-
-    # expected shapes:
-    # x: (seq_len, 1, batch, hidden_dim)
-    # start_pos: int
-    # attn_mask: [seq_len, n_heads, batch, padded_layer_past_len]
-    # rot_mat: [1, 1, head_dim, head_dim]
-    # assert x.size() == (seq_len, 1, batch, hidden_size)
 
     if torch.is_tensor(x):
         x = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)

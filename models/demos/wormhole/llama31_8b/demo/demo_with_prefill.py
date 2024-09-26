@@ -102,7 +102,6 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, embd,
         pt_tokenized_inputs_decode,
         emb_prefill_inputs,
         input_mask,
-        None,
         prefill_seq_len,
         encoded_prompts,
     )
@@ -179,7 +178,6 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
         _,
         _,
         _,
-        rot_emb_matrix_list,
         prefill_seq_len,
         _,
     ) = preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, embd, instruct_mode, device)
@@ -228,7 +226,6 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
             tt_decode_input,
             pt_prefill_input,
             input_mask,
-            rot_emb_matrix_list,
             prefill_seq_len,
             encoded_prompts,
         ) = preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, embd, instruct_mode, device)
@@ -357,25 +354,19 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
             profiler.start(f"decode_and_argmax", iteration=batch_idx)
             # Run ttnn llama3.1 model
             tt_out = tt_model(decode_input, current_pos_tensor, current_pos_attn_tensor, rot_mat=current_rot_mat)
+
+            # Get model output
             tt_out_rm = ttnn.untilize(tt_out, use_multicore=True)
             ttnn.deallocate(tt_out)
             tt_output_torch = (
                 ttnn.to_torch(tt_out_rm).permute(2, 1, 0, 3).squeeze(1)[:batch_size, :, :]
             )  # [batch, seq, hidden_dim]
             ttnn.deallocate(tt_out_rm)
+
             # Update rotation matrix for next iteration
             current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
             # If temperature is 0, does greedy decoding (top-1)
             tt_out_tok = sample(tt_output_torch, temperature=0, top_p=0.8)
-
-            # TODO argmax on device
-            # tt_out = ttnn.to_layout(tt_out, ttnn.ROW_MAJOR_LAYOUT)
-            # tt_out = ttnn.permute(tt_out, (2, 1, 0, 3))
-            # tt_out = ttnn.reshape(tt_out, (tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]))  # Squeeze(1)
-            # tt_out_argmax = ttnn.argmax(tt_out, dim=-1)
-            # Typecast from bf16 to uint32 for embedding
-            # tt_out_tok = ttnn.clone(tt_out_argmax, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.uint32)
-            # tt_out_tok = ttnn.experimental.tensor.typecast(tt_out_tok, dtype=ttnn.uint32)
 
             if iteration < input_mask.shape[1]:  # If prefill
                 # If token is pad token, start generating new token, otherwise, push the next prompt token to the model

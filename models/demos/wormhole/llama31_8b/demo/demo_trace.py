@@ -255,14 +255,13 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
             pt_out.append(ttnn.to_torch(tt_out)[0, 0, (decoding_pos[batch_id] - 1) % 32, :])
             ttnn.deallocate(tt_out)
             ttnn.synchronize_device(device)
-        logger.info(f"Prefill finished !")
+        logger.info(f"Prefill finished!")
 
         # Preparing first decode token
         pt_out_batched = torch.stack(pt_out, dim=-2)
         pt_out_batched = torch.argmax(pt_out_batched, dim=-1)
         tt_out_tok = ttnn.from_torch(
             torch.nn.functional.pad(pt_out_batched.unsqueeze(0).unsqueeze(0).unsqueeze(0), (0, 31), "constant", 0),
-            # pt_out_batched.unsqueeze(0).unsqueeze(0).unsqueeze(0),
             device=device,
             dtype=ttnn.uint32,
         )
@@ -283,7 +282,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
             start_pos=decoding_pos[0] - 2,
         )
 
-        # Create events
+        # Create trace events
         op_event = ttnn.create_event(device)
         write_event = ttnn.create_event(device)
 
@@ -292,7 +291,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
             torch.tensor(decoding_pos * 8, dtype=torch.int32), device=device, dtype=ttnn.int32
         )
 
-        # Compile
+        # Compile the trace (dry run of the model)
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
         tt_out = tt_model(decode_input, current_pos, current_pos_attn, rot_mat=current_rot_mat)
         tt_out_rm = ttnn.untilize(tt_out, use_multicore=True)
@@ -320,6 +319,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
 
         ttnn.end_trace_capture(device, trace_id, cq_id=0)
 
+        # Reset the decoding position for the proper run of the model
         current_pos_reset = ttnn.from_torch(torch.tensor(decoding_pos, dtype=torch.int32), dtype=ttnn.int32)
         current_pos_attn_reset = ttnn.from_torch(torch.tensor(decoding_pos * 8, dtype=torch.int32), dtype=ttnn.int32)
         tt_out_tok_reset = ttnn.from_torch(
@@ -327,6 +327,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
             dtype=ttnn.uint32,
         )
 
+        # Update the resetted tensors on device
         ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos)
         ttnn.copy_host_to_device_tensor(current_pos_attn_reset, current_pos_attn)
         ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)

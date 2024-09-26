@@ -80,7 +80,7 @@ class TtTransformer(nn.Module):
         if mode == "prefill" and get_last_token == -1:
             return x
 
-        # slicing for the last token
+        # Slicing the tensor to the nearest celing/floor multiples of 32 for the prefill_len, to get the last token
         if get_last_token != -1:
             x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, 4096))
 
