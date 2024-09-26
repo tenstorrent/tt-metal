@@ -287,7 +287,7 @@ class TtLlamaAttention(nn.Module):
             k_heads_1BKD = ttnn.linear(
                 k_heads_pre_rot_1BKD,
                 rot_mat,
-                # program_config=self.k_heads_program_config,
+                program_config=self.model_config["ROT_MAT_BMM_PROGCFG"],
                 memory_config=k_heads_pre_rot_1BKD.memory_config(),
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 dtype=ttnn.bfloat16,
