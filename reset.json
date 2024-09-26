@@ -1,0 +1,40 @@
+{
+    "time": "",
+    "host_name": "aus-glx-12",
+    "wh_link_reset": {
+        "pci_index": [
+            0,
+            1,
+            2,
+            3
+        ]
+    },
+    "re_init_devices": true,
+    "wh_mobo_reset": [
+        {
+            "nb_host_pci_idx": [
+                0,
+                1,
+                2,
+                3
+            ],
+            "mobo": "aus-glx-mgmt-12",
+            "credo": [
+                "6:0",
+                "6:1",
+                "7:0",
+                "7:1"
+            ],
+            "disabled_ports": [
+                "0:0",
+                "0:1",
+                "0:2",
+                "1:0",
+                "1:1",
+                "1:2",
+                "6:2",
+                "7:2"
+            ]
+        }
+    ]
+}
