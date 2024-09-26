@@ -51,18 +51,22 @@ set -eo pipefail
 
 # Function to display help
 show_help() {
-    echo "Usage: $0 [-h] [-e] [-c] [-b build_type] [-t] [-a]"
-    echo "  -h  Show this help message."
-    echo "  -e  Enable CMAKE_EXPORT_COMPILE_COMMANDS."
-    echo "  -c  Enable ccache for the build."
-    echo "  -b  Set the build type. Default is Release. Other options are Debug, RelWithDebInfo, and CI."
-    echo "  -t  Enable build time trace (clang only)."
-    echo "  -a  Enable AddressSanitizer."
-    echo "  -m  Enable MemorySanitizer."
-    echo "  -s  Enable ThreadSanitizer."
-    echo "  -u  Enable UndefinedBehaviorSanitizer."
-    echo "  -p  Enable Tracy profiler."
+    echo "Usage: $0 [options]..."
+    echo "  -h, --help                       Show this help message."
+    echo "  -b, --build-type build_type      Set the build type. Default is Release. Other options are Debug, RelWithDebInfo, and CI."
+    echo "  -e, --export-compile-commands    Enable CMAKE_EXPORT_COMPILE_COMMANDS."
+    echo "  -c, --enable-ccache              Enable ccache for the build."
+    echo "  -a, --enable-asan                Enable AddressSanitizer."
+    echo "  -m, --enable-msan                Enable MemorySanitizer."
+    echo "  -s, --enable-tsan                Enable ThreadSanitizer."
+    echo "  -u, --enable-ubsan               Enable UndefinedBehaviorSanitizer."
+    echo "  -p, --enable-profiler            Enable Tracy profiler."
+    echo "  -t, --trace                      Enable build time trace (clang only)."
+    echo "  --build-tests                    Build Testcases."
+    echo "  --install-prefix                 Where to install build artifacts."
+    echo "  --cmake-options                  Supply additional options to cmake."
 }
+
 
 # Parse CLI options
 export_compile_commands="OFF"
@@ -74,46 +78,70 @@ enable_tsan="OFF"
 enable_ubsan="OFF"
 build_type="Release"
 enable_profiler="OFF"
+build_tests="OFF"
 
-while getopts "hectamsub:p" opt; do
-    case ${opt} in
-        h )
+declare -a cmake_args
+
+#!/bin/bash
+
+OPTIONS=h,e,c,t,a,m,s,u,b:,p,build-tests,install-prefix:,cmake-options::
+LONGOPTS=help,export_compile_commands,enable_ccache,enable_time_trace,enable_asan,enable_msan,enable_tsan,enable_ubsan,build-type:,enable_profiler,build-tests,install-prefix:,cmake-options::
+
+# Parse the options
+PARSED=$(getopt -n 'build_metal' --options=$OPTIONS --longoptions=$LONGOPTS --name "$0" -- "$@")
+if [[ $? -ne 0 ]]; then
+    # If getopt has errors
+    echo "INFO: Failed to parse arguments!"
+    show_help
+    exit 1
+fi
+
+eval set -- "$PARSED"
+
+while true; do
+    case "$1" in
+        -h|--help)
             show_help
             exit 0
             ;;
-        e )
-            export_compile_commands="ON"
-            ;;
-        c )
-            enable_ccache="ON"
-            ;;
-        t )
+        -e|--export-compile-commands)
+            export_compile_commands="ON";;
+        -c|--enable-ccache)
+            enable_ccache="ON";;
+        -t|--enable-time-trace)
             enable_time_trace="ON"
             ;;
-        a )
-            enable_asan="ON"
-            ;;
-        m )
-            enable_msan="ON"
-            ;;
-        s )
-            enable_tsan="ON"
-            ;;
-        u )
-            enable_ubsan="ON"
-            ;;
-        b )
-            build_type="$OPTARG"
-            ;;
-        p )
-            enable_profiler="ON"
-            ;;
-        \? )
-            show_help
-            exit 1
-            ;;
+        -a|--enable-asan)
+            enable_asan="ON";;
+        -m|--enable-msan)
+            enable_msan="ON";;
+        -s|--enable-tsan)
+            enable_tsan="ON";;
+        -u|--enable-ubsan)
+            enable_ubsan="ON";;
+        -b|--build-type)
+            build_type="$2";shift;;
+        -p|--enable-profiler)
+            enable_profiler="ON";;
+        --build-tests)
+            build_tests="ON";;
+        --install-prefix) shift; install_prefix=$1;;
+        --cmake-options)
+	    cmake_args+=($2);shift;;
+        --)
+            shift;break;;
     esac
+    shift
 done
+
+build_dir="build_$build_type"
+
+# Create and link the build directory
+mkdir -p $build_dir
+ln -nsf $build_dir build
+
+install_prefix_default=$build_dir
+cmake_install_prefix=${install_prefix:="${install_prefix_default}"}
 
 # Set the python environment directory if not already set
 if [ -z "$PYTHON_ENV_DIR" ]; then
@@ -121,58 +149,69 @@ if [ -z "$PYTHON_ENV_DIR" ]; then
 fi
 
 # Debug output to verify parsed options
-echo "Export compile commands: $export_compile_commands"
-echo "Enable ccache: $enable_ccache"
-echo "Build type: $build_type"
-echo "Enable time trace: $enable_time_trace"
-echo "Enable AddressSanitizer: $enable_asan"
-echo "Enable MemorySanitizer: $enable_msan"
-echo "Enable ThreadSanitizer: $enable_tsan"
-echo "Enable UndefinedBehaviorSanitizer: $enable_ubsan"
+echo "INFO: Export compile commands: $export_compile_commands"
+echo "INFO: Enable ccache: $enable_ccache"
+echo "INFO: Build type: $build_type"
+echo "INFO: Enable time trace: $enable_time_trace"
+echo "INFO: Enable AddressSanitizer: $enable_asan"
+echo "INFO: Enable MemorySanitizer: $enable_msan"
+echo "INFO: Enable ThreadSanitizer: $enable_tsan"
+echo "INFO: Enable UndefinedBehaviorSanitizer: $enable_ubsan"
+echo "INFO: Build Tests: $build_tests"
+echo "INFO: Install Prefix: $cmake_install_prefix"
 
-build_dir="build_$build_type"
+# Prepare cmake arguments
+cmake_args+=("-B" "$build_dir")
+cmake_args+=("-G" "Ninja")
+cmake_args+=("-DCMAKE_BUILD_TYPE=$build_type")
+cmake_args+=("-DCMAKE_INSTALL_PREFIX=$cmake_install_prefix")
 
 if [ "$enable_ccache" = "ON" ]; then
-    cmake_args="$cmake_args -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+    cmake_args+=("-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache")
 fi
 
 if [ "$enable_time_trace" = "ON" ]; then
-    cmake_args="$cmake_args -DENABLE_BUILD_TIME_TRACE=ON"
+    cmake_args+=("-DENABLE_BUILD_TIME_TRACE=ON")
 fi
 
 if [ "$enable_asan" = "ON" ]; then
-    cmake_args="$cmake_args -DENABLE_ASAN=ON"
+    cmake_args+=("-DENABLE_ASAN=ON")
 fi
 
 if [ "$enable_msan" = "ON" ]; then
-    cmake_args="$cmake_args -DENABLE_MSAN=ON"
+    cmake_args+=("-DENABLE_MSAN=ON")
 fi
 
 if [ "$enable_tsan" = "ON" ]; then
-    cmake_args="$cmake_args -DENABLE_TSAN=ON"
+    cmake_args+=("-DENABLE_TSAN=ON")
 fi
 
 if [ "$enable_ubsan" = "ON" ]; then
-    cmake_args="$cmake_args -DENABLE_UBSAN=ON"
+    cmake_args+=("-DENABLE_UBSAN=ON")
 fi
 
 if [ "$enable_profiler" = "ON" ]; then
-    cmake_args="$cmake_args -DENABLE_TRACY=ON"
+    cmake_args+=("-DENABLE_TRACY=ON")
     build_dir="${build_dir}_tracy"
 fi
 
-# Create and link the build directory
-mkdir -p $build_dir
-ln -nsf $build_dir build
+if [ "$export_compile_commands" = "ON" ]; then
+    cmake_args+=("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
+fi
 
-# Prepare cmake arguments
-# -DCXX_INCLUDE_WHAT_YOU_USE=include-what-you-use
-cmake_args="$cmake_args -B $build_dir -G Ninja -DCMAKE_BUILD_TYPE=$build_type -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands"
+if [ "$build_tests" = "ON" ]; then
+    cmake_args+=("-DTT_METALLIUM_BUILD_TESTS=ON")
+    cmake_args+=("-DTTNN_BUILD_TESTS=ON")
+    cmake_args+=("-DTT_METAL_BUILD_TESTS=ON")
+    cmake_args+=("-DTT_UMD_BUILD_TESTS=ON")
+fi
 
 # Configure cmake
-cmake $cmake_args
+echo "INFO: Configuring project"
+echo "INFO: Running: cmake "${cmake_args[@]}""
+cmake "${cmake_args[@]}"
 
 # Build libraries and cpp tests
-echo "Building libraries and cpp tests"
-cmake --build $build_dir --target tests      # <- Can also just run `ninja tests -C build`
-cmake --build $build_dir --target install    # <- This is a general cmake way, can also just run `ninja install -C build`
+echo "INFO: Building project"
+cmake --build $build_dir
+cmake --build $build_dir --target install
