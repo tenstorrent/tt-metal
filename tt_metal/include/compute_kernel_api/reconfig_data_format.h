@@ -57,7 +57,7 @@ ALWI void reconfig_data_format_srca(const uint32_t srca_old_operand, const uint3
  * Helper function to reconfigure srcb input data format.
  */
 template <bool float_only = true, bool reconfig_math = true>
-ALWI void econfig_data_format_srcb(const uint32_t srcb_new_operand) {
+ALWI void reconfig_data_format_srcb(const uint32_t srcb_new_operand) {
     unpack_reconfig_data_format_srcb<float_only>(srcb_new_operand);
     if constexpr (reconfig_math) {
         math_reconfig_data_format_srcb<float_only>(srcb_new_operand);
