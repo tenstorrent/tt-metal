@@ -86,4 +86,5 @@ enum SfpuType {
     fmod,
     ceil,
     unused,
+    cumsum
 };
