@@ -1,6 +1,6 @@
 # Llama 3.1 8B Demo
 
-Demo showcasing Llama 3.1 8B running on Wormhole, using ttnn.
+Demo showcasing Llama 3.1 8B running on Wormhole N300 (tensor-parallel on 2 chips), using ttnn.
 
 ## How to Run
 
@@ -42,38 +42,36 @@ If the cached weights have not yet been created the first execution will take ca
 
 ```
 # Build a full 32 layer model to cache the weights. This will take some time (1 time only).
-pytest models/demos/wormhole/llama31_8b/tests/test_llama_model.py
+pytest models/demos/wormhole/llama31_8b_N300/tests/test_llama_model.py
 ```
 
 ### Run the demo
 
-Llama 3.1 8B runs fast prefill upto sequence lengths of 512.
+Llama 3.1 8B runs fast prefill upto sequence lengths of 16k.
 
-For decode-only, the largest context length supported is currently 1024 tokens.
+For decode-only, the largest context length supported is 128k tokens.
 
 Llama 3.1 8B is running on a single chip. If you are running on a T3000 please set the following: `export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml`
-
-Note that while running the demo you might see the warning: `Op | WARNING  | TILE layout does not have multicore implementation yet. Falling back to 1 core.` This is expected and can be ignored; the demo will run after the warning.
 
 ```
 # Run the demo with a pre-written batch of 8 user prompts:
 
 # Prefill & Decode demo
-pytest models/demos/wormhole/llama31_8b/demo/demo_with_prefill.py::test_llama_demo[general_weights-1_batch]
+pytest models/demos/wormhole/llama31_8b_N300/demo/demo_with_prefill.py::test_llama_demo[general_weights-1_batch]
 
 # Decode-only demo
-pytest models/demos/wormhole/llama31_8b/demo/demo.py::test_llama_demo[general_weights]
+pytest models/demos/wormhole/llama31_8b_N300/demo/demo.py::test_llama_demo[general_weights]
 ```
 
 We also provide an input file with 32 user question-prompt for instruct weights (don't forget to update your env flags to the correct instruct weights folder):
 ```
 # Prefill & Decode demo
-pytest models/demos/wormhole/llama31_8b/demo/demo_with_prefill.py::test_llama_demo[instruct_weights-1_batch]
+pytest models/demos/wormhole/llama31_8b_N300/demo/demo_with_prefill.py::test_llama_demo[instruct_weights-1_batch]
 
 # Decode-only demo
-pytest models/demos/wormhole/llama31_8b/demo/demo.py::test_llama_demo[instruct_weights]
+pytest models/demos/wormhole/llama31_8b_N300/demo/demo.py::test_llama_demo[instruct_weights]
 ```
 
-Both input files are provided inside `models/demos/wormhole/llama31_8b/demo/`.
+Both input files are provided inside `models/demos/wormhole/llama31_8b_N300/demo/`.
 
 If you wish you to run the model using a different set of input prompts you can provide a different path to pytest inside the demo code. At this time our code does not add system, user or assistant prompts to the input, so the output should be used for reference only.
