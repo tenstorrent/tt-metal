@@ -8,7 +8,10 @@ import torch.optim as optim
 
 import ttnn
 import pytest
-from models.utility_functions import is_wormhole_b0, comp_allclose_and_pcc, comp_pcc, is_wormhole_b0
+from models.utility_functions import (
+    comp_allclose_and_pcc,
+    skip_for_grayskull,
+)
 from loguru import logger
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
     get_compute_kernel_options,
@@ -141,3 +144,22 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_
         logger.debug(f"Out passing (max_exp_avg_sq)={passing}")
         logger.debug(f"Output pcc={out}")
     assert passing
+
+
+@pytest.mark.parametrize(
+    "params",
+    (
+        # shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en
+        ([32, 32], 0.0, (0.9, 0.999), 1e-06, 0.0, True, True),
+        ([2, 2, 2, 2, 2, 2, 64, 64], 0.0, (0.9, 0.999), 1e-06, 0.0, False, False),
+    ),
+)
+def test_moreh_adam_enable_cache(params, device, use_program_cache):
+    for i in range(4):
+        shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en = params
+        if i % 2 == 1:
+            amsgrad = not amsgrad
+
+        test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device)
+
+    assert device.num_program_cache_entries() == 2
