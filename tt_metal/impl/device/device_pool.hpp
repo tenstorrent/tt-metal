@@ -5,6 +5,7 @@
 #pragma once
 
 #include "impl/debug/dprint_server.hpp"
+#include "impl/debug/noc_logging.hpp"
 #include "impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/third_party/umd/device/tt_cluster_descriptor.h"

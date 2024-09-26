@@ -14,19 +14,8 @@
 //
 #pragma once
 
-#include "dprint.h"
-
-// Add the ability to skip NOC logging, we can't have the tunneling cores stalling waiting for the
-// print server.
-#if !defined(SKIP_NOC_LOGGING)
-#define LOG_LEN(l) DPRINT << NOC_LOG_XFER(l);
-#define LOG_READ_LEN_FROM_STATE(noc_id) LOG_LEN(NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE));
-#define LOG_WRITE_LEN_FROM_STATE(noc_id) LOG_LEN(NOC_CMD_BUF_READ_REG(noc_id, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE));
-#else
-#define LOG_LEN(l)
-#define LOG_READ_LEN_FROM_STATE(noc_id)
-#define LOG_WRITE_LEN_FROM_STATE(noc_id)
-#endif
+// NOC logging enabled independently of watcher, need to include it here because it hooks into DEBUG_SANITIZE_NOC_*
+#include "noc_logging.h"
 
 #if (                                                                                          \
     defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
