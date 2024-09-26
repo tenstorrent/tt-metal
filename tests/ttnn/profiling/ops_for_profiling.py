@@ -1893,6 +1893,11 @@ all_unary_ops = [
         "name": "ttnn.zeros_like",
     },
     {
+        "op": ttnn.zeros_like,
+        "name": "ttnn.zeros_like_rm",
+        "layout": "ROW_MAJOR",
+    },
+    {
         "op": full_like,
         "name": "ttnn.full_like",
     },
