@@ -33,6 +33,10 @@
 
 uint8_t noc_index;
 uint8_t noc_mode;
+const uint32_t read_cmd_buf __attribute__((used)) = BRISC_RD_CMD_BUF;
+const uint32_t write_cmd_buf __attribute__((used)) = BRISC_WR_CMD_BUF;
+const uint32_t write_reg_cmd_buf __attribute__((used)) = BRISC_WR_REG_CMD_BUF;
+const uint32_t write_at_cmd_buf __attribute__((used)) = BRISC_AT_CMD_BUF;
 
 constexpr uint32_t RISCV_IC_BRISC_MASK = 0x1;
 constexpr uint32_t RISCV_IC_NCRISC_MASK = 0x10;

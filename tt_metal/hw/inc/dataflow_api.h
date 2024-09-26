@@ -819,14 +819,14 @@ void noc_async_write_multicast_one_packet(
 // this sets the state for issuing a single packet with size <= NOC_MAX_BURST_SIZE (ie maximum packet size)
 template <bool non_posted = true>
 FORCE_INLINE
-void noc_async_write_one_packet_set_state(std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
+void noc_async_write_one_packet_set_state(std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
 
     WAYPOINT("NWPW");
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
     WAYPOINT("NWPD");
 
     uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC |
-                                NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) | 0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
+                                NOC_CMD_STATIC_VC(vc) | 0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
                                 0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
                                 (non_posted ? NOC_CMD_RESP_MARKED : 0x0);
 

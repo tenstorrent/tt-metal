@@ -27,6 +27,11 @@ volatile tt_l1_ptr uint8_t *const ncrisc_run = &mailboxes->slave_sync.ncrisc;
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
 
+const uint32_t read_cmd_buf __attribute__((used)) = NCRISC_RD_CMD_BUF;
+const uint32_t write_cmd_buf __attribute__((used)) = NCRISC_WR_CMD_BUF;
+const uint32_t write_reg_cmd_buf __attribute__((used)) = NCRISC_WR_REG_CMD_BUF;
+const uint32_t write_at_cmd_buf __attribute__((used)) = NCRISC_AT_CMD_BUF;
+
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
