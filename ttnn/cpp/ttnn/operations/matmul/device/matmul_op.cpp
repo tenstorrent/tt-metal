@@ -1026,10 +1026,13 @@ void Matmul::validate(
         uint32_t bias_batch_size = get_batch_size(bias_shape);
         TT_FATAL(bias_batch_size == 1, "Unsupported bias shape: batch size not equal to 1.");
         TT_FATAL(
-            bias_shape.with_tile_padding()[-2] == in0_tile_shape[0], "Unsupported bias shape: second last dimension not equal to tile height");
+            bias_shape.with_tile_padding()[-2] == in0_tile_shape[0], "Unsupported bias shape: padded second last dimension of bias, {}, not equal to tile height, {}", bias_shape.with_tile_padding()[-2], in0_tile_shape[0]);
         TT_FATAL(
             bias_shape.with_tile_padding()[-1] == b_shape.with_tile_padding()[-1],
-            "Unsupported bias shape: last dimension not equal to second input's last dimension.", bias_shape.with_tile_padding()[-1], b_shape.with_tile_padding()[-1]);
+            "Unsupported bias shape: padded last dimension of bias, {}, not equal to second input's padded last dimension, {}.", bias_shape.with_tile_padding()[-1], b_shape.with_tile_padding()[-1]);
+        TT_FATAL(
+            bias_shape[-1] >= b_shape[-1],
+            "Unsupported bias shape: last dimension of bias, {}, not equal to or greater than second input's last dimension, {}.", bias_shape[-1], b_shape[-1]);
     }
 
     if (this->untilize_out) {
