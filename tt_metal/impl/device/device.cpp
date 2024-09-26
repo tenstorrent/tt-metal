@@ -27,10 +27,6 @@ namespace tt {
 
 namespace tt_metal {
 
-void ::detail::ProgramDeleter::operator()(Program *p) {
-    delete p;
-}
-
 Device::Device(
     chip_id_t device_id, const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap, bool minimal, uint32_t worker_core) :
     id_(device_id), worker_thread_core(worker_core), work_executor(worker_core, device_id) {
@@ -1455,8 +1451,8 @@ void Device::setup_tunnel_for_remote_devices() {
 
 void Device::compile_command_queue_programs() {
     ZoneScoped;
-    std::unique_ptr<Program, detail::ProgramDeleter> command_queue_program_ptr(new Program);
-    std::unique_ptr<Program, detail::ProgramDeleter> mmio_command_queue_program_ptr(new Program);
+    auto command_queue_program_ptr = std::make_unique<Program>();
+    auto mmio_command_queue_program_ptr = std::make_unique<Program>();
 
     std::string prefetch_kernel_path = "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp";
     std::string dispatch_kernel_path = "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp";
