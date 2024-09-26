@@ -581,7 +581,11 @@ class resnet50:
             reshard_if_not_optimal=False,
         )
         if whb0_and_b16:
-            self.conv1_config.act_block_h_override = 256
+            # Issue #13145: Temp workaround for Galaxy to avoid hangs
+            if type(device) == ttnn.MeshDevice and device.get_num_devices() > 8:
+                self.conv1_config.act_block_h_override = 64
+            else:
+                self.conv1_config.act_block_h_override = 256
 
         self.conv1_kernel_size = (4, 4)
         self.conv1_stride = (1, 1)
