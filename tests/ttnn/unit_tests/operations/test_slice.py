@@ -415,6 +415,8 @@ def test_slice_negative_ends(layout, dim, ends, device):
         ((1, 256), (0, 0), (-1, 256)),
         ((1, 512), (0, 0), (-1, 512)),
         ((1, 512), (0, 0), (1, 256)),
+        ((1, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 1)),
+        ((1, 32, 32, 64), (0, 0, 0, 0), (1, 32, 32, 32)),
     ),
 )
 @pytest.mark.parametrize(
@@ -426,6 +428,8 @@ def test_slice_bert(input_shape, input_start, input_ends, layout, device):
         torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
     else:
+        if input_ends[-1] - input_start[-1] == 1:
+            pytest.skip("Cannot slice the last dimension to 1 in row major layout")
         torch_input = torch.randn(input_shape, dtype=torch.float32)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.float32, layout=layout)
 
@@ -457,6 +461,8 @@ def test_slice_bert(input_shape, input_start, input_ends, layout, device):
         ((1, 256), (0, 0), (-1, 256)),
         ((1, 512), (0, 0), (-1, 512)),
         ((1, 512), (0, 0), (1, 256)),
+        ((1, 32, 32, 32), (0, 0, 0, 0), (1, 32, 32, 1)),
+        ((1, 32, 32, 64), (0, 0, 0, 0), (1, 32, 32, 32)),
     ),
 )
 @pytest.mark.parametrize(
@@ -472,6 +478,8 @@ def test_ttnn_slice_bert(input_shape, input_start, input_ends, layout, memory_co
         torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
     else:
+        if input_ends[-1] - input_start[-1] == 1:
+            pytest.skip("Cannot slice the last dimension to 1 in row major layout")
         torch_input = torch.randn(input_shape, dtype=torch.float32)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.float32, layout=layout)
 
