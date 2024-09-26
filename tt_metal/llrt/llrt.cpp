@@ -344,6 +344,12 @@ void wait_until_cores_done(
             }
         }
         loop_count++;
+        // Continuously polling cores here can cause other host-driven noc transactions (dprint, watcher) to drastically
+        // slow down for remote devices. So when debugging with these features, add a small delay to allow other
+        // host-driven transactions through.
+        if (llrt::OptionsG.get_watcher_enabled() ||
+            llrt::OptionsG.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint))
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 }
 
