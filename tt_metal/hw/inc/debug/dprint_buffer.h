@@ -7,6 +7,8 @@
 #include "tt_metal/hostdevcommon/dprint_common.h"
 #include <dev_msgs.h>
 
+#include "hostdevcommon/dprint_common.h"
+
 // Returns the buffer address for current thread+core. Differs for NC/BR/ER/TR0-2.
 inline uint8_t* get_debug_print_buffer() {
     #if defined(COMPILE_FOR_NCRISC)
