@@ -49,13 +49,13 @@ def test_yolov4(device, reset_seeds, model_location_generator):
 
     ref1, ref2, ref3 = torch_model(torch_input)
 
-    result_1 = result_1.reshape(1, ref1.shape[2], ref1.shape[3], 256)
+    result_1 = result_1.reshape(1, ref1.shape[2], ref1.shape[3], 255)
     result_1 = result_1.permute(0, 3, 1, 2)
 
-    result_2 = result_2.reshape(1, ref2.shape[2], ref2.shape[3], 256)
+    result_2 = result_2.reshape(1, ref2.shape[2], ref2.shape[3], 255)
     result_2 = result_2.permute(0, 3, 1, 2)
 
-    result_3 = result_3.reshape(1, ref3.shape[2], ref3.shape[3], 256)
+    result_3 = result_3.reshape(1, ref3.shape[2], ref3.shape[3], 255)
     result_3 = result_3.permute(0, 3, 1, 2)
 
     # Output is sliced because ttnn.conv returns 256 channels instead of 255.
