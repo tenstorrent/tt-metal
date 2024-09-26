@@ -87,6 +87,20 @@ struct ExecuteUnaryBackwardRound {
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
+struct ExecuteUnaryBackwardFloor {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardLogit {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
 struct ExecuteUnaryBackwardSoftplus {
     static std::vector<Tensor> invoke(
          const Tensor &grad_tensor_arg,
@@ -622,12 +636,8 @@ constexpr auto silu_bw = ttnn::register_operation<
 constexpr auto relu_bw = ttnn::register_operation<
     "ttnn::relu_bw",
     operations::unary_backward::ExecuteUnaryBackwardWoFloat<operations::unary_backward::UnaryBackwardOpType::RELU_BW>>();
-constexpr auto logit_bw = ttnn::register_operation<
-    "ttnn::logit_bw",
-    operations::unary_backward::ExecuteUnaryBackwardWoFloat<operations::unary_backward::UnaryBackwardOpType::LOGIT_BW>>();
-constexpr auto floor_bw = ttnn::register_operation<
-    "ttnn::floor_bw",
-    operations::unary_backward::ExecuteUnaryBackwardWoFloat<operations::unary_backward::UnaryBackwardOpType::FLOOR_BW>>();
+constexpr auto logit_bw = ttnn::register_operation<"ttnn::logit_bw", operations::unary_backward::ExecuteUnaryBackwardLogit>();
+constexpr auto floor_bw = ttnn::register_operation<"ttnn::floor_bw", operations::unary_backward::ExecuteUnaryBackwardFloor>();
 constexpr auto round_bw = ttnn::register_operation<"ttnn::round_bw", operations::unary_backward::ExecuteUnaryBackwardRound>();
 constexpr auto log_bw = ttnn::register_operation<"ttnn::log_bw", operations::unary_backward::ExecuteUnaryBackwardLog>();
 constexpr auto logiteps_bw = ttnn::register_operation<"ttnn::logiteps_bw", operations::unary_backward::ExecuteUnaryBackwardLogiteps>();
