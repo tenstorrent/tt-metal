@@ -201,7 +201,17 @@ struct ExecuteBinaryRemainder
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
-}  // namespace binary
+#define DEFINE_BINARY_COMPOSITE(op_name) \
+struct Execute##op_name { \
+    static Tensor invoke( \
+        const Tensor& input_tensor_a, \
+        const Tensor& input_tensor_b, \
+        const std::optional<MemoryConfig>& memory_config = std::nullopt); \
+};
+DEFINE_BINARY_COMPOSITE(LCM)
+DEFINE_BINARY_COMPOSITE(GCD)
+
+} // namespace binary
 }  // namespace operations
 
 constexpr auto hypot = ttnn::register_operation_with_auto_launch_op<
@@ -264,5 +274,11 @@ constexpr auto outer = ttnn::register_operation_with_auto_launch_op<
 constexpr auto polyval = ttnn::register_operation_with_auto_launch_op<
     "ttnn::polyval",
     operations::binary::ExecuteBinaryCompositeOpsPolyval<operations::binary::BinaryCompositeOpType::POLYVAL>>();
+constexpr auto gcd = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::gcd",
+    operations::binary::ExecuteGCD>();
+constexpr auto lcm = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::lcm",
+    operations::binary::ExecuteLCM>();
 
 }  // namespace ttnn
