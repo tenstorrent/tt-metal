@@ -201,15 +201,19 @@ struct ExecuteBinaryRemainder
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
-#define DEFINE_BINARY_COMPOSITE(op_name) \
-struct Execute##op_name { \
-    static Tensor invoke( \
-        const Tensor& input_tensor_a, \
-        const Tensor& input_tensor_b, \
-        const std::optional<MemoryConfig>& memory_config = std::nullopt); \
+struct ExecuteLCM {
+    static Tensor invoke(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
-DEFINE_BINARY_COMPOSITE(LCM)
-DEFINE_BINARY_COMPOSITE(GCD)
+
+struct ExecuteGCD {
+    static Tensor invoke(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+};
 
 } // namespace binary
 }  // namespace operations
