@@ -40,8 +40,8 @@ void bind_full_operation(py::module& module, const creation_operation_t& operati
         Example:
             >>> filled_tensor = ttnn.full(shape=[2, 3], fill_value=7.0, dtype=ttnn.bfloat16)
             >>> print(filled_tensor)
-            ttnn.Tensor([[[[ 7.0,  7.0,  7.0],
-                            [ 7.0,  7.0,  7.0]]]], shape=Shape([2, 3]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+            ttnn.Tensor([[[[7.0,  7.0,  7.0],
+                            [7.0,  7.0,  7.0]]]], shape=Shape([2, 3]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
         )doc",
         operation.base_name());
 
@@ -161,8 +161,8 @@ void bind_full_like_operation(py::module& module, const creation_operation_t& op
             >>> tensor = ttnn.zeros(shape=(2, 3), dtype=ttnn.bfloat16)
             >>> filled_tensor = ttnn.fill_like(tensor, fill_value=5.0, dtype=ttnn.bfloat16)
             >>> print(filled_tensor)
-            ttnn.Tensor([[[[ 5.0,  5.0,  5.0],
-                            [ 5.0,  5.0,  5.0]]]], shape=Shape([2, 3]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+            ttnn.Tensor([[[[5.0,  5.0,  5.0],
+                            [5.0,  5.0,  5.0]]]], shape=Shape([2, 3]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
         )doc",
         operation.base_name());
 
@@ -286,7 +286,7 @@ void bind_arange_operation(py::module& module, const creation_operation_t& opera
         Example:
             >>> tensor = ttnn.arange(start=0, end=10, step=2, dtype=ttnn.float32)
             >>> print(tensor)
-            ttnn.Tensor([[[[ 0.00000,  2.00000,  ...,  8.00000,  0.00000]]]], shape=Shape([1, 1, 1, 6]), dtype=DataType::FLOAT32, layout=Layout::ROW_MAJOR)
+            ttnn.Tensor([[[[0.00000,  2.00000,  ...,  8.00000,  0.00000]]]], shape=Shape([1, 1, 1, 6]), dtype=DataType::FLOAT32, layout=Layout::ROW_MAJOR)
         )doc",
         operation.base_name());
 
