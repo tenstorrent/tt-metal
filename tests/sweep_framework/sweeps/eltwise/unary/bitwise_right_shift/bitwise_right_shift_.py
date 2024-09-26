@@ -37,10 +37,12 @@ parameters = {
 }
 
 
-def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    if not is_wormhole_b0():
-        return True, "Supported only for WH_B0"
-    return False, None
+def mesh_device_fixture():
+    device = ttnn.open_device(device_id=0)
+    assert ttnn.device.is_wormhole_b0(device), "This op is available for Wormhole_B0 only"
+    yield (device, "Wormhole_B0")
+    ttnn.close_device(device)
+    del device
 
 
 # This is the run instructions for the test, defined by the developer.
