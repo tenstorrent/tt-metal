@@ -287,13 +287,42 @@ def test_reshape_tile_layout_only_change_shape(device):
     assert_with_pcc(torch_result, output, 0.9999)
 
 
-def test_reshape_bert(device):
-    torch_input_tensor = torch.randn((1, 256, 1024), dtype=torch.bfloat16)
-    reshape_shape = (1, 256, 16, 64)
-    torch_result = torch_input_tensor.reshape(reshape_shape)
+# Reshape in Tile layout with shapes that are not divisible by 32
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ((1, 256, 16), (16, 256)),
+        ((1, 256, 1024), (1, 256, 16, 64)),
+        ((16, 16), (32, 8)),
+    ],
+)
+def test_reshape_tile_with_padding(input_shape, output_shape, device):
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_result = torch_input_tensor.reshape(output_shape)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
-    ttnn_output = ttnn.reshape(input_tensor, reshape_shape)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    ttnn_output = ttnn.reshape(input_tensor, output_shape)
+
+    output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_result, output, 0.9999)
+
+
+# Since Inner dim is 1 of bfloat16, can't do on device, testing fallback on host
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ((1, 256, 1), (1, 256)),
+        ((1, 1024, 1), (1, 4, 256)),
+        ((1, 128, 1), (1, 128)),
+    ],
+)
+def test_reshape_host(input_shape, output_shape, device):
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_result = torch_input_tensor.reshape(output_shape)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    ttnn_output = ttnn.reshape(input_tensor, output_shape)
 
     output = ttnn.to_torch(ttnn_output)
 
