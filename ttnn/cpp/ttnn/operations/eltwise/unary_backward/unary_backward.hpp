@@ -61,18 +61,6 @@ struct ExecuteUnaryBackwardPolygamma {
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
-template <UnaryBackwardOpType unary_backward_op_type>
-struct ExecuteUnaryBackwardWoFloat {
-    static std::vector<Tensor> invoke(
-        const Tensor &grad_tensor_arg,
-        const Tensor &input_tensor_arg,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, output_memory_config);
-        }
-
-};
-
 struct ExecuteUnaryBackwardLog {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
@@ -129,12 +117,19 @@ struct ExecuteUnaryBackwardHardsigmoid {
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
-// struct new {
-//     static std::vector<Tensor> invoke(
-//         const Tensor &grad_tensor_arg,
-//         const Tensor &input_tensor_arg,
-//         const std::optional<MemoryConfig> &memory_config = std::nullopt);
-// };
+struct ExecuteUnaryBackwardLgamma {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardMultigammaln {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
 
 struct ExecuteUnaryBackwardSoftplus {
     static std::vector<Tensor> invoke(
@@ -609,16 +604,8 @@ constexpr auto erfc_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardOp<
         operations::unary_backward::UnaryBackwardOpType::ERFC_BW>>();
 
-constexpr auto multigammaln_bw = ttnn::register_operation<
-    "ttnn::multigammaln_bw",
-    operations::unary_backward::ExecuteUnaryBackwardWoFloat<
-        operations::unary_backward::UnaryBackwardOpType::MULTIGAMMALN_BW>>();
-
-constexpr auto lgamma_bw = ttnn::register_operation<
-    "ttnn::lgamma_bw",
-    operations::unary_backward::ExecuteUnaryBackwardWoFloat<
-        operations::unary_backward::UnaryBackwardOpType::LGAMMA_BW>>();
-
+constexpr auto multigammaln_bw = ttnn::register_operation<"ttnn::multigammaln_bw", operations::unary_backward::ExecuteUnaryBackwardMultigammaln>();
+constexpr auto lgamma_bw = ttnn::register_operation<"ttnn::lgamma_bw", operations::unary_backward::ExecuteUnaryBackwardLgamma>();
 constexpr auto hardsigmoid_bw = ttnn::register_operation<"ttnn::hardsigmoid_bw", operations::unary_backward::ExecuteUnaryBackwardHardsigmoid>();
 constexpr auto cos_bw = ttnn::register_operation<"ttnn::cos_bw", operations::unary_backward::ExecuteUnaryBackwardCos>();
 constexpr auto acosh_bw = ttnn::register_operation<"ttnn::acosh_bw", operations::unary_backward::ExecuteUnaryBackwardAcosh>();

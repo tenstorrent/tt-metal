@@ -14,11 +14,9 @@ namespace ttnn::operations::unary_backward {
 
 enum class UnaryBackwardOpType {
     DIV_BW,
-    MULTIGAMMALN_BW,
     ADD_BW,
     EQ_BW,
     GT_BW,
-    LGAMMA_BW,
     ACOS_BW,
     ATAN_BW,
     RAD2DEG_BW,
@@ -93,9 +91,6 @@ std::vector<Tensor> _square_bw(const Tensor& grad, const Tensor& input, const st
 
 std::vector<Tensor> _sub_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _gt_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config);
-
-std::vector<Tensor> _multigammaln_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _lgamma_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 
 std::vector<Tensor> _add_bw( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 std::vector<Tensor> _eq_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
@@ -348,20 +343,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::GT_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config ) {
         return _gt_bw(grad, input, other, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::MULTIGAMMALN_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _multigammaln_bw(grad, input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::LGAMMA_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _lgamma_bw(grad, input, output_mem_config);
     }
 };
 
