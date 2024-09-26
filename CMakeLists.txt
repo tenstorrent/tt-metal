@@ -122,11 +122,10 @@ endif()
 unset(SANITIZER_ENABLED)
 
 include(GNUInstallDirs)
-set(CMAKE_INSTALL_PREFIX "${PROJECT_BINARY_DIR}")
-set(CMAKE_INSTALL_LIBDIR "${PROJECT_BINARY_DIR}/lib")
-set(CMAKE_INSTALL_BINDIR "${PROJECT_BINARY_DIR}/tmp/bin")
-set(CMAKE_INSTALL_INCLUDEDIR "${PROJECT_BINARY_DIR}/tmp/include")
-set(CMAKE_INSTALL_DATAROOTDIR "${PROJECT_BINARY_DIR}/tmp/share")
+#FIX ME: Should not be changing these
+set(CMAKE_INSTALL_BINDIR "${CMAKE_INSTALL_PREFIX}/tmp/bin")
+set(CMAKE_INSTALL_INCLUDEDIR "${CMAKE_INSTALL_PREFIX}/tmp/include")
+set(CMAKE_INSTALL_DATAROOTDIR "${CMAKE_INSTALL_PREFIX}/tmp/share")
 
 ############################################################################################################################
 # Find all required libraries to build
@@ -145,7 +144,7 @@ if (NOT NUMA_LIBRARY)
 endif()
 
 # Bring in UMD and all it's dependencies
-add_subdirectory(${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd)
+add_subdirectory(tt_metal/third_party/umd)
 
 ############################################################################################################################
 # Constructing interface libs for common compiler flags, header directories, and libraries
@@ -250,10 +249,13 @@ if(ENABLE_TRACY)
     include(${PROJECT_SOURCE_DIR}/cmake/tracy.cmake)
 endif()
 
-add_subdirectory(${PROJECT_SOURCE_DIR}/tt_metal)
-add_subdirectory(${PROJECT_SOURCE_DIR}/ttnn)
+add_subdirectory(tt_metal)
+add_subdirectory(ttnn)
 
-add_subdirectory(${PROJECT_SOURCE_DIR}/tests EXCLUDE_FROM_ALL)
+option(TT_METALLIUM_BUILD_TESTS "Enables build of Tests" OFF)
+if(TT_METALLIUM_BUILD_TESTS)
+    add_subdirectory(tests)
+endif(TT_METALLIUM_BUILD_TESTS)
 
 ############################################################################################################################
 # Install targets for build artifacts and pybinds
@@ -273,7 +275,7 @@ install(TARGETS ttnn
 )
 if(WITH_PYTHON_BINDINGS)
     # Install .so into src files for pybinds implementation
-    install(FILES ${PROJECT_BINARY_DIR}/lib/_ttnn.so
+    install(TARGETS ttnn
     DESTINATION ${PROJECT_SOURCE_DIR}/ttnn/ttnn
     COMPONENT tt_pybinds
     )
