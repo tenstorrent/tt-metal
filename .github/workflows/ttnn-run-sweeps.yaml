@@ -15,6 +15,7 @@ on:
           - ccl.all_gather_n300
           - eltwise.unary.relu.relu
           - eltwise.unary.gelu.gelu
+          - eltwise.unary.abs.abs
           - eltwise.unary.cos.cos
           - eltwise.unary.sin.sin
           - eltwise.unary.clamp.clamp
