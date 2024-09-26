@@ -55,6 +55,7 @@ on:
           - eltwise.unary.lgamma.lgamma
           - eltwise.unary.sigmoid.sigmoid
           - eltwise.unary.sigmoid_accurate.sigmoid_accurate
+          - eltwise.unary.hardswish.hardswish_pytorch2
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multiply
           - eltwise.binary.div.div
