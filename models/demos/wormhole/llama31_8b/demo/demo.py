@@ -13,7 +13,6 @@ from models.demos.wormhole.llama31_8b.tt.llama_common import (
     prepare_inputs_ttnn,
     sample,
     get_single_rot_mat,
-    cache_attention,
     encode_prompt_llama_instruct,
     HostEmbedding,
 )
