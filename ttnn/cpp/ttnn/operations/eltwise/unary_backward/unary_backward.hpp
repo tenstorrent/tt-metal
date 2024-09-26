@@ -417,15 +417,6 @@ struct ExecuteUnaryBackwardGelu{
 
 }  // operations::unary
 
-constexpr auto threshold_bw = ttnn::register_operation<
-    "ttnn::threshold_bw",
-    operations::unary_backward::ExecuteUnaryBackwardThreshold>();
-
-constexpr auto fill_bw = ttnn::register_operation<
-    "ttnn::fill_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFill>();
-
-//ExecuteUnaryBackwardOp : get_function_type1
 constexpr auto acos_bw = ttnn::register_operation<
     "ttnn::acos_bw",
     operations::unary_backward::ExecuteUnaryBackwardOp<
@@ -490,14 +481,6 @@ constexpr auto sigmoid_bw = ttnn::register_operation<
     "ttnn::sigmoid_bw",
     operations::unary_backward::ExecuteUnaryBackwardOp<
         operations::unary_backward::UnaryBackwardOpType::SIGMOID_BW>>();
-
-constexpr auto rsqrt_bw = ttnn::register_operation<
-    "ttnn::rsqrt_bw",
-    operations::unary_backward::ExecuteUnaryBackwardRsqrt>();
-
-constexpr auto neg_bw = ttnn::register_operation<
-    "ttnn::neg_bw",
-    operations::unary_backward::ExecuteUnaryBackwardNeg>();
 
 constexpr auto ceil_bw = ttnn::register_operation<
     "ttnn::ceil_bw",
@@ -604,6 +587,10 @@ constexpr auto erfc_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardOp<
         operations::unary_backward::UnaryBackwardOpType::ERFC_BW>>();
 
+constexpr auto threshold_bw = ttnn::register_operation<"ttnn::threshold_bw", operations::unary_backward::ExecuteUnaryBackwardThreshold>();
+constexpr auto fill_bw = ttnn::register_operation<"ttnn::fill_bw", operations::unary_backward::ExecuteUnaryBackwardFill>();
+constexpr auto rsqrt_bw = ttnn::register_operation<"ttnn::rsqrt_bw", operations::unary_backward::ExecuteUnaryBackwardRsqrt>();
+constexpr auto neg_bw = ttnn::register_operation<"ttnn::neg_bw", operations::unary_backward::ExecuteUnaryBackwardNeg>();
 constexpr auto multigammaln_bw = ttnn::register_operation<"ttnn::multigammaln_bw", operations::unary_backward::ExecuteUnaryBackwardMultigammaln>();
 constexpr auto lgamma_bw = ttnn::register_operation<"ttnn::lgamma_bw", operations::unary_backward::ExecuteUnaryBackwardLgamma>();
 constexpr auto hardsigmoid_bw = ttnn::register_operation<"ttnn::hardsigmoid_bw", operations::unary_backward::ExecuteUnaryBackwardHardsigmoid>();
