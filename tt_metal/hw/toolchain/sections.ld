@@ -14,6 +14,8 @@
 */
 
 #define IMPORT(NAME, REGION) (DEFINED(NAME) ? NAME : ORIGIN(REGION))
+HIDDEN(__text = IMPORT(__fw_export_end_text, REGION_CODE));
+HIDDEN(__data = IMPORT(__fw_export_ldm_end, REGION_DATA));
 #define EXPORT(NAME, EXPR) NAME = (DEFINED(NAME) ? NAME : EXPR)
 
 /* Firmware end and Kernel start mustn't straddle a cache line */
@@ -32,7 +34,7 @@ SEARCH_DIR("/opt/riscv32i/riscv32-unknown-elf/lib");
 SECTIONS
 {
   /* Read-only sections, merged into text segment: */
-  .init ALIGN(IMPORT(__fw_export_end_text, REGION_CODE), 4) :
+  .init ALIGN(__text, 4) :
   {
     /* Because FIRMWARE_START might not be the start of a region, we
        need to foce this section to be emitted so that following sections
@@ -73,7 +75,7 @@ SECTIONS
   EXPORT(__fw_export_end_text, .);
 
   PROVIDE(__global_pointer$ = ORIGIN(REGION_DATA) + 0x7f0);
-  .ldm_data ALIGN(IMPORT(__fw_export_ldm_end, REGION_DATA), 4):
+  .ldm_data ALIGN(__data, 4):
   {
      . = .; /* Force emission, as described above.  */
      __ldm_data_start = .;
@@ -136,7 +138,7 @@ SECTIONS
   _end = .; PROVIDE (end = .);
   EXPORT(__fw_export_ldm_end, .);
 
-/* Move to end of local memory for stack */
+  /* Move to end of local memory for stack */
   .stack :
   {
     __stack_bottom = .;
