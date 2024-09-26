@@ -1112,7 +1112,7 @@ def threshold(x):
 
 
 def reshape(x):
-    shape = x.get_legacy_shape()
+    shape = x.shape.with_tile_padding()
     ttnn.reshape(x, [shape[-4], shape[-3], shape[-1], shape[-2]])
 
 
@@ -1149,7 +1149,7 @@ def tilize(x):
 
 
 def tilize_with_val_padding(x):
-    shape = x.get_legacy_shape()
+    shape = x.shape.with_tile_padding()
 
     output_tensor_shape = [shape[-4], shape[-3], shape[-2] + 32, shape[-1] + 32]
 
@@ -1157,7 +1157,7 @@ def tilize_with_val_padding(x):
 
 
 def untilize_with_unpadding(x):
-    shape = x.get_legacy_shape()
+    shape = x.shape.with_tile_padding()
 
     unpadded_shape_end = [
         shape[0] - 1,
@@ -1170,7 +1170,7 @@ def untilize_with_unpadding(x):
 
 
 def pad(x):
-    shape = x.get_legacy_shape()
+    shape = x.shape.with_tile_padding()
 
     padding = [
         (0, 0),
@@ -1183,13 +1183,13 @@ def pad(x):
 
 
 def ttnn_slice(x):
-    shape = x.get_legacy_shape()
+    shape = x.shape.with_tile_padding()
 
     output_tensor_end = (
-        shape[0] - 1,
-        shape[1] - 1,
-        shape[2] - 33,
-        shape[3] - 33,
+        shape[0],
+        shape[1],
+        shape[2] - 32,
+        shape[3] - 32,
     )
 
     ttnn.slice(x, (0, 0, 0, 0), output_tensor_end)
@@ -1204,7 +1204,9 @@ def arange(x):
 
 
 def full(x):
-    ttnn.full(shape=x.get_legacy_shape(), fill_value=2, dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
+    ttnn.full(
+        shape=x.shape.with_tile_padding(), fill_value=2, dtype=x.get_dtype(), layout=x.get_layout(), device=x.device()
+    )
 
 
 def full_like(x):
@@ -1212,15 +1214,15 @@ def full_like(x):
 
 
 def ones(x):
-    ttnn.ones(shape=x.get_legacy_shape(), dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
+    ttnn.ones(shape=x.shape.with_tile_padding(), dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
 
 
 def zeros(x):
-    ttnn.zeros(shape=x.get_legacy_shape(), dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
+    ttnn.zeros(shape=x.shape.with_tile_padding(), dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
 
 
 def empty(x):
-    ttnn.empty(shape=x.get_legacy_shape(), dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
+    ttnn.empty(shape=x.shape.with_tile_padding(), dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
 
 
 def sum_dim_0(x):
@@ -1292,7 +1294,7 @@ def rsqrt_slow(x):
 
 
 def fill_rm(x):
-    shape = x.get_legacy_shape()
+    shape = x.shape.with_tile_padding()
 
     ttnn.fill_rm(
         N=shape[0],
@@ -1308,7 +1310,7 @@ def fill_rm(x):
 
 
 def fill_ones_rm(x):
-    shape = x.get_legacy_shape()
+    shape = x.shape.with_tile_padding()
 
     ttnn.fill_ones_rm(N=shape[0], C=shape[1], H=shape[2], W=shape[3], hOnes=shape[2] - 32, wOnes=shape[3] - 32, any=x)
 
@@ -1466,19 +1468,19 @@ def primary_moreh_logsoftmax_3(x):
 
 
 def primary_moreh_norm_0(x):
-    tt_lib.operations.primary.moreh_norm(x, p=2.0, dim=0)
+    ttnn.operations.moreh.norm(x, p=2.0, dim=0)
 
 
 def primary_moreh_norm_1(x):
-    tt_lib.operations.primary.moreh_norm(x, p=2.0, dim=1)
+    ttnn.operations.moreh.norm(x, p=2.0, dim=1)
 
 
 def primary_moreh_norm_2(x):
-    tt_lib.operations.primary.moreh_norm(x, p=2.0, dim=2)
+    ttnn.operations.moreh.norm(x, p=2.0, dim=2)
 
 
 def primary_moreh_norm_3(x):
-    tt_lib.operations.primary.moreh_norm(x, p=2.0, dim=3)
+    ttnn.operations.moreh.moreh_norm(x, p=2.0, dim=3)
 
 
 def split_dim_3(x):
@@ -2254,15 +2256,15 @@ all_unary_ops = [
     },
     {
         "op": primary_moreh_norm_0,
-        "name": "tt_lib.operations.primary.moreh_norm_dim_0",
+        "name": "ttnn.operations.moreh.norm_dim_0",
     },
     {
         "op": primary_moreh_norm_1,
-        "name": "tt_lib.operations.primary.moreh_norm_dim_1",
+        "name": "ttnn.operations.moreh.norm_dim_1",
     },
     {
         "op": primary_moreh_norm_2,
-        "name": "tt_lib.operations.primary.moreh_norm_dim_2",
+        "name": "ttnn.operations.moreh.norm_dim_2",
     },
     {
         "op": primary_moreh_norm_3,
@@ -2485,7 +2487,7 @@ def add_bw(x, y, z):
 
 
 def primary_moreh_norm_backward(x, y, z):
-    tt_lib.operations.primary.moreh_norm_backward(x, y, z, p=2.0)
+    ttnn.operations.moreh.norm_backward(x, y, z, p=2.0)
 
 
 def linear(x, weight, bias):
@@ -2669,7 +2671,7 @@ all_ternary_ops = [
     },
     {
         "op": primary_moreh_norm_backward,
-        "name": "tt_lib.tensor.moreh_norm_backward",
+        "name": "ttnn.operations.moreh.norm_backward",
     },
     {
         "op": linear,

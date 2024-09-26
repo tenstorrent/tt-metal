@@ -54,7 +54,7 @@ def falcon_dense_h_to_4h_matmul(
     output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
     output_dtype=None,
 ):
-    seq_len = input_tensor_a.get_legacy_shape()[2]
+    seq_len = input_tensor_a.shape.with_tile_padding()[2]
     if seq_len > 1024:
         # TODO: Review if this path is used? If not, we can delete
         assert fused_activation == None
@@ -368,7 +368,7 @@ class TtFalconMLPDecode(nn.Module):
             hidden_states = ttnn.slice(
                 hidden_states,
                 [0, 0, 0, 0],
-                [0, 0, batch_size - 1, self.hidden_size - 1],
+                [1, 1, batch_size, self.hidden_size],
                 memory_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
             )
 

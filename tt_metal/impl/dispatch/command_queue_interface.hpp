@@ -43,7 +43,6 @@ struct dispatch_constants {
 
     static constexpr uint32_t LOG_TRANSFER_PAGE_SIZE = 12;
     static constexpr uint32_t TRANSFER_PAGE_SIZE = 1 << LOG_TRANSFER_PAGE_SIZE;
-    static constexpr uint32_t ISSUE_Q_ALIGNMENT = PCIE_ALIGNMENT;
 
     static constexpr uint32_t DISPATCH_BUFFER_LOG_PAGE_SIZE = 12;
     static constexpr uint32_t DISPATCH_BUFFER_SIZE_BLOCKS = 4;
@@ -109,9 +108,10 @@ struct dispatch_constants {
         TT_ASSERT(scratch_db_size_ % 2 == 0);
         TT_ASSERT((dispatch_buffer_block_size & (dispatch_buffer_block_size - 1)) == 0);
 
+        uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
         prefetch_q_size_ = prefetch_q_entries_ * sizeof(prefetch_q_entry_type);
-        cmddat_q_base_ = PREFETCH_Q_BASE + ((prefetch_q_size_ + PCIE_ALIGNMENT - 1) / PCIE_ALIGNMENT * PCIE_ALIGNMENT);
-        scratch_db_base_ = cmddat_q_base_ + ((cmddat_q_size_ + PCIE_ALIGNMENT - 1) / PCIE_ALIGNMENT * PCIE_ALIGNMENT);
+        cmddat_q_base_ = PREFETCH_Q_BASE + ((prefetch_q_size_ + pcie_alignment - 1) / pcie_alignment * pcie_alignment);
+        scratch_db_base_ = cmddat_q_base_ + ((cmddat_q_size_ + pcie_alignment - 1) / pcie_alignment * pcie_alignment);
         const uint32_t l1_size = core_type == CoreType::WORKER ? MEM_L1_SIZE : MEM_ETH_SIZE;
         TT_ASSERT(scratch_db_base_ + scratch_db_size_ < l1_size);
         dispatch_buffer_block_size_pages_ =
@@ -291,10 +291,10 @@ struct SystemMemoryCQInterface {
         offset(get_absolute_cq_offset(channel, cq_id, cq_size)),
         id(cq_id) {
         TT_ASSERT(
-            this->command_completion_region_size % PCIE_ALIGNMENT == 0 and
-                this->command_issue_region_size % PCIE_ALIGNMENT == 0,
+            this->command_completion_region_size % hal.get_alignment(HalMemType::HOST) == 0 and
+                this->command_issue_region_size % hal.get_alignment(HalMemType::HOST) == 0,
             "Issue queue and completion queue need to be {}B aligned!",
-            PCIE_ALIGNMENT);
+            hal.get_alignment(HalMemType::HOST));
         TT_ASSERT(this->issue_fifo_limit != 0, "Cannot have a 0 fifo limit");
         // Currently read / write pointers on host and device assumes contiguous ranges for each channel
         // Device needs absolute offset of a hugepage to access the region of sysmem that holds a particular command
@@ -546,7 +546,7 @@ class SystemMemoryManager {
         uint32_t issue_q_write_ptr = this->get_issue_queue_write_ptr(cq_id);
 
         const uint32_t command_issue_limit = this->get_issue_queue_limit(cq_id);
-        if (issue_q_write_ptr + align(cmd_size_B, PCIE_ALIGNMENT) > command_issue_limit) {
+        if (issue_q_write_ptr + align(cmd_size_B, hal.get_alignment(HalMemType::HOST)) > command_issue_limit) {
             this->wrap_issue_queue_wr_ptr(cq_id);
             issue_q_write_ptr = this->get_issue_queue_write_ptr(cq_id);
         }
@@ -593,7 +593,7 @@ class SystemMemoryManager {
         }
 
         // All data needs to be 32B aligned
-        uint32_t push_size_16B = align(push_size_B, dispatch_constants::ISSUE_Q_ALIGNMENT) >> 4;
+        uint32_t push_size_16B = align(push_size_B, hal.get_alignment(HalMemType::HOST)) >> 4;
 
         SystemMemoryCQInterface &cq_interface = this->cq_interfaces[cq_id];
 

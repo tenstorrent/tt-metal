@@ -15,7 +15,7 @@ galaxy:
       []
 
     dispatch_cores:
-      [[0, 10], [0, 11], [0, 12], [0, 13]]
+      [[0, 4], [0, 5], [0, 10], [0, 11], [0, 12], [0, 13]]
 
     dispatch_core_type:
       "ethernet"
@@ -29,7 +29,7 @@ galaxy:
       []
 
     dispatch_cores:
-      [[0, 10], [0, 11], [0, 12], [0, 13]]
+      [[0, 4], [0, 5], [0, 10], [0, 11], [0, 12], [0, 13]]
 
     dispatch_core_type:
       "ethernet"
@@ -44,7 +44,7 @@ nebula_x1:
       []
 
     dispatch_cores:
-      [[0, 10], [0, 11], [0, 12], [0, 13]]
+      [[0, 4], [0, 5], [0, 10], [0, 11], [0, 12], [0, 13]]
 
     dispatch_core_type:
       "ethernet"
@@ -58,7 +58,7 @@ nebula_x1:
       []
 
     dispatch_cores:
-      [[0, 10], [0, 11], [0, 12], [0, 13]]
+      [[0, 4], [0, 5], [0, 10], [0, 11], [0, 12], [0, 13]]
 
     dispatch_core_type:
       "ethernet"

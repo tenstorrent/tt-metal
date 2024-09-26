@@ -20,6 +20,12 @@ struct ExecuteUnaryBackwardNeg {
         const Tensor &input_tensor_arg,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
+
+    static std::vector<std::optional<Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardThreshold {
@@ -31,28 +37,29 @@ struct ExecuteUnaryBackwardThreshold {
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
-template <UnaryBackwardOpType unary_backward_op_type>
-struct ExecuteUnaryBackwardFloat {
+struct ExecuteUnaryBackwardRpow {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         float scalar,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, scalar, output_memory_config);
-        }
-
-    static std::vector<Tensor> invoke(
-        const Tensor &grad_tensor_arg,
-        const Tensor &input_tensor_a_arg,
-        const Tensor &input_tensor_b_arg,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
-        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, output_memory_config);
-        }
-
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
+struct ExecuteUnaryBackwardDivNoNan {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float scalar,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardPolygamma {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        int scalar,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
 
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardWoFloat {
@@ -66,29 +73,78 @@ struct ExecuteUnaryBackwardWoFloat {
 
 };
 
-template <UnaryBackwardOpType unary_backward_op_type>
-struct ExecuteUnaryBackwardTwoFloatWithDefault {
+struct ExecuteUnaryBackwardSoftplus {
     static std::vector<Tensor> invoke(
-        const Tensor &grad_tensor_arg,
+         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         float parameter_a,
         float parameter_b,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, parameter_a, parameter_b, output_memory_config);
-    }
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
-template <UnaryBackwardOpType unary_backward_op_type>
-struct ExecuteUnaryBackwardFloatWithDefault {
+struct ExecuteUnaryBackwardHardtanh {
+    static std::vector<Tensor> invoke(
+         const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float parameter_a,
+        float parameter_b,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackward {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         float parameter_a,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, parameter_a, output_memory_config);
-    }
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardHardshrink {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float parameter_a,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardSoftshrink {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float parameter_a,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardLeakyRelu {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float parameter_a,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardElu {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float parameter_a,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardCelu {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float parameter_a,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardLogiteps {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float parameter_a,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
 template <UnaryBackwardOpType unary_backward_op_type>
@@ -113,7 +169,8 @@ struct ExecuteUnaryBackwardRsqrt {
     static std::vector<std::optional<Tensor>> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardClamp {
@@ -125,17 +182,13 @@ struct ExecuteUnaryBackwardClamp {
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
-template <UnaryBackwardOpType unary_backward_op_type>
-struct ExecuteUnaryBackwardFloatStringDefault {
+struct ExecuteUnaryBackwardRdiv {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         float parameter_a,
         string parameter_b,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, parameter_a, parameter_b, output_memory_config);
-    }
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
 template <UnaryBackwardOpType unary_backward_op_type>
@@ -150,16 +203,12 @@ struct ExecuteUnaryBackwardStringDefault {
     }
 };
 
-template <UnaryBackwardOpType unary_backward_op_type>
-struct ExecuteUnaryBackwardShape {
+struct ExecuteUnaryBackwardRepeat {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         const tt::tt_metal::LegacyShape &parameter_a,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, parameter_a, output_memory_config);
-    }
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardPow {
@@ -246,19 +295,21 @@ struct ExecuteUnaryBackwardFill {
         const Tensor &input_tensor_arg,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
+
+    static std::vector<std::optional<Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt);
 };
 
-template <UnaryBackwardOpType unary_backward_op_type>
-struct ExecuteUnaryBackwardProdBW {
+struct ExecuteUnaryBackwardProd {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         bool all_dimensions = true,
         int64_t dim = 0,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, all_dimensions, dim, output_memory_config);
-    }
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardRecip {
@@ -290,12 +341,6 @@ struct ExecuteUnaryBackwardAbs {
 
 struct ExecuteUnaryBackwardGelu{
     static std::vector<std::optional<ttnn::Tensor>> invoke(
-        const Tensor &grad_tensor_arg,
-        const Tensor &input_tensor_arg,
-        string parameter_a,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
-
-    static std::vector<std::optional<ttnn::Tensor>> invoke(
         uint8_t queue_id,
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
@@ -303,8 +348,14 @@ struct ExecuteUnaryBackwardGelu{
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
 
-};
+    static std::vector<std::optional<ttnn::Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        string parameter_a,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt);
 
+};
 
 }  // operations::unary
 
@@ -340,21 +391,6 @@ constexpr auto acosh_bw = ttnn::register_operation<
     "ttnn::acosh_bw",
     operations::unary_backward::ExecuteUnaryBackwardWoFloat<
         operations::unary_backward::UnaryBackwardOpType::ACOSH_BW>>();
-
-constexpr auto rpow_bw = ttnn::register_operation<
-    "ttnn::rpow_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloat<
-        operations::unary_backward::UnaryBackwardOpType::RPOW_BW>>();
-
-constexpr auto div_no_nan_bw = ttnn::register_operation<
-    "ttnn::div_no_nan_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloat<
-        operations::unary_backward::UnaryBackwardOpType::DIV_NO_NAN_BW>>();
-
-constexpr auto polygamma_bw = ttnn::register_operation<
-    "ttnn::polygamma_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloat<
-        operations::unary_backward::UnaryBackwardOpType::POLYGAMMA_BW>>();
 
 //ExecuteUnaryBackwardOp : get_function_type1
 constexpr auto acos_bw = ttnn::register_operation<
@@ -535,53 +571,13 @@ constexpr auto erfc_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardOp<
         operations::unary_backward::UnaryBackwardOpType::ERFC_BW>>();
 
-constexpr auto hardshrink_bw = ttnn::register_operation<
-    "ttnn::hardshrink_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloatWithDefault<
-        operations::unary_backward::UnaryBackwardOpType::HARDSHRINK_BW>>();
-
-constexpr auto softshrink_bw = ttnn::register_operation<
-    "ttnn::softshrink_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloatWithDefault<
-        operations::unary_backward::UnaryBackwardOpType::SOFTSHRINK_BW>>();
-
-constexpr auto leaky_relu_bw = ttnn::register_operation<
-    "ttnn::leaky_relu_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloatWithDefault<
-        operations::unary_backward::UnaryBackwardOpType::LEAKY_RELU_BW>>();
-
-constexpr auto elu_bw = ttnn::register_operation<
-    "ttnn::elu_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloatWithDefault<
-        operations::unary_backward::UnaryBackwardOpType::ELU_BW>>();
-
-constexpr auto celu_bw = ttnn::register_operation<
-    "ttnn::celu_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloatWithDefault<
-        operations::unary_backward::UnaryBackwardOpType::CELU_BW>>();
-
-constexpr auto logiteps_bw = ttnn::register_operation<
-    "ttnn::logiteps_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloatWithDefault<
-        operations::unary_backward::UnaryBackwardOpType::LOGITEPS_BW>>();
-
 constexpr auto clamp_bw = ttnn::register_operation<
     "ttnn::clamp_bw",
     operations::unary_backward::ExecuteUnaryBackwardClamp>();
 
-constexpr auto softplus_bw = ttnn::register_operation<
-    "ttnn::softplus_bw",
-    operations::unary_backward::ExecuteUnaryBackwardTwoFloatWithDefault<
-        operations::unary_backward::UnaryBackwardOpType::SOFTPLUS_BW>>();
-constexpr auto hardtanh_bw = ttnn::register_operation<
-    "ttnn::hardtanh_bw",
-    operations::unary_backward::ExecuteUnaryBackwardTwoFloatWithDefault<
-        operations::unary_backward::UnaryBackwardOpType::HARDTANH_BW>>();
-
 constexpr auto rdiv_bw = ttnn::register_operation<
     "ttnn::rdiv_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloatStringDefault<
-        operations::unary_backward::UnaryBackwardOpType::RDIV_BW>>();
+    operations::unary_backward::ExecuteUnaryBackwardRdiv>();
 
 constexpr auto gelu_bw = ttnn::register_operation<
     "ttnn::gelu_bw",
@@ -589,8 +585,7 @@ constexpr auto gelu_bw = ttnn::register_operation<
 
 constexpr auto repeat_bw = ttnn::register_operation<
     "ttnn::repeat_bw",
-    operations::unary_backward::ExecuteUnaryBackwardShape<
-        operations::unary_backward::UnaryBackwardOpType::REPEAT_BW>>();
+    operations::unary_backward::ExecuteUnaryBackwardRepeat>();
 
 constexpr auto pow_bw = ttnn::register_operation<
     "ttnn::pow_bw",
@@ -610,10 +605,6 @@ constexpr auto silu_bw = ttnn::register_operation<
     "ttnn::silu_bw",
     operations::unary_backward::ExecuteUnaryBackwardSilu>();
 
-constexpr auto prod_bw = ttnn::register_operation<
-    "ttnn::prod_bw",
-    operations::unary_backward::ExecuteUnaryBackwardProdBW<operations::unary_backward::UnaryBackwardOpType::PROD_BW>>();
-
 constexpr auto relu_bw = ttnn::register_operation<
     "ttnn::relu_bw",
     operations::unary_backward::ExecuteUnaryBackwardWoFloat<operations::unary_backward::UnaryBackwardOpType::RELU_BW>>();
@@ -630,13 +621,19 @@ constexpr auto log_bw = ttnn::register_operation<
     "ttnn::log_bw",
     operations::unary_backward::ExecuteUnaryBackwardWoFloat<operations::unary_backward::UnaryBackwardOpType::LOG_BW>>();
 
-// overload
-constexpr auto reciprocal_bw = ttnn::register_operation<
-    "ttnn::reciprocal_bw",
-    operations::unary_backward::ExecuteUnaryBackwardRecip>();
-
-constexpr auto abs_bw = ttnn::register_operation<
-    "ttnn::abs_bw",
-    operations::unary_backward::ExecuteUnaryBackwardAbs>();
+constexpr auto logiteps_bw = ttnn::register_operation<"ttnn::logiteps_bw", operations::unary_backward::ExecuteUnaryBackwardLogiteps>();
+constexpr auto celu_bw = ttnn::register_operation<"ttnn::celu_bw", operations::unary_backward::ExecuteUnaryBackwardCelu>();
+constexpr auto elu_bw = ttnn::register_operation<"ttnn::elu_bw", operations::unary_backward::ExecuteUnaryBackwardElu>();
+constexpr auto leaky_relu_bw = ttnn::register_operation<"ttnn::leaky_relu_bw", operations::unary_backward::ExecuteUnaryBackwardLeakyRelu>();
+constexpr auto softshrink_bw = ttnn::register_operation<"ttnn::softshrink_bw", operations::unary_backward::ExecuteUnaryBackwardSoftshrink>();
+constexpr auto hardshrink_bw = ttnn::register_operation<"ttnn::hardshrink_bw", operations::unary_backward::ExecuteUnaryBackwardHardshrink>();
+constexpr auto hardtanh_bw = ttnn::register_operation<"ttnn::hardtanh_bw", operations::unary_backward::ExecuteUnaryBackwardHardtanh>();
+constexpr auto softplus_bw = ttnn::register_operation<"ttnn::softplus_bw", operations::unary_backward::ExecuteUnaryBackwardSoftplus>();
+constexpr auto rpow_bw = ttnn::register_operation<"ttnn::rpow_bw", operations::unary_backward::ExecuteUnaryBackwardRpow>();
+constexpr auto div_no_nan_bw = ttnn::register_operation<"ttnn::div_no_nan_bw", operations::unary_backward::ExecuteUnaryBackwardDivNoNan>();
+constexpr auto polygamma_bw = ttnn::register_operation<"ttnn::polygamma_bw", operations::unary_backward::ExecuteUnaryBackwardPolygamma>();
+constexpr auto reciprocal_bw = ttnn::register_operation<"ttnn::reciprocal_bw", operations::unary_backward::ExecuteUnaryBackwardRecip>();
+constexpr auto abs_bw = ttnn::register_operation<"ttnn::abs_bw", operations::unary_backward::ExecuteUnaryBackwardAbs>();
+constexpr auto prod_bw = ttnn::register_operation<"ttnn::prod_bw", operations::unary_backward::ExecuteUnaryBackwardProd>();
 
 }  // namespace ttnn

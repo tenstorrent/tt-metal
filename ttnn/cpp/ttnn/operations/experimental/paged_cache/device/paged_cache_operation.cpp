@@ -17,23 +17,27 @@ void PagedUpdateCacheDeviceOperation::validate(const std::vector<Tensor>& input_
     TT_FATAL(input_tensor.device() == cache_tensor.device(), "Operands to update_cache need to be on the same device!");
     TT_FATAL(input_tensor.buffer() != nullptr and cache_tensor.buffer() != nullptr, "Operands to update_cache need to be allocated in buffers on device!");
     TT_FATAL((input_tensor.get_layout() == Layout::TILE && cache_tensor.get_layout() == Layout::TILE), "Inputs to update_cache must be tilized");
-    TT_FATAL(input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B, "Error");
-    TT_FATAL(cache_tensor.get_dtype() == DataType::FLOAT32 || cache_tensor.get_dtype() == DataType::BFLOAT16 || cache_tensor.get_dtype() == DataType::BFLOAT8_B, "Error");
+    TT_FATAL(cache_tensor.get_dtype() == DataType::FLOAT32 || cache_tensor.get_dtype() == DataType::BFLOAT16 || cache_tensor.get_dtype() == DataType::BFLOAT8_B, "Data type of cache tensor must be FLOAT32, BFLOAT16 or BFLOAT8_B");
 
     // input_tensor: [1, b, padded_heads, head_dim]
-    // cache_tensor: [b, 1, kv_len, head_dim]
-    TT_FATAL(input_tensor.get_legacy_shape()[0] == 1, "Error");
-    TT_FATAL(cache_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
-    TT_FATAL(input_tensor.get_legacy_shape()[-1] == cache_tensor.get_legacy_shape()[-1], "Error");
+    // cache_tensor: [b, n_heads, kv_len, head_dim]
+    TT_FATAL(input_tensor.get_legacy_shape()[0] == 1, "Dim 0 of input tensor must be 1");
+    TT_FATAL(cache_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Only interleaved cache is supported");
+    TT_FATAL(input_tensor.get_legacy_shape()[-1] == cache_tensor.get_legacy_shape()[-1], "Last dim of input tensor must match last dim of cache tensor");
 
     if (this->op_type == PagedUpdateCacheOpType::UPDATE) {
-
+        TT_FATAL(input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16, "Data type of input tensor for update cache must be FLOAT32 or BFLOAT16, got {}", input_tensor.get_dtype());
         const bool paged_cache = optional_input_tensors.at(1).has_value();
         uint32_t batch_size;
         if (!paged_cache) {
-            TT_FATAL(cache_tensor.get_legacy_shape()[1] == 1, "Only supports 1 head now.");
-            TT_FATAL(input_tensor.get_legacy_shape()[1] == cache_tensor.get_legacy_shape()[0], "Error");
+            if (this->share_cache){
+                TT_FATAL(cache_tensor.get_legacy_shape()[0] == 1, "Share cache feature expects cache tensor to have batch of 1");
+            }
+            else {
+                TT_FATAL(input_tensor.get_legacy_shape()[1] == cache_tensor.get_legacy_shape()[0], "Expect batch in input tensor match the batch in cache tensor");
+            }
         } else {
+            TT_FATAL(!this->share_cache, "share_cache not supported with paged cache");
             TT_FATAL(optional_input_tensors.at(0).has_value(), "Paged cache requires update_idxs tensor");
             // TODO: How to validate page_table and paged_cache?
             auto page_table = optional_input_tensors.at(1).value();
@@ -79,6 +83,7 @@ void PagedUpdateCacheDeviceOperation::validate(const std::vector<Tensor>& input_
         // else TT_FATAL(this->batch_offset == 0, "Error");
         TT_FATAL(this->batch_offset == 0, "Error");
     } else {
+        TT_FATAL(input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16 || cache_tensor.get_dtype() == DataType::BFLOAT8_B, "Data type of input tensor for fill cache must be FLOAT32, BFLOAT16, or BFLOAT8_b, got {}", input_tensor.get_dtype());
 
         TT_FATAL(this->op_type == PagedUpdateCacheOpType::FILL, "Error");
         const auto& page_table_tensor = input_tensors.at(2);
@@ -92,7 +97,6 @@ void PagedUpdateCacheDeviceOperation::validate(const std::vector<Tensor>& input_
         auto input_shape = input_tensor.get_legacy_shape();
         auto page_table_shape = page_table_tensor.get_legacy_shape();
 
-        TT_FATAL(cache_shape[1] == 1, "Error");
         TT_FATAL(this->batch_idx <= cache_shape[0], "Error");
         TT_FATAL(input_shape[2] <= cache_shape[2] * page_table_shape[1], "Input seq_len must fit in max_num_blocks_per_seq");
     }
@@ -122,7 +126,7 @@ operation::ProgramWithCallbacks PagedUpdateCacheDeviceOperation::create_program(
             if (this->op_type == PagedUpdateCacheOpType::UPDATE) {
                 const auto update_idxs_tensor = optional_input_tensors.at(0); // TODO: Is this tensor passed around by value?
                 const auto page_table = optional_input_tensors.at(1);
-                return detail::paged_update_cache_multi_core(cache_tensor, input_tensor, update_idxs_tensor, page_table, this->update_idxs, this->batch_offset, this->compute_kernel_config);
+                return detail::paged_update_cache_multi_core(cache_tensor, input_tensor, update_idxs_tensor, page_table, this->update_idxs, this->batch_offset, this->compute_kernel_config, this->share_cache);
             } else {
                 const auto& page_table = input_tensors.at(2);
                 return detail::paged_fill_cache_multi_core(cache_tensor, input_tensor, page_table, this->batch_idx);

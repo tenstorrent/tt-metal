@@ -55,8 +55,8 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         num_tile_per_core = ntiles_along_width * ntiles_along_height;
     } else {
         TT_FATAL(
-            (shard_spec.shape[1] * datum_size(act_df)) % L1_ALIGNMENT == 0,
-            "Shard width should be multiple of L1_ADRESS_ALIGNMENT");
+            (shard_spec.shape[1] * datum_size(act_df)) % hal.get_alignment(HalMemType::L1) == 0,
+            "Shard width should be multiple of {} to satisfy L1 alignment", hal.get_alignment(HalMemType::L1));
         size_t shard_height = shard_spec.shape[0];
         size_t shard_width = round_up_to_mul16(
             shard_spec.shape[1]);  // rounding up is done to aligned with  --> tt-metal/tt_metal/detail/util.hpp:31
@@ -114,6 +114,11 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         num_tile_per_core  // per_core_block_size
     };
 
+    vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (args.preserve_fp32_precision) {
+        unpack_to_dest_mode[in_cb_id] = UnpackToDestMode::UnpackToDestFp32;
+    }
+
     bool math_approx_mode = std::all_of(
         args.op_chain.begin(), args.op_chain.end(), [](const auto &u) { return utils::get_op_approx_mode(u.op_type); });
     std::map<string, string> unary_defines = utils::get_block_defines(args.op_chain);
@@ -124,7 +129,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
-            .preserve_fp32_precision = args.preserve_fp32_precision,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args_group_1,
             .defines = unary_defines});

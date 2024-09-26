@@ -135,15 +135,16 @@ models/demos/wormhole/llama31_8b @yieldthought @mtairum @uaydonat
 models/demos/wormhole/stable_diffusion @esmalTT @uaydonat @mywoodstock
 models/demos/t3000/falcon40b @uaydonat @djordje-tt @johanna-rock-tt
 models/demos/t3000/falcon7b @skhorasganiTT @djordje-tt @uaydonat
-models/demos/t3000/llama2_70b @cglagovichTT @caixunshiren @uaydonat
-models/demos/t3000/llama3_70b @cglagovichTT @caixunshiren @uaydonat
+models/demos/t3000/llama2_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
+models/demos/t3000/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
 models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
-models/demos/tg/llama3_70b @cglagovichTT @caixunshiren @uaydonat
+models/demos/tg/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/grayskull @uaydonat @eyonland
 models/demos/**/*resnet* @mywoodstock @shwetankTT @tt-aho
 models/experimental/functional_unet @esmalTT @uaydonat @mywoodstock
 models/perf/ @uaydonat @tt-rkim
+models/perf/perf_report.py @yieldthought @uaydonat @tt-rkim
 models/perf/benchmarking_utils.py @skhorasganiTT @tt-rkim
 
 # docs

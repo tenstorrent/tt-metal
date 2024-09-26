@@ -376,7 +376,7 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     cb_pop_front(in_cb, num_tiles);
 }
 
-void cb_matmul_blocks(const uint32_t& in0_cb, const uint32_t& in1_cb, const uint32_t& out_cb, const uint32_t& M, const uint32_t& N, const uint32_t& K, const uint32_t& num_blocks, const uint32_t& in0_num_subblocks, const uint32_t& in1_num_subblocks,
+ALWI void cb_matmul_blocks(const uint32_t& in0_cb, const uint32_t& in1_cb, const uint32_t& out_cb, const uint32_t& M, const uint32_t& N, const uint32_t& K, const uint32_t& num_blocks, const uint32_t& in0_num_subblocks, const uint32_t& in1_num_subblocks,
                     const uint32_t& in0_block_w, const uint32_t& subblock_h, const uint32_t& subblock_w, const bool& transpose) {
     // precondition: in0_cb has M*K produced
     // preconditino: in1_cb has K*N produced
@@ -447,6 +447,7 @@ void MAIN {
     constexpr uint32_t out_num_blocks = get_compile_time_arg_val(15);
     constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(16);
     constexpr uint32_t k_chunk_size = get_compile_time_arg_val(17);
+    constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(18);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -479,12 +480,14 @@ void MAIN {
     constexpr uint32_t cb_out_l = tt::CB::c_out2;
     constexpr uint32_t cb_out_final = tt::CB::c_out4;
 
-    const bool do_reduce = get_arg_val<uint32_t>(0) == 1;
-    const uint32_t core_num = get_arg_val<uint32_t>(1);
-    const uint32_t cur_batch = get_arg_val<uint32_t>(2);
-    const uint32_t cur_pos_arg = get_arg_val<uint32_t>(3);
-
-    // const uin32_t idle_core = get_arg_val<uint32_t>(4);
+    uint32_t arg_idx = 0;
+    const bool do_reduce = get_arg_val<uint32_t>(arg_idx++) == 1;
+    const bool do_output = get_arg_val<uint32_t>(arg_idx++) == 1;
+    const uint32_t cur_head = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t core_num_in_output = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
 
     // idle core
     // get_arg_val<uint32_t>(0) can go from 0-63 for the core_num; for active cores 65 is out of range so 65 indicates an idle_core
@@ -494,8 +497,8 @@ void MAIN {
 
     // Get cur_pos
     uint32_t cur_pos = 0;
-    // using 4294967295 (end of uint32 range) as a flag to indicate that cur_pos is not provided as a list
-    if (cur_pos_arg!=4294967295){
+    // using UINT32_MAX as a flag to indicate that cur_pos is not provided as a list
+    if (cur_pos_arg != UINT32_MAX){
         cur_pos = cur_pos_arg;
     }
     else {
@@ -506,13 +509,18 @@ void MAIN {
         cur_pos = index_addr_ptr[4+cur_batch];
         cb_release_tile(cb_index_id);
     }
+
+    if (cur_pos == UINT32_MAX) {
+        // cur_pos of -1 indicates that the user should be skipped
+        return;
+    }
     // Sequence length assignment
-    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(cur_pos, cur_batch, core_num, num_cores_per_batch, k_chunk_size);
+    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(cur_pos, cur_batch, core_num_in_reduce, num_cores_per_head, k_chunk_size);
     if (k_chunk_start == k_chunk_end) {
         return; // early exit because no computes needs to be done
     }
-    uint32_t num_cores_to_wait = num_cores_per_batch-1;
-    if (num_cores_per_batch>k_num_chunks) num_cores_to_wait = k_num_chunks-1;
+    uint32_t num_cores_to_wait = num_cores_per_head-1;
+    if (num_cores_per_head>k_num_chunks) num_cores_to_wait = k_num_chunks-1;
 
     mm_init();
     cb_wait_front(cb_q_in, q_chunk_tiles);

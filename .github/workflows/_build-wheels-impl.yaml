@@ -38,9 +38,7 @@ jobs:
             tt_metal/python_env/requirements-dev.txt
             pyproject.toml
       - name: Install python deps for packaging
-        run: |
-          pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
-          pip install -r tt_metal/python_env/requirements-dev.txt
+        run: pip install build
       - name: Use g++ as umd compiler for ubuntu 22.04
         if: ${{ inputs.os == 'ubuntu-22.04' }}
         run: |

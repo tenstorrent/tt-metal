@@ -15,11 +15,24 @@ on:
   workflow_run:
     workflows:
       - "All post-commit tests"
-      - "(T3K) T3000 demo tests"
-      - "(T3K) T3000 model perf tests"
       - "(Single-card) Model perf tests"
       - "(Single-card) Device perf tests"
+      - "(Single-card) Demo tests"
       - "Nightly fast dispatch tests"
+      - "(T3K) T3000 demo tests"
+      - "(T3K) T3000 model perf tests"
+      - "(T3K) T3000 perplexity tests"
+      - "(T3K) T3000 model perf tests"
+      - "(T3K) T3000 profiler tests"
+      - "(T3K) T3000 unit tests"
+      - "(TG) TG unit tests"
+      - "(TG) TG demo tests"
+      - "(TG) TG frequent tests"
+      - "(TG) TG model perf tests"
+      - "(TGG) TGG model perf tests"
+      - "(TGG) TGG unit tests"
+      - "(TGG) TGG demo tests"
+      - "(TGG) TGG frequent tests"
     types:
       - completed
 
@@ -129,11 +142,18 @@ jobs:
           touch 'generated/benchmark_data/measurement_2024-07-12T05:01:45+0000.csv'
           touch 'generated/benchmark_data/measurement_2024-07-12T04:59:14+0000.csv'
           touch 'generated/benchmark_data/measurement_2024-07-12T05:03:29+0000.csv'
-      - name: sdf
+      - uses: actions/setup-python@v5.0.0
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: 'infra/requirements-infra.txt'
+      - name: Install infra dependencies
+        run: pip install -r infra/requirements-infra.txt
+      - name: Create environment CSV test
         env:
           PYTHONPATH: ${{ github.workspace }}
           ARCH_NAME: grayskull
-        run: pip3 install loguru && python3 .github/scripts/data_analysis/create_benchmark_environment_csv.py
+        run: python3 .github/scripts/data_analysis/create_benchmark_environment_csv.py
       - name: Show files
         shell: bash
         run: find generated/benchmark_data -type f | xargs -n 1 -I {} bash -c 'echo {} && cat {}'

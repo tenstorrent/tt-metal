@@ -205,7 +205,8 @@ class TtLlamaDecoder_galaxy:
         )
 
         tt_stats = ttnn.reshape(
-            tt_stats, ttnn.Shape((1, 1, inp.get_legacy_shape()[-2], 32), (1, 1, inp.get_legacy_shape()[-2], 32))
+            tt_stats,
+            ttnn.Shape((1, 1, inp.shape.with_tile_padding()[-2], 32), (1, 1, inp.shape.with_tile_padding()[-2], 32)),
         )  # TODO: Figure out why we need this
 
         tt_stats = tt_all_gather(

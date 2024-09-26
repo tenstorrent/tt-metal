@@ -24,6 +24,7 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
     }
 
     const auto q_shape = input_tensors.at(0).get_legacy_shape();
+    const auto q_shape_unpadded = input_tensors.at(0).get_shape();
     const auto k_shape = input_tensors.at(1).get_legacy_shape();
     const auto v_shape = input_tensors.at(2).get_legacy_shape();
 
@@ -45,6 +46,7 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
 
     if (this->paged_attention) {
         // Paged attention verification
+        TT_FATAL(! this->share_cache.value_or(false), "Share cache feature not supported for paged attention");
         TT_FATAL(optional_input_tensors.at(0).has_value(), "Must have cur_pos tensor for paged attention");
         TT_FATAL(optional_input_tensors.at(1).has_value(), "Must have page_table tensor for paged attention");
 
@@ -64,7 +66,6 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
         TT_FATAL(cur_pos_shape[0] == B, "cur_pos must have batch size equal to Q");
         TT_FATAL(page_table_shape[0] == B, "page_table must have hidden size equal to Q");
 
-        TT_FATAL(k_shape[1] == 1 && v_shape[1] == 1, "Paged attention only supports 1 head");
         TT_FATAL(k_shape[2] == v_shape[2], "K and V must have same block size");
         TT_FATAL(k_shape[3] == v_shape[3] && k_shape[3] == q_shape[3], "Q, K, V must have same hidden size");
     } else {
@@ -77,14 +78,17 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
 
         // Batch must match
         const auto B = q_shape[1];
-        TT_FATAL(k_shape[1] == B, "Error");
-        TT_FATAL(v_shape[1] == B, "Error");
+        if (this->share_cache.value_or(false)) {
+            TT_FATAL(k_shape[0] == 1, "Share cache expects K to have batch size of 1, but got {}", k_shape[0]);
+            TT_FATAL(v_shape[0] == 1, "Share cache expects V to have batch size of 1, but got {}", v_shape[0]);
+        } else {
+            TT_FATAL(k_shape[0] == B, "Error");
+            TT_FATAL(v_shape[0] == B, "Error");
+        }
         // TT_FATAL(Q_memcfg.shard_spec.value().grid.num_cores() == B, "Q must be height sharded by batch ");
 
-        // NKV must be 1 if we are running in this decode mode
+        // Q seqlen must be 1 if we are running decode mode
         TT_FATAL(q_shape[0] == 1, "Error");
-        TT_FATAL(k_shape[0] == 1, "Error");
-        TT_FATAL(v_shape[0] == 1, "Error");
 
         // Check sequence lengths
         TT_FATAL(k_shape[-2] == v_shape[-2], "Error");
@@ -100,6 +104,17 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
         }
     }
 
+    // Check gqa specific validation
+    TT_FATAL(k_shape[1] == v_shape[1], "Flash decode expects K and V to have same number of heads, but got {} and {}", k_shape[1], v_shape[1]);
+    bool is_gqa = (k_shape[1] > 1);
+    if (is_gqa) {
+        TT_FATAL(! output_mem_config.is_sharded(), "Sharded output not supported for GQA");
+        TT_FATAL(input_tensors.at(0).get_dtype() == DataType::BFLOAT16, "GQA expects BFLOAT16 input tensor, but got {}", input_tensors.at(0).get_dtype());
+        uint32_t num_heads_per_kv = q_shape_unpadded[2]/k_shape[1];
+        TT_FATAL(q_shape_unpadded[2]%k_shape[1] == 0, "GQA expects Q to have a multiple of K heads, but got {} and {}", q_shape_unpadded[2], k_shape[1]);
+        // check that num_heads_per_kv is a power of 2
+        TT_FATAL(num_heads_per_kv != 0 && (num_heads_per_kv & (num_heads_per_kv - 1)) == 0, "GQA expects Q to have a power of 2 number of heads per kv head, but got {}", num_heads_per_kv);
+    }
 
     // Check compute kernel config
     std::visit(
@@ -156,7 +171,8 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
         scale,
         this->compute_kernel_config,
         this->program_config,
-        this->k_chunk_size);
+        this->k_chunk_size,
+        this->share_cache);
 }
 
 operation::Hash ScaledDotProductAttentionDecode::compute_program_hash(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {

@@ -31,7 +31,7 @@ def run_ssm_eltwise_mul_test(batch_size, in0_W, in1_W, dtype, in0_mem_config, in
         tt_input_tensor_B, tt_input_tensor_X, memory_config=out_mem_config, dtype=dtype
     )
 
-    assert list(tt_out.get_legacy_shape()) == [1, 1, batch_size, latent_size * hidden_size]
+    assert list(tt_out.shape.with_tile_padding()) == [1, 1, batch_size, latent_size * hidden_size]
 
     out = tt2torch_tensor(tt_out)
 

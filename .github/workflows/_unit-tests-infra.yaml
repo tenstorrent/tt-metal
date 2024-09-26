@@ -1,0 +1,32 @@
+name: "[internal] Infra tools unit tests"
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - "main"
+    paths:
+      - "infra/**"
+  schedule:
+    - cron: "0 */6 * * *"
+
+jobs:
+  build-and-test-infra:
+    strategy:
+      matrix:
+        python-version: [3.8]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+          cache-dependency-path: 'infra/requirements-infra.txt'
+      - name: Install infra dependencies
+        run: pip install -r infra/requirements-infra.txt
+      - name: Test
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        working-directory: ${{ github.workspace }}/infra
+        run: pytest tests

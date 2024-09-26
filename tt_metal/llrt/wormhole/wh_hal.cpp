@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "core_config.h"
+#include "noc/noc_parameters.h"
 #include "llrt/hal.hpp"
 #include "llrt/wormhole/wh_hal.hpp"
 #include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
@@ -25,6 +26,11 @@ void Hal::initialize_wh() {
 
     HalCoreInfoType idle_eth_mem_map = create_idle_eth_mem_map();
     this->core_info_.push_back(idle_eth_mem_map);
+
+    this->mem_alignments_.resize(utils::underlying_type<HalMemType>(HalMemType::COUNT));
+    this->mem_alignments_[utils::underlying_type<HalMemType>(HalMemType::L1)] = L1_ALIGNMENT;
+    this->mem_alignments_[utils::underlying_type<HalMemType>(HalMemType::DRAM)] = DRAM_ALIGNMENT;
+    this->mem_alignments_[utils::underlying_type<HalMemType>(HalMemType::HOST)] = PCIE_ALIGNMENT;
 #endif
 }
 

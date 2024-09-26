@@ -13,7 +13,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operation.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_numpy/functions.hpp"
+#include "ttnn/operations/numpy/functions.hpp"
 
 using tt::tt_metal::DataType;
 using tt::tt_metal::Device;
@@ -58,7 +58,7 @@ Tensor host_function(const Tensor& input_tensor) {
 
 template <ttnn::operations::unary::UnaryOpType unary_op_type, typename... Args>
 bool run_test(Device* device, const tt::tt_metal::LegacyShape& shape, float low, float high, Args... args) {
-    auto input_tensor = tt::numpy::random::uniform(bfloat16(low), bfloat16(high), shape).to(Layout::TILE);
+    auto input_tensor = ttnn::numpy::random::uniform(bfloat16(low), bfloat16(high), shape).to(Layout::TILE);
 
     using ttnn::operations::unary::UnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
@@ -66,35 +66,35 @@ bool run_test(Device* device, const tt::tt_metal::LegacyShape& shape, float low,
     if constexpr (unary_op_type == UnaryOpType::SQRT) {
         auto host_output = host_function<::detail::sqrt>(input_tensor);
         auto device_output = ttnn::sqrt(input_tensor.to(device)).cpu();
-        return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
+        return ttnn::numpy::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::EXP) {
         auto host_output = host_function<::detail::exp>(input_tensor);
         auto device_output = ttnn::exp(input_tensor.to(device)).cpu();
-        return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
+        return ttnn::numpy::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::RECIP) {
         auto host_output = host_function<::detail::recip>(input_tensor);
         auto device_output = ttnn::reciprocal(input_tensor.to(device)).cpu();
-        return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
+        return ttnn::numpy::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::GELU) {
         auto host_output = host_function<::detail::gelu>(input_tensor);
         auto device_output = ttnn::gelu(input_tensor.to(device)).cpu();
-        return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
+        return ttnn::numpy::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::RELU) {
         auto host_output = host_function<::detail::relu>(input_tensor);
         auto device_output = ttnn::relu(input_tensor.to(device)).cpu();
-        return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
+        return ttnn::numpy::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::SIGMOID) {
         auto host_output = host_function<::detail::sigmoid>(input_tensor);
         auto device_output = ttnn::sigmoid(input_tensor.to(device)).cpu();
-        return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
+        return ttnn::numpy::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::LOG) {
         auto host_output = host_function<::detail::log>(input_tensor);
         auto device_output = ttnn::log(input_tensor.to(device)).cpu();
-        return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
+        return ttnn::numpy::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::TANH) {
         auto host_output = host_function<::detail::tanh>(input_tensor);
         auto device_output =ttnn::tanh(input_tensor.to(device)).cpu();
-        return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
+        return ttnn::numpy::allclose<bfloat16>(host_output, device_output, args...);
     }
     TT_ASSERT(false, "Unsupported function");
     return false;
@@ -111,7 +111,7 @@ void test_operation_infrastructure() {
     auto device = tt::tt_metal::CreateDevice(device_id);
 
     auto shape = tt::tt_metal::LegacyShape{1, 1, TILE_HEIGHT, TILE_WIDTH};
-    auto input_tensor = tt::numpy::random::uniform(bfloat16(0), bfloat16(1), shape).to(Layout::TILE).to(device);
+    auto input_tensor = ttnn::numpy::random::uniform(bfloat16(0), bfloat16(1), shape).to(Layout::TILE).to(device);
 
     ttnn::operations::unary::operation_attributes_t op_args {
         {UnaryWithParam{UnaryOpType::SQRT}},
@@ -139,7 +139,7 @@ void test_shape_padding() {
 
     tt::tt_metal::Array4D input_shape = {1, 1, 13, 18};
     tt::tt_metal::Array4D padded_input_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
-    auto input_tensor = tt::numpy::random::uniform(bfloat16(0), bfloat16(1), input_shape);
+    auto input_tensor = ttnn::numpy::random::uniform(bfloat16(0), bfloat16(1), input_shape);
 
     auto padded_input_tensor = ttnn::pad(input_tensor, padded_input_shape, tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
 
@@ -253,7 +253,7 @@ void test_program_cache() {
 
         // Allocate a tensor to show that the addresses aren't cached
         auto input_tensor =
-            tt::numpy::random::uniform(bfloat16(0.0f), bfloat16(0.0f), {1, 1, 32, 32}).to(Layout::TILE).to(device);
+            ttnn::numpy::random::uniform(bfloat16(0.0f), bfloat16(0.0f), {1, 1, 32, 32}).to(Layout::TILE).to(device);
 
         // Program Cache Hit
         run_test<UnaryOpType::EXP>(device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);

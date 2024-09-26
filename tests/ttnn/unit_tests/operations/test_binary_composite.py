@@ -6,8 +6,13 @@ import torch
 import pytest
 import random
 import ttnn
-from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc, compare_equal
-from models.utility_functions import is_grayskull, skip_for_grayskull, skip_for_wormhole_b0
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import (
+    data_gen_with_range,
+    data_gen_with_range_int,
+    compare_pcc,
+    compare_equal,
+)
+from models.utility_functions import is_grayskull, skip_for_grayskull
 
 
 @pytest.mark.parametrize(
@@ -255,14 +260,80 @@ def test_binary_div_ttnn(accurate_mode, round_mode, input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
+def test_binary_div_ttnn_opt(accurate_mode, round_mode, input_shapes, device):
+    if is_grayskull():
+        if round_mode in ["trunc", "floor"]:
+            pytest.skip("does not work for Grayskull -skipping")
+    if accurate_mode == False:  # If input_b is non-zero tensor
+        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
+        in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, -1, device)
+    else:
+        in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
+        in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
+
+    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+
+    cq_id = 0
+    ttnn.div(
+        input_tensor1,
+        input_tensor2,
+        accurate_mode=accurate_mode,
+        round_mode=round_mode,
+        output_tensor=output_tensor,
+        queue_id=cq_id,
+    )
+    golden_function = ttnn.get_golden_function(ttnn.div)
+    golden_tensor = golden_function(in_data1, in_data2, round_mode)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize("accurate_mode", [False, True])
+@pytest.mark.parametrize("round_mode", ["None", "trunc", "floor"])
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
 @pytest.mark.parametrize("value", [-5.1, 0.0, 10.9])
-def test_binary_div_overload_ttnn(accurate_mode, round_mode, input_shapes, value, device):
+def test_binary_div_scalar_ttnn(accurate_mode, round_mode, input_shapes, value, device):
     if is_grayskull():
         if round_mode in ["trunc", "floor"]:
             pytest.skip("does not work for Grayskull -skipping")
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
 
     output_tensor = ttnn.div(input_tensor1, value, accurate_mode=accurate_mode, round_mode=round_mode)
+    golden_function = ttnn.get_golden_function(ttnn.div)
+    golden_tensor = golden_function(in_data1, value, round_mode)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize("accurate_mode", [False, True])
+@pytest.mark.parametrize("round_mode", ["None", "trunc", "floor"])
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize("value", [-5.1, 0.0, 10.9])
+def test_binary_div_scalar_ttnn_opt(accurate_mode, round_mode, input_shapes, value, device):
+    if is_grayskull():
+        if round_mode in ["trunc", "floor"]:
+            pytest.skip("does not work for Grayskull -skipping")
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
+    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+
+    cq_id = 0
+    ttnn.div(input_tensor1, value, accurate_mode=accurate_mode, round_mode=round_mode, output_tensor=output_tensor)
     golden_function = ttnn.get_golden_function(ttnn.div)
     golden_tensor = golden_function(in_data1, value, round_mode)
 
@@ -779,4 +850,43 @@ def test_nei_ttnn(input_shapes, scalar, device):
     golden_tensor = golden_function(in_data, scalar)
 
     comp_pass = compare_equal([input_tensor], [golden_tensor])
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder")
+def test_binary_gcd_ttnn(input_shapes, device):
+    in_data1, input_tensor1 = data_gen_with_range_int(input_shapes, -1024, 1024, device)
+    in_data2, input_tensor2 = data_gen_with_range_int(input_shapes, -1024, 1024, device)
+    output_tensor = ttnn.gcd(input_tensor1, input_tensor2)
+    golden_function = ttnn.get_golden_function(ttnn.gcd)
+    golden_tensor = golden_function(in_data1, in_data2)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder")
+def test_binary_lcm_ttnn(input_shapes, device):
+    in_data1, input_tensor1 = data_gen_with_range_int(input_shapes, -1024, 1024, device)
+    in_data2, input_tensor2 = data_gen_with_range_int(input_shapes, -1024, 1024, device)
+    output_tensor = ttnn.lcm(input_tensor1, input_tensor2)
+    golden_function = ttnn.get_golden_function(ttnn.lcm)
+    golden_tensor = golden_function(in_data1, in_data2)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass

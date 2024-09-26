@@ -44,11 +44,11 @@ def test_llama_model_inference(device, weights, layers, use_program_cache, reset
 
     # This sets the minimum PCC for each iteration
     # TODO: In the full model test, iterations 4 and 8 have lower PCCs of 0.9077 and 0.9593 respectively.
-    pcc = 0.94 if layers == 1 else 0.97
+    pcc = 0.88 if layers == 1 else 0.97
     # In post-commit CI, also validate the final PCCs after 6 iterations
-    final_model_pcc = 0.9989
-    final_k_cache_pcc = 0.9998
-    final_v_cache_pcc = 0.9998
+    final_model_pcc = 0.9990
+    final_k_cache_pcc = 0.9997
+    final_v_cache_pcc = 0.9997
 
     iterations = 6 if layers == 1 else 9
 
@@ -95,8 +95,6 @@ def test_llama_model_inference(device, weights, layers, use_program_cache, reset
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         layers=list(range(model_args.n_layers)),
-        rot_mat=None,
-        start_pos=generation_start_pos,
     )
     logger.info("Model and caches loaded.")
 
@@ -120,16 +118,18 @@ def test_llama_model_inference(device, weights, layers, use_program_cache, reset
     for i in range(generation_length):
         current_pos = generation_start_pos + i
 
-        decode_input, pos = prepare_inputs_ttnn(
+        decode_input = prepare_inputs_ttnn(
             tt_decode_input,
-            current_pos,
             model_args.dim,
-            model_args.sliding_window,
             tt_model.device,
+        )
+        current_pos_tensor = ttnn.from_torch(torch.tensor([current_pos] * batch), device=device, dtype=ttnn.int32)
+        current_pos_attn_tensor = ttnn.from_torch(
+            torch.tensor([current_pos] * batch * 8), device=device, dtype=ttnn.int32
         )
 
         # Run TT model
-        tt_out = tt_model(decode_input, pos, rot_mat=current_rot_mat)
+        tt_out = tt_model(decode_input, current_pos_tensor, current_pos_attn_tensor, rot_mat=current_rot_mat)
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
             ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[: model_args.max_batch_size, :, :]

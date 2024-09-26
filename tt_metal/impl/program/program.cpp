@@ -591,6 +591,37 @@ void Program::set_cb_data_fmt(Device *device, const std::vector<CoreRange> &crs,
     }
 }
 
+void Program::set_cb_tile_dims(Device *device, const std::vector<CoreRange> &crs, JitBuildOptions &build_options) const {
+    ZoneScoped;
+    for (const auto &logical_cr : crs) {
+        auto cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
+        for (const auto &circular_buffer : cbs_on_core) {
+            for (auto buffer_index : circular_buffer->buffer_indices()) {
+                auto tile = circular_buffer->tile(buffer_index);
+                if (tile.has_value()) {
+                    build_options.set_cb_tile_dims_all_cores(
+                        static_cast<CB>(buffer_index),
+                        tile->get_num_faces(),
+                        tile->get_partial_face(),
+                        tile->get_face_shape()[0],
+                        tile->get_narrow_tile(),
+                        tile->get_tile_shape()[0],
+                        tile->get_tile_shape()[1]);
+                    build_options.set_cb_tile_size_all_cores(
+                        static_cast<CB>(buffer_index),
+                        tile->get_tile_size(circular_buffer->data_format(buffer_index)));
+                } else {
+                    Tile t;
+                    build_options.set_cb_tile_size_all_cores(
+                        static_cast<CB>(buffer_index),
+                        t.get_tile_size(circular_buffer->data_format(buffer_index)));
+                }
+
+            }
+        }
+    }
+}
+
 void Program::invalidate_compile() {
     for (auto &[device_id, compile_needed] : compile_needed_) {
         compile_needed = true;
@@ -780,6 +811,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
 
     this->get_program_config(programmable_core_type_index).rta_offset = base_offset;
 
+    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
     for (auto& kg : this->get_kernel_groups(programmable_core_type_index)) {
         for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
             max_rtas[dispatch_class] = 0;
@@ -813,7 +845,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
         }
 
         kg.total_rta_size = offset;
-        offset = align(offset, L1_ALIGNMENT);
+        offset = align(offset, l1_alignment);
         max_unique_rta_size = std::max(offset, max_unique_rta_size);
     }
 
@@ -839,7 +871,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
         this->get_program_config(programmable_core_type_index).crta_offsets[dispatch_class] = base_offset + max_unique_rta_size + offset;
         this->get_program_config(programmable_core_type_index).crta_sizes[dispatch_class] = size;
         offset += size;
-        offset = align(offset, L1_ALIGNMENT);
+        offset = align(offset, l1_alignment);
     }
     total_crta_size = offset;
 
@@ -882,7 +914,7 @@ uint32_t Program::finalize_sems(uint32_t programmable_core_type_index, uint32_t 
         }
     }
 
-    uint32_t sem_size = (max_id + 1) * L1_ALIGNMENT;
+    uint32_t sem_size = (max_id + 1) * hal.get_alignment(HalMemType::L1);
 
     this->program_configs_[programmable_core_type_index].sem_offset = base_offset;
     this->program_configs_[programmable_core_type_index].sem_size = sem_size;
@@ -945,11 +977,11 @@ void Program::finalize() {
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         uint32_t offset = 0;
         offset = finalize_rt_args(index, offset);
-        TT_ASSERT(offset == align(offset, L1_ALIGNMENT));
+        TT_ASSERT(offset == align(offset, hal.get_alignment(HalMemType::L1)));
         offset = finalize_sems(index, offset);
-        TT_ASSERT(offset == align(offset, L1_ALIGNMENT));
+        TT_ASSERT(offset == align(offset, hal.get_alignment(HalMemType::L1)));
         offset = finalize_cbs(index, offset);
-        TT_ASSERT(offset == align(offset, L1_ALIGNMENT));
+        TT_ASSERT(offset == align(offset, hal.get_alignment(HalMemType::L1)));
         this->get_program_config_size(index) = offset;
     }
 
@@ -1018,6 +1050,7 @@ void Program::compile(Device *device, bool fd_bootloader_mode) {
                     JitBuildOptions build_options(device->build_env());
                     kernel->set_build_options(build_options);
                     this->set_cb_data_fmt(device, kernel->logical_coreranges(), build_options);
+                    this->set_cb_tile_dims(device, kernel->logical_coreranges(), build_options);
 
                     auto kernel_hash = KernelCompileHash(kernel, build_options, device->build_key());
                     std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";

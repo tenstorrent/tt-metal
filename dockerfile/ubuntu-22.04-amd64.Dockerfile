@@ -8,7 +8,7 @@ ENV DOXYGEN_VERSION=1.9.6
 RUN apt update -y && apt install software-properties-common gpg-agent -y
 
 # add custom repo
-RUN add-apt-repository ppa:deadsnakes/ppa 
+RUN add-apt-repository ppa:deadsnakes/ppa
 
 # Install build and runtime deps
 COPY /scripts/docker/requirements-${UBUNTU_VERSION}.txt /opt/tt_metal_infra/scripts/docker/requirements.txt
@@ -104,5 +104,7 @@ RUN update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 12
 
 RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 11
 RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12
+
+RUN mkdir -p /usr/app
 
 # CMD ["tail", "-f", "/dev/null"]

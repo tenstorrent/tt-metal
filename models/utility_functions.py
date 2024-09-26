@@ -290,7 +290,7 @@ def pad_by_zero(
 
 
 def unpad_from_zero(x, desired_shape):
-    if x.get_legacy_shape()[-1] == desired_shape[-1] and x.get_legacy_shape()[-2] == desired_shape[-2]:
+    if x.shape.with_tile_padding()[-1] == desired_shape[-1] and x.shape.with_tile_padding()[-2] == desired_shape[-2]:
         x = tt2torch_tensor(x)
     else:
         x = x.cpu()
@@ -299,10 +299,10 @@ def unpad_from_zero(x, desired_shape):
         x = x.unpad(
             (0, 0, 0, 0),
             (
-                desired_shape[0] - 1,
-                desired_shape[1] - 1,
-                desired_shape[2] - 1,
-                desired_shape[3] - 1,
+                desired_shape[0],
+                desired_shape[1],
+                desired_shape[2],
+                desired_shape[3],
             ),
         )
 

@@ -158,72 +158,92 @@ Tensor _logical_xor(const Tensor& input_a, const Tensor& input_b, const std::opt
     return result;
 }
 
-Tensor _div_overload(const Tensor& input_a, float value, bool accurate_mode, const std::string& round_mode, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ExecuteDiv::invoke(uint8_t queue_id, const Tensor& input, float value, bool accurate_mode, const std::string& round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
     TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
-    Tensor result = ttnn::multiply(input_a, (1.0f/value), std::nullopt, output_mem_config);
+    output_tensor = output_tensor.value_or(ttnn::zeros_like(input));
+    ttnn::multiply(queue_id, input, (1.0f/value), std::nullopt, output_mem_config, output_tensor);
     if(round_mode == "trunc"){
-        result = ttnn::trunc(result);
+        ttnn::trunc(queue_id, output_tensor.value(), output_mem_config, output_tensor);
     }
     else if(round_mode == "floor"){
-        result = ttnn::floor(result);
+        ttnn::floor(queue_id, output_tensor.value(), output_mem_config, output_tensor);
     }
-    return result;
+    return output_tensor.value();
 }
 
-Tensor _div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, const std::string& round_mode, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ExecuteDiv::invoke(const Tensor& input, float value, bool accurate_mode, const std::string& round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
+   return ExecuteDiv::invoke(DefaultQueueId, input, value, accurate_mode, round_mode, output_mem_config, output_tensor);
+}
+
+Tensor ExecuteDiv::invoke(uint8_t queue_id, const Tensor& input_a, const Tensor& input_b, bool accurate_mode, const std::string& round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
     TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
+    output_tensor = output_tensor.value_or(ttnn::empty_like(input_a));
     auto arch = input_a.device()->arch();
     if (arch == tt::ARCH::WORMHOLE_B0) {
         DataType input_dtype = input_a.get_dtype();
-        Tensor a = typecast(input_a, DataType::FLOAT32);
-        Tensor b = typecast(input_b, DataType::FLOAT32);
-        Tensor result = ttnn::divide(a, b);
+        Tensor a = typecast(queue_id, input_a, DataType::FLOAT32);
+        Tensor b = typecast(queue_id, input_b, DataType::FLOAT32);
+        Tensor result = ttnn::divide(queue_id, a, b);
 
         if(round_mode == "trunc"){
-            result = ttnn::trunc(result);
+            result = ttnn::trunc(queue_id, result);
         }
         else if(round_mode == "floor"){
-            result = ttnn::floor(result);
+            result = ttnn::floor(queue_id, result);
         }
 
         if (accurate_mode == false) {  // If input_b is non-zero tensor
-            return typecast(result, input_dtype);
+            return typecast(queue_id, result, input_dtype, std::nullopt, output_tensor);
         }
 
-        Tensor t_inf = ttnn::full_like(input_a, std::numeric_limits<float>::infinity());
-        Tensor t_nan = ttnn::full_like(input_a, std::nanf(""));
-        return typecast(where(
-            ttnn::eqz(input_b, output_mem_config),
+        float t_nan = std::nanf("");
+        float t_inf = std::numeric_limits<float>::infinity();
+        typecast(queue_id, where(
+            queue_id,
+            ttnn::eqz(queue_id, input_b, output_mem_config),
             ttnn::where(
-                ttnn::eqz(input_a, output_mem_config),
+                queue_id,
+                ttnn::eqz(queue_id, input_a, output_mem_config),
                 t_nan,
-                ttnn::multiply(t_inf, ttnn::sign(input_a, output_mem_config), std::nullopt, output_mem_config)),
+                ttnn::multiply(queue_id, ttnn::sign(queue_id, input_a, output_mem_config), t_inf, std::nullopt, output_mem_config)),
             result),
-            input_dtype);
-    } else {
-        Tensor result = ttnn::divide(input_a, input_b);
+            input_dtype,
+            std::nullopt,
+            output_tensor);
+        return output_tensor.value();
+    }
+    else {
+        ttnn::divide(queue_id, input_a, input_b, std::nullopt, std::nullopt, output_tensor);
 
         if(round_mode == "trunc"){
-            result = ttnn::trunc(result);
+            ttnn::trunc(queue_id, output_tensor.value(), output_mem_config, output_tensor);
         }
         else if(round_mode == "floor"){
-            result = ttnn::floor(result);
+            ttnn::floor(queue_id, output_tensor.value(), output_mem_config, output_tensor);
         }
 
         if (accurate_mode == false) {  // If input_b is non-zero tensor
-            return result;
+            return output_tensor.value();
         }
 
-        Tensor t_inf = ttnn::full_like(input_a, std::numeric_limits<float>::infinity());
-        Tensor t_nan = ttnn::full_like(input_a, std::nanf(""));
+        float t_nan = std::nanf("");
+        float t_inf = std::numeric_limits<float>::infinity();
         return ttnn::where(
-            ttnn::eqz(input_b, output_mem_config),
+            queue_id,
+            ttnn::eqz(queue_id, input_b, output_mem_config),
             ttnn::where(
-                ttnn::eqz(input_a, output_mem_config),
+                queue_id,
+                ttnn::eqz(queue_id, input_a, output_mem_config),
                 t_nan,
-                ttnn::multiply(t_inf, ttnn::sign(input_a, output_mem_config), std::nullopt, output_mem_config)),
-            result);
+                ttnn::multiply(queue_id, ttnn::sign(input_a, output_mem_config), t_inf, std::nullopt, output_mem_config)),
+            output_tensor.value(),
+            output_mem_config,
+            output_tensor);
     }
+}
+
+Tensor ExecuteDiv::invoke(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, const std::string& round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
+   return ExecuteDiv::invoke(DefaultQueueId, input_a, input_b, accurate_mode, round_mode, output_mem_config, output_tensor);
 }
 
 Tensor _div_no_nan_overload(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
@@ -251,7 +271,6 @@ Tensor ExecuteBinaryRemainder::invoke(const Tensor& input_a, const Tensor& input
     result = ttnn::where(ttnn::eq(a, b, std::nullopt, output_mem_config), ttnn::full_like(input_a, 0.0f), result);
     return typecast(result, input_dtype);
 }
-
 
 Tensor ExecuteBinaryRemainder::invoke(const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
     return ttnn::unary_remainder(input, scalar);
@@ -378,6 +397,35 @@ Tensor _polyval(const Tensor& input_a, const std::vector<float>& coeffs, const s
     }
     Tensor final_tensor = ttnn::add(result, coeffs.back(), std::nullopt, output_mem_config);
     return final_tensor;
+}
+
+Tensor ExecuteGCD::invoke(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor input_a_abs = ttnn::abs(input_a);
+    Tensor input_b_abs = ttnn::abs(input_b);
+    Tensor a_gt_b = ttnn::gt(input_a_abs, input_b_abs);
+    Tensor min = ttnn::where(a_gt_b, input_b_abs, input_a_abs);
+    Tensor max = ttnn::where(a_gt_b, input_a_abs, input_b_abs);
+    a_gt_b.deallocate();
+    // https://en.wikipedia.org/wiki/Lam%C3%A9%27s_theorem
+    // While 186 is the theoretical maximum iterations for numbers within the floating point range according to Lame's
+    // theorem, in practice when evaluating gcd of consecutive Fibonacci numbers coerced to floating point, the
+    // maximum number of iterations reached is only 14 because the remainder converges to 0 much more quickly. In
+    // addition, limited precision in bfloat16 format decreases support for input to the range [-1024, 1024]
+    constexpr std::size_t max_iterations = 14;
+    for (std::size_t iteration = 0; iteration < max_iterations; ++iteration) {
+        Tensor isz = ttnn::eqz(min);
+        Tensor rem = ttnn::remainder(max, ttnn::where(isz, isz, min));
+        max = ttnn::where(isz, max, min);
+        min = rem;
+    }
+    return max;
+}
+
+Tensor ExecuteLCM::invoke(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor val = ttnn::multiply(input_a, input_b, std::nullopt, output_mem_config);
+    Tensor tmp_result = ttnn::gcd(input_a, input_b);
+    Tensor result = ttnn::div(val, tmp_result, false, "None", output_mem_config);
+    return ttnn::abs(result);
 }
 
 } // namespace ttnn::operations::binary

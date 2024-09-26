@@ -72,25 +72,41 @@ struct ExecuteDivLikeOps
     }
 };
 
-template <BinaryCompositeOpType binary_comp_op_type>
-struct ExecuteBinaryCompositeOpsDiv
+struct ExecuteDiv
 {
     static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         bool accurate_mode = false,
         const std::string& round_mode = "None",
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return OpHandler<binary_comp_op_type>::handle(input_tensor_a, input_tensor_b, accurate_mode, round_mode, memory_config);
-    }
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
+
     static Tensor invoke(
-        const Tensor& input_tensor_a,
+        const Tensor& input_tensor,
         float value,
         bool accurate_mode = false,
         const std::string& round_mode = "None",
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return OpHandler<binary_comp_op_type>::handle(input_tensor_a, value, accurate_mode, round_mode, memory_config);
-    }
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        bool accurate_mode = false,
+        const std::string& round_mode = "None",
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        float value,
+        bool accurate_mode = false,
+        const std::string& round_mode = "None",
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 
 template <BinaryOpType binary_op_type>
@@ -185,7 +201,21 @@ struct ExecuteBinaryRemainder
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
-}  // namespace binary
+struct ExecuteLCM {
+    static Tensor invoke(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+};
+
+struct ExecuteGCD {
+    static Tensor invoke(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+};
+
+} // namespace binary
 }  // namespace operations
 
 constexpr auto hypot = ttnn::register_operation_with_auto_launch_op<
@@ -226,7 +256,7 @@ constexpr auto fmod = ttnn::register_operation_with_auto_launch_op<
     operations::binary::ExecuteBinaryFmod>();
 constexpr auto div = ttnn::register_operation_with_auto_launch_op<
     "ttnn::div",
-    operations::binary::ExecuteBinaryCompositeOpsDiv<operations::binary::BinaryCompositeOpType::DIV>>();
+    operations::binary::ExecuteDiv>();
 constexpr auto div_no_nan = ttnn::register_operation_with_auto_launch_op<
     "ttnn::div_no_nan",
     operations::binary::ExecuteDivLikeOps<operations::binary::BinaryCompositeOpType::DIV_NO_NAN>>();
@@ -248,5 +278,11 @@ constexpr auto outer = ttnn::register_operation_with_auto_launch_op<
 constexpr auto polyval = ttnn::register_operation_with_auto_launch_op<
     "ttnn::polyval",
     operations::binary::ExecuteBinaryCompositeOpsPolyval<operations::binary::BinaryCompositeOpType::POLYVAL>>();
+constexpr auto gcd = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::gcd",
+    operations::binary::ExecuteGCD>();
+constexpr auto lcm = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::lcm",
+    operations::binary::ExecuteLCM>();
 
 }  // namespace ttnn

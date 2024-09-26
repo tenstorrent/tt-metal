@@ -6,7 +6,7 @@ import ttnn
 
 
 def default_device():
-    device = ttnn.open_device(0)
+    device = ttnn.open_device(device_id=0)
 
     yield (device, "default")
 

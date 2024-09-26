@@ -20,7 +20,9 @@ void ShardedToInterleavedDeviceOperation::validate(const std::vector<Tensor>& in
     TT_FATAL(input_tensor.memory_config().buffer_type == BufferType::L1, "Input tensor must be in L1");
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Output memory config must be Interleaved");
     if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        TT_FATAL((*input_tensor.memory_config().shard_spec).shape[1] * input_tensor.element_size() % (this->output_mem_config.buffer_type == BufferType::DRAM ? DRAM_ALIGNMENT : L1_ALIGNMENT) == 0, "Shard page size must be aligned to 16B for L1 Tensor, or 32B for DRAM tensor");
+        uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
+        uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+        TT_FATAL((*input_tensor.memory_config().shard_spec).shape[1] * input_tensor.element_size() % (this->output_mem_config.buffer_type == BufferType::DRAM ? dram_alignment : l1_alignment) == 0, "Shard page size must be aligned to {}B for L1 Tensor, or {}B for DRAM tensor", l1_alignment, dram_alignment);
     }
     if (input_tensor.get_dtype() != this->output_dtype) {
         TT_FATAL(input_tensor.get_layout() == Layout::TILE, "If diff output type, tensor must be TILED");
