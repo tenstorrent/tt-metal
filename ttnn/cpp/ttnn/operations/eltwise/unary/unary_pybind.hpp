@@ -1832,7 +1832,6 @@ void py_module(py::module& module) {
            +----------------------------+---------------------------------+-------------------+
 
         )doc");
-
     detail::bind_unary_composite(module, ttnn::digamma, R"doc(Performs digamma function on :attr:`input_tensor`.)doc", "[supported for value greater than 0]");
     detail::bind_unary_composite(module, ttnn::lgamma, R"doc(Performs lgamma function on :attr:`input_tensor`.)doc", "[supported for value greater than 0]");
     detail::bind_unary_composite(module, ttnn::log1p, R"doc(Performs log1p function on :attr:`input_tensor`.)doc", "[supported range -1 to 1]",
@@ -1846,7 +1845,16 @@ void py_module(py::module& module) {
 
         )doc");
     detail::bind_unary_composite(module, ttnn::mish, R"doc(Performs mish function on :attr:`input_tensor`, not supported for grayskull.)doc");
-    detail::bind_unary_composite(module, ttnn::multigammaln, R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc", "[supported range 1.6 to inf]");
+    detail::bind_unary_composite(module, ttnn::multigammaln, R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc", "[supported range 1.6 to inf]",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        
+        )doc");
     detail::bind_unary_composite(module, ttnn::sinh, R"doc(Performs sinh function on :attr:`input_tensor`.)doc", "[supported range -88 to 88]",
         R"doc(Supported dtypes, layouts, and ranks:
 
