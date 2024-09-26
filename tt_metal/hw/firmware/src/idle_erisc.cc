@@ -144,8 +144,8 @@ int main() {
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
                 launch_msg_address->kernel_config.enables = 0;
                 uint64_t dispatch_addr =
-                    NOC_XY_ADDR(NOC_X(mailboxes->go_message.master_x),
-                        NOC_Y(mailboxes->go_message.master_x), DISPATCH_MESSAGE_ADDR);
+                    NOC_XY_ADDR(NOC_X(noc_index, mailboxes->go_message.master_x),
+                        NOC_Y(noc_index, mailboxes->go_message.master_x), DISPATCH_MESSAGE_ADDR);
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                 noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31 /*wrap*/, false /*linked*/);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
