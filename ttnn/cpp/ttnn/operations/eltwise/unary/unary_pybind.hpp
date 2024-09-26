@@ -76,15 +76,13 @@ void bind_unary_operation(py::module& module, const unary_operation_t& operation
 
 
 template <typename unary_operation_t>
-void bind_unary_operation_overload_complex(py::module& module, const unary_operation_t& operation, const std::string& info_doc = "" ) {
+void bind_unary_operation_overload_complex(py::module& module, const unary_operation_t& operation, const std::string& math, const std::string& info_doc = "" ) {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
 
-        {2}
-
         .. math::
-            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
+            {2}
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
@@ -97,12 +95,16 @@ void bind_unary_operation_overload_complex(py::module& module, const unary_opera
         Returns:
             ttnn.Tensor: the output tensor.
 
+        Note:
+            {3}
+
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
             >>> output = {1}(tensor)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
+        math,
         info_doc);
 
     bind_registered_operation(
@@ -1325,7 +1327,13 @@ void bind_dropout(py::module& module, const unary_operation_t& operation) {
 }  // namespace detail
 
 void py_module(py::module& module) {
-    detail::bind_unary_operation_overload_complex(module, ttnn::abs);
+    detail::bind_unary_operation_overload_complex(module, ttnn::abs, R"doc(\mathrm{{output\_tensor}}_i = abs(\mathrm{{input\_tensor}}_i))doc",
+    R"doc(Supported dtypes, layouts, and ranks:
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+)doc");
     detail::bind_unary_operation(module, ttnn::acos, R"doc(\mathrm{{output\_tensor}}_i = acos(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::asin, R"doc(\mathrm{{output\_tensor}}_i = asin(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::atan, R"doc(\mathrm{{output\_tensor}}_i = atan(\mathrm{{input\_tensor}}_i))doc");
