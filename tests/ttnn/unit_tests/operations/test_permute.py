@@ -120,3 +120,13 @@ def test_permute_negative_dim(device, h, w):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+def test_permute_bfloat8(device):
+    input_a = torch.randn(1, 160, 32, 32)
+    torch_output = torch.permute(input_a, (0, 2, 3, 1))
+
+    tt_input = ttnn.from_torch(input_a, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    tt_output = ttnn.permute(tt_input, (0, 2, 3, 1))
+    tt_output = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_output, 0.9999)

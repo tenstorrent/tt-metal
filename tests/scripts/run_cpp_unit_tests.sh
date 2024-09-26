@@ -7,6 +7,11 @@ if [[ -z "$TT_METAL_HOME" ]]; then
     exit 1
 fi
 
+kernel_path="/tmp/kernels"
+mkdir -p $kernel_path
+TT_METAL_KERNEL_PATH=$kernel_path ./build/test/tt_metal/test_kernel_path_env_var
+rm -rf $kernel_path
+
 if [[ ! -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
     ./build/test/tt_metal/unit_tests
     env python tests/scripts/run_tt_metal.py --dispatch-mode slow

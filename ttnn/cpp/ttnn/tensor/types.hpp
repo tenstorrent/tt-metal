@@ -17,14 +17,13 @@
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/cpp/ttnn/tensor/enum_types.hpp"
 
 namespace tt {
 
 namespace tt_metal {
 
 static constexpr std::uint8_t VERSION_ID = 3;
-
-enum class Layout { ROW_MAJOR = 0, TILE = 1, INVALID = 2 };
 
 enum class DataType {
     BFLOAT16 = 0,

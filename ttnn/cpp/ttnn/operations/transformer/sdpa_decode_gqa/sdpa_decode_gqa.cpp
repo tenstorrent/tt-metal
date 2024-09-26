@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
 #include "sdpa_decode_gqa.hpp"
 
-#include "device/sdpa_decode_gqa_op.hpp"
+#include "ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_op.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
@@ -48,32 +47,23 @@ ttnn::Tensor ExecuteScaledDotProductAttentionGQADecode::invoke(
 
     auto arch = input_tensor_q.storage_type() == StorageType::DEVICE ? input_tensor_q.device()->arch()
                                                                      : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-    // formatting input tensors
-    auto q_shape = input_tensor_q.get_shape();
-    auto k_shape = input_tensor_k.get_shape();
-    uint32_t Bkv = k_shape[0];
-    uint32_t Bq = transpose_q.value() ? q_shape[2] : q_shape[1];
-    uint32_t NQH = transpose_q.value() ? q_shape[1] : q_shape[2];
-    uint32_t NKH = k_shape[1];
-    uint32_t D = k_shape[3];
-    uint32_t NG = NQH / NKH;
 
-    // Q (if transpose q): 1, heads, batch, dim -> 1, batch, heads, dim -> 1, batch*k_heads, q_heads/k_heads, dim
-    // K: batch, k_heads, seqlen, dim -> 1, batch*k_heads, seqlen, dim
-
-    auto input_tensor_q_gqa =
-        ttnn::to_layout(input_tensor_q, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
+    // Q (if transpose q): 1, heads, batch, dim -> 1, batch, heads, dim
+    auto input_tensor_q_gqa = input_tensor_q;
     if (transpose_q.value()) {
-        input_tensor_q_gqa = ttnn::transpose(input_tensor_q_gqa, 1, 2);
-    }
-    input_tensor_q_gqa = ttnn::reshape(input_tensor_q_gqa, ttnn::Shape{std::array<uint32_t, 4>{1, Bq * NKH, NG, D}});
-    input_tensor_q_gqa =
-        ttnn::to_layout(input_tensor_q_gqa, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
+        // formatting input tensors
+        auto q_shape = input_tensor_q.get_shape();
+        uint32_t Bq = transpose_q.value() ? q_shape[2] : q_shape[1];
+        uint32_t NQH = transpose_q.value() ? q_shape[1] : q_shape[2];
+        uint32_t D = q_shape[3];
 
-    auto input_tensor_k_gqa =
-        ttnn::reshape(input_tensor_k, ttnn::Shape{std::array<uint32_t, 4>{1, Bkv * NKH, k_shape[2], D}});
-    auto input_tensor_v_gqa =
-        ttnn::reshape(input_tensor_v, ttnn::Shape{std::array<uint32_t, 4>{1, Bkv * NKH, k_shape[2], D}});
+        input_tensor_q_gqa =
+        ttnn::to_layout(input_tensor_q, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
+        input_tensor_q_gqa = ttnn::transpose(input_tensor_q_gqa, 1, 2);
+        input_tensor_q_gqa = ttnn::reshape(input_tensor_q_gqa, ttnn::Shape{std::array<uint32_t, 4>{1, Bq, NQH, D}});
+        input_tensor_q_gqa =
+        ttnn::to_layout(input_tensor_q_gqa, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
+    }
 
     uint32_t k_chunk_size;
     // since we can't get the max cur_pos value from the tensor, we default to 512
@@ -89,25 +79,22 @@ ttnn::Tensor ExecuteScaledDotProductAttentionGQADecode::invoke(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
     auto output_tensors = operation::run(
-        ScaledDotProductAttentionGQADecode{
+        ScaledDotProductAttentionDecode{
             .cur_pos = cur_pos,
-            .share_cache = share_cache,
             .scale = scale,
             .output_mem_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
             .program_config = program_config,
             .compute_kernel_config = kernel_config_val,
-            .k_chunk_size = k_chunk_size},
-        {input_tensor_q_gqa, input_tensor_k_gqa, input_tensor_v_gqa},
+            .k_chunk_size = k_chunk_size,
+            .paged_attention = false,
+            .share_cache = share_cache},
+        {input_tensor_q_gqa, input_tensor_k, input_tensor_v},
         {cur_pos_tensor, std::nullopt},
         {},
         queue_id);
 
     // formatting output tensor
     auto output_tensor = output_tensors.at(0);
-    output_tensor =
-        ttnn::to_layout(output_tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
-    output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{std::array<uint32_t, 4>{1, Bq, NQH, D}});
-    output_tensor = ttnn::to_layout(output_tensor, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
     return output_tensor;
 }
 

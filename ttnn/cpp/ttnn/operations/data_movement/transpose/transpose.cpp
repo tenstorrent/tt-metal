@@ -9,6 +9,7 @@
 #include "device/transpose_op.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/cpp/ttnn/operations/copy.hpp"
 
 
 namespace ttnn::operations::data_movement {
@@ -24,16 +25,10 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
             break;
         case TransposeOpDim::NH:
             return ttnn::permute((const ttnn::Tensor)a, std::vector<int64_t>({2, 1, 0, 3}), output_mem_config);
-            pad_n = true;
-            break;
         case TransposeOpDim::NW:
             return ttnn::permute((const ttnn::Tensor)a, std::vector<int64_t>({3, 1, 2, 0}), output_mem_config);
-            pad_n = true;
-            break;
         case TransposeOpDim::CW:
             return ttnn::permute((const ttnn::Tensor)a, std::vector<int64_t>({0, 3, 2, 1}), output_mem_config);
-            pad_c = true;
-            break;
         default:
             break;
     }
@@ -54,7 +49,15 @@ ttnn::Tensor ExecuteTranspose::invoke(
     const int64_t& dim1,
     const int64_t& dim2,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+
+    uint32_t normalized_dim1 = input_tensor.get_legacy_shape().get_normalized_index(dim1);
+    uint32_t normalized_dim2 = input_tensor.get_legacy_shape().get_normalized_index(dim2);
+    bool wh = normalized_dim2 == 2 && normalized_dim1 == 0;
+    bool typecast = input_tensor.get_dtype() == DataType::BFLOAT8_B and input_tensor.get_layout() == Layout::TILE and !wh and !input_tensor.is_sharded();
+    Tensor b = typecast ? ttnn::typecast(input_tensor, DataType::BFLOAT16) : input_tensor;
+
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({b}))};
+
     operation::launch_with_autoformat(
         [dim1, dim2, memory_config_arg] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto& a = input_tensors.at(0);
@@ -62,7 +65,7 @@ ttnn::Tensor ExecuteTranspose::invoke(
             uint32_t normalized_dim1 = a.get_legacy_shape().get_normalized_index(dim1);
             uint32_t normalized_dim2 = a.get_legacy_shape().get_normalized_index(dim2);
 
-            TT_FATAL( normalized_dim1 <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
+            TT_FATAL(normalized_dim1 <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
             TT_FATAL(normalized_dim2 <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
 
             if (
@@ -72,13 +75,13 @@ ttnn::Tensor ExecuteTranspose::invoke(
                 return {ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(a, memory_config)};
             }
 
-            if ( normalized_dim1 > normalized_dim2 ) {
+            if (normalized_dim1 > normalized_dim2 ) {
                 std::swap(normalized_dim1, normalized_dim2);
             }
 
             TransposeOpDim transpose_dim = TransposeOpDim::NW;
 
-            if ( normalized_dim2 == 3 && normalized_dim1 == 0 ) {
+            if (normalized_dim2 == 3 && normalized_dim1 == 0 ) {
                 transpose_dim = TransposeOpDim::NW;
             } else if (normalized_dim2 == 3 && normalized_dim1 == 1) {
             transpose_dim = TransposeOpDim::CW;
@@ -94,8 +97,9 @@ ttnn::Tensor ExecuteTranspose::invoke(
                 TT_ASSERT(false, "Unsupported transpose dims");
             }
             return {detail::transpose_(a, transpose_dim, memory_config)};
-        }, {input_tensor}, output_tensors);
-    return output_tensors.at(0);
+        }, {b}, output_tensors);
+
+    return typecast ? ttnn::typecast(output_tensors.at(0), DataType::BFLOAT8_B) : output_tensors.at(0);
 
 }
 
