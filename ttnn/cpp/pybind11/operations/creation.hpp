@@ -22,18 +22,26 @@ template <typename creation_operation_t>
 void bind_full_operation(py::module& module, const creation_operation_t& operation) {
     auto doc = fmt::format(
         R"doc(
-        Creates a tensor of the specified shape and fills it with the specified value.
+        Creates a tensor of the specified shape and fills it with the specified scalar value.
 
         Args:
             shape (ttnn.Shape): The shape of the tensor.
             fill_value (float): The value to fill the tensor with.
             dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `None`.
             layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `None`.
-            device (ttnn.Device, optional): The device on which the tensor will be allocated. Defaults to None.
-            memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to None.
+            device (ttnn.Device, optional): The device on which the tensor will be allocated. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
-            ttnn.Tensor: A filled tensor.
+            ttnn.Tensor: A filled tensor of specified shape and value.
+
+        Example:
+            >>> filled_tensor = ttnn.full(shape=[2, 3], fill_value=7.0, dtype=ttnn.bfloat16)
+            >>> print(filled_tensor)
+            ttnn.Tensor([[[[ 7.0,  7.0,  7.0],
+                            [ 7.0,  7.0,  7.0]]]], shape=Shape([2, 3]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
         )doc",
         operation.base_name());
 
@@ -84,22 +92,31 @@ void bind_full_operation(py::module& module, const creation_operation_t& operati
 }
 
 template <typename creation_operation_t>
-void bind_full_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation) {
+void bind_full_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation, const std::string& value_string) {
     auto doc = fmt::format(
         R"doc(
-        Creates a tensor with the specified shape and fills it with the value of {0}.
+        Creates a tensor with the specified shape and fills it with the value of {1}.
 
         Args:
             shape (ttnn.Shape): The shape of the tensor.
             dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `None`.
             layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `None`.
-            device (ttnn.Device, optional): The device on which the tensor will be allocated. Defaults to None.
-            memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to None.
+            device (ttnn.Device, optional): The device on which the tensor will be allocated. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
 
         Returns:
-            ttnn.Tensor: A filled tensor.
+            ttnn.Tensor: A tensor filled with {1}.
+
+        Example:
+            >>> tensor = ttnn.{0}(shape=[1, 2, 2, 2], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            >>> print(tensor)
+            ttnn.Tensor([[[[{1}, {1}],
+                            [{1}, {1}]],
+                            [[{1}, {1}],
+                            [{1}, {1}]]]]], shape=Shape([1, 2, 2, 2]), dtype=DataType::BFLOAT16, layout=Layout::TILE_LAYOUT)
         )doc",
-        operation.base_name());
+        operation.base_name(),
+        value_string);
 
     bind_registered_operation(
         module,
@@ -125,18 +142,27 @@ template <typename creation_operation_t>
 void bind_full_like_operation(py::module& module, const creation_operation_t& operation) {
     auto doc = fmt::format(
         R"doc(
-        Creates a tensor of the same shape as the input tensor and fills it with the specified value.
+        Creates a tensor of the same shape as the input tensor and fills it with the specified scalar value. The data type, layout, device, and memory configuration of the resulting tensor can be specified.
 
         Args:
             tensor (ttnn.Tensor): The tensor to use as a template for the shape of the new tensor.
-            fill_value (float): The value to fill the tensor with.
+            fill_value (float | int): The value to fill the tensor with.
             dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `None`.
             layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `None`.
-            device (ttnn.Device, optional): The device on which the tensor will be allocated. Defaults to None.
-            memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to None.
+            device (ttnn.Device, optional): The device on which the tensor will be allocated. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
             ttnn.Tensor: A filled tensor.
+
+        Example:
+            >>> tensor = ttnn.zeros(shape=(2, 3), dtype=ttnn.bfloat16)
+            >>> filled_tensor = ttnn.fill_like(tensor, fill_value=5.0, dtype=ttnn.bfloat16)
+            >>> print(filled_tensor)
+            ttnn.Tensor([[[[ 5.0,  5.0,  5.0],
+                            [ 5.0,  5.0,  5.0]]]], shape=Shape([2, 3]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
         )doc",
         operation.base_name());
 
@@ -187,22 +213,34 @@ void bind_full_like_operation(py::module& module, const creation_operation_t& op
 }
 
 template <typename creation_operation_t>
-void bind_full_like_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation) {
+void bind_full_like_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation, const std::string& value_string) {
     auto doc = fmt::format(
         R"doc(
-        Creates a tensor of the same shape as the input tensor and fills it with the value of {0}.
+        Creates a tensor of the same shape as the input tensor and fills it with the value of {1}. The data type, layout, device, and memory configuration of the resulting tensor can be specified.
 
         Args:
             tensor (ttnn.Tensor): The tensor to use as a template for the shape of the new tensor.
             dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `None`.
             layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `None`.
-            device (ttnn.Device, optional): The device on which the tensor will be allocated. Defaults to None.
-            memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to None.
+            device (ttnn.Device, optional): The device on which the tensor will be allocated. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
-            ttnn.Tensor: A filled tensor.
+            ttnn.Tensor: A tensor filled with {1}.
+
+        Example:
+            >>> tensor = ttnn.{0}(ttnn.from_torch(torch.randn(1, 2, 2, 2), ttnn.bfloat16, ttnn.TILE_LAYOUT)
+            >>> output_tensor = ttnn.{0}(tensor=input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            >>> print(output_tensor)
+            ttnn.Tensor([[[[{1}, {1}],
+                            [{1}, {1}]],
+                            [[{1}, {1}],
+                            [{1}, {1}]]]]], shape=Shape([1, 2, 2, 2]), dtype=DataType::BFLOAT16, layout=Layout::TILE_LAYOUT)
         )doc",
-        operation.base_name());
+        operation.base_name(),
+        value_string);
 
     bind_registered_operation(
         module,
@@ -276,7 +314,24 @@ void bind_arange_operation(py::module& module, const creation_operation_t& opera
 
 void bind_empty_operation(py::module& module) {
     auto doc = fmt::format(
-        R"doc({0}(shape: List[int], dtype: ttnn.DataType, layout: ttnn.Layout, device: ttnn.Device, memory_config: ttnn.MemoryConfig)doc",
+        R"doc(
+        Creates a device tensor with uninitialized values of the specified shape, data type, layout, and memory configuration.
+
+        Args:
+            shape (List[int]): The shape of the tensor to be created.
+            dtype (ttnn.DataType, optional): The tensor data type. Defaults to `ttnn.bfloat16`.
+            layout (ttnn.Layout, optional): The tensor layout. Defaults to `ttnn.ROW_MAJOR`.
+            device (ttnn.Device): The device where the tensor will be allocated.
+            memory_config (ttnn.MemoryConfig, optional): The memory configuration for the operation. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
+
+        Returns:
+            ttnn.Tensor: The output uninitialized tensor.
+
+        Example:
+            >>> tensor = ttnn.empty(shape=[2, 3], device=device)
+            >>> print(tensor)
+            ttnn.Tensor([[[[0.9, 0.21, 0.5], [0.67, 0.11, 0.30]]]], shape=Shape([2, 3]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
+        )doc",
         ttnn::empty.base_name());
 
     using EmptyType = decltype(ttnn::empty);
@@ -296,13 +351,33 @@ void bind_empty_operation(py::module& module) {
             py::arg("shape"),
             py::arg("dtype") = DataType::BFLOAT16,
             py::arg("layout") = Layout::ROW_MAJOR,
-            py::arg("device") = nullptr,
+            py::arg("device"),
             py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG});
 }
 
 void bind_empty_like_operation(py::module& module) {
     auto doc = fmt::format(
-        R"doc({0}(tensor: ttnn.Tensor, dtype: Optional[ttnn.DataType] = None, layout: Optional[ttnn.Layout] = None, device: Optional[ttnn.Device] = None, memory_config: Optional[ttnn.MemoryConfig] = None)doc",
+        R"doc(
+        Creates a new tensor with the same shape as the given `reference`, but without initializing its values. The data type, layout, device, and memory configuration of the new tensor can be specified.
+
+        Args:
+            reference (ttnn.Tensor): The reference tensor whose shape will be used for the output tensor.
+
+        Keyword Args:
+            dtype (ttnn.DataType, optional): The desired data type of the output tensor. Defaults to `ttnn.bfloat16`.
+            layout (ttnn.Layout, optional): The desired layout of the output tensor. Defaults to `ttnn.ROW_MAJOR`.
+            device (ttnn.Device, optional): The device where the output tensor will be allocated. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): The memory configuration for the operation. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
+
+        Returns:
+            ttnn.Tensor: The output uninitialized tensor with the same shape as the reference tensor.
+
+        Example:
+            >>> reference = ttnn.from_torch(torch.randn(2, 3), dtype=ttnn.bfloat16)
+            >>> tensor = ttnn.empty_like(reference, dtype=ttnn.float32)
+            >>> print(tensor)
+            ttnn.Tensor([[[[0.87, 0.45, 0.22], [0.60, 0.75, 0.25]]]], shape=Shape([2, 3]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+        )doc",
         ttnn::empty_like.base_name());
 
     using EmptyLikeType = decltype(ttnn::empty_like);
@@ -331,12 +406,12 @@ void bind_empty_like_operation(py::module& module) {
 
 void py_module(py::module& module) {
     detail::bind_full_operation(module, ttnn::full);
-    detail::bind_full_operation_with_hard_coded_value(module, ttnn::zeros);
-    detail::bind_full_operation_with_hard_coded_value(module, ttnn::ones);
+    detail::bind_full_operation_with_hard_coded_value(module, ttnn::zeros, "0.0");
+    detail::bind_full_operation_with_hard_coded_value(module, ttnn::ones, "1.0");
 
     detail::bind_full_like_operation(module, ttnn::full_like);
-    detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::zeros_like);
-    detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::ones_like);
+    detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::zeros_like, "0.0");
+    detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::ones_like, "1.0");
 
     detail::bind_arange_operation(module, ttnn::arange);
 
