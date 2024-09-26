@@ -56,7 +56,7 @@ SECTIONS
     KEEP (*(SORT_NONE(.fini)))
   } > REGION_CODE
 
-  l1_data SECTION_END(.fini):
+  l1_data :
   {
     *(l1_data)
   } > REGION_CODE
