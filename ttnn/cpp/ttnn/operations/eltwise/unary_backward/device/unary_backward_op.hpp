@@ -19,8 +19,6 @@ enum class UnaryBackwardOpType {
     EQ_BW,
     GT_BW,
     LGAMMA_BW,
-    HARDSIGMOID_BW,
-    COS_BW,
     ACOS_BW,
     ATAN_BW,
     RAD2DEG_BW,
@@ -98,8 +96,6 @@ std::vector<Tensor> _gt_bw( const Tensor& grad, const Tensor& input, float other
 
 std::vector<Tensor> _multigammaln_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _lgamma_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _hardsigmoid_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _cos_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 
 std::vector<Tensor> _add_bw( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 std::vector<Tensor> _eq_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
@@ -366,20 +362,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::LGAMMA_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
         return _lgamma_bw(grad, input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::HARDSIGMOID_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _hardsigmoid_bw(grad, input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::COS_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _cos_bw(grad, input, output_mem_config);
     }
 };
 

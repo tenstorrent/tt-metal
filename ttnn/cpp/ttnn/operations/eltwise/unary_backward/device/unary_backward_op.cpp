@@ -452,7 +452,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardFill::invoke(const Tensor
     return ExecuteUnaryBackwardFill::invoke(DefaultQueueId, grad, input, output_mem_config, input_grad);
 }
 
-std::vector<Tensor> _hardsigmoid_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+std::vector<Tensor> ExecuteUnaryBackwardHardsigmoid::invoke(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_a = ttnn::where(
         ttnn::logical_or(
@@ -469,7 +469,7 @@ std::vector<Tensor> _hardsigmoid_bw(const Tensor& grad, const Tensor& input, con
 
 // name: cos(Tensor self) -> Tensor
 // self: grad * -self.sin()
-std::vector<Tensor> _cos_bw(const Tensor& grad, const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
+std::vector<Tensor> ExecuteUnaryBackwardCos::invoke(const Tensor& grad, const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result =
         ttnn::multiply(grad, (ttnn::neg(ttnn::sin(input_tensor, output_mem_config), output_mem_config)), std::nullopt, output_mem_config);
