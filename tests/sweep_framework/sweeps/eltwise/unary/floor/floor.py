@@ -20,14 +20,6 @@ TIMEOUT = 30
 random.seed(0)
 
 
-def mesh_device_fixture():
-    device = ttnn.open_device(device_id=0)
-    assert ttnn.device.is_wormhole_b0(device), "This op is available for Wormhole_B0 only"
-    yield (device, "Wormhole_B0")
-    ttnn.close_device(device)
-    del device
-
-
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
@@ -43,10 +35,12 @@ parameters = {
 }
 
 
-def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    if not is_wormhole_b0():
-        return True, "Supported only for WH_B0"
-    return False, None
+def mesh_device_fixture():
+    device = ttnn.open_device(device_id=0)
+    assert ttnn.device.is_wormhole_b0(device), "This op is available for Wormhole_B0 only"
+    yield (device, "Wormhole_B0")
+    ttnn.close_device(device)
+    del device
 
 
 # This is the run instructions for the test, defined by the developer.
