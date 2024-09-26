@@ -43,7 +43,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
     origin_hw_vec.reserve(num_inputs);
 
     for (uint32_t j = 0; j < num_inputs; ++j) {
-        const auto& input_shape_without_padding = inputs.at(j).get_legacy_shape().without_padding();
+        const auto& input_shape_without_padding = inputs.at(j).get_shape();
         origin_hw_vec.emplace_back(input_shape_without_padding[2], input_shape_without_padding[3]);
     }
 

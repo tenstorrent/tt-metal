@@ -16,10 +16,10 @@ namespace data_movement {
 ttnn::Tensor ExecuteRepeatInterleave::invoke(const ttnn::Tensor& input_a, uint32_t repeat, int32_t dim, std::optional<MemoryConfig> output_mem_config) {
     std::vector<Tensor> combined_tensors;
     combined_tensors.reserve(repeat);
-    auto shape_wh = input_a.get_legacy_shape();
+    auto shape_wh = input_a.get_shape().with_tile_padding();
     MemoryConfig mem_config = output_mem_config.value_or(input_a.memory_config());
     // normalizing the negative dim
-    uint32_t normalized_dim = input_a.get_legacy_shape().get_normalized_index(dim);
+    uint32_t normalized_dim = input_a.get_shape().with_tile_padding().get_normalized_index(dim);
     // check if dim is 1 or 3
     if (normalized_dim & 1) {
         constexpr uint32_t tmp_dim = 2;

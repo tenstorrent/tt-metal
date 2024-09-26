@@ -23,13 +23,13 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &o
 
     Buffer *src_buffer = output_grad.buffer();
     Buffer *dst_buffer = bias_grad.buffer();
-    const auto &output_grad_shape_wo_padding = output_grad.get_legacy_shape().without_padding();
+    const auto &output_grad_shape_wo_padding = output_grad.get_shape();
     const bool do_mask_h = (output_grad_shape_wo_padding[-2] % TILE_HEIGHT) != 0;
     const uint32_t mask_h = do_mask_h ? output_grad_shape_wo_padding[-2] % TILE_HEIGHT : TILE_HEIGHT;
     const bool do_mask_w = (output_grad_shape_wo_padding[-1] % TILE_WIDTH) != 0;
     const uint32_t mask_w = do_mask_w ? output_grad_shape_wo_padding[-1] % TILE_WIDTH : TILE_WIDTH;
 
-    const auto &output_grad_shape = output_grad.get_legacy_shape();
+    const auto &output_grad_shape = output_grad.get_shape().with_tile_padding();
     uint32_t batch_num = output_grad.volume() / output_grad_shape[-2] / output_grad_shape[-1];
     uint32_t Ht = output_grad_shape[-2] / TILE_HEIGHT;
     uint32_t Wt = output_grad_shape[-1] / TILE_WIDTH;

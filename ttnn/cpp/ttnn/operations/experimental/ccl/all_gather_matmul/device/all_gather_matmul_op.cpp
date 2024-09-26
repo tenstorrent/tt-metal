@@ -34,7 +34,7 @@ void AllGatherMatmul::validate(const std::vector<Tensor> &input_tensors, const s
 
     // All Gather Matmul validate
     TT_FATAL(this->all_gather_struct.dim == 3, "AllGatherMatmul requires dim=3 for the AllGather operaitons.");
-    TT_FATAL(input_tensor.get_legacy_shape()[0] == 1 && input_tensor.get_legacy_shape()[1] == 1, "AllGatherMatmul requires input tensor to have batch size of 1.");
+    TT_FATAL(input_tensor.get_shape().with_tile_padding()[0] == 1 && input_tensor.get_shape().with_tile_padding()[1] == 1, "AllGatherMatmul requires input tensor to have batch size of 1.");
     std::visit([&] (const auto& config) {
         using ProgramConfigType = std::decay_t<decltype(config)>;
         if (not (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig> || std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>)) {

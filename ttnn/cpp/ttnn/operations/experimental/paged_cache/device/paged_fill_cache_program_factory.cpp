@@ -25,15 +25,15 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(const Tensor& cache_
     // input_tensor: [1, num_heads, input_seq_len, head_dim]
     // cache_tensor: [max_num_blocks, 1, block_size, head_dim]
     // page_table_tensor: [b, max_num_blocks_per_seq]
-    const uint32_t num_heads = input_tensor.get_legacy_shape()[1];
-    const uint32_t input_seq_len = input_tensor.get_legacy_shape()[2];
+    const uint32_t num_heads = input_tensor.get_shape().with_tile_padding()[1];
+    const uint32_t input_seq_len = input_tensor.get_shape().with_tile_padding()[2];
 
-    const uint32_t max_num_blocks = cache_tensor.get_legacy_shape()[0];
-    const uint32_t block_size = cache_tensor.get_legacy_shape()[2];
-    const uint32_t head_dim = cache_tensor.get_legacy_shape()[3];
+    const uint32_t max_num_blocks = cache_tensor.get_shape().with_tile_padding()[0];
+    const uint32_t block_size = cache_tensor.get_shape().with_tile_padding()[2];
+    const uint32_t head_dim = cache_tensor.get_shape().with_tile_padding()[3];
 
-    const uint32_t batch = page_table_tensor.get_legacy_shape()[0];
-    const uint32_t max_num_blocks_per_seq = page_table_tensor.get_legacy_shape()[1];
+    const uint32_t batch = page_table_tensor.get_shape().with_tile_padding()[0];
+    const uint32_t max_num_blocks_per_seq = page_table_tensor.get_shape().with_tile_padding()[1];
 
     const uint32_t input_seq_len_t = input_seq_len / TILE_HEIGHT;
     const uint32_t Wt = head_dim / TILE_WIDTH;

@@ -402,7 +402,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
     }
     if (needs_shard_or_reshard) {
         uint32_t input_num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
-        // TT_ASSERT(input_tensor.get_legacy_shape() == input_tensor.get_shape());
+        // TT_ASSERT(input_tensor.get_shape().with_tile_padding() == input_tensor.get_shape());
         uint32_t tensor_height = input_tensor.get_shape()[0] * input_tensor.get_shape()[1] * input_tensor.get_shape()[2];
         uint32_t input_tensor_height_snapped_to_tile = (conv_config.shard_layout == TensorMemoryLayout::WIDTH_SHARDED)? tensor_height : tt::round_up(tensor_height, input_num_cores_nhw * 32);
         TT_ASSERT(input_tensor_height_snapped_to_tile >= tensor_height);
@@ -497,13 +497,13 @@ void validate_weight_and_bias_tensors(
     TT_ASSERT(weight_tensor.get_layout() == Layout::ROW_MAJOR);
     TT_ASSERT(weight_tensor.get_shape().rank() == 4);
     // TODO: enable this assert
-    // TT_ASSERT(weight_tensor.get_shape() == weight_tensor.get_legacy_shape());
+    // TT_ASSERT(weight_tensor.get_shape() == weight_tensor.get_shape().with_tile_padding());
     if (bias_tensor.has_value()) {
         TT_ASSERT(!ttnn::has_storage_type_of(bias_tensor.value(), ttnn::DEVICE_STORAGE_TYPE));
         TT_ASSERT(bias_tensor.value().get_shape().rank() == 4);
         TT_ASSERT(bias_tensor.value().get_layout() == Layout::ROW_MAJOR);
         // TODO: enable this assert
-        // TT_ASSERT(bias_tensor.value().get_shape() == bias_tensor.value().get_legacy_shape());
+        // TT_ASSERT(bias_tensor.value().get_shape() == bias_tensor.value().get_shape().with_tile_padding());
     }
 }
 

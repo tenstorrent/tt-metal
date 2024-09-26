@@ -50,7 +50,7 @@ void MorehSGD::validate_with_output_tensors(
 }
 
 std::vector<tt::tt_metal::LegacyShape> MorehSGD::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    auto output_shape = input_tensors.at(0).get_legacy_shape();
+    auto output_shape = input_tensors.at(0).get_shape().with_tile_padding();
     return {output_shape, output_shape};
 }
 

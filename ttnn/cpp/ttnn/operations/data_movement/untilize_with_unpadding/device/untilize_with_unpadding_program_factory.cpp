@@ -21,8 +21,8 @@ namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
-    const auto& input_shape = a.get_legacy_shape();
-    const auto& output_shape = output.get_legacy_shape();
+    const auto& input_shape = a.get_shape().with_tile_padding();
+    const auto& output_shape = output.get_shape().with_tile_padding();
 
     tt::tt_metal::Program program{};
 
@@ -212,14 +212,14 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    const auto& input_shape = a.get_legacy_shape();
-    const auto& output_shape = output.get_legacy_shape();
+    const auto& input_shape = a.get_shape().with_tile_padding();
+    const auto& output_shape = output.get_shape().with_tile_padding();
 
     Device* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
 
     uint32_t num_blocks = a.volume() / input_shape[-1] / TILE_HEIGHT;
-    uint32_t num_tiles_per_row = a.get_legacy_shape()[-1] / TILE_WIDTH;
+    uint32_t num_tiles_per_row = a.get_shape().with_tile_padding()[-1] / TILE_WIDTH;
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
         ttnn::split_blocks_for_tilize(grid_size, num_blocks);
@@ -403,26 +403,26 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     uint32_t ncores = all_cores.num_cores();
     uint32_t ntiles_per_block = shard_spec.shape[1] / TILE_WIDTH;
     uint32_t nblocks_per_core = shard_spec.shape[0] / TILE_HEIGHT;
-    uint32_t batch = a.volume() / (a.get_legacy_shape()[-2] * a.get_legacy_shape()[-1]);
+    uint32_t batch = a.volume() / (a.get_shape().with_tile_padding()[-2] * a.get_shape().with_tile_padding()[-1]);
     uint32_t ntiles_per_batch = ntiles_per_block * nblocks_per_core / batch;
 
     num_rows_block = out_shard_spec.shape[0];
     block_row_size = out_shard_spec.shape[1] * output.element_size();         // in0_block_w * TILE_WIDTH * dtype_nbytes
-    output_row_size = output.get_legacy_shape()[-1] * output.element_size();  // output row size bytes
+    output_row_size = output.get_shape().with_tile_padding()[-1] * output.element_size();  // output row size bytes
     last_block_row_size_unpadded =
         block_row_size -
-        (tt::round_up(output.get_legacy_shape()[-1], out_shard_spec.shape[1]) - output.get_legacy_shape()[-1]) *
+        (tt::round_up(output.get_shape().with_tile_padding()[-1], out_shard_spec.shape[1]) - output.get_shape().with_tile_padding()[-1]) *
             output.element_size();
-    uint32_t num_output_rows = output.volume() / output.get_legacy_shape()[-1];
+    uint32_t num_output_rows = output.volume() / output.get_shape().with_tile_padding()[-1];
     num_output_rows_unpadded =
         num_rows_block - (tt::round_up(num_output_rows, out_shard_spec.shape[0]) - num_output_rows);
     if (a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        last_idx = tt::div_up(output.get_legacy_shape()[-1], out_shard_spec.shape[1]) - 1;
+        last_idx = tt::div_up(output.get_shape().with_tile_padding()[-1], out_shard_spec.shape[1]) - 1;
     } else if (a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         last_idx = tt::div_up(num_output_rows, out_shard_spec.shape[0]) - 1;
     } else {
         end_core = {
-            tt::div_up(output.get_legacy_shape()[-1], out_shard_spec.shape[1]) - 1,
+            tt::div_up(output.get_shape().with_tile_padding()[-1], out_shard_spec.shape[1]) - 1,
             tt::div_up(num_output_rows, out_shard_spec.shape[0]) - 1};
     }
     if (!row_major) {

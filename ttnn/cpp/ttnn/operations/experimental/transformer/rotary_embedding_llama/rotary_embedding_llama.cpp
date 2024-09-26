@@ -20,7 +20,7 @@ Tensor RotaryEmbeddingLlamaOperation::invoke(
     operation::launch_op(
         [memory_config, compute_kernel_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto& input_tensor = input_tensors.at(0);
-            uint32_t seq_len = input_tensor.get_legacy_shape()[-2];
+            uint32_t seq_len = input_tensor.get_shape().with_tile_padding()[-2];
 
             auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch() : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
             auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);

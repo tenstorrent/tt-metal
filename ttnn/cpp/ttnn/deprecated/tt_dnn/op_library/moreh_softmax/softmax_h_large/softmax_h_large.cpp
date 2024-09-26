@@ -21,7 +21,7 @@ namespace primary {
 operation::ProgramWithCallbacks moreh_softmax_h_large(const Tensor &input, const Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op, const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     log_info(LogTest, "Large tensor algorithm selected");
     // split work
-    auto shape = input.get_legacy_shape();
+    auto shape = input.get_shape().with_tile_padding();
     auto H = shape[-2];
     auto W = shape[-1];
     auto Ht = H / TILE_HEIGHT;

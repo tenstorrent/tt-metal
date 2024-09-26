@@ -31,9 +31,9 @@ void get_tensor_dim(std::vector<uint32_t>& dim, const tt::tt_metal::LegacyShape&
 tt::tt_metal::LegacyShape get_output_grad_shape(
     const Tensor& output_grad, const Tensor& input_grad, const std::vector<int64_t>& dims, const bool& keepdim) {
     if (keepdim)
-        return output_grad.get_legacy_shape();
+        return output_grad.get_shape().with_tile_padding();
 
-    auto shape = input_grad.get_legacy_shape();
+    auto shape = input_grad.get_shape().with_tile_padding();
     auto rank = shape.rank();
     auto padding = shape.padding();
     for (auto dim : dims) {
@@ -65,7 +65,7 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto& input_grad_shape = input_grad.get_legacy_shape();
+    const auto& input_grad_shape = input_grad.get_shape().with_tile_padding();
     const auto& input_grad_shape_wo_padding = input_grad_shape.without_padding();
     const auto input_grad_rank = input_grad_shape.rank();
 

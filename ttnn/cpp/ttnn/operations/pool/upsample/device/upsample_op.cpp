@@ -39,7 +39,7 @@ std::vector<tt::tt_metal::LegacyShape> UpSample::compute_output_shapes(const std
     // NOTE2: Mapping it into in 2D format should be {N*H*W, C}
     // NOTE3: Assuming output data type is same as input
     const auto& input = input_tensors.at(0);
-    const auto input_shape = input.get_legacy_shape().without_padding();
+    const auto input_shape = input.get_shape();
 
     uint32_t out_n = input_shape[0];
     uint32_t out_h = input_shape[1] * scale_factor_h_;

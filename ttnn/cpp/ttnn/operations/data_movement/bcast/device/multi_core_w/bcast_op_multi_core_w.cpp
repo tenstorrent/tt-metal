@@ -19,8 +19,8 @@ using namespace	tt::constants;
 namespace ttnn::operations::data_movement {
 operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor &b, const Tensor& output, BcastOpMath bcast_math) {
 
-    const auto ashape = a.get_legacy_shape();
-    const auto bshape = b.get_legacy_shape();
+    const auto ashape = a.get_shape().with_tile_padding();
+    const auto bshape = b.get_shape().with_tile_padding();
         uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
         uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
         uint32_t H = ashape[-2];
@@ -199,8 +199,8 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
 
         auto dst_dram_buffer = output_tensors.at(0).buffer();
 
-		const auto ashape = input_tensors.at(0).get_legacy_shape();
-		const auto bshape = input_tensors.at(1).get_legacy_shape();
+		const auto ashape = input_tensors.at(0).get_shape().with_tile_padding();
+		const auto bshape = input_tensors.at(1).get_shape().with_tile_padding();
         uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
         uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
         uint32_t H = ashape[-2];

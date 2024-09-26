@@ -20,7 +20,7 @@ namespace primary {
 namespace {
 inline bool is_dot_forward(const Tensor& input, const Tensor& other, bool transpose_input, bool transpose_other) {
     // TODO: non-4d support for dot.
-    if (input.get_legacy_shape().rank() != 4 || other.get_legacy_shape().rank() != 4) {
+    if (input.get_shape().with_tile_padding().rank() != 4 || other.get_shape().with_tile_padding().rank() != 4) {
         return false;
     }
 
@@ -119,8 +119,8 @@ std::vector<int64_t> find_reduce_dim(const tt::tt_metal::LegacyShape& a_shape, c
 
 bool is_same_batch_dim(const Tensor& tensor_a, const Tensor& tensor_b) {
     // check batch dims
-    const auto& a_shape = tensor_a.get_legacy_shape();
-    const auto& b_shape = tensor_b.get_legacy_shape();
+    const auto& a_shape = tensor_a.get_shape().with_tile_padding();
+    const auto& b_shape = tensor_b.get_shape().with_tile_padding();
     std::vector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     std::vector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(a_dim, a_shape);
@@ -156,8 +156,8 @@ operation::ProgramWithCallbacks MorehMatmul::create_program(
 // Must be provided in the case where an optional output tensor was not provided
 std::vector<tt::tt_metal::LegacyShape> MorehMatmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     return {compute_output_shape(
-        input_tensors.at(0).get_legacy_shape(),
-        input_tensors.at(1).get_legacy_shape(),
+        input_tensors.at(0).get_shape().with_tile_padding(),
+        input_tensors.at(1).get_shape().with_tile_padding(),
         this->transpose_input,
         this->transpose_other)};
 }
@@ -190,8 +190,8 @@ void MorehMatmul::validate_with_output_tensors(
     check_tensor(bias, "moreh_matmul", "bias");
 
     // check matrix dims
-    const auto& input_shape = input.get_legacy_shape().without_padding();
-    const auto& other_shape = other.get_legacy_shape().without_padding();
+    const auto& input_shape = input.get_shape();
+    const auto& other_shape = other.get_shape();
     const auto& input_wo_shape = input_shape.without_padding();
     const auto& other_wo_shape = other_shape.without_padding();
     uint32_t input_m = (this->transpose_input) ? (input_wo_shape[-1]) : (input_wo_shape[-2]);
@@ -214,7 +214,7 @@ void MorehMatmul::validate_with_output_tensors(
 
     // check output dims
     if (output.has_value()) {
-        const auto& output_shape = output.value().get_legacy_shape().without_padding();
+        const auto& output_shape = output.value().get_shape();
         const auto& output_wo_shape = output_shape.without_padding();
         uint32_t output_m = output_wo_shape[-2];
         uint32_t output_n = output_wo_shape[-1];
@@ -231,7 +231,7 @@ void MorehMatmul::validate_with_output_tensors(
 
     // check bias size
     if (bias.has_value()) {
-        const auto& bias_wo_shape = bias.value().get_legacy_shape().without_padding();
+        const auto& bias_wo_shape = bias.value().get_shape();
         uint32_t bias_rank = bias_wo_shape.rank();
         uint32_t bias_w = bias_wo_shape[-1];
         TT_FATAL(bias_rank == 2, "bias rank {} must be 2 (tilized).", bias_rank);

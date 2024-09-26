@@ -22,7 +22,7 @@ namespace ttnn::operations::experimental::transformer {
         const uint32_t elements_per_group = head_dim * total_heads_per_group; // head_dim * (num q heads + 2 * num kv heads)
         const uint32_t tiles_per_group = elements_per_group / TILE_WIDTH; // head_dim % TILE_WIDTH == 0 so guaranteed to fit evenly
 
-        const auto &input_shape = input_tensor.get_legacy_shape();
+        const auto &input_shape = input_tensor.get_shape().with_tile_padding();
 
         TT_FATAL(input_shape[3] % elements_per_group == 0, "flattened inner tensor dimension {} does not divide evenly into head dim {}, heads per group, and groups {}", input_shape[3], head_dim, groups);
         TT_FATAL(input_shape[2] % TILE_HEIGHT == 0, "Sequence length {} must divide evenly into Tiles of Tile Height {}", input_shape[2], TILE_HEIGHT);

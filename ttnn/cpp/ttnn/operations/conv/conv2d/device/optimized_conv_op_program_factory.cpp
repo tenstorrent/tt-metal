@@ -99,10 +99,10 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
                 const auto& ashape = tt::tt_metal::LegacyShape(input_tensor_shape);
                 auto padded_a_shape = ttnn::Shape(std::array<uint32_t,4>{ashape[0], ashape[1], ashape[2], tt::round_up(ashape[3], 16)});
                 FormatParams input_a_format_params = {.pad_shape=padded_a_shape.value, .pad_value=0.0, .target_layout=Layout::ROW_MAJOR};
-                FormatParams input_b_format_params = {.pad_shape=b.get_legacy_shape(), .pad_value=0.0, .target_layout=Layout::TILE};
+                FormatParams input_b_format_params = {.pad_shape=b.get_shape().with_tile_padding(), .pad_value=0.0, .target_layout=Layout::TILE};
                 FormatParams input_bias_format_params = {};
                 if (bias.has_value()) {
-                    input_bias_format_params = {.pad_shape=bias.value().get_legacy_shape(), .pad_value=0, .target_layout=Layout::TILE};
+                    input_bias_format_params = {.pad_shape=bias.value().get_shape().with_tile_padding(), .pad_value=0, .target_layout=Layout::TILE};
                 }
                 auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
                 auto arch = is_tensor_on_device_or_multidevice(a) ? a.device()->arch() : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
@@ -128,7 +128,7 @@ void OptimizedConvNew::validate(const std::vector<Tensor>& input_tensors, const 
     }
     if (this->memory_config.is_sharded()) {
         uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntiles;
-        auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(input_tensor_a.get_legacy_shape(), sliding_window_config, out_block_h_ntiles, extra_padding_for_32B_alignment);
+        auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(input_tensor_a.get_shape().with_tile_padding(), sliding_window_config, out_block_h_ntiles, extra_padding_for_32B_alignment);
         uint32_t out_width_ntiles = this->compute_output_shapes(input_tensors).at(0)[-1] / TILE_WIDTH;
         if(this->memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
             TT_FATAL(this->parallelization_config.per_core_out_matrix_width_ntiles == out_width_ntiles, "Error");
@@ -202,7 +202,7 @@ std::vector<Tensor> OptimizedConvNew::create_output_tensors(const std::vector<Te
             uint32_t act_matrix_height = (uint32_t) act_matrix_shape[1];
             uint32_t act_matrix_height_ntiles = act_matrix_height / TILE_HEIGHT;
             uint32_t total_active_num_cores_per_weight_slice = act_matrix_height_ntiles / this->parallelization_config.per_core_out_matrix_height_ntiles;
-            uint32_t weight_matrix_width = weight_tensor.get_legacy_shape()[-1];
+            uint32_t weight_matrix_width = weight_tensor.get_shape().with_tile_padding()[-1];
             uint32_t weight_matrix_width_ntiles = weight_matrix_width / TILE_WIDTH;
             uint32_t num_weight_slices_width = weight_matrix_width_ntiles / this->parallelization_config.per_core_out_matrix_width_ntiles ;
             uint32_t total_active_num_cores = total_active_num_cores_per_weight_slice * num_weight_slices_width;

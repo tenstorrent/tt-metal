@@ -26,7 +26,7 @@ namespace ttnn::operations::experimental::transformer {
 
         tt_metal::Program program = tt_metal::CreateProgram();
 
-        const auto& input_shape = input_tensor.get_legacy_shape();
+        const auto& input_shape = input_tensor.get_shape().with_tile_padding();
 
         tt_metal::Device *device = input_tensor.device();
 
@@ -44,7 +44,7 @@ namespace ttnn::operations::experimental::transformer {
         auto q_shard_spec = output[0].shard_spec().value();
         auto q_cores = q_shard_spec.grid;
         auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / TILE_HW;
-        auto in_shape = input_tensor.get_legacy_shape();
+        auto in_shape = input_tensor.get_shape().with_tile_padding();
         auto in_num_tiles = in_shape[-2] * in_shape[-1] / TILE_HW;
 
         uint32_t q_output_cb_index = CB::c_out0;
@@ -178,7 +178,7 @@ namespace ttnn::operations::experimental::transformer {
     operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_input(const Tensor &input_tensor, const uint32_t num_q_heads, const uint32_t num_kv_heads, const uint32_t head_dim, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
         tt_metal::Program program = tt_metal::CreateProgram();
 
-        const auto& input_shape = input_tensor.get_legacy_shape();
+        const auto& input_shape = input_tensor.get_shape().with_tile_padding();
 
         tt_metal::Device *device = input_tensor.device();
 

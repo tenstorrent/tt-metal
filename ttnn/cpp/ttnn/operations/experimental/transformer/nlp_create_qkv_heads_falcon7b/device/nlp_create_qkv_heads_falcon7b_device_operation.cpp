@@ -11,7 +11,7 @@ namespace ttnn::operations::experimental::transformer {
 // Hard-coded for Falcon7B
 void NlpCreateHeadsFalcon7BDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
+    const auto input_shape = input_tensor.get_shape().with_tile_padding();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
@@ -26,7 +26,7 @@ void NlpCreateHeadsFalcon7BDeviceOperation::validate(const std::vector<Tensor>& 
 std::vector<tt::tt_metal::LegacyShape> NlpCreateHeadsFalcon7BDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     std::vector<tt::tt_metal::LegacyShape> output_shape_vec;
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
+    const auto input_shape = input_tensor.get_shape().with_tile_padding();
     output_shape_vec = {(tt::tt_metal::LegacyShape) {input_shape[0], 71, input_shape[2], 64}, (tt::tt_metal::LegacyShape) {input_shape[0], 1, input_shape[2], 64}, (tt::tt_metal::LegacyShape) {input_shape[0], 1, input_shape[2], 64}};
     return output_shape_vec;
 }

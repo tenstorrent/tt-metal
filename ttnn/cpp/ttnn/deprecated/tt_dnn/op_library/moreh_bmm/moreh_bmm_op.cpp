@@ -13,8 +13,8 @@ namespace primary {
 
 namespace {
 inline void moreh_bmm_validate(const Tensor& input, const Tensor& mat2) {
-    const auto& input_shape = input.get_legacy_shape();
-    const auto& mat2_shape = mat2.get_legacy_shape();
+    const auto& input_shape = input.get_shape().with_tile_padding();
+    const auto& mat2_shape = mat2.get_shape().with_tile_padding();
 
     TT_ASSERT(
         input.storage_type() == StorageType::DEVICE && mat2.storage_type() == StorageType::DEVICE,

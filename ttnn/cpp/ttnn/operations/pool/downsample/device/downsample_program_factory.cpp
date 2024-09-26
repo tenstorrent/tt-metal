@@ -352,8 +352,8 @@ operation::ProgramWithCallbacks downsample_single_core(
     auto [img_batch_size, img_height, img_width, img_stride_h, img_stride_w] = downsample_params;
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
-    TT_ASSERT(a.get_legacy_shape()[0] == 1 && a.get_legacy_shape()[1] == 1);
-    TT_ASSERT(output.get_legacy_shape()[0] == 1 && output.get_legacy_shape()[1] == 1);
+    TT_ASSERT(a.get_shape().with_tile_padding()[0] == 1 && a.get_shape().with_tile_padding()[1] == 1);
+    TT_ASSERT(output.get_shape().with_tile_padding()[0] == 1 && output.get_shape().with_tile_padding()[1] == 1);
 
     tt::tt_metal::Device* device = a.device();
 
@@ -387,11 +387,11 @@ operation::ProgramWithCallbacks downsample_single_core(
     auto core_range = all_cores;
 
     uint32_t input_height =
-        a.get_legacy_shape()[2];  // input height == flattened face of input image, multiple images are stacked in H dim
-    uint32_t input_width = a.get_legacy_shape()[3];         // input width == input image # of channels
-    uint32_t output_height = output.get_legacy_shape()[2];  // output height == flattened face of output image, multiple
+        a.get_shape().with_tile_padding()[2];  // input height == flattened face of input image, multiple images are stacked in H dim
+    uint32_t input_width = a.get_shape().with_tile_padding()[3];         // input width == input image # of channels
+    uint32_t output_height = output.get_shape().with_tile_padding()[2];  // output height == flattened face of output image, multiple
                                                             // images are stacked in H dim
-    uint32_t output_width = output.get_legacy_shape()[3];
+    uint32_t output_width = output.get_shape().with_tile_padding()[3];
     TT_ASSERT(input_width == output_width);
 
     uint32_t input_height_unpadded = img_batch_size * img_height * img_width;

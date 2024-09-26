@@ -24,12 +24,12 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor &input, const Tenso
     bool tilized = output.get_layout() == Layout::TILE;
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
-    uint32_t input_unit_size = tilized ? tt::tt_metal::detail::TileSize(input_cb_data_format) : input.get_legacy_shape()[-1] * input.element_size();
+    uint32_t input_unit_size = tilized ? tt::tt_metal::detail::TileSize(input_cb_data_format) : input.get_shape().with_tile_padding()[-1] * input.element_size();
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-    uint32_t output_unit_size = tilized ? tt::tt_metal::detail::TileSize(output_cb_data_format) : output.get_legacy_shape()[-1] * output.element_size();
+    uint32_t output_unit_size = tilized ? tt::tt_metal::detail::TileSize(output_cb_data_format) : output.get_shape().with_tile_padding()[-1] * output.element_size();
     bool convert_dtype = input_cb_data_format != output_cb_data_format;
 
-    uint32_t num_units = tilized ? output.volume() / TILE_HW : output.volume() / output.get_legacy_shape()[-1];
+    uint32_t num_units = tilized ? output.volume() / TILE_HW : output.volume() / output.get_shape().with_tile_padding()[-1];
 
     tt::tt_metal::Device *device = output.device();
 

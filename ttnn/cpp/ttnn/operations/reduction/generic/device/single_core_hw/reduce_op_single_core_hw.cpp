@@ -19,7 +19,7 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
     ReduceOpMath reduce_op,
     const ttnn::DeviceComputeKernelConfig &compute_kernel_config,
     float scaler) {
-    const auto shape = a.get_legacy_shape();
+    const auto shape = a.get_shape().with_tile_padding();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
     uint32_t HW = H * W;
 

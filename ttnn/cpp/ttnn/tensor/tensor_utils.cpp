@@ -14,7 +14,7 @@ namespace tt_metal {
 template <typename T>
 Tensor to_weight_special_padding_tile_layout(
     const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, DataType output_dtype) {
-    auto w_shape = conv_weight_tensor.get_legacy_shape();
+    auto w_shape = conv_weight_tensor.get_shape().with_tile_padding();
     auto compute = [&w_shape, &in1_block_h, &in1_block_w, &output_dtype](const auto& input_buffer) {
         uint32_t in1_block_h_datums = in1_block_h * constants::TILE_HEIGHT;
         uint32_t in1_block_w_datums = in1_block_w * constants::TILE_WIDTH;
@@ -96,7 +96,7 @@ Tensor to_weight_special_padding_tile_layout(
 template <typename T>
 Tensor to_weight_tile_layout(
     const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, DataType output_dtype) {
-    auto w_shape = conv_weight_tensor.get_legacy_shape();
+    auto w_shape = conv_weight_tensor.get_shape().with_tile_padding();
     auto compute = [&w_shape, &in1_block_h, &in1_block_w, &output_dtype](const auto& input_buffer) {
         auto weight_matrix_cols = w_shape[0];
         // width padding
@@ -509,7 +509,7 @@ Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id)
         if (tensor_storage.has_buffer_for_device_id(device_id)) {
             return Tensor{
                 DeviceStorage{tensor_storage.get_buffer_for_device_id(device_id)},
-                multi_device_tensor.get_legacy_shape(),
+                multi_device_tensor.get_shape().with_tile_padding(),
                 multi_device_tensor.get_dtype(),
                 multi_device_tensor.get_layout()};
         }
@@ -589,11 +589,11 @@ Tensor create_multi_device_tensor(
             auto device_id = device->id();
             ordered_device_ids.push_back(device_id);
             device_buffers.insert({device_id, std::get<DeviceStorage>(tensor.get_storage()).buffer});
-            shapes.insert({device_id, tensor.get_legacy_shape()});
+            shapes.insert({device_id, tensor.get_shape().with_tile_padding()});
         }
         return Tensor{
             MultiDeviceStorage{strategy, ordered_device_ids, device_buffers, shapes},
-            tensors.at(0).get_legacy_shape(),
+            tensors.at(0).get_shape().with_tile_padding(),
             tensors.at(0).get_dtype(),
             tensors.at(0).get_layout()};
     } else if (storage_type == StorageType::MULTI_DEVICE_HOST) {
@@ -602,11 +602,11 @@ Tensor create_multi_device_tensor(
         for (const auto& tensor : tensors) {
             TT_ASSERT(std::holds_alternative<OwnedStorage>(tensor.get_storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(tensor.get_storage()));
             owned_buffers.push_back(std::get<OwnedStorage>(tensor.get_storage()).buffer);
-            shapes.push_back(tensor.get_legacy_shape());
+            shapes.push_back(tensor.get_shape().with_tile_padding());
         }
         return Tensor{
             MultiDeviceHostStorage{strategy, owned_buffers, shapes},
-            tensors.at(0).get_legacy_shape(),
+            tensors.at(0).get_shape().with_tile_padding(),
             tensors.at(0).get_dtype(),
             tensors.at(0).get_layout()};
     } else {

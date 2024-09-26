@@ -27,8 +27,8 @@ operation::ProgramWithCallbacks non_zero_indices_single_core(const Tensor &input
     uint32_t alignment_base = 32/input.element_size();
     //we want per core to be aligned to aligment_base per core
 
-    uint32_t aligned_elements = tt::div_up(input.get_legacy_shape()[-1] , alignment_base) * alignment_base;
-    uint32_t actual_elements = input.get_legacy_shape()[-1];
+    uint32_t aligned_elements = tt::div_up(input.get_shape().with_tile_padding()[-1] , alignment_base) * alignment_base;
+    uint32_t actual_elements = input.get_shape().with_tile_padding()[-1];
 
     CoreCoord core = {0,0};
 
@@ -105,8 +105,8 @@ operation::ProgramWithCallbacks non_zero_indices_single_core(const Tensor &input
         auto output_1 = output_tensors.at(1);
         auto input = input_tensors.at(1);
         uint32_t alignment_base = 32/input.element_size();
-        uint32_t aligned_elements = tt::div_up(input.get_legacy_shape()[-1] , alignment_base) * alignment_base;
-        uint32_t actual_elements = input.get_legacy_shape()[-1];
+        uint32_t aligned_elements = tt::div_up(input.get_shape().with_tile_padding()[-1] , alignment_base) * alignment_base;
+        uint32_t actual_elements = input.get_shape().with_tile_padding()[-1];
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_id, core);
         runtime_args[0] = input.buffer()->address();
         runtime_args[1] = output_0.buffer()->address();

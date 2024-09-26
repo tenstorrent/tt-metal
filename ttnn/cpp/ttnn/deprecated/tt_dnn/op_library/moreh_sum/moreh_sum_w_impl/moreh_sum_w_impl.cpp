@@ -24,7 +24,7 @@ operation::ProgramWithCallbacks moreh_sum_w_impl(const Tensor &a, const Tensor &
     tt_metal::ReduceOpDim reduce_dim = tt_metal::ReduceOpDim::W;
     float scaler = 1.0f;
 
-    const auto shape = a.get_legacy_shape();
+    const auto shape = a.get_shape().with_tile_padding();
     const auto [W, H, other_dims_product] = extract_spatial_dims(shape);
 
     uint32_t HW = H * W;

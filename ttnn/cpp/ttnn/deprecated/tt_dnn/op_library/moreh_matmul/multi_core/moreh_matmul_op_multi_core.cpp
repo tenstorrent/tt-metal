@@ -86,7 +86,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     const auto num_output_tiles {output.volume() / TILE_HW};
 
     // input tensor
-    const auto &input_shape = input.get_legacy_shape();
+    const auto &input_shape = input.get_shape().with_tile_padding();
     const auto &input_shape_wo_padding = input_shape.without_padding();
     const auto input_rank = input_shape.rank();
     log_debug(LogOp, "input dim");
@@ -98,7 +98,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     get_tensor_stride(input_stride, input_dim);
 
     // other tensor
-    const auto &other_shape = other.get_legacy_shape();
+    const auto &other_shape = other.get_shape().with_tile_padding();
     const auto &other_shape_wo_padding = other_shape.without_padding();
     const auto other_rank = other_shape.rank();
     log_debug(LogOp, "other dim");
@@ -115,7 +115,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     get_not_bcast(input_not_bcast, input_dim, other_not_bcast, other_dim);
 
     // output tensor
-    const auto &output_shape = output.get_legacy_shape();
+    const auto &output_shape = output.get_shape().with_tile_padding();
     const auto &output_shape_wo_padding = output_shape.without_padding();
     const auto output_rank = output_shape.rank();
     log_debug(LogOp, "output dim");
@@ -136,7 +136,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     bool is_scalar_bias = false;
     if (bias.has_value()) {
         const auto& bias_tensor = bias.value();
-        const auto& bias_shape_wo_padding = bias_tensor.get_legacy_shape().without_padding();
+        const auto& bias_shape_wo_padding = bias_tensor.get_shape();
         is_scalar_bias = (bias_shape_wo_padding[-1] == 1) ? (true) : (false);
         log_debug(LogOp, "{}:{} bias tensor. is_scalar_bias {}", __func__, __LINE__, is_scalar_bias);
     }

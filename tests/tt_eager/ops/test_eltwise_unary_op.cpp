@@ -51,7 +51,7 @@ Tensor host_function(const Tensor& input_tensor) {
 
     return Tensor(
         OwnedStorage{output_buffer},
-        input_tensor.get_legacy_shape(),
+        input_tensor.get_shape().with_tile_padding(),
         input_tensor.get_dtype(),
         input_tensor.get_layout());
 }
@@ -148,7 +148,7 @@ void test_shape_padding() {
     auto output_tensor = ttnn::sqrt(padded_input_tensor);
     output_tensor = output_tensor.cpu();
 
-    auto output_shape = output_tensor.get_legacy_shape();
+    auto output_shape = output_tensor.get_shape().with_tile_padding();
 
     TT_FATAL(output_shape == tt::tt_metal::LegacyShape(padded_input_shape), "Error");
     TT_FATAL(output_shape.without_padding() == tt::tt_metal::LegacyShape(input_shape), "Error");

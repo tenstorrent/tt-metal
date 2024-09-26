@@ -59,7 +59,7 @@ void Reduce::validate(const std::vector<Tensor>& input_tensors) const {
 std::vector<tt::tt_metal::LegacyShape> Reduce::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
 
-    auto output_shape = input_tensor.get_legacy_shape();
+    auto output_shape = input_tensor.get_shape().with_tile_padding();
     auto padding = output_shape.padding();
     switch (this->dim) {
         case ReduceOpDim::H:
@@ -191,7 +191,7 @@ Tensor reduce(
                 } else {
                     device = input_tensor.device();
                 }
-                auto input_tensor_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
+                auto input_tensor_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.get_shape().with_tile_padding());
                 auto formatted_input_tensor = input_tensor;
                 if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
                     formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(

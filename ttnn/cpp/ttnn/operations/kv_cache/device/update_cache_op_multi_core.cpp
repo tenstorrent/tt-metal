@@ -44,10 +44,10 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
     tt::DataFormat interm_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t interm_single_tile_size = tt::tt_metal::detail::TileSize(interm_cb_data_format);
 
-    uint32_t Wt = cache_tensor.get_legacy_shape()[-1] / tt::constants::TILE_WIDTH;
+    uint32_t Wt = cache_tensor.get_shape().with_tile_padding()[-1] / tt::constants::TILE_WIDTH;
 
     // Width size after untilize
-    uint32_t Wbytes = fp32_dest_acc_en ? cache_tensor.get_legacy_shape()[-1] * sizeof(float) : cache_tensor.get_legacy_shape()[-1] * sizeof(::bfloat16);
+    uint32_t Wbytes = fp32_dest_acc_en ? cache_tensor.get_shape().with_tile_padding()[-1] * sizeof(float) : cache_tensor.get_shape().with_tile_padding()[-1] * sizeof(::bfloat16);
 
     tt::log_debug("cache_cb_data_format: {}", cache_cb_data_format);
     tt::log_debug("input_cb_data_format: {}", input_cb_data_format);
@@ -57,15 +57,15 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
 
 
     uint32_t cache_total_num_tiles = cache_tensor.volume() / TILE_HW;
-    uint32_t cache_batch_num_tiles = cache_total_num_tiles / cache_tensor.get_legacy_shape()[0];
-    uint32_t cache_head_num_tiles = cache_batch_num_tiles / cache_tensor.get_legacy_shape()[1];
+    uint32_t cache_batch_num_tiles = cache_total_num_tiles / cache_tensor.get_shape().with_tile_padding()[0];
+    uint32_t cache_head_num_tiles = cache_batch_num_tiles / cache_tensor.get_shape().with_tile_padding()[1];
 
     uint32_t num_tiles = input_tensor.volume() / tt::constants::TILE_HW;
 
-    uint32_t B = input_tensor.get_legacy_shape()[-2];
-    uint32_t Bcache = cache_tensor.get_legacy_shape()[0];
+    uint32_t B = input_tensor.get_shape().with_tile_padding()[-2];
+    uint32_t Bcache = cache_tensor.get_shape().with_tile_padding()[0];
     const uint32_t granularity = std::min(static_cast<uint32_t>(2), Bcache); // granularity = 2 best for performance
-    uint32_t num_batched_heads = input_tensor.get_legacy_shape()[1] * B / tt::constants::TILE_HEIGHT;
+    uint32_t num_batched_heads = input_tensor.get_shape().with_tile_padding()[1] * B / tt::constants::TILE_HEIGHT;
     uint32_t tile_update_offset = update_idx % tt::constants::TILE_HEIGHT * Wbytes;
     uint32_t batch_read_offset = batch_offset * Wbytes;  // Offset to read from input tensor
 
@@ -320,12 +320,12 @@ operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor
     // TODO: For interleaved and kv_heads > 1, we assert that each core only gets 1 tile along seq_len
     // For sharded, each core gets shard_shape[0] number of tiles along seq_len.
     // For either case, assume that work doesn't spill over to next head, so we just increment by Wt within reader/writer
-    uint32_t num_blocks_of_work = input_tensor.get_legacy_shape()[1] * input_tensor.get_legacy_shape()[-2] / TILE_HEIGHT;
+    uint32_t num_blocks_of_work = input_tensor.get_shape().with_tile_padding()[1] * input_tensor.get_shape().with_tile_padding()[-2] / TILE_HEIGHT;
 
-    uint32_t Wt = cache_tensor.get_legacy_shape()[-1] / TILE_WIDTH;
-    uint32_t input_Ht = input_tensor.get_legacy_shape()[-2] / TILE_HEIGHT; // seq_len
-    uint32_t cache_HtWt = cache_tensor.get_legacy_shape()[-2] * Wt / TILE_HEIGHT;
-    uint32_t cache_CHtWt = cache_tensor.get_legacy_shape()[1] * cache_HtWt;
+    uint32_t Wt = cache_tensor.get_shape().with_tile_padding()[-1] / TILE_WIDTH;
+    uint32_t input_Ht = input_tensor.get_shape().with_tile_padding()[-2] / TILE_HEIGHT; // seq_len
+    uint32_t cache_HtWt = cache_tensor.get_shape().with_tile_padding()[-2] * Wt / TILE_HEIGHT;
+    uint32_t cache_CHtWt = cache_tensor.get_shape().with_tile_padding()[1] * cache_HtWt;
     uint32_t update_idxt = update_idx / TILE_HEIGHT;
     uint32_t start_idx = batch_idx * cache_CHtWt + update_idxt * Wt;
     tt::tt_metal::Device *device = input_tensor.device();

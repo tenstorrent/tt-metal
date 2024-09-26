@@ -17,7 +17,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode(const Tensor 
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    const auto& input_shape = input_tensor.get_legacy_shape();
+    const auto& input_shape = input_tensor.get_shape().with_tile_padding();
     const uint32_t head_dim = input_shape[-1];
     const uint32_t batch = input_shape[1];
 

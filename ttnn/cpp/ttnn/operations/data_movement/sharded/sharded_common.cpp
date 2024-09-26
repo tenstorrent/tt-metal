@@ -15,8 +15,8 @@ uint32_t calculate_starting_idx_h(const Tensor& tensor, uint32_t num_slices, uin
         return 0;
     }
 
-    uint32_t num_tiles_height = tensor.volume() / tensor.get_legacy_shape()[-1] / tt::constants::TILE_HEIGHT;
-    uint32_t num_tiles_width = tensor.get_legacy_shape()[-1] / tt::constants::TILE_WIDTH;
+    uint32_t num_tiles_height = tensor.volume() / tensor.get_shape().with_tile_padding()[-1] / tt::constants::TILE_HEIGHT;
+    uint32_t num_tiles_width = tensor.get_shape().with_tile_padding()[-1] / tt::constants::TILE_WIDTH;
     uint32_t total_num_tiles = num_tiles_height * num_tiles_width;
 
     uint32_t num_tiles_per_slice = total_num_tiles / num_slices;

@@ -491,10 +491,10 @@ std::vector<std::optional<Tensor>> ExecuteBackwardConcat::invoke(
     if(are_required_outputs[0]){
         std::vector<uint32_t> start_index = {0, 0, 0, 0};
         std::vector<uint32_t> end_index = {
-            input.get_legacy_shape()[0],
-            input.get_legacy_shape()[1],
-            input.get_legacy_shape()[2],
-            input.get_legacy_shape()[3]};
+            input.get_shape().with_tile_padding()[0],
+            input.get_shape().with_tile_padding()[1],
+            input.get_shape().with_tile_padding()[2],
+            input.get_shape().with_tile_padding()[3]};
         std::vector<uint32_t> step = std::vector<uint32_t>({1, 1, 1, 1});
         ttnn::slice(queue_id, grad, start_index, end_index, step, std::nullopt, input_grad);
         grad_tensor[0] = input_grad;
@@ -503,20 +503,20 @@ std::vector<std::optional<Tensor>> ExecuteBackwardConcat::invoke(
     if(are_required_outputs[1]){
         std::vector<uint32_t> start_index_2 = {0, 0, 0, 0};
         if (dim == 0) {
-            start_index_2 = {input.get_legacy_shape()[0], 0, 0, 0};
+            start_index_2 = {input.get_shape().with_tile_padding()[0], 0, 0, 0};
         } else if (dim == 1) {
-            start_index_2 = {0, input.get_legacy_shape()[1], 0, 0};
+            start_index_2 = {0, input.get_shape().with_tile_padding()[1], 0, 0};
         } else if (dim == 2) {
             start_index_2 = {
-                0, 0, input.get_legacy_shape()[2], 0};
+                0, 0, input.get_shape().with_tile_padding()[2], 0};
         } else if (dim == 3) {
-            start_index_2 = {0, 0, 0, input.get_legacy_shape()[3]};
+            start_index_2 = {0, 0, 0, input.get_shape().with_tile_padding()[3]};
         }
         std::vector<uint32_t> end_index_2 = {
-            grad.get_legacy_shape()[0],
-            grad.get_legacy_shape()[1],
-            grad.get_legacy_shape()[2],
-            grad.get_legacy_shape()[3]};
+            grad.get_shape().with_tile_padding()[0],
+            grad.get_shape().with_tile_padding()[1],
+            grad.get_shape().with_tile_padding()[2],
+            grad.get_shape().with_tile_padding()[3]};
         std::vector<uint32_t> step_2 = std::vector<uint32_t>({1, 1, 1, 1});
         ttnn::slice(queue_id, grad, start_index_2, end_index_2, step_2, std::nullopt, other_grad);
         grad_tensor[1] = other_grad;
