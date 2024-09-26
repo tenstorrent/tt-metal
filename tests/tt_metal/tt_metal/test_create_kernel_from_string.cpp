@@ -11,65 +11,64 @@
 #include "impl/kernels/data_types.hpp"
 #include "impl/kernels/kernel_types.hpp"
 #include "impl/program/program.hpp"
+#include "tt_cluster_descriptor_types.h"
 
 #include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
 
-TEST_F(CommonFixture, ProgramWithDataMovementKernelCreatedFromString) {
+class ProgramWithKernelCreatedFromStringFixture : public CommonFixture {
+   protected:
+    void SetUp() override {
+        CommonFixture::SetUp();
+        for (Device *device : this->devices_)
+        {
+            const chip_id_t device_id = device->id();
+            this->device_ids_to_devices_[device_id] = device;
+        }
+    }
+
+    void TearDown() override {
+        detail::CloseDevices(this->device_ids_to_devices_);
+    }
+
+   private:
+    std::map<chip_id_t, Device *> device_ids_to_devices_;
+};
+
+TEST_F(ProgramWithKernelCreatedFromStringFixture, DataMovementKernel) {
     const CoreRange cores({0, 0}, {1, 1});
     const string &kernel_src_code = R"(
-    #include <stdint.h>
+    #include "debug/dprint.h"
     #include "dataflow_api.h"
 
     void kernel_main() {
-        uint32_t src_addr = get_arg_val<uint32_t>(0);
-        uint32_t src_noc_x = get_arg_val<uint32_t>(1);
-        uint32_t src_noc_y = get_arg_val<uint32_t>(2);
-        uint32_t num_tiles = get_arg_val<uint32_t>(3);
 
-        constexpr uint32_t cb_id_in0 = 0;
+        DPRINT_DATA0(DPRINT << "Hello, I am running a void data movement kernel on NOC 0." << ENDL());
+        DPRINT_DATA1(DPRINT << "Hello, I am running a void data movement kernel on NOC 1." << ENDL());
 
-        constexpr uint32_t ublock_size_tiles = 4;
-        uint32_t ublock_size_bytes = get_tile_size(cb_id_in0) * ublock_size_tiles;
-
-        for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
-            uint64_t src_noc_addr = get_noc_addr(src_noc_x, src_noc_y, src_addr);
-
-            cb_reserve_back(cb_id_in0, ublock_size_tiles);
-            uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-
-            noc_async_read(src_noc_addr, l1_write_addr, ublock_size_bytes);
-
-            noc_async_read_barrier();
-
-            cb_push_back(cb_id_in0, ublock_size_tiles);
-            src_addr += ublock_size_bytes;
-        }
     }
     )";
 
-    Program program = CreateProgram();
-    tt_metal::CreateKernelFromString(
-        program,
-        kernel_src_code,
-        cores,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-
     for (Device *device : this->devices_) {
-        detail::CompileProgram(device, program);
+        Program program = CreateProgram();
+        tt_metal::CreateKernelFromString(
+            program,
+            kernel_src_code,
+            cores,
+            tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
         this->RunProgram(device, program);
     };
 }
 
-TEST_F(CommonFixture, ProgramWithComputeKernelCreatedFromString) {
+TEST_F(ProgramWithKernelCreatedFromStringFixture, ComputeKernel) {
     const CoreRange cores({0, 0}, {1, 1});
     const string &kernel_src_code = R"(
-#include "debug/dprint.h"
-#include "compute_kernel_api.h"
+    #include "debug/dprint.h"
+    #include "compute_kernel_api.h"
 
-namespace NAMESPACE {
+    namespace NAMESPACE {
 
     void MAIN {
 
@@ -77,55 +76,35 @@ namespace NAMESPACE {
 
     }
 
-}
+    }
     )";
 
-    Program program = CreateProgram();
-    tt_metal::CreateKernelFromString(
-        program,
-        kernel_src_code,
-        cores,
-        tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = false,
-            .math_approx_mode = false,
-            .compile_args = {}});
-
     for (Device *device : this->devices_) {
-        detail::CompileProgram(device, program);
+        Program program = CreateProgram();
+        tt_metal::CreateKernelFromString(
+            program,
+            kernel_src_code,
+            cores,
+            tt_metal::ComputeConfig{
+                .math_fidelity = MathFidelity::HiFi4,
+                .fp32_dest_acc_en = false,
+                .math_approx_mode = false,
+                .compile_args = {}});
         this->RunProgram(device, program);
     };
 }
 
-TEST_F(CommonFixture, ProgramWithEthernetKernelCreatedFromString) {
+TEST_F(ProgramWithKernelCreatedFromStringFixture, EthernetKernel) {
     const string &kernel_src_code = R"(
-#include <cstdint>
-#include "debug/ring_buffer.h"
+    #include "debug/dprint.h"
+    #include "dataflow_api.h"
 
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
-void kernel_main() {
-#else
-#include "compute_kernel_api/common.h"
-namespace NAMESPACE {
-void MAIN {
-#endif
+    void kernel_main() {
 
-#if (defined(UCK_CHLKC_UNPACK) and defined(TRISC0)) or \
-    (defined(UCK_CHLKC_MATH) and defined(TRISC1)) or \
-    (defined(UCK_CHLKC_PACK) and defined(TRISC2)) or \
-    (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC))
-    for (uint32_t idx = 0; idx < 40; idx++) {
-        WATCHER_RING_BUFFER_PUSH((idx + 1) + (idx << 16));
+        DPRINT << "Hello, I am running a void ethernet kernel." << ENDL();
+
     }
-#endif
-
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
-}
-#else
-}
-}
-#endif
-)";
+    )";
 
     for (Device *device : this->devices_) {
         const std::unordered_set<CoreCoord> &active_ethernet_cores = device->get_active_ethernet_cores(true);
@@ -140,7 +119,6 @@ void MAIN {
             kernel_src_code,
             *active_ethernet_cores.begin(),
             tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
-        detail::CompileProgram(device, program);
         this->RunProgram(device, program);
     };
 }
