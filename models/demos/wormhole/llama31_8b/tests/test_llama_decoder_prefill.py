@@ -66,16 +66,13 @@ def test_llama_decoder_inference(device, seq_len, use_program_cache, reset_seeds
         state_dict=state_dict,
         layer_num=0,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        rot_mat=None,
-        start_pos=generation_start_pos,
     )
 
-    # TODO Update start_pos (check llama test for reference)
     for i in range(generation_length):
         print(f"[Decoder] Generating token {i}")
         pt_decode_input = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1
         tt_decode_input = pt_decode_input.clone()
-        decode_input, attn_mask, attn_mask_torch = prepare_inputs_ttnn_prefill(
+        decode_input = prepare_inputs_ttnn_prefill(
             tt_decode_input,
             tt_model.device,
         )
@@ -85,9 +82,11 @@ def test_llama_decoder_inference(device, seq_len, use_program_cache, reset_seeds
         )[positions]
 
         # Reference model
+        attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
+        attn_mask_torch = torch.triu(attn_mask, diagonal=1)
         ref_output = reference_model(pt_decode_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
         # Run TT model
-        tt_out = tt_model(decode_input, 0, attn_mask, rot_mats, transformation_mats, user_id=0, mode="prefill")
+        tt_out = tt_model(decode_input, None, None, rot_mats, transformation_mats, user_id=0, mode="prefill")
         tt_output_torch = ttnn.to_torch(tt_out).view(batch, seq_len, -1)  # [seq, batch, hidden_dim]
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
 

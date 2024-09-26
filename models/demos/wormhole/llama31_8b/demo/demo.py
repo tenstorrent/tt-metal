@@ -13,7 +13,6 @@ from models.demos.wormhole.llama31_8b.tt.llama_common import (
     prepare_inputs_ttnn,
     sample,
     get_single_rot_mat,
-    cache_attention,
     encode_prompt_llama_instruct,
     HostEmbedding,
 )
@@ -61,7 +60,7 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, embd, instruc
     pt_tokenized_inputs = torch.tensor(input_tokens)
     emb_inputs = embd(pt_tokenized_inputs[:, 0]).view(model_args.max_batch_size, seqlen, -1)
 
-    return emb_inputs, pt_tokenized_inputs, input_mask, None
+    return emb_inputs, pt_tokenized_inputs, input_mask
 
 
 def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
@@ -100,7 +99,6 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     }
     logger.info("Loading weights finished!")
 
-    # TODO Should we keep initial embedding on host?
     embd = HostEmbedding(model_args)
     embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
 
@@ -109,7 +107,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     users_decoding = True
 
     # Preprocess initial prompt inputs
-    tt_decode_input, pt_encoded_input, input_mask, rot_emb_matrix_list = preprocess_inputs(
+    tt_decode_input, pt_encoded_input, input_mask = preprocess_inputs(
         input_prompts, tokenizer, model_args, dtype, embd, instruct_mode, device
     )
     # pre-compute the rotational embedding matrix and send to device
@@ -118,8 +116,6 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
         device,
         start_pos=0,
     )
-    logger.info("Caching attention ops...")
-    cache_attention(device, state_dict, model_args, current_rot_mat, dtype, max_generated_tokens)
 
     # if instruct_mode:
     #     tokenizer._model.pad_id = tokenizer._model.eos_id
@@ -133,8 +129,6 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         layers=list(range(model_args.n_layers)),
-        rot_mat=rot_emb_matrix_list,
-        start_pos=generation_start_pos,
     )
     tt_embd = TtLlamaEmbedding(
         device=device,
@@ -160,35 +154,32 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
             decode_input = tt_decode_input
         else:
             # Prepare inputs for decode mode
-            decode_input, current_pos = prepare_inputs_ttnn(
+            decode_input = prepare_inputs_ttnn(
                 tt_decode_input,
-                curr_pos,
                 model_args.dim,
-                model_args.sliding_window,
                 tt_model.device,
             )
 
+        current_pos_tensor = ttnn.from_torch(torch.tensor([curr_pos] * batch_size), device=device, dtype=ttnn.int32)
+        current_pos_attn_tensor = ttnn.from_torch(
+            torch.tensor([curr_pos] * batch_size * 8), device=device, dtype=ttnn.int32
+        )
+
         # Run ttnn llama model
-        tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
-        tt_out = ttnn.untilize(
-            tt_out, use_multicore=False
-        )  # multi-core OOMs (https://github.com/tenstorrent/tt-metal/issues/9022)
+        tt_out = tt_model(decode_input, current_pos_tensor, current_pos_attn_tensor, rot_mat=current_rot_mat)
+
+        # Get model output
+        tt_out_rm = ttnn.untilize(tt_out, use_multicore=True)  # Row-major layout
+        ttnn.deallocate(tt_out)
         tt_output_torch = (
-            ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[: model_args.max_batch_size, :, :]
+            ttnn.to_torch(tt_out_rm).permute(2, 1, 0, 3).squeeze(1)[: model_args.max_batch_size, :, :]
         )  # [batch, seq, hidden_dim]
+        ttnn.deallocate(tt_out_rm)
+
         # Update rotation matrix for next iteration
         current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         # If temperature is 0, does greedy decoding (top-1)
         tt_out_tok = sample(tt_output_torch, temperature=0, top_p=0.8)
-
-        # TODO argmax on device
-        # tt_out = ttnn.to_layout(tt_out, ttnn.ROW_MAJOR_LAYOUT)
-        # tt_out = ttnn.permute(tt_out, (2, 1, 0, 3))
-        # tt_out = ttnn.reshape(tt_out, (tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]))  # Squeeze(1)
-        # tt_out_argmax = ttnn.argmax(tt_out, dim=-1)
-        # Typecast from bf16 to uint32 for embedding
-        # tt_out_tok = ttnn.clone(tt_out_argmax, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.uint32)
-        # tt_out_tok = ttnn.experimental.tensor.typecast(tt_out_tok, dtype=ttnn.uint32)
 
         if iteration < input_mask.shape[1]:  # If prefill
             # If token is pad token, start generating new token, otherwise, push the next prompt token to the model
