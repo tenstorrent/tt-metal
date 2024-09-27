@@ -10,7 +10,7 @@ from models.demos.tg.llama3_70b.tt.llama_mlp_galaxy import TtLlamaMLP_galaxy
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     ShardTensor2dMesh,
 )
-from models.demos.tg.llama3_70b.tt.llama_common import tt_all_gather
+from models.demos.tg.llama3_70b.tt.llama_common import tt_all_gather, tt_sharded_distributed_rmsnorm
 
 
 class TtLlamaDecoder_galaxy:
@@ -180,10 +180,9 @@ class TtLlamaDecoder_galaxy:
         start_pos: int,
         attn_masks: List[ttnn.Tensor],
     ) -> List[ttnn.Tensor]:
-        xs_interleaved = ttnn.to_memory_config(xs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        attn_norm_out = self.tt_distributed_rmsnorm(
-            xs_interleaved,
+        attn_norm_out = tt_sharded_distributed_rmsnorm(
+            self.mesh_device,
+            xs,
             epsilon=self.norm_eps,
             gamma=self.attn_norm_sharded,
         )
@@ -200,16 +199,16 @@ class TtLlamaDecoder_galaxy:
         )
         attn_outs.deallocate(True)
 
-        output_interleaved = ttnn.to_memory_config(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ffn_norm_out = self.tt_distributed_rmsnorm(
-            output_interleaved,
+        ffn_norm_out = tt_sharded_distributed_rmsnorm(
+            self.mesh_device,
+            output,
             epsilon=self.norm_eps,
             gamma=self.ffn_norm_sharded,
         )
 
         ffn_norm_out = ttnn.to_memory_config(ffn_norm_out, memory_config=self.decoder_config["MLP_ACT_MEMCFG"])
         ffn_out = self.mlp(ffn_norm_out, mode="decode")
-
+        ffn_norm_out.deallocate(True)
         ### residual add
         output = ttnn.add(
             output,

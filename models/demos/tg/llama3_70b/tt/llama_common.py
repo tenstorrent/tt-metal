@@ -146,3 +146,45 @@ def setup_llama_env(llama_version="llama3", max_batch_size=32, max_context_len=4
     )
 
     return model_config, ckpt_dir, tokenizer_path, cache_path
+
+
+def tt_sharded_distributed_rmsnorm(mesh_device, inp, epsilon, gamma):
+    core_grid = (4, 8)
+    num_cores = core_grid[0] * core_grid[1]
+    input_sharded_memory_config = ttnn.create_sharded_memory_config(
+        shape=(1, 1, 32, 2048),
+        core_grid=ttnn.CoreGrid(y=core_grid[0], x=core_grid[1]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+    )
+    sharded_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
+        subblock_w=(2048 // num_cores) // 32,
+        block_h=1,
+        block_w=(2048 // num_cores) // 32,
+        inplace=False,
+    )
+    gathered_stats_sharded_memory_config = ttnn.create_sharded_memory_config(
+        shape=[1, 1, 32, 32 * 4],
+        core_grid=ttnn.CoreGrid(y=1, x=1),
+        strategy=ttnn.ShardStrategy.WIDTH,
+    )
+    inp = ttnn.to_memory_config(inp, memory_config=input_sharded_memory_config)
+    tt_stats = ttnn.rms_norm_pre_all_gather(inp, program_config=sharded_program_config)
+    tt_stats = ttnn.line_all_gather(
+        tt_stats,
+        3,
+        num_links=1,
+        cluster_axis=1,
+        mesh_device=mesh_device,
+        memory_config=gathered_stats_sharded_memory_config,
+    )
+    tt_out = ttnn.rms_norm_post_all_gather(
+        inp,
+        epsilon=epsilon,
+        weight=gamma,
+        program_config=sharded_program_config,
+        stats=tt_stats,
+    )
+    tt_stats.deallocate(True)
+    return tt_out
+

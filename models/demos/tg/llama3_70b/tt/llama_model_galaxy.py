@@ -22,6 +22,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 from models.demos.tg.llama3_70b.tt.llama_common import (
     tt_all_reduce,
     tt_all_gather,
+    tt_sharded_distributed_rmsnorm,
 )
 
 
@@ -337,10 +338,9 @@ class TtLlamaModel_galaxy:
         for layer in self.layers:
             xs = layer(xs, rot_mats, start_pos, attn_masks, mode="decode")  # xs is fractured
 
-        xs_interleaved = ttnn.to_memory_config(xs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        norm_out = self.tt_distributed_rmsnorm(
-            xs_interleaved,
+        norm_out = tt_sharded_distributed_rmsnorm(
+            self.mesh_device,
+            xs,
             epsilon=self.norm_eps,
             gamma=self.norm_sharded,
         )
