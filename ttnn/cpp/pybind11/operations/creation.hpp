@@ -84,7 +84,7 @@ void bind_full_operation(py::module& module, const creation_operation_t& operati
 }
 
 template <typename creation_operation_t>
-void bind_full_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation) {
+void bind_full_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation, const std::string& info_doc = "" ) {
     auto doc = fmt::format(
         R"doc(
         Creates a tensor with the specified shape and fills it with the value of {0}.
@@ -98,8 +98,13 @@ void bind_full_operation_with_hard_coded_value(py::module& module, const creatio
 
         Returns:
             ttnn.Tensor: A filled tensor.
+
+        Note:
+            {2}
         )doc",
-        operation.base_name());
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        info_doc);
 
     bind_registered_operation(
         module,
@@ -331,7 +336,16 @@ void bind_empty_like_operation(py::module& module) {
 
 void py_module(py::module& module) {
     detail::bind_full_operation(module, ttnn::full);
-    detail::bind_full_operation_with_hard_coded_value(module, ttnn::zeros);
+    detail::bind_full_operation_with_hard_coded_value(module, ttnn::zeros,
+    R"doc(Supported dtypes, layouts, and ranks:
+
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16                |       ROW_MAJOR, TILE           |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT_8                |          TILE                   |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+)doc");
     detail::bind_full_operation_with_hard_coded_value(module, ttnn::ones);
 
     detail::bind_full_like_operation(module, ttnn::full_like);
