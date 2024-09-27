@@ -136,12 +136,6 @@ done
 
 build_dir="build_$build_type"
 
-# Create and link the build directory
-mkdir -p $build_dir
-ln -nsf $build_dir build
-
-install_prefix_default=$build_dir
-cmake_install_prefix=${install_prefix:="${install_prefix_default}"}
 
 # Set the python environment directory if not already set
 if [ -z "$PYTHON_ENV_DIR" ]; then
@@ -158,13 +152,16 @@ echo "INFO: Enable MemorySanitizer: $enable_msan"
 echo "INFO: Enable ThreadSanitizer: $enable_tsan"
 echo "INFO: Enable UndefinedBehaviorSanitizer: $enable_ubsan"
 echo "INFO: Build Tests: $build_tests"
-echo "INFO: Install Prefix: $cmake_install_prefix"
+
+# Don't like this, but okay
+if [ "$enable_profiler" = "ON" ]; then
+    build_dir="${build_dir}_tracy"
+fi
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
 cmake_args+=("-G" "Ninja")
 cmake_args+=("-DCMAKE_BUILD_TYPE=$build_type")
-cmake_args+=("-DCMAKE_INSTALL_PREFIX=$cmake_install_prefix")
 
 if [ "$enable_ccache" = "ON" ]; then
     cmake_args+=("-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache")
@@ -192,7 +189,6 @@ fi
 
 if [ "$enable_profiler" = "ON" ]; then
     cmake_args+=("-DENABLE_TRACY=ON")
-    build_dir="${build_dir}_tracy"
 fi
 
 if [ "$export_compile_commands" = "ON" ]; then
@@ -205,6 +201,18 @@ if [ "$build_tests" = "ON" ]; then
     cmake_args+=("-DTT_METAL_BUILD_TESTS=ON")
     cmake_args+=("-DTT_UMD_BUILD_TESTS=ON")
 fi
+
+install_prefix_default=$build_dir
+cmake_install_prefix=${install_prefix:="${install_prefix_default}"}
+
+cmake_args+=("-DCMAKE_INSTALL_PREFIX=$cmake_install_prefix")
+
+echo "INFO: Build directory: $build_dir"
+echo "INFO: Install Prefix: $cmake_install_prefix"
+
+# Create and link the build directory
+mkdir -p $build_dir
+ln -nsf $build_dir build
 
 # Configure cmake
 echo "INFO: Configuring project"
