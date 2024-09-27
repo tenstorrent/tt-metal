@@ -42,9 +42,9 @@ on:
           - eltwise.binary.multiply.multipl
           - eltwise.binary.div.div
           - eltwise.binary.div_no_nan.div_no_nan
-          - eltwise.binary.logical_or.logical_or
-          - eltwise.binary.logical_xor.logical_or
-          - eltwise.binary.logical_and.logical_or
+          - eltwise.binary.logical_or_.logical_or_
+          - eltwise.binary.logical_xor_.logical_xor_
+          - eltwise.binary.logical_and_.logical_and_
           - eltwise.binary.remainder.remainder
           - eltwise.binary.bcast.bcast_h_sharded
           - eltwise.binary.fmod.fmod
