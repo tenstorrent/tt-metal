@@ -252,10 +252,11 @@ endif()
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)
 
-option(TT_METALLIUM_BUILD_TESTS "Enables build of Tests" OFF)
-if(TT_METALLIUM_BUILD_TESTS)
+option(TT_METAL_BUILD_TESTS "Enables build of tt_metal tests" OFF)
+option(TTNN_BUILD_TESTS "Enables build of ttnn tests" OFF)
+if(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
     add_subdirectory(tests)
-endif(TT_METALLIUM_BUILD_TESTS)
+endif(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
 
 ############################################################################################################################
 # Install targets for build artifacts and pybinds

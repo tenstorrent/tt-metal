@@ -1,55 +1,7 @@
 #!/bin/bash
-: '
-TLDR: Follow the steps outlined below to build metal. For more in-depth information, keep reading
-
-Steps:
-    1. Create python_env (you only need to do this ONCE): ./create_venv.sh
-        - The env will by default be created in $TT_METAL_HOME/python_env. If you want to change it, set the PYTHON_ENV_DIR.
-        - This step is not dependent on any of the other steps; you only need to run it ONCE and in any order.
-    2. Configure and generate build files: `cmake -B build -G Ninja`
-        - The `-B` indicates where the build folder is; you can change the folder name to whatever you want.
-        - The `-G Ninja` specifies to cmake to use the Ninja build system, which is faster and more reliable than make.
-    3. Build metal: `ninja install -C build`
-        - The general command would be: `cmake --build build --target install`
-        - The `-C` indicates where to run the command; in this case, it will be your build folder(s).
-        - We are targeting `install` since that will also just build src.
-        - The install target will install pybinding .so (_C.so & _ttnn.so) into the src files, so pybinds can be used.
-    4. Build cpp tests: `ninja tests -C build`
-        - Building tests will also automatically build src.
-
-Notes:
-    - YOU ONLY NEED TO BUILD THE PYTHON_ENV ONCE!!!!! (unless you touch the dev python dependencies)
-    - ALWAYS INSTALL, i.e., just run `ninja install -C build` as the new make build.
-    - `cmake --build build --target install` is the EXACT same as running `ninja install -C build`. You would use the cmake command if you want to be agnostic of the build system (Ninja or Make).
-
-Different configs: To change build type or use tracy, you have to change the configuration cmake step (step #2).
-    - Changing build types: `cmake -B build -DCMAKE_BUILD_TYPE=<type> -G Ninja`
-        - Valid CMAKE_BUILD_TYPE values: `Release`, `Debug`, `RelWithDebInfo`, `CI`
-        - Release is the default if you do not set CMAKE_BUILD_TYPE.
-    - Tracy: `cmake -B build -G Ninja -DENABLE_TRACY=ON`
-
-Now you can have multiple build folders with different configs. If you want to switch, just run `ninja install -C <your_build_folder>` to install different pybinds.
-    - Caveats:
-        - At least one of these folders has to be named `build`, and if using tracy config, it has to be named `build`.. pending issue #8767.
-        - They have to be built with the original build folder name, i.e., you cannot change the build folder name after building because it will mess up the RPATHs and linking.
-
-Example:
-    ./create_venv.sh
-    cmake -B build -G Ninja && ninja -C build                       # <- Build in Release, inside folder called `build`.
-    cmake -DCMAKE_BUILD_TYPE=Debug -B build_debug -G Ninja && ninja -C build_debug    # <- Build in Debug, inside folder called `build_debug`.
-    source python_env/bin/activate                                  # <- You cannot run pytests yet since pybinds have not been installed.
-    ninja install -C build                                          # <- Install Release pybinds.
-    <run a pytest>                                                  # <- This test ran in Release config.
-    ninja install -C build_debug                                    # <- Install Debug pybinds.
-    <run a pytest>                                                  # <- This test ran in Debug config.
-
-NOTE ON DEBUGGING!:
-    GDB/LLDB is not stable right now. Recommend using GCC11 or higher for debugging or Clang-17 with GDB 14+.
-'
 
 set -eo pipefail
 
-# Function to display help
 show_help() {
     echo "Usage: $0 [options]..."
     echo "  -h, --help                       Show this help message."
@@ -65,6 +17,15 @@ show_help() {
     echo "  --build-tests                    Build Testcases."
     echo "  --install-prefix                 Where to install build artifacts."
     echo "  --cmake-options                  Supply additional options to cmake."
+    echo "  --release                        Set the build type as Release."
+    echo "  --development                    Set the build type as RelWithDebInfo."
+    echo "  --debug                          Set the build type as Debug."
+    echo "  --clean                          Remove build workspaces."
+}
+
+clean() {
+    echo "Removing build artifacts!"
+    rm -rf build_Release* build_Debug* build_RelWithDebInfo* build built
 }
 
 
@@ -82,10 +43,8 @@ build_tests="OFF"
 
 declare -a cmake_args
 
-#!/bin/bash
-
-OPTIONS=h,e,c,t,a,m,s,u,b:,p,build-tests,install-prefix:,cmake-options::
-LONGOPTS=help,export_compile_commands,enable_ccache,enable_time_trace,enable_asan,enable_msan,enable_tsan,enable_ubsan,build-type:,enable_profiler,build-tests,install-prefix:,cmake-options::
+OPTIONS=h,e,c,t,a,m,s,u,b:,p
+LONGOPTS=help,export_compile_commands,enable_ccache,enable_time_trace,enable_asan,enable_msan,enable_tsan,enable_ubsan,build-type:,release,development,debug,enable_profiler,build-tests,install-prefix:,cmake-options:,clean
 
 # Parse the options
 PARSED=$(getopt -n 'build_metal' --options=$OPTIONS --longoptions=$LONGOPTS --name "$0" -- "$@")
@@ -109,8 +68,7 @@ while true; do
         -c|--enable-ccache)
             enable_ccache="ON";;
         -t|--enable-time-trace)
-            enable_time_trace="ON"
-            ;;
+            enable_time_trace="ON";;
         -a|--enable-asan)
             enable_asan="ON";;
         -m|--enable-msan)
@@ -120,19 +78,44 @@ while true; do
         -u|--enable-ubsan)
             enable_ubsan="ON";;
         -b|--build-type)
+            echo "Manually specifying build type"
             build_type="$2";shift;;
+        -rel|--release)
+            build_type="Release";;
+        -dev|--development)
+            build_type="RelWithDebInfo";;
+        -dbg|--debug)
+            build_type="Debug";;
         -p|--enable-profiler)
             enable_profiler="ON";;
         --build-tests)
             build_tests="ON";;
-        --install-prefix) shift; install_prefix=$1;;
+        --install-prefix)
+            install_prefix="$2";shift;;
         --cmake-options)
 	    cmake_args+=($2);shift;;
+        --clean)
+	    clean; exit 0;;
         --)
             shift;break;;
     esac
     shift
 done
+
+# Check if there are unrecognized positional arguments left
+if [[ $# -gt 0 ]]; then
+    echo "ERROR: Unrecognized positional argument(s): $@"
+    show_help
+    exit 1
+fi
+
+# Validate the build_type
+VALID_BUILD_TYPES=("Release" "Debug" "RelWithDebInfo")
+if [[ ! " ${VALID_BUILD_TYPES[@]} " =~ " ${build_type} " ]]; then
+    echo "ERROR: Invalid build type '$build_type'. Allowed values are Release, Debug, RelWithDebInfo."
+    show_help
+    exit 1
+fi
 
 build_dir="build_$build_type"
 
@@ -196,7 +179,6 @@ if [ "$export_compile_commands" = "ON" ]; then
 fi
 
 if [ "$build_tests" = "ON" ]; then
-    cmake_args+=("-DTT_METALLIUM_BUILD_TESTS=ON")
     cmake_args+=("-DTTNN_BUILD_TESTS=ON")
     cmake_args+=("-DTT_METAL_BUILD_TESTS=ON")
     cmake_args+=("-DTT_UMD_BUILD_TESTS=ON")
