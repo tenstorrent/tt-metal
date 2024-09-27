@@ -216,6 +216,34 @@ struct ExecuteUnaryBackwardOp {
     }
 };
 
+struct ExecuteUnaryBackwardErfc {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardLog1p {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+// struct new {
+//     static std::vector<Tensor> invoke(
+//         const Tensor &grad_tensor_arg,
+//         const Tensor &input_tensor_arg,
+//         const std::optional<MemoryConfig> &memory_config = std::nullopt);
+// };
+
+// struct new {
+//     static std::vector<Tensor> invoke(
+//         const Tensor &grad_tensor_arg,
+//         const Tensor &input_tensor_arg,
+//         const std::optional<MemoryConfig> &memory_config = std::nullopt);
+// };
+
 struct ExecuteUnaryBackwardRsqrt {
     static std::vector<std::optional<Tensor>> invoke(
         uint8_t queue_id,
@@ -577,16 +605,8 @@ constexpr auto log10_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardOp<
         operations::unary_backward::UnaryBackwardOpType::LOG10_BW>>();
 
-constexpr auto log1p_bw = ttnn::register_operation<
-    "ttnn::log1p_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::LOG1P_BW>>();
-
-constexpr auto erfc_bw = ttnn::register_operation<
-    "ttnn::erfc_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::ERFC_BW>>();
-
+constexpr auto log1p_bw = ttnn::register_operation<"ttnn::log1p_bw", operations::unary_backward::ExecuteUnaryBackwardLog1p>();
+constexpr auto erfc_bw = ttnn::register_operation<"ttnn::erfc_bw", operations::unary_backward::ExecuteUnaryBackwardErfc>();
 constexpr auto threshold_bw = ttnn::register_operation<"ttnn::threshold_bw", operations::unary_backward::ExecuteUnaryBackwardThreshold>();
 constexpr auto fill_bw = ttnn::register_operation<"ttnn::fill_bw", operations::unary_backward::ExecuteUnaryBackwardFill>();
 constexpr auto rsqrt_bw = ttnn::register_operation<"ttnn::rsqrt_bw", operations::unary_backward::ExecuteUnaryBackwardRsqrt>();

@@ -965,7 +965,7 @@ std::vector<Tensor> _log10_bw(const Tensor& grad, const Tensor& input, const std
 
 // bw(log1p(in)) = grad/(in + 1)
 // for -1 = inf
-std::vector<Tensor> _log1p_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+std::vector<Tensor> ExecuteUnaryBackwardLog1p::invoke(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor t_inf = where(
         ttnn::ltz(grad, output_mem_config),
@@ -988,7 +988,7 @@ std::vector<Tensor> _log1p_bw(const Tensor& grad, const Tensor& input, const std
     return grad_tensor;
 }
 
-std::vector<Tensor> _erfc_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+std::vector<Tensor> ExecuteUnaryBackwardErfc::invoke(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = ttnn::multiply(
         ttnn::multiply(ttnn::exp(ttnn::neg(ttnn::square(input, output_mem_config), output_mem_config), false, output_mem_config),
