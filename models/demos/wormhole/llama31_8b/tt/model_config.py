@@ -311,10 +311,10 @@ class TtModelArgs:
 
             # Update OUTPUT_MM_PROGCFG for DECODE (DRAM-sharded)
             self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-                # Grid size = [4, 8]
-                in0_block_w=4,  # K(4096) / TILE_WIDTH(32) / Grid_Size(32)
+                # Grid size = [8, 8]
+                in0_block_w=2,  # K(4096) / TILE_WIDTH(32) / Grid_Size(64)
                 per_core_M=1,  # M(32) / TILE_HEIGHT(32)
-                per_core_N=126,  # N(128256) / TILE_WIDTH(32) / Grid_Size(32)
+                per_core_N=32,  # N(128256 / 2) / TILE_WIDTH(32) / Grid_Size(64)
                 fused_activation=None,
             )
 
