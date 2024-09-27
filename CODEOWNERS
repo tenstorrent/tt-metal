@@ -32,8 +32,7 @@ cmake/ @tt-rkim @vtangTT @TT-billteng
 build_metal.sh @tt-rkim @vtangTT @TT-billteng
 
 Makefile @tt-rkim
-/CMakeLists.txt @tt-rkim @vtangTT @TT-billteng
-tt_metal/CMakeLists.txt @tt-rkim @vtangTT @TT-billteng
+**/CMakeLists.txt @tt-rkim @vtangTT @TT-billteng @blozano-tt
 
 # Testing scripts and infra
 
