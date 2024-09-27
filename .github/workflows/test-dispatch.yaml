@@ -13,6 +13,7 @@ on:
       runner-label:
         required: true
         type: string
+        default: '["in-service"]'
       build-type:
         required: false
         type: choice
@@ -36,6 +37,18 @@ on:
 
 run-name: ${{ inputs.description }}
 jobs:
+  # setup:
+  #   name: Setup runner labels for deploy
+  #   runs-on: ubuntu-latest
+  #   environment: ${{ inputs.environment }}
+  #   outputs:
+  #     deployrunner: ${{ steps.step1.outputs.deployrunner }}
+  #   steps:
+  #     - name: Set runs-on for deploy
+  #       id: step1
+  #       run: |
+  #         # local_var="\'[\"${{ inputs.hw-config }}\", \"${{ inputs.runner-label }}\"]\'"
+  #         echo "deployrunner=${{ inputs.runner-label }}" >> $GITHUB_OUTPUT
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     with:
@@ -44,6 +57,7 @@ jobs:
       tracy: ${{ inputs.tracy }}
     secrets: inherit
   test-dispatch:
+    # needs: setup
     needs: build-artifact
     timeout-minutes: 1440
     env:
@@ -51,9 +65,7 @@ jobs:
       ARCH_NAME: ${{ inputs.arch }}
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
-    runs-on:
-      - ${{ inputs.runner-label }}
-      - "in-service"
+    runs-on: ${{ fromJSON(inputs.runner-label) }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Ensure weka mount is active
