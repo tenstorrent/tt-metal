@@ -29,7 +29,8 @@ struct ExecuteAllGather {
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<size_t> num_workers = std::nullopt,
-        const std::optional<size_t> num_buffers_per_channel = std::nullopt);
+        const std::optional<size_t> num_buffers_per_channel = std::nullopt,
+        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear);
 };
 
 }  // namespace ccl

@@ -211,7 +211,8 @@ Tensor all_gather(
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> user_defined_num_workers = std::nullopt,
-    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);
+    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
+    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear);
 
 } // namespace ccl
 } // namespace operations

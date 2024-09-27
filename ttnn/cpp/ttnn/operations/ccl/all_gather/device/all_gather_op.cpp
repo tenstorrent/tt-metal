@@ -217,21 +217,16 @@ Tensor all_gather(
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> user_defined_num_workers,
-    const std::optional<size_t> user_defined_num_buffers_per_channel) {
+    const std::optional<size_t> user_defined_num_buffers_per_channel,
+    const ttnn::ccl::Topology topology) {
 
     const auto mesh_view = mesh_device.get_view();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view->num_rows() : mesh_view->num_cols();
 
-    ttnn::ccl::Topology ccl_topology = ttnn::ccl::Topology::Ring;
-
-    if (num_devices == 2){
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
-
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
 
     operation::launch_op(
-        [dim, num_links, memory_config, mesh_view, cluster_axis, user_defined_num_workers, user_defined_num_buffers_per_channel, num_devices, ccl_topology](
+        [dim, num_links, memory_config, mesh_view, cluster_axis, user_defined_num_workers, user_defined_num_buffers_per_channel, num_devices, topology](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -259,7 +254,7 @@ Tensor all_gather(
 
             return operation::run(
                 ttnn::AllGather{
-                    dim, num_links, num_devices, device_index, user_defined_num_workers, user_defined_num_buffers_per_channel, receiver_device_id, sender_device_id, memory_config.value_or(input_device_tensor.memory_config()), ccl_topology},
+                    dim, num_links, num_devices, device_index, user_defined_num_workers, user_defined_num_buffers_per_channel, receiver_device_id, sender_device_id, memory_config.value_or(input_device_tensor.memory_config()), topology},
                 {input_device_tensor});
         },
         {input_tensor},
