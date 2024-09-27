@@ -77,6 +77,7 @@ class TtTransformerBlock(torch.nn.Module):
         transformation_mats=None,
         user_id=0,
         mode="decode",
+        page_table=None,
     ) -> ttnn.Tensor:
         if mode == "prefill":
             skip_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
@@ -91,6 +92,7 @@ class TtTransformerBlock(torch.nn.Module):
             transformation_mats,
             user_id,
             mode,
+            page_table,
         )
         # Attention also returns multiple outputs (multi-device support)
         assert len(r) == 1, "Multiple devices not yet supported"

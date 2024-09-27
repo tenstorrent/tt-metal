@@ -72,10 +72,11 @@ class TtTransformer(nn.Module):
         transformation_mats=None,
         user_id=0,
         mode="decode",
+        page_table=None,
         get_last_token=-1,
     ):
         for layer in self.layers:
-            x = layer(x, current_pos, rot_mat, transformation_mats, user_id, mode)
+            x = layer(x, current_pos, rot_mat, transformation_mats, user_id, mode, page_table)
         if mode == "prefill" and get_last_token == -1:
             return x
 

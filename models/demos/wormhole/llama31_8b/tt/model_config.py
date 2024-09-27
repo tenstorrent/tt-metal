@@ -27,6 +27,7 @@ class TtModelArgs:
     multiple_of = 1024
     rope_theta = 500000.0
     use_scaled_rope = True
+    paged_attention_config = None
 
     # Parameters for our use
     max_batch_size = 1
