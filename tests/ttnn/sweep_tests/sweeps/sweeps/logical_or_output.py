@@ -16,14 +16,31 @@ parameters = {
     "batch_sizes": [(1,)],
     "height": [384, 1024],
     "width": [1024, 4096],
-    "input_a_dtype": [ttnn.bfloat16],
-    "input_b_dtype": [ttnn.bfloat16],
-    "input_a_layout": [ttnn.TILE_LAYOUT],
-    "input_b_layout": [ttnn.TILE_LAYOUT],
+    "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+    "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+    "input_a_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    "input_b_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "out_tensor_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
 }
+
+
+def skip(
+    batch_sizes,
+    height,
+    width,
+    input_a_dtype,
+    input_b_dtype,
+    input_a_layout,
+    input_b_layout,
+    input_b_memory_config,
+    input_a_memory_config,
+    out_tensor_memory_config,
+) -> Tuple[bool, Optional[str]]:
+    if input_a_layout == ttnn.ROW_MAJOR_LAYOUT or input_b_layout == ttnn.ROW_MAJOR_LAYOUT:
+        return True, "Skipped as ROW_MAJOR_LAYOUT not supported"
+    return False, None
 
 
 def run(
