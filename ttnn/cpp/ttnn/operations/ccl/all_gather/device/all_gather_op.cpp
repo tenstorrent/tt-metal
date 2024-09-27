@@ -186,7 +186,7 @@ Tensor all_gather(
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
     auto devices = input_tensor.get_workers();
     uint32_t num_devices = devices.size();
-    ttnn::ccl::Topology ccl_topology = ttnn::ccl::Topology::Ring;
+    ttnn::ccl::Topology ccl_topology = topology;
 
     if (num_devices == 2){
         ccl_topology = ttnn::ccl::Topology::Linear;
