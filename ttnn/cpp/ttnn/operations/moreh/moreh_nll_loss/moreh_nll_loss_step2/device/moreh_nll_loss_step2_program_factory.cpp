@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstddef>
 #include <optional>
 
 #include "common/constants.hpp"
@@ -17,8 +18,8 @@ namespace ttnn::operations::moreh::moreh_nll_loss_step2 {
 MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2_impl_2d(
     const Tensor& input,
     const Tensor& target,
-    const std::optional<const Tensor> weight,
-    const std::optional<const Tensor> divisor,
+    const std::optional<Tensor>& weight,
+    const std::optional<Tensor>& divisor,
     const Tensor& output,
     const std::string reduction,
     const uint32_t ignore_index,
@@ -76,8 +77,8 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const std::vector<uint32_t> reader_compile_time_args{
         static_cast<uint32_t>(tt::operations::primary::is_dram(input)),
         static_cast<uint32_t>(tt::operations::primary::is_dram(target)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(weight)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(divisor)),
+        static_cast<uint32_t>(weight.has_value() ? tt::operations::primary::is_dram(weight.value()) : false),
+        static_cast<uint32_t>(divisor.has_value() ? tt::operations::primary::is_dram(divisor.value()) : false),
     };
 
     const std::vector<uint32_t> writer_compile_time_args{
@@ -195,8 +196,8 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
 MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2_impl_3d(
     const Tensor& input,
     const Tensor& target,
-    const std::optional<const Tensor> weight,
-    const std::optional<const Tensor> divisor,
+    const std::optional<Tensor>& weight,
+    const std::optional<Tensor>& divisor,
     const Tensor& output,
     const std::string reduction,
     const uint32_t ignore_index,
@@ -255,8 +256,8 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const std::vector<uint32_t> reader_compile_time_args{
         static_cast<uint32_t>(tt::operations::primary::is_dram(input)),
         static_cast<uint32_t>(tt::operations::primary::is_dram(target)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(weight)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(divisor)),
+        static_cast<uint32_t>(weight.has_value() ? tt::operations::primary::is_dram(weight.value()) : false),
+        static_cast<uint32_t>(divisor.has_value() ? tt::operations::primary::is_dram(divisor.value()) : false),
     };
 
     const std::vector<uint32_t> writer_compile_time_args{
@@ -376,8 +377,8 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
 MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2_impl_4d(
     const Tensor& input,
     const Tensor& target,
-    const std::optional<const Tensor> weight,
-    const std::optional<const Tensor> divisor,
+    const std::optional<Tensor>& weight,
+    const std::optional<Tensor>& divisor,
     const Tensor& output,
     const std::string reduction,
     const uint32_t ignore_index,
@@ -444,8 +445,8 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const std::vector<uint32_t> reader_compile_time_args{
         static_cast<uint32_t>(tt::operations::primary::is_dram(input)),
         static_cast<uint32_t>(tt::operations::primary::is_dram(target)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(weight)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(divisor)),
+        static_cast<uint32_t>(weight.has_value() ? tt::operations::primary::is_dram(weight.value()) : false),
+        static_cast<uint32_t>(divisor.has_value() ? tt::operations::primary::is_dram(divisor.value()) : false),
     };
 
     const std::vector<uint32_t> writer_compile_time_args{
@@ -571,8 +572,8 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t MorehNllLossStep2Dev
 
     const Tensor& input = tensor_args.input_tensor;
     const Tensor& target = tensor_args.target_tensor;
-    const std::optional<const Tensor> weight = tensor_args.weight_tensor;
-    const std::optional<const Tensor> divisor = tensor_args.divisor_tensor;
+    const std::optional<Tensor>& weight = tensor_args.weight_tensor;
+    const std::optional<Tensor>& divisor = tensor_args.divisor_tensor;
     const Tensor& output = tensor_return_value;
     const std::string reduction = operation_attributes.reduction;
     const uint32_t ignore_index = operation_attributes.ignore_index;

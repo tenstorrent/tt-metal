@@ -15,8 +15,8 @@ void MorehNllLossStep2DeviceOperation::validate_inputs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const Tensor& input_tensor = tensor_args.input_tensor;
     const Tensor& target_tensor = tensor_args.target_tensor;
-    const std::optional<const Tensor> weight_tensor = tensor_args.weight_tensor;
-    const std::optional<const Tensor> divisor_tensor = tensor_args.divisor_tensor;
+    const std::optional<Tensor>& weight_tensor = tensor_args.weight_tensor;
+    const std::optional<Tensor>& divisor_tensor = tensor_args.divisor_tensor;
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "intput_tensor to nll_loss need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "intput_tensor to nll_loss need to be allocated in buffers on device!");
@@ -130,9 +130,9 @@ MorehNllLossStep2DeviceOperation::invoke(
     const Tensor& input_tensor,
     const Tensor& target_tensor,
     const std::string reduction,
-    const std::optional<const Tensor> weight_tensor,
-    const std::optional<const Tensor> divisor_tensor,
-    const std::optional<const Tensor> output_tensor,
+    const std::optional<Tensor>& weight_tensor,
+    const std::optional<Tensor>& divisor_tensor,
+    const std::optional<Tensor>& output_tensor,
     const int32_t ignore_index,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {
