@@ -12,19 +12,8 @@ on:
           - blackhole
       runner-label:
         required: true
-        type: choice
-        options:
-          - E150
-          - N150
-          - N300
-          - config-t3000
-          - config-tg
-          - config-tgg
-          - BH
-      runner-label:
-        required: false
         type: string
-        default: "in-service"
+        default: '["in-service"]'
       build-type:
         required: false
         type: choice
@@ -48,25 +37,35 @@ on:
 
 run-name: ${{ inputs.description }}
 jobs:
-  # build-artifact:
-  #   uses: ./.github/workflows/build-artifact.yaml
-  #   with:
-  #     arch: '[ "${{ inputs.arch }}" ]'
-  #     build-type: ${{ inputs.build-type }}
-  #     tracy: ${{ inputs.tracy }}
-  #   secrets: inherit
+  # setup:
+  #   name: Setup runner labels for deploy
+  #   runs-on: ubuntu-latest
+  #   environment: ${{ inputs.environment }}
+  #   outputs:
+  #     deployrunner: ${{ steps.step1.outputs.deployrunner }}
+  #   steps:
+  #     - name: Set runs-on for deploy
+  #       id: step1
+  #       run: |
+  #         # local_var="\'[\"${{ inputs.hw-config }}\", \"${{ inputs.runner-label }}\"]\'"
+  #         echo "deployrunner=${{ inputs.runner-label }}" >> $GITHUB_OUTPUT
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      arch: '[ "${{ inputs.arch }}" ]'
+      build-type: ${{ inputs.build-type }}
+      tracy: ${{ inputs.tracy }}
+    secrets: inherit
   test-dispatch:
-    # needs: build-artifact
+    # needs: setup
+    needs: build-artifact
     timeout-minutes: 1440
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ inputs.arch }}
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
-    runs-on:
-      - ${{ inputs.runner-label }}
-      # ${{ format(''["{0}", "{1}"]'', inputs.runner-label, inputs.hw-config ) }}
-      - ${{ inputs.hw-config }}
+    runs-on: ${{ fromJSON(inputs.runner-label) }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Ensure weka mount is active
