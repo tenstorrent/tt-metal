@@ -6,55 +6,58 @@
 
 #include <unordered_map>
 
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tt_metal/impl/program/program.hpp"
 #include "tt_metal/tt_stl/unique_any.hpp"
 
-namespace tt::tt_metal {
+namespace tt::tt_metal::program_cache::detail {
 
-namespace program_cache {
+template <typename shared_variables_t>
+struct CachedProgram {
+    tt::tt_metal::Program program;
+    // Cached program needs to share shared_variables between create and override_runtime_arguments functions
+    shared_variables_t shared_variables;
 
-namespace detail {
+    CachedProgram(tt::tt_metal::Program&& program, shared_variables_t&& shared_variables) :
+        program{std::move(program)}, shared_variables{std::forward<shared_variables_t>(shared_variables)} {}
+};
+
+struct CachedProgramFactory {
+    static constexpr auto MAX_SIZE = 4096;
+    static constexpr auto ALIGNMENT = 32;
+
+    tt::stl::unique_any<MAX_SIZE, ALIGNMENT> cached_program;
+    // program_factory_index is used to map a runtime value to a program factory type that is being used
+    std::size_t program_factory_index;
+
+    template <typename shared_variables_t>
+    CachedProgramFactory(CachedProgram<shared_variables_t>&& cached_program, std::size_t program_factory_index) :
+        cached_program{std::move(cached_program)}, program_factory_index{program_factory_index} {}
+};
+
 // Generic Program Cache: This data structure is tied to a device handle and can store generic program types from
 // TT-Metal and TT-Eager using tt::stl::concepts::unique_any.
 struct ProgramCache {
-    inline bool contains(uint64_t program_hash) { return this->cache_.count(program_hash) > 0; }
+    bool contains(uint64_t program_hash) { return this->cache_.count(program_hash) > 0; }
 
-    template <typename T>
-    inline T& get(uint64_t program_hash) {
-        return this->cache_.at(program_hash).get<T>();
-    }
+    CachedProgramFactory& get(uint64_t program_hash) { return this->cache_.at(program_hash); }
 
-    template <typename T>
-    inline void insert(uint64_t program_hash, T&& program) {
+    void insert(uint64_t program_hash, CachedProgramFactory&& program) {
         this->cache_.insert({program_hash, std::move(program)});
     }
 
-    void enable() {
-        is_enabled_ = true;
-    }
+    void enable() { is_enabled_ = true; }
 
-    void disable() {
-        is_enabled_ = false;
-    }
+    void disable() { is_enabled_ = false; }
 
-    bool is_enabled()  {
-        return is_enabled_;
-    }
+    bool is_enabled() { return is_enabled_; }
 
-    void clear() {
-        this->cache_.clear();
-    }
+    void clear() { this->cache_.clear(); }
 
-    inline std::size_t num_entries() const { return this->cache_.size(); }
+    std::size_t num_entries() const { return this->cache_.size(); }
 
    private:
     inline static bool is_enabled_ = false;
-
-    static constexpr auto MAX_CACHED_PROGRAM_SIZE = 4192;
-    static constexpr auto ALIGNMENT = 32;
-    std::unordered_map<uint64_t, tt::stl::unique_any<MAX_CACHED_PROGRAM_SIZE, ALIGNMENT>> cache_{};
+    std::unordered_map<uint64_t, CachedProgramFactory> cache_{};
 };
 
-}
-}
-}
+}  // namespace tt::tt_metal::program_cache
