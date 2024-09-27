@@ -70,7 +70,7 @@ def test_llama_attention_inference(seq_len, device, use_program_cache, reset_see
         device,
     )
 
-    tt_out = tt_model([attention_input], 0, None, rot_mats, transformation_mats, user_id=0, mode="prefill")
+    tt_out = tt_model([attention_input], 0, rot_mats, transformation_mats, user_id=0, mode="prefill")
     # multi-device attention module returns replicated output
     assert isinstance(tt_out, list)
     tt_out = tt_out[0]

@@ -219,13 +219,11 @@ class TtLlamaAttention(nn.Module):
         self,
         xs: List[ttnn.Tensor],
         current_pos,
-        current_pos_attn,
         rot_mat=None,
     ) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, hidden_dim)
         current_pos: (batch_size), current token position in the sequence for each user
-        current_pos_attn: (batch_size * kv_heads[8]), current token position in the sequence for each KV_head (Required for SDPA_decode)
         """
         dense_outputs = []
         for i in range(self.num_devices):
@@ -279,7 +277,7 @@ class TtLlamaAttention(nn.Module):
                 q_heads_pre_rot_1BQD,
                 rot_mat,
                 program_config=self.model_config["ROT_MAT_BMM_PROGCFG"],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=q_heads_pre_rot_1BQD.memory_config(),
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 dtype=ttnn.bfloat16,
             )
@@ -312,12 +310,11 @@ class TtLlamaAttention(nn.Module):
             ttnn.deallocate(k_heads_1BKD)
             ttnn.deallocate(v_heads_1BKD)
 
-            attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode_gqa(
+            attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
                 q_heads_1BQD,
                 keys,
                 values,
-                cur_pos_tensor=current_pos_attn,
-                transpose_q=False,
+                cur_pos_tensor=current_pos,
                 scale=self.scale,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
@@ -482,10 +479,8 @@ class TtLlamaAttention(nn.Module):
         attn_output_11SH.deallocate(True)
         return [output_11SH]
 
-    def forward(
-        self, xs, current_pos, current_pos_attn=None, rot_mats=None, transformation_mats=None, user_id=0, mode="decode"
-    ):
+    def forward(self, xs, current_pos, rot_mats=None, transformation_mats=None, user_id=0, mode="decode"):
         if mode == "prefill":
             return self.forward_prefill(xs[0], rot_mats, transformation_mats, user_id)
         else:
-            return self.forward_decode(xs, current_pos, current_pos_attn, rot_mats)
+            return self.forward_decode(xs, current_pos, rot_mats)

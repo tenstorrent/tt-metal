@@ -322,7 +322,6 @@ def run_decode(
             tt_out = model(
                 prefill_input,
                 0,  # Current position
-                None,
                 rot_mats_prefill,
                 transformation_mats,
                 user_id=batch_idx,
@@ -351,7 +350,7 @@ def run_decode(
                 model_args, tt_args.device, tokens_tensor, tt_embed, host_embed, indices_tensor
             )
             logger.info(f"Decoding batch with indices {batch_token_indices}")
-            tt_out = model(decode_input, current_pos_tensor, current_pos_tensor, rot_mat=current_rot_mat)
+            tt_out = model(decode_input, current_pos_tensor, rot_mat=current_rot_mat)
             tt_out_rm = ttnn.untilize(tt_out, use_multicore=True)
             ttnn.deallocate(tt_out)
             ttnn.deallocate(current_rot_mat)

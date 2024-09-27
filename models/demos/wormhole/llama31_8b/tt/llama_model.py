@@ -68,7 +68,6 @@ class TtTransformer(nn.Module):
         self,
         x: ttnn.Tensor,
         current_pos,
-        current_pos_attn,
         rot_mat=None,
         transformation_mats=None,
         user_id=0,
@@ -76,7 +75,7 @@ class TtTransformer(nn.Module):
         get_last_token=-1,
     ):
         for layer in self.layers:
-            x = layer(x, current_pos, current_pos_attn, rot_mat, transformation_mats, user_id, mode)
+            x = layer(x, current_pos, rot_mat, transformation_mats, user_id, mode)
         if mode == "prefill" and get_last_token == -1:
             return x
 
