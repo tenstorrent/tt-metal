@@ -21,11 +21,9 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "seq_len",
     (
-        16 * 4096,
+        64 * 1024,
+        32 * 1024,
         # 1024,
-        # 512,
-        # 128,
-        # 32,
     ),
 )
 def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seeds):
@@ -69,16 +67,16 @@ def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seed
     mode = "decode" if seq_len <= 32 else "prefill"
     tt_output = tt_model(tt_input, mode)
 
-    # tt_input = ttnn.from_torch(
-    #     torch_input,
-    #     device=mesh_device,
-    #     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    #     dtype=ttnn.bfloat16,
-    #     memory_config=ttnn.L1_MEMORY_CONFIG,
-    #     layout=ttnn.TILE_LAYOUT,
-    # )
-    # logger.info("Performance pass for Llama_MLP")
-    # tt_output = tt_model(tt_input, mode)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    logger.info("Performance pass for Llama_MLP")
+    tt_output = tt_model(tt_input, mode)
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[:, :1, :, :]
 
     pcc_required = 0.99

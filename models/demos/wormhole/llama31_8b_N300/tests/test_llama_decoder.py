@@ -60,7 +60,6 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds):
     cos, sin = precompute_freqs(model_args.head_dim, model_args.max_seq_len * 2)
     freqs_cis = torch.complex(cos, sin)
 
-    # TODO Update start_pos (check llama test for reference)
     for i in range(generation_length):
         print(f"[Decoder] Generating token {i}")
 

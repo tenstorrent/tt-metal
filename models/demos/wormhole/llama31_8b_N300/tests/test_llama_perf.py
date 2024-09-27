@@ -66,7 +66,6 @@ def test_llama_model_perf(
     # Embedding on host
     embd = HostEmbedding(model_args)
     embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
-    # TODO Add argmax + embedding on device, same as the demo.py code
 
     generation_start_pos = kv_cache_len
     generation_length = 1
@@ -100,6 +99,7 @@ def test_llama_model_perf(
     compile_and_iter_time = profiler.get("model_run_for_inference_0")
 
     ttnn.DumpDeviceProfiler(mesh_device.get_devices()[0])
+    # Synchronize devices to ensure all profiling data is captured accurately
     ttnn.synchronize_device(mesh_device.get_devices()[0])
     ttnn.synchronize_device(mesh_device.get_devices()[1])
 
