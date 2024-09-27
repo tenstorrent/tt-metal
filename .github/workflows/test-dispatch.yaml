@@ -11,6 +11,7 @@ on:
           - wormhole_b0
           - blackhole
       runner-label:
+        description: 'Optional: N150, N300, E150, BH, config-t3000, config-tg, config-tgg'
         required: true
         type: string
         default: '["in-service"]'
