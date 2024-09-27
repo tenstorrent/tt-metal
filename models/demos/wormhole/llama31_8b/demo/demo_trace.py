@@ -124,10 +124,10 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
     output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
 
     # Set Llama flags for CI
-    # if is_ci_env and instruct_mode:  # Update paths for instruct mode, otherwise use default paths for general weights
-    os.environ["LLAMA_CKPT_DIR"] = "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/"
-    os.environ["LLAMA_TOKENIZER_PATH"] = "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/"
-    os.environ["LLAMA_CACHE_PATH"] = "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/"
+    if is_ci_env and instruct_mode:  # Update paths for instruct mode, otherwise use default paths for general weights
+        os.environ["LLAMA_CKPT_DIR"] = "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/"
+        os.environ["LLAMA_TOKENIZER_PATH"] = "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/"
+        os.environ["LLAMA_CACHE_PATH"] = "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/"
     # This module requires the env paths above for CI runs
     from models.demos.wormhole.llama31_8b.tt.model_config import TtModelArgs
 
