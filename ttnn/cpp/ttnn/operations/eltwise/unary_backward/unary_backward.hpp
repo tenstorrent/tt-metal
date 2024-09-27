@@ -216,6 +216,90 @@ struct ExecuteUnaryBackwardOp {
     }
 };
 
+struct ExecuteUnaryBackwardErfc {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardLog1p {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardLog10 {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardSinh {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardSin {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardAsinh {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardAsin {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardAtanh {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardTanhshrink {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardHardswish {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardDeg2rad {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardErf {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
 struct ExecuteUnaryBackwardRsqrt {
     static std::vector<std::optional<Tensor>> invoke(
         uint8_t queue_id,
@@ -527,66 +611,18 @@ constexpr auto erfinv_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardOp<
         operations::unary_backward::UnaryBackwardOpType::ERFINV_BW>>();
 
-constexpr auto erf_bw = ttnn::register_operation<
-    "ttnn::erf_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::ERF_BW>>();
-
-constexpr auto deg2rad_bw = ttnn::register_operation<
-    "ttnn::deg2rad_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::DEG2RAD_BW>>();
-
-constexpr auto hardswish_bw = ttnn::register_operation<
-    "ttnn::hardswish_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::HARDSWISH_BW>>();
-
-constexpr auto tanhshrink_bw = ttnn::register_operation<
-    "ttnn::tanhshrink_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::TANHSHRINK_BW>>();
-
-constexpr auto atanh_bw = ttnn::register_operation<
-    "ttnn::atanh_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::ATANH_BW>>();
-
-constexpr auto asin_bw = ttnn::register_operation<
-    "ttnn::asin_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::ASIN_BW>>();
-
-constexpr auto asinh_bw = ttnn::register_operation<
-    "ttnn::asinh_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::ASINH_BW>>();
-
-constexpr auto sin_bw = ttnn::register_operation<
-    "ttnn::sin_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::SIN_BW>>();
-
-constexpr auto sinh_bw = ttnn::register_operation<
-    "ttnn::sinh_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::SINH_BW>>();
-
-constexpr auto log10_bw = ttnn::register_operation<
-    "ttnn::log10_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::LOG10_BW>>();
-
-constexpr auto log1p_bw = ttnn::register_operation<
-    "ttnn::log1p_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::LOG1P_BW>>();
-
-constexpr auto erfc_bw = ttnn::register_operation<
-    "ttnn::erfc_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::ERFC_BW>>();
-
+constexpr auto erf_bw = ttnn::register_operation<"ttnn::erf_bw", operations::unary_backward::ExecuteUnaryBackwardErf>();
+constexpr auto deg2rad_bw = ttnn::register_operation<"ttnn::deg2rad_bw", operations::unary_backward::ExecuteUnaryBackwardDeg2rad>();
+constexpr auto hardswish_bw = ttnn::register_operation<"ttnn::hardswish_bw", operations::unary_backward::ExecuteUnaryBackwardHardswish>();
+constexpr auto tanhshrink_bw = ttnn::register_operation<"ttnn::tanhshrink_bw", operations::unary_backward::ExecuteUnaryBackwardTanhshrink>();
+constexpr auto atanh_bw = ttnn::register_operation<"ttnn::atanh_bw", operations::unary_backward::ExecuteUnaryBackwardAtanh>();
+constexpr auto asin_bw = ttnn::register_operation<"ttnn::asin_bw", operations::unary_backward::ExecuteUnaryBackwardAsin>();
+constexpr auto asinh_bw = ttnn::register_operation<"ttnn::asinh_bw", operations::unary_backward::ExecuteUnaryBackwardAsinh>();
+constexpr auto sin_bw = ttnn::register_operation<"ttnn::sin_bw", operations::unary_backward::ExecuteUnaryBackwardSin>();
+constexpr auto sinh_bw = ttnn::register_operation<"ttnn::sinh_bw", operations::unary_backward::ExecuteUnaryBackwardSinh>();
+constexpr auto log10_bw = ttnn::register_operation<"ttnn::log10_bw", operations::unary_backward::ExecuteUnaryBackwardLog10>();
+constexpr auto log1p_bw = ttnn::register_operation<"ttnn::log1p_bw", operations::unary_backward::ExecuteUnaryBackwardLog1p>();
+constexpr auto erfc_bw = ttnn::register_operation<"ttnn::erfc_bw", operations::unary_backward::ExecuteUnaryBackwardErfc>();
 constexpr auto threshold_bw = ttnn::register_operation<"ttnn::threshold_bw", operations::unary_backward::ExecuteUnaryBackwardThreshold>();
 constexpr auto fill_bw = ttnn::register_operation<"ttnn::fill_bw", operations::unary_backward::ExecuteUnaryBackwardFill>();
 constexpr auto rsqrt_bw = ttnn::register_operation<"ttnn::rsqrt_bw", operations::unary_backward::ExecuteUnaryBackwardRsqrt>();
