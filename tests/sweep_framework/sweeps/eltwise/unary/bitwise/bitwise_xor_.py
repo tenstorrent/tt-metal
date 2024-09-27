@@ -12,7 +12,7 @@ from tests.sweep_framework.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random, is_wormhole_b0
+from models.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -25,10 +25,9 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 128, 128], [1, 1, 32, 32], 4)
-        + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 4)
-        + gen_shapes([32, 32], [256, 256], [32, 32], 4),
-        "shift_bits": list(range(0, 32)),
+        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 128, 128], [1, 1, 32, 32], 8)
+        + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 8)
+        + gen_shapes([32, 32], [256, 256], [32, 32], 8),
         "input_a_dtype": [ttnn.int32],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -51,7 +50,6 @@ def mesh_device_fixture():
 # If you defined a device_mesh_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_shape,
-    shift_bits,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
@@ -63,12 +61,12 @@ def run(
     torch.manual_seed(data_seed)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=0, high=100, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=0, high=100, dtype=torch.int64), input_a_dtype
     )(input_shape)
 
-    # scalar = torch.randint(1, 31, (1,)).item()
+    scalar = torch.randint(0, 101, (1,)).item()
 
-    torch_output_tensor = torch.bitwise_right_shift(torch_input_tensor_a, shift_bits)
+    torch_output_tensor = torch.bitwise_xor(torch_input_tensor_a, scalar)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -79,7 +77,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.bitwise_right_shift(input_tensor_a, shift_bits=shift_bits, memory_config=output_memory_config)
+    result = ttnn.bitwise_xor(input_tensor_a, value=scalar, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 

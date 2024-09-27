@@ -12,7 +12,7 @@ from tests.sweep_framework.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random, is_wormhole_b0
+from models.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -61,12 +61,12 @@ def run(
     torch.manual_seed(data_seed)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=0, high=100, dtype=torch.int64), input_a_dtype
     )(input_shape)
 
-    scalar = torch.randint(-100, 101, (1,)).item()
+    scalar = torch.randint(0, 101, (1,)).item()
 
-    torch_output_tensor = torch.bitwise_not(torch_input_tensor_a)
+    torch_output_tensor = torch.bitwise_or(torch_input_tensor_a, scalar)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -77,7 +77,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.bitwise_not(input_tensor_a, value=scalar, memory_config=output_memory_config)
+    result = ttnn.bitwise_or(input_tensor_a, value=scalar, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 

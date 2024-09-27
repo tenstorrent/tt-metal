@@ -12,7 +12,7 @@ from tests.sweep_framework.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random, is_wormhole_b0
+from models.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -25,9 +25,22 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 128, 128], [1, 1, 32, 32], 32)
-        + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 32)
-        + gen_shapes([32, 32], [256, 256], [32, 32], 32),
+        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 128, 128], [1, 1, 32, 32], 4)
+        + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 4)
+        + gen_shapes([32, 32], [256, 256], [32, 32], 4),
+        "shift_bits": list(range(1, 31)),
+        "use_safe_range": [True],
+        "input_a_dtype": [ttnn.int32],
+        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    },
+    "xfail": {
+        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 128, 128], [1, 1, 32, 32], 4)
+        + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 4)
+        + gen_shapes([32, 32], [256, 256], [32, 32], 4),
+        "shift_bits": list(range(1, 31)),
+        "use_safe_range": [False],
         "input_a_dtype": [ttnn.int32],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -50,6 +63,8 @@ def mesh_device_fixture():
 # If you defined a device_mesh_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_shape,
+    shift_bits,
+    use_safe_range,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
@@ -60,13 +75,23 @@ def run(
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
+    # In ttnn.bitwise_left_shift, if there is a 1 on the 0th position (most-significant-bit position),
+    # it discards it and turns the remaining bits into the positive int32 number.
+    # Torch version uses two's complement to handle such cases.
+    # If the number is greater or equal than 2 ** (31 - shift_bits),
+    # ttnn.bitwise_left_shift and torch .bitwise_left_shift will, therefore, return different results between torch and ttnn versions.
+    if use_safe_range:
+        low = -(2 ** (31 - shift_bits))
+        high = 2 ** (31 - shift_bits)
+    else:
+        low = -(2 ** (31 - shift_bits)) - 50
+        high = (2 ** (31 - shift_bits)) + 51
+
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=0, high=100, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=low, high=high, dtype=torch.int64), input_a_dtype
     )(input_shape)
 
-    scalar = torch.randint(0, 101, (1,)).item()
-
-    torch_output_tensor = torch.bitwise_xor(torch_input_tensor_a, scalar)
+    torch_output_tensor = torch.bitwise_left_shift(torch_input_tensor_a, shift_bits).to(torch.int32)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -77,8 +102,23 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.bitwise_xor(input_tensor_a, value=scalar, memory_config=output_memory_config)
-    output_tensor = ttnn.to_torch(result)
+    result = ttnn.bitwise_left_shift(input_tensor_a, shift_bits=shift_bits, memory_config=output_memory_config)
+    output_tensor = ttnn.to_torch(result).to(torch.int32)
     e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
+
+
+from tests.sweep_framework.permutations import *
+
+for suite in parameters.keys():
+    device_id = 0
+    device = ttnn.open_device(device_id=device_id)
+    suite_vectors = list(permutations(parameters[suite]))
+    print(len(suite_vectors))
+    for vector in suite_vectors:
+        passed, _ = run(**vector, device=device)
+        if passed[0] != True:
+            print(passed)
+
+    ttnn.close_device(device)
