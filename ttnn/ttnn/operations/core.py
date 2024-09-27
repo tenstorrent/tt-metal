@@ -198,7 +198,7 @@ def from_torch(
     Example:
         >>> tensor = ttnn.from_torch(torch.randn((2,3)), dtype=ttnn.bfloat16)
         >>> print(tensor)
-        Tensor([ [1.375, -1.30469, -0.714844],
+        Tensor([[1.375, -1.30469, -0.714844],
             [-0.761719, 0.53125, -0.652344]], dtype=bfloat16)
     """
 

@@ -151,7 +151,8 @@ void py_module(py::module& module) {
                 >>> device = ttnn.open_device(0)
                 >>> tensor = ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16))
                 >>> device_tensor = ttnn.to_device(tensor=tensor, device=device)
-                >>> host_tensor = ttnn.from_device(device_tensor)
+                >>> # non-blocking mode
+                >>> host_tensor = ttnn.from_device(tensor=device_tensor, blocking=False)
         )doc");
 
     module.def("deallocate", &ttnn::operations::core::deallocate, py::arg("tensor"), py::arg("force") = true,
@@ -170,7 +171,7 @@ void py_module(py::module& module) {
             >>> device = ttnn.open_device(device_id=device_id)
             >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
             >>> tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
-            >>> ttnn.deallocate(tensor)
+            >>> ttnn.deallocate(tensor=tensor, force=False)
     )doc");
 
     module.def(
@@ -358,7 +359,7 @@ void py_module(py::module& module) {
             >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
             >>> tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
             >>> print(tensor[0,0,:3])
-            Tensor([ 1.42188, -1.25, -0.398438], dtype=bfloat16)
+            Tensor([1.42188, -1.25, -0.398438], dtype=bfloat16)
         )doc",
         ttnn::pybind_overload_t{
             [](const std::decay_t<decltype(ttnn::to_layout)> self,
