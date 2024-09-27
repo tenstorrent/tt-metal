@@ -48,15 +48,15 @@ on:
 
 run-name: ${{ inputs.description }}
 jobs:
-  build-artifact:
-    uses: ./.github/workflows/build-artifact.yaml
-    with:
-      arch: '[ "${{ inputs.arch }}" ]'
-      build-type: ${{ inputs.build-type }}
-      tracy: ${{ inputs.tracy }}
-    secrets: inherit
+  # build-artifact:
+  #   uses: ./.github/workflows/build-artifact.yaml
+  #   with:
+  #     arch: '[ "${{ inputs.arch }}" ]'
+  #     build-type: ${{ inputs.build-type }}
+  #     tracy: ${{ inputs.tracy }}
+  #   secrets: inherit
   test-dispatch:
-    needs: build-artifact
+    # needs: build-artifact
     timeout-minutes: 1440
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
