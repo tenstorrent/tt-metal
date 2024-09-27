@@ -463,7 +463,7 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
 }
 
 template <typename binary_operation_t>
-void bind_polyval(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math) {
+void bind_polyval(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math, const std::string& note) {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -481,6 +481,9 @@ void bind_polyval(py::module& module, const binary_operation_t& operation, const
         Returns:
             ttnn.Tensor: the output tensor.
 
+        Note:
+            {4}
+
         Example:
             >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
             >>> coeffs = (1, 2, 3, 4)
@@ -491,7 +494,8 @@ void bind_polyval(py::module& module, const binary_operation_t& operation, const
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description,
-        math);
+        math,
+        note);
 
     bind_registered_operation(
         module,
@@ -979,6 +983,14 @@ void py_module(py::module& module) {
         ttnn::polyval,
         R"doc(Compute polyval of all elements of :attr:`input_tensor_a` with coefficient :attr:`coeffs` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor} = \sum_{i=0}^{n} (\mathrm{coeffs}_i) (\mathrm{input\_tensor}^i)
+        )doc",
+
+        R"doc(Supported dtypes, layouts, and ranks:
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+
         )doc");
 
     detail::bind_binary_overload_operation(
