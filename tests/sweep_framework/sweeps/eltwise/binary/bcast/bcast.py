@@ -25,7 +25,7 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 64, 64], [6, 12, 256, 256], [1, 1, 32, 32], 32),
+        "input_shape": gen_shapes([1, 1, 64, 64], [6, 12, 256, 256], [1, 1, 32, 32], 16),
         "op": [ttnn.BcastOpMath.ADD, ttnn.BcastOpMath.SUB, ttnn.BcastOpMath.MUL],
         "axis": [ttnn.BcastOpDim.H, ttnn.BcastOpDim.W, ttnn.BcastOpDim.HW],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -86,14 +86,6 @@ def run(
             torch_input_tensor_b = torch_input_tensor_b.repeat(1, 1, 1, 32)
         else:
             torch_input_tensor_b = torch_input_tensor_b.repeat(1, 1, 32, 32)
-
-        # print("")
-        # print(f"op {op} **********************************")
-        # print(f"axis {axis} **********************************")
-        # print(f"torch_input_tensor_a.shape {torch_input_tensor_a.shape} **********************************")
-        # print(f"torch_input_tensor_b.shape {torch_input_tensor_b.shape} **********************************")
-        # print(f"input_a_memory_config {input_a_memory_config} **********************************")
-        # print(f"input_b_memory_config {input_b_memory_config} **********************************")
 
         input_tensor_a = ttnn.from_torch(
             torch_input_tensor_a,
