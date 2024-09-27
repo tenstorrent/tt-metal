@@ -9,9 +9,8 @@ import os
 import ttnn
 from models.demos.wormhole.llama31_8b.tt.llama_common import (
     prepare_inputs_ttnn,
-    sample,
-    HostEmbedding,
     get_single_rot_mat,
+    HostEmbedding,
 )
 from models.demos.wormhole.llama31_8b.tt.llama_model import TtTransformer
 from models.demos.wormhole.llama31_8b.tt.llama_embedding import TtLlamaEmbedding
@@ -137,35 +136,38 @@ def run_inference(device, tt_model, tt_embd, embd, encoded_prompts, generation_s
     # Select the first token from the prompts for initial decoding
     encoded_prompts_tensor = torch.tensor(encoded_prompts)  # [:,0]
 
+    # Initialize tt_out_tok with the first token
+    tt_out_tok = ttnn.from_torch(
+        torch.nn.functional.pad(
+            encoded_prompts_tensor[:, 0].unsqueeze(0).unsqueeze(0).unsqueeze(0), (0, 31), "constant", 0
+        ),
+        device=device,
+        dtype=ttnn.uint32,
+    )
+
+    current_pos = ttnn.from_torch(torch.tensor([generation_start_pos] * batch), device=device, dtype=ttnn.int32)
+    current_pos_attn = ttnn.from_torch(
+        torch.tensor([generation_start_pos] * batch * 8), device=device, dtype=ttnn.int32
+    )
+
     for i in range(generation_length):
-        current_pos = generation_start_pos + i
-        pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
-        tt_decode_input = pt_decode_input
-        decode_input = prepare_inputs_ttnn(
-            tt_decode_input,
-            tt_model.args.dim,
-            tt_model.device,
-        )
-
-        current_pos_tensor = ttnn.from_torch(torch.tensor([current_pos] * batch), device=device, dtype=ttnn.int32)
-        current_pos_attn_tensor = ttnn.from_torch(
-            torch.tensor([current_pos] * batch * 8), device=device, dtype=ttnn.int32
-        )
-
         # Run TT model
         profiler.start(f"model_run_for_inference_{i}")
-        tt_out = tt_model(decode_input, current_pos_tensor, current_pos_attn_tensor, rot_mat=current_rot_mat)
 
-        # Convert ttnn tensor to torch tensor
-        profiler.start(f"result_wait_for_inference_{i}")
-        tt_out = ttnn.untilize(tt_out, use_multicore=True)
-        tt_output_torch = ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
-
-        profiler.end(f"model_run_for_inference_{i}")
-        profiler.end(f"result_wait_for_inference_{i}")
-
-        # Greedy decode the generated token and pass it back in, this is just a perf test
-        tt_out_tok = sample(tt_output_torch, temperature=0, top_p=1)
+        decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
+        tt_out = tt_model(decode_input, current_pos, current_pos_attn, rot_mat=current_rot_mat)
+        tt_out_rm = ttnn.untilize(tt_out, use_multicore=True)
+        ttnn.deallocate(tt_out)
+        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
+        ttnn.deallocate(tt_out_rm)
 
         # Update the rotation matrix for the next iteration
-        current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
+        new_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
+        current_rot_mat = ttnn.copy(new_rot_mat, current_rot_mat)
+        ttnn.plus_one(current_pos)
+        ttnn.plus_one(current_pos_attn)
+
+        profiler.end(f"model_run_for_inference_{i}")
+
+    # Synchronize device to ensure all operations are complete
+    ttnn.synchronize_device(device)
