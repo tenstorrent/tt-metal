@@ -34,6 +34,10 @@ on:
           - eltwise.unary.rad2deg.rad2deg
           - eltwise.unary.deg2rad.deg2rad
           - eltwise.unary.relu6.relu6
+          - eltwise.unary.log.log
+          - eltwise.unary.log1p.log1p
+          - eltwise.unary.log2.log2
+          - eltwise.unary.log10.log10
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multipl
           - eltwise.binary.div.div
