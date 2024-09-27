@@ -230,6 +230,20 @@ struct ExecuteUnaryBackwardLog1p {
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
+struct ExecuteUnaryBackwardLog10 {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardSinh {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
 // struct new {
 //     static std::vector<Tensor> invoke(
 //         const Tensor &grad_tensor_arg,
@@ -595,16 +609,8 @@ constexpr auto sin_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardOp<
         operations::unary_backward::UnaryBackwardOpType::SIN_BW>>();
 
-constexpr auto sinh_bw = ttnn::register_operation<
-    "ttnn::sinh_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::SINH_BW>>();
-
-constexpr auto log10_bw = ttnn::register_operation<
-    "ttnn::log10_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::LOG10_BW>>();
-
+constexpr auto sinh_bw = ttnn::register_operation<"ttnn::sinh_bw", operations::unary_backward::ExecuteUnaryBackwardSinh>();
+constexpr auto log10_bw = ttnn::register_operation<"ttnn::log10_bw", operations::unary_backward::ExecuteUnaryBackwardLog10>();
 constexpr auto log1p_bw = ttnn::register_operation<"ttnn::log1p_bw", operations::unary_backward::ExecuteUnaryBackwardLog1p>();
 constexpr auto erfc_bw = ttnn::register_operation<"ttnn::erfc_bw", operations::unary_backward::ExecuteUnaryBackwardErfc>();
 constexpr auto threshold_bw = ttnn::register_operation<"ttnn::threshold_bw", operations::unary_backward::ExecuteUnaryBackwardThreshold>();
