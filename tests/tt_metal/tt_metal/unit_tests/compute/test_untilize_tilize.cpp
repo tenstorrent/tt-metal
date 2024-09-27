@@ -113,7 +113,9 @@ void run_single_core_tilize_program(tt_metal::Device* device, const TestConfig& 
 
     uint32_t ouput_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = num_tiles;
-    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * test_config.output_single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
+    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(
+        num_output_tiles * test_config.output_single_tile_size,
+        {{ouput_cb_index, test_config.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b}})
         .set_page_size(ouput_cb_index, test_config.output_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
@@ -161,9 +163,11 @@ void run_single_core_tilize_program(tt_metal::Device* device, const TestConfig& 
 
     std::map<string, string> defines = {};
 
-    if (test_config.short_init)
-    {
+    if (test_config.short_init) {
         defines["SHORT_INIT"] = "1";
+    }
+    if (test_config.fp32_dest_acc_en) {
+        defines["DST_ACCUM_MODE"] = "1";
     }
 
     auto eltwise_unary_kernel = tt_metal::CreateKernel(
