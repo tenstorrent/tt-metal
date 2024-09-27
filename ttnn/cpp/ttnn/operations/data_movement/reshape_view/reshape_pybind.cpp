@@ -24,64 +24,23 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
         ttnn::pybind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const ttnn::Shape& new_shape
+               const ttnn::Shape& shape
                ) -> ttnn::Tensor {
-                return self(input_tensor, new_shape);
+                return self(input_tensor, shape);
             },
             py::arg("input_tensor"),
-            py::arg("new_shape"),
+            py::arg("shape"),
             },
         ttnn::pybind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const std::array<uint32_t, 1>& new_shape
+               const std::vector<int32_t>& shape
                ) -> ttnn::Tensor {
-                return self(input_tensor, ttnn::Shape(new_shape));
+                return self(input_tensor, shape);
             },
             py::arg("input_tensor"),
-            py::arg("new_shape"),
-            },
-        ttnn::pybind_overload_t{
-            [](const data_movement_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const std::array<uint32_t, 2>& new_shape
-               ) -> ttnn::Tensor {
-                return self(input_tensor, ttnn::Shape(new_shape));
-            },
-            py::arg("input_tensor"),
-            py::arg("new_shape"),
-            },
-        ttnn::pybind_overload_t{
-            [](const data_movement_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const std::array<uint32_t, 3>& new_shape
-               ) -> ttnn::Tensor {
-                return self(input_tensor, ttnn::Shape(new_shape));
-            },
-            py::arg("input_tensor"),
-            py::arg("new_shape"),
-            },
-        ttnn::pybind_overload_t{
-            [](const data_movement_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const std::array<uint32_t, 4>& new_shape
-               ) -> ttnn::Tensor {
-                return self(input_tensor, ttnn::Shape(new_shape));
-            },
-            py::arg("input_tensor"),
-            py::arg("new_shape"),
-            },
-        ttnn::pybind_overload_t{
-            [](const data_movement_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const std::array<uint32_t, 5>& new_shape
-               ) -> ttnn::Tensor {
-                return self(input_tensor, ttnn::Shape(new_shape));
-            },
-            py::arg("input_tensor"),
-            py::arg("new_shape"),
+            py::arg("shape"),
             }
-
         );
 }
 
@@ -93,25 +52,14 @@ void py_bind_reshape_view(pybind11::module& module) {
         module,
         ttnn::reshape,
 
-        R"doc(reshape(input_tensor: ttnn.Tensor, ttnn.Shape new_shape) -> ttnn.Tensor
-
-        Returns a tensor with the new shape.
-
-        Equivalent pytorch code:
-
-        .. code-block:: python
-            input_tensor = torch.arange(4.)
-            W = 1
-            Z = 1
-            Y = 2
-            X = 2
-            output_tensor = torch.reshape(input_tensor, (W, Z, Y, X))
-
+        R"doc(
 
         Args:
-            * :attr:`input_tensor`: Input Tensor.
-            * :attr:`new_shape`: New shape of tensor.
+            * input_tensor: Input Tensor.
+            * new_shape: New shape of tensor.
 
+        Returns:
+            ttnn.Tensor: the output tensor with the new shape.
 
         Example:
 

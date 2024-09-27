@@ -48,7 +48,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/reshape/device/kernels/dataflow/reader_unary_reshape_interleaved.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/kernels/dataflow/reader_unary_reshape_interleaved.cpp",
         core,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -191,13 +191,13 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/reshape/device/kernels/dataflow/reader_unary_reshape_stick_layout_interleaved.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/kernels/dataflow/reader_unary_reshape_stick_layout_interleaved.cpp",
         core,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/reshape/device/kernels/dataflow/writer_unary_reshape_stick_layout_interleaved.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/kernels/dataflow/writer_unary_reshape_stick_layout_interleaved.cpp",
         core,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -427,13 +427,13 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor &a, Tensor& o
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/reshape/device/kernels/dataflow/reader_unary_reshape_stick_layout_interleaved_multi_core.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/kernels/dataflow/reader_unary_reshape_stick_layout_interleaved_multi_core.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/reshape/device/kernels/dataflow/writer_unary_reshape_stick_layout_interleaved_multi_core.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/kernels/dataflow/writer_unary_reshape_stick_layout_interleaved_multi_core.cpp",
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 

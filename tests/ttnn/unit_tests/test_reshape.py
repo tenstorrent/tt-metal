@@ -206,9 +206,6 @@ def test_reshape_in_4D(n, c, h, w):
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])
 def test_reshape_in_4D_on_device(device, n, c, h, w):
-    if w != c:
-        pytest.skip("ttnn.reshape cannot modify width without causing a mismatch")
-
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.reshape(h, w, n, c)
 
@@ -222,7 +219,6 @@ def test_reshape_in_4D_on_device(device, n, c, h, w):
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.skip(reason="ttnn.reshape cannot modify width without causing a mismatch")
 def test_permute_reshape(device):
     input_shape = (1, 4, 64, 32)
     output_shape = (1, 64, 128)
@@ -296,11 +292,12 @@ def test_reshape_tile_layout_only_change_shape(device):
         ((16, 16), (32, 8)),
     ],
 )
-def test_reshape_tile_with_padding(input_shape, output_shape, device):
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_reshape_tile_with_padding(input_shape, output_shape, layout, device):
     torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
     torch_result = torch_input_tensor.reshape(output_shape)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, dtype=ttnn.bfloat16, device=device)
     ttnn_output = ttnn.reshape(input_tensor, output_shape)
 
     output = ttnn.to_torch(ttnn_output)
