@@ -87,22 +87,16 @@ tt-metal/tt_metal/programming_examples/profiler @mo-tenstorrent
 tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tt-rkim
 tests/scripts/run_performance.sh @tt-rkim
 
-# eager - tensor
-# **/tensor/ @TT-BrianLiu @tt-aho @dmakoviichuk-tt
-
 # TTNN
-ttnn/ @eyonland @patrickroberts @yan-zaretskiy @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dmakoviichuk-tt
-ttnn/ttnn/library_tweaks.py @ayerofieiev-tt @dmakoviichuk-tt @tt-rkim
+ttnn/ @ayerofieiev-tt @dmakoviichuk-tt @cfjchu @TT-BrianLiu
+ttnn/ttnn/library_tweaks.py @ayerofieiev-tt @tt-rkim
 ttnn/ttnn/operations/moreh.py @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
 ttnn/**/kernels/ # Removes the owners above from owning kernels unless specified afterwards
 ttnn/**/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @yan-zaretskiy
-ttnn/cpp/ttnn/tensor/ @patrickroberts @yan-zaretskiy @eyonland @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
+ttnn/cpp/ttnn/tensor/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
 ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/ccl/ @SeanNijjar
-ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/program_cache.*pp @eyonland @cfjchu @xanderchin
 ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
-ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @TT-BrianLiu @mywoodstock @eyonland @ayerofieiev-tt @razorback3 @dongjin-na
-ttnn/cpp/ttnn/deprecated/tt_lib/csrc/tt_lib_bindings_tensor_pytensor.cpp @eyonland @cfjchu @xanderchin
-ttnn/cpp/ttnn/deprecated/tt_lib/fallback_ops @tt-aho
+ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @ayerofieiev-tt @razorback3 @dongjin-na
 
 ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
 ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @cfjchu
@@ -116,7 +110,7 @@ ttnn/cpp/ttnn/operations/reduction/ @SeanNijjar @ntarafdar @sjameelTT
 ttnn/cpp/ttnn/operations/normalization/ @yugaoTT @tt-aho
 ttnn/cpp/ttnn/operations/embedding/ @ntarafdar @tt-aho @TT-BrianLiu
 ttnn/cpp/ttnn/operations/embedding_backward/ @TT-BrianLiu @yan-zaretskiy
-tests/ttnn/ @eyonland @patrickroberts @yan-zaretskiy @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dmakoviichuk-tt @razorback3 @dongjin-na
+tests/ttnn/ @ayerofieiev-tt @dmakoviichuk-tt @rfurko-tt @cfjchu @TT-BrianLiu @razorback3 @dongjin-na
 tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
 
 # models
@@ -149,8 +143,8 @@ models/perf/perf_report.py @yieldthought @uaydonat @tt-rkim
 models/perf/benchmarking_utils.py @skhorasganiTT @tt-rkim
 
 # docs
-docs/source/ttnn/dependencies/tt_lib.rst @eyonland @patrickroberts @yan-zaretskiy @cfjchu @xanderchin @ayerofieiev-tt
-docs/source/ttnn/ @eyonland @patrickroberts @yan-zaretskiy @cfjchu @xanderchin @ayerofieiev-tt @razorback3 @dongjin-na
+docs/source/ttnn/dependencies/tt_lib.rst @eyonland @patrickroberts @yan-zaretskiy @ayerofieiev-tt
+docs/source/ttnn/ @eyonland @patrickroberts @yan-zaretskiy @ayerofieiev-tt @razorback3 @dongjin-na
 # docs/source/apis/host_apis/ @abhullar-tt @TT-billteng @davorchap @tt-rkim
 # docs/source/apis/host_apis2.rst @abhullar-tt @TT-billteng @davorchap @tt-rkim
 # docs/source/apis/kernel_apis/ @davorchap @pgkeller @tt-rkim
