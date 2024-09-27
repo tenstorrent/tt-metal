@@ -1144,13 +1144,15 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     tt::tt_metal::CircularBufferConfig ex2pe_cb_config = tt::tt_metal::CircularBufferConfig(ex2pe_CB_size, {{cb_ex2pe_index, cb_data_format}})
         .set_page_size(cb_ex2pe_index, single_tile_size);
     auto cb_ex2pe = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2pe_cb_config);
+
+    CBHandle cb_stats = 0;
     if (is_post_all_gather){
         // cb_stats
         uint32_t cb_stats_index;
         cb_stats_index = tt::CB::c_in7;
         tt::tt_metal::CircularBufferConfig stats_cb_config = tt::tt_metal::CircularBufferConfig(stats_cb_size, {{cb_stats_index, cb_data_format}})
             .set_page_size(cb_stats_index, single_tile_size).set_globally_allocated_address(*stats.value().buffer());
-        auto cb_stats = tt::tt_metal::CreateCircularBuffer(program, sender_cores, stats_cb_config);
+        cb_stats = tt::tt_metal::CreateCircularBuffer(program, sender_cores, stats_cb_config);
         // cb_stats_reduced
         uint32_t cb_stats_reduced_index;
         cb_stats_reduced_index = tt::CB::c_intermed4;
@@ -1429,6 +1431,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             num_none_all_to_all_workers,
             cb_in0,
             cb_in1,
+            cb_stats,
             cb_output,
             cores
         ]
@@ -1443,12 +1446,16 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         const auto b_tensor = optional_input_tensors.at(0);
         const auto gamma_tensor = optional_input_tensors.at(1);
         const auto beta_tensor = optional_input_tensors.at(2);
+        const auto stats_tensor = optional_input_tensors.at(3);
         const auto dst_buffer = output_tensors.at(0).buffer();
 
         UpdateDynamicCircularBufferAddress(program, cb_in0, *src_buffer_a);
 
         if (b_tensor.has_value()) {
             UpdateDynamicCircularBufferAddress(program, cb_in1, *b_tensor.value().buffer());
+        }
+        if (stats_tensor.has_value()) {
+            UpdateDynamicCircularBufferAddress(program, cb_stats, *stats_tensor.value().buffer());
         }
 
         UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
