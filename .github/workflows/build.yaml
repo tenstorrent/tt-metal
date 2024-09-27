@@ -43,8 +43,8 @@ jobs:
             -e ARCH_NAME=${{ matrix.arch }}
           docker_os_arch: ${{ matrix.build.os }}-amd64
           run_args: |
-            nice -n 19 cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build.type }} -DCMAKE_CXX_COMPILER=${{ matrix.build.cxx_compiler }} -DCMAKE_C_COMPILER=${{ matrix.build.c_compiler }} -G Ninja
-            nice -n 19 cmake --build build --target tests
+            nice -n 19 cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build.type }} -DCMAKE_CXX_COMPILER=${{ matrix.build.cxx_compiler }} -DCMAKE_C_COMPILER=${{ matrix.build.c_compiler }} -G Ninja -DTT_METALLIUM_BUILD_TESTS=ON -DTT_METAL_BUILD_TESTS=ON -DTTNN_BUILD_TESTS=ON -DTT_UMD_BUILD_TESTS=ON
+            nice -n 19 cmake --build build
 
       - name: Check disk space
         run: |
