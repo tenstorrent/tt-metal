@@ -4,8 +4,6 @@
 
 #include "moreh_mean_device_operation.hpp"
 
-#include <iostream>
-
 #include "tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -20,7 +18,7 @@ void MorehMeanOperation::validate_tensors(
         (operation_attributes.dim >= 0 && operation_attributes.dim <= 7),
         "Invalid dimension value: {}. Expected a value between 0 and 7.",
         operation_attributes.dim);
-    TT_FATAL(operation_attributes.divisor.has_value() == false, "divisor not supported yet.");
+    // TT_FATAL(operation_attributes.divisor.has_value() == false, "divisor not supported yet.");
 
     tt::operations::primary::check_tensor(input, "moreh_mean", "input", {DataType::BFLOAT16});
     tt::operations::primary::check_tensor(output, "moreh_mean", "output", {DataType::BFLOAT16});
@@ -112,19 +110,23 @@ MorehMeanOperation::tensor_return_value_t MorehMeanOperation::create_output_tens
         tensor_args.input.get_dtype(),
         tensor_args.input.get_layout(),
         tensor_args.input.device(),
-        operation_attributes.output_memory_config);
+        operation_attributes.memory_config);
 }
 
 std::tuple<MorehMeanOperation::operation_attributes_t, MorehMeanOperation::tensor_args_t> MorehMeanOperation::invoke(
     const Tensor& input,
     const int64_t dim,
     const bool keepdim,
-    const std::optional<uint32_t>& divisor,
+    // const std::optional<uint32_t>& divisor,
     const std::optional<Tensor>& output,
-    const std::optional<MemoryConfig>& output_memory_config,
+    const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return {
-        {dim, keepdim, divisor, output_memory_config.value_or(input.memory_config()), compute_kernel_config},
+        {dim,
+         keepdim,
+         //  divisor,
+         memory_config.value_or(input.memory_config()),
+         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
         {input, output}};
 }
 }  // namespace ttnn::operations::moreh::moreh_mean

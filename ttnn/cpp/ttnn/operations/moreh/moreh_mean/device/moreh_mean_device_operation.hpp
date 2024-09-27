@@ -17,10 +17,10 @@ struct MorehMeanOperation {
     struct operation_attributes_t {
         const int64_t dim;
         const bool keepdim;
-        const std::optional<uint32_t> divisor;
+        // const std::optional<uint32_t> divisor;
         // const CoreRange core_range;  // unused for now
-        const MemoryConfig output_memory_config;
-        const std::optional<DeviceComputeKernelConfig> compute_kernel_config;
+        const MemoryConfig memory_config;
+        const DeviceComputeKernelConfig compute_kernel_config;
     };
     struct tensor_args_t {
         const Tensor& input;
@@ -108,9 +108,9 @@ struct MorehMeanOperation {
         const Tensor& input,
         const int64_t dim,
         const bool keepdim,
-        const std::optional<uint32_t>& divisor,
+        // const std::optional<uint32_t>& divisor,
         const std::optional<Tensor>& output,
-        const std::optional<MemoryConfig>& output_memory_config,
+        const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 

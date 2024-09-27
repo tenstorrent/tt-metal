@@ -82,8 +82,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     auto bfloat_scaler_value = *(new class bfloat16(scaler));
     auto packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(is_dram(input)), packed_scaler_value};
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(is_dram(input)), packed_scaler_value};
 
     std::vector<uint32_t> writer_compile_time_args = {
         static_cast<uint32_t>(CB::c_out0), static_cast<uint32_t>(is_dram(output))};

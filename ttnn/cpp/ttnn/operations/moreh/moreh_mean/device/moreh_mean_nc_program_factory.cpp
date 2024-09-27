@@ -99,10 +99,8 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
     std::vector<uint32_t> writer_compile_time_args;
     const auto reader_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/reader_moreh_mean_nc.cpp";
     const auto writer_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/writer_moreh_mean_nc.cpp";
-    const auto reader_kernel_id =
-        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
-    const auto writer_kernel_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -166,10 +164,7 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
             program,
             writer_kernel_id,
             core,
-            {output.buffer()->address(),
-             units_per_core,
-             tile_offset,
-             static_cast<uint32_t>(is_dram(output))});
+            {output.buffer()->address(), units_per_core, tile_offset, static_cast<uint32_t>(is_dram(output))});
 
         tile_offset += units_per_core;
     }

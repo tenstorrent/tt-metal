@@ -219,26 +219,26 @@ void MorehMeanBackwardOperation::MorehMeanBackwardFactory::override_runtime_argu
     cached_program_t &cached_program,
     const operation_attributes_t &operation_attributes,
     const tensor_args_t &tensor_args,
-    tensor_return_value_t &output_tensor){
-        auto& program = cached_program.program;
-        auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-        auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-        auto num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
-        auto num_cores_y = cached_program.shared_variables.num_cores_y;
+    tensor_return_value_t &output_tensor) {
+    auto &program = cached_program.program;
+    auto &reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
+    auto &writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    auto num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
+    auto num_cores_y = cached_program.shared_variables.num_cores_y;
 
-        const auto *output_grad_buffer = tensor_args.output_grad.buffer();
-        const auto *input_grad_buffer = output_tensor.buffer();
-        for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
-            CoreCoord core = {i / num_cores_y, i % num_cores_y};
-            {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = output_grad_buffer->address();
-            }
+    const auto *output_grad_buffer = tensor_args.output_grad.buffer();
+    const auto *input_grad_buffer = output_tensor.buffer();
+    for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        {
+            auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            runtime_args[0] = output_grad_buffer->address();
+        }
 
-            {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = input_grad_buffer->address();
-            }
+        {
+            auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            runtime_args[0] = input_grad_buffer->address();
         }
     }
+}
 }  // namespace ttnn::operations::moreh::moreh_mean_backward
