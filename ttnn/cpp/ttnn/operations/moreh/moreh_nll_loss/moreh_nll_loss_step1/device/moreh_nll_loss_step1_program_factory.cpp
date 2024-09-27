@@ -19,7 +19,7 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     using namespace tt::tt_metal;
 
     const Tensor& target = tensor_args.target_tensor;
-    const std::optional<const Tensor> weight = tensor_args.weight_tensor;
+    const std::optional<Tensor>& weight = tensor_args.weight_tensor;
     const Tensor& output = tensor_return_value;
     const std::string reduction = operation_attributes.reduction;
     const uint32_t ignore_index = operation_attributes.ignore_index;
@@ -101,7 +101,7 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     // create read/wrtie kernel
     const std::vector<uint32_t> reader_compile_time_args{
         static_cast<uint32_t>(tt::operations::primary::is_dram(target)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(weight)),
+        static_cast<uint32_t>(weight.has_value() ? tt::operations::primary::is_dram(weight.value()) : false),
         static_cast<uint32_t>(weight_has_value)};
 
     const std::vector<uint32_t> writer_compile_time_args{

@@ -9,7 +9,7 @@ import pytest
 from models.utility_functions import comp_allclose_and_pcc
 from loguru import logger
 
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
+from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
@@ -63,7 +63,7 @@ def run_moreh_nll_loss(shape, ignore_index, reduction, none_weight, device, comp
 
     assert reduction in ["sum", "mean"]
 
-    tt_loss = ttnn.moreh_nll_loss(
+    tt_loss = ttnn.operations.moreh.nll_loss(
         tt_input,
         tt_target,
         reduction,  # reduction_mean,
@@ -101,7 +101,7 @@ def run_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weight
     if reduction_mean == False:
         tt_divisor = None
         reduction = "sum"
-    tt_loss = ttnn.moreh_nll_loss(
+    tt_loss = ttnn.operations.moreh.nll_loss(
         tt_input,
         tt_target,
         reduction,
@@ -119,7 +119,7 @@ def run_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weight
     tt_output_grad = to_npu(output_grad, device)
     tt_input_grad = to_npu(torch_input, device)
 
-    tt_input_grad = ttnn.moreh_nll_loss_backward(
+    tt_input_grad = ttnn.operations.moreh.nll_loss_backward(
         target_tensor=tt_target,
         weight_tensor=tt_weight,
         divisor_tensor=tt_divisor,
@@ -167,16 +167,28 @@ def test_moreh_nll_loss(shape, ignore_index, reduction, none_weight, device):
     ],
 )
 @pytest.mark.parametrize("reduction", ["mean", "sum"])
-@pytest.mark.parametrize("none_weight", [True, False])
-def test_moreh_nll_loss_callback(shape, reduction, none_weight, device, use_program_cache):
+def test_moreh_nll_loss_callback(shape, reduction, device, use_program_cache):
     torch.manual_seed(0)
+    ignore_index = 0
 
-    ignore_idx = 0
+    num_program_cache_entries_list = []
+    for i in range(4):
+        if i < 2:
+            none_weight = True
+        else:
+            none_weight = False
 
-    for _ in range(2):
-        run_moreh_nll_loss(shape, ignore_idx, reduction, none_weight, device)
+        run_moreh_nll_loss(shape, ignore_index, reduction, none_weight, device)
         torch_dummy = torch.randn([32, 32])
         tt_dummy = to_npu(torch_dummy, device)
+
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert (
+        num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+        and num_program_cache_entries_list[2] == num_program_cache_entries_list[3]
+    )
 
 
 @pytest.mark.parametrize(
@@ -228,16 +240,29 @@ def test_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weigh
     ],
 )
 @pytest.mark.parametrize("reduction_mean", [True, False])
-@pytest.mark.parametrize("none_weight", [True, False])
-def test_moreh_nll_loss_backward_test_callback(shape, reduction_mean, none_weight, device, use_program_cache):
+def test_moreh_nll_loss_backward_test_callback(shape, reduction_mean, device, use_program_cache):
     torch.manual_seed(0)
 
     ignore_index = 0
 
-    for _ in range(2):
+    num_program_cache_entries_list = []
+    for i in range(4):
+        if i < 2:
+            none_weight = True
+        else:
+            none_weight = False
+
         run_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weight, device)
         torch_dummy = torch.randn([32, 32])
         tt_dummy = to_npu(torch_dummy, device)
+
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert (
+        num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+        and num_program_cache_entries_list[2] == num_program_cache_entries_list[3]
+    )
 
 
 @pytest.mark.parametrize(

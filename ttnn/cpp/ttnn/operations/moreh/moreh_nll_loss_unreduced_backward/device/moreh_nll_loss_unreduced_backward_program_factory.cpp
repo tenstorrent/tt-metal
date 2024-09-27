@@ -14,7 +14,7 @@ namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward {
 
 MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_unreduced_backward_impl_2d(
     const Tensor& target,
-    const std::optional<const Tensor> weight,
+    const std::optional<Tensor>& weight,
     const Tensor& output_grad,
     const Tensor& input_grad,
     const uint32_t ignore_index,
@@ -65,7 +65,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     const std::vector<uint32_t> reader_compile_time_args{
         static_cast<uint32_t>(tt::operations::primary::is_dram(target)),
         static_cast<uint32_t>(tt::operations::primary::is_dram(output_grad)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(weight))};
+        static_cast<uint32_t>(weight.has_value() ? tt::operations::primary::is_dram(weight.value()) : false)};
 
     const std::vector<uint32_t> writer_compile_time_args{
         static_cast<uint32_t>(tt::operations::primary::is_dram(input_grad))};
@@ -140,7 +140,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
 
 MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_unreduced_backward_impl_3d(
     const Tensor& target,
-    const std::optional<const Tensor> weight,
+    const std::optional<Tensor>& weight,
     const Tensor& output_grad,
     const Tensor& input_grad,
     const uint32_t ignore_index,
@@ -193,7 +193,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     const std::vector<uint32_t> reader_compile_time_args{
         static_cast<uint32_t>(tt::operations::primary::is_dram(target)),
         static_cast<uint32_t>(tt::operations::primary::is_dram(output_grad)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(weight))};
+        static_cast<uint32_t>(weight.has_value() ? tt::operations::primary::is_dram(weight.value()) : false)};
 
     const std::vector<uint32_t> writer_compile_time_args{
         static_cast<uint32_t>(tt::operations::primary::is_dram(input_grad))};
@@ -268,7 +268,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
 
 MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_unreduced_backward_impl_4d(
     const Tensor& target,
-    const std::optional<const Tensor> weight,
+    const std::optional<Tensor>& weight,
     const Tensor& output_grad,
     const Tensor& input_grad,
     const uint32_t ignore_index,
@@ -320,7 +320,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     const std::vector<uint32_t> reader_compile_time_args{
         static_cast<uint32_t>(tt::operations::primary::is_dram(target)),
         static_cast<uint32_t>(tt::operations::primary::is_dram(output_grad)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(weight))};
+        static_cast<uint32_t>(weight.has_value() ? tt::operations::primary::is_dram(weight.value()) : false)};
 
     const std::vector<uint32_t> writer_compile_time_args{
         static_cast<uint32_t>(tt::operations::primary::is_dram(input_grad))};
@@ -402,7 +402,7 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::create(
     using namespace tt::tt_metal;
 
     const Tensor& target = tensor_args.target_tensor;
-    const std::optional<const Tensor> weight = tensor_args.weight_tensor;
+    const std::optional<Tensor>& weight = tensor_args.weight_tensor;
     const Tensor& output_grad = tensor_args.output_grad_tensor;
 
     const uint32_t ignore_index = operation_attributes.ignore_index;
