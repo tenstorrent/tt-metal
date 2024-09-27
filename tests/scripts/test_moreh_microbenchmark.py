@@ -265,6 +265,24 @@ def run_dram_read_cmd(k, n, num_blocks, df, num_banks, bank_start_id):
     run_moreh_single_test("DRAM BW test multi-core", command)
 
 
+def run_dram_read_remote_cb_sync_cmd(k, n, num_blocks, df):
+    command = (
+        "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/9_dram_read_remote_cb_sync/test_dram_read_remote_cb_sync "
+        + " --k "
+        + str(k)
+        + " --n "
+        + str(n)
+        + " --num-blocks "
+        + str(num_blocks)
+        + " --num-tests "
+        + str(1)
+        + " --data-type "
+        + str(df)
+        + " --bypass-check "
+    )
+    run_moreh_single_test("DRAM BW test multi-core", command)
+
+
 # noc
 def test_noc_local(r=9, c=12, nt=256, cb=1):
     command = (
@@ -650,6 +668,48 @@ def test_dram_read_12_core(arch, freq, test_vector, num_tests, nblock, data_form
         elif data_format == 1:
             input_size = k * n * 2048 // 1024
         run_dram_read_cmd(k, n, nblock, data_format, num_banks, bank_start_id)
+        cycle = profile_results_kernel_duration()
+        time = cycle / freq / 1000.0 / 1000.0
+        throughput = input_size / cycle
+        logger.info("DRAM read cycle: " + str(cycle))
+        logger.info("DRAM read time: " + str(time))
+        logger.info("DRAM read throughput: " + str(throughput))
+        cycle_list.append(cycle)
+        time_list.append(time)
+        throughput_list.append(throughput)
+    cycle = sum(cycle_list) / len(cycle_list)
+    time = sum(time_list) / len(time_list)
+    throughput = sum(throughput_list) / len(throughput_list)
+    logger.info("DRAM read cycle: " + str(cycle))
+    logger.info("DRAM read time: " + str(time))
+    logger.info("DRAM read throughput: " + str(throughput))
+    data.append([throughput])
+    # check within range
+    dev_freq = get_device_freq()
+    bw_bound = 260.0 * dev_freq / 1000.0
+    assert bw_bound <= throughput
+
+
+@pytest.mark.parametrize(
+    "arch, freq, test_vector, num_tests, nblock, data_format",
+    [
+        # ("wormhole_b0", 1000, np.array([32768, 12 * 128]), 1, 8, 0),
+        ("wormhole_b0", 1000, np.array([32768, 12 * 128]), 1, 8, 1),
+    ],
+)
+def test_dram_read_remote_cb_sync_single_core(arch, freq, test_vector, num_tests, nblock, data_format):
+    data = []
+    cycle_list = []
+    time_list = []
+    throughput_list = []
+    for _ in range(num_tests):
+        k = int(test_vector[0])
+        n = int(test_vector[1])
+        if data_format == 0:
+            input_size = k * n * 1088 // 1024
+        elif data_format == 1:
+            input_size = k * n * 2048 // 1024
+        run_dram_read_remote_cb_sync_cmd(k, n, nblock, data_format)
         cycle = profile_results_kernel_duration()
         time = cycle / freq / 1000.0 / 1000.0
         throughput = input_size / cycle
