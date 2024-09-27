@@ -34,6 +34,8 @@ on:
           - eltwise.unary.rad2deg.rad2deg
           - eltwise.unary.deg2rad.deg2rad
           - eltwise.unary.relu6.relu6
+          - eltwise.unary.zeros.zeros
+          - eltwise.unary.zeros_like.zeros_like
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multipl
           - eltwise.binary.div.div

@@ -192,7 +192,7 @@ void bind_full_like_operation(py::module& module, const creation_operation_t& op
 }
 
 template <typename creation_operation_t>
-void bind_full_like_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation) {
+void bind_full_like_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation, const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
         Creates a tensor of the same shape as the input tensor and fills it with the value of {0}.
@@ -206,8 +206,13 @@ void bind_full_like_operation_with_hard_coded_value(py::module& module, const cr
 
         Returns:
             ttnn.Tensor: A filled tensor.
+
+        Note:
+            {2}
         )doc",
-        operation.base_name());
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        info_doc);
 
     bind_registered_operation(
         module,
@@ -349,7 +354,14 @@ void py_module(py::module& module) {
     detail::bind_full_operation_with_hard_coded_value(module, ttnn::ones);
 
     detail::bind_full_like_operation(module, ttnn::full_like);
-    detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::zeros_like);
+    detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::zeros_like,
+    R"doc(Supported dtypes, layouts, and ranks:
+
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16                |       ROW_MAJOR, TILE           |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+)doc");
     detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::ones_like);
 
     detail::bind_arange_operation(module, ttnn::arange);
