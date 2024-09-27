@@ -368,6 +368,7 @@ all_binary_ops = [
         "op": ttnn.add,
         "name": "ttnn.add",
     },
+    {"op": ttnn.add, "name": "ttnn.add_sharded", "use_sharded_tensors": [True, True]},
     {
         "op": ttnn.sub,
         "name": "ttnn.sub",
@@ -501,6 +502,12 @@ all_binary_ops = [
         "shape_func": bcast_h_shape_func,
     },
     {
+        "op": bcast_add_h,
+        "name": "ttnn.bcast_add_h_sharded",
+        "use_sharded_tensors": [True, False],
+        "shape_func": bcast_h_shape_func,
+    },
+    {
         "op": bcast_add_w,
         "name": "ttnn.bcast_add_w",
         "shape_func": bcast_w_shape_func,
@@ -516,6 +523,12 @@ all_binary_ops = [
         "shape_func": bcast_h_shape_func,
     },
     {
+        "op": bcast_sub_h,
+        "name": "ttnn.bcast_sub_h_sharded",
+        "use_sharded_tensors": [True, False],
+        "shape_func": bcast_h_shape_func,
+    },
+    {
         "op": bcast_sub_w,
         "name": "ttnn.bcast_sub_w",
         "shape_func": bcast_w_shape_func,
@@ -528,6 +541,12 @@ all_binary_ops = [
     {
         "op": bcast_mul_h,
         "name": "ttnn.bcast_mul_h",
+        "shape_func": bcast_h_shape_func,
+    },
+    {
+        "op": bcast_mul_h,
+        "name": "ttnn.bcast_mul_h_sharded",
+        "use_sharded_tensors": [True, False],
         "shape_func": bcast_h_shape_func,
     },
     {
@@ -2268,7 +2287,7 @@ all_unary_ops = [
     },
     {
         "op": primary_moreh_norm_3,
-        "name": "tt_lib.operations.primary.moreh_norm_dim_3",
+        "name": "ttnn.operations.moreh.norm_dim_3",
     },
     {
         "op": fused_softmax,

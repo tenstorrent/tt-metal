@@ -42,6 +42,7 @@ on:
           - eltwise.binary.logical_xor.logical_or
           - eltwise.binary.logical_and.logical_or
           - eltwise.binary.remainder.remainder
+          - eltwise.binary.bcast.bcast_h_sharded
           - eltwise.binary.fmod.fmod
           - eltwise.composite.binary.addalpha.addalpha
           - eltwise.composite.binary.subalpha.subalpha
