@@ -16,6 +16,13 @@ TIMEOUT = 10
 random.seed(0)
 
 
+# Create several shape types, such as [A, B, C, D] where any may or may not be included and any value ranges from 1-x
+# for i -> rand(1,4):
+#   shape should be [rand between 1,4096 for each N]
+#   One index (0->n) should have length/value 1 to squeeze, index i #this should also be random
+# dim = i or -(length-i) 50% chance here
+# All can go in a for loop for how many samples you want
+# This will do every combination of the following dtype and layout, so we will address RM and bfloat8 in invalidate vector
 def generate_squeeze_config(num_samples=10):
     # Iterate to generate 'num_samples' configurations
     for _ in range(num_samples):
@@ -44,15 +51,20 @@ def generate_squeeze_config(num_samples=10):
 
 parameters = {
     "nightly": {
-        "squeeze_specs": list(generate_squeeze_config(num_samples=100)),
-        # Couple thousand samples at most
-        # Create several shape types, such as [A, B, C, D] where any may or may not be included and any value ranges from 1-x
-        # for i -> rand(1,4):
-        #   shape should be [rand between 1,4096 for each N]
-        #   One index (0->n) should have length/value 1 to squeeze, index i #this should also be random
-        # dim = i or -(length-i) 50% chance here
-        # All can go in a for loop for how many samples you want
-        # This will do every combination of the following dtype and layout, so we will address RM and bfloat8 in invalidate vector
+        # "squeeze_specs": list(generate_squeeze_config(num_samples=100)),
+        "squeeze_specs": [
+            {"shape": [1, 1, 25088], "dim": 0},
+            {"shape": [1, 1, 480, 640], "dim": 1},
+            {"shape": [1, 14, 1], "dim": -1},
+            {"shape": [1, 19], "dim": 0},
+            {"shape": [1, 25, 1], "dim": -1},
+            {"shape": [1, 256, 1], "dim": -1},
+            {"shape": [3, 1370, 1, 1, 1280], "dim": -2},
+            {"shape": [3, 197, 1, 1, 1024], "dim": -2},
+            {"shape": [3, 197, 1, 1, 768], "dim": -2},
+            {"shape": [3, 50, 1, 1, 1024], "dim": -2},
+            {"shape": [3, 50, 1, 1, 768], "dim": -2},
+        ],
         "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
     }
