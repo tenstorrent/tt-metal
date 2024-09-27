@@ -8,9 +8,9 @@ import torch
 import pytest
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.utility_functions import is_grayskull, is_wormhole_b0
 from models.experimental.functional_vovnet.tt import ttnn_functional_vovnet
-from ttnn.tracer import trace, visualize
+from models.experimental.functional_vovnet.tt.model_preprocessing import create_vovnet_model_parameters
+from models.experimental.functional_vovnet.ref import torch_functional_vovnet
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -18,7 +18,8 @@ def test_effective_se_module(
     reset_seeds,
     device,
 ):
-    rf_model = timm.create_model("hf_hub:timm/ese_vovnet19b_dw.ra_in1k", pretrained=True)
+    rf_model = timm.create_model("ese_vovnet19b_dw", pretrained=True)
+
     rf_model = rf_model.eval()
     model = rf_model.stages[0].blocks[0].attn
 
@@ -256,18 +257,17 @@ def test_classifier_head(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_vovnet(reset_seeds, device, imagenet_sample_input):
     rf_model = timm.create_model("hf_hub:timm/ese_vovnet19b_dw.ra_in1k", pretrained=True)
+
     rf_model = rf_model.eval()
 
-    torch_input = torch.randn((1, 224, 224, 3), dtype=torch.bfloat16)
+    torch_input = torch.randn((1, 224, 224, 3))
 
     ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16)
     torch_input = torch_input.permute(0, 3, 1, 2)
-    torch_output = rf_model(torch_input.float())
+    torch_output = rf_model(torch_input)
 
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: rf_model,
-        convert_to_ttnn=lambda *_: False,
-    )
+    parameters = create_vovnet_model_parameters(rf_model, torch_input, device=device)
+
     tt_output = ttnn_functional_vovnet.vovnet(
         device=device,
         x=ttnn_input,
@@ -281,7 +281,8 @@ def test_vovnet(reset_seeds, device, imagenet_sample_input):
     )
 
     tt_output = ttnn.to_torch(tt_output)
-    tt_output = tt_output.permute(1, 2, 0, 3)
+    tt_output = tt_output.permute(0, 3, 1, 2)
     tt_output = tt_output.squeeze(0).squeeze(0)
+    tt_output = tt_output.reshape(torch_output.shape)
 
     assert_with_pcc(torch_output, tt_output, 0.99)
