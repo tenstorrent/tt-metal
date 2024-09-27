@@ -35,11 +35,9 @@ class TtModelArgs:
     sliding_window = 8192 * 4 * 4
 
     # Default folder location for weights and cached files
-    DEFAULT_CKPT_DIR = os.getenv("LLAMA_CKPT_DIR", "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/")
-    DEFAULT_TOKENIZER_PATH = os.getenv(
-        "LLAMA_TOKENIZER_PATH", "/proj_sw/user_dev/hf_data/llama//Meta-Llama-3.1-8B-Instruct/"
-    )
-    DEFAULT_CACHE_PATH = os.getenv("LLAMA_CACHE_PATH", "/proj_sw/user_dev/hf_data/llama/llama_81_n300_cache_instruct")
+    DEFAULT_CKPT_DIR = os.getenv("LLAMA_CKPT_DIR", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B/")
+    DEFAULT_TOKENIZER_PATH = os.getenv("LLAMA_TOKENIZER_PATH", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B/")
+    DEFAULT_CACHE_PATH = os.getenv("LLAMA_CACHE_PATH", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B/N300/")
 
     OP_KEYS = (
         # Embedding
