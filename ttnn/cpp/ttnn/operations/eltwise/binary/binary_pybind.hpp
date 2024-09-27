@@ -105,6 +105,9 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
 
         Supports broadcasting.
 
+        Note:
+            {4}
+
         Example:
 
             >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
@@ -618,7 +621,7 @@ void bind_inplace_operation(py::module& module, const binary_operation_t& operat
 }
 
 template <typename binary_operation_t>
-void bind_logical_inplace_operation(py::module& module, const binary_operation_t& operation, const std::string& description) {
+void bind_logical_inplace_operation(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& note) {
     auto doc = fmt::format(
         R"doc(
             {2}
@@ -632,6 +635,9 @@ void bind_logical_inplace_operation(py::module& module, const binary_operation_t
 
             Returns:
                 List of ttnn.Tensor: the output tensor.
+
+            Note:
+                {3}
 
             Example::
                 >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -798,7 +804,15 @@ void py_module(py::module& module) {
         module,
         ttnn::logical_or,
         R"doc(Compute logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i | \mathrm{{input\_tensor\_b}}_i))doc");
+        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i | \mathrm{{input\_tensor\_b}}_i))doc",
+
+        R"doc(Supported dtypes, layouts, and ranks:
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+
+        )doc");
 
     detail::bind_binary_operation(
         module,
@@ -896,7 +910,15 @@ void py_module(py::module& module) {
     detail::bind_logical_inplace_operation(
         module,
         ttnn::logical_or_,
-        R"doc(Compute inplace logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
+        R"doc(Compute inplace logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+
+        R"doc(Supported dtypes, layouts, and ranks:
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+
+        )doc");
 
     detail::bind_binary_composite(
         module,
