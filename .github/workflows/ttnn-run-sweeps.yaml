@@ -53,6 +53,7 @@ on:
           - eltwise.unary.exp.exp_pytorch2
           - eltwise.unary.exp2.exp2
           - eltwise.unary.expm1.expm1
+          - eltwise.unary.multigammaln.multigammaln
           - eltwise.unary.tanh.tanh
           - eltwise.unary.tanh.tanh_pytorch2
           - eltwise.unary.atanh.atanh
