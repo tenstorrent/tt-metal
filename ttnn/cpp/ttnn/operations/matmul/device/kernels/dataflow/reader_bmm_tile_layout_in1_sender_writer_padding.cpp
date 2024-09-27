@@ -89,12 +89,14 @@ void kernel_main() {
     constexpr DataFormat bias_data_format = get_dataformat(cb_id_in3);
     constexpr const uint32_t in3_tile_hw = get_tile_hw(cb_id_in3);
 
+#ifndef BIAS_SHARDED
     uint32_t l1_write_addr_in3;
 
     const InterleavedAddrGenFast<in3_is_dram, in3_tile_hw> s3 = {
         .bank_base_address = in3_tensor_addr,
         .page_size = bias_single_tile_size_bytes,
         .data_format = bias_data_format};
+#endif
 #else
     rt_args_idx += 2; // Skip over placeholders
 #endif
@@ -294,6 +296,7 @@ void kernel_main() {
         // Only read bias on first batch
         if (b == 0) {
             // Operand 1
+#ifndef BIAS_SHARDED
             cb_reserve_back(cb_id_in3, in1_block_w);
             l1_write_addr_in3 = get_write_ptr(cb_id_in3);
 
@@ -364,11 +367,15 @@ void kernel_main() {
                 in1_mcast_receiver_semaphore_addr,
                 in1_mcast_receiver_semaphore_noc_addr,
                 in1_mcast_num_cores);
-#endif
+#endif // SKIP_MCAST
 
             cb_push_back(cb_id_in3, in1_block_w);
+#else
+            cb_reserve_back(cb_id_in3, in1_block_w);
+            cb_push_back(cb_id_in3, in1_block_w);
+#endif // BIAS_SHARDED
         }
-#endif
+#endif // FUSE_BIAS
         if (bcast_B == 0) {
             in1_tensor_start_tile_id += KtNt;
         }

@@ -1175,50 +1175,53 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "in0_dtype, in1_dtype, num_activation_cores, num_compute_cores",
+    "in0_dtype, in1_dtype, num_activation_cores, num_compute_cores, has_bias, config, M, K, N",
     [
-        (ttnn.bfloat16, ttnn.bfloat4_b, 24, 24),
+        (ttnn.bfloat16, ttnn.bfloat4_b, 24, 24, False, "tg_llama_FF1", None, None, None),
+        (ttnn.bfloat16, ttnn.bfloat4_b, 24, 24, True, "tg_llama_FF1", None, None, None),
+        (ttnn.bfloat16, ttnn.bfloat4_b, 2, 2, True, None, 32, 1024, 2048),
     ],
 )
-def test_llama_ff1_matmul_in0_and_in1_sharded(device, in0_dtype, in1_dtype, num_activation_cores, num_compute_cores):
-    def padded_k_per_device_size_for_num_cores(num_cores, hidden_size):
-        padded_k = math.ceil(hidden_size / cluster_size[0] / num_cores / TILE_SIZE) * num_cores * TILE_SIZE
-        return padded_k
+def test_matmul_in0_in1_bias_sharded(
+    device, in0_dtype, in1_dtype, num_activation_cores, num_compute_cores, has_bias, config, M, K, N
+):
+    def padded_size_per_device_for_num_cores(size, num_devices, num_cores):
+        padded_size = math.ceil(size / num_devices / num_cores / TILE_SIZE) * num_cores * TILE_SIZE
+        return padded_size
 
-    def padded_n_per_device_size_for_num_cores(num_cores, ff_size):
-        padded_n = math.ceil(ff_size / cluster_size[1] / num_cores / TILE_SIZE) * num_cores * TILE_SIZE
-        return padded_n
+    def core_grid_size_for_num_cores(num_cores):
+        assert num_cores < 8 or num_cores % 8 == 0
+        x = min(num_cores, 8)
+        y = max(1, num_cores // 8)
+        core_grid = (x, y)
+        return core_grid
 
     def core_range_for_num_cores(num_cores):
-        assert num_cores % 8 == 0
-        end_x_coord = min(num_cores - 1, 7)
-        end_y_coord = num_cores // 8 - 1
+        core_grid = core_grid_size_for_num_cores(num_cores)
         core_range = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
                     ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(end_x_coord, end_y_coord),
+                    ttnn.CoreCoord(core_grid[0] - 1, core_grid[1] - 1),
                 ),
             }
         )
         return core_range
 
-    def core_grid_size_for_num_cores(num_cores):
-        assert num_cores % 8 == 0
-        x = min(num_cores, 8)
-        y = num_cores // 8
-        core_grid = (x, y)
-        return core_grid
-
-    hidden_size = 8192
-    ff_size = 28 * 1024
-    cluster_size = (4, 8)
-    M = 32
     TILE_SIZE = 32
 
-    K = padded_k_per_device_size_for_num_cores(num_activation_cores, hidden_size)
-    N = ff_size // cluster_size[1]
-    N_padded = padded_n_per_device_size_for_num_cores(num_compute_cores, ff_size)
+    if config == "tg_llama_FF1":
+        assert M is None and K is None and N is None, "Cannot specify config and any of M, K, N"
+        cluster_size = (4, 8)
+        hidden_size = 8192
+        ff_size = 28 * 1024
+        M = 32
+        K = padded_size_per_device_for_num_cores(hidden_size, cluster_size[0], num_activation_cores)
+        N = ff_size // cluster_size[1]
+        N_padded = padded_size_per_device_for_num_cores(ff_size, cluster_size[1], num_compute_cores)
+    else:
+        assert M is not None and K is not None and N is not None, "Must specify M, K, N"
+        N_padded = N
 
     # Weights
     mem_config_weights = ttnn.MemoryConfig(
@@ -1234,6 +1237,21 @@ def test_llama_ff1_matmul_in0_and_in1_sharded(device, in0_dtype, in1_dtype, num_
             False,
         ),
     )
+
+    if has_bias:
+        mem_config_bias = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                core_range_for_num_cores(num_compute_cores),
+                [
+                    32,
+                    N_padded // num_compute_cores,
+                ],
+                ttnn.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
 
     # Input
     mem_config_input = ttnn.MemoryConfig(
@@ -1276,6 +1294,16 @@ def test_llama_ff1_matmul_in0_and_in1_sharded(device, in0_dtype, in1_dtype, num_
         memory_config=mem_config_weights,
     )
 
+    if has_bias:
+        bias_tensor = torch.randn([1, 1, 1, N]).float() * 2.0
+        bias_tt = ttnn.as_tensor(
+            bias_tensor,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=mem_config_bias,
+        )
+
     mm_core_grid = core_grid_size_for_num_cores(num_compute_cores)
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=mm_core_grid,
@@ -1289,18 +1317,30 @@ def test_llama_ff1_matmul_in0_and_in1_sharded(device, in0_dtype, in1_dtype, num_
         fuse_batch=True,
     )
 
-    tt_matmul_out_tensor = ttnn.matmul(
-        tt_input_tensor,
-        weight_tt,
-        memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-        program_config=program_config,
-        compute_kernel_config=compute_kernel_config,
-    )
+    if has_bias:
+        tt_matmul_out_tensor = ttnn.linear(
+            tt_input_tensor,
+            weight_tt,
+            bias=bias_tt,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+    else:
+        tt_matmul_out_tensor = ttnn.matmul(
+            tt_input_tensor,
+            weight_tt,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+        )
 
     tt_mm_out = ttnn.from_device(tt_matmul_out_tensor)
     tt_mm_out = ttnn.to_torch(tt_mm_out)
 
     # Torch reference
     matmul_output = torch.matmul(input_tensor, weights_tensor)
+    if has_bias:
+        matmul_output = matmul_output + bias_tensor
 
     assert_with_pcc(matmul_output, tt_mm_out, pcc=0.993)
