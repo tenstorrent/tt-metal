@@ -1,0 +1,48 @@
+name: "Choose your pipeline"
+
+on:
+  workflow_dispatch:
+    inputs:
+      build-type:
+        required: false
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - CI
+
+run-name: ${{ inputs.description }}
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      arch: '[ "${{ inputs.arch }}" ]'
+      build-type: ${{ inputs.build-type }}
+      tracy: ${{ inputs.tracy }}
+    secrets: inherit
+  # build-artifact-profiler:
+  #   if: ${{ inputs.profiler_regression == true }}
+  #   uses: ./.github/workflows/build-artifact.yaml
+  #   with:
+  #     tracy: true
+  single-card-demo-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
+  t3000-demo-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/t3000-demo-tests-impl.yaml
+  perf-models-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/perf-models-impl.yaml
+  perf-device-models-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/perf-device-models-impl.yaml
+  fast-dispatch-full-regressions-and-models:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
