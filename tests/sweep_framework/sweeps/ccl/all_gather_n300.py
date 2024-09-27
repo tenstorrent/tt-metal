@@ -76,7 +76,7 @@ def mesh_device_fixture():
 
     yield ([devices[i] for i in range(num_devices)], "N300 Fixture")
 
-    del devices
+    ttnn.close_device(devices[0])
 
 
 # This is the run instructions for the test, defined by the developer.
