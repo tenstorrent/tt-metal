@@ -62,7 +62,7 @@ MorehNllLossStep1DeviceOperation::tensor_return_value_t MorehNllLossStep1DeviceO
 std::tuple<MorehNllLossStep1DeviceOperation::operation_attributes_t, MorehNllLossStep1DeviceOperation::tensor_args_t>
 MorehNllLossStep1DeviceOperation::invoke(
     const Tensor& target_tensor,
-    const std::optional<const Tensor> weight_tensor,
+    const std::optional<Tensor>& weight_tensor,
     const int32_t ignore_index,
     const std::string reduction,
     const DataType output_dtype,
