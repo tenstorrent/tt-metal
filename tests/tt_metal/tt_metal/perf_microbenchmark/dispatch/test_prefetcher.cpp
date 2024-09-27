@@ -1579,16 +1579,16 @@ void configure_for_single_chip(Device *device,
 
     constexpr uint32_t prefetch_sync_sem = 0;
 
-    tt_metal::CreateSemaphore(program, {prefetch_core}, 0);
-    tt_metal::CreateSemaphore(program, {prefetch_d_core}, 0);
+    tt_metal::CreateSemaphore(program, {prefetch_core}, 0); // 0
+    tt_metal::CreateSemaphore(program, {prefetch_d_core}, 0); // 0
     if (packetized_path_en_g) {
         tt_metal::CreateSemaphore(program, {prefetch_relay_mux_core}, 0); // unused
         tt_metal::CreateSemaphore(program, {prefetch_relay_demux_core}, 0); // unused
     }
     constexpr uint32_t prefetch_downstream_cb_sem = 1;
     uint32_t prefetch_downstream_buffer_pages = split_prefetcher_g ? prefetch_d_buffer_pages : dispatch_buffer_pages;
-    tt_metal::CreateSemaphore(program, {prefetch_core}, prefetch_downstream_buffer_pages);
-    tt_metal::CreateSemaphore(program, {prefetch_core}, prefetch_d_buffer_pages);
+    tt_metal::CreateSemaphore(program, {prefetch_core}, prefetch_downstream_buffer_pages); // 1
+    // tt_metal::CreateSemaphore(program, {prefetch_core}, prefetch_d_buffer_pages); // 2
     if (packetized_path_en_g) {
         // for the unpacketize stage, we use rptr/wptr for flow control, and poll semaphore
         // value only to update the rptr:
@@ -1600,24 +1600,24 @@ void configure_for_single_chip(Device *device,
     if (packetized_path_en_g) {
         tt_metal::CreateSemaphore(program, {prefetch_relay_mux_core}, 0);
     }
-    tt_metal::CreateSemaphore(program, {prefetch_d_core}, 0);
-    tt_metal::CreateSemaphore(program, {prefetch_d_core}, dispatch_buffer_pages);
+    tt_metal::CreateSemaphore(program, {prefetch_d_core}, 0); // 1
+    tt_metal::CreateSemaphore(program, {prefetch_d_core}, dispatch_buffer_pages); // 2
 
     constexpr uint32_t dispatch_sync_sem = 0;
     constexpr uint32_t dispatch_cb_sem = 1;
     constexpr uint32_t dispatch_downstream_cb_sem = 2;
-    tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
-    tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
-    tt_metal::CreateSemaphore(program, {dispatch_core}, dispatch_buffer_pages);
-    tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0); // unused
-    tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0); // unused
+    tt_metal::CreateSemaphore(program, {dispatch_core}, 0); // 0
+    tt_metal::CreateSemaphore(program, {dispatch_core}, 0); // 1
+    tt_metal::CreateSemaphore(program, {dispatch_core}, dispatch_buffer_pages); // 2
+    tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0); // unused 0
+    tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0); // unused 1
     // for the unpacketize stage, we use rptr/wptr for flow control, and poll semaphore
     // value only to update the rptr:
-    tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0);
+    tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0); // 2
 
     constexpr uint32_t dispatch_h_cb_sem = 0;
-    tt_metal::CreateSemaphore(program, {dispatch_h_core}, 0);
-    tt_metal::CreateSemaphore(program, {dispatch_relay_mux_core}, 0);
+    tt_metal::CreateSemaphore(program, {dispatch_h_core}, 0); // 0
+    tt_metal::CreateSemaphore(program, {dispatch_relay_mux_core}, 0); // 0
 
     std::vector<uint32_t> prefetch_compile_args = {
         dispatch_buffer_base, // overridden below for prefetch_h
