@@ -61,16 +61,74 @@ struct ExecuteUnaryBackwardPolygamma {
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
-template <UnaryBackwardOpType unary_backward_op_type>
-struct ExecuteUnaryBackwardWoFloat {
+struct ExecuteUnaryBackwardLog {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, output_memory_config);
-        }
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
 
+struct ExecuteUnaryBackwardRound {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardFloor {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardLogit {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardRelu {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardAcosh {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardCos {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardHardsigmoid {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardLgamma {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardMultigammaln {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
 struct ExecuteUnaryBackwardSoftplus {
@@ -359,40 +417,6 @@ struct ExecuteUnaryBackwardGelu{
 
 }  // operations::unary
 
-constexpr auto threshold_bw = ttnn::register_operation<
-    "ttnn::threshold_bw",
-    operations::unary_backward::ExecuteUnaryBackwardThreshold>();
-
-constexpr auto multigammaln_bw = ttnn::register_operation<
-    "ttnn::multigammaln_bw",
-    operations::unary_backward::ExecuteUnaryBackwardWoFloat<
-        operations::unary_backward::UnaryBackwardOpType::MULTIGAMMALN_BW>>();
-
-constexpr auto lgamma_bw = ttnn::register_operation<
-    "ttnn::lgamma_bw",
-    operations::unary_backward::ExecuteUnaryBackwardWoFloat<
-        operations::unary_backward::UnaryBackwardOpType::LGAMMA_BW>>();
-
-constexpr auto fill_bw = ttnn::register_operation<
-    "ttnn::fill_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFill>();
-
-constexpr auto hardsigmoid_bw = ttnn::register_operation<
-    "ttnn::hardsigmoid_bw",
-    operations::unary_backward::ExecuteUnaryBackwardWoFloat<
-        operations::unary_backward::UnaryBackwardOpType::HARDSIGMOID_BW>>();
-
-constexpr auto cos_bw = ttnn::register_operation<
-    "ttnn::cos_bw",
-    operations::unary_backward::ExecuteUnaryBackwardWoFloat<
-        operations::unary_backward::UnaryBackwardOpType::COS_BW>>();
-
-constexpr auto acosh_bw = ttnn::register_operation<
-    "ttnn::acosh_bw",
-    operations::unary_backward::ExecuteUnaryBackwardWoFloat<
-        operations::unary_backward::UnaryBackwardOpType::ACOSH_BW>>();
-
-//ExecuteUnaryBackwardOp : get_function_type1
 constexpr auto acos_bw = ttnn::register_operation<
     "ttnn::acos_bw",
     operations::unary_backward::ExecuteUnaryBackwardOp<
@@ -457,14 +481,6 @@ constexpr auto sigmoid_bw = ttnn::register_operation<
     "ttnn::sigmoid_bw",
     operations::unary_backward::ExecuteUnaryBackwardOp<
         operations::unary_backward::UnaryBackwardOpType::SIGMOID_BW>>();
-
-constexpr auto rsqrt_bw = ttnn::register_operation<
-    "ttnn::rsqrt_bw",
-    operations::unary_backward::ExecuteUnaryBackwardRsqrt>();
-
-constexpr auto neg_bw = ttnn::register_operation<
-    "ttnn::neg_bw",
-    operations::unary_backward::ExecuteUnaryBackwardNeg>();
 
 constexpr auto ceil_bw = ttnn::register_operation<
     "ttnn::ceil_bw",
@@ -571,56 +587,29 @@ constexpr auto erfc_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardOp<
         operations::unary_backward::UnaryBackwardOpType::ERFC_BW>>();
 
-constexpr auto clamp_bw = ttnn::register_operation<
-    "ttnn::clamp_bw",
-    operations::unary_backward::ExecuteUnaryBackwardClamp>();
-
-constexpr auto rdiv_bw = ttnn::register_operation<
-    "ttnn::rdiv_bw",
-    operations::unary_backward::ExecuteUnaryBackwardRdiv>();
-
-constexpr auto gelu_bw = ttnn::register_operation<
-    "ttnn::gelu_bw",
-    operations::unary_backward::ExecuteUnaryBackwardGelu>();
-
-constexpr auto repeat_bw = ttnn::register_operation<
-    "ttnn::repeat_bw",
-    operations::unary_backward::ExecuteUnaryBackwardRepeat>();
-
-constexpr auto pow_bw = ttnn::register_operation<
-    "ttnn::pow_bw",
-    operations::unary_backward::ExecuteUnaryBackwardPow>();
-
-constexpr auto exp_bw = ttnn::register_operation<
-    "ttnn::exp_bw",
-    operations::unary_backward::ExecuteUnaryBackwardExp>();
-constexpr auto tanh_bw = ttnn::register_operation<
-    "ttnn::tanh_bw",
-    operations::unary_backward::ExecuteUnaryBackwardTanh>();
-constexpr auto sqrt_bw = ttnn::register_operation<
-    "ttnn::sqrt_bw",
-    operations::unary_backward::ExecuteUnaryBackwardSqrt>();
-
-constexpr auto silu_bw = ttnn::register_operation<
-    "ttnn::silu_bw",
-    operations::unary_backward::ExecuteUnaryBackwardSilu>();
-
-constexpr auto relu_bw = ttnn::register_operation<
-    "ttnn::relu_bw",
-    operations::unary_backward::ExecuteUnaryBackwardWoFloat<operations::unary_backward::UnaryBackwardOpType::RELU_BW>>();
-constexpr auto logit_bw = ttnn::register_operation<
-    "ttnn::logit_bw",
-    operations::unary_backward::ExecuteUnaryBackwardWoFloat<operations::unary_backward::UnaryBackwardOpType::LOGIT_BW>>();
-constexpr auto floor_bw = ttnn::register_operation<
-    "ttnn::floor_bw",
-    operations::unary_backward::ExecuteUnaryBackwardWoFloat<operations::unary_backward::UnaryBackwardOpType::FLOOR_BW>>();
-constexpr auto round_bw = ttnn::register_operation<
-    "ttnn::round_bw",
-    operations::unary_backward::ExecuteUnaryBackwardWoFloat<operations::unary_backward::UnaryBackwardOpType::ROUND_BW>>();
-constexpr auto log_bw = ttnn::register_operation<
-    "ttnn::log_bw",
-    operations::unary_backward::ExecuteUnaryBackwardWoFloat<operations::unary_backward::UnaryBackwardOpType::LOG_BW>>();
-
+constexpr auto threshold_bw = ttnn::register_operation<"ttnn::threshold_bw", operations::unary_backward::ExecuteUnaryBackwardThreshold>();
+constexpr auto fill_bw = ttnn::register_operation<"ttnn::fill_bw", operations::unary_backward::ExecuteUnaryBackwardFill>();
+constexpr auto rsqrt_bw = ttnn::register_operation<"ttnn::rsqrt_bw", operations::unary_backward::ExecuteUnaryBackwardRsqrt>();
+constexpr auto neg_bw = ttnn::register_operation<"ttnn::neg_bw", operations::unary_backward::ExecuteUnaryBackwardNeg>();
+constexpr auto multigammaln_bw = ttnn::register_operation<"ttnn::multigammaln_bw", operations::unary_backward::ExecuteUnaryBackwardMultigammaln>();
+constexpr auto lgamma_bw = ttnn::register_operation<"ttnn::lgamma_bw", operations::unary_backward::ExecuteUnaryBackwardLgamma>();
+constexpr auto hardsigmoid_bw = ttnn::register_operation<"ttnn::hardsigmoid_bw", operations::unary_backward::ExecuteUnaryBackwardHardsigmoid>();
+constexpr auto cos_bw = ttnn::register_operation<"ttnn::cos_bw", operations::unary_backward::ExecuteUnaryBackwardCos>();
+constexpr auto acosh_bw = ttnn::register_operation<"ttnn::acosh_bw", operations::unary_backward::ExecuteUnaryBackwardAcosh>();
+constexpr auto clamp_bw = ttnn::register_operation<"ttnn::clamp_bw", operations::unary_backward::ExecuteUnaryBackwardClamp>();
+constexpr auto rdiv_bw = ttnn::register_operation<"ttnn::rdiv_bw", operations::unary_backward::ExecuteUnaryBackwardRdiv>();
+constexpr auto gelu_bw = ttnn::register_operation<"ttnn::gelu_bw", operations::unary_backward::ExecuteUnaryBackwardGelu>();
+constexpr auto repeat_bw = ttnn::register_operation<"ttnn::repeat_bw", operations::unary_backward::ExecuteUnaryBackwardRepeat>();
+constexpr auto pow_bw = ttnn::register_operation<"ttnn::pow_bw", operations::unary_backward::ExecuteUnaryBackwardPow>();
+constexpr auto exp_bw = ttnn::register_operation<"ttnn::exp_bw", operations::unary_backward::ExecuteUnaryBackwardExp>();
+constexpr auto tanh_bw = ttnn::register_operation<"ttnn::tanh_bw", operations::unary_backward::ExecuteUnaryBackwardTanh>();
+constexpr auto sqrt_bw = ttnn::register_operation<"ttnn::sqrt_bw", operations::unary_backward::ExecuteUnaryBackwardSqrt>();
+constexpr auto silu_bw = ttnn::register_operation<"ttnn::silu_bw", operations::unary_backward::ExecuteUnaryBackwardSilu>();
+constexpr auto relu_bw = ttnn::register_operation<"ttnn::relu_bw", operations::unary_backward::ExecuteUnaryBackwardRelu>();
+constexpr auto logit_bw = ttnn::register_operation<"ttnn::logit_bw", operations::unary_backward::ExecuteUnaryBackwardLogit>();
+constexpr auto floor_bw = ttnn::register_operation<"ttnn::floor_bw", operations::unary_backward::ExecuteUnaryBackwardFloor>();
+constexpr auto round_bw = ttnn::register_operation<"ttnn::round_bw", operations::unary_backward::ExecuteUnaryBackwardRound>();
+constexpr auto log_bw = ttnn::register_operation<"ttnn::log_bw", operations::unary_backward::ExecuteUnaryBackwardLog>();
 constexpr auto logiteps_bw = ttnn::register_operation<"ttnn::logiteps_bw", operations::unary_backward::ExecuteUnaryBackwardLogiteps>();
 constexpr auto celu_bw = ttnn::register_operation<"ttnn::celu_bw", operations::unary_backward::ExecuteUnaryBackwardCelu>();
 constexpr auto elu_bw = ttnn::register_operation<"ttnn::elu_bw", operations::unary_backward::ExecuteUnaryBackwardElu>();
