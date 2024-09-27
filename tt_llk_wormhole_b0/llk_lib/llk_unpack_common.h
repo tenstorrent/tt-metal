@@ -82,16 +82,6 @@ inline void _llk_unpack_config_tile_dim_srcb_impl_(const std::uint32_t face_r_di
 
 inline void _llk_unpack_reconfig_data_format_srca_impl_(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t tile_size)
 {
-    alu_config_u alu_payload = {.val = 0};
-    alu_payload.f.ALU_FORMAT_SPEC_REG0_SrcA = unpack_dst_format;
-    if ((uint)unpack_src_format == (uint)DataFormat::UInt8) {
-        alu_payload.f.ALU_FORMAT_SPEC_REG0_SrcAUnsigned = 1;
-    }
-    alu_payload.f.ALU_ACC_CTRL_INT8_math_enabled = ((uint)(unpack_dst_format & 0xF) == (uint)DataFormat::Int8) ||
-                                                   ((uint)unpack_dst_format == (uint)DataFormat::Int32);
-    constexpr uint alu_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG0_SrcAUnsigned_MASK | ALU_ACC_CTRL_INT8_math_enabled_MASK;
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, alu_mask>(alu_payload.val);
-    
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0, 0x0f>(unpack_src_format);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Out_data_format_RMW>(unpack_dst_format);
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_A)); // update gpr which holds tile size A
