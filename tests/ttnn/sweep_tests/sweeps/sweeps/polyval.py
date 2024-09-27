@@ -16,10 +16,10 @@ parameters = {
     "batch_sizes": [(1, 2)],
     "height": [384, 1024],
     "width": [1024, 4096],
-    "input_dtype": [ttnn.bfloat16],
+    "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-    "layout": [ttnn.TILE_LAYOUT],
+    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "coeff": [(3.6, 23.6, 1.7, 4.6), (9.4, 4.2, 3.3, 9.0)],
 }
 
@@ -29,6 +29,21 @@ def torch_polyval(input_tensor, coeff):
     for curValIndex in range(len(coeff) - 1):
         curVal = (curVal + coeff[curValIndex]) * input_tensor[0]
     return curVal + coeff[len(coeff) - 1]
+
+
+def skip(
+    batch_sizes,
+    height,
+    width,
+    input_dtype,
+    input_memory_config,
+    output_memory_config,
+    layout,
+    coeff,
+) -> Tuple[bool, Optional[str]]:
+    if layout == ttnn.ROW_MAJOR_LAYOUT:
+        return True, "Skipped as ROW_MAJOR_LAYOUT not supported"
+    return False, None
 
 
 def run(
