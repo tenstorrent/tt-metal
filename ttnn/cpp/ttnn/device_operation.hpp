@@ -8,42 +8,19 @@
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
+#include "tt_metal/impl/device/program_cache.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
-#include "tt_stl/concepts.hpp"
 #include "tt_stl/reflection.hpp"
-#include "tt_stl/unique_any.hpp"
 #include "tt_metal/graph/graph_tracking.hpp"
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "ttnn/core.hpp"
 
 namespace ttnn {
 
 namespace device_operation {
 
-template <typename shared_variables_t>
-struct CachedProgram {
-    tt::tt_metal::Program program;
-    // Cached program needs to share shared_variables between create and override_runtime_arguments functions
-    shared_variables_t shared_variables;
-
-    CachedProgram(tt::tt_metal::Program&& program, shared_variables_t&& shared_variables) :
-        program{std::move(program)}, shared_variables{shared_variables} {}
-};
-
-struct CachedProgramFactory {
-    static constexpr auto MAX_SIZE = 4096;
-    static constexpr auto ALIGNMENT = 32;
-
-    tt::stl::unique_any<MAX_SIZE, ALIGNMENT> cached_program;
-    // program_factory_index is used to map a runtime value to a program factory type that is being used
-    std::size_t program_factory_index;
-
-    template <typename shared_variables_t>
-    CachedProgramFactory(CachedProgram<shared_variables_t>&& cached_program, std::size_t program_factory_index) :
-        cached_program{std::move(cached_program)}, program_factory_index{program_factory_index} {}
-};
+template <typename T>
+using CachedProgram = tt::tt_metal::program_cache::detail::CachedProgram<T>;
 
 template <typename program_factory_t>
 concept ProgramFactoryConcept = requires {
@@ -138,10 +115,10 @@ inline auto& create_or_get_program_from_cache(
                     decltype(program_factory_t::create(operation_attributes, tensor_args, tensor_return_value));
                 program_cache.insert(
                     program_hash,
-                    CachedProgramFactory{
+                    tt::tt_metal::program_cache::detail::CachedProgramFactory{
                         program_factory_t::create(operation_attributes, tensor_args, tensor_return_value),
                         program_factory_index});
-                auto& cached_program_factory = program_cache.template get<CachedProgramFactory>(program_hash);
+                auto& cached_program_factory = program_cache.get(program_hash);
                 auto& cached_program = cached_program_factory.cached_program.template get<cached_program_t>();
                 return cached_program.program;
             },
@@ -149,7 +126,7 @@ inline auto& create_or_get_program_from_cache(
         return program;
     } else {
         ZoneScopedN("Program Cache Hit");
-        auto& cached_program_factory = program_cache.template get<CachedProgramFactory>(program_hash);
+        auto& cached_program_factory = program_cache.get(program_hash);
         auto program_factory_index = cached_program_factory.program_factory_index;
 
         using program_factory_variant_t =
