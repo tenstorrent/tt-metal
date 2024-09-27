@@ -133,7 +133,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
 
     # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
     for _ in range(num_iters):
-        ttnn_tensor_out = ttnn.line_all_gather(
+        ttnn_tensor_out = ttnn.all_gather(
             ttnn_tensor, dim=dim, cluster_axis=cluster_axis, mesh_device=mesh_device, num_links=num_links
         )
 

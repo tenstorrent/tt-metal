@@ -107,7 +107,9 @@ def run(
 
     for i in range(num_iters):
         start_time = start_measuring_time()
-        tt_out_tensor = ttnn.line_all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
+        tt_out_tensor = ttnn.all_gather(
+            input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=ttnn.Topology.Linear
+        )
         e2e_perf = stop_measuring_time(start_time)
 
         logger.info(f"Done iteration {i}")

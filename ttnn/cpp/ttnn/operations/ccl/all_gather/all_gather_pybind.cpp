@@ -127,7 +127,7 @@ void py_bind_all_gather(pybind11::module& module) {
         Example:
 
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.line_all_gather(tensor, dim=0)
+            >>> output = ttnn.all_gather(tensor, dim=0, topology=ttnn.Topology.Linear)
 
         )doc");*/
 }

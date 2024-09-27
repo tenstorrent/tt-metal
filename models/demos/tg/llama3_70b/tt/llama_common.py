@@ -40,7 +40,7 @@ def tt_all_reduce(input_tensor, mesh_device, cluster_axis, dim=0, num_links=2, m
     # Ensure the input tensor is in the correct memory configuration
     input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
 
-    gathered_tensor = ttnn.line_all_gather(
+    gathered_tensor = ttnn.all_gather(
         input_tensor, dim, num_links=num_links, cluster_axis=cluster_axis, mesh_device=mesh_device
     )
     reduced_tensors = ttnn.experimental.fast_reduce_nc(
@@ -54,13 +54,11 @@ def tt_all_gather(input_tensor, mesh_device, cluster_axis, dim, num_links=2, mem
     # Ensure the input tensor is in the correct memory configuration
     input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
 
-    return ttnn.line_all_gather(
-        input_tensor, dim, num_links=num_links, cluster_axis=cluster_axis, mesh_device=mesh_device
-    )
+    return ttnn.all_gather(input_tensor, dim, num_links=num_links, cluster_axis=cluster_axis, mesh_device=mesh_device)
 
 
 def tt_sharded_all_reduce(input_tensor, mesh_device, cluster_axis, dim=0, num_links=2, memory_config=None):
-    gathered_tensor = ttnn.line_all_gather(
+    gathered_tensor = ttnn.all_gather(
         input_tensor,
         dim,
         num_links=num_links,
@@ -79,7 +77,7 @@ def tt_sharded_all_reduce(input_tensor, mesh_device, cluster_axis, dim=0, num_li
 def tt_sharded_all_gather(input_tensor, mesh_device, cluster_axis, dim, num_links=2, memory_config=None):
     # Ensure the input tensor is in the correct memory configuration
 
-    return ttnn.line_all_gather(
+    return ttnn.all_gather(
         input_tensor,
         dim,
         num_links=num_links,
