@@ -44,8 +44,10 @@ class TtLlamaAttention(nn.Module):
         self.sliding_window = configuration.sliding_window
         self.grid_size = configuration.max_grid_size
 
+        self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
+        self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
+
         self.model_config = configuration.get_model_config()
-        self.compute_kernel_config = configuration.get_compute_kernel_config()
 
         layer_name = f"layers.{layer_num}.attention"
         if configuration.dummy_weights:
@@ -67,6 +69,17 @@ class TtLlamaAttention(nn.Module):
         self.layer_past_list = []
 
         for i in range(1):
+            # wqkv: 4096 x 3072 (2 devices): width-sharded on 12 banks, 3072 over 12 banks.
+            wqkv_shard_shape = (
+                4096,
+                3072 // 12,
+            )
+            wqkv_shard_spec = ttnn.ShardSpec(
+                configuration.dram_weight_grid, wqkv_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False
+            )
+            wqkv_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, wqkv_shard_spec
+            )
             wqkv = ttnn.as_tensor(
                 torch.concat(
                     [
@@ -97,14 +110,14 @@ class TtLlamaAttention(nn.Module):
                 device=self.device_mesh,
                 mesh_mapper=ttnn.ShardTensorToMesh(self.device_mesh, dim=-1),
                 dtype=self.dtype,
-                memory_config=self.model_config["ATTN_WEIGHTS_MEMCFG"],
+                memory_config=wqkv_mem_config,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
-                cache_file_name=cache_name("wqkv_n300"),
+                cache_file_name=cache_name("wqkv_sharded_n300"),
             )
 
-            # wo: 4096 x 4096: width-sharded on 12 banks, 4224 over 12 banks.
+            # wo: 2048 (2devices) x 4096: width-sharded on 12 banks, 4224 over 12 banks.
             wo_shard_shape = (
-                4096,
+                2048,
                 4224 // 12,
             )  # (11 shards) 4224 - padded cols to divide by 12 dram cores (and divisible by tile size of 32)
             wo_shard_spec = ttnn.ShardSpec(
@@ -121,10 +134,10 @@ class TtLlamaAttention(nn.Module):
                 ),
                 device=self.device_mesh,
                 mesh_mapper=ttnn.ShardTensorToMesh(self.device_mesh, dim=-2),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,  # TODO: wo dram sharded matmul errors// wo_mem_config,
+                memory_config=wo_mem_config,
                 dtype=self.dtype,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
-                cache_file_name=cache_name("wo_n300"),
+                cache_file_name=cache_name("wo_sharded_n300"),
             )
 
             cache_k = torch.zeros(
@@ -212,11 +225,6 @@ class TtLlamaAttention(nn.Module):
             per_core_M=1,
             per_core_N=32,
         )
-        self.compute_kernel_config_attn = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
         self.attention_grid = ttnn.CoreCoord(8, 4)
         self.scale = self.head_dim**-0.5
 
@@ -229,6 +237,8 @@ class TtLlamaAttention(nn.Module):
     ) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, hidden_dim)
+        current_pos: (batch_size), current token position in the sequence for each user
+        current_pos_attn: (batch_size * kv_heads[8]), current token position in the sequence for each KV_head (Required for SDPA_decode)
         """
         dense_outputs = []
         for i in range(1):
@@ -239,34 +249,26 @@ class TtLlamaAttention(nn.Module):
             assert self.max_batch_size * self.n_kv_heads < 64
             ###
             # QKV matmuls
+            # Use HiFi2 for DRAM-sharded matmuls as htey are otherwise flop-bound. Loses 1 bit of activation precision.
             ###
-            # pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            #     compute_with_storage_grid_size=(8, 8),
-            #     in0_block_w=1,  # how much inner dim you take each time
-            #     out_subblock_h=1,  # Must be divisible by per_core_M
-            #     out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-            #     per_core_M=1,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-            #     per_core_N=12,  # N / TILE_WIDTH / Grid_Size
-            #     mcast_in0=True,
-            #     fused_activation=None,
-            #     fuse_batch=True,
-            # )
-            xqkv_fused = ttnn.linear(
-                x,
+            x_sharded = ttnn.interleaved_to_sharded(x, self.model_config["SHARDED_SKIP_INPUT_MEMCFG"])
+            xqkv_fused_sharded = ttnn.linear(
+                x_sharded,
                 wqkv,
-                memory_config=self.model_config["XQKV_MM_OUTPUT_MEMCFG"],
-                compute_kernel_config=self.compute_kernel_config,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                program_config=self.model_config["XQKV_DECODE_PROGCFG"],
+                compute_kernel_config=self.compute_kernel_config_hifi2,
                 dtype=ttnn.bfloat16,
-                core_grid=self.grid_size,
             )
 
+            ttnn.deallocate(x_sharded)
+            xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(xqkv_fused_sharded)
             # Reshape such that true unpadded batch is tracked in shape
             fqkv_shape = xqkv_fused.shape
             xqkv_fused = ttnn.reshape(
                 xqkv_fused, ttnn.Shape((1, 1, self.max_batch_size, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3]))
             )
-
-            # ttnn.deallocate(x)
 
             ###
             # Reshape and rotary embeddings
@@ -284,26 +286,24 @@ class TtLlamaAttention(nn.Module):
 
             ttnn.deallocate(xqkv_fused)
 
-            # Update rotary matrix on device
-            rotary_mat = rot_mat
-
             q_heads_1BQD = ttnn.linear(
                 q_heads_pre_rot_1BQD,
-                rotary_mat,
+                rot_mat,
                 program_config=self.model_config["ROT_MAT_BMM_PROGCFG"],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_kernel_config,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
                 dtype=ttnn.bfloat16,
             )
 
             k_heads_1BKD = ttnn.linear(
                 k_heads_pre_rot_1BKD,
-                rotary_mat,
+                rot_mat,
                 program_config=self.model_config["ROT_MAT_BMM_PROGCFG"],
                 memory_config=k_heads_pre_rot_1BKD.memory_config(),
-                compute_kernel_config=self.compute_kernel_config,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
                 dtype=ttnn.bfloat16,
             )
+
             ttnn.deallocate(q_heads_pre_rot_1BQD)
             ttnn.deallocate(k_heads_pre_rot_1BKD)
 
@@ -335,6 +335,7 @@ class TtLlamaAttention(nn.Module):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
+            ttnn.deallocate(q_heads_1BQD)
             attn_output_11BH = ttnn.to_memory_config(
                 attn_output_1G4D, memory_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"]
             )
@@ -342,15 +343,18 @@ class TtLlamaAttention(nn.Module):
                 attn_output_11BH,
                 num_heads=self.n_local_heads,
             )
-            # attn_output_cat = ttnn.reshape(attn_output_cat, ttnn.Shape((1, 1, 32, self.hidden_size/self.num_devices)))
-            dense_out = ttnn.linear(
+            ttnn.deallocate(attn_output_11BH)
+
+            dense_out_sharded = ttnn.linear(
                 attn_output_cat,
                 wo,
-                memory_config=self.model_config["ATTN_OUTPUT_MEMCFG"],
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=self.model_config["ATTN_OUTPUT_PROGCFG"],
-                compute_kernel_config=self.compute_kernel_config,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
             )  # seqlen, 1, batch, hidden_size
+
             ttnn.deallocate(attn_output_cat)
+            dense_out = ttnn.sharded_to_interleaved(dense_out_sharded, ttnn.L1_MEMORY_CONFIG)
             dense_outputs.append(dense_out)
 
         # All reduce
@@ -378,7 +382,7 @@ class TtLlamaAttention(nn.Module):
             wqkv,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
         )
         if seq_len > 2048:
@@ -490,7 +494,7 @@ class TtLlamaAttention(nn.Module):
         output_11SH = ttnn.linear(
             attn_output_11SH,
             wo,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),

@@ -24,6 +24,7 @@ from models.utility_functions import skip_for_grayskull
         64 * 1024,
         32 * 1024,
         # 1024,
+        32,
     ),
 )
 def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seeds):

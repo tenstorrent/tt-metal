@@ -81,7 +81,7 @@ class TtTransformer(nn.Module):
         if mode == "prefill" and get_last_token == -1:
             return x
 
-        # slicing for the last token
+        # Slicing the tensor to the nearest celing/floor multiples of 32 for the prefill_len, to get the last token
         if get_last_token != -1:
             x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, 4096))
 
@@ -90,10 +90,12 @@ class TtTransformer(nn.Module):
         output = ttnn.linear(
             x,
             self.output_weight,
-            compute_kernel_config=self.args.get_compute_kernel_config(),
+            compute_kernel_config=self.args.compute_kernel_config_hifi4,
             program_config=self.model_config["OUTPUT_MM_PROGCFG"],
             memory_config=self.model_config["OUTPUT_MM_MEMCFG"],
             dtype=self.dtype,
         )
+
+        ttnn.deallocate(x)
 
         return output

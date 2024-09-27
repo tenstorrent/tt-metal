@@ -123,9 +123,9 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
 
     # Set Llama flags for CI
     if is_ci_env and instruct_mode:  # Update paths for instruct mode, otherwise use default paths for general weights
-        os.environ["LLAMA_CKPT_DIR"] = "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/"
-        os.environ["LLAMA_TOKENIZER_PATH"] = "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/"
-        os.environ["LLAMA_CACHE_PATH"] = "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct-N300/"
+        os.environ["LLAMA_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/"
+        os.environ["LLAMA_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/"
+        os.environ["LLAMA_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/N300/"
     # This module requires the env paths above for CI runs
     from models.demos.wormhole.llama31_8b_N300.tt.model_config import TtModelArgs
 
@@ -454,16 +454,16 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights, num_batches",
     [
-        # ("models/demos/wormhole/llama31_8b/demo/input_data_prefill_128.json", False, 1),
-        # ("models/demos/wormhole/llama31_8b/demo/input_data_prefill_128.json", False, 3),
+        ("models/demos/wormhole/llama31_8b/demo/input_data_prefill_128.json", False, 1),
+        ("models/demos/wormhole/llama31_8b/demo/input_data_prefill_128.json", False, 3),
         ("models/demos/wormhole/llama31_8b_N300/demo/input_data_questions_prefill_128.json", True, 1),
-        # ("models/demos/wormhole/llama31_8b/demo/input_data_questions_prefill_128.json", True, 3),
+        ("models/demos/wormhole/llama31_8b/demo/input_data_questions_prefill_128.json", True, 3),
     ],
     ids=[
-        # "general_weights-1_batch",
-        # "general_weights-3_batch",
+        "general_weights-1_batch",
+        "general_weights-3_batch",
         "instruct_weights-1_batch",
-        # "instruct_weights-3_batch",
+        "instruct_weights-3_batch",
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 4604928, "num_command_queues": 2}], indirect=True)

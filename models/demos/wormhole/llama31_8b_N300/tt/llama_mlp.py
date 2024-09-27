@@ -36,7 +36,7 @@ class TtLlamaMLP(torch.nn.Module):
         w1_w3_shard_shape = (
             4096,
             7296 // 12,
-        )  # (38 shards) 7168 - padded cols to divide by 12 dram cores (and divisible by tile size of 32)
+        )  # (19 shards) 7168 - padded cols to divide by 12 dram cores (and divisible by tile size of 32)
         w1_w3_shard_spec = ttnn.ShardSpec(
             args.dram_weight_grid, w1_w3_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False
         )
@@ -44,30 +44,18 @@ class TtLlamaMLP(torch.nn.Module):
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, w1_w3_shard_spec
         )
         # w2: 7168 x 4096: width-sharded on 12 banks, 4096 over 12 banks.
-        # TODO should dim 0 be expanded to 32k like in llama2?
         w2_shard_shape = (7168, 4224 // 12)  # (11 shards)  padded cols to divide by 12 dram cores
         w2_shard_spec = ttnn.ShardSpec(args.dram_weight_grid, w2_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
         w2_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
 
         # TODO Clean up this code. With sharding, we load the normal weights and then shard them
         as_sharded_tensor = lambda name, type, dim: ttnn.as_tensor(
-            torch_weight(name[:2]),
+            torch_weight(name[:2]),  # Grab only the wX part of the name
             dtype=type,
             device=self.device_mesh,
             mesh_mapper=ttnn.ShardTensorToMesh(self.device_mesh, dim=dim),
             layout=self.model_config["MLP_W_LAYOUT_TILE"],
-            # memory_config=self.model_config["MLP_W1_SHARDED_MEM_CFG"],
             memory_config=w2_mem_config if "w2" in name else w1_w3_mem_config,
-            cache_file_name=cache_name(name),
-        )
-        as_tensor = lambda name, type, dim: ttnn.as_tensor(
-            torch_weight(name[:2]),
-            dtype=type,
-            device=self.device_mesh,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.device_mesh, dim=dim),
-            layout=self.model_config["MLP_W_LAYOUT_TILE"],
-            # memory_config=self.model_config["MLP_W1_SHARDED_MEM_CFG"],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name(name),
         )
 
@@ -78,13 +66,6 @@ class TtLlamaMLP(torch.nn.Module):
         self.w2 = as_sharded_tensor("w2_sharded_n300", ttnn.bfloat8_b, dim=-2)
         self.w3 = as_sharded_tensor("w3_sharded_n300", ttnn.bfloat8_b, dim=-1)
 
-        # Interleaved weights
-        # self.w1 = as_tensor(
-        #     "w1_n300", ttnn.bfloat8_b, dim=-1
-        # )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        # self.w2 = as_tensor("w2_n300", ttnn.bfloat8_b, dim=-2)
-        # self.w3 = as_tensor("w3_n300", ttnn.bfloat8_b, dim=-1)
-
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """
         w1 -> gate_proj
@@ -93,86 +74,75 @@ class TtLlamaMLP(torch.nn.Module):
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
         seq_len = x.shape[-2]
-        compute_kernel_config = self.model_config["MLP_KERNEL_CONFIG"]
+        compute_kernel_config_hifi2 = self.model_config["MLP_KERNEL_CONFIG_HIFI2"]
         if mode == "decode":  # Sharded config
-            pc_1 = self.model_config["DECODE_MLP_W1_PRG_CONFIG"]
+            pc_1 = self.model_config["DECODE_MLP_W1_W3_PRG_CONFIG"]
             pc_2 = self.model_config["DECODE_MLP_W2_PRG_CONFIG"]
-            pc_3 = self.model_config["DECODE_MLP_W3_PRG_CONFIG"]
-            # pc_1 = None
-            # pc_2 = None
-            # pc_3 = None
+            pc_3 = self.model_config["DECODE_MLP_W1_W3_PRG_CONFIG"]
+            x_in = ttnn.interleaved_to_sharded(x, self.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"])
         else:  # Update the program configs based for prefill
+            x_in = x
             if seq_len >= 1024:  # Too big to compute. Set different program configs based on seqlen
                 # Reshape input to to fit on device and parallelize computation
                 x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
-                pc_1 = self.model_config["PREFILL_MLP_W1_PRG_CONFIG"]
+                pc_1 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"]
                 pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"]
-                pc_3 = self.model_config["PREFILL_MLP_W3_PRG_CONFIG"]
+                pc_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"]
             else:
-                pc_1 = self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"](seq_len)
+                pc_1 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG_128"](seq_len)
                 pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"](seq_len)
-                pc_3 = self.model_config["PREFILL_MLP_W3_PRG_CONFIG_128"](seq_len)
+                pc_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG_128"](seq_len)
 
-        # TODO Update the model itself to output sharded tensor to MLP
-        if mode == "decode":
-            old_x = x
-            x = ttnn.interleaved_to_sharded(
-                x,
-                self.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"],
-            )
-            old_x.deallocate(True)
-
+        # In decode mode (seqlen <= 32) do DRAM sharded matmuls
+        # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
         w1_out = ttnn.linear(
-            x,
+            x_in,
             self.w1,
-            compute_kernel_config=compute_kernel_config,  # TODO update to LOFI
+            compute_kernel_config=compute_kernel_config_hifi2,
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             dtype=ttnn.bfloat16,
             program_config=pc_1,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if seq_len <= 32 else ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
         )
-
         w3_out = ttnn.linear(
-            x,
+            x_in,
             self.w3,
-            compute_kernel_config=compute_kernel_config,
+            compute_kernel_config=compute_kernel_config_hifi2,
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             dtype=ttnn.bfloat16,
             program_config=pc_3,
-            # memory_config=ttnn.L1_MEMORY_CONFIG if seq_len <= 32 else ttnn.DRAM_MEMORY_CONFIG,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if seq_len <= 32 else ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
         )
 
         x.deallocate(True)
+        x_in.deallocate(True)
 
         w2_in = ttnn.multiply(
             w1_out,
             w3_out,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if seq_len <= 32 else ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
             input_tensor_a_activation=ttnn.UnaryOpType.SILU,
             dtype=ttnn.bfloat8_b,
-            # memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         w3_out.deallocate(True)
         w1_out.deallocate(True)
 
-        # w2_in -> [32, 224] shard
+        # This uses HiFi2 for full precision as it is dram-bound and uses bfp8 inputs
         w2_out = ttnn.linear(
             w2_in,
             self.w2,
-            compute_kernel_config=compute_kernel_config,
+            compute_kernel_config=compute_kernel_config_hifi2,
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
             dtype=ttnn.bfloat8_b,
             program_config=pc_2,
-            # memory_config=ttnn.DRAM_MEMORY_CONFIG  # ttnn.L1_MEMORY_CONFIG if seq_len <= 32 else ttnn.DRAM_MEMORY_CONFIG,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if seq_len <= 32 else ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
         )
 
         w2_in.deallocate(True)
 
         if mode == "decode":
-            w2_out = ttnn.sharded_to_interleaved(w2_out)
+            w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.L1_MEMORY_CONFIG)
 
         if seq_len >= 2048:  # Reshape back to intended shape
             w2_out = ttnn.reshape(w2_out, [1, 1, seq_len, -1])
