@@ -24,7 +24,7 @@ on:
       runner-label:
         required: false
         type: string
-        default: '["in-service"]'
+        default: "in-service"
       build-type:
         required: false
         type: choice
@@ -64,8 +64,9 @@ jobs:
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
     runs-on:
-      - ${{ format('[{0},{1}]', inputs.runner-label, inputs.hw-config ) }}
-      # - ${{ inputs.hw-config }}
+      - ${{ inputs.runner-label }}
+      # ${{ format(''["{0}", "{1}"]'', inputs.runner-label, inputs.hw-config ) }}
+      - ${{ inputs.hw-config }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Ensure weka mount is active
