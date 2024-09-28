@@ -57,3 +57,7 @@ jobs:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/t3000-nightly-tests-impl.yaml
+  t3000-model-perf-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
