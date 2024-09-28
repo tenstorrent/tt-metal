@@ -129,6 +129,7 @@ struct WorkerToEdmSender{
     template<ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_impl(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
         uint64_t buffer_address = this->edm_buffer_addr + (this->buffer_index * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
+        ASSERT(num_pages * page_size <= this->buffer_size_bytes);
         send_chunk<blocking_mode>(cb_id, num_pages, page_size, buffer_address);
         noc_semaphore_inc(edm_semaphore_addr, 1);
         this->buffer_index = (this->buffer_index == this->last_buffer_index) ? 0 : this->buffer_index + 1;

@@ -7,12 +7,11 @@
 #include "eth_l1_address_map.h"
 #include "ttnn/cpp/ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include <limits>
 
 namespace ttnn {
 namespace ccl {
-
-enum Topology { Ring = 0, Linear = 1, Meash = 2 };
 
 struct EriscDatamoverConfig {
     static constexpr std::size_t total_l1_buffer_space =
@@ -197,6 +196,8 @@ class EriscDatamoverBuilder {
         log_trace(tt::LogOp, "\tbuffer_address: {}", local_buffer_addresses.at(channel));
         log_trace(tt::LogOp, "\tsemaphore_address: {}", local_semaphore_addresses.at(channel));
         log_trace(tt::LogOp, "\tnum_workers: {}", worker_coords.size());
+        TT_ASSERT(local_buffer_addresses.size() > channel);
+        TT_ASSERT(local_semaphore_addresses.size() > channel);
 
         return ChannelBufferInterface{channel, local_buffer_addresses.at(channel), local_semaphore_addresses.at(channel)};
     }
@@ -225,6 +226,8 @@ class EriscDatamoverBuilder {
         log_trace(tt::LogOp, "\tchannel: {}", active_channels.back().channel);
         log_trace(tt::LogOp, "\tnum_workers: {}", worker_coords.size());
         log_trace(tt::LogOp, "\tis_sender: {}", active_channels.back().is_sender ? 1 : 0);
+        TT_ASSERT(local_buffer_addresses.size() > channel);
+        TT_ASSERT(local_semaphore_addresses.size() > channel);
         return ChannelBufferInterface{channel, local_buffer_addresses.at(channel), local_semaphore_addresses.at(channel)};
     }
 
