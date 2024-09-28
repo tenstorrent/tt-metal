@@ -11,21 +11,20 @@ on:
           - Debug
           - RelWithDebInfo
           - CI
-
+        default: "Release"
 run-name: ${{ inputs.description }}
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     with:
-      arch: '[ "${{ inputs.arch }}" ]'
       build-type: ${{ inputs.build-type }}
-      tracy: ${{ inputs.tracy }}
     secrets: inherit
-  # build-artifact-profiler:
-  #   if: ${{ inputs.profiler_regression == true }}
-  #   uses: ./.github/workflows/build-artifact.yaml
-  #   with:
-  #     tracy: true
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      build-type: ${{ inputs.build-type }}
+      tracy: true
+    secrets: inherit
   single-card-demo-tests:
     needs: build-artifact
     secrets: inherit
@@ -39,7 +38,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/perf-models-impl.yaml
   perf-device-models-tests:
-    needs: build-artifact
+    needs: build-artifact-profiler
     secrets: inherit
     uses: ./.github/workflows/perf-device-models-impl.yaml
   fast-dispatch-full-regressions-and-models:
