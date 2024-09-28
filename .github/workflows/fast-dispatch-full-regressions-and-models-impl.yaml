@@ -1,4 +1,4 @@
-name: (internal) Nightly fast dispatch tests impl
+name: "[internal] Nightly fast dispatch tests impl"
 
 on:
   workflow_call:

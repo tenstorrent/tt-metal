@@ -1,4 +1,4 @@
-name: "(internal) Perf models impl"
+name: "[internal] Perf models impl"
 
 on:
   workflow_call:
