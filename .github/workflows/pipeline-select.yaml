@@ -61,3 +61,7 @@ jobs:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
+  tgg-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tgg-unit-tests-impl.yaml
