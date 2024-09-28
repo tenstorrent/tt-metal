@@ -33,26 +33,6 @@ on:
         required: false
         type: boolean
         default: false
-      t3000-unit:
-        required: false
-        type: boolean
-        default: false
-      t3000-demo:
-        required: false
-        type: boolean
-        default: false
-      t3000-frequent:
-        required: false
-        type: boolean
-        default: false
-      t3000-nightly:
-        required: false
-        type: boolean
-        default: false
-      t3000-model-perf:
-        required: false
-        type: boolean
-        default: false
       tgg-unit:
         required: false
         type: boolean
@@ -98,31 +78,6 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
     if: ${{ inputs.single-card-nightly }}
-  t3000-unit-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/t3000-unit-tests-impl.yaml
-    if: ${{ inputs.t3000-unit }}
-  t3000-demo-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/t3000-demo-tests-impl.yaml
-    if: ${{ inputs.t3000-demo }}
-  t3000-frequent-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/t3000-frequent-tests-impl.yaml
-    if: ${{ inputs.t3000-frequent }}
-  t3000-nightly-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/t3000-nightly-tests-impl.yaml
-    if: ${{ inputs.t3000-nightly }}
-  t3000-model-perf-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
-    if: ${{ inputs.t3000-model-perf }}
   tgg-unit-tests:
     needs: build-artifact
     secrets: inherit
