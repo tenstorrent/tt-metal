@@ -21,11 +21,12 @@ Note that the core coordinates are logical coordinates, so worker cores and ethe
 
 .. code-block::
 
-    export TT_METAL_DPRINT_CORES=0,0     # required, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch
-    export TT_METAL_DPRINT_ETH_CORES=0,0 # optional, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch
-    export TT_METAL_DPRINT_CHIPS=0       # optional, comma separated list of chips
-    export TT_METAL_DPRINT_RISCVS=BR     # optional, default is all RISCs.  Use a subset of BR,NC,TR0,TR1,TR2
-    export TT_METAL_DPRINT_FILE=log.txt  # optional, default is to print to the screen
+    export TT_METAL_DPRINT_CORES=0,0           # required, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch
+    export TT_METAL_DPRINT_ETH_CORES=0,0       # optional, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch
+    export TT_METAL_DPRINT_CHIPS=0             # optional, comma separated list of chips
+    export TT_METAL_DPRINT_RISCVS=BR           # optional, default is all RISCs.  Use a subset of BR,NC,TR0,TR1,TR2
+    export TT_METAL_DPRINT_FILE=log.txt        # optional, default is to print to the screen
+    export TT_METAL_DPRINT_ONE_FILE_PER_RISC=1 # optional, splits DPRINT data on a per-RISC basis into files under $TT_METAL_HOME/generated/dprint/. Overrides TT_METAL_DPRINT_FILE.
 
 To generate kernel debug prints on the device, include the ``debug/dprint.h`` header and use the APIs defined there.
 And example with the different features available is shown below:

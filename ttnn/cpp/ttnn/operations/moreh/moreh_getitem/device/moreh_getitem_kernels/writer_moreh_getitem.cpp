@@ -20,13 +20,10 @@ void kernel_main() {
 
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
 
-    const InterleavedAddrGen<dst_is_dram> s0 = {
-        .bank_base_address = dst_addr,
-        .page_size = output_stick_size
-    };
+    const InterleavedAddrGen<dst_is_dram> s0 = {.bank_base_address = dst_addr, .page_size = output_stick_size};
 
     uint32_t end_id = start_id + num_sticks;
-    for (uint32_t i = start_id; i < end_id; ++ i) {
+    for (uint32_t i = start_id; i < end_id; ++i) {
         cb_wait_front(cb_id_out, 1);
         uint32_t l1_read_addr = get_read_ptr(cb_id_out);
         uint64_t dst_noc_addr = get_noc_addr(i, s0);

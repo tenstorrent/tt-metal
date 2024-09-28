@@ -101,6 +101,7 @@ class Device {
     CoreCoord dram_grid_size() const;
 
     CoreCoord physical_core_from_logical_core(const CoreCoord &logical_core, const CoreType &core_type) const;
+    CoreCoord physical_core_from_logical_core(const CoreDescriptor &logical_core) const;
     CoreType core_type_from_physical_core(const CoreCoord &physical_core) const;
 
     CoreCoord worker_core_from_logical_core(const CoreCoord &logical_core) const;

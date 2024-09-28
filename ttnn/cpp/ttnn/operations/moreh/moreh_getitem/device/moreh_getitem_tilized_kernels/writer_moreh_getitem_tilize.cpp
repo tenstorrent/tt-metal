@@ -37,20 +37,23 @@ void kernel_main() {
     };
 
     uint32_t end_id = start_id + num_sticks;
-    for (uint32_t i = start_id; i < end_id; ++ i) {
+    for (uint32_t i = start_id; i < end_id; ++i) {
         cb_wait_front(cb_id_out, 1);
         uint32_t l1_read_addr = get_read_ptr(cb_id_out);
 
         uint32_t stick_idx = i;
 
-        Idx5d stick_index_5d = get_stick_indices(stick_idx, output_size_c_without_padding, output_size_d_without_padding, output_size_h_without_padding, output_num_stick_width);
+        Idx5d stick_index_5d = get_stick_indices(
+            stick_idx,
+            output_size_c_without_padding,
+            output_size_d_without_padding,
+            output_size_h_without_padding,
+            output_num_stick_width);
         Idx5d tile_index_5d = get_tile_indices(stick_index_5d);
 
-        uint32_t noc_id =   tile_index_5d.n * output_noc_id_stride_n +
-                            tile_index_5d.c * output_noc_id_stride_c +
-                            tile_index_5d.d * output_noc_id_stride_d +
-                            tile_index_5d.h * output_noc_id_stride_h +
-                            tile_index_5d.w;
+        uint32_t noc_id = tile_index_5d.n * output_noc_id_stride_n + tile_index_5d.c * output_noc_id_stride_c +
+                          tile_index_5d.d * output_noc_id_stride_d + tile_index_5d.h * output_noc_id_stride_h +
+                          tile_index_5d.w;
 
         uint32_t noc_offset = get_noc_offset_in_tile(stick_index_5d.h, stick_index_5d.w, tile_index_5d.h, element_size);
 
