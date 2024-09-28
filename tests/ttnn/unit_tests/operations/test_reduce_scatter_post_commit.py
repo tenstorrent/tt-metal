@@ -207,7 +207,7 @@ def run_reduce_scatter_test(
     "input_dtype",
     [
         ttnn.bfloat16,
-        # ttnn.bfloat8_b,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
