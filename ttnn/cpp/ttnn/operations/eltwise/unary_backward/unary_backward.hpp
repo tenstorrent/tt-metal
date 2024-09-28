@@ -216,6 +216,76 @@ struct ExecuteUnaryBackwardOp {
     }
 };
 
+struct ExecuteUnaryBackwardTan {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardSquare {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+// struct new {
+//     static std::vector<Tensor> invoke(
+//         const Tensor &grad_tensor_arg,
+//         const Tensor &input_tensor_arg,
+//         const std::optional<MemoryConfig> &memory_config = std::nullopt);
+// };
+
+// struct new {
+//     static std::vector<Tensor> invoke(
+//         const Tensor &grad_tensor_arg,
+//         const Tensor &input_tensor_arg,
+//         const std::optional<MemoryConfig> &memory_config = std::nullopt);
+// };
+
+// struct new {
+//     static std::vector<Tensor> invoke(
+//         const Tensor &grad_tensor_arg,
+//         const Tensor &input_tensor_arg,
+//         const std::optional<MemoryConfig> &memory_config = std::nullopt);
+// };
+
+// struct new {
+//     static std::vector<Tensor> invoke(
+//         const Tensor &grad_tensor_arg,
+//         const Tensor &input_tensor_arg,
+//         const std::optional<MemoryConfig> &memory_config = std::nullopt);
+// };
+
+// struct new {
+//     static std::vector<Tensor> invoke(
+//         const Tensor &grad_tensor_arg,
+//         const Tensor &input_tensor_arg,
+//         const std::optional<MemoryConfig> &memory_config = std::nullopt);
+// };
+
+// struct new {
+//     static std::vector<Tensor> invoke(
+//         const Tensor &grad_tensor_arg,
+//         const Tensor &input_tensor_arg,
+//         const std::optional<MemoryConfig> &memory_config = std::nullopt);
+// };
+
+// struct new {
+//     static std::vector<Tensor> invoke(
+//         const Tensor &grad_tensor_arg,
+//         const Tensor &input_tensor_arg,
+//         const std::optional<MemoryConfig> &memory_config = std::nullopt);
+// };
+
+// struct new {
+//     static std::vector<Tensor> invoke(
+//         const Tensor &grad_tensor_arg,
+//         const Tensor &input_tensor_arg,
+//         const std::optional<MemoryConfig> &memory_config = std::nullopt);
+// };
+
 struct ExecuteUnaryBackwardErfc {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
@@ -621,16 +691,8 @@ constexpr auto selu_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardOp<
         operations::unary_backward::UnaryBackwardOpType::SELU_BW>>();
 
-constexpr auto square_bw = ttnn::register_operation<
-    "ttnn::square_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::SQUARE_BW>>();
-
-constexpr auto tan_bw = ttnn::register_operation<
-    "ttnn::tan_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::TAN_BW>>();
-
+constexpr auto square_bw = ttnn::register_operation<"ttnn::square_bw", operations::unary_backward::ExecuteUnaryBackwardSquare>();
+constexpr auto tan_bw = ttnn::register_operation<"ttnn::tan_bw", operations::unary_backward::ExecuteUnaryBackwardTan>();
 constexpr auto sigmoid_bw = ttnn::register_operation<"ttnn::sigmoid_bw", operations::unary_backward::ExecuteUnaryBackwardSigmoid>();
 constexpr auto ceil_bw = ttnn::register_operation<"ttnn::ceil_bw", operations::unary_backward::ExecuteUnaryBackwardCeil>();
 constexpr auto softsign_bw = ttnn::register_operation<"ttnn::softsign_bw", operations::unary_backward::ExecuteUnaryBackwardSoftsign>();

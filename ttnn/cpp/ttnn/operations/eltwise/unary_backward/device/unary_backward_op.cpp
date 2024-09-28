@@ -367,7 +367,7 @@ std::vector<Tensor> _i0_bw(const Tensor& grad, const Tensor& input, const std::o
     return grad_tensor;
 }
 
-std::vector<Tensor> _tan_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+std::vector<Tensor> ExecuteUnaryBackwardTan::invoke(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor tan_result = ttnn::tan(input, output_mem_config);
     Tensor result =
@@ -584,7 +584,7 @@ std::vector<Tensor> ExecuteUnaryBackwardLogit::invoke(const Tensor& grad, const 
 }
 // square
 // result:  2 * input * grad_data
-std::vector<Tensor> _square_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+std::vector<Tensor> ExecuteUnaryBackwardSquare::invoke(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = ttnn::multiply(ttnn::multiply(grad, 2.0f, std::nullopt, output_mem_config), input, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_result);
