@@ -20,11 +20,11 @@ on:
         required: false
         type: boolean
         default: false
-      perf-models:
+      single-card-perf-models:
         required: false
         type: boolean
         default: false
-      perf-device-models:
+      single-card-perf-device-models:
         description: "perf-device (requires tracy build)"
         required: false
         type: boolean
@@ -63,12 +63,12 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
     if: ${{ inputs.single-card-demo }}
-  perf-models-tests:
+  single-card-perf-models-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/perf-models-impl.yaml
     if: ${{ inputs.perf-models }}
-  perf-device-models-tests:
+  single-card-perf-device-models-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/perf-device-models-impl.yaml
