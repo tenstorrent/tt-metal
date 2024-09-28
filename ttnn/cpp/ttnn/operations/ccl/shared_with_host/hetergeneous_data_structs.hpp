@@ -120,7 +120,7 @@ inline coord_t advance_wrapped_slice_row_major(
 inline void advance_worker_global_page_interleaved (
     uint32_t &curr_page_idx,
     uint32_t &offset_into_worker_slice, // local to the worker chunk
-    coord_t &offset_worker_slice, // local to the tensor slice
+    coord_t const& offset_worker_slice, // local to the tensor slice
 
     coord_t const &worker_slice_shape, // worker chunk shape
     coord_t const &tensor_slice_shape, // tensor slice shape (per device)
