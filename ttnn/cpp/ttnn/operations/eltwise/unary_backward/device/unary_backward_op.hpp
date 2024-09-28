@@ -24,8 +24,6 @@ enum class UnaryBackwardOpType {
     FRAC_BW,
     TRUNC_BW,
     LOG_SIGMOID_BW,
-    FILL_ZERO_BW,
-    I0_BW,
 };
 
 std::vector<Tensor> _acos_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
@@ -34,8 +32,6 @@ std::vector<Tensor> _rad2deg_bw( const Tensor& grad, const Tensor& input, const 
 std::vector<Tensor> _frac_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _trunc_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _log_sigmoid_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _fill_zero_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _i0_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 
 std::vector<Tensor> _sub_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _gt_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config);
@@ -88,20 +84,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::LOG_SIGMOID_BW> {
     static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
         return _log_sigmoid_bw(grad, input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::FILL_ZERO_BW> {
-    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-        return _fill_zero_bw(grad, input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::I0_BW> {
-    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-        return _i0_bw(grad, input, output_mem_config);
     }
 };
 

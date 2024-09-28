@@ -330,14 +330,14 @@ std::vector<Tensor> _log_sigmoid_bw(const Tensor& grad, const Tensor& input, con
     return grad_tensor;
 }
 
-std::vector<Tensor> _fill_zero_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+std::vector<Tensor> ExecuteUnaryBackwardFillZero::invoke(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = ttnn::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
 
-std::vector<Tensor> _i0_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+std::vector<Tensor> ExecuteUnaryBackwardI0::invoke(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     float t_inf = std::numeric_limits<float>::infinity();
     Tensor value = ttnn::multiply(

@@ -244,19 +244,19 @@ struct ExecuteUnaryBackwardRelu6 {
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
-// struct new {
-//     static std::vector<Tensor> invoke(
-//         const Tensor &grad_tensor_arg,
-//         const Tensor &input_tensor_arg,
-//         const std::optional<MemoryConfig> &memory_config = std::nullopt);
-// };
+struct ExecuteUnaryBackwardI0 {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
 
-// struct new {
-//     static std::vector<Tensor> invoke(
-//         const Tensor &grad_tensor_arg,
-//         const Tensor &input_tensor_arg,
-//         const std::optional<MemoryConfig> &memory_config = std::nullopt);
-// };
+struct ExecuteUnaryBackwardFillZero {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
 
 // struct new {
 //     static std::vector<Tensor> invoke(
@@ -671,16 +671,8 @@ constexpr auto log_sigmoid_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardOp<
         operations::unary_backward::UnaryBackwardOpType::LOG_SIGMOID_BW>>();
 
-constexpr auto fill_zero_bw = ttnn::register_operation<
-    "ttnn::fill_zero_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::FILL_ZERO_BW>>();
-
-constexpr auto i0_bw = ttnn::register_operation<
-    "ttnn::i0_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::I0_BW>>();
-
+constexpr auto fill_zero_bw = ttnn::register_operation<"ttnn::fill_zero_bw", operations::unary_backward::ExecuteUnaryBackwardFillZero>();
+constexpr auto i0_bw = ttnn::register_operation<"ttnn::i0_bw", operations::unary_backward::ExecuteUnaryBackwardI0>();
 constexpr auto relu6_bw = ttnn::register_operation<"ttnn::relu6_bw", operations::unary_backward::ExecuteUnaryBackwardRelu6>();
 constexpr auto selu_bw = ttnn::register_operation<"ttnn::selu_bw", operations::unary_backward::ExecuteUnaryBackwardSelu>();
 constexpr auto square_bw = ttnn::register_operation<"ttnn::square_bw", operations::unary_backward::ExecuteUnaryBackwardSquare>();
