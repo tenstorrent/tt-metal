@@ -29,7 +29,6 @@ jobs:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
-
   perf-models-tests:
     needs: build-artifact
     secrets: inherit
@@ -42,6 +41,10 @@ jobs:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
+  t3000-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/t3000-unit-tests-impl.yaml
   t3000-demo-tests:
     needs: build-artifact
     secrets: inherit
