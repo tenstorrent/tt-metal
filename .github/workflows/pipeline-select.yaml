@@ -1,0 +1,71 @@
+name: "Choose your pipeline"
+
+on:
+  workflow_dispatch:
+    inputs:
+      build-type:
+        required: false
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - CI
+        default: "Release"
+run-name: ${{ inputs.description }}
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      build-type: ${{ inputs.build-type }}
+    secrets: inherit
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      build-type: ${{ inputs.build-type }}
+      tracy: true
+    secrets: inherit
+  single-card-demo-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
+  perf-models-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/perf-models-impl.yaml
+  perf-device-models-tests:
+    needs: build-artifact-profiler
+    secrets: inherit
+    uses: ./.github/workflows/perf-device-models-impl.yaml
+  fast-dispatch-full-regressions-and-models:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
+  t3000-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/t3000-unit-tests-impl.yaml
+  t3000-demo-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/t3000-demo-tests-impl.yaml
+  t3000-frequent-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/t3000-frequent-tests-impl.yaml
+  t3000-nightly-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/t3000-nightly-tests-impl.yaml
+  t3000-model-perf-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
+  tgg-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tgg-unit-tests-impl.yaml
+  tg-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tg-unit-tests-impl.yaml
