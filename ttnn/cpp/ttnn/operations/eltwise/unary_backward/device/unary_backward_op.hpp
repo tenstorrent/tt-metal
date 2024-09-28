@@ -12,14 +12,11 @@
 namespace ttnn::operations::unary_backward {
 
 enum class UnaryBackwardOpType {
-    ADD_BW,
     EQ_BW,
     GT_BW,
 };
 
 std::vector<Tensor> _gt_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config);
-
-std::vector<Tensor> _add_bw( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 std::vector<Tensor> _eq_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config);
