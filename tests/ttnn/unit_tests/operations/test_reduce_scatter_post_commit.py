@@ -178,6 +178,7 @@ def run_reduce_scatter_test(
                                     logger.error(
                                         f"mismatch at {w}, {z}, {y}, {x}: {tt_output_tensor[w, z, y, x]} != {golden_output_tensors[i][w, z, y, x]}"
                                     )
+
         else:
             logger.info(f"output match for tensor {i}")
     assert not mismatch, f"{i} FAILED: {output}"

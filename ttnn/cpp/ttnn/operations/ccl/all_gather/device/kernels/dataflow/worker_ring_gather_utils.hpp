@@ -498,7 +498,6 @@ FORCE_INLINE void read_wrapped_chunk_from_output_tensor(
         local_l1_read_addr += page_size * contig_pages;
     }
     noc_async_read_barrier();
-
     cb_push_back(cb_id, num_pages);
 }
 

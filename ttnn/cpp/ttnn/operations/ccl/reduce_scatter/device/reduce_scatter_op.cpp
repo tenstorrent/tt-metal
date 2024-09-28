@@ -22,6 +22,8 @@ void ReduceScatter::validate(const std::vector<Tensor>& input_tensors) const {
         TT_FATAL(
             t.get_legacy_shape()[this->scatter_dim] % this->ring_size == 0,
             "Reduce scatter input tensor shape on dim {} must be divisible by ring size", this->scatter_dim);
+
+        TT_FATAL(this->topology != ccl::Topology::Linear || !t.is_sharded(), "Sharded tensors are not supported for reduce scatter on a linear topology");
     }
 }
 
