@@ -292,12 +292,6 @@ std::vector<Tensor> ExecuteUnaryBackwardLgamma::invoke(const Tensor& grad, const
     return grad_tensor;
 }
 
-std::vector<Tensor> _sub_bw(const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    grad_tensor.emplace_back(grad);
-    return grad_tensor;
-}
-
 std::vector<Tensor> ExecuteUnaryBackwardFrac::invoke(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);

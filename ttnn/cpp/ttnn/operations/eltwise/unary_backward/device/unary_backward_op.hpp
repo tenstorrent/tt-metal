@@ -15,10 +15,8 @@ enum class UnaryBackwardOpType {
     ADD_BW,
     EQ_BW,
     GT_BW,
-    SUB_BW,
 };
 
-std::vector<Tensor> _sub_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _gt_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config);
 
 std::vector<Tensor> _add_bw( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
@@ -34,13 +32,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::GT_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config ) {
         return _gt_bw(grad, input, other, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::SUB_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _sub_bw(grad, input, scalar, output_mem_config);
     }
 };
 
