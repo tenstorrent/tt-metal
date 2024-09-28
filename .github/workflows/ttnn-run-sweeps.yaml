@@ -34,13 +34,17 @@ on:
           - eltwise.unary.rad2deg.rad2deg
           - eltwise.unary.deg2rad.deg2rad
           - eltwise.unary.relu6.relu6
+          - eltwise.unary.log.log
+          - eltwise.unary.log1p.log1p
+          - eltwise.unary.log2.log2
+          - eltwise.unary.log10.log10
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multipl
           - eltwise.binary.div.div
           - eltwise.binary.div_no_nan.div_no_nan
-          - eltwise.binary.logical_or.logical_or
-          - eltwise.binary.logical_xor.logical_or
-          - eltwise.binary.logical_and.logical_or
+          - eltwise.binary.logical_or_.logical_or_
+          - eltwise.binary.logical_xor_.logical_xor_
+          - eltwise.binary.logical_and_.logical_and_
           - eltwise.binary.remainder.remainder
           - eltwise.binary.bcast.bcast_h_sharded
           - eltwise.binary.fmod.fmod
