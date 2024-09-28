@@ -15,10 +15,12 @@ struct MorehGetItem {
         const std::vector<uint32_t> index_dims,
         const std::optional<Tensor>& output,
         // const CoreRange core_range,
-        const std::optional<MemoryConfig> output_memory_config);
-    };
-} // namespace ttnn::operations::moreh::moreh_getitem
+        const std::optional<MemoryConfig> memory_config);
+};
+}  // namespace ttnn::operations::moreh::moreh_getitem
 
 namespace ttnn {
-constexpr auto moreh_getitem = ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_getitem", ttnn::operations::moreh::moreh_getitem::MorehGetItem>();
+constexpr auto moreh_getitem = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::moreh_getitem",
+    ttnn::operations::moreh::moreh_getitem::MorehGetItem>();
 }

@@ -136,7 +136,6 @@ void kernel_main() {
         bool is_first_index = true;
         int32_t output_dim = 3;
         for (int32_t dim = 3; dim >= 0; dim--) {
-
             uint32_t input_stick_idx_stride = input_stick_idx_strides[dim];
             auto output_size = output_size_list[output_dim];
 
@@ -167,8 +166,7 @@ void kernel_main() {
                 noc_async_read(index_noc_addr, index_l1_addr, index_stick_sizes[dim]);
                 noc_async_read_barrier();
 
-                volatile tt_l1_ptr int32_t* index_l1_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr int32_t*>(index_l1_addr);
+                volatile tt_l1_ptr int32_t* index_l1_ptr = reinterpret_cast<volatile tt_l1_ptr int32_t*>(index_l1_addr);
                 int32_t noc_idx = index_l1_ptr[index_index];
 
                 if (noc_idx < 0) {
@@ -186,7 +184,7 @@ void kernel_main() {
                 output_stick_idx /= output_size;
             }
             if (!(index_start_dim < dim && dim <= index_end_dim)) {
-                output_dim --;
+                output_dim--;
             }
         }
 
