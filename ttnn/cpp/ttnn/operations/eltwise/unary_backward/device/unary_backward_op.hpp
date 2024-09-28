@@ -26,8 +26,6 @@ enum class UnaryBackwardOpType {
     LOG_SIGMOID_BW,
     FILL_ZERO_BW,
     I0_BW,
-    RELU6_BW,
-    SELU_BW,
 };
 
 std::vector<Tensor> _acos_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
@@ -38,8 +36,6 @@ std::vector<Tensor> _trunc_bw( const Tensor& grad, const Tensor& input, const st
 std::vector<Tensor> _log_sigmoid_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _fill_zero_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _i0_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _relu6_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _selu_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 
 std::vector<Tensor> _sub_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _gt_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config);
@@ -106,20 +102,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::I0_BW> {
     static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
         return _i0_bw(grad, input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::RELU6_BW> {
-    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-        return _relu6_bw(grad, input, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::SELU_BW> {
-    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-        return _selu_bw(grad, input, output_mem_config);
     }
 };
 
