@@ -12,68 +12,134 @@ on:
           - RelWithDebInfo
           - CI
         default: "Release"
+      build-with-tracy:
+        required: false
+        type: boolean
+        default: false
+      single-card-demo:
+        required: false
+        type: boolean
+        default: false
+      perf-models:
+        required: false
+        type: boolean
+        default: false
+      perf-device-models:
+        description: "Requires tracy"
+        required: false
+        type: boolean
+        default: false
+      single-card-nightly:
+        required: false
+        type: boolean
+        default: false
+      t3000-unit:
+        required: false
+        type: boolean
+        default: false
+      t3000-demo:
+        required: false
+        type: boolean
+        default: false
+      t3000-frequent:
+        required: false
+        type: boolean
+        default: false
+      t3000-nightly:
+        required: false
+        type: boolean
+        default: false
+      t3000-model-perf:
+        required: false
+        type: boolean
+        default: false
+      tgg-unit:
+        required: false
+        type: boolean
+        default: false
+      tgg-frequent:
+        required: false
+        type: boolean
+        default: false
+      tg-unit:
+        required: false
+        type: boolean
+        default: false
+      tg-frequent:
+        required: false
+        type: boolean
+        default: false
+
 run-name: ${{ inputs.description }}
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       build-type: ${{ inputs.build-type }}
-    secrets: inherit
-  build-artifact-profiler:
-    uses: ./.github/workflows/build-artifact.yaml
-    with:
-      build-type: ${{ inputs.build-type }}
-      tracy: true
+      tracy: ${{ inputs.build-with-tracy }}
     secrets: inherit
   single-card-demo-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
+    if: ${{ inputs.single-card-demo }}
   perf-models-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/perf-models-impl.yaml
+    if: ${{ inputs.perf-models }}
   perf-device-models-tests:
-    needs: build-artifact-profiler
+    needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/perf-device-models-impl.yaml
-  fast-dispatch-full-regressions-and-models:
+    if: ${{ inputs.perf-device-models }}
+  single-card-nightly:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
+    if: ${{ inputs.single-card-nightly }}
   t3000-unit-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/t3000-unit-tests-impl.yaml
+    if: ${{ inputs.t3000-unit }}
   t3000-demo-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
+    if: ${{ inputs.t3000-demo }}
   t3000-frequent-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/t3000-frequent-tests-impl.yaml
+    if: ${{ inputs.t3000-frequent }}
   t3000-nightly-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/t3000-nightly-tests-impl.yaml
+    if: ${{ inputs.t3000-nightly }}
   t3000-model-perf-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
+    if: ${{ inputs.t3000-model-perf }}
   tgg-unit-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tgg-unit-tests-impl.yaml
+    if: ${{ inputs.tgg-unit }}
   tgg-frequent-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tgg-frequent-tests-impl.yaml
+    if: ${{ inputs.tgg-frequent }}
   tg-unit-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tg-unit-tests-impl.yaml
+    if: ${{ inputs.tg-unit }}
   tg-frequent-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tg-frequent-tests-impl.yaml
+    if: ${{ inputs.tg-frequent }}
