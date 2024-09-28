@@ -195,7 +195,7 @@ struct LegacyCclTensorSlicer {
 
 
 struct TensorSlice {
-    using ords_t = tt_xy_pair;//Shape4D<uint32_t>;
+    using ords_t = tt_xy_pair;
     ords_t tensor_shape;
     ords_t tensor_slice_shape;
     ords_t tensor_slice_offset;

@@ -4,7 +4,6 @@
 
 
 #include "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_common.hpp"
-// #include "ttnn/tensor/tensor.hpp"
 #include "tt_metal/common/base.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
 

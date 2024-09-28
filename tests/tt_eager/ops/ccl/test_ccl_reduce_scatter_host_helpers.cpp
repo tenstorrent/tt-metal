@@ -20,7 +20,6 @@ TEST(LineReduceScatter, EmitCclSendSliceSequenceCommands_8Slices_1x1x32x2048Tens
     const std::size_t num_slices = 8;
     const std::int64_t start_slice_index = 0;
     const std::int64_t end_slice_index_exclusive = 8;
-    // const tt_xy_pair tensor_shape(2048, 32);
     const tt_xy_pair tensor_shape(64, 1);
     const tt_xy_pair worker_slice_shape(16, 1);
     const std::size_t scatter_dim = 3;
@@ -82,11 +81,5 @@ TEST(LineReduceScatter, EmitCclSendSliceSequenceCommands_8Slices_1x1x32x2048Tens
 
 
     }
-
-    // Validate the rest of the commands
-    {
-
-    }
-
 
 }

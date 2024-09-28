@@ -120,7 +120,6 @@ def run_reduce_scatter_test(
     numel = canonical_input_shape[0] * canonical_input_shape[1] * canonical_input_shape[2] * canonical_input_shape[3]
     input_tensors = [
         torch.rand(canonical_input_shape).bfloat16() if not debug else torch.ones(canonical_input_shape).bfloat16()
-        # torch.rand(canonical_input_shape).bfloat16() if not debug else torch.zeros(canonical_input_shape).bfloat16()
         for _ in range(num_devices)
     ]
 
@@ -179,19 +178,6 @@ def run_reduce_scatter_test(
                                     logger.error(
                                         f"mismatch at {w}, {z}, {y}, {x}: {tt_output_tensor[w, z, y, x]} != {golden_output_tensors[i][w, z, y, x]}"
                                     )
-                        # for y in range(0, tt_output_tensor.shape[2], 32):
-                        #     for x in range(0, tt_output_tensor.shape[3], 32):
-                        #         # xx = 0
-                        #         # yy = 0
-                        #         for yy in range(32):
-                        #             for xx in range(32):
-                        #                 if (
-                        #                     tt_output_tensor[w, z, y + yy, x + xx]
-                        #                     != golden_output_tensors[i][w, z, y + yy, x + xx]
-                        #                 ):
-                        #                     logger.error(
-                        #                         f"mismatch at {w}, {z}, {y+yy}, {x+xx}: {tt_output_tensor[w, z, y+yy, x+xx]} != {golden_output_tensors[i][w, z, y+yy, x+xx]}"
-                        #                     )
         else:
             logger.info(f"output match for tensor {i}")
     assert not mismatch, f"{i} FAILED: {output}"
@@ -213,7 +199,7 @@ def run_reduce_scatter_test(
         ([1, 1, 32, 32 * 8], 3, ttnn.TILE_LAYOUT),
         ([1, 8, 1024, 1024], 3, ttnn.TILE_LAYOUT),
         ([1, 4, 2048, 1024], 3, ttnn.TILE_LAYOUT),
-        # # # # Has worker slice size warning - defaults to 1x1
+        # # # Has worker slice size warning - defaults to 1x1
         ([1, 1, 128, 8192], 3, ttnn.TILE_LAYOUT),
     ],
 )
@@ -270,34 +256,25 @@ def test_ring_reduce_scatter_post_commit(
 @pytest.mark.parametrize(
     "num_devices, num_links",
     [
-        # (4, 1),
         (8, 1),
     ],
 )
 @pytest.mark.parametrize(
     "per_chip_output_shape, scatter_dim, layout",
     [
-        # ([1, 1, 32, 32 * 2], 3, ttnn.TILE_LAYOUT),
         ([1, 1, 32, 32 * 8], 3, ttnn.TILE_LAYOUT),
-        # Fals with 5th chip not reduceing some of its final tiles with the counter-clockwise direction
-        # ([1, 2, 256, 32 * 8], 3, ttnn.TILE_LAYOUT),  # Input tensor is (16*32) x (64*32) = 8 * input tensor shape
-        # ([1, 8, 1024, 1024], 3, ttnn.TILE_LAYOUT),
-        # ([1, 4, 2048, 1024], 3, ttnn.TILE_LAYOUT),
-        # ([1, 1, 128, 8192], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
         ttnn.bfloat16,
-        # ttnn.bfloat8_b, # passes
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])

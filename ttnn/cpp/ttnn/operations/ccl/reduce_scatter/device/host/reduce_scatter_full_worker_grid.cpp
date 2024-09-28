@@ -102,7 +102,6 @@ static void add_worker_config_to_edm_builders(
         std::size_t global_worker_idx = c + num_channels_per_edm * link;
         log_trace(tt::LogOp, "get_worker_slice_size_bytes");
         std::size_t worker_tensor_slice_index = !is_linear ? global_worker_idx : (c % (num_channels_per_edm / 2)) + ((num_channels_per_edm / 2) * link);
-        // std::size_t worker_tensor_slice_index = !is_linear ? global_worker_idx : (c / 2) + (num_channels_per_edm / 2) * link;
 
         bool is_in_clockwise_direction = worker_attrs.direction == Direction::CLOCKWISE;
 
@@ -184,9 +183,7 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle, std::optional<Kernel
         }
     }
 
-    static std::string const& receiver_kernel_path = //topology_config.is_linear ?
-        // "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/kernels/worker_line_reduce_scatter_reader.cpp" :
-        "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/kernels/worker_interleaved_ring_reduce_scatter_reader.cpp";
+    static std::string const& receiver_kernel_path = "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/kernels/worker_interleaved_ring_reduce_scatter_reader.cpp";
     static std::string const& forward_sender_kernel_path = "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/kernels/worker_interleaved_ring_reduce_scatter_sender.cpp";
     static std::string const& line_start_sender_kernel_path = "ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_send.cpp";
     static std::string const& reduce_kernel_path = "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp";
@@ -288,7 +285,6 @@ static void set_reduce_scatter_worker_rt(
             worker_arg_builder.generate_reduce_op_kernel_rt_args(worker_attributes, topology_config.ring_size));
     }
 
-    // if (!topology_config.is_last_device_in_line(is_in_clockwise_direction))
     {
         ttnn::ccl::WorkerXY edm_noc_coord = ttnn::ccl::WorkerXY(0,0);
         uint32_t edm_core_semaphore_address = 0;
@@ -788,9 +784,6 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
             log_trace(tt::LogOp, "------ Worker: {} (global ID={})", worker, global_worker_index);
 
             std::size_t worker_tensor_slice_index = get_worker_index_in_slice(topology_config, global_worker_index, worker, num_edm_channels_per_link, link);
-                // !topology_config.is_linear ?
-                //     global_worker_index :
-                //     (worker % (num_edm_channels_per_link / 2)) + ((num_edm_channels_per_link / 2) * link);
             auto const& worker_slice = tensor_slicer.get_worker_slice(worker_tensor_slice_index);
             auto worker_arg_builder = ReduceScatterWorkerArgBuilder(
                 device,
@@ -804,7 +797,6 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
                 receiver_worker_partial_ready_semaphore_id,
                 num_buffers_per_channel);
 
-            // log_trace(tt::LogOp, "worker_cores.at(global_worker_index): {}", worker_cores.at(global_worker_index));
             set_reduce_scatter_worker_rt(
                 program,
                 device,

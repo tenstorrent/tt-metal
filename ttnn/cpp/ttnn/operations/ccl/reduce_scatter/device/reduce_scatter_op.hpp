@@ -60,7 +60,6 @@ namespace ccl{
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     const std::optional<size_t> user_defined_num_workers = std::nullopt,
     const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);
-    // const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
 } // namespace ccl
 } // namespace operations
 

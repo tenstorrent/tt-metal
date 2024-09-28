@@ -32,7 +32,6 @@ constexpr std::size_t ct_args_consumed() {
 
 template <>
 auto build_from_args<Shape4D<uint32_t>>(std::size_t &rt_arg_idx) -> Shape4D<uint32_t> {
-    // static_assert(sizeof(Shape4D<uint32_t>) <= sizeof(uint32_t), "Shape4D doesn't support types larger than 4B.");
     auto w = get_arg_val<uint32_t>(rt_arg_idx++);
     auto z = get_arg_val<uint32_t>(rt_arg_idx++);
     auto y = get_arg_val<uint32_t>(rt_arg_idx++);
@@ -67,10 +66,6 @@ void update_command_tensor(std::size_t &arg_idx, CclCommandTensor &cmd_tensor) {
             case CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES:
                 CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>::unpack(
                     reinterpret_cast<volatile uint32_t *>(get_arg_addr(arg_idx)), cmd_tensor.tensor_slice_offset);
-                // DPRINT << "Updating tensor slice offset: (w=" << (uint32_t)cmd_tensor.tensor_slice_offset.w
-                //        << ", z=" << (uint32_t)cmd_tensor.tensor_slice_offset.z
-                //        << ", y=" << (uint32_t)cmd_tensor.tensor_slice_offset.y
-                //        << ", x=" << (uint32_t)cmd_tensor.tensor_slice_offset.x << ")\n";
                 arg_idx += CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>::size_in_words();
                 break;
             case CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES:

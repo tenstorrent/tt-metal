@@ -372,7 +372,6 @@ std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::compute_worker_slice_offs
     return worker_slice_offsets;
 }
 
-// Not specific to reduce scatter - we can start to commonize this somewhere.
 static std::vector<tt_xy_pair> compute_worker_slice_offsets_for_wrapped_tensor_slicer(
     std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape) {
     std::vector<tt_xy_pair> worker_slice_offsets;
@@ -739,7 +738,7 @@ std::vector<TensorSlice> generate_slice_sequence_on_dim(
     auto dim_start_offset = start_slice_index * slice_size_on_dim;
     TensorSlice::ords_t tensor_slice_offset = fracture_dim == 0 ? tt_xy_pair{0, dim_start_offset} : tt_xy_pair{dim_start_offset, 0};
 
-    bool forward_direction = start_slice_index > end_slice_index_exclusive; // REMOVE - ONLY HERE FOR DEBUG
+    bool forward_direction = start_slice_index > end_slice_index_exclusive; // only for debug
     auto incr = start_slice_index < end_slice_index_exclusive ? 1 : -1;
     if (forward_direction) {
         log_trace(tt::LogOp, "slice_size_on_dim {}", slice_size_on_dim);

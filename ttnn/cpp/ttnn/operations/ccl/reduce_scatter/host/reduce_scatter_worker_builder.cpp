@@ -45,7 +45,6 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_reduce_op_kernel_c
     return {};
 }
 
-// TODO: expose for testing
 static bool worker_writer_must_send_sync_signal_to_other_line_direction(WorkerAttributes const& wa, ttnn::ccl::RingTopology const& tc) {
     // Doesn't actually matter which direction is the one waiting because it will be the same number of prior slices to forward
     // from either direction before reach the each (however, in practice, there may be slight differences that lead us to prefer
@@ -600,7 +599,6 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_line_start_sender_
     for (auto const& arg : edm_interface_args) {
         log_trace(tt::LogOp, "ccl_send arg[{}]: edm_interface_args[] {}", logged_arg_idx, args[logged_arg_idx]);logged_arg_idx++;
     }
-    // ttnn::ccl::log_runtime_args(edm_interface, "edm_interface");
 
     std::ranges::copy(std::vector<uint32_t>{this->worker_transfer_info.get_num_pages_per_full_chunk(worker_attrs)}, std::back_inserter(args));
     log_trace(tt::LogOp, "ccl_send arg[{}]: pages_per_packet {}", logged_arg_idx, args[logged_arg_idx]);logged_arg_idx++;

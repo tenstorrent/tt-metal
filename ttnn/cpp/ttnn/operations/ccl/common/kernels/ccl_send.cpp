@@ -5,7 +5,6 @@
 #include "dataflow_api.h"
 #include "impl/buffers/buffer_constants.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-// #include "ttnn/tensor/types.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
@@ -14,7 +13,7 @@
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
 #include "debug/dprint.h"
-#include <type_traits>
+#include "ttnn/cpp/ttnn/tensor/enum_types.hpp"
 #include <cstdint>
 
 using ttnn::ccl::coord_t;
@@ -37,29 +36,9 @@ std::size_t get_flat_index_from_shape(const Shape4D<uint32_t> &shape, const Shap
     return offset;
 }
 
-
-namespace tt {
-namespace tt_metal {
-// TODO: Include directly from tt_metal or ttnn
-enum class Layout { ROW_MAJOR = 0, TILE = 1, INVALID = 2 };
-
-// TODO: move from `buffer.hpp` into a commmon location
-enum class BufferType {
-    DRAM,
-    L1,
-    SYSTEM_MEMORY,
-    L1_SMALL,
-    TRACE,
-};
-}
-}
-
 using tt::tt_metal::BufferType;
 using tt::tt_metal::Layout;
 
-/// TODO: This is *mostly* duplicate (but updated and closer to the intended deisng) to
-///       similar logic from worker_interleaved_ring_reduce_scatter_reader.cpp
-///       -> BEFORE MERGE, DEPRECATE THAT ONE AND REPLACE WITH THIS ONE
 template <TensorMemoryLayout tensor_layout, tt::tt_metal::BufferType buffer_type, tt::tt_metal::Layout page_layout>
 struct source_tensor_addrgen {
     static constexpr char name[] = "Uninitialized";
@@ -105,7 +84,6 @@ constexpr Shape4D<T> build_wrapped_row_tensor_slice(T n_pages) {
     return Shape4D<T>{1, 1, 1, n_pages};
 }
 
-//tt::tt_metal::Layout from ttnn/cpp/ttnn/tensor/types.hpp
 template <tt::tt_metal::TensorMemoryLayout tensor_layout, tt::tt_metal::BufferType buffer_type, tt::tt_metal::Layout page_layout>
 auto build_source_address_generator(std::size_t &arg_idx, address_t tensor_address, std::size_t page_size, uint32_t cb_id_in0) -> typename source_tensor_addrgen<tensor_layout, buffer_type, page_layout>::type {
     constexpr bool is_sharded = is_sharded_tensor_layout(tensor_layout);
@@ -193,8 +171,6 @@ void kernel_main() {
 
     // EDM Interface Parameters
     const ttnn::ccl::WorkerEdmInterfaceArgs edm_args = ttnn::ccl::build_from_args<ttnn::ccl::WorkerEdmInterfaceArgs>(arg_idx);
-    // static_assert(tt_metal::is_compile_time_evaluated(edm_args.num_buffers_per_channel), "Number of buffers per channel was expected to resolve as compile time variable.");
-
 
     // Assuming whole page transmissions (which is the only mode we support at the moment)
     // -> however, wanted to call it out here to make it clear that we need to pull this
@@ -218,8 +194,6 @@ void kernel_main() {
     for (std::size_t i = 0; i < num_commands; ++i) {
         // Generalized would be to get the command header info and then dispatch accordingly - if the command type is singular
         //
-        // TODO: Turn this into a command iterator that initializes itself with the current arg_idx and then after that,
-        //       the arg_idx never needs to be accessed again
         std::size_t old_arg_idx = arg_idx;
         ttnn::ccl::cmd::update_command_tensor(arg_idx, command_tensor);
         std::size_t new_arg_idx = arg_idx;
