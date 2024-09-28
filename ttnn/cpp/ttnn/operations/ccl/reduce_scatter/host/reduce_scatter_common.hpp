@@ -52,7 +52,7 @@ struct WorkerAttributes {
 
 struct WorkerTransferInfo {
     WorkerTransferInfo(
-        std::vector<uint32_t> pages_per_full_chunk_per_worker, uint32_t num_links, uint32_t num_workers);
+        std::vector<uint32_t> const& pages_per_full_chunk_per_worker, uint32_t num_links, uint32_t num_workers);
 
     uint32_t get_num_pages_per_full_chunk(WorkerAttributes const& worker_attrs) const;
 

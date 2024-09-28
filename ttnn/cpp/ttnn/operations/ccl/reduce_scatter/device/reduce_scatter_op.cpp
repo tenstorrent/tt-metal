@@ -3,14 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
-#include <cstdint>
-
-#include "ttnn/operations/reduction/generic/device/common.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "tt_metal/host_api.hpp"
 
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-
+#include <cstdint>
 
 namespace ttnn {
 
@@ -29,7 +24,7 @@ void ReduceScatter::validate(const std::vector<Tensor>& input_tensors) const {
 
 std::vector<tt::tt_metal::LegacyShape> ReduceScatter::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     auto shape = input_tensors[0].get_legacy_shape();
-    TT_ASSERT(
+    TT_FATAL(
         shape[this->scatter_dim] % this->ring_size == 0,
         "The size of the scatter dimension must be a multiple of the ring size");
     shape[this->scatter_dim] /= this->ring_size;
@@ -91,7 +86,7 @@ Tensor reduce_scatter(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            TT_ASSERT(input_tensors.size() >= 1, "Reduce scatter op expects an input tensor");
+            TT_FATAL(input_tensors.size() >= 1, "Reduce scatter op expects an input tensor but it received none");
             bool is_linear = topology == ttnn::ccl::Topology::Linear;
 
             const auto& input_tensor = input_tensors.at(0);

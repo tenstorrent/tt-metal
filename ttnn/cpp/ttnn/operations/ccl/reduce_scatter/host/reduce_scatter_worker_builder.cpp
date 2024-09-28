@@ -4,7 +4,6 @@
 
 #include <cstdint>
 #include <iterator>
-#include <ranges>
 
 #include "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp"
 #include "hostdevcommon/kernel_structs.h"
