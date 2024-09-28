@@ -1,4 +1,4 @@
-name: "(internal) Single-card Demo tests impl"
+name: "[internal] Single-card Demo tests impl"
 
 on:
   workflow_call:
