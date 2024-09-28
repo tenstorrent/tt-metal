@@ -715,7 +715,7 @@ std::vector<Tensor> ExecuteUnaryBackwardLog::invoke(const Tensor& grad, const Te
     return grad_tensor;
 }
 
-std::vector<Tensor> _relu6_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+std::vector<Tensor> ExecuteUnaryBackwardRelu6::invoke(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor zero_tensor = ttnn::zeros_like(input);
     Tensor one_tensor = ttnn::ones_like(input);
@@ -772,7 +772,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSilu::invoke(const Tensor
 
 // Selu
 // result:  torch.where(input > 0, grad * lambd, grad * lambd * alpha * torch.exp(input))
-std::vector<Tensor> _selu_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+std::vector<Tensor> ExecuteUnaryBackwardSelu::invoke(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad_lambd = ttnn::multiply(grad, 1.0507f, std::nullopt, output_mem_config);
     Tensor grad_result = where(
