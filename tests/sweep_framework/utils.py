@@ -60,7 +60,7 @@ def gen_shapes(start_shape, end_shape, interval, num_samples="all"):
 
     else:
         samples_id = 0
-
+        TIMEOUT = 5
         while samples_id < num_samples:
             shape = []
 
@@ -68,11 +68,8 @@ def gen_shapes(start_shape, end_shape, interval, num_samples="all"):
                 x = random.randint(start_shape[i], end_shape[i])
                 shape.append(align_to_interval(x, start_shape[i], interval[i]))
 
-            if shape in shapes:
-                pass
-            else:
-                samples_id += 1
-                shapes.append(shape)
+            samples_id += 1
+            shapes.append(shape)
 
     return shapes
 
