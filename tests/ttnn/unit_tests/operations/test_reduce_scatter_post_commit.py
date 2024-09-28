@@ -99,7 +99,7 @@ def run_reduce_scatter_test(
     if len(t3k_mesh_device.get_device_ids()) != 8:
         pytest.skip("Not T3000!")
 
-    debug = True
+    debug = False
 
     (is_known_failure, message) = is_unsupported_case(
         per_chip_output_shape, scatter_dim, math_op, mem_config, num_devices, num_links, input_dtype, layout
