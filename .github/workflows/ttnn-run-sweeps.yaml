@@ -49,6 +49,7 @@ on:
           - eltwise.unary.logical_not_.logical_not_
           - eltwise.unary.erf.erf
           - eltwise.unary.erfinv.erfinv
+          - eltwise.unary.i0.i0
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multiply
           - eltwise.binary.div.div
@@ -63,6 +64,7 @@ on:
           - eltwise.binary.logaddexp.logaddexp
           - eltwise.binary.logaddexp2.logaddexp2
           - eltwise.binary.ldexp.ldexp
+          - eltwise.binary.hypot.hypot
           - eltwise.composite.binary.addalpha.addalpha
           - eltwise.composite.binary.subalpha.subalpha
           - eltwise.composite.binary.minimum.minimum
