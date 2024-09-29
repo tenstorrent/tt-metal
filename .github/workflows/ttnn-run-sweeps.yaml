@@ -47,6 +47,8 @@ on:
           - eltwise.unary.bitwise.bitwise_xor
           - eltwise.unary.log_sigmoid.log_sigmoid
           - eltwise.unary.logical_not_.logical_not_
+          - eltwise.unary.erf.erf
+          - eltwise.unary.erfinv.erfinv
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multiply
           - eltwise.binary.div.div
