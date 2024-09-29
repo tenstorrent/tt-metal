@@ -45,6 +45,8 @@ on:
           - eltwise.unary.bitwise.bitwise_or
           - eltwise.unary.bitwise.bitwise_right_shift
           - eltwise.unary.bitwise.bitwise_xor
+          - eltwise.unary.log_sigmoid.log_sigmoid
+          - eltwise.unary.logical_not_.logical_not_
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multiply
           - eltwise.binary.div.div
