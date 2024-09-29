@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include "chlkc_list.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_template.h"
@@ -171,7 +172,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
     std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
-    _llk_pack_<DstSync::SyncHalf, untilize, is_fp32_dest_acc_en>(
+    _llk_pack_<DST_SYNC_MODE, untilize, is_fp32_dest_acc_en>(
         tile_index,
         pack_tile_addr
     );
@@ -230,7 +231,7 @@ inline void llk_matmul_pack(std::uint32_t start_tile_index, std::uint32_t output
     for (uint32_t tile_index=start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
-        _llk_pack_<DstSync::SyncHalf, untilize, is_fp32_dest_acc_en>(
+        _llk_pack_<DST_SYNC_MODE, untilize, is_fp32_dest_acc_en>(
             tile_index,
             pack_tile_addr
         );
@@ -253,7 +254,7 @@ inline void llk_packer_set_math_semaphore() {
 
 template <bool is_fp32_dest_acc_en = false>
 inline void llk_pack_dest_section_done() {
-    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
 }
 
 template <bool untilize = false, bool diagonal = false>
@@ -262,7 +263,7 @@ inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_outpu
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_init_packer_dest_offset_registers_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, untilize, diagonal>(
+    _llk_init_packer_dest_offset_registers_<DST_SYNC_MODE, DstTileFaceLayout::RowMajor, untilize, diagonal>(
         face_r_dim,
         narrow_tile
     );
@@ -275,7 +276,7 @@ inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_dest_init_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, untilize, is_fp32_dest_acc_en>(
+    _llk_pack_dest_init_<DST_SYNC_MODE, DstTileFaceLayout::RowMajor, untilize, is_fp32_dest_acc_en>(
         face_r_dim,
         narrow_tile
     );

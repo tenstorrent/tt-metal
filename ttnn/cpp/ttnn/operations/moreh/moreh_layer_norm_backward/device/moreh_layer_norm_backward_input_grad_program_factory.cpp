@@ -82,7 +82,7 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
             tt::tt_metal::split_work_to_cores(grid, num_outer);
 
     auto arch = input.device()->arch();
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup

@@ -38,7 +38,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHLargeFactory::create(
         tt::operations::primary::split_work_to_cores(core_range, num_cols_tiles);
 
     auto arch = input_grad.device()->arch();
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
     Program program = Program();

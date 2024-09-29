@@ -27,7 +27,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     uint32_t Ht = H / TILE_HEIGHT;
     uint32_t HtWt = Ht * Wt;
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(a.device()->arch(), compute_kernel_config);
 
     tt_metal::Program program = tt_metal::CreateProgram();

@@ -13,7 +13,7 @@ inline void llk_math_eltwise_unary_sfpu_params(
     int vector_mode = (int)VectorMode::RC,
     ARGS&& ... args) {
 
-    _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(dst_index);
+    _llk_math_eltwise_unary_sfpu_start_<DST_SYNC_MODE>(dst_index);
 
     if (vector_mode == (int)VectorMode::R) {
         // Do a row vector, Face0 + Face1 -- first iteration (first row)

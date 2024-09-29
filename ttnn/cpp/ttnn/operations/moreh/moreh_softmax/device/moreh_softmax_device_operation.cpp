@@ -13,7 +13,7 @@ bool is_moreh_softmax_w_small_available(const Tensor& tensor, const DeviceComput
     int32_t Wt = (w + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
 
     auto arch = tensor.device()->arch();
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.get_dtype());
@@ -43,7 +43,7 @@ bool is_moreh_softmax_h_small_available(const Tensor& tensor, const DeviceComput
     int32_t Ht = (h + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
 
     auto arch = tensor.device()->arch();
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.get_dtype());

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include "chlkc_list.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_template.h"
@@ -112,7 +113,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
     std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
-    _llk_pack_<out_of_order_output, DstSync::SyncHalf, untilize, is_fp32_dest_acc_en>(
+    _llk_pack_<out_of_order_output, DST_SYNC_MODE, untilize, is_fp32_dest_acc_en>(
         tile_index,
         pack_dst_format[output_id],
         pack_tile_addr
@@ -177,17 +178,17 @@ inline void llk_packer_set_math_semaphore() {
 
 template <bool is_fp32_dest_acc_en = false>
 inline void llk_pack_dest_section_done() {
-    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
 }
 
 template <bool untilize = false, bool diagonal = false>
 inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_output = 16) {
-    _llk_init_packer_dest_offset_registers_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, untilize, diagonal>();
+    _llk_init_packer_dest_offset_registers_<DST_SYNC_MODE, DstTileFaceLayout::RowMajor, untilize, diagonal>();
 }
 
 template <bool untilize = false, bool is_fp32_dest_acc_en = false /*unused*/>
 inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
-    _llk_pack_dest_init_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, untilize, is_fp32_dest_acc_en>();
+    _llk_pack_dest_init_<DST_SYNC_MODE, DstTileFaceLayout::RowMajor, untilize, is_fp32_dest_acc_en>();
 }
 
 template <bool mail2math=true, bool mail2pack=true>
@@ -281,7 +282,7 @@ inline void llk_matmul_pack(const std::uint32_t start_tile_index, const std::uin
 
         std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
-        _llk_pack_<out_of_order_output, DstSync::SyncHalf, untilize, is_fp32_dest_acc_en>(
+        _llk_pack_<out_of_order_output, DST_SYNC_MODE, untilize, is_fp32_dest_acc_en>(
             tile_index,
             pack_dst_format[output_id],
             pack_tile_addr

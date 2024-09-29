@@ -26,7 +26,7 @@ inline void llk_math_eltwise_binary_sfpu(
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
 
-    _llk_math_eltwise_binary_sfpu_<sfpu_op, APPROXIMATE, DstSync::SyncHalf>(
+    _llk_math_eltwise_binary_sfpu_<sfpu_op, APPROXIMATE, DST_SYNC_MODE>(
         face_r_dim, num_faces, dst_index_a, dst_index_b, vector_mode, param0, param1, param2, param3, param4, param5);
 }
 
@@ -39,7 +39,7 @@ inline void llk_math_eltwise_binary_sfpu_init(
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_quant_int32(
     const uint operand, uint dst_index_a, uint dst_index_b, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_binary_sfpu<SfpuType::quant_int32, APPROXIMATE, DstSync::SyncHalf>(operand, dst_index_a, dst_index_b, vector_mode);
+    llk_math_eltwise_binary_sfpu<SfpuType::quant_int32, APPROXIMATE>(operand, dst_index_a, dst_index_b, vector_mode);
 }
 
 template <bool APPROXIMATE>
@@ -50,7 +50,7 @@ inline void llk_math_eltwise_binary_sfpu_quant_int32_init(const uint zero_point)
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_requant_int32(
     const uint operand, uint dst_index_a, uint dst_index_b, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_binary_sfpu<SfpuType::requant_int32, APPROXIMATE, DstSync::SyncHalf>(operand, dst_index_a, dst_index_b, vector_mode);
+    llk_math_eltwise_binary_sfpu<SfpuType::requant_int32, APPROXIMATE>(operand, dst_index_a, dst_index_b, vector_mode);
 }
 
 template <bool APPROXIMATE>
@@ -61,7 +61,7 @@ inline void llk_math_eltwise_binary_sfpu_requant_int32_init(const uint zero_poin
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_dequant_int32(
     const uint operand, uint dst_index_a, uint dst_index_b, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_binary_sfpu<SfpuType::dequant_int32, APPROXIMATE, DstSync::SyncHalf>(operand, dst_index_a, dst_index_b, vector_mode);
+    llk_math_eltwise_binary_sfpu<SfpuType::dequant_int32, APPROXIMATE>(operand, dst_index_a, dst_index_b, vector_mode);
 }
 
 template <bool APPROXIMATE>

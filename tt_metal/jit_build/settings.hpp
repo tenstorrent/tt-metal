@@ -27,6 +27,8 @@ class JitBuildOptions {
     bool fp32_dest_acc_en;
     std::vector<UnpackToDestMode> unpack_to_dest_mode;
 
+    bool dst_full_sync_en;
+
     std::map<std::string, std::string> hlk_defines;  // preprocessor defines for HLK
     std::map<std::string, std::string> ncrisc_defines;
     std::map<std::string, std::string> brisc_defines;

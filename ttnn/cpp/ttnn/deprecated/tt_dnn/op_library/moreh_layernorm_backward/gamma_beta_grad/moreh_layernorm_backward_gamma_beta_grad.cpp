@@ -82,7 +82,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
          num_cols_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_inner);
 
     auto arch = input.device()->arch();
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
     ////////////////////////////////////////////////////////////////////////////

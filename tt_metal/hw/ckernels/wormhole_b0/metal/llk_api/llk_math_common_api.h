@@ -26,18 +26,18 @@ inline void llk_math_hw_configure_disaggregated() { /*Unused for WHB0*/ }
 
 inline void llk_math_wait_for_dest_available() {
     WAYPOINT("MWDW");
-    _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+    _llk_math_wait_for_dest_available_<DST_SYNC_MODE>();
     WAYPOINT("MWDD");
 }
 
 template <bool is_fp32_dest_acc_en = false>
 inline void llk_math_dest_section_done() {
-    _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
 }
 
 template <bool is_fp32_dest_acc_en = false>
 inline void llk_math_pack_sync_init() {
-    _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    _llk_math_pack_sync_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
 }
 
 template <bool mail2math = true, bool mail2pack = true>

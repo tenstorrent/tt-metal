@@ -473,6 +473,22 @@ static void generate_dst_accum_mode_descriptor(JitBuildOptions& options) {
     file_stream.close();
 }
 
+static void generate_dst_sync_mode_descriptor(JitBuildOptions& options) {
+    string dst_sync_mode_descriptor = options.path + "chlkc_dst_sync_mode.h";
+
+    ofstream file_stream;
+
+    file_stream.open(dst_sync_mode_descriptor);
+
+    if (options.dst_full_sync_en) {
+        file_stream << "#define DST_SYNC_MODE DstSync::SyncFull" << endl;
+    } else {
+        file_stream << "#define DST_SYNC_MODE DstSync::SyncHalf" << endl;
+    }
+
+    file_stream.close();
+}
+
 static void generate_math_fidelity_descriptor(JitBuildOptions& options) {
     string math_fidelity_descriptor = options.path + "chlkc_math_fidelity.h";
     // assuming all cores within a op have the same desc
@@ -509,11 +525,13 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& opt
         std::thread tm( [&]() { generate_math_fidelity_descriptor(options); } );
         std::thread ta( [&]() { generate_math_approx_mode_descriptor(options); } );
         std::thread tf( [&]() { generate_dst_accum_mode_descriptor(options); } );
+        std::thread ts( [&]() { generate_dst_sync_mode_descriptor(options); } );
         td.join();
         tt.join();
         tm.join();
         ta.join();
         tf.join();
+        ts.join();
     } catch (std::runtime_error& ex) {
         std::cerr << "EXCEPTION FROM THREADING IN GENERATE_DESCRIPTORS: " << ex.what() << std::endl;
     }
