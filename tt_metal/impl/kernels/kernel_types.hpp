@@ -48,6 +48,7 @@ struct WriterDataMovementConfig : public DataMovementConfig {
 struct ComputeConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
+    bool dst_full_sync_en = false;
     std::vector<UnpackToDestMode> unpack_to_dest_mode;
     bool math_approx_mode = false;
     std::vector<uint32_t> compile_args;
