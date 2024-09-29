@@ -121,7 +121,10 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
         core_group_1,
-        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args_group_1});
+        tt_metal::ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .dst_full_sync_en = true,
+            .compile_args = compute_args_group_1});
 
     if (!core_group_2.ranges().empty()) {
         vector<uint32_t> compute_args_group_2 = {
@@ -136,7 +139,10 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
             core_group_2,
-            tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args_group_2});
+            tt_metal::ComputeConfig{
+                .math_fidelity = math_fidelity,
+                .dst_full_sync_en = true,
+                .compile_args = compute_args_group_2});
     }
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
