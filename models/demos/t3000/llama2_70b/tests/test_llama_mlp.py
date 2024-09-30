@@ -46,16 +46,7 @@ def tt_llama_mlp_prepare_inputs(llama_mlp_model, x, mode):
     )
 
     if mode == "decode":
-        x_multichip = ttnn.to_memory_config(
-            x_multichip,
-            ttnn.create_sharded_memory_config(
-                shape=(32, 8192 // 32),
-                core_grid=ttnn.CoreGrid(y=4, x=8),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            ),
-        )
+        x_multichip = ttnn.to_memory_config(x_multichip, llama_mlp_model.model_config["HIDDEN_WIDTH_16_CORES_MEMCFG"])
     elif mode == "prefill":
         x_multichip = ttnn.to_memory_config(x_multichip, ttnn.DRAM_MEMORY_CONFIG)
 

@@ -178,7 +178,7 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, mode)
             device=llama_attention_model.mesh_device,
         )
         xs = ttnn.to_device(xs, llama_attention_model.mesh_device)
-        xs = ttnn.interleaved_to_sharded(xs, llama_attention_model.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"])
+        xs = ttnn.interleaved_to_sharded(xs, llama_attention_model.model_config["HIDDEN_WIDTH_16_CORES_MEMCFG"])
 
         cache_idxs = torch.tensor([start_pos for _ in range(batch)])
 
