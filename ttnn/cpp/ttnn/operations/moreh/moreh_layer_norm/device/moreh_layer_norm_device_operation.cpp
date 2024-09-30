@@ -4,8 +4,6 @@
 
 #include "moreh_layer_norm_device_operation.hpp"
 
-#include <cstdint>
-
 #include "tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
