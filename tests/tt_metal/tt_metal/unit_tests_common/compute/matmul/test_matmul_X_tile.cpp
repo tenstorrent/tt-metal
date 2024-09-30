@@ -48,7 +48,7 @@ void create_test_stimuli(MatmulTileStimuli &stimuli, uint32_t M, uint32_t K, uin
         std::chrono::system_clock::now().time_since_epoch().count()
     );
     stimuli.t = tensor.get_values();
-    
+
     auto activations_tilized = test_utils::tilize(tensor.get_values(), M * 32, K * 32);
     auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
