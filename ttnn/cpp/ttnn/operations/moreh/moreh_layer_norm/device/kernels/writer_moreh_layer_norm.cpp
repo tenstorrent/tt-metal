@@ -6,8 +6,17 @@
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 template <typename T>
-void write_mean_rstd(uint32_t cb_id, uint32_t tile_offset, uint32_t num_inner, uint32_t normalized_dims, uint32_t outer_idx, uint32_t output_height, uint32_t output_width, uint32_t Ht, uint32_t Wt, T addrg)
-{
+void write_mean_rstd(
+    uint32_t cb_id,
+    uint32_t tile_offset,
+    uint32_t num_inner,
+    uint32_t normalized_dims,
+    uint32_t outer_idx,
+    uint32_t output_height,
+    uint32_t output_width,
+    uint32_t Ht,
+    uint32_t Wt,
+    T addrg) {
     constexpr uint32_t onetile = 1;
 
     const uint32_t cb_tile_bytes = get_tile_size(cb_id);
@@ -126,11 +135,31 @@ void kernel_main() {
 
     for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; outer_idx++) {
         if (mean_has_value) {
-            write_mean_rstd(cb_id_mean, tile_offset, num_inner, normalized_dims, outer_idx, mean_rstd_height, mean_rstd_width, Ht, Wt, mean_addrg);
+            write_mean_rstd(
+                cb_id_mean,
+                tile_offset,
+                num_inner,
+                normalized_dims,
+                outer_idx,
+                mean_rstd_height,
+                mean_rstd_width,
+                Ht,
+                Wt,
+                mean_addrg);
         }
 
         if (rstd_has_value) {
-            write_mean_rstd(cb_id_rstd, tile_offset, num_inner, normalized_dims, outer_idx, mean_rstd_height, mean_rstd_width, Ht, Wt, rstd_addrg);
+            write_mean_rstd(
+                cb_id_rstd,
+                tile_offset,
+                num_inner,
+                normalized_dims,
+                outer_idx,
+                mean_rstd_height,
+                mean_rstd_width,
+                Ht,
+                Wt,
+                rstd_addrg);
         }
 
         // output

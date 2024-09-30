@@ -4,7 +4,6 @@
 
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
-
 ALWI bool need_to_do_mask_h(uint32_t w_idx, uint32_t origin_num_h_tiles, uint32_t origin_num_w_tiles) {
     return ((w_idx / origin_num_w_tiles) + 1) % origin_num_h_tiles == 0;
 }
@@ -69,7 +68,6 @@ void MAIN {
     constexpr uint32_t origin_Wt = (origin_W + TILE_WIDTH - 1) / TILE_WIDTH;
 
     for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; outer_idx++) {
-
         /*
          * Sum[x]
          * cb_xsum
