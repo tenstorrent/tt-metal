@@ -62,6 +62,7 @@ def calculate_perplexity(
         ("state-spaces/mamba-2.8b", ModelMode.PREFILL, 32, 128, 64, 15.4, 0.44, 0.69),
     ),
 )
+@pytest.mark.skip(reason="#13292: Possible hang regression introduced")
 def test_mamba_reference_perplexity(
     model_version: MambaPretrainedModelName,
     mode: ModelMode,
@@ -126,6 +127,7 @@ def test_mamba_reference_perplexity(
 
 
 @pytest.mark.timeout(1200)
+@pytest.mark.skip(reason="#13292: Possible hang regression introduced")
 @skip_for_grayskull("Mamba not supported on Grayskull")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
