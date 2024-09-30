@@ -107,139 +107,6 @@ class TtLlamaAttention_galaxy:
             mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
         )
 
-    def get_attn_model_config(self, mode):
-        if mode == "decode":
-            # 32 x 2048 X 2048 x 1280
-            self.FUSED_QKV_MM_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 5),
-                in0_block_w=2,
-                out_subblock_h=1,
-                out_subblock_w=1,
-                per_core_M=1,
-                per_core_N=1,
-                fuse_batch=True,
-                fused_activation=None,
-                mcast_in0=True,
-            )
-            self.COMPUTE_KERNEL_QKV = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=True,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
-            )
-            self.COMPUTE_KERNEL_SELFOUT = self.COMPUTE_KERNEL_QKV
-
-            total_cores = (self.n_local_heads + self.n_local_kv_heads * 2) * self.head_dim // 32
-            shard_spec_n_cores_grid = ttnn.CoreRangeSet({num_to_corerange(total_cores)})
-            self.CREATE_HEAD_INPUT_MEMCFG = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    shard_spec_n_cores_grid,
-                    [
-                        32,
-                        32,
-                    ],
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
-                ),
-            )
-            self.COMPUTE_KERNEL_ROTARY = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
-            )
-
-            self.ROTARY_PROGCFG = ttnn.MatmulMultiCoreReuseProgramConfig(
-                compute_with_storage_grid_size=[8, 1],
-                in0_block_w=4,
-                out_subblock_h=1,
-                out_subblock_w=4,
-                per_core_M=1,
-                per_core_N=4,
-            )
-
-            self.COMPUTE_KERNEL_SDPA = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=False,
-            )
-
-            shard_grid = ttnn.CoreRangeSet({num_to_corerange(self.batch_size_per_device_group)})
-            shard_spec = ttnn.ShardSpec(
-                shard_grid, (self.padded_local_heads, self.head_dim), ttnn.ShardOrientation.ROW_MAJOR, False
-            )
-
-            self.SDPA_HEIGHT_SHARDED_MEMCFG = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec
-            )
-            mesh_rows, mesh_cols = 8, 4
-            self.QKV_OUT_GATHERED_MEMCFG = ttnn.create_sharded_memory_config(
-                shape=(32 * mesh_cols, 1280 // 40),
-                core_grid=ttnn.CoreGrid(y=5, x=8),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            self.SELF_OUT_GATHERED_MEMCFG = ttnn.create_sharded_memory_config(
-                shape=(32 * mesh_rows, 2048 // 32),
-                core_grid=ttnn.CoreGrid(y=4, x=8),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-
-            self.GATHER_USERS_MEMCFG = ttnn.create_sharded_memory_config(
-                shape=(32 * mesh_cols, 1024 // 32),
-                core_grid=ttnn.CoreGrid(y=4, x=8),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-
-        elif mode == "prefill":
-            self.COMPUTE_KERNEL_QKV = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=True,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
-            )
-            self.COMPUTE_KERNEL_SELFOUT = self.COMPUTE_KERNEL_QKV
-
-            self.COMPUTE_KERNEL_ROTARY = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
-            )
-
-            self.COMPUTE_KERNEL_SDPA = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=False,
-            )
-
-            self.FUSED_QKV_MM_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
-                (1, 1, self.model_config["MAX_MM_SEQ_LEN"], 2048),
-                (1, 1, 2048, 1280),
-                grid=ttnn.CoreGrid(x=8, y=4),
-                overwrite_subblock_h=1,
-                overwrite_subblock_w=1,
-                fuse_batch=False,
-            )
-
-            self.SELFOUT_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
-                (1, 1, self.model_config["MAX_MM_SEQ_LEN"], 1024),
-                (1, 1, 1024, 2048),
-                grid=ttnn.CoreGrid(x=8, y=4),
-                overwrite_subblock_h=1,
-                overwrite_subblock_w=1,
-                fuse_batch=False,
-            )
-
     def init_kv_cache(self):
         """
         Generates empty KV cache and pushed to device memory
@@ -263,17 +130,14 @@ class TtLlamaAttention_galaxy:
         )
         layer_past = [cache_k, cache_v]
         self.layer_past = [
-            ttnn.to_device(
-                ttnn.as_tensor(
-                    lp,
-                    device=self.mesh_device,
-                    mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    dtype=ttnn.bfloat8_b,
-                    cache_file_name=self.cache_path / f"empty_attn_cache_galaxy_{cache_k.shape}",
-                ),
-                self.mesh_device,
+            ttnn.as_tensor(
+                lp,
+                device=self.mesh_device,
+                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat8_b,
+                cache_file_name=self.cache_path / f"empty_attn_cache_galaxy_{cache_k.shape}",
             )
             for lp in layer_past
         ]
@@ -357,7 +221,7 @@ class TtLlamaAttention_galaxy:
         )
 
     def __call__(self, xs, rot_mats, start_pos: int, attn_masks, user_id: int = 0, mode="decode"):
-        self.get_attn_model_config(mode)
+        self.attention_config = self.model_config["attention"][mode]
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
         if mode == "decode":
             return self.decode_forward(xs, rot_mats, start_pos, attn_masks)
@@ -382,20 +246,21 @@ class TtLlamaAttention_galaxy:
         xs,
         rot_mats,
     ):
+        batch_size = xs.shape[2]
         # Fused QKV
         fused_query_key_value = ttnn.matmul(
             xs,
             self.qkv,
-            program_config=self.FUSED_QKV_MM_PROGCFG,
+            program_config=self.attention_config["FUSED_QKV_MM_PROGCFG"],
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.COMPUTE_KERNEL_QKV,
+            compute_kernel_config=self.attention_config["COMPUTE_KERNEL_QKV"],
         )
         xs.deallocate(True)
 
         # TODO: Use sharded all_reduce when PCC issue is fixed in this particular configuration
         # fused_query_key_value = tt_sharded_all_reduce(
-        #     fused_query_key_value, self.mesh_device, cluster_axis=1, num_links=2, memory_config=self.QKV_OUT_GATHERED_MEMCFG
+        #     fused_query_key_value, self.mesh_device, cluster_axis=1, num_links=2, memory_config=self.attention_config["QKV_OUT_GATHERED_MEMCFG"](self.cluster_shape[0])
         # )
 
         fused_query_key_value = tt_all_reduce(
@@ -420,7 +285,7 @@ class TtLlamaAttention_galaxy:
         )
 
         fused_query_key_value = ttnn.to_memory_config(
-            fused_query_key_value, memory_config=self.CREATE_HEAD_INPUT_MEMCFG
+            fused_query_key_value, memory_config=self.attention_config["CREATE_HEAD_INPUT_MEMCFG"]
         )
 
         # Split QKV
@@ -442,17 +307,17 @@ class TtLlamaAttention_galaxy:
         query_layer = ttnn.matmul(
             query_layer,
             rot_mats,
-            program_config=self.model_config["ROT_MAT_MM_PROGCFG"],
+            program_config=self.attention_config["ROT_MAT_MM_PROGCFG"](batch_size),
             memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-            compute_kernel_config=self.COMPUTE_KERNEL_ROTARY,
+            compute_kernel_config=self.attention_config["COMPUTE_KERNEL_ROTARY"],
         )
 
         key_layer = ttnn.matmul(
             key_layer,
             rot_mats,
-            program_config=self.model_config["ROT_MAT_MM_PROGCFG"],
+            program_config=self.attention_config["ROT_MAT_MM_PROGCFG"](batch_size),
             memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-            compute_kernel_config=self.COMPUTE_KERNEL_ROTARY,
+            compute_kernel_config=self.attention_config["COMPUTE_KERNEL_ROTARY"],
         )
 
         return query_layer, key_layer, value_layer
@@ -499,8 +364,8 @@ class TtLlamaAttention_galaxy:
             [start_pos for _ in range(self.max_batch_size)],
             scale=self.scale,
             program_config=program_config,
-            compute_kernel_config=self.COMPUTE_KERNEL_SDPA,
-            memory_config=self.SDPA_HEIGHT_SHARDED_MEMCFG,
+            compute_kernel_config=self.attention_config["COMPUTE_KERNEL_SDPA"],
+            memory_config=self.attention_config["SDPA_HEIGHT_SHARDED_MEMCFG"](self.batch_size_per_device_group),
         )
         return attn_output
 
@@ -509,7 +374,6 @@ class TtLlamaAttention_galaxy:
         attn_output,
     ):
         # ATTENTION SELFOUT
-        # breakpoint()
         # (1, 8, 8(32), 128) - > (1, 1, 8(32), 1024) ->(1, 1, 32, 1024)
         attn_output = ttnn.experimental.nlp_concat_heads_decode(
             attn_output,
@@ -522,7 +386,7 @@ class TtLlamaAttention_galaxy:
             dim=2,
             cluster_axis=1,
             num_links=2,
-            memory_config=self.GATHER_USERS_MEMCFG,
+            memory_config=self.attention_config["GATHER_USERS_MEMCFG"](self.cluster_shape[0]),
         )
         attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
         # user_selection_matrix = [1, 1, 32, 128]
@@ -541,7 +405,7 @@ class TtLlamaAttention_galaxy:
             core_grid=ttnn.CoreGrid(y=4, x=8),
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            compute_kernel_config=self.COMPUTE_KERNEL_SELFOUT,
+            compute_kernel_config=self.attention_config["COMPUTE_KERNEL_SELFOUT"],
         )
 
         attn_output = tt_sharded_all_reduce(
@@ -549,7 +413,7 @@ class TtLlamaAttention_galaxy:
             self.mesh_device,
             cluster_axis=0,
             num_links=2,
-            memory_config=self.SELF_OUT_GATHERED_MEMCFG,
+            memory_config=self.attention_config["SELF_OUT_GATHERED_MEMCFG"](self.cluster_shape[1]),
         )
 
         return attn_output
@@ -571,10 +435,10 @@ class TtLlamaAttention_galaxy:
         rot_mats,
     ):
         assert xs.shape[1] == 1, "batch must be 1"
-        assert xs.shape[2] % 128 == 0 and xs.shape[2] > 0, "Seqlen must be divisible by 128"
+        assert xs.shape[2] % 32 == 0 and xs.shape[2] > 0, "Seqlen must be divisible by 32"
         _, _, seq_len, _ = xs.shape
 
-        max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
+        max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"](seq_len)
         batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
 
         xs = ttnn.reshape(xs, (1, batch_dim, seq_len // batch_dim, -1))
@@ -585,8 +449,8 @@ class TtLlamaAttention_galaxy:
             self.qkv,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.COMPUTE_KERNEL_QKV,
-            program_config=self.FUSED_QKV_MM_PROGCFG,
+            compute_kernel_config=self.attention_config["COMPUTE_KERNEL_QKV"],
+            program_config=self.attention_config["FUSED_QKV_MM_PROGCFG"](seq_len),
         )
 
         fused_query_key_value = tt_all_reduce(
@@ -647,8 +511,8 @@ class TtLlamaAttention_galaxy:
         single_user_key_layer = self.prefill_prepare_tensor_for_kv_cache(key_layer, user_id)
 
         # Fill cache with multi-device tensor
-        ttnn.experimental.paged_fill_cache(
-            keys_reshaped,
+        ttnn.fill_cache(
+            keys,
             ttnn.experimental.typecast(single_user_key_layer, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             user_id % self.batch_size_per_device_group,
         )
@@ -657,8 +521,8 @@ class TtLlamaAttention_galaxy:
         values = self.layer_past[1]
         single_user_value_layer = self.prefill_prepare_tensor_for_kv_cache(value_layer, user_id)
 
-        ttnn.experimental.paged_fill_cache(
-            values_reshaped,
+        ttnn.fill_cache(
+            values,
             ttnn.experimental.typecast(single_user_value_layer, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             user_id % self.batch_size_per_device_group,
         )
@@ -670,6 +534,8 @@ class TtLlamaAttention_galaxy:
             value_layer,
             is_causal=True,
             scale=self.scale,
+            compute_kernel_config=self.attention_config["COMPUTE_KERNEL_SDPA"],
+            program_config=self.attention_config["SDPA_PROG_CFG"](query_layer.shape[-2]),  # pass seq_len
         )
 
         return attn_output
@@ -683,7 +549,7 @@ class TtLlamaAttention_galaxy:
 
         _, _, seq_len, _ = attn_output.shape
 
-        max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
+        max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"](seq_len)
         batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
         attn_output = ttnn.reshape(attn_output, (1, batch_dim, seq_len // batch_dim, -1))
 
@@ -692,7 +558,8 @@ class TtLlamaAttention_galaxy:
             self.wo,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
-            program_config=self.SELFOUT_PROGCFG,
+            program_config=self.attention_config["SELFOUT_PROGCFG"](seq_len),
+            compute_kernel_config=self.attention_config["COMPUTE_KERNEL_SELFOUT"],
         )  # bsz, 1, seqlen, hidden_size
 
         attn_output = ttnn.reshape(attn_output, (1, 1, seq_len, -1))
