@@ -73,7 +73,7 @@ def test_line_all_gather_on_t3000_nightly(
         mem_config,
         use_program_cache,
         function_level_defaults,
-        all_gather_function=ttnn.line_all_gather,
+        all_gather_operation=ttnn.line_all_gather,
         enable_async=enable_async,
         num_iters=num_iters,
     )
