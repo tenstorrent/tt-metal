@@ -83,6 +83,11 @@ on:
           - eltwise.unary_backward.div_bw.div_bw
           - eltwise.unary_backward.log_bw.log_bw
           - eltwise.unary_backward.relu6_bw.relu6_bw
+          - eltwise.unary.isfinite
+          - eltwise.unary.isinf
+          - eltwise.unary.isnan
+          - eltwise.unary.isneginf
+          - eltwise.unary.isposinf
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multiply
           - eltwise.binary.div.div
