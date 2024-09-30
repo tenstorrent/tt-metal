@@ -17,6 +17,9 @@ show_help() {
     echo "  -p, --enable-profiler            Enable Tracy profiler."
     echo "  --install-prefix                 Where to install build artifacts."
     echo "  --build-tests                    Build Testcases."
+    echo "  --release                        Set the build type as Release."
+    echo "  --development                    Set the build type as RelWithDebInfo."
+    echo "  --debug                          Set the build type as Debug."
     echo "  --clean                          Remove build workspaces."
 }
 
@@ -40,7 +43,7 @@ build_tests="OFF"
 declare -a cmake_args
 
 OPTIONS=h,e,c,t,a,m,s,u,b:,p
-LONGOPTIONS=help,export-compile-commands,enable-ccache,enable-time-trace,enable-asan,enable-msan,enable-tsan,enable-ubsan,build-type:,enable-profiler,install-prefix:,build-tests,clean
+LONGOPTIONS=help,export-compile-commands,enable-ccache,enable-time-trace,enable-asan,enable-msan,enable-tsan,enable-ubsan,build-type:,enable-profiler,install-prefix:,build-tests,release,development,debug,clean
 
 # Parse the options
 PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTIONS --name "$0" -- "$@")
@@ -78,6 +81,12 @@ while true; do
             install_prefix="$2";shift;;
         --build-tests)
             build_tests="ON";;
+        --release)
+            build_type="Release";;
+        --development)
+            build_type="RelWithDebInfo";;
+        --debug)
+            build_type="Debug";;
         --clean)
 	    clean; exit 0;;
         --)
