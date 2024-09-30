@@ -85,4 +85,5 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    # print(pcc)
     return [pcc, e2e_perf]
