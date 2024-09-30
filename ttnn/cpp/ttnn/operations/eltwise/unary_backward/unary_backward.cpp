@@ -259,19 +259,6 @@ std::vector<Tensor> ExecuteUnaryBackwardMultigammaln::invoke(const Tensor& grad,
     return grad_tensor;
 }
 
-
-std::vector<Tensor> _unary_comp_bw(const Tensor& grad, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor zero_grad = ttnn::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(zero_grad);
-    return grad_tensor;
-}
-
-std::vector<Tensor> _gt_bw(
-    const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config) {
-    return _unary_comp_bw(grad, output_mem_config);
-}
-
 std::vector<Tensor> ExecuteUnaryBackwardLgamma::invoke(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
     std::vector<Tensor> grad_tensor;
