@@ -201,6 +201,13 @@ ttnn.attach_golden_function(
 )
 
 ttnn.attach_golden_function(
+    ttnn.gt_bw,
+    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_comparison_ops(
+        torch.gt, grad, a, b, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
     ttnn.atan2_bw,
     golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
         torch.atan2, grad, a, b, *args, **kwargs
