@@ -1243,7 +1243,7 @@ void py_module(py::module& module) {
         +----------------------------+---------------------------------+-------------------+
         |    BFLOAT16                |       ROW_MAJOR, TILE           |      2, 3, 4      |
         +----------------------------+---------------------------------+-------------------+)doc");
-    
+
     detail::bind_binary_bw_optional(
         module,
         ttnn::lt_bw,
@@ -1271,6 +1271,11 @@ void py_module(py::module& module) {
         +----------------------------+---------------------------------+-------------------+
         |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
         +----------------------------+---------------------------------+-------------------+)doc");
+
+    detail::bind_binary_bw_optional(
+        module,
+        ttnn::eq_bw,
+        R"doc(Performs backward operations for equal to comparison operation of :attr:`input_tensor_a` and attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc");
 
     detail::bind_binary_backward_opt_float_default(
         module,

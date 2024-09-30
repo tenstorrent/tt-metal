@@ -269,11 +269,6 @@ std::vector<Tensor> _unary_comp_bw(const Tensor& grad, const std::optional<Memor
     return grad_tensor;
 }
 
-std::vector<Tensor> _eq_bw(
-    const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config) {
-    return _unary_comp_bw(grad, output_mem_config);
-}
-
 std::vector<Tensor> _gt_bw(
     const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config) {
     return _unary_comp_bw(grad, output_mem_config);
