@@ -293,6 +293,20 @@ struct ExecuteBackwardGE {
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
+struct ExecuteBackwardGT {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const Tensor &other_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float other,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
 struct ExecuteBackwardSub {
     static std::vector<std::optional<Tensor>> invoke(
         uint8_t queue_id,
@@ -557,6 +571,10 @@ constexpr auto eq_bw = ttnn::register_operation<
 constexpr auto ge_bw = ttnn::register_operation<
     "ttnn::ge_bw",
     operations::binary_backward::ExecuteBackwardGE>();
+
+constexpr auto gt_bw = ttnn::register_operation<
+    "ttnn::gt_bw",
+    operations::binary_backward::ExecuteBackwardGT>();
 
 constexpr auto sub_bw = ttnn::register_operation<
     "ttnn::sub_bw",

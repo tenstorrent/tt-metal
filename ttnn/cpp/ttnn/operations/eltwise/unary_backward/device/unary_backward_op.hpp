@@ -15,12 +15,10 @@ namespace ttnn::operations::unary_backward {
 enum class UnaryBackwardOpType {
     DIV_BW,
     ADD_BW,
-    GT_BW,
     SUB_BW,
 };
 
 std::vector<Tensor> _sub_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _gt_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config);
 
 std::vector<Tensor> _add_bw( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
@@ -29,13 +27,6 @@ Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_
 // OpHandler struct template
 template <UnaryBackwardOpType OpType>
 struct OpHandler;
-
-template <>
-struct OpHandler<UnaryBackwardOpType::GT_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _gt_bw(grad, input, other, output_mem_config);
-    }
-};
 
 template <>
 struct OpHandler<UnaryBackwardOpType::SUB_BW> {
