@@ -2,9 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <variant>
-#include <vector>
-
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -70,7 +67,7 @@ struct MorehLayerNormBackwardGammaBetaGradOperation {
         const std::optional<const Tensor> &gamma_grad,
         const std::optional<const Tensor> &beta_grad,
         const std::optional<MemoryConfig> &memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
+        const std::optional<DeviceComputeKernelConfig> &compute_kernel_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_layer_norm_backward_gamma_beta_grad
 

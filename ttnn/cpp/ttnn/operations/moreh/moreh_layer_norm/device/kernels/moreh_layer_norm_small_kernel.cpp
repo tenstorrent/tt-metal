@@ -158,7 +158,7 @@ void MAIN {
                     tile_regs_release();
                 }
             }  // block_size loop
-        } // num_inner loop
+        }  // num_inner loop
         // We don't pop cb_x until we compute xmm.
 
         /*
@@ -442,7 +442,7 @@ void MAIN {
                 cb_pop_front(cb_beta, block_size);
                 cb_push_back(cb_out, block_size);
             }  // if (beta_has_value)
-        } // num_inner loop
+        }  // num_inner loop
         cb_pop_front(cb_recip_std, onetile);
         cb_pop_front(cb_xmm, num_inner);
     }  // num_rows_per_core loop
