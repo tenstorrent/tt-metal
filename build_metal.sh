@@ -15,6 +15,7 @@ show_help() {
     echo "  -s, --enable-tsan                Enable ThreadSanitizer."
     echo "  -u, --enable-ubsan               Enable UndefinedBehaviorSanitizer."
     echo "  -p, --enable-profiler            Enable Tracy profiler."
+    echo "  --install-prefix                 Where to install build artifacts."
     echo "  --clean                          Remove build workspaces."
 }
 
@@ -37,7 +38,7 @@ enable_profiler="OFF"
 declare -a cmake_args
 
 OPTIONS=h,e,c,t,a,m,s,u,b:,p
-LONGOPTIONS=help,export-compile-commands,enable-ccache,enable-time-trace,enable-asan,enable-msan,enable-tsan,enable-ubsan,build-type:,enable-profiler,clean
+LONGOPTIONS=help,export-compile-commands,enable-ccache,enable-time-trace,enable-asan,enable-msan,enable-tsan,enable-ubsan,build-type:,enable-profiler,install-prefix:,clean
 
 # Parse the options
 PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTIONS --name "$0" -- "$@")
@@ -71,6 +72,8 @@ while true; do
             build_type="$2";shift;;
         -p|--enable-profiler)
             enable_profiler="ON";;
+        --install-prefix)
+            install_prefix="$2";shift;;
         --clean)
 	    clean; exit 0;;
         --)
@@ -100,6 +103,9 @@ if [ "$enable_profiler" = "ON" ]; then
     build_dir="${build_dir}_tracy"
 fi
 
+install_prefix_default=$build_dir
+cmake_install_prefix=${install_prefix:="${install_prefix_default}"}
+
 # Set the python environment directory if not already set
 if [ -z "$PYTHON_ENV_DIR" ]; then
     PYTHON_ENV_DIR=$(pwd)/python_env
@@ -115,11 +121,13 @@ echo "INFO: Enable MemorySanitizer: $enable_msan"
 echo "INFO: Enable ThreadSanitizer: $enable_tsan"
 echo "INFO: Enable UndefinedBehaviorSanitizer: $enable_ubsan"
 echo "INFO: Build directory: $build_dir"
+echo "INFO: Install Prefix: $cmake_install_prefix"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
 cmake_args+=("-G" "Ninja")
 cmake_args+=("-DCMAKE_BUILD_TYPE=$build_type")
+cmake_args+=("-DCMAKE_INSTALL_PREFIX=$cmake_install_prefix")
 
 if [ "$enable_ccache" = "ON" ]; then
     cmake_args+=("-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache")
