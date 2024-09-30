@@ -76,6 +76,7 @@ def test_run_device_perf_llama(
         t3k_mesh_device,
         batch,
         seq_len,
+        max_context_len,
         N_LAYERS_TO_PCC[n_layers],
         model_config,
         n_layers,
@@ -96,7 +97,7 @@ def test_run_device_perf_llama(
         ("decode_2048_batch16", 0),  # Issue #9028
         ("decode_4096_batch16", 0),  # Issue #9028
         ("decode_8192_batch16", 0),  # Issue #9028
-        ("decode_128_batch32", 16.6),
+        ("decode_128_batch32", 19.15),
         ("decode_2048_batch32", 14.1),
         ("decode_4096_batch32", 12.8),
         ("prefill_128", 713),
