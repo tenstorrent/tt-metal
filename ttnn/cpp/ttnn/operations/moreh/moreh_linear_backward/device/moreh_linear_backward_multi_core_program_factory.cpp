@@ -15,13 +15,12 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::cached_program_t
 MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    tensor_return_value_t& bias_grad) {
     using namespace tt;
     using namespace tt::tt_metal;
 
     Program program{};
     auto& output_grad = tensor_args.output_grad;
-    auto& bias_grad = output_tensor;
 
     const auto& bias_grad_shape = bias_grad.get_legacy_shape().without_padding();
     const auto& output_grad_shape_wo_padding = output_grad.get_legacy_shape().without_padding();

@@ -139,14 +139,19 @@ std::vector<std::optional<Tensor>> MorehLinearBackward::invoke(
         "input and weight tensors need to be on device");
 
     TT_FATAL(output_grad.storage_type() == StorageType::DEVICE, "Error");
-    auto kernel_config_val =
-        init_device_compute_kernel_config(output_grad.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
     moreh_linear_backward_validate(output_grad, input, weight, input_grad, weight_grad, bias_grad);
 
     if (input_required_grad) {
         TT_FATAL(input_grad.has_value(), "input_grad tensor should not be std::nullopt");
         result[0] = ttnn::moreh_matmul(
-            output_grad, weight, false, false, input_grad, std::nullopt, input_grad_memory_config, kernel_config_val);
+            output_grad,
+            weight,
+            false,
+            false,
+            input_grad,
+            std::nullopt,
+            input_grad_memory_config,
+            compute_kernel_config);
     }
 
     if (weight_required_grad) {
@@ -162,7 +167,7 @@ std::vector<std::optional<Tensor>> MorehLinearBackward::invoke(
                 weight_grad_tensor,
                 std::nullopt,
                 weight_grad_memory_config,
-                kernel_config_val);
+                compute_kernel_config);
         } else {
             const auto& temp_weight_grad = ttnn::moreh_matmul(
                 output_grad,
@@ -172,19 +177,19 @@ std::vector<std::optional<Tensor>> MorehLinearBackward::invoke(
                 std::nullopt,
                 std::nullopt,
                 weight_grad_memory_config,
-                kernel_config_val);
+                compute_kernel_config);
             TT_FATAL(weight_grad.has_value(), "weight_grad tensor should not be std::nullopt");
             std::vector<int64_t> dims =
                 find_reduce_dim(temp_weight_grad.get_legacy_shape(), weight_grad.value().get_legacy_shape());
             ttnn::moreh_sum(
-                temp_weight_grad, dims, true, weight_grad.value(), weight_grad_memory_config, kernel_config_val);
+                temp_weight_grad, dims, true, weight_grad.value(), weight_grad_memory_config, compute_kernel_config);
         }
         result[1] = weight_grad_tensor;
     }
 
     if (bias_required_grad) {
         Tensor output_tensor = ttnn::prim::moreh_bias_add_backward(
-            output_grad, bias, bias_grad, bias_grad_memory_config, kernel_config_val);
+            output_grad, bias, bias_grad, bias_grad_memory_config, compute_kernel_config);
         result[2] = std::make_optional(output_tensor);
     }
 

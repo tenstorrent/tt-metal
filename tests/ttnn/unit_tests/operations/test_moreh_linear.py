@@ -6,9 +6,9 @@ import pytest
 import torch
 import ttnn
 from models.utility_functions import comp_allclose_and_pcc
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_moreh_matmul import get_tensors
+from tests.ttnn.unit_tests.operations.test_moreh_matmul import get_tensors
 from loguru import logger
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
+from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
@@ -262,8 +262,12 @@ def test_moreh_linear_backward_enable_cache(shapes, device, use_program_cache):
     torch.manual_seed(3072)
     requires_input_grad, requires_weight_grad, requires_bias_grad = (True, True, True)
     compute_kernel_config = get_compute_kernel_options(False)
+    num_program_cache_entries_list = []
+
     for i in range(2):
         passing = moreh_linear_backward(
             shapes, requires_input_grad, requires_weight_grad, requires_bias_grad, compute_kernel_config, device
         )
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
         assert passing
+    assert len(set(num_program_cache_entries_list)) == 1

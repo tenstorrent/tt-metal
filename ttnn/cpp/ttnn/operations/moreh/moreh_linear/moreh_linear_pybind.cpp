@@ -19,7 +19,6 @@ void bind_moreh_linear_operation(py::module& module) {
             py::kw_only(),
             py::arg("bias") = std::nullopt,
             py::arg("output") = std::nullopt,
-
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt});
 }
