@@ -1458,19 +1458,6 @@ void Device::compile_command_queue_programs() {
     std::string prefetch_kernel_path = "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp";
     std::string dispatch_kernel_path = "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp";
 
-    // TODO: These are semaphore IDs, remove these when CreateSemaphore returns ID rather than address
-    // constexpr uint32_t prefetch_sync_sem = 0;
-    // constexpr uint32_t prefetch_downstream_cb_sem = 1;
-    // constexpr uint32_t prefetch_sem = 1;
-    // constexpr uint32_t dispatch_sem = 0;
-    // constexpr uint32_t mux_sem = 0;
-    // constexpr uint32_t demux_sem = 0;
-
-    // constexpr uint32_t prefetch_d_sync_sem = 0;
-    // constexpr uint32_t prefetch_d_upstream_cb_sem = 1;
-    // constexpr uint32_t prefetch_d_downstream_cb_sem = 2;
-    // constexpr uint32_t dispatch_downstream_cb_sem = 1;
-
     // TODO: this->hw_command_queues_[cq_id]->noc_index is also hardcoded to NOC_0 elsewhere, should have one definition and remove assertion
     constexpr NOC my_noc_index = NOC::NOC_0;
     constexpr NOC dispatch_upstream_noc_index = NOC::NOC_1;
@@ -1504,9 +1491,9 @@ void Device::compile_command_queue_programs() {
             uint32_t completion_queue_start_addr = issue_queue_start_addr + issue_queue_size;
             uint32_t completion_queue_size = this->sysmem_manager_->get_completion_queue_size(cq_id);
 
-            const uint32_t prefetch_sync_sem = tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_core, 0, dispatch_core_type); // prefetch_sync_sem
-            const uint32_t prefetch_sem = tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_core, dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages(), dispatch_core_type); // prefetch_sem
-            const uint32_t dispatch_sem = tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_core, 0, dispatch_core_type); // dispatch_sem
+            const uint32_t prefetch_sync_sem = tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_core, 0, dispatch_core_type);
+            const uint32_t prefetch_sem = tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_core, dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages(), dispatch_core_type);
+            const uint32_t dispatch_sem = tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_core, 0, dispatch_core_type);
 
             std::vector<uint32_t> prefetch_compile_args = {
                 dispatch_constants::DISPATCH_BUFFER_BASE,
