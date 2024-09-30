@@ -16,6 +16,7 @@ show_help() {
     echo "  -u, --enable-ubsan               Enable UndefinedBehaviorSanitizer."
     echo "  -p, --enable-profiler            Enable Tracy profiler."
     echo "  --install-prefix                 Where to install build artifacts."
+    echo "  --build-tests                    Build Testcases."
     echo "  --clean                          Remove build workspaces."
 }
 
@@ -34,11 +35,12 @@ enable_tsan="OFF"
 enable_ubsan="OFF"
 build_type="Release"
 enable_profiler="OFF"
+build_tests="OFF"
 
 declare -a cmake_args
 
 OPTIONS=h,e,c,t,a,m,s,u,b:,p
-LONGOPTIONS=help,export-compile-commands,enable-ccache,enable-time-trace,enable-asan,enable-msan,enable-tsan,enable-ubsan,build-type:,enable-profiler,install-prefix:,clean
+LONGOPTIONS=help,export-compile-commands,enable-ccache,enable-time-trace,enable-asan,enable-msan,enable-tsan,enable-ubsan,build-type:,enable-profiler,install-prefix:,build-tests,clean
 
 # Parse the options
 PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTIONS --name "$0" -- "$@")
@@ -74,6 +76,8 @@ while true; do
             enable_profiler="ON";;
         --install-prefix)
             install_prefix="$2";shift;;
+        --build-tests)
+            build_tests="ON";;
         --clean)
 	    clean; exit 0;;
         --)
@@ -122,6 +126,7 @@ echo "INFO: Enable ThreadSanitizer: $enable_tsan"
 echo "INFO: Enable UndefinedBehaviorSanitizer: $enable_ubsan"
 echo "INFO: Build directory: $build_dir"
 echo "INFO: Install Prefix: $cmake_install_prefix"
+echo "INFO: Build tests: $build_tests"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
@@ -160,6 +165,12 @@ fi
 if [ "$export_compile_commands" = "ON" ]; then
     cmake_args+=("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
 fi
+
+if [ "$build_tests" = "ON" ]; then
+    cmake_args+=("-DTT_METAL_BUILD_TESTS=ON")
+    cmake_args+=("-DTTNN_BUILD_TESTS=ON")
+    cmake_args+=("-DTT_UMD_BUILD_TESTS=ON")
+fi
 # Create and link the build directory
 mkdir -p $build_dir
 ln -nsf $build_dir build
@@ -170,5 +181,4 @@ cmake "${cmake_args[@]}"
 
 # Build libraries and cpp tests
 echo "INFO: Building Project"
-cmake --build $build_dir --target tests      # <- Can also just run `ninja tests -C build`
-cmake --build $build_dir --target install    # <- This is a general cmake way, can also just run `ninja install -C build`
+cmake --build $build_dir --target install
