@@ -191,7 +191,7 @@ int main(int argc, char **argv) {
                             JitBuildProcessorType::DATA_MOVEMENT,
                             0,
                             get_latest_kernel_binary_path(mask, riscv0_kernel));
-                        ll_api::memory brisc_binary = llrt::get_risc_binary(brisc_hex_path);
+                        ll_api::memory brisc_binary = llrt::get_risc_binary(brisc_hex_path, 0, llrt::PackSpans::PACK);
                         TT_FATAL(
                             brisc_binary == brisc_binaries.at(mask).at(0),
                             "Expected saved BRISC binary to be the same as binary in persistent cache");
@@ -199,7 +199,7 @@ int main(int argc, char **argv) {
                             JitBuildProcessorType::DATA_MOVEMENT,
                             1,
                             get_latest_kernel_binary_path(mask, riscv1_kernel));
-                        ll_api::memory ncrisc_binary = llrt::get_risc_binary(ncrisc_hex_path);
+                        ll_api::memory ncrisc_binary = llrt::get_risc_binary(ncrisc_hex_path, 1, llrt::PackSpans::PACK);
                         TT_FATAL(
                             ncrisc_binary == ncrisc_binaries.at(mask).at(0),
                             "Expected saved NCRISC binary to be the same as binary in persistent cache");
@@ -209,7 +209,7 @@ int main(int argc, char **argv) {
                                 JitBuildProcessorType::COMPUTE,
                                 trisc_id,
                                 get_latest_kernel_binary_path(mask, compute_kernel));
-                            ll_api::memory trisc_binary = llrt::get_risc_binary(trisc_hex_path);
+                            ll_api::memory trisc_binary = llrt::get_risc_binary(trisc_hex_path, 2, llrt::PackSpans::PACK);
                             TT_FATAL(
                                 trisc_binary == compute_binaries.at(mask).at(trisc_id),
                                 "Expected saved TRISC binary for {} to be the same as binary in persistent cache", trisc_id_str);
