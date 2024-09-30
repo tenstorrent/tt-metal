@@ -1351,6 +1351,11 @@ void py_module(py::module& module) {
         ttnn::gt_bw,
         R"doc(Performs backward operations for greater than comparison operation of :attr:`input_tensor_a` and attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc");
 
+    detail::bind_binary_backward_overload_comparison(
+        module,
+        ttnn::le_bw,
+        R"doc(Performs backward operations for less than or equal comparison operation of :attr:`input_tensor_a` and attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc");
+
     detail::bind_binary_backward_opt_float_default(
         module,
         ttnn::addalpha_bw,
