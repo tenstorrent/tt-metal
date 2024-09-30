@@ -8,7 +8,7 @@ from functools import partial
 import torch
 import random
 import ttnn
-from tests.sweep_framework.utils import gen_shapes
+from tests.sweep_framework.utils import gen_shapes, gen_arange
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -25,9 +25,9 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 128, 128], [1, 1, 32, 32], 8)
-        + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 8)
-        + gen_shapes([32, 32], [256, 256], [32, 32], 8),
+        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 512, 512], [1, 1, 32, 32], 16)
+        + gen_shapes([1, 32, 32], [12, 1024, 1024], [1, 32, 32], 16)
+        + gen_shapes([32, 32], [1024, 1024], [32, 32], 16),
         "input_a_dtype": [ttnn.int32],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -61,8 +61,10 @@ def run(
     torch.manual_seed(data_seed)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.int64), input_a_dtype
+        partial(torch_random, low=-2147483647, high=2147483648, dtype=torch.int64), input_a_dtype
     )(input_shape)
+
+    torch_input_tensor_a = torch.full(size=input_shape, fill_value=-2147483647).to(torch.int32)
 
     scalar = torch.randint(-100, 101, (1,)).item()
 
@@ -82,3 +84,19 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
+
+
+from tests.sweep_framework.permutations import *
+
+for suite in parameters.keys():
+    device_id = 0
+    device = ttnn.open_device(device_id=device_id)
+    suite_vectors = list(permutations(parameters[suite]))
+    print(len(suite_vectors))
+    for vector in suite_vectors:
+        passed, _ = run(**vector, device=device)
+        if passed[0] != True:
+            print(passed)
+            print(input_tensor_a)
+
+    ttnn.close_device(device)

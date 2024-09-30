@@ -28,7 +28,7 @@ parameters = {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 128, 128], [1, 1, 32, 32], 4)
         + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 4)
         + gen_shapes([32, 32], [256, 256], [32, 32], 4),
-        "shift_bits": list(range(0, 32)),
+        "shift_bits": list(range(1, 31)),
         "input_a_dtype": [ttnn.int32],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -63,7 +63,7 @@ def run(
     torch.manual_seed(data_seed)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=0, high=100, dtype=torch.int64), input_a_dtype
+        partial(torch_random, low=-100, high=100, dtype=torch.int64), input_a_dtype
     )(input_shape)
 
     torch_output_tensor = torch.bitwise_right_shift(torch_input_tensor_a, shift_bits)

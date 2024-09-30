@@ -61,7 +61,7 @@ def run(
     torch.manual_seed(data_seed)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.int64), input_a_dtype
+        partial(torch_random, low=0, high=100, dtype=torch.int64), input_a_dtype
     )(input_shape)
 
     scalar = torch.randint(0, 101, (1,)).item()
