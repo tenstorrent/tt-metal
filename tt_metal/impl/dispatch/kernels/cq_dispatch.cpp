@@ -218,12 +218,6 @@ void process_write_host_h(uint32_t& block_noc_writes_to_clear, uint32_t block_ne
     cmd_ptr = data_ptr;
 }
 
-inline void process_remote_write_h() {
-    volatile tt_l1_ptr CQDispatchCmd *cmd = (volatile tt_l1_ptr CQDispatchCmd *)cmd_ptr;
-    noc_inline_dw_write(get_noc_addr_helper(cmd->write_from_remote.noc_xy_addr, cmd->write_from_remote.addr), cmd->write_from_remote.data);
-    cmd_ptr += sizeof(CQDispatchCmd);
-}
-
 void process_exec_buf_end_h() {
     if (split_prefetch) {
         invalidate_l1_cache();
@@ -884,15 +878,6 @@ re_run_command:
             }
             break;
 
-        case CQ_DISPATCH_CMD_REMOTE_WRITE:
-            DPRINT << "cmd_remote_write\n";
-            if (is_d_variant && !is_h_variant) {
-                // Relay write to dispatch_h, which will issue it on local chip
-                relay_to_next_cb<split_dispatch_page_preamble_size>(cmd_ptr, sizeof(CQDispatchCmd), block_noc_writes_to_clear, block_next_start_addr);
-            }
-            cmd_ptr += sizeof(CQDispatchCmd);
-            break;
-
         case CQ_DISPATCH_CMD_SET_WRITE_OFFSET:
             DPRINT << "write offset: " <<
                 cmd->set_write_offset.offset0 << " " <<
@@ -947,10 +932,6 @@ static inline bool process_cmd_h(uint32_t &cmd_ptr, uint32_t& block_noc_writes_t
         case CQ_DISPATCH_CMD_EXEC_BUF_END:
             DPRINT << "dispatch_h exec_buf_end\n";
             process_exec_buf_end_h();
-            break;
-        case CQ_DISPATCH_CMD_REMOTE_WRITE:
-            DPRINT << "cmd_remote_write\n";
-            process_remote_write_h();
             break;
         case CQ_DISPATCH_CMD_TERMINATE:
             DPRINT << "dispatch_h terminate\n";
