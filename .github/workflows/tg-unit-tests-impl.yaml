@@ -45,7 +45,7 @@ jobs:
           {
             name: "TG unit tests",
             arch: wormhole_b0,
-            runs-on: ["config-tg", "in-service", "bare-metal", "pipeline-functional"],
+            runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-functional"],
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type unit_tg_device --dispatch-mode ""'
           },
         ]
