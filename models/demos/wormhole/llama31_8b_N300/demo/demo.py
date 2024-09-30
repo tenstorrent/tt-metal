@@ -57,7 +57,7 @@ def preprocess_inputs_prefill(
     if instruct:
         encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in input_prompts]
     else:
-        encoded_prompts = [tokenizer.encode(prompt) for prompt in input_prompts]
+        encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in input_prompts]
 
     prompt_lens = [len(x) for x in encoded_prompts]
     min_prompt_len = min(prompt_lens)
