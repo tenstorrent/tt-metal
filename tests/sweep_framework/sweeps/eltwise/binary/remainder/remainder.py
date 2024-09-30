@@ -12,7 +12,7 @@ from tests.sweep_framework.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
+from models.utility_functions import torch_random, is_wormhole_b0
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -26,9 +26,9 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16),
-        "accurate_mode": [True, False],
-        "round_mode": [None],
+        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 128, 128], [1, 1, 32, 32], 16)
+        + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 16)
+        + gen_shapes([32, 32], [256, 256], [32, 32], 16),
         "input_a_dtype": [ttnn.bfloat16],
         "input_b_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
@@ -38,9 +38,9 @@ parameters = {
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
     "xfail": {
-        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16),
-        "accurate_mode": [True, False],
-        "round_mode": [None],
+        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 128, 128], [1, 1, 32, 32], 16)
+        + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 16)
+        + gen_shapes([32, 32], [256, 256], [32, 32], 16),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_layout": [ttnn.TILE_LAYOUT],
@@ -50,6 +50,14 @@ parameters = {
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
+
+
+def mesh_device_fixture():
+    device = ttnn.open_device(device_id=0)
+    assert ttnn.device.is_wormhole_b0(device), "This op is available for Wormhole_B0 only"
+    yield (device, "Wormhole_B0")
+    ttnn.close_device(device)
+    del device
 
 
 # TO-DO: Create an issue on this, since these constrictions are not mentioned in the documentation
@@ -65,8 +73,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_shape,
-    accurate_mode,
-    round_mode,
     input_a_dtype,
     input_b_dtype,
     input_a_layout,
@@ -79,25 +85,15 @@ def run(
 ) -> list:
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
-
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
-    signs_a = torch.randint(0, 2, input_shape) * 2 - 1
-    torch_input_tensor_a *= signs_a
 
-    if accurate_mode == False:
-        torch_input_tensor_b = gen_func_with_cast_tt(
-            partial(torch_random, low=0.1, high=100, dtype=torch.float32), input_b_dtype
-        )(input_shape)
-        signs_b = torch.randint(0, 2, input_shape) * 2 - 1
-        torch_input_tensor_b *= signs_b
-    else:
-        torch_input_tensor_b = gen_func_with_cast_tt(
-            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
-        )(input_shape)
+    torch_input_tensor_b = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
+    )(input_shape)
 
-    torch_output_tensor = torch.div(torch_input_tensor_a, torch_input_tensor_b)
+    torch_output_tensor = torch.remainder(torch_input_tensor_a, torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -116,9 +112,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.div(
-        input_tensor_a, input_tensor_b, accurate_mode=accurate_mode, memory_config=output_memory_config
-    )
+    output_tensor = ttnn.remainder(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 

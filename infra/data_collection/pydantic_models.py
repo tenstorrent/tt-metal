@@ -48,6 +48,10 @@ class Job(BaseModel):
         None,
         description="Identifier for the Github Actions CI job, for pipelines " "orchestrated and executed by Github.",
     )
+    github_job_link: Optional[str] = Field(
+        None,
+        description="Link to the Github Actions CI job, for pipelines orchestrated and " "executed by Github.",
+    )
     name: str = Field(description="Name of the job.")
     job_submission_ts: datetime = Field(description="Timestamp with timezone when the job was submitted.")
     job_start_ts: datetime = Field(description="Timestamp with timezone when the job execution started.")
@@ -66,6 +70,8 @@ class Job(BaseModel):
     card_type: Optional[str] = Field(description="Card type and version.")
     os: Optional[str] = Field(description="Operating system of the host.")
     location: Optional[str] = Field(description="Where the host is located.")
+    failure_signature: Optional[str] = Field(None, description="Failure signature.")
+    failure_description: Optional[str] = Field(None, description="Failure description.")
     tests: List[Test] = []
 
 
@@ -81,6 +87,10 @@ class Pipeline(BaseModel):
         None,
         description="Identifier for the Github Actions CI pipeline, for pipelines "
         "orchestrated and executed by Github.",
+    )
+    github_pipeline_link: Optional[str] = Field(
+        None,
+        description="Link to the Github Actions CI pipeline, for pipelines " "orchestrated and executed by Github.",
     )
     pipeline_submission_ts: datetime = Field(
         description="Timestamp with timezone when the pipeline was submitted for " "execution.",

@@ -16,7 +16,7 @@ struct MorehGetItemOperation {
     struct operation_attributes_t {
         const std::vector<uint32_t> index_dims;
         // const CoreRange core_range;
-        const MemoryConfig output_memory_config;
+        const MemoryConfig memory_config;
     };
 
     struct tensor_args_t {
@@ -90,7 +90,7 @@ struct MorehGetItemOperation {
         const std::vector<uint32_t> index_dims,
         const std::optional<Tensor>& output,
         // const CoreRange core_range,
-        const std::optional<MemoryConfig> output_memory_config);
+        const std::optional<MemoryConfig> memory_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_getitem
 

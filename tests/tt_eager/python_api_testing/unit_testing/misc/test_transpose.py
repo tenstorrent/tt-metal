@@ -40,7 +40,7 @@ def transpose(
 
     xt = xt.to(device, input_mem_config)
     xtt = ttnn.transpose(xt, dim0, dim1, memory_config=output_mem_config)
-    assert list(xtt.get_legacy_shape()) == output_shape
+    assert list(xtt.shape.with_tile_padding()) == output_shape
     transposed_ref = x.transpose(dim0, dim1)
 
     tt_got_back = xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()

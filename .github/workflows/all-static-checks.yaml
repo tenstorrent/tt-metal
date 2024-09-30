@@ -16,6 +16,7 @@ jobs:
         with:
           cache: 'pip'
           cache-dependency-path: infra/requirements-infra.txt
+          python-version: '3.10'
       - name: Install infra deps
         run: python -m pip install -r infra/requirements-infra.txt
       - name: Check SPDX licenses
@@ -54,6 +55,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5.0.0
+        with:
+          python-version: '3.10'
       - name: Check sweeps workflow option count against sweep file count
         run: |
           pip install pyyaml

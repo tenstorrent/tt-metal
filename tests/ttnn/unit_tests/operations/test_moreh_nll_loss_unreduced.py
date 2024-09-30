@@ -9,7 +9,7 @@ import pytest
 from models.utility_functions import comp_allclose_and_pcc, is_wormhole_b0
 from loguru import logger
 
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
+from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
@@ -74,7 +74,7 @@ def run_moreh_nll_loss_unreduced_backward(shape, ignore_index, none_weight, devi
         torch_target, torch_weight, output_grad, torch_input.grad, device
     )
 
-    tt_input_grad = ttnn.moreh_nll_loss_unreduced_backward(
+    tt_input_grad = ttnn.operations.moreh.nll_loss_unreduced_backward(
         tt_target,
         tt_output_grad,
         weight_tensor=tt_weight,
@@ -110,7 +110,7 @@ def run_moreh_nll_loss_unreduced(shape, ignore_index, none_weight, device, compu
 
     reduction_mode = "none"
 
-    tt_loss = ttnn.moreh_nll_loss(
+    tt_loss = ttnn.operations.moreh.nll_loss(
         tt_input,
         tt_target,
         reduction_mode,
@@ -158,16 +158,29 @@ def test_moreh_nll_loss_unreduced(shape, ignore_index, none_weight, compute_kern
         (5, 10, 10, 20),
     ],
 )
-@pytest.mark.parametrize("none_weight", [True, False])
-def test_moreh_nll_loss_unreduced_callback(shape, none_weight, device, use_program_cache):
+def test_moreh_nll_loss_unreduced_callback(shape, device, use_program_cache):
     torch.manual_seed(0)
 
     ignore_index = 1
+    num_program_cache_entries_list = []
 
-    for _ in range(2):
+    for i in range(4):
+        if i < 2:
+            none_weight = True
+        else:
+            none_weight = False
+
         run_moreh_nll_loss_unreduced(shape, ignore_index, none_weight, device)
         torch_dummy = torch.randn([32, 32])
         tt_dummy = to_npu(torch_dummy, device)
+
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert (
+        num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+        and num_program_cache_entries_list[2] == num_program_cache_entries_list[3]
+    )
 
 
 @pytest.mark.parametrize(
@@ -205,7 +218,21 @@ def test_moreh_nll_loss_unreduced_backward(
 def test_moreh_nll_loss_unreduced_backward_test_callback(shape, none_weight, device, ignore_index, use_program_cache):
     torch.manual_seed(0)
 
-    for _ in range(2):
+    num_program_cache_entries_list = []
+    for i in range(4):
+        if i < 2:
+            none_weight = True
+        else:
+            none_weight = False
+
         run_moreh_nll_loss_unreduced_backward(shape, ignore_index, none_weight, device)
         torch_dummy = torch.randn([32, 32])
         tt_dummy = to_npu(torch_dummy, device)
+
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert (
+        num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+        and num_program_cache_entries_list[2] == num_program_cache_entries_list[3]
+    )

@@ -10,8 +10,6 @@
 * This file contains addresses used for fast dispatch that are visible to both host and device compiled code
 */
 
-static constexpr uint32_t PCIE_ALIGNMENT = NOC_PCIE_READ_ALIGNMENT_BYTES >= NOC_PCIE_WRITE_ALIGNMENT_BYTES ? NOC_PCIE_READ_ALIGNMENT_BYTES : NOC_PCIE_WRITE_ALIGNMENT_BYTES;
-
 // Command queue pointers
 constexpr static uint32_t CQ_PREFETCH_Q_RD_PTR = L1_UNRESERVED_BASE;
 // Used to notify host of how far device has gotten, doesn't need L1 alignment because it's only written locally by

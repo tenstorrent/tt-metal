@@ -160,7 +160,7 @@ class TtTrOCRDecoder(nn.Module):
             raise ValueError("You cannot specify both decoder_input_ids and decoder_inputs_embeds at the same time")
         elif input_ids is not None:
             input = input_ids
-            input_ids = fallback_ops.reshape(input_ids, 1, 1, -1, input.get_legacy_shape()[-1])
+            input_ids = fallback_ops.reshape(input_ids, 1, 1, -1, input.shape.with_tile_padding()[-1])
 
         elif inputs_embeds is not None:
             input_shape = inputs_embeds.size()[:-1]
@@ -189,7 +189,7 @@ class TtTrOCRDecoder(nn.Module):
                 bias=self.layernorm_embedding_bias,
             )
 
-        input_shape = input.get_legacy_shape()
+        input_shape = input.shape.with_tile_padding()
 
         attention_mask = self._prepare_decoder_attention_mask(
             attention_mask, input_shape, inputs_embeds, past_key_values_length

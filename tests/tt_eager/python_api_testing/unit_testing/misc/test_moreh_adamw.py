@@ -141,7 +141,7 @@ def run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device, 
         compute_kernel_config=compute_kernel_config,
     )
 
-    assert tt_param_out.get_legacy_shape() == list(model.weight.shape)
+    assert tt_param_out.shape.with_tile_padding() == list(model.weight.shape)
 
     param_result = tt_param_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
     exp_avg_result = tt_exp_avg_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)

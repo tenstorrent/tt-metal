@@ -56,9 +56,7 @@ inline __attribute__((always_inline)) uint32_t NOC_CFG_READ_REG(uint32_t noc, ui
 }
 
 inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint32_t cmd_buf) {
-    // Command buffer FIFO supports 16 commands, once it is full the overflow register for the cmd_buf will be set
-    // CMD_BUF_AVAIL holds available buffer space in [28:24], [20:16], [12:8], [4:0] for buffers 3, 2, 1, 0 respectively
-    return bool((NOC_CMD_BUF_READ_REG(noc, cmd_buf, CMD_BUF_AVAIL) >> (cmd_buf << 3)) & 0x1F);
+    return (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
 }
 
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
@@ -171,10 +169,6 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_atomics_flushed(
 inline __attribute__((always_inline)) void noc_init() {
 #pragma GCC unroll 0
     for (int noc = 0; noc < NUM_NOCS; noc++) {
-        // Enable command buffer FIFO that has capacity of 16 per buffer
-        uint32_t niu_cfg0_reg_val = NOC_CFG_READ_REG(noc, NIU_CFG_0);
-        NOC_CMD_BUF_WRITE_REG(noc, 0, NOC_CFG(NIU_CFG_0), niu_cfg0_reg_val | (1 << NIU_CFG_0_CMD_BUFFER_FIFO_EN));
-
         uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
         uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
         uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;

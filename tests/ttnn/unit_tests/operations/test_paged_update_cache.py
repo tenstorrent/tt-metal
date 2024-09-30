@@ -41,8 +41,8 @@ def run_test_update_cache_decode(
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
-            xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
-            xt.get_legacy_shape()[-1],
+            xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
+            xt.shape.with_tile_padding()[-1],
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
         False,
@@ -151,8 +151,8 @@ def test_update_cache_decode(
         input_shard_spec = ttnn.ShardSpec(
             shard_grid,
             [
-                xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
-                xt.get_legacy_shape()[-1],
+                xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
+                xt.shape.with_tile_padding()[-1],
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
             False,
@@ -234,8 +234,8 @@ def test_update_cache_decode_program_cache(
         input_shard_spec = ttnn.ShardSpec(
             shard_grid,
             [
-                xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
-                xt.get_legacy_shape()[-1],
+                xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
+                xt.shape.with_tile_padding()[-1],
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
             False,
@@ -276,8 +276,8 @@ def run_test_tensor_index_update_cache_decode(
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
-            xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
-            xt.get_legacy_shape()[-1],
+            xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
+            xt.shape.with_tile_padding()[-1],
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
         False,
@@ -414,8 +414,8 @@ def run_test_paged_update_cache_decode(
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
-            xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
-            xt.get_legacy_shape()[-1],
+            xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
+            xt.shape.with_tile_padding()[-1],
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
         False,
@@ -543,8 +543,8 @@ def test_paged_update_cache_decode_program_caching(
         input_shard_spec = ttnn.ShardSpec(
             shard_grid,
             [
-                xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
-                xt.get_legacy_shape()[-1],
+                xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
+                xt.shape.with_tile_padding()[-1],
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
             False,

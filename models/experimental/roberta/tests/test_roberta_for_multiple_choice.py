@@ -61,7 +61,7 @@ def test_roberta_for_multiple_choice(device):
         print(inputs_dict["attention_mask"].shape)
         inputs_dict["attention_mask"] = torch.unsqueeze(inputs_dict["attention_mask"], 0)
         inputs_dict["attention_mask"] = torch2tt_tensor(inputs_dict["attention_mask"], device)
-        print(inputs_dict["attention_mask"].get_legacy_shape())
+        print(inputs_dict["attention_mask"].shape.with_tile_padding())
 
         logger.info("Running tt model ...")
         tt_output = tt_model(**inputs_dict)

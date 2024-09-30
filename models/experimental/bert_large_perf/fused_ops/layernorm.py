@@ -70,8 +70,8 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
     # gamma, beta, epsilon should be tt::tensors of size 32*W
     # with a single populated top row
     # H, W need to be from the "true" shape (unpadded)
-    assert gamma is None or gamma.get_legacy_shape() == [1, 1, 32, W]  # single H-tile
-    assert beta is None or beta.get_legacy_shape() == [1, 1, 32, W]  # single H-tile
+    assert gamma is None or gamma.shape.with_tile_padding() == [1, 1, 32, W]  # single H-tile
+    assert beta is None or beta.shape.with_tile_padding() == [1, 1, 32, W]  # single H-tile
 
     H_ = H
     W_ = W
@@ -122,10 +122,10 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
     # 1D variant
     # TODO(AP): merge with 2d? refactor.
     def layernorm_1d_(x, var_scaler, overrideH=None, refx=None, refgamma=None, refbeta=None):
-        N = x.get_legacy_shape()[0]
-        C = x.get_legacy_shape()[1]
-        H = x.get_legacy_shape()[2]
-        W = x.get_legacy_shape()[3]
+        N = x.shape.with_tile_padding()[0]
+        C = x.shape.with_tile_padding()[1]
+        H = x.shape.with_tile_padding()[2]
+        W = x.shape.with_tile_padding()[3]
 
         H_ = 1
         if overrideH is not None:
@@ -140,7 +140,7 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
         var = ttnn.mul(x_minus_mean, x_minus_mean)  # (x-m)^2
         var_redW = ttnn.sum(var, 3)  # sum[(x-m)^2]
 
-        # print(f"layernorm_1d_ var_scaler shape {var_scaler.get_legacy_shape()} H {H} H_ {H_} W {W}")
+        # print(f"layernorm_1d_ var_scaler shape {var_scaler.shape.with_tile_padding()} H {H} H_ {H_} W {W}")
 
         var_div_n1 = ttnn.multiply(var_redW, var_scaler)
         var_plus_eps = ttnn.add(var_div_n1, epsilon_)
@@ -163,10 +163,10 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
             return x_gamma
 
     def layernorm_2d_(x):
-        N = x.get_legacy_shape()[0]
-        C = x.get_legacy_shape()[1]
-        H = x.get_legacy_shape()[2]
-        W = x.get_legacy_shape()[3]
+        N = x.shape.with_tile_padding()[0]
+        C = x.shape.with_tile_padding()[1]
+        H = x.shape.with_tile_padding()[2]
+        W = x.shape.with_tile_padding()[3]
 
         # first compute the mean (m)
         redW = ttnn.sum(x, 3, scalar=1.0 / W)  # -> NCH1
@@ -177,7 +177,7 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
         hmaskt = ttnn.tilize(hmasku)  # tilize the mask
         x_minus_mean = ttnn.multiply(x_minus_mean0, hmaskt)  # zero out (x-m) for h>=H_, h<H
 
-        print(f"layernorm_2d_ hmasku shape {hmasku.get_legacy_shape()}")
+        print(f"layernorm_2d_ hmasku shape {hmasku.shape.with_tile_padding()}")
 
         var = ttnn.mul(x_minus_mean, x_minus_mean)  # (x-m)^2
         var_redW = ttnn.sum(var, 3)  # sum[(x-m)^2]

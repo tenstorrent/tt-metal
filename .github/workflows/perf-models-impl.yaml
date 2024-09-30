@@ -1,0 +1,74 @@
+name: "[internal] Perf models impl"
+
+on:
+  workflow_call:
+
+jobs:
+  models-perf:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        test-info: [
+          {name: "GS", arch: grayskull, runs-on: ["E150", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal"},
+          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal"},
+        ]
+        model-type: [llm_javelin, cnn_javelin, other]
+    name: "${{ matrix.model-type }} ${{ matrix.test-info.name }}"
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.test-info.arch }}
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    environment: dev
+    runs-on: ${{ matrix.test-info.runs-on }}
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Enable Performance mode
+        run: |
+          sudo cpupower frequency-set -g performance
+      - name: Ensure weka mount is active
+        run: |
+          sudo systemctl restart mnt-MLPerf.mount
+          sudo /etc/rc.local
+          ls -al /mnt/MLPerf/bit_error_tests
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+          echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.test-info.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.test-info.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
+      - name: Run performance regressions
+        id: performance_tests
+        timeout-minutes: 70
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type ${{ matrix.model-type }}_models_performance_${{ matrix.test-info.machine-type }}
+      # TODO: Fix the pipeline before enabling notifications.
+      #- uses: ./.github/actions/slack-report
+      #  if: ${{ failure() }}
+      #  with:
+      #    slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+      - name: Check perf report exists
+        id: check-perf-report
+        if: ${{ !cancelled() }}
+        run: |
+          ls -hal
+          export PERF_REPORT_FILENAME=Models_Perf_$(date +%Y_%m_%d).csv
+          ls -hal $PERF_REPORT_FILENAME
+          echo "perf_report_filename=$PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      - name: Upload perf report
+        if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-report-csv-${{ matrix.model-type }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
+          path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
+      - name: Disable Performance mode
+        if: always()
+        run: |
+          sudo cpupower frequency-set -g ondemand

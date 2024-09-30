@@ -22,7 +22,7 @@ def check_log_pytorch_warning(arg):
 def custom_tensor_print_handler(tensor_cls):
     def custom_tt_tensor_to_str_fn(tensor):
         # We just report that this was a tt tensor and its shape as detailed information is already reported in other columns
-        return f"ttnn.Tensor({'_'.join(map(str, tensor.get_legacy_shape()))})"
+        return f"ttnn.Tensor({'_'.join(map(str, tensor.shape.with_tile_padding()))})"
 
     def custom_pt_tensor_to_str_fn(tensor):
         return f"torch.Tensor({'|'.join(['_'.join(map(str, tensor.shape)), str(tensor.layout), str(tensor.dtype), str(tensor.device)])})"
@@ -77,7 +77,7 @@ def convert_pt_tensor_to_tt_tensor(pt_tensor, output_format):
 
     if output_format["layout"] == ttnn.TILE_LAYOUT:
         if (
-            tt_tensor.get_legacy_shape()[2] % 32 == 0 and tt_tensor.get_legacy_shape()[3] % 32 == 0
+            tt_tensor.shape.with_tile_padding()[2] % 32 == 0 and tt_tensor.shape.with_tile_padding()[3] % 32 == 0
         ):  # Restore tile layout only if legal or else leave as RM
             tt_tensor = tt_tensor.to(ttnn.TILE_LAYOUT)
     else:
@@ -89,7 +89,7 @@ def convert_pt_tensor_to_tt_tensor(pt_tensor, output_format):
         if (
             tt_tensor.get_layout() == ttnn.TILE_LAYOUT
             or tt_tensor.get_layout() == ttnn.ROW_MAJOR_LAYOUT
-            and tt_tensor.get_legacy_shape()[3] % 2 == 0
+            and tt_tensor.shape.with_tile_padding()[3] % 2 == 0
         ):
             tt_tensor = tt_tensor.to(output_format["device"])
     return tt_tensor

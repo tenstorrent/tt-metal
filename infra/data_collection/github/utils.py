@@ -54,8 +54,7 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
     github_pipeline_id = github_pipeline_json["id"]
     pipeline_submission_ts = github_pipeline_json["created_at"]
 
-    logger.warning("Using hardcoded value for repository_url")
-    repository_url = "https://github.com/tenstorrent/tt-metal"
+    repository_url = github_pipeline_json["repository"]["html_url"]
 
     jobs = github_jobs_json["jobs"]
     jobs_start_times = list(map(lambda job_: get_datetime_from_github_datetime(job_["started_at"]), jobs))
@@ -75,8 +74,7 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
     pipeline_end_ts = github_pipeline_json["updated_at"]
     name = github_pipeline_json["name"]
 
-    logger.warning("Using hardcoded value tt-metal for project value")
-    project = "tt-metal"
+    project = github_pipeline_json["repository"]["name"]
 
     trigger = github_runner_environment["github_event_name"]
 
@@ -92,6 +90,8 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
     logger.warning("Using hardcoded value github_actions for orchestrator value")
     orchestrator = "github_actions"
 
+    github_pipeline_link = github_pipeline_json["html_url"]
+
     return {
         "github_pipeline_id": github_pipeline_id,
         "repository_url": repository_url,
@@ -106,6 +106,7 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
         "git_commit_hash": git_commit_hash,
         "git_author": git_author,
         "orchestrator": orchestrator,
+        "github_pipeline_link": github_pipeline_link,
     }
 
 
@@ -217,6 +218,8 @@ def get_job_row_from_github_job(github_job):
     logger.warning("docker_image erroneously used in pipeline data model, but should be moved. Returning null")
     docker_image = None
 
+    github_job_link = github_job["html_url"]
+
     return {
         "github_job_id": github_job_id,
         "host_name": host_name,
@@ -231,6 +234,7 @@ def get_job_row_from_github_job(github_job):
         "is_build_job": is_build_job,
         "job_matrix_config": job_matrix_config,
         "docker_image": docker_image,
+        "github_job_link": github_job_link,
     }
 
 
