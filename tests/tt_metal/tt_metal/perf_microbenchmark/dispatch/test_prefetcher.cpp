@@ -2227,7 +2227,6 @@ void configure_for_multi_chip(Device *device,
 
     const uint32_t prefetch_downstream_buffer_pages = split_prefetcher_g ? prefetch_d_buffer_pages : dispatch_buffer_pages;
     const uint32_t prefetch_core_sem_1_id = tt_metal::CreateSemaphore(program, {prefetch_core}, prefetch_downstream_buffer_pages);
-    // tt_metal::CreateSemaphore(program, {prefetch_core}, prefetch_d_buffer_pages);
     if (packetized_path_en_g) {
         // for the unpacketize stage, we use rptr/wptr for flow control, and poll semaphore
         // value only to update the rptr:
