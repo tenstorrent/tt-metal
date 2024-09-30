@@ -528,6 +528,12 @@ std::vector<std::optional<Tensor>> ExecuteBackwardConcat::invoke(
     return ExecuteBackwardConcat::invoke(ttnn::DefaultQueueId, grad, input, other, dim, are_required_outputs, memory_config, input_grad, other_grad);
 }
 
+std::vector<Tensor> _unary_comp_bw(const Tensor& grad, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor zero_grad = ttnn::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(zero_grad);
+    return grad_tensor;
+}
 
 std::vector<Tensor> _binary_comp_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
@@ -634,8 +640,14 @@ std::vector<Tensor> _gt_bw(const Tensor& grad, const Tensor& input, const Tensor
     return _binary_comp_bw(grad, input, other, output_mem_config);
 }
 
-std::vector<Tensor> _ge_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> ExecuteBackwardGE::invoke(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     return _binary_comp_bw(grad, input, other, output_mem_config);
+}
+
+std::vector<Tensor> ExecuteBackwardGE::invoke(
+    const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config) {
+    return _unary_comp_bw(grad, output_mem_config);
 }
 
 // template parameter min_or_max = TRUE for MAX, FALSE for MIN
