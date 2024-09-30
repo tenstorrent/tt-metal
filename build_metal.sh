@@ -4,17 +4,17 @@ set -eo pipefail
 
 # Function to display help
 show_help() {
-    echo "Usage: $0 [-h] [-e] [-c] [-b build_type] [-t] [-a]"
-    echo "  -h  Show this help message."
-    echo "  -e  Enable CMAKE_EXPORT_COMPILE_COMMANDS."
-    echo "  -c  Enable ccache for the build."
-    echo "  -b  Set the build type. Default is Release. Other options are Debug, RelWithDebInfo, and CI."
-    echo "  -t  Enable build time trace (clang only)."
-    echo "  -a  Enable AddressSanitizer."
-    echo "  -m  Enable MemorySanitizer."
-    echo "  -s  Enable ThreadSanitizer."
-    echo "  -u  Enable UndefinedBehaviorSanitizer."
-    echo "  -p  Enable Tracy profiler."
+    echo "Usage: $0 [options]..."
+    echo "  -h, --help                       Show this help message."
+    echo "  -e, --export-compile-commands    Enable CMAKE_EXPORT_COMPILE_COMMANDS."
+    echo "  -c, --enable-ccache              Enable ccache for the build."
+    echo "  -b, --build-type build_type      Set the build type. Default is Release. Other options are Debug, RelWithDebInfo, and CI."
+    echo "  -t, --trace                      Enable build time trace (clang only)."
+    echo "  -a, --enable-asan                Enable AddressSanitizer."
+    echo "  -m, --enable-msan                Enable MemorySanitizer."
+    echo "  -s, --enable-tsan                Enable ThreadSanitizer."
+    echo "  -u, --enable-ubsan               Enable UndefinedBehaviorSanitizer."
+    echo "  -p, --enable-profiler            Enable Tracy profiler."
 }
 
 # Parse CLI options
@@ -28,46 +28,63 @@ enable_ubsan="OFF"
 build_type="Release"
 enable_profiler="OFF"
 
-while getopts "hectamsub:p" opt; do
-    case ${opt} in
-        h )
-            show_help
-            exit 0
-            ;;
-        e )
-            export_compile_commands="ON"
-            ;;
-        c )
-            enable_ccache="ON"
-            ;;
-        t )
-            enable_time_trace="ON"
-            ;;
-        a )
-            enable_asan="ON"
-            ;;
-        m )
-            enable_msan="ON"
-            ;;
-        s )
-            enable_tsan="ON"
-            ;;
-        u )
-            enable_ubsan="ON"
-            ;;
-        b )
-            build_type="$OPTARG"
-            ;;
-        p )
-            enable_profiler="ON"
-            ;;
-        \? )
-            show_help
-            exit 1
-            ;;
+declare -a cmake_args
+
+OPTIONS=h,e,c,t,a,m,s,u,b:,p
+LONGOPTIONS=help,export-compile-commands,enable-ccache,enable-time-trace,enable-asan,enable-msan,enable-tsan,enable-ubsan,build-type:,enable-profiler
+
+# Parse the options
+PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTIONS --name "$0" -- "$@")
+if [[ $? -ne 0 ]]; then
+    # If getopt has errors
+    echo "INFO: Failed to parse arguments!"
+    show_help
+    exit 1
+fi
+
+eval set -- "$PARSED"
+while true; do
+    case "$1" in
+        -h|--help)
+            show_help;exit 0;;
+        -e|--export-compile-commands)
+            export_compile_commands="ON";;
+        -c|--enable-ccache)
+            enable_ccache="ON";;
+        -t|--enable-time-trace)
+            enable_time_trace="ON";;
+        -a|--enable-asan)
+            enable_asan="ON";;
+        -m|--enable-msan)
+            enable_msan="ON";;
+        -s|--enable-tsan)
+            enable_tsan="ON";;
+        -u|--enable-ubsan)
+            enable_ubsan="ON";;
+        -b|--build-type)
+            build_type="$2";shift;;
+        -p|--enable-profiler)
+            enable_profiler="ON";;
+        --)
+            shift;break;;
     esac
+    shift
 done
 
+# Check if there are unrecognized positional arguments left
+if [[ $# -gt 0 ]]; then
+    echo "ERROR: Unrecognized positional argument(s): $@"
+    show_help
+    exit 1
+fi
+
+# Validate the build_type
+VALID_BUILD_TYPES=("Release" "Debug" "RelWithDebInfo")
+if [[ ! " ${VALID_BUILD_TYPES[@]} " =~ " ${build_type} " ]]; then
+    echo "ERROR: Invalid build type '$build_type'. Allowed values are Release, Debug, RelWithDebInfo."
+    show_help
+    exit 1
+fi
 # Set the python environment directory if not already set
 if [ -z "$PYTHON_ENV_DIR" ]; then
     PYTHON_ENV_DIR=$(pwd)/python_env
