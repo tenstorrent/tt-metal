@@ -1343,22 +1343,57 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::eqz);
     detail::bind_unary_operation(module, ttnn::floor, "Available for Wormhole_B0 only");
     detail::bind_unary_operation(module, ttnn::ceil, "Available for Wormhole_B0 only");
-    detail::bind_unary_operation(module, ttnn::gez);
-    detail::bind_unary_operation(module, ttnn::gtz);
+    detail::bind_unary_operation(module, ttnn::gez,
+    R"doc(Supported dtypes, layouts, and ranks:
+
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+)doc");
+    detail::bind_unary_operation(module, ttnn::gtz,
+    R"doc(Supported dtypes, layouts, and ranks:
+
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+)doc");
     detail::bind_unary_operation(module, ttnn::i0);
     detail::bind_unary_operation(module, ttnn::isfinite);
     detail::bind_unary_operation(module, ttnn::isinf);
     detail::bind_unary_operation(module, ttnn::isnan);
     detail::bind_unary_operation(module, ttnn::isneginf);
     detail::bind_unary_operation(module, ttnn::isposinf);
-    detail::bind_unary_operation(module, ttnn::lez);
+    detail::bind_unary_operation(module, ttnn::lez,
+    R"doc(Supported dtypes, layouts, and ranks:
+
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+)doc");
     detail::bind_unary_operation(module, ttnn::log);
     detail::bind_unary_operation(module, ttnn::log10);
     detail::bind_unary_operation(module, ttnn::log2);
     detail::bind_unary_operation(module, ttnn::logical_not, R"doc(Supports bfloat16 dtype and both TILE and ROW_MAJOR layout)doc");
-    detail::bind_unary_operation(module, ttnn::ltz);
+    detail::bind_unary_operation(module, ttnn::ltz,
+    R"doc(Supported dtypes, layouts, and ranks:
+
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+)doc");
     detail::bind_unary_operation(module, ttnn::neg);
-    detail::bind_unary_operation(module, ttnn::nez);
+    detail::bind_unary_operation(module, ttnn::nez,
+    R"doc(Supported dtypes, layouts, and ranks:
+
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+)doc");
     detail::bind_unary_operation_overload_complex_return_complex(module, ttnn::reciprocal);
     detail::bind_unary_operation(module, ttnn::relu);
     detail::bind_unary_operation(module, ttnn::relu6);
