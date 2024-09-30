@@ -6,7 +6,6 @@ import pytest
 from loguru import logger
 import torch
 import ttnn
-from ttnn import ListMeshToTensor
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.tg.llama3_70b.tt.llama_mlp_galaxy import TtLlamaMLP_galaxy

@@ -15,9 +15,9 @@ from models.utility_functions import skip_for_grayskull
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from transformers.generation.utils import top_k_top_p_filtering
 from models.demos.tg.llama3_70b.tt.llama_generation_galaxy import TtLlamaModelForGeneration
+from models.demos.tg.llama3_70b.tt.llama_common import setup_llama_env
 from models.demos.t3000.llama2_70b.reference.llama.llama.tokenizer3 import ChatFormat
 from models.demos.t3000.llama2_70b.tt.llama_common import (
-    setup_llama_env,
     check_mesh_device,
     string_similarity_score,
     load_llama_state_dict,
@@ -267,8 +267,14 @@ def run_decode(
             break
 
         # Decode the entire sequence generated so far and log it
-        for user_id in range(max(0, bsz - 3), bsz):
-            text = tokenizer.decode(tokens[user_id, : cur_pos + 1].tolist())
+        for user_id in range(max(0, bsz - 5), bsz):
+            eos_found = False
+            for eos_idx, tk in enumerate(tokens[user_id, : cur_pos + 1].tolist()):
+                if tk == tokenizer.eos_id:
+                    text = tokenizer.decode(tokens[user_id, :eos_idx].tolist())
+                    eos_found = True
+            if not eos_found:
+                text = tokenizer.decode(tokens[user_id, : cur_pos + 1].tolist())
             if data_args.print_output_as_generated:
                 logger.info(f"Loop {cur_pos} user {user_id}: {text}\n")
 
@@ -364,7 +370,7 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
     ),
     ids=("chat_completion", "text_completion"),
 )
-@pytest.mark.parametrize("decode_only", (True,), ids=("decode_only",))
+@pytest.mark.parametrize("decode_only", (True, False), ids=("decode_only", "prefill_decode"))
 @pytest.mark.parametrize("num_layers", (1, 2, 10, 80), ids=("1L", "2L", "10L", "80L"))
 @pytest.mark.parametrize(
     "implementation, skip_model_load, n_devices",
@@ -432,6 +438,8 @@ def test_LlamaModel_demo(
     ## Get model config
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,
+        max_batch_size=max_batch_size,
+        max_context_len=max_context_len,
     )
 
     check_mesh_device(mesh_device, model_config)

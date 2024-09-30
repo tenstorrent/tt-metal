@@ -16,8 +16,8 @@ from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.tg.llama3_70b.tt.llama_model_galaxy import TtLlamaModel_galaxy
 from models.demos.tg.llama3_70b.tt.llama_common import PytorchLlamaModel
 from models.utility_functions import skip_for_grayskull
+from models.demos.tg.llama3_70b.tt.llama_common import setup_llama_env
 from models.demos.t3000.llama2_70b.tt.llama_common import (
-    setup_llama_env,
     check_mesh_device,
     extract_pcc_from_log,
     BASE_URL,
@@ -242,11 +242,11 @@ def run_test_LlamaModel_inference(
     "batch, seq_len",
     [
         (32, 1),
-        #  (1, 256), (1, 8192), (1, 32768), (1, 128 * 1024)
+        #  (1, 32), (1, 256), (1, 8192), (1, 32768), (1, 128 * 1024)
     ],
     ids=[
         "decode",
-        #  "prefill_256", "prefill_8k", "prefill_32k", "prefill_128k"
+        # "prefill_32", "prefill_256", "prefill_8k", "prefill_32k", "prefill_128k"
     ],
 )
 @pytest.mark.parametrize(

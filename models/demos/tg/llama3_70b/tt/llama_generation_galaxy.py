@@ -9,9 +9,10 @@ from loguru import logger
 import copy
 from models.demos.tg.llama3_70b.tt.llama_model_galaxy import TtLlamaModel_galaxy as TtLlamaModel
 from models.demos.t3000.llama2_70b.tt.llama_common import BASE_URL, ConcatMesh2DToTensor
-from models.demos.t3000.llama2_70b.tt.model_config import (
+from models.demos.tg.llama3_70b.tt.model_config import (
     get_model_config,
 )
+from models.demos.tg.llama3_70b.tt.llama_common import upper_pad_sequence_length
 
 
 class TtLlamaModelForGeneration:
@@ -54,6 +55,8 @@ class TtLlamaModelForGeneration:
         _, seq_len = tokens.shape
         if seq_len == 1:
             return self.decode_forward(tokens, start_pos)
+        else:
+            return self.prefill_forward(tokens, start_pos)
 
     def decode_forward(self, tokens: torch.Tensor, start_pos: int):
         batch = tokens.shape[0]
@@ -72,6 +75,55 @@ class TtLlamaModelForGeneration:
         del tt_logits
 
         return logits
+
+    def prefill_forward_single_user(
+        self, tokens: torch.Tensor, start_pos: int, user_id: int, last_token_idx=None, page_table=None
+    ):
+        batch, seq_len = tokens.shape
+        assert batch == 1
+        assert start_pos == 0, "start_pos must be 0 for prefill_forward_single_user"
+        assert seq_len % 32 == 0, f"seq_len must be divisible by 32, got {seq_len}"
+        tt_inp_emb, start_pos, rot_mat, attn_mask = self.tt_model.prepare_inputs(
+            tokens,
+            start_pos=start_pos,
+            valid_seq_len=seq_len,
+            mode="prefill",
+        )
+
+        tt_logits = self.tt_model(tt_inp_emb, rot_mat, start_pos, attn_mask, user_id=user_id, mode="prefill")
+
+        del tt_inp_emb
+        del rot_mat
+        del attn_mask
+
+        logits = self._process_logits(tt_logits)
+        logits = logits.squeeze(1)
+        del tt_logits
+        return logits
+
+    def prefill_forward(self, tokens: torch.Tensor, start_pos: int):
+        batch, seq_len = tokens.shape
+        assert seq_len <= 8 * 1024, f"Only prefill up to 2048 tokens is supported, got {seq_len}"
+        prefill_seq_len = upper_pad_sequence_length(
+            seq_len, self.tt_model.model_config["PADDING_LENGTH"]
+        )  # Pad seq_len to nearest_32 multiple
+
+        batch, seq_len = tokens.shape
+        last_token_idx = seq_len - 1
+        output_logits = torch.zeros(batch, seq_len, self.params.vocab_size)
+        # pad tokens to nearest 32 multiple
+        prefill_ids = torch.cat([tokens, torch.zeros(batch, prefill_seq_len - seq_len).long()], dim=-1)
+
+        for user_id in range(batch):
+            logger.info(f"Filling kv cache for user {user_id + 1}")
+
+            logits = self.prefill_forward_single_user(prefill_ids[user_id : user_id + 1], start_pos, user_id)
+
+            # Since we give padded_seq_len, we get only the last token
+            output_logits[user_id] = logits[:, last_token_idx % 32 : last_token_idx % 32 + 1, :]
+        logger.info(f"Finished prefill for all users up to {seq_len} tokens, Starting decode...")
+
+        return output_logits
 
     def _process_logits(self, tt_logits):
         logits = ttnn.to_torch(
