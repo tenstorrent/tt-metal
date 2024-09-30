@@ -274,11 +274,6 @@ std::vector<Tensor> _gt_bw(
     return _unary_comp_bw(grad, output_mem_config);
 }
 
-std::vector<Tensor> _ge_bw(
-    const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config) {
-    return _unary_comp_bw(grad, output_mem_config);
-}
-
 std::vector<Tensor> ExecuteUnaryBackwardLgamma::invoke(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
     std::vector<Tensor> grad_tensor;
