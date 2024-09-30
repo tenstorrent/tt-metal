@@ -239,7 +239,7 @@ class TtLlamaAttention_optimized:
         )
         xs.deallocate(True)
 
-        d = fused_query_key_value.get_legacy_shape()[-1]
+        d = fused_query_key_value.shape.with_tile_padding()[-1]
         fused_query_key_value = ttnn.reshape(
             fused_query_key_value,
             ttnn.Shape((1, 1, self.max_batch_size, d), (1, 1, self.model_config["PADDED_BATCH_SIZE"], d)),
@@ -313,13 +313,10 @@ class TtLlamaAttention_optimized:
             )
 
         else:
-            # Have to reshape back since sdpa expects batch in dim 1
-            keys_reshaped = ttnn.reshape(keys, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
-            values_reshaped = ttnn.reshape(values, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
             attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
                 query_layer,
-                keys_reshaped,
-                values_reshaped,
+                keys,
+                values,
                 # [start_pos for _ in range(self.max_batch_size)],
                 cur_pos_tensor=cache_idxs,
                 scale=self.scale,

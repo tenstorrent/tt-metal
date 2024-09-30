@@ -40,7 +40,7 @@ def transpose(
 
     xt = xt.to(device, input_mem_config)
     xtt = ttnn.transpose(xt, dim0, dim1, memory_config=output_mem_config)
-    assert list(xtt.get_legacy_shape()) == output_shape
+    assert list(xtt.shape.with_tile_padding()) == output_shape
     transposed_ref = x.transpose(dim0, dim1)
 
     tt_got_back = xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
@@ -610,3 +610,23 @@ def test_tranpose_hc_sharded_with_program_cache(device, n, c, h, w, grid_size, u
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
     assert device.num_program_cache_entries() == 3
+
+
+@pytest.mark.parametrize(
+    "shape, swap_dims",
+    [
+        ((32, 32, 32, 32), (0, 2)),
+        ((32, 32, 32, 32), (1, 2)),
+        ((32, 32, 32, 32), (0, 3)),
+        ((32, 32, 32, 32), (1, 3)),
+    ],
+)
+def test_transpose_bfloat8_b(device, shape, swap_dims):
+    input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output = input.transpose(*swap_dims)
+
+    tt_input = ttnn.from_torch(input, dtype=ttnn.DataType.BFLOAT8_B, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.transpose(tt_input, *swap_dims)
+    tt_output = ttnn.to_torch(tt_output)
+
+    assert_with_pcc(torch_output, tt_output, 0.9999)

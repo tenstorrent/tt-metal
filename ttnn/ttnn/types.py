@@ -38,6 +38,8 @@ MULTI_DEVICE_STORAGE_TYPE = StorageType.MULTI_DEVICE
 
 TILE_SIZE = 32
 
+Tile = ttnn._ttnn.tensor.Tile
+
 Shape = ttnn._ttnn.types.Shape
 Tensor = ttnn._ttnn.tensor.Tensor
 

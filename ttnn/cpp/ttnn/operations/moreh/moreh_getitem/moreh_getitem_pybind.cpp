@@ -19,6 +19,6 @@ void bind_moreh_getitem_operation(py::module& module) {
             py::arg("index_dims"),
             py::kw_only(),
             py::arg("output") = std::nullopt,
-            py::arg("output_memory_config") = std::nullopt});
+            py::arg("memory_config") = std::nullopt});
 }
 }  // namespace ttnn::operations::moreh::moreh_getitem

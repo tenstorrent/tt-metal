@@ -58,6 +58,25 @@ void bind_fill_rm_op(py::module& module) {
             +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
             | val_lo   | Low value to use                                                      | float                 |                        | Yes      |
             +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
+
+            Args:
+                N (number): Batch count of output tensor.
+                C (number): Channel count of output tensor.
+                H (number): Height count of output tensor.
+                W (number): Width count of output tensor.
+                hOnes (number): Height of high values region.
+                wOnes (number): Width of high values region.
+                any (ttnn.tensor): Any input tensor with desired device and data types for output tensor. value greater than 0
+                val_hi (number): High value to use.
+                val_lo (number): Low value to use.
+
+            Keyword args:
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                queue_id (int, optional): command queue id. Defaults to `0`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+
         )doc",
         ttnn::fill_rm.base_name());
 
@@ -118,6 +137,22 @@ void bind_fill_ones_rm_op(py::module& module) {
             +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
             | any      | Any input tensor with desired device and data types for output tensor | tt_lib.tensor.Tensor  |                        | Yes      |
             +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
+
+            Args:
+                N (number): Batch count of output tensor.
+                C (number): Channel count of output tensor.
+                H (number): Height count of output tensor.
+                W (number): Width count of output tensor.
+                hOnes (number): Height of high values region.
+                wOnes (number): Width of high values region.
+                any (ttnn.tensor): Any input tensor with desired device and data types for output tensor. value greater than 0
+
+            Keyword args:
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                queue_id (int, optional): command queue id. Defaults to `0`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
         )doc",
         ttnn::fill_ones_rm.base_name());
 

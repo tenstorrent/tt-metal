@@ -9,10 +9,10 @@ import ttnn
 def bert_large_fused_qkv_matmul(
     input_tensor_a, input_tensor_b, bias=None, output_mem_config=ttnn.DRAM_MEMORY_CONFIG, output_dtype=None
 ):
-    batch_size = input_tensor_a.get_legacy_shape()[0]
+    batch_size = input_tensor_a.shape.with_tile_padding()[0]
 
-    assert input_tensor_a.get_legacy_shape() == [batch_size, 1, 384, 1024], "Unsupported input shape"
-    assert input_tensor_b.get_legacy_shape() == [1, 1, 1024, 3072], "Unsupported input shape"
+    assert input_tensor_a.shape.with_tile_padding() == [batch_size, 1, 384, 1024], "Unsupported input shape"
+    assert input_tensor_b.shape.with_tile_padding() == [1, 1, 1024, 3072], "Unsupported input shape"
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(12, batch_size),
@@ -42,7 +42,7 @@ def bert_large_ff1_matmul(
     output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
     output_dtype=None,
 ):
-    batch_size = input_tensor_a.get_legacy_shape()[0]
+    batch_size = input_tensor_a.shape.with_tile_padding()[0]
 
     assert (
         (
@@ -56,8 +56,8 @@ def bert_large_ff1_matmul(
             and input_tensor_b.memory_config().buffer_type == tttn.BufferType.DRAM
         )
     ), "For BFLOAT16, if output is on L1, one of in0 or in1 must be on DRAM!"
-    assert input_tensor_a.get_legacy_shape() == [batch_size, 1, 384, 1024], "Unsupported input shape"
-    assert input_tensor_b.get_legacy_shape() == [1, 1, 1024, 4096], "Unsupported input shape"
+    assert input_tensor_a.shape.with_tile_padding() == [batch_size, 1, 384, 1024], "Unsupported input shape"
+    assert input_tensor_b.shape.with_tile_padding() == [1, 1, 1024, 4096], "Unsupported input shape"
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(12, batch_size),
@@ -82,10 +82,10 @@ def bert_large_ff1_matmul(
 def bert_large_ff2_matmul(
     input_tensor_a, input_tensor_b, bias=None, output_mem_config=ttnn.DRAM_MEMORY_CONFIG, output_dtype=None
 ):
-    batch_size = input_tensor_a.get_legacy_shape()[0]
+    batch_size = input_tensor_a.shape.with_tile_padding()[0]
 
-    assert input_tensor_a.get_legacy_shape() == [batch_size, 1, 384, 4096], "Unsupported input shape"
-    assert input_tensor_b.get_legacy_shape() == [1, 1, 4096, 1024], "Unsupported input shape"
+    assert input_tensor_a.shape.with_tile_padding() == [batch_size, 1, 384, 4096], "Unsupported input shape"
+    assert input_tensor_b.shape.with_tile_padding() == [1, 1, 4096, 1024], "Unsupported input shape"
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(12, batch_size),
@@ -110,10 +110,10 @@ def bert_large_ff2_matmul(
 def bert_large_selfout_matmul(
     input_tensor_a, input_tensor_b, bias=None, output_mem_config=ttnn.DRAM_MEMORY_CONFIG, output_dtype=None
 ):
-    batch_size = input_tensor_a.get_legacy_shape()[0]
+    batch_size = input_tensor_a.shape.with_tile_padding()[0]
 
-    assert input_tensor_a.get_legacy_shape() == [batch_size, 1, 384, 1024], "Unsupported input shape"
-    assert input_tensor_b.get_legacy_shape() == [1, 1, 1024, 1024], "Unsupported input shape"
+    assert input_tensor_a.shape.with_tile_padding() == [batch_size, 1, 384, 1024], "Unsupported input shape"
+    assert input_tensor_b.shape.with_tile_padding() == [1, 1, 1024, 1024], "Unsupported input shape"
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(12, batch_size),
@@ -138,10 +138,10 @@ def bert_large_selfout_matmul(
 def bert_large_pre_softmax_bmm(
     input_tensor_a, input_tensor_b, output_mem_config=ttnn.DRAM_MEMORY_CONFIG, output_dtype=None
 ):
-    batch_size = input_tensor_a.get_legacy_shape()[0]
+    batch_size = input_tensor_a.shape.with_tile_padding()[0]
 
-    assert input_tensor_a.get_legacy_shape() == [batch_size, 16, 384, 64], "Unsupported input shape"
-    assert input_tensor_b.get_legacy_shape() == [batch_size, 16, 64, 384], "Unsupported input shape"
+    assert input_tensor_a.shape.with_tile_padding() == [batch_size, 16, 384, 64], "Unsupported input shape"
+    assert input_tensor_b.shape.with_tile_padding() == [batch_size, 16, 64, 384], "Unsupported input shape"
 
     program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
         compute_with_storage_grid_size=(12, batch_size),
@@ -163,10 +163,10 @@ def bert_large_pre_softmax_bmm(
 def bert_large_post_softmax_bmm(
     input_tensor_a, input_tensor_b, output_mem_config=ttnn.DRAM_MEMORY_CONFIG, output_dtype=None
 ):
-    batch_size = input_tensor_a.get_legacy_shape()[0]
+    batch_size = input_tensor_a.shape.with_tile_padding()[0]
 
-    assert input_tensor_a.get_legacy_shape() == [batch_size, 16, 384, 384], "Unsupported input shape"
-    assert input_tensor_b.get_legacy_shape() == [batch_size, 16, 384, 64], "Unsupported input shape"
+    assert input_tensor_a.shape.with_tile_padding() == [batch_size, 16, 384, 384], "Unsupported input shape"
+    assert input_tensor_b.shape.with_tile_padding() == [batch_size, 16, 384, 64], "Unsupported input shape"
 
     program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
         compute_with_storage_grid_size=(12, batch_size),

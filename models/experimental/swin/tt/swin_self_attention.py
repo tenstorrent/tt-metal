@@ -75,7 +75,7 @@ class TtSwinSelfAttention(nn.Module):
         # x must be 4d originaly
         # 1 is appended to the beggining
         # so create tensor shape by ommiting the first dimension
-        new_x_shape = list(x.get_legacy_shape())[1:-1] + [
+        new_x_shape = list(x.shape.with_tile_padding())[1:-1] + [
             self.num_attention_heads,
             self.attention_head_size,
         ]
@@ -90,7 +90,7 @@ class TtSwinSelfAttention(nn.Module):
         head_mask: Optional[ttnn.Tensor] = None,
         output_attentions: Optional[bool] = False,
     ) -> Tuple[ttnn.Tensor]:
-        _, batch_size, dim, num_channels = hidden_states.get_legacy_shape()
+        _, batch_size, dim, num_channels = hidden_states.shape.with_tile_padding()
         mixed_query_layer = TtLinear(hidden_states, self.query_weight, self.query_bias)
 
         key_layer = self.transpose_for_scores(TtLinear(hidden_states, self.key_weight, self.key_bias))
@@ -102,7 +102,7 @@ class TtSwinSelfAttention(nn.Module):
 
         attention_scores = ttnn.matmul(query_layer, key_layer_transposed)
 
-        attention_head_size_tt = self.const_tensor(attention_scores.get_legacy_shape(), self.attention_head_size)
+        attention_head_size_tt = self.const_tensor(attention_scores.shape.with_tile_padding(), self.attention_head_size)
         attention_head_size_tt = ttnn.sqrt(attention_head_size_tt)
         attention_head_size_tt = ttnn.reciprocal(attention_head_size_tt)
 
@@ -131,7 +131,7 @@ class TtSwinSelfAttention(nn.Module):
 
         if attention_mask is not None:
             # Apply the attention mask is (precomputed for all layers in SwinModel forward() function)
-            mask_shape = attention_mask.get_legacy_shape()[1]
+            mask_shape = attention_mask.shape.with_tile_padding()[1]
             """
             Converting attention_scores to 5D, Hence pytorch tensor
             """
@@ -159,7 +159,7 @@ class TtSwinSelfAttention(nn.Module):
         context_layer = ttnn.matmul(attention_probs, value_layer)
         context_layer = ttnn.permute(context_layer, (0, 2, 1, 3))
 
-        new_context_layer_shape = tuple(context_layer.get_legacy_shape())[:-2] + (self.all_head_size,)
+        new_context_layer_shape = tuple(context_layer.shape.with_tile_padding())[:-2] + (self.all_head_size,)
         context_layer = fallback_ops.reshape(
             context_layer,
             1,

@@ -67,6 +67,14 @@ RingTopology::RingTopology(
     }
 }
 
+bool RingTopology::is_first_device_in_line(bool in_clockwise_direction) const {
+    return this->is_linear && ((in_clockwise_direction && this->ring_index == 0) ||
+                               (!in_clockwise_direction && this->ring_index == this->ring_size - 1));
+}
+bool RingTopology::is_last_device_in_line(bool in_clockwise_direction) const {
+    return this->is_linear && ((in_clockwise_direction && this->ring_index == this->ring_size - 1) ||
+                               (!in_clockwise_direction && this->ring_index == 0));
+}
 
 CclOpTensorConfig::CclOpTensorConfig(Tensor const& tensor) :
     buffer_start_address(tensor.buffer()->address()),
@@ -99,111 +107,8 @@ std::unique_ptr<CclOpTensorConfig> CclOpTensorConfig::build_all_gather_tensor_co
     }
 }
 
-static std::pair<tt_xy_pair, tt_xy_pair> shard_grid_from_shard_spec(const ShardSpec& shard_spec) {
-    auto const& core_range = shard_spec.grid.bounding_box();
-    log_trace(tt::LogOp, "SHARD CORE_RANGE: start_x:{} start_y:{} end_x:{} end_y:{}", core_range.start_coord.x, core_range.start_coord.y, core_range.end_coord.x, core_range.end_coord.y);
-    log_trace(tt::LogOp, "grid_size: {}", shard_spec.grid.num_cores());
 
-    return {core_range.start_coord, core_range.end_coord};
-}
 
-std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_ct_args(Tensor const& t) {
-    std::vector<uint32_t> args;
-    TT_ASSERT(t.is_sharded());
-    auto const& [pages_per_shard_y, pages_per_shard_x] = t.buffer()->shard_spec().shape_in_pages();
-    auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(t.shard_spec().value());
-    bool shard_grid_transposed = shard_grid_is_transposed(t);
-    TT_FATAL(
-        t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-        t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-        t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
-        "Unsupported memory layout {}.", t.memory_config().memory_layout
-    );
-    args.push_back(static_cast<uint32_t>(t.memory_config().memory_layout));
-    // shard_grid_height (cores)
-    args.push_back(shard_grid_end.y - shard_grid_start.y + 1);
-    // shard_grid_width (cores)
-    args.push_back(shard_grid_end.x - shard_grid_start.x + 1);
-    // shard_grid_start_y
-    args.push_back(shard_grid_start.y);
-    // shard_grid_start_x
-    args.push_back(shard_grid_start.x);
-    // pages_per_shard_y
-    args.push_back(pages_per_shard_y);
-    // pages_per_shard_x
-    args.push_back(pages_per_shard_x);
-    // transposed grid
-    args.push_back(static_cast<uint32_t>(shard_grid_transposed));
-
-    return args;
-}
-
-bool ShardedAddrGenArgBuilder::shard_grid_is_transposed(Tensor const& t) {
-    TT_FATAL(
-        t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-        t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-        t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
-        "Unsupported memory layout {}.", t.memory_config().memory_layout
-    );
-    bool shard_grid_transposed =
-        ((t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
-          t.shard_spec()->orientation == ShardOrientation::ROW_MAJOR) ||
-         ((t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-           t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) &&
-          t.shard_spec()->orientation == ShardOrientation::COL_MAJOR));
-    return shard_grid_transposed;
-}
-
-void ShardedAddrGenArgBuilder::log_sharded_tensor_kernel_args(Tensor const& t, std::string const& prefix) {
-
-    auto const& [pages_per_shard_y, pages_per_shard_x] = t.buffer()->shard_spec().shape_in_pages();
-    auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(t.shard_spec().value());
-    bool shard_grid_transposed = shard_grid_is_transposed(t);
-
-    TT_ASSERT(pages_per_shard_y > 0);
-    TT_ASSERT(pages_per_shard_x > 0);
-    log_trace(tt::LogOp, "\t{}_shard_grid_height: {}", prefix,   shard_grid_end.y - shard_grid_start.y + 1);
-    log_trace(tt::LogOp, "\t{}_shard_grid_width: {}", prefix,    shard_grid_end.x - shard_grid_start.x + 1);
-    log_trace(tt::LogOp, "\t{}_shard_grid_start_y: {}", prefix,  shard_grid_start.y);
-    log_trace(tt::LogOp, "\t{}_shard_grid_start_x: {}", prefix,  shard_grid_start.x);
-    log_trace(tt::LogOp, "\t{}_pages_per_shard_y: {}", prefix,     pages_per_shard_y);
-    log_trace(tt::LogOp, "\t{}_pages_per_shard_x: {}", prefix,     pages_per_shard_x);
-    log_trace(tt::LogOp, "\t{}_transposed_grid: {}", prefix,     static_cast<uint32_t>(shard_grid_transposed));
-}
-
-// non-transposed - always row-major layout
-// vec<logical row -> noc row>, vec<logicacal col -> noc col>
-static std::pair<std::vector<uint32_t>,std::vector<uint32_t>> shard_noc_cores_from_shard_spec(Device const* d, const ShardSpec& shard_spec) {
-    TT_ASSERT(d != nullptr);
-    auto const& core_range = shard_spec.grid.bounding_box();
-    std::vector<uint32_t> logical_to_noc_row_map;
-    std::vector<uint32_t> logical_to_noc_col_map;
-    for (uint32_t y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-        CoreCoord noc_core = d->physical_core_from_logical_core(CoreCoord(0, y), CoreType::WORKER);
-        logical_to_noc_row_map.push_back(noc_core.y);
-    }
-    for (uint32_t x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-        CoreCoord noc_core = d->physical_core_from_logical_core(CoreCoord(x, 0), CoreType::WORKER);
-        logical_to_noc_col_map.push_back(noc_core.x);
-    }
-
-    return {logical_to_noc_row_map, logical_to_noc_col_map};
-}
-
-std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_rt_args(Device const* d, Tensor const& t) {
-    std::vector<uint32_t> args;
-    auto const& [row_map, col_map] = shard_noc_cores_from_shard_spec(d, t.shard_spec().value());
-    args.push_back(row_map.size());
-    for (uint32_t i = 0; i < row_map.size(); i++) {
-        args.push_back(row_map.at(i));
-    }
-    args.push_back(col_map.size());
-    for (uint32_t i = 0; i < col_map.size(); i++) {
-        args.push_back(col_map.at(i));
-    }
-
-    return args;
-}
 
 void generate_edm_kernels_for_ring_or_linear_topology(
    tt::tt_metal::Program& program,
@@ -467,7 +372,7 @@ std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::compute_worker_slice_offs
     return worker_slice_offsets;
 }
 
-std::vector<tt_xy_pair> RingReduceScatterWrappedTensorSlicer::compute_worker_slice_offsets(
+static std::vector<tt_xy_pair> compute_worker_slice_offsets_for_wrapped_tensor_slicer(
     std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape) {
     std::vector<tt_xy_pair> worker_slice_offsets;
     worker_slice_offsets.reserve(worker_slice_shapes.size());
@@ -489,6 +394,11 @@ std::vector<tt_xy_pair> RingReduceScatterWrappedTensorSlicer::compute_worker_sli
 
     TT_ASSERT(worker_slice_offsets.size() == worker_slice_shapes.size());
     return worker_slice_offsets;
+}
+
+std::vector<tt_xy_pair> RingReduceScatterWrappedTensorSlicer::compute_worker_slice_offsets(
+    std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape) {
+        return compute_worker_slice_offsets_for_wrapped_tensor_slicer(worker_slice_shapes, tensor_slice_shape);
 }
 
 template <class DERIVED_SLICER_T>
@@ -797,6 +707,92 @@ std::vector<tt_xy_pair> RingReduceScatterWrappedTensorSlicer::create_worker_slic
     return worker_slice_shapes;
 }
 
+
+/*
+ * @brief: Given a tensor shape, evenly break it into pieces along a given dimension and generate the slices accordingly.
+ * This can be fed into a CCL Send command generator
+ */
+std::vector<TensorSlice> generate_slice_sequence_on_dim(
+    TensorSlice::ords_t tensor_shape,
+    TensorSlice::ords_t worker_slice_shape,
+    std::size_t fracture_dim,
+    std::size_t num_slices,
+    std::int64_t start_slice_index,
+    std::int64_t end_slice_index_exclusive,
+    std::size_t worker_index
+) {
+    static_assert(std::is_same_v<TensorSlice::ords_t, tt_xy_pair>, "generate_slice_sequence_on_dim not yet implemented for type not of tt_xy_pair");
+    TT_ASSERT(fracture_dim == 3);
+    // We don't support 4D shapes in the CCL kernels yet, which are needed for proper reduction/concatenation in some cases
+    // so for now we subtract the outer dims from the fracture_dim since we only support 2D at the moment.
+    fracture_dim -= 2;
+
+    TT_ASSERT(worker_slice_shape.y == 1);
+
+    std::vector<TensorSlice> slices;
+    auto dim_size = fracture_dim == 1 ? tensor_shape.x : tensor_shape.y;
+    TT_ASSERT(dim_size % num_slices == 0);
+    auto slice_size_on_dim = dim_size / num_slices;
+    auto slice_shape = fracture_dim == 0 ? tt_xy_pair{tensor_shape.x, slice_size_on_dim} : tt_xy_pair{slice_size_on_dim, tensor_shape.y};
+
+    auto dim_start_offset = start_slice_index * slice_size_on_dim;
+    TensorSlice::ords_t tensor_slice_offset = fracture_dim == 0 ? tt_xy_pair{0, dim_start_offset} : tt_xy_pair{dim_start_offset, 0};
+
+    bool forward_direction = start_slice_index > end_slice_index_exclusive; // only for debug
+    auto incr = start_slice_index < end_slice_index_exclusive ? 1 : -1;
+    if (forward_direction) {
+        log_trace(tt::LogOp, "slice_size_on_dim {}", slice_size_on_dim);
+        log_trace(tt::LogOp, "worker_index {}", worker_index);
+    }
+
+    auto worker_slice_start_offset = fracture_dim == 0 ? TensorSlice::ords_t{0, worker_index * worker_slice_shape.y} : TensorSlice::ords_t{worker_index * worker_slice_shape.x, 0};
+
+    auto generate_slice = [forward_direction,incr, &slices, &tensor_shape, &slice_shape, &worker_slice_shape, tensor_slice_offset, &worker_slice_start_offset, fracture_dim, dim_start_offset, slice_size_on_dim](std::int64_t i){
+        auto tensor_slice_offset_adjusted = tensor_slice_offset;
+        if (fracture_dim == 0) {
+            tensor_slice_offset_adjusted.y = slice_size_on_dim * i;
+        } else {
+            tensor_slice_offset_adjusted.x = slice_size_on_dim * i;
+        }
+        TT_ASSERT(tensor_shape.x > 0, "Invalid tensor shape. x = 0 but it must be > 0");
+        TT_ASSERT(tensor_shape.y > 0, "Invalid tensor shape. y = 0 but it must be > 0");
+        TT_ASSERT(slice_shape.x > 0, "Invalid tensor slice shape. x = 0 but it must be > 0");
+        TT_ASSERT(slice_shape.y > 0, "Invalid tensor slice shape. x = 0 but it must be > 0");
+        TT_ASSERT(tensor_slice_offset_adjusted.x < tensor_shape.x, "Invalid tensor slice offset. x = {} but it must be < tensor shape x={}. slice_offset: (y={},x={}), tensor_shape: (y={},x={}). slice_size_on_dim: {}, i: {}", tensor_slice_offset_adjusted.x, tensor_shape.x, tensor_slice_offset_adjusted.y, tensor_slice_offset_adjusted.x, tensor_shape.y, tensor_shape.x, slice_size_on_dim, i);
+        TT_ASSERT(tensor_slice_offset_adjusted.y < tensor_shape.y, "Invalid tensor slice offset. y = {} but it must be < tensor shape y={}. slice_offset: (y={},x={}), tensor_shape: (y={},x={}). slice_size_on_dim: {}, i: {}", tensor_slice_offset_adjusted.y, tensor_shape.y, tensor_slice_offset_adjusted.y, tensor_slice_offset_adjusted.x, tensor_shape.y, tensor_shape.x, slice_size_on_dim, i);
+        TT_ASSERT(worker_slice_shape.x > 0, "Invalid worker slice shape. x = 0 but it must be > 0");
+        TT_ASSERT(worker_slice_shape.y > 0, "Invalid worker slice shape. y = 0 but it must be > 0");
+
+        auto const& tensor_slice = TensorSlice(tensor_shape, slice_shape, tensor_slice_offset_adjusted, worker_slice_shape, worker_slice_start_offset, fracture_dim);
+        if (forward_direction) {
+        log_trace(
+            tt::LogOp,
+            "generate_slice ({}):\n\ttensor_shape: (y={},x={})\n\ttensor_slice_shape: (y={},x={})\n\ttensor_slice_offset_adjusted: (y={},x={})\n\tslice_start_shape: (y={},x={})\n\tworker relative slice_start_offset: (y={},x={})\n\tfracture_dim: {}\n\tdim_start_offset: {}\n\tslice_size_on_dim: {}\n",
+            i,
+            tensor_slice.tensor_shape.y,
+            tensor_slice.tensor_shape.x,
+            tensor_slice.tensor_slice_shape.y,
+            tensor_slice.tensor_slice_shape.x,
+            tensor_slice.tensor_slice_offset.y,
+            tensor_slice.tensor_slice_offset.x,
+            tensor_slice.worker_slice_shape.y,
+            tensor_slice.worker_slice_shape.x,
+            tensor_slice.worker_slice_offset.y,
+            tensor_slice.worker_slice_offset.x,
+            fracture_dim,
+            dim_start_offset,
+            slice_size_on_dim);
+        }
+
+        slices.push_back(tensor_slice);
+    };
+
+    for (int i = start_slice_index; i != end_slice_index_exclusive; i += incr) {
+        generate_slice(i);
+    }
+
+    return slices;
+}
 
 }  // namespace ccl
 }  // namespace ttnn

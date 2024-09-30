@@ -167,7 +167,7 @@ def test_moreh_sgd(
         compute_kernel_config=compute_kernel_config,
     )
 
-    assert dev_param_in.get_legacy_shape() == list(model.weight.shape)
+    assert dev_param_in.shape.with_tile_padding() == list(model.weight.shape)
 
     # check param_out
     param_result = dev_param_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
@@ -304,7 +304,7 @@ def test_moreh_sgd_callback(
             compute_kernel_config=compute_kernel_config,
         )
 
-    assert dev_param_in.get_legacy_shape() == list(model.weight.shape)
+    assert dev_param_in.shape.with_tile_padding() == list(model.weight.shape)
 
     # check param_out
     param_result = dev_param_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)

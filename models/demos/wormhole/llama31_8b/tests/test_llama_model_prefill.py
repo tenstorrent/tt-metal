@@ -41,7 +41,7 @@ def test_llama_model_inference(device, seq_len, use_program_cache, reset_seeds):
     cache_pcc = False  # Flag to measure KV cache PCC for all layers
 
     dtype = ttnn.bfloat8_b
-    pcc = 0.94
+    pcc = 0.97
 
     # Use instruct weights instead of general weights
     instruct = False
@@ -101,8 +101,6 @@ def test_llama_model_inference(device, seq_len, use_program_cache, reset_seeds):
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         layers=list(range(model_args.n_layers)),
-        rot_mat=None,
-        start_pos=0,
     )
 
     logger.info("Model and caches loaded.")
@@ -118,21 +116,20 @@ def test_llama_model_inference(device, seq_len, use_program_cache, reset_seeds):
 
     tt_decode_input = pt_decode_input
 
-    decode_input, attn_mask, attn_mask_torch = prepare_inputs_ttnn_prefill(
+    decode_input = prepare_inputs_ttnn_prefill(
         tt_decode_input,
         tt_model.device,
     )
     for i in range(1):
         start_pos = 0
         # Run TT model
-        tt_out = tt_model(decode_input, start_pos, attn_mask, rot_mats, transformation_mats, user_id=i, mode="prefill")
+        tt_out = tt_model(decode_input, None, None, rot_mats, transformation_mats, user_id=i, mode="prefill")
         # Convert ttnn tensor to torch tensor
         tt_output_torch = ttnn.to_torch(tt_out).view(batch, seq_len, -1)  # [seq, batch, hidden_dim]
 
         if run_ref_pt:  # Run reference model
             ref_output = reference_model(pt_decode_input, start_pos, mode="prefill")
 
-        # TODO Measure only PCC at the end, instead of at every iteration
         # Measure PCC if also running reference model
         if run_ref_pt:
             passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)

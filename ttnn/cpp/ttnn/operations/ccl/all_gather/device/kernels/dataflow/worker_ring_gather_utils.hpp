@@ -434,12 +434,12 @@ template <typename AddrGen>
 FORCE_INLINE void read_wrapped_chunk_from_output_tensor(
     uint32_t& curr_page_idx,
     uint32_t& offset_into_worker_slice,
-     ttnn::ccl::coord_t& offset_worker_slice,
-    const  ttnn::ccl::coord_t& worker_slice_shape,
+    const ttnn::ccl::coord_t& offset_worker_slice,
+    const ttnn::ccl::coord_t& worker_slice_shape,
 
     // In tiles for tile layout
-    const  ttnn::ccl::coord_t& tensor_shape,
-    const  ttnn::ccl::coord_t& tensor_slice_shape,
+    const ttnn::ccl::coord_t& tensor_shape,
+    const ttnn::ccl::coord_t& tensor_slice_shape,
     const uint32_t cb_id,
     const AddrGen& s,
     const uint32_t num_pages,
