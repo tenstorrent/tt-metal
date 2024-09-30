@@ -18,7 +18,7 @@ void bind_moreh_mean_operation(py::module& module) {
             py::kw_only(),
             py::arg("dim"),
             py::arg("keepdim") = false,
-            // py::arg("divisor") = std::nullopt,
+            py::arg("divisor") = std::nullopt,
             py::arg("output") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt});

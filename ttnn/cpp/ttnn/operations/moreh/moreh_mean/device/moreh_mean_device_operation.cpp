@@ -18,7 +18,7 @@ void MorehMeanOperation::validate_tensors(
         (operation_attributes.dim >= 0 && operation_attributes.dim <= 7),
         "Invalid dimension value: {}. Expected a value between 0 and 7.",
         operation_attributes.dim);
-    // TT_FATAL(operation_attributes.divisor.has_value() == false, "divisor not supported yet.");
+    TT_FATAL(operation_attributes.divisor.has_value() == false, "divisor not supported yet.");
 
     tt::operations::primary::check_tensor(input, "moreh_mean", "input", {DataType::BFLOAT16});
     tt::operations::primary::check_tensor(output, "moreh_mean", "output", {DataType::BFLOAT16});
@@ -117,14 +117,14 @@ std::tuple<MorehMeanOperation::operation_attributes_t, MorehMeanOperation::tenso
     const Tensor& input,
     const int64_t dim,
     const bool keepdim,
-    // const std::optional<uint32_t>& divisor,
+    const std::optional<uint32_t>& divisor,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return {
         {dim,
          keepdim,
-         //  divisor,
+         divisor,
          memory_config.value_or(input.memory_config()),
          init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
         {input, output}};

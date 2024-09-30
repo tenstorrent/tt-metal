@@ -11,7 +11,7 @@ struct MorehMean {
         const Tensor& input,
         const std::optional<std::variant<int64_t, std::vector<int64_t>>> dims,
         const bool keep_batch_dim,
-        // const std::optional<uint32_t>& divisor,
+        const std::optional<uint32_t>& divisor,
         const std::optional<Tensor>& output,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);

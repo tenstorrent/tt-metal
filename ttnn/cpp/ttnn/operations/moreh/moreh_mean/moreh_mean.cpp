@@ -12,7 +12,7 @@ Tensor MorehMean::invoke(
     const Tensor& input,
     const std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
     const bool keep_batch_dim,
-    // const std::optional<uint32_t>& divisor,
+    const std::optional<uint32_t>& divisor,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
@@ -23,11 +23,11 @@ Tensor MorehMean::invoke(
     for (uint32_t i = dims.size() - 1; i > 0; i--) {
         log_debug(tt::LogOp, "{}:{} dim {} keep_batch_dim {}", __func__, __LINE__, dims[i], keep_batch_dim);
         auto temp_output = ttnn::prim::moreh_mean(
-            temp_input, dims[i], keep_batch_dim, std::nullopt, memory_config, compute_kernel_config);
+            temp_input, dims[i], keep_batch_dim, divisor, std::nullopt, memory_config, compute_kernel_config);
         temp_input = temp_output;
     }
     log_debug(tt::LogOp, "{}:{} dim {} keep_batch_dim {}", __func__, __LINE__, dims.front(), keep_batch_dim);
     return ttnn::prim::moreh_mean(
-        temp_input, dims.front(), keep_batch_dim, output, memory_config, compute_kernel_config);
+        temp_input, dims.front(), keep_batch_dim, divisor, output, memory_config, compute_kernel_config);
 }
 }  // namespace ttnn::operations::moreh::moreh_mean
