@@ -81,7 +81,7 @@ void bind_primitive_binary_operation(py::module& module, const binary_operation_
 
 
 template <typename binary_operation_t>
-void bind_binary_operation(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math) {
+void bind_binary_operation(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math, const std::string& info=". ") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -97,7 +97,7 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             dtype (ttnn.DataType, optional): Data type for the output tensor. Defaults to `Null`.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
-            activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `Null`.
+            activations (List[str], optional): list of activation functions to apply to the output tensor{4}Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
@@ -114,7 +114,8 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description,
-        math);
+        math,
+        info);
 
     bind_registered_operation(
         module,
@@ -712,7 +713,8 @@ void py_module(py::module& module) {
         module,
         ttnn::add,
         R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i))doc");
+        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i))doc",
+        R"doc(: :code:`'None'` | :code:`'relu'`. )doc");
 
     detail::bind_binary_inplace_operation(
         module,
@@ -724,7 +726,8 @@ void py_module(py::module& module) {
         module,
         ttnn::subtract,
         R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i))doc");
+        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i))doc",
+        R"doc(: :code:`'None'` | :code:`'relu'`. )doc");
 
     detail::bind_binary_inplace_operation(
         module,
@@ -736,7 +739,8 @@ void py_module(py::module& module) {
         module,
         ttnn::multiply,
         R"doc(Multiplies :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i * \mathrm{{input\_tensor\_b}}_i))doc");
+        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i * \mathrm{{input\_tensor\_b}}_i))doc",
+        R"doc(: :code:`'None'` | :code:`'relu'`. )doc");
 
     detail::bind_binary_inplace_operation(
         module,
