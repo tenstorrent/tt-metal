@@ -62,6 +62,7 @@ on:
           - eltwise.binary.logical_or_.logical_or_
           - eltwise.binary.logical_xor_.logical_xor_
           - eltwise.binary.logical_and_.logical_and_
+          - eltwise.binary.polyval.polyval
           - eltwise.binary.remainder.remainder
           - eltwise.binary.bcast.bcast_h_sharded
           - eltwise.binary.bcast.bcast
