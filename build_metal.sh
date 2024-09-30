@@ -93,64 +93,74 @@ if [[ ! " ${VALID_BUILD_TYPES[@]} " =~ " ${build_type} " ]]; then
     show_help
     exit 1
 fi
+
+build_dir="build_$build_type"
+
+if [ "$enable_profiler" = "ON" ]; then
+    build_dir="${build_dir}_tracy"
+fi
+
 # Set the python environment directory if not already set
 if [ -z "$PYTHON_ENV_DIR" ]; then
     PYTHON_ENV_DIR=$(pwd)/python_env
 fi
 
 # Debug output to verify parsed options
-echo "Export compile commands: $export_compile_commands"
-echo "Enable ccache: $enable_ccache"
-echo "Build type: $build_type"
-echo "Enable time trace: $enable_time_trace"
-echo "Enable AddressSanitizer: $enable_asan"
-echo "Enable MemorySanitizer: $enable_msan"
-echo "Enable ThreadSanitizer: $enable_tsan"
-echo "Enable UndefinedBehaviorSanitizer: $enable_ubsan"
+echo "INFO: Export compile commands: $export_compile_commands"
+echo "INFO: Enable ccache: $enable_ccache"
+echo "INFO: Build type: $build_type"
+echo "INFO: Enable time trace: $enable_time_trace"
+echo "INFO: Enable AddressSanitizer: $enable_asan"
+echo "INFO: Enable MemorySanitizer: $enable_msan"
+echo "INFO: Enable ThreadSanitizer: $enable_tsan"
+echo "INFO: Enable UndefinedBehaviorSanitizer: $enable_ubsan"
+echo "INFO: Build directory: $build_dir"
 
-build_dir="build_$build_type"
+# Prepare cmake arguments
+cmake_args+=("-B" "$build_dir")
+cmake_args+=("-G" "Ninja")
+cmake_args+=("-DCMAKE_BUILD_TYPE=$build_type")
 
 if [ "$enable_ccache" = "ON" ]; then
-    cmake_args="$cmake_args -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+    cmake_args+=("-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache")
 fi
 
 if [ "$enable_time_trace" = "ON" ]; then
-    cmake_args="$cmake_args -DENABLE_BUILD_TIME_TRACE=ON"
+    cmake_args+=("-DENABLE_BUILD_TIME_TRACE=ON")
 fi
 
 if [ "$enable_asan" = "ON" ]; then
-    cmake_args="$cmake_args -DENABLE_ASAN=ON"
+    cmake_args+=("-DENABLE_ASAN=ON")
 fi
 
 if [ "$enable_msan" = "ON" ]; then
-    cmake_args="$cmake_args -DENABLE_MSAN=ON"
+    cmake_args+=("-DENABLE_MSAN=ON")
 fi
 
 if [ "$enable_tsan" = "ON" ]; then
-    cmake_args="$cmake_args -DENABLE_TSAN=ON"
+    cmake_args+=("-DENABLE_TSAN=ON")
 fi
 
 if [ "$enable_ubsan" = "ON" ]; then
-    cmake_args="$cmake_args -DENABLE_UBSAN=ON"
+    cmake_args+=("-DENABLE_UBSAN=ON")
 fi
 
 if [ "$enable_profiler" = "ON" ]; then
-    cmake_args="$cmake_args -DENABLE_TRACY=ON"
-    build_dir="${build_dir}_tracy"
+    cmake_args+=("-DENABLE_TRACY=ON")
 fi
 
+if [ "$export_compile_commands" = "ON" ]; then
+    cmake_args+=("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
+fi
 # Create and link the build directory
 mkdir -p $build_dir
 ln -nsf $build_dir build
 
-# Prepare cmake arguments
-# -DCXX_INCLUDE_WHAT_YOU_USE=include-what-you-use
-cmake_args="$cmake_args -B $build_dir -G Ninja -DCMAKE_BUILD_TYPE=$build_type -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands"
-
-# Configure cmake
-cmake $cmake_args
+echo "INFO: Configuring Project"
+echo "INFO: Running: cmake "${cmake_args[@]}""
+cmake "${cmake_args[@]}"
 
 # Build libraries and cpp tests
-echo "Building libraries and cpp tests"
+echo "INFO: Building Project"
 cmake --build $build_dir --target tests      # <- Can also just run `ninja tests -C build`
 cmake --build $build_dir --target install    # <- This is a general cmake way, can also just run `ninja install -C build`
