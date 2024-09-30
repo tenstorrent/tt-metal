@@ -12,6 +12,7 @@
 #include <unordered_set>
 
 #include "dev_msgs.h"
+#include "hostdevcommon/common_runtime_address_map.h"
 #include "llrt/hal.hpp"
 #include "impl/allocator/allocator.hpp"
 #include "impl/debug/dprint_server.hpp"
@@ -1072,6 +1073,12 @@ CBHandle CreateCircularBuffer(
 
 const CircularBufferConfig &GetCircularBufferConfig(Program &program, CBHandle cb_handle) {
     return detail::GetCircularBuffer(program, cb_handle)->config();
+}
+
+const uint32_t GetNextAvailableCircularBufferIndex(Program &program) {
+    const auto next_value = program.num_circular_buffers();
+    TT_FATAL(next_value < NUM_CIRCULAR_BUFFERS, "No more indexes available to be used for referencing circular buffers");
+    return next_value;
 }
 
 void UpdateCircularBufferTotalSize(Program &program, CBHandle cb_handle, uint32_t total_size) {

@@ -106,6 +106,9 @@ class Program {
 
     const std::vector<std::shared_ptr<CircularBuffer>> &circular_buffers() const;
 
+    // #7493
+    const std::size_t num_circular_buffers() const { return circular_buffers().size();};
+
     const std::vector< Semaphore > & semaphores() const;
 
     KernelGroup * kernels_on_core(const CoreCoord &core, uint32_t programmable_core_type_index);

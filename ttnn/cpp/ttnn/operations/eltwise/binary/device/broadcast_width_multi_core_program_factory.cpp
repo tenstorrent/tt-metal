@@ -92,7 +92,7 @@ BinaryDeviceOperation::BroadcastWidthMultiCore::cached_program_t BinaryDeviceOpe
     auto dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    uint32_t src0_cb_index = 0;
+    uint32_t src0_cb_index = GetNextAvailableCircularBufferIndex(program);
     uint32_t num_input_tiles = 2;
 
     tt_metal::CircularBufferConfig src0_cb_config =
@@ -100,7 +100,7 @@ BinaryDeviceOperation::BroadcastWidthMultiCore::cached_program_t BinaryDeviceOpe
             .set_page_size(src0_cb_index, src0_single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_device_cores, src0_cb_config);
 
-    uint32_t src1_cb_index = 1;
+    uint32_t src1_cb_index = GetNextAvailableCircularBufferIndex(program);
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(num_input_tiles * src1_single_tile_size, {{src1_cb_index, src1_cb_data_format}})
             .set_page_size(src1_cb_index, src1_single_tile_size);
