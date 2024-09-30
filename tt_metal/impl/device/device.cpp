@@ -676,7 +676,9 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
             case DispatchWorkerType::MUX:
             {
                 uint32_t num_prefetchers = device_worker_variants[DispatchWorkerType::PREFETCH].size();
-                TT_ASSERT(device_worker_variants[DispatchWorkerType::MUX].size() * MAX_SWITCH_FAN_IN >= num_prefetchers, "Insufficient Mux Cores");
+                uint32_t num_muxes = device_worker_variants[DispatchWorkerType::MUX].size();
+
+                TT_ASSERT(num_muxes * MAX_SWITCH_FAN_IN >= num_prefetchers, "Insufficient Mux Cores");
 
                 TT_ASSERT(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE].size() == 1, "Unexpected number of ethernet tunnelers.");
                 auto &tunneler_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE][0]);
@@ -704,7 +706,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                                                                     (uint32_t)tunneler_settings.worker_physical_core.y,
                                                                     i + (mux_id * MAX_SWITCH_FAN_IN),
                                                                     (uint32_t)DispatchRemoteNetworkType::NOC0); // 4, 5, 6, 7: dest x info
-                        compile_args[8 + i * 2] = (tunneler_settings.cb_start_address + i * tunneler_settings.cb_size_bytes) >> 4;
+                        compile_args[8 + i * 2] = (tunneler_settings.cb_start_address + (i + mux_id * MAX_SWITCH_FAN_IN) * tunneler_settings.cb_size_bytes) >> 4;
                         compile_args[9 + i * 2] = tunneler_settings.cb_size_bytes >> 4;
                         connections_remaining--;
                     }
@@ -712,7 +714,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     uint32_t arg_index = 16;
                     connections_remaining = mux_fanin;
                     for (int i = 0; (i < MAX_SWITCH_FAN_IN) && (connections_remaining); i++) {
-                        auto&[core, settings] = device_worker_variants[DispatchWorkerType::PREFETCH][i + mux_id * MAX_SWITCH_FAN_IN];
+                        auto&[core, settings] = device_worker_variants[DispatchWorkerType::PREFETCH][i * num_muxes + mux_id];
                         compile_args[arg_index++] = packet_switch_4B_pack((uint32_t)settings.worker_physical_core.x,
                                                                         (uint32_t)settings.worker_physical_core.y,
                                                                         1,
@@ -732,11 +734,13 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
 
                     connections_remaining = mux_fanin;
                     for (int i = 0; (i < MAX_SWITCH_FAN_IN) && (connections_remaining); i++) {
-                        auto&[core, settings] = device_worker_variants[DispatchWorkerType::PREFETCH][i + mux_id * MAX_SWITCH_FAN_IN];
+                        auto&[core, settings] = device_worker_variants[DispatchWorkerType::PREFETCH][i * num_muxes + mux_id];
                         compile_args[arg_index++] = packet_switch_4B_pack(0x1,
                                     dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
                                     settings.producer_semaphore_id,  // upstream sem
                                     mux_sem++); // local sem
+
+                        //FIXME: connections_remaining-- ??
                     }
                     uint32_t src_id_start = 0xA1 + mux_id * MAX_SWITCH_FAN_IN;
                     uint32_t dst_id_start = 0xB1 + mux_id * MAX_SWITCH_FAN_IN;
@@ -1408,7 +1412,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 compile_args[0] = 0; // 0: reserved
                 compile_args[1] = mux_d_settings.cb_start_address >> 4; // 1: rx_queue_start_addr_words
                 compile_args[2] = mux_d_settings.cb_size_bytes >> 4; // 2: rx_queue_size_words
-                compile_args[3] =  device_worker_variants[DispatchWorkerType::DISPATCH_D].size() + device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE].size(); // 3: mux_fan_in
+                compile_args[3] =  num_dispatchers + device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE].size(); // 3: mux_fan_in
 
                 uint32_t mux_d_input_idx = 0;
                 for (const auto& dispatch_d_settings : device_worker_variants[DispatchWorkerType::DISPATCH_D]) {
@@ -1455,11 +1459,11 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                             mux_sem++); // local sem
                     mux_d_sem_idx++;
                 }
-                uint32_t src_id = 0xC1 + mux_d_settings.tunnel_stop - 1;
-                uint32_t dest_id = 0xD1 + mux_d_settings.tunnel_stop - 1;
+                uint32_t src_id = 0xC1 + (mux_d_settings.tunnel_stop - 1) * num_dispatchers;
+                uint32_t dest_id = 0xD1 + (mux_d_settings.tunnel_stop - 1) * num_dispatchers;
 
-                compile_args[23] = packet_switch_4B_pack(src_id, src_id + device_worker_variants[DispatchWorkerType::DISPATCH_D].size() - 1, src_id, src_id); // 23: packetized input src id
-                compile_args[24] = packet_switch_4B_pack(dest_id, dest_id + device_worker_variants[DispatchWorkerType::DISPATCH_D].size() - 1, dest_id, dest_id); // 24: packetized input dest id
+                compile_args[23] = packet_switch_4B_pack(src_id, src_id + 1, src_id + 2, src_id + 3); // 23: packetized input src id
+                compile_args[24] = packet_switch_4B_pack(dest_id, dest_id + 1, dest_id + 2, dest_id + 3); // 24: packetized input dest id
                 break;
             }
         }
@@ -2019,26 +2023,27 @@ void Device::compile_command_queue_programs() {
                 cq_id = (cq_id + 1) % num_hw_cqs;
             }
 
-            auto [mux_core, mux_settings] = mmio_device_worker_variants[DispatchWorkerType::MUX][0];
-            for (auto sem : mux_settings.semaphores) {
-                //size of semaphores vector is number of needed semaphores on the core.
-                //Value of each vector entry is the initialization value for the semaphore.
-                tt::tt_metal::CreateSemaphore(*mmio_command_queue_program_ptr, mux_core, sem, mux_settings.dispatch_core_type);
+            for (auto [mux_core, mux_settings] : mmio_device_worker_variants[DispatchWorkerType::MUX]) {
+                for (auto sem : mux_settings.semaphores) {
+                    //size of semaphores vector is number of needed semaphores on the core.
+                    //Value of each vector entry is the initialization value for the semaphore.
+                    tt::tt_metal::CreateSemaphore(*mmio_command_queue_program_ptr, mux_core, sem, mux_settings.dispatch_core_type);
+                }
+                configure_kernel_variant(
+                    *mmio_command_queue_program_ptr,
+                    mux_settings.kernel_file,
+                    mux_settings.compile_args,
+                    mux_core,
+                    CoreCoord{0, 0},
+                    mux_settings.dispatch_core_type,
+                    CoreCoord{0, 0},
+                    CoreCoord{0, 0},
+                    std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
+                    my_noc_index, // Only one Mux - use NOC for CQ 0
+                    my_noc_index,
+                    my_noc_index
+                );
             }
-            configure_kernel_variant(
-                *mmio_command_queue_program_ptr,
-                mux_settings.kernel_file,
-                mux_settings.compile_args,
-                mux_core,
-                CoreCoord{0, 0},
-                mux_settings.dispatch_core_type,
-                CoreCoord{0, 0},
-                CoreCoord{0, 0},
-                std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
-                my_noc_index, // Only one Mux - use NOC for CQ 0
-                my_noc_index,
-                my_noc_index
-            );
 
             auto [tunneler_core, tunneler_settings] = mmio_device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE][0];
             configure_kernel_variant(
