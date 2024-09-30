@@ -61,6 +61,11 @@ on:
           - eltwise.binary.multiply.multiply
           - eltwise.binary.div.div
           - eltwise.binary.div_no_nan.div_no_nan
+          - eltwise.binary.logical_and.logical_and
+          - eltwise.binary.logical_or.logical_or
+          - eltwise.binary.logical_xor.logical_xor
+          - eltwise.binary.logical_and_output.logical_and_output
+          - eltwise.binary.logical_or_output.logical_or_output
           - eltwise.binary.logical_or_.logical_or_
           - eltwise.binary.logical_xor_.logical_xor_
           - eltwise.binary.logical_and_.logical_and_
