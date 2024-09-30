@@ -249,6 +249,29 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
 
 
 @pytest.fixture(scope="function")
+def n300_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
+    import ttnn
+
+    if ttnn.get_num_devices() < 2:
+        pytest.skip()
+
+    mesh_device = ttnn.open_mesh_device(
+        ttnn.MeshShape(1, 2),
+        dispatch_core_type=get_dispatch_core_type(),
+        **device_params,
+    )
+
+    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
+    yield mesh_device
+
+    for device in mesh_device.get_devices():
+        ttnn.DumpDeviceProfiler(device)
+
+    ttnn.close_mesh_device(mesh_device)
+    del mesh_device
+
+
+@pytest.fixture(scope="function")
 def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
     import ttnn
 
