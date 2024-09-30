@@ -663,6 +663,16 @@ std::vector<Tensor> ExecuteBackwardGE::invoke(
     return _unary_comp_bw(grad, output_mem_config);
 }
 
+std::vector<Tensor> ExecuteBackwardNE::invoke(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
+    return _binary_comp_bw(grad, input, other, output_mem_config);
+}
+
+std::vector<Tensor> ExecuteBackwardNE::invoke(
+    const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config) {
+    return _unary_comp_bw(grad, output_mem_config);
+}
+
 // template parameter min_or_max = TRUE for MAX, FALSE for MIN
 template <bool min_or_max>
 std::vector<Tensor> _min_or_max_bw(
