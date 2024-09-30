@@ -10,7 +10,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "t3k LLM falcon7b model perf tests", model: "falcob7b", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_falcon7b_tests, timeout: 75, owner_id: U053W15B6JF}, # Djordje Ivanovic
+          { name: "t3k LLM falcon7b model perf tests", model: "falcon7b", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_falcon7b_tests, timeout: 75, owner_id: U05RWH3QUPM}, # Salar Hosseini
           { name: "t3k LLM mixtral model perf tests", model: "mixtral", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 75, owner_id: U03PUAKE719}, # Miguel Tairum
           { name: "t3k LLM llama2 model perf tests", model: "llama2", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_llama2_70b_tests, timeout: 75, owner_id: U03FJB5TM5Y}, # Colman Glagovich
           { name: "t3k LLM falcon40b model perf tests", model: "falcon40b", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 75, owner_id: U053W15B6JF}, # Djordje Ivanovic
