@@ -62,12 +62,6 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
         (input_tensor_a.get_layout() == Layout::TILE && input_tensor_b.get_layout() == Layout::TILE),
         "Inputs to eltwise binary must be tilized");
     if (input_tensor_a.memory_config().is_sharded()) {
-        if (input_tensor_a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-            // If we aren't height sharded, we require all sharding schemes to match until we add blocked
-            // reader/writers for width and block sharding
-            TT_FATAL((input_tensor_b.memory_config().is_sharded()));
-            TT_FATAL(input_tensor_a.shard_spec().value().grid.ranges().size() == 1);
-        }
         if (input_tensor_b.memory_config().is_sharded()) {
             TT_FATAL(input_tensor_a.memory_config().memory_layout == input_tensor_b.memory_config().memory_layout);
             TT_FATAL(input_tensor_a.shard_spec().value() == input_tensor_b.shard_spec().value());
@@ -78,7 +72,6 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(attributes.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
         }
     } else if (input_tensor_b.memory_config().is_sharded()) {
-        TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
         TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
         if (attributes.memory_config.is_sharded()) {
             TT_FATAL(input_tensor_b.memory_config().memory_layout == attributes.memory_config.memory_layout);
