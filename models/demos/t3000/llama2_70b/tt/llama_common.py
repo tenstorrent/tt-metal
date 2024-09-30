@@ -9,7 +9,6 @@ import re
 from typing import Tuple
 import numpy as np
 import torch
-from torch import nn
 import ttnn
 from models.utility_functions import tt2torch_tensor, torch2tt_tensor
 from loguru import logger
@@ -18,7 +17,6 @@ from models.demos.t3000.llama2_70b.reference.llama.llama.generation import (
     load_chunked_checkpoints,
     load_sharded_checkpoints,
 )
-import pytest
 from models.demos.t3000.llama2_70b.tt.model_config import get_model_config
 
 MAX_SEQ_LEN = 4096
@@ -126,10 +124,6 @@ def setup_llama_env(llama_version="llama3", max_batch_size=32, max_context_len=4
             ckpt_dir = "/mnt/MLPerf/tt_dnn-models/llama-3/llama-3-70b-repacked/"
             tokenizer_path = "/mnt/MLPerf/tt_dnn-models/llama-3/tokenizer.model"
             cache_path = Path("/mnt/MLPerf/tt_dnn-models/llama-3/llama-data-cache/weights-cache-3")
-        elif llama_version == "llama3-tg":
-            ckpt_dir = "/mnt/MLPerf/tt_dnn-models/llama-3/llama-3-70b-repacked/"
-            tokenizer_path = "/mnt/MLPerf/tt_dnn-models/llama-3/tokenizer.model"
-            cache_path = Path("/mnt/MLPerf/tt_dnn-models/llama-3/llama-data-cache/weights-cache-tg")
         elif llama_version == "llama3-405b":
             ckpt_dir = "/mnt/MLPerf/tt_dnn-models/llama-3-405b/llama-3-405b-repacked/"
             tokenizer_path = "/mnt/MLPerf/tt_dnn-models/llama-3-405b/tokenizer.model"
@@ -143,12 +137,6 @@ def setup_llama_env(llama_version="llama3", max_batch_size=32, max_context_len=4
             ckpt_dir = os.getenv("LLAMA3_CKPT_DIR", "/proj_sw/llama3-data-repacked/llama-3-70b/")
             tokenizer_path = os.getenv("LLAMA3_TOKENIZER_PATH", "/proj_sw/llama3-data-repacked/tokenizer.model")
             cache_path = Path(os.getenv("LLAMA3_CACHE_PATH", "/proj_sw/llama-cache/llama-3-70b"))
-        elif llama_version == "llama3-tg":
-            ckpt_dir = os.getenv("LLAMA3_CKPT_DIR", "/proj_sw/user_dev/llama3-data-repacked/llama-3-70b/")
-            tokenizer_path = os.getenv(
-                "LLAMA3_TOKENIZER_PATH", "/proj_sw/user_dev/llama3-data-repacked/tokenizer.model"
-            )
-            cache_path = Path(os.getenv("LLAMA3_CACHE_PATH", "/proj_sw/user_dev/llama3-data-cache/weights-cache-2"))
         elif llama_version == "llama3-405b":
             ckpt_dir = os.getenv("LLAMA3_405B_CKPT_DIR", "/proj_sw/user_dev/llama3-405B-data-repacked/llama-3-405b/")
             tokenizer_path = os.getenv(
