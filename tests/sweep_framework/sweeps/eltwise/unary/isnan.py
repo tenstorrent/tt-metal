@@ -5,6 +5,7 @@
 from typing import Optional, Tuple
 from functools import partial
 
+import os
 import torch
 import random
 import ttnn
@@ -32,15 +33,23 @@ parameters = {
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
+    "xfail": {
+        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 1),
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    },
 }
 
 
-# def mesh_device_fixture():
-#     device = ttnn.open_device(device_id=0)
-#     assert ttnn.device.is_wormhole_b0(device), "This op is available for Wormhole_B0 only"
-#     yield (device, "Wormhole_B0")
-#     ttnn.close_device(device)
-#     del device
+def mesh_device_fixture():
+    device = ttnn.open_device(device_id=0)
+    assert ttnn.device.is_grayskull(device), "This op is not supported on Grayskull"
+    device_name = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "default")).lower()
+    yield (device, device_name)
+    ttnn.close_device(device)
+    del device
 
 
 # This is the run instructions for the test, defined by the developer.
@@ -60,7 +69,7 @@ def run(
     torch.manual_seed(data_seed)
 
     torch_input_tensor_a = gen_rand_inf(input_shape, low=-100, high=100)
-    torch_output_tensor = torch.isfinite(torch_input_tensor_a)
+    torch_output_tensor = torch.isnan(torch_input_tensor_a)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -71,7 +80,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.isfinite(input_tensor_a, memory_config=output_memory_config)
+    output_tensor = ttnn.isnan(input_tensor_a, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
