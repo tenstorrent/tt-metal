@@ -290,12 +290,15 @@ struct registered_operation_t {
             return output_tensors;
         } else if constexpr (std::is_same_v<execute_on_worker_thread_return_t, OptionalTensors>) {
             // convert tensor to optional tensor
-            std::vector<std::optional<Tensor>> ret;
-
             auto size = output_tensors.size();
-            ret.reserve(size);
+            std::vector<std::optional<Tensor>> ret(size);
+
+            auto return_flags = operation_t::create_async_return_flag(std::forward<decltype(args)>(args)...);
+
             for (uint32_t i = 0 ; i < size; i++) {
-                ret.push_back(output_tensors.at(i));
+                if (return_flags.at(i)) {
+                    ret[i] = output_tensors.at(i);
+                }
             }
             return ret;
         } else if constexpr (detail::is_homogenous_tuple<execute_on_worker_thread_return_t, Tensor>()) {

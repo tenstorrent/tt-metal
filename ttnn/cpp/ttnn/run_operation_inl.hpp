@@ -216,6 +216,12 @@ void launch_op(
                         if (!output_tensor || !local_tensor) {
                             continue;
                         }
+
+                        // The return type is vector<optional<Tensor>>, and this refers to the case where the i-th value is nullopt.
+                        if (output_tensor->tensor_attributes.use_count() != 0 && local_tensor->tensor_attributes.use_count() == 0) {
+                            continue;
+                        }
+
                         if (std::holds_alternative<OwnedStorage>(local_tensor->tensor_attributes->storage)) {
                             TT_ASSERT(
                                 output_tensor->tensor_attributes->dynamic_storage,
