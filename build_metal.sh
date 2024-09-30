@@ -15,6 +15,12 @@ show_help() {
     echo "  -s, --enable-tsan                Enable ThreadSanitizer."
     echo "  -u, --enable-ubsan               Enable UndefinedBehaviorSanitizer."
     echo "  -p, --enable-profiler            Enable Tracy profiler."
+    echo "  --clean                          Remove build workspaces."
+}
+
+clean() {
+    echo "INFO: Removing build artifacts!"
+    rm -rf build_Release* build_Debug* build_RelWithDebInfo* build built
 }
 
 # Parse CLI options
@@ -31,7 +37,7 @@ enable_profiler="OFF"
 declare -a cmake_args
 
 OPTIONS=h,e,c,t,a,m,s,u,b:,p
-LONGOPTIONS=help,export-compile-commands,enable-ccache,enable-time-trace,enable-asan,enable-msan,enable-tsan,enable-ubsan,build-type:,enable-profiler
+LONGOPTIONS=help,export-compile-commands,enable-ccache,enable-time-trace,enable-asan,enable-msan,enable-tsan,enable-ubsan,build-type:,enable-profiler,clean
 
 # Parse the options
 PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTIONS --name "$0" -- "$@")
@@ -65,6 +71,8 @@ while true; do
             build_type="$2";shift;;
         -p|--enable-profiler)
             enable_profiler="ON";;
+        --clean)
+	    clean; exit 0;;
         --)
             shift;break;;
     esac
