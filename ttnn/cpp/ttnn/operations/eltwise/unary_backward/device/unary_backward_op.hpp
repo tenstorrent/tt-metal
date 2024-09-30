@@ -15,7 +15,6 @@ namespace ttnn::operations::unary_backward {
 enum class UnaryBackwardOpType {
     DIV_BW,
     ADD_BW,
-    EQ_BW,
     GT_BW,
     SUB_BW,
 };
@@ -24,7 +23,6 @@ std::vector<Tensor> _sub_bw( const Tensor& grad, const Tensor& input, float scal
 std::vector<Tensor> _gt_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config);
 
 std::vector<Tensor> _add_bw( const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-std::vector<Tensor> _eq_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config);
 
@@ -43,13 +41,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::SUB_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config ) {
         return _sub_bw(grad, input, scalar, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::EQ_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _eq_bw(grad, input, other, output_mem_config);
     }
 };
 

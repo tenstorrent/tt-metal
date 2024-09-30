@@ -198,6 +198,39 @@ std::vector<ComplexTensor> ExecuteBackwardAdd::invoke(
     return grad_tensor;
 }
 
+std::vector<std::optional<Tensor>> ExecuteBackwardEQ::invoke(
+    uint8_t queue_id, const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+    std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
+    result[0] = input_grad.has_value() ? ttnn::zeros_like(queue_id, grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config, input_grad) :  ttnn::zeros_like(queue_id, grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
+    result[1] = other_grad.has_value() ? ttnn::zeros_like(queue_id, input, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config, other_grad) :  ttnn::zeros_like(queue_id, input, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
+    return result;
+}
+
+std::vector<std::optional<Tensor>> ExecuteBackwardEQ::invoke(
+    uint8_t queue_id, const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> input_grad) {
+    std::vector<std::optional<Tensor>> result = {std::nullopt};
+    result[0] = input_grad.has_value() ? ttnn::zeros_like(queue_id, grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config, input_grad) :  ttnn::zeros_like(queue_id, grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
+    return result;
+}
+
+std::vector<std::optional<Tensor>> ExecuteBackwardEQ::invoke(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+    return ExecuteBackwardLT::invoke(ttnn::DefaultQueueId, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
+}
+
+std::vector<std::optional<Tensor>> ExecuteBackwardEQ::invoke(
+    const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> input_grad) {
+    return ExecuteBackwardLT::invoke(ttnn::DefaultQueueId, grad, input, other, output_mem_config, input_grad);
+}
+
 std::vector<std::optional<Tensor>> ExecuteBackwardSub::invoke(
     uint8_t queue_id, const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;
@@ -402,48 +435,6 @@ std::vector<ttnn::Tensor> _squared_difference_bw(
     Tensor grad_b = ttnn::multiply(grad_a, -1, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_b);
     return grad_tensor;
-}
-
-std::vector<std::optional<Tensor>> _eq_bw(
-    uint8_t cq_id,
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    std::vector<std::optional<Tensor>> result;
-
-    if (are_required_outputs.at(0)) {
-        input_grad = ttnn::full_like(input, 0.0f);
-        result.emplace_back(input_grad);
-    } else {
-        result.emplace_back(std::nullopt);
-    }
-    if (are_required_outputs.at(1)) {
-        other_grad = ttnn::full_like(grad, 0.0f);
-        result.emplace_back(other_grad);
-    } else {
-        result.emplace_back(std::nullopt);
-    }
-    return result;
-}
-
-std::vector<ttnn::Tensor> _eq_bw_inter(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    auto result = _eq_bw(0, grad, input, other, output_mem_config, {true, true}, std::nullopt, std::nullopt);
-    std::vector<ttnn::Tensor> output_tensors;
-    output_tensors.reserve(result.size());
-
-    for (const auto& opt_tensor : result) {
-        if (opt_tensor) {
-            output_tensors.emplace_back(*opt_tensor);
-        } else {
-            output_tensors.emplace_back();
-        }
-    }
-    return output_tensors;
 }
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardAssign::invoke(
