@@ -1237,7 +1237,9 @@ def test_device_line_all_gather_8x1(mesh_device):
         full_tensor, mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(-2, -1))
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-    ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=2, cluster_axis=0, mesh_device=mesh_device, num_links=1)
+    ttnn_tensor = ttnn.all_gather(
+        ttnn_tensor, dim=2, cluster_axis=0, mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear
+    )
 
     device_tensors: typing.List[ttnn.Tensor] = ttnn.get_device_tensors(ttnn_tensor)
     for index, device_tensor in enumerate(device_tensors):
@@ -1277,7 +1279,14 @@ def test_device_line_all_gather_8x4_data(mesh_device, cluster_axis: int, dim: in
         full_tensor, mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(-2, -1))
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-    ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=dim, cluster_axis=cluster_axis, mesh_device=mesh_device, num_links=1)
+    ttnn_tensor = ttnn.all_gather(
+        ttnn_tensor,
+        dim=dim,
+        cluster_axis=cluster_axis,
+        mesh_device=mesh_device,
+        num_links=1,
+        topology=ttnn.Topology.Linear,
+    )
 
     device_tensors: typing.List[ttnn.Tensor] = ttnn.get_device_tensors(ttnn_tensor)
 
@@ -1416,7 +1425,9 @@ def test_line_all_gather_column_major(mesh_device):
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
     ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
-    ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, cluster_axis=0, mesh_device=mesh_device, num_links=1)
+    ttnn_tensor = ttnn.all_gather(
+        ttnn_tensor, dim=3, cluster_axis=0, mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear
+    )
     tt_outputs = ttnn.to_torch(ttnn_tensor, mesh_composer=ListMeshToTensor(mesh_device))
     for output in tt_outputs[1:]:
         assert output.shape == (1, 1, 32, 32 * 8)
@@ -1456,7 +1467,14 @@ def test_device_line_all_gather_8x4_data(mesh_device, cluster_axis: int, dim: in
         full_tensor, mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(-2, -1))
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-    ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=dim, cluster_axis=cluster_axis, mesh_device=mesh_device, num_links=1)
+    ttnn_tensor = ttnn.all_gather(
+        ttnn_tensor,
+        dim=dim,
+        cluster_axis=cluster_axis,
+        mesh_device=mesh_device,
+        num_links=1,
+        topology=ttnn.Topology.Linear,
+    )
 
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
@@ -1548,6 +1566,7 @@ def test_sharded_distributed_layernorm(mesh_device, input_width, input_height, c
         cluster_axis=1,
         mesh_device=mesh_device,
         memory_config=gathered_stats_sharded_memory_config,
+        topology=ttnn.Topology.Linear,
     )
 
     tt_output_tensor = ttnn.rms_norm_post_all_gather(

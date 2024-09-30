@@ -88,6 +88,7 @@ def run_with_trace(
         memory_config=output_mem_config,
         num_workers=n_worker,
         num_buffers_per_channel=n_buffer,
+        topology=all_gather_topology,
     )
     for d in mesh_device.get_devices():
         ttnn.synchronize_device(d)
@@ -103,6 +104,7 @@ def run_with_trace(
             memory_config=output_mem_config,
             num_workers=n_worker,
             num_buffers_per_channel=n_buffer,
+            topology=all_gather_topology,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     for d in mesh_device.get_devices():
@@ -156,7 +158,9 @@ def run_all_gather_impl(
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     for i in range(num_iters):
-        tt_out_tensor = ttnn.all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
+        tt_out_tensor = ttnn.all_gather(
+            input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=all_gather_topology
+        )
 
         for d in mesh_device.get_devices():
             ttnn.synchronize_device(d)
@@ -1215,6 +1219,7 @@ def run_all_gather_sharded(
                 memory_config=output_mem_config,
                 num_workers=n_worker,
                 num_buffers_per_channel=n_buffer,
+                topology=all_gather_topology,
             )
         ## Wait for completion
         for d in mesh_device.get_devices():

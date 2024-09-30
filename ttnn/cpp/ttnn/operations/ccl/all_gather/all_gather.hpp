@@ -30,7 +30,7 @@ struct ExecuteAllGather {
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<size_t> num_workers = std::nullopt,
         const std::optional<size_t> num_buffers_per_channel = std::nullopt,
-        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear);
+        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
 };
 
 }  // namespace ccl

@@ -68,7 +68,7 @@ void bind_all_gather(pybind11::module& module, const ccl_operation_t& operation,
             py::arg("memory_config") = std::nullopt,
             py::arg("num_workers") = std::nullopt,
             py::arg("num_buffers_per_channel") = std::nullopt,
-            py::arg("topology") = ttnn::ccl::Topology::Linear});
+            py::arg("topology") = ttnn::ccl::Topology::Ring});
 }
 
 }  // namespace detail
@@ -85,6 +85,12 @@ void py_bind_all_gather(pybind11::module& module) {
         Args:
             * :attr:`input_tensor` (ttnn.Tensor): multi-device tensor
             * :attr:`dim` (int)
+            * Following are applicable only for Linear Topology
+            * :attr:`cluster_axis` (int):
+                Provided a MeshTensor, the axis corresponding to MeshDevice
+                to perform the line-all-gather operation on.
+            * :attr:`mesh_device` (MeshDevice):
+                Device mesh to perform the line-all-gather operation on.
 
         Keyword Args:
             * :attr:`num_links` (int): Number of links to use for the all-gather operation.
@@ -99,37 +105,6 @@ void py_bind_all_gather(pybind11::module& module) {
             >>> output = ttnn.all_gather(tensor, dim=0)
 
         )doc");
-
-    /*
-    detail::bind_line_all_gather(
-        module,
-        ttnn::line_all_gather,
-        R"doc(line_all_gather(input_tensor: ttnn.Tensor, dim: int, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-
-        Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
-        Args:
-            * :attr:`input_tensor` (ttnn.Tensor):
-                multi-device tensor
-            * :attr:`dim` (int):
-                Dimension to perform the all-gather operation on.
-                After the all-gather operation, the size of the :attr:`dim`
-                dimension will larger by number of devices in the line.
-            * :attr:`cluster_axis` (int):
-                Provided a MeshTensor, the axis corresponding to MeshDevice
-                to perform the line-all-gather operation on.
-            * :attr:`mesh_device` (MeshDevice):
-                Device mesh to perform the line-all-gather operation on.
-
-        Keyword Args:
-            * :attr:`num_links` (int): Number of links to use for the all-gather operation.
-            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-
-        Example:
-
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.all_gather(tensor, dim=0, topology=ttnn.Topology.Linear)
-
-        )doc");*/
 }
 
 }  // namespace ttnn::operations::ccl
