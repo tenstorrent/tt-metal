@@ -72,6 +72,7 @@ on:
           - data_movement.concat.concat_interleaved_n_tensors
           - data_movement.concat.concat_interleaved
           - data_movement.concat.concat_sharded
+          - data_movement.concat.concat_pytorch2
           - data_movement.slice.slice_pytorch2_rm
           - data_movement.slice.slice_pytorch2_tiled
           - data_movement.permute.permute_pytorch2_rm
