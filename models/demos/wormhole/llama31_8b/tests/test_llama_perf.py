@@ -146,16 +146,13 @@ def run_inference(device, tt_model, tt_embd, embd, encoded_prompts, generation_s
     )
 
     current_pos = ttnn.from_torch(torch.tensor([generation_start_pos] * batch), device=device, dtype=ttnn.int32)
-    current_pos_attn = ttnn.from_torch(
-        torch.tensor([generation_start_pos] * batch * 8), device=device, dtype=ttnn.int32
-    )
 
     for i in range(generation_length):
         # Run TT model
         profiler.start(f"model_run_for_inference_{i}")
 
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
-        tt_out = tt_model(decode_input, current_pos, current_pos_attn, rot_mat=current_rot_mat)
+        tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
         tt_out_rm = ttnn.untilize(tt_out, use_multicore=True)
         ttnn.deallocate(tt_out)
         tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
@@ -165,7 +162,6 @@ def run_inference(device, tt_model, tt_embd, embd, encoded_prompts, generation_s
         new_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         current_rot_mat = ttnn.copy(new_rot_mat, current_rot_mat)
         ttnn.plus_one(current_pos)
-        ttnn.plus_one(current_pos_attn)
 
         profiler.end(f"model_run_for_inference_{i}")
 

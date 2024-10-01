@@ -9,6 +9,7 @@ from loguru import logger
 import torch
 import json
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
+from models.demos.wormhole.llama31_8b_N300.tt.llama_common import precompute_freqs, freqs_to_rotation_matrix
 
 
 class TtModelArgs:
@@ -26,6 +27,7 @@ class TtModelArgs:
     multiple_of = 1024
     rope_theta = 500000.0
     use_scaled_rope = True
+    paged_attention_config = None
 
     # Parameters for our use
     max_batch_size = 1
@@ -64,7 +66,7 @@ class TtModelArgs:
         "OUTPUT_MM",
     )
 
-    def __init__(self, device, instruct=False, dummy_weights=False):
+    def __init__(self, device, instruct=False, dummy_weights=False, max_batch_size=1):
         if not dummy_weights:
             # Assert if all folders and files exist
             assert os.path.exists(
@@ -97,6 +99,7 @@ class TtModelArgs:
 
         self.instruct = instruct
         self.dummy_weights = dummy_weights
+        self.max_batch_size = max_batch_size
 
         # Enable workarounds by default until di/dt issues are fixed
         self.di_dt_workaround = os.getenv("DISABLE_DI_DT_WORKAROUND") != "1"
@@ -112,6 +115,11 @@ class TtModelArgs:
         )
         # Update memory layouts (Tile, except MLP)
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
+
+        self.cos, self.sin = precompute_freqs(
+            self.head_dim, self.max_seq_len * 2, self.rope_theta, self.use_scaled_rope
+        )  # for prefill
+        self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
 
         if device is not None:  # Avoid issue with test_llama_torch.py not having a device
             grid = device.compute_with_storage_grid_size()
@@ -365,20 +373,6 @@ class TtModelArgs:
 
             # Useful core grid based on batch size
             if self.max_batch_size == 32:
-                core_grid_by_batch = ttnn.CoreGrid(y=4, x=8)
-            elif self.max_batch_size == 16:
-                core_grid_by_batch = ttnn.CoreGrid(y=2, x=8)
-            elif self.max_batch_size == 8:
-                core_grid_by_batch = ttnn.CoreGrid(y=1, x=8)
-            elif self.max_batch_size == 4:
-                core_grid_by_batch = ttnn.CoreGrid(y=1, x=4)
-            elif self.max_batch_size == 2:
-                core_grid_by_batch = ttnn.CoreGrid(y=1, x=2)
-            elif self.max_batch_size == 1:
-                core_grid_by_batch = ttnn.CoreGrid(y=1, x=1)
-            else:
-                raise ValueError(f"Batch size {self.max_batch_size} not supported")
-            if self.max_batch_size == 32:
                 grid_by_batch = (8, 4)
             elif self.max_batch_size == 16:
                 grid_by_batch = (8, 2)
@@ -390,6 +384,17 @@ class TtModelArgs:
                 grid_by_batch = (2, 1)
             elif self.max_batch_size == 1:
                 grid_by_batch = (1, 1)
+            else:
+                raise ValueError(f"Batch size {self.max_batch_size} not supported")
+            core_grid_by_batch = ttnn.CoreGrid(y=grid_by_batch[1], x=grid_by_batch[0])
+            core_range_set_by_batch = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(grid_by_batch[0] - 1, grid_by_batch[1] - 1),
+                    ),
+                }
+            )
 
             self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32, 128),
@@ -405,6 +410,19 @@ class TtModelArgs:
                 out_subblock_w=4,
                 per_core_M=1,
                 per_core_N=4,
+            )
+            self.model_config["ROT_MAT_MEMCONFIG"] = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    core_range_set_by_batch,
+                    [
+                        128,
+                        128,
+                    ],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
+                ),
             )
 
     def weight_cache_path(self, dtype):

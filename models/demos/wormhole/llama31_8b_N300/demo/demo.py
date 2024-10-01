@@ -246,7 +246,6 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
             tt_out = tt_model(
                 prefill_input,
                 None,  # Current position
-                None,  # Current position for attention
                 rot_mats_prefill,
                 transformation_mats,
                 user_id=batch_id,
@@ -299,16 +298,10 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
             mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
             dtype=ttnn.int32,
         )
-        current_pos_attn = ttnn.from_torch(
-            torch.tensor(decoding_pos * 4, dtype=torch.int32),
-            device=device_mesh,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
-            dtype=ttnn.int32,
-        )
 
         # Compile
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
-        tt_out = tt_model(decode_input, current_pos, current_pos_attn, rot_mat=current_rot_mat)
+        tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
         tt_out_gathered = ttnn.line_all_gather(tt_out, dim=3, num_links=1)
         ttnn.deallocate(tt_out)
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
@@ -318,13 +311,12 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
         new_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         current_rot_mat = ttnn.copy(new_rot_mat, current_rot_mat)
         ttnn.plus_one(current_pos)
-        ttnn.plus_one(current_pos_attn)
 
         # Capture Trace
         trace_id = ttnn.begin_trace_capture(device_mesh, cq_id=0)
 
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
-        tt_out = tt_model(decode_input, current_pos, current_pos_attn, rot_mat=current_rot_mat)
+        tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
         tt_out_gathered = ttnn.line_all_gather(tt_out, dim=3, num_links=1)
         ttnn.deallocate(tt_out)
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
@@ -334,16 +326,10 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
         new_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         current_rot_mat = ttnn.copy(new_rot_mat, current_rot_mat)
         ttnn.plus_one(current_pos)
-        ttnn.plus_one(current_pos_attn)
 
         ttnn.end_trace_capture(device_mesh, trace_id, cq_id=0)
         current_pos_reset = ttnn.from_torch(
             torch.tensor(decoding_pos, dtype=torch.int32),
-            dtype=ttnn.int32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
-        )
-        current_pos_attn_reset = ttnn.from_torch(
-            torch.tensor(decoding_pos * 4, dtype=torch.int32),
             dtype=ttnn.int32,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
         )
@@ -354,7 +340,6 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
         )
 
         ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos)
-        ttnn.copy_host_to_device_tensor(current_pos_attn_reset, current_pos_attn)
         ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
         # Start decoding
         iteration = 0

@@ -34,6 +34,7 @@ class TtLlamaAttention(nn.Module):
         self.max_seq_len = configuration.max_seq_len
         self.max_batch_size = configuration.max_batch_size
         self.n_kv_heads = configuration.n_kv_heads
+        self.paged_attention_config = configuration.paged_attention_config
 
         self.n_local_heads = self.n_heads // self.num_devices
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices
@@ -132,22 +133,40 @@ class TtLlamaAttention(nn.Module):
                 cache_file_name=cache_name("wo_sharded"),
             )
 
-            cache_k = torch.zeros(
-                (
-                    self.max_batch_size,
-                    self.n_kv_heads // self.num_devices,
-                    self.sliding_window,
-                    self.head_dim,
+            if self.paged_attention_config:
+                cache_k = torch.zeros(
+                    (
+                        self.paged_attention_config.max_num_blocks,
+                        self.n_kv_heads // self.num_devices,
+                        self.paged_attention_config.block_size,
+                        self.head_dim,
+                    )
                 )
-            )
-            cache_v = torch.zeros(
-                (
-                    self.max_batch_size,
-                    self.n_kv_heads // self.num_devices,
-                    self.sliding_window,
-                    self.head_dim,
+                cache_v = torch.zeros(
+                    (
+                        self.paged_attention_config.max_num_blocks,
+                        self.n_kv_heads // self.num_devices,
+                        self.paged_attention_config.block_size,
+                        self.head_dim,
+                    )
                 )
-            )
+            else:
+                cache_k = torch.zeros(
+                    (
+                        self.max_batch_size,
+                        self.n_kv_heads // self.num_devices,
+                        self.sliding_window,
+                        self.head_dim,
+                    )
+                )
+                cache_v = torch.zeros(
+                    (
+                        self.max_batch_size,
+                        self.n_kv_heads // self.num_devices,
+                        self.sliding_window,
+                        self.head_dim,
+                    )
+                )
             layer_past = [cache_k, cache_v]
             layer_past = [
                 ttnn.from_torch(
@@ -219,13 +238,12 @@ class TtLlamaAttention(nn.Module):
         self,
         xs: List[ttnn.Tensor],
         current_pos,
-        current_pos_attn,
         rot_mat=None,
+        page_table=None,
     ) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, hidden_dim)
         current_pos: (batch_size), current token position in the sequence for each user
-        current_pos_attn: (batch_size * kv_heads[8]), current token position in the sequence for each KV_head (Required for SDPA_decode)
         """
         dense_outputs = []
         for i in range(self.num_devices):
@@ -279,7 +297,7 @@ class TtLlamaAttention(nn.Module):
                 q_heads_pre_rot_1BQD,
                 rot_mat,
                 program_config=self.model_config["ROT_MAT_BMM_PROGCFG"],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=q_heads_pre_rot_1BQD.memory_config(),
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 dtype=ttnn.bfloat16,
             )
@@ -287,7 +305,7 @@ class TtLlamaAttention(nn.Module):
             k_heads_1BKD = ttnn.linear(
                 k_heads_pre_rot_1BKD,
                 rot_mat,
-                # program_config=self.k_heads_program_config,
+                program_config=self.model_config["ROT_MAT_BMM_PROGCFG"],
                 memory_config=k_heads_pre_rot_1BKD.memory_config(),
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 dtype=ttnn.bfloat16,
@@ -305,24 +323,41 @@ class TtLlamaAttention(nn.Module):
             # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
             # v_heads [seqlen, n_kv_heads, bsz, head_dim]
             # keys, [max_batch_size, n_kv_heads // self.num_devices, sliding_window, head_dim]
-            ttnn.experimental.paged_update_cache(keys, k_heads_1BKD, update_idxs_tensor=current_pos)
-            ttnn.experimental.paged_update_cache(values, v_heads_1BKD, update_idxs_tensor=current_pos)
+            ttnn.experimental.paged_update_cache(
+                keys, k_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
+            )
+            ttnn.experimental.paged_update_cache(
+                values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
+            )
             self.layer_past_list[i] = [keys, values]
 
             ttnn.deallocate(k_heads_1BKD)
             ttnn.deallocate(v_heads_1BKD)
 
-            attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode_gqa(
-                q_heads_1BQD,
-                keys,
-                values,
-                cur_pos_tensor=current_pos_attn,
-                transpose_q=False,
-                scale=self.scale,
-                program_config=self.model_config["SDPA_DECODE_PROGCFG"],
-                compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            if page_table:
+                attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                    q_heads_1BQD,
+                    keys,
+                    values,
+                    cur_pos_tensor=current_pos,
+                    page_table_tensor=page_table,
+                    scale=self.scale,
+                    program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+                    compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+
+            else:
+                attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
+                    q_heads_1BQD,
+                    keys,
+                    values,
+                    cur_pos_tensor=current_pos,
+                    scale=self.scale,
+                    program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+                    compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
 
             ttnn.deallocate(q_heads_1BQD)
             attn_output_11BH = ttnn.to_memory_config(
@@ -353,7 +388,7 @@ class TtLlamaAttention(nn.Module):
         else:
             return dense_outputs
 
-    def forward_prefill(self, xs_11SH, rot_mats, transformation_mats, user_id: int = 0):
+    def forward_prefill(self, xs_11SH, rot_mats, transformation_mats, user_id: int = 0, page_table=None):
         seq_len = xs_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         wqkv = self.wqkv_list[0]
@@ -420,16 +455,21 @@ class TtLlamaAttention(nn.Module):
         # sharding v_fill to deal with update_cache memory limitation
         if seq_len > 128:
             v_fill = ttnn.interleaved_to_sharded(v_fill, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
-        ttnn.fill_cache(
-            keys_BKSD,
-            k_fill,
-            user_id,
-        )
-        ttnn.fill_cache(
-            values_BKSD,
-            v_fill,
-            user_id,
-        )
+
+        if page_table:
+            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill, page_table, batch_idx=user_id)
+            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill, page_table, batch_idx=user_id)
+        else:
+            ttnn.fill_cache(
+                keys_BKSD,
+                k_fill,
+                user_id,
+            )
+            ttnn.fill_cache(
+                values_BKSD,
+                v_fill,
+                user_id,
+            )
 
         self.layer_past = [keys_BKSD, values_BKSD]
 
@@ -483,9 +523,9 @@ class TtLlamaAttention(nn.Module):
         return [output_11SH]
 
     def forward(
-        self, xs, current_pos, current_pos_attn=None, rot_mats=None, transformation_mats=None, user_id=0, mode="decode"
+        self, xs, current_pos, rot_mats=None, transformation_mats=None, user_id=0, mode="decode", page_table=None
     ):
         if mode == "prefill":
-            return self.forward_prefill(xs[0], rot_mats, transformation_mats, user_id)
+            return self.forward_prefill(xs[0], rot_mats, transformation_mats, user_id, page_table)
         else:
-            return self.forward_decode(xs, current_pos, current_pos_attn, rot_mats)
+            return self.forward_decode(xs, current_pos, rot_mats, page_table)

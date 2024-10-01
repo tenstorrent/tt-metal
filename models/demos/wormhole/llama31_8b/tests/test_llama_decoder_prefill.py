@@ -86,7 +86,7 @@ def test_llama_decoder_inference(device, seq_len, use_program_cache, reset_seeds
         attn_mask_torch = torch.triu(attn_mask, diagonal=1)
         ref_output = reference_model(pt_decode_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
         # Run TT model
-        tt_out = tt_model(decode_input, None, None, rot_mats, transformation_mats, user_id=0, mode="prefill")
+        tt_out = tt_model(decode_input, None, rot_mats, transformation_mats, user_id=0, mode="prefill")
         tt_output_torch = ttnn.to_torch(tt_out).view(batch, seq_len, -1)  # [seq, batch, hidden_dim]
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
 

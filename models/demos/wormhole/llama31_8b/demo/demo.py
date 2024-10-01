@@ -161,12 +161,9 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
             )
 
         current_pos_tensor = ttnn.from_torch(torch.tensor([curr_pos] * batch_size), device=device, dtype=ttnn.int32)
-        current_pos_attn_tensor = ttnn.from_torch(
-            torch.tensor([curr_pos] * batch_size * 8), device=device, dtype=ttnn.int32
-        )
 
         # Run ttnn llama model
-        tt_out = tt_model(decode_input, current_pos_tensor, current_pos_attn_tensor, rot_mat=current_rot_mat)
+        tt_out = tt_model(decode_input, current_pos_tensor, rot_mat=current_rot_mat)
 
         # Get model output
         tt_out_rm = ttnn.untilize(tt_out, use_multicore=True)  # Row-major layout
