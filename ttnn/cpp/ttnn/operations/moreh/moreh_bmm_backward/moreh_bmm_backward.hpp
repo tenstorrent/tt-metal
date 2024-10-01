@@ -8,7 +8,7 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::moreh::moreh_bmm_backward {
-struct MorehBmmBackward {
+struct MorehBMMBackward {
     static std::vector<std::optional<Tensor>> invoke(
         const Tensor& output_grad,
         const Tensor& input,
@@ -24,5 +24,5 @@ struct MorehBmmBackward {
 
 namespace ttnn {
 constexpr auto moreh_bmm_backward = ttnn::
-    register_operation<"ttnn::moreh_bmm_backward", ttnn::operations::moreh::moreh_bmm_backward::MorehBmmBackward>();
+    register_operation<"ttnn::moreh_bmm_backward", ttnn::operations::moreh::moreh_bmm_backward::MorehBMMBackward>();
 }

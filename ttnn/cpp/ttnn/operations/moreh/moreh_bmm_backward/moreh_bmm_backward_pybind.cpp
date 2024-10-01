@@ -12,7 +12,7 @@ void bind_moreh_bmm_backward_operation(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::moreh_bmm_backward,
-        "Moreh Bmm Backward Operation",
+        "Moreh BMM Backward Operation",
         ttnn::pybind_arguments_t{
             py::arg("output_grad"),
             py::arg("input"),

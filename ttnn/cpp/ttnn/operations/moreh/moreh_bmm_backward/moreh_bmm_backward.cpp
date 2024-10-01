@@ -7,7 +7,7 @@
 #include "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
 
 namespace ttnn::operations::moreh::moreh_bmm_backward {
-std::vector<std::optional<Tensor>> MorehBmmBackward::invoke(
+std::vector<std::optional<Tensor>> MorehBMMBackward::invoke(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& mat2,
