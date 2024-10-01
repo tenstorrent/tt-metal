@@ -20,6 +20,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     gather_cos_sin,
     get_rot_transformation_mat,
 )
+from models.demos.t3000.falcon40b.tt.model_utils import matmul_2d_config
 
 
 class TtLlamaModel_optimized:
@@ -440,7 +441,16 @@ class TtLlamaModel_optimized:
                     else self.model_config["PREFILL_LM_HEAD_MM_PROGCFG_128"]
                 )
             else:
-                pc_lm_head = None
+                pc_lm_head = matmul_2d_config(
+                    m=norm_out_replicated.shape[2],
+                    k=norm_out_replicated.shape[3],
+                    n=self.lm_head.shape[3],
+                    overwrite_per_core_k=1,
+                    grid=ttnn.CoreGrid(y=min(8, norm_out_replicated.shape[2] // 32), x=8),
+                    is_fp32_accumulate=False,
+                    overwrite_subblock_h=1,
+                    overwrite_subblock_w=1,
+                )
 
         lm_head_out = ttnn.linear(
             norm_out_replicated,

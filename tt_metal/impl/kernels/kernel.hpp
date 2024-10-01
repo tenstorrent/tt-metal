@@ -25,18 +25,43 @@ constexpr uint32_t max_runtime_args = 256;
 constexpr uint32_t idle_eth_max_runtime_args = eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_SIZE / sizeof(uint32_t);
 
 using Config = std::variant<DataMovementConfig, EthernetConfig, ComputeConfig>;
+struct KernelSource {
+    enum SourceType { FILE_PATH, SOURCE_CODE };
+
+    std::string source_;
+    SourceType source_type_;
+
+    KernelSource(const std::string &source, const SourceType &source_type) :
+        source_(source), source_type_(source_type) {}
+
+    std::string name() const {
+        std::string name;
+        if (this->source_type_ == SourceType::FILE_PATH) {
+            const std::size_t start_pos_of_name = this->source_.rfind("/") + 1;
+            const std::size_t pos_of_dot = this->source_.rfind(".");
+            name = this->source_.substr(start_pos_of_name, (pos_of_dot - start_pos_of_name));
+        } else {
+            name = "Kernel_Source_Code";
+        }
+        return name;
+    }
+};
 
 class Kernel : public JitBuildSettings {
    public:
-    Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &compile_args, const std::map<std::string, std::string>&defines);
+    Kernel(
+        const KernelSource &kernel_src,
+        const CoreRangeSet &core_range_set,
+        const std::vector<uint32_t> &compile_args,
+        const std::map<std::string, std::string> &defines);
 
     virtual ~Kernel() {}
 
-    std::string kernel_path_file_name() const { return kernel_path_file_name_; }
-
     std::string name() const;
 
-    const CoreRangeSet& core_range_set() const { return core_range_set_; }
+    const KernelSource &kernel_source() const { return kernel_src_; }
+
+    const CoreRangeSet &core_range_set() const { return core_range_set_; }
 
     const std::set<CoreCoord> &logical_cores() const;
 
@@ -48,7 +73,7 @@ class Kernel : public JitBuildSettings {
 
     std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
 
-    const std::set<CoreCoord>& cores_with_runtime_args() const { return core_with_runtime_args_; }
+    const std::set<CoreCoord> &cores_with_runtime_args() const { return core_with_runtime_args_; }
 
     std::vector<uint32_t> & runtime_args(const CoreCoord &logical_core);
     RuntimeArgsData & runtime_args_data(const CoreCoord &logical_core);
@@ -58,7 +83,7 @@ class Kernel : public JitBuildSettings {
     std::vector<uint32_t> & common_runtime_args();
     RuntimeArgsData & common_runtime_args_data();
     void set_common_runtime_args_count(uint32_t count);
-    uint32_t get_common_runtime_args_count() const  { return this->common_runtime_args_count_; }
+    uint32_t get_common_runtime_args_count() const { return this->common_runtime_args_count_; }
 
     std::map<std::string, std::string> defines() const { return defines_; }
 
@@ -71,9 +96,9 @@ class Kernel : public JitBuildSettings {
 
     std::string compute_hash() const;
     virtual void set_build_options(JitBuildOptions &build_options) const = 0;
-    virtual void generate_binaries(Device *device, JitBuildOptions& build_options) const = 0;
+    virtual void generate_binaries(Device *device, JitBuildOptions &build_options) const = 0;
     inline uint16_t get_binary_size16() const { return binary_size16_; }
-    void set_binary_path ( const std::string & binary_path) { binary_path_ = binary_path; }
+    void set_binary_path(const std::string &binary_path) { binary_path_ = binary_path; }
     void set_binaries(uint32_t build_key, std::vector<ll_api::memory> &&binaries);
     virtual void read_binaries(Device *device) = 0;
 
@@ -92,9 +117,9 @@ class Kernel : public JitBuildSettings {
     bool is_idle_eth();
 
    protected:
-    const int watcher_kernel_id_;
-    std::string kernel_path_file_name_;                 // Full kernel path and file name
-    std::string kernel_full_name_;                      // Name + hash
+    int watcher_kernel_id_;
+    KernelSource kernel_src_;
+    std::string kernel_full_name_;  // Name + hash
     CoreRangeSet core_range_set_;
     std::string binary_path_;
     // DataMovement kernels have one binary each and Compute kernels have three binaries
@@ -118,11 +143,18 @@ class Kernel : public JitBuildSettings {
     virtual uint8_t expected_num_binaries() const = 0;
 
     virtual std::string config_hash() const = 0;
+
+   private:
+    void register_kernel_with_watcher();
 };
 
 class DataMovementKernel : public Kernel {
    public:
-    DataMovementKernel(const std::string &kernel_path, const CoreRangeSet &cr_set, const DataMovementConfig &config) : Kernel(kernel_path, cr_set, config.compile_args, config.defines), config_(config) { this->dispatch_class_ = (config.processor == DataMovementProcessor::RISCV_0) ? DISPATCH_CLASS_TENSIX_DM0 : DISPATCH_CLASS_TENSIX_DM1; }
+    DataMovementKernel(const KernelSource &kernel_src, const CoreRangeSet &cr_set, const DataMovementConfig &config) :
+        Kernel(kernel_src, cr_set, config.compile_args, config.defines), config_(config) {
+        this->dispatch_class_ = (config.processor == DataMovementProcessor::RISCV_0) ? DISPATCH_CLASS_TENSIX_DM0
+                                                                                     : DISPATCH_CLASS_TENSIX_DM1;
+    }
 
     ~DataMovementKernel() {}
 
@@ -148,22 +180,24 @@ class DataMovementKernel : public Kernel {
 
 class EthernetKernel : public Kernel {
    public:
-    EthernetKernel(const std::string &kernel_path, const CoreRangeSet &cr_set, const EthernetConfig &config) :
-        Kernel(kernel_path, cr_set, config.compile_args, config.defines), config_(config) { this->dispatch_class_ = DISPATCH_CLASS_ETH_DM0; }
+    EthernetKernel(const KernelSource &kernel_src, const CoreRangeSet &cr_set, const EthernetConfig &config) :
+        Kernel(kernel_src, cr_set, config.compile_args, config.defines), config_(config) {
+        this->dispatch_class_ = DISPATCH_CLASS_ETH_DM0;
+    }
 
     ~EthernetKernel() {}
 
     RISCV processor() const override;
 
-    void set_build_options(JitBuildOptions& build_options) const override;
-    void generate_binaries(Device *device, JitBuildOptions& build_options) const override;
+    void set_build_options(JitBuildOptions &build_options) const override;
+    void generate_binaries(Device *device, JitBuildOptions &build_options) const override;
     void read_binaries(Device *device) override;
 
     bool configure(Device *device, const CoreCoord &logical_core) const override;
 
     Config config() const override { return this->config_; }
 
-    void process_defines(const std::function<void (const string& define, const string &value)>) const override;
+    void process_defines(const std::function<void(const string &define, const string &value)>) const override;
 
    private:
     const EthernetConfig config_;
@@ -175,7 +209,10 @@ class EthernetKernel : public Kernel {
 
 class ComputeKernel : public Kernel {
    public:
-    ComputeKernel(const std::string &kernel_path, const CoreRangeSet &cr_set, const ComputeConfig &config) : Kernel(kernel_path, cr_set, config.compile_args, config.defines), config_(config) { this->dispatch_class_ = DISPATCH_CLASS_TENSIX_COMPUTE; }
+    ComputeKernel(const KernelSource &kernel_src, const CoreRangeSet &cr_set, const ComputeConfig &config) :
+        Kernel(kernel_src, cr_set, config.compile_args, config.defines), config_(config) {
+        this->dispatch_class_ = DISPATCH_CLASS_TENSIX_COMPUTE;
+    }
 
     ~ComputeKernel() {}
 

@@ -61,8 +61,11 @@ def gen_shapes(start_shape, end_shape, interval, num_samples="all"):
     else:
         samples_id = 0
         TIMEOUT = 5
-        while samples_id < num_samples:
+        num_tries = 0
+
+        while samples_id < num_samples and num_tries < num_samples * 10:
             shape = []
+            num_tries += 1
 
             for i in range(-num_dims, 0):
                 x = random.randint(start_shape[i], end_shape[i])

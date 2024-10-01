@@ -531,16 +531,6 @@ uint32_t process_relay_paged_cmd_large(uint32_t cmd_ptr,
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
-inline uint32_t process_prefetch_h_wait_cmd(uint32_t cmd_ptr) {
-    volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
-    volatile tt_l1_ptr uint32_t* event_addr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cmd->event_wait.sync_event_addr);
-    do {
-        invalidate_l1_cache();
-    } while (*event_addr < cmd->event_wait.sync_event);
-    return CQ_PREFETCH_CMD_BARE_MIN_SIZE + sizeof(CQPrefetchHToPrefetchDHeader);
-}
-
 // This fn prefetches data from DRAM memory and writes data to the dispatch core.
 // Reading from DRAM has the following characteristics:
 //  - latency is moderately high ~400 cycles on WH
@@ -1181,10 +1171,6 @@ bool process_cmd(uint32_t& cmd_ptr,
         stride = process_debug_cmd(cmd_ptr);
         break;
 
-    case CQ_PREFETCH_CMD_WAIT_FOR_EVENT:
-        stride = CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-        break;
-
     case CQ_PREFETCH_CMD_TERMINATE:
         //DPRINT << "prefetch terminating_" << is_h_variant << is_d_variant << ENDL();
         ASSERT(!exec_buf);
@@ -1319,11 +1305,6 @@ void kernel_main_h() {
 
         volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
         uint32_t cmd_id = cmd->base.cmd_id;
-        if (cmd_id == CQ_PREFETCH_CMD_WAIT_FOR_EVENT) {
-            // prefetch_h will stop execution until it recieves an event update from the
-            // dispatch_d core assigned to the other CQ
-            uint32_t stride = process_prefetch_h_wait_cmd(cmd_ptr);
-        }
         // Infer that an exec_buf command is to be executed based on the stall state.
         bool is_exec_buf = (stall_state == STALLED);
         cmd_ptr = process_relay_inline_all(cmd_ptr, fence, is_exec_buf);

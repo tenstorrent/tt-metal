@@ -129,48 +129,6 @@ class DeviceCommand {
         }
     }
 
-    void add_prefetch_wait_for_event(uint32_t event_id, uint32_t event_addr) {
-        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), this->pcie_alignment);
-        auto initialize_wait_cmd = [&](CQPrefetchCmd *wait_cmd) {
-            *wait_cmd = {};
-            wait_cmd->base.cmd_id = CQ_PREFETCH_CMD_WAIT_FOR_EVENT;
-            wait_cmd->event_wait.sync_event = event_id;
-            wait_cmd->event_wait.sync_event_addr = event_addr;
-        };
-        CQPrefetchCmd *wait_cmd_dst = this->reserve_space<CQPrefetchCmd *>(increment_sizeB);
-        if constexpr (hugepage_write) {
-            alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd wait_cmd;
-            initialize_wait_cmd(&wait_cmd);
-            this->memcpy(wait_cmd_dst, &wait_cmd, sizeof(CQPrefetchCmd));
-        } else {
-            initialize_wait_cmd(wait_cmd_dst);
-        }
-    }
-
-    void add_dispatch_write_remote(uint32_t data, uint32_t noc_xy_addr, uint32_t addr) {
-        auto initialize_cross_prefetch_write = [&](CQPrefetchCmd *relay_write, CQDispatchCmd *write_cmd) {
-            relay_write->base.cmd_id = CQ_PREFETCH_CMD_RELAY_INLINE;
-            relay_write->relay_inline.length = sizeof(CQDispatchCmd);
-            relay_write->relay_inline.stride = CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-            write_cmd->base.cmd_id = CQ_DISPATCH_CMD_REMOTE_WRITE;
-            write_cmd->write_from_remote.data = data;
-            write_cmd->write_from_remote.noc_xy_addr = noc_xy_addr;
-            write_cmd->write_from_remote.addr = addr;
-        };
-        CQPrefetchCmd *relay_write_dst = this->reserve_space<CQPrefetchCmd *>(sizeof(CQPrefetchCmd));
-        CQDispatchCmd *write_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
-
-        if constexpr (hugepage_write) {
-            alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd relay_write;
-            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd write_cmd;
-            initialize_cross_prefetch_write(&relay_write, &write_cmd);
-            this->memcpy(relay_write_dst, &relay_write, sizeof(CQPrefetchCmd));
-            this->memcpy(write_cmd_dst, &write_cmd, sizeof(CQDispatchCmd));
-        } else {
-            initialize_cross_prefetch_write(write_cmd_dst);
-        }
-    }
-
     void add_prefetch_relay_linear(uint32_t noc_xy_addr, uint32_t lengthB, uint32_t addr) {
         uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), this->pcie_alignment);
         auto initialize_relay_linear_cmd = [&](CQPrefetchCmd *relay_linear_cmd) {

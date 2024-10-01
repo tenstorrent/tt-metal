@@ -24,8 +24,8 @@ random.seed(0)
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "nightly": {
-        "input_shape": gen_shapes([1, 1, 1024, 512], [1, 4, 1024, 1024], [1, 1, 32, 512], 32),
+    "xfail": {
+        "input_shape": gen_shapes([1, 1, 1024, 1024], [1, 4, 1024, 1024], [1, 1, 32, 512], 16),
         "op": [ttnn.BcastOpMath.ADD, ttnn.BcastOpMath.SUB, ttnn.BcastOpMath.MUL],
         "input_a_dtype": [ttnn.bfloat16],
         "input_b_dtype": [ttnn.bfloat16],
@@ -71,8 +71,8 @@ def run(
             torch_output_tensor = torch.mul(torch_input_tensor_a, torch_input_tensor_b)
         torch_input_tensor_b = torch_input_tensor_b.repeat(1, 1, 32, 1)
 
-        print(f"torch_input_tensor_a.shape {torch_input_tensor_a.shape} **********************************")
-        print(f"torch_input_tensor_b.shape {torch_input_tensor_b.shape} **********************************")
+        # print(f"torch_input_tensor_a.shape {torch_input_tensor_a.shape} **********************************")
+        # print(f"torch_input_tensor_b.shape {torch_input_tensor_b.shape} **********************************")
 
         input_tensor_a = ttnn.from_torch(
             torch_input_tensor_a,
@@ -112,7 +112,7 @@ def run(
     except e:
         print(e)
 
-    print(f"e2e_perf {e2e_perf / 1000000}ms")
-    print(f"pcc_res {pcc_res}")
+    # print(f"e2e_perf {e2e_perf / 1000000}ms")
+    # print(f"pcc_res {pcc_res}")
 
     return [pcc_res, e2e_perf]

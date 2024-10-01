@@ -55,8 +55,7 @@ inline void firmware_kernel_common_init(void *init_local_l1_base) {
     wzerorange(__ldm_bss_start, __ldm_bss_end);
 
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
-    uint32_t offset = (uint32_t)__ldm_data_start - MEM_LOCAL_BASE;
-    l1_to_local_mem_copy((uint32_t *)__ldm_data_start, (uint32_t *)((uint8_t *)init_local_l1_base + offset), num_words);
+    l1_to_local_mem_copy((uint32_t *)__ldm_data_start, (uint32_t *)((uint8_t *)init_local_l1_base), num_words);
 
     for (void (** fptr)() = __init_array_start; fptr < __init_array_end; fptr++) {
         (**fptr)();
