@@ -107,6 +107,31 @@ class TtLlamaModel_galaxy:
         )
 
         self.load_weights()
+        self.set_input_memory_config()
+
+    def set_input_memory_config(self):
+        self.EMBD_MEMCFG = ttnn.create_sharded_memory_config(
+            shape=(32, 2048 // 8),
+            core_grid=ttnn.CoreGrid(y=1, x=8),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        shard_spec_n_cores_grid = ttnn.CoreRangeSet({num_to_corerange(32 // 4)})
+        self.ROT_MAT_MEMCFG = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                shard_spec_n_cores_grid,
+                [
+                    self.head_dim,
+                    self.head_dim,
+                ],
+                ttnn.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        )
 
     def set_model_config(self, model_config):
         self.model_config = model_config
@@ -169,8 +194,6 @@ class TtLlamaModel_galaxy:
             inp_ids,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
         )
 
@@ -178,7 +201,7 @@ class TtLlamaModel_galaxy:
 
         if mode == "decode":
             assert seq_len == 1, "Decode mode only supports seq_len=1"
-            assert xs.shape == (seq_len, 1, batch, self.hidden_size // self.cluster_shape[0])
+            xs = x
 
             ACT_MEMCFG = ttnn.create_sharded_memory_config(
                 shape=(xs.shape[2], xs.shape[3] // 8),
@@ -190,14 +213,9 @@ class TtLlamaModel_galaxy:
 
             xs = ttnn.to_memory_config(xs, memory_config=ACT_MEMCFG)
 
-            if isinstance(start_pos, int):
-                cache_idxs = torch.tensor([start_pos for _ in range(batch // self.cluster_shape[0])], dtype=torch.int64)
-            else:
-                raise ValueError("start_pos must be an int, different start_pos for each user not supported yet")
-                cache_idxs = start_pos
-
             # TODO : Create different rot_mat for each user_groups in the cluster
-            rot_mat = get_rotation_mat(self.rot_emb, cache_idxs, seq_len, batch // self.cluster_shape[0])
+            # rot_mat = get_rotation_mat(self.rot_emb, cache_idxs, seq_len, batch // self.cluster_shape[0])
+            rot_mat = get_rotation_mat(self.rot_emb, start_pos, seq_len, batch // self.cluster_shape[0])
             assert rot_mat.size() == (1, batch // self.cluster_shape[0], self.head_dim, self.head_dim)
 
             shard_spec_n_cores_grid = ttnn.CoreRangeSet({num_to_corerange(batch // 4)})
@@ -225,11 +243,27 @@ class TtLlamaModel_galaxy:
                 mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             )
 
+            if isinstance(start_pos, int):
+                cache_idxs = torch.tensor([start_pos for _ in range(batch // self.cluster_shape[0])], dtype=torch.int64)
+            else:
+                cache_idxs = start_pos.to(dtype=torch.int64)
+
+            cache_idxs_tt = ttnn.as_tensor(
+                cache_idxs,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+            )
+
             attn_masks = None
 
         elif mode == "prefill":
             # check if seq_len is power of 2
             assert is_power_of_two(seq_len), "Prefill mode only supports seq_len as power of 2"
+
+            x = ttnn.to_device(x, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            xs = self.tt_embd(x)
+
             assert xs.shape == (batch, 1, seq_len, self.hidden_size // self.cluster_shape[0])
 
             cos_gathered, sin_gathered = gather_cos_sin(
@@ -272,25 +306,30 @@ class TtLlamaModel_galaxy:
             else:
                 attn_masks = attn_mask
 
+            cache_idxs_tt = None
+
         return (
             xs,
             start_pos,
             rot_mats,
+            cache_idxs_tt,
             attn_masks,
         )
+
 
     def __call__(
         self,
         xs: List[ttnn.Tensor],
         rot_mats: List[ttnn.Tensor],
         start_pos: int,
+        cache_idxs: List[ttnn.Tensor],
         attn_masks: List[ttnn.Tensor],
         user_id: int = 0,
         mode="decode",
     ) -> ttnn.Tensor:
         self.core_model_config = self.model_config["core_model"][mode]
         if mode == "decode":
-            return self.decode_forward(xs, rot_mats, start_pos, attn_masks)
+            return self.decode_forward(xs, rot_mats, start_pos, cache_idxs, attn_masks)
         elif mode == "prefill":
             return self.prefill_forward(xs, rot_mats, start_pos, attn_masks, user_id)
         else:
@@ -331,11 +370,12 @@ class TtLlamaModel_galaxy:
         xs: List[ttnn.Tensor],
         rot_mats: List[ttnn.Tensor],
         start_pos: int,
+        cache_idxs: List[ttnn.Tensor],
         attn_masks: List[ttnn.Tensor],
     ) -> ttnn.Tensor:
         ### Run all layers
         for layer in self.layers:
-            xs = layer(xs, rot_mats, start_pos, attn_masks, mode="decode")  # xs is fractured
+            xs = layer(xs, rot_mats, start_pos, cache_idxs, attn_masks, mode="decode")  # xs is fractured
 
         xs_interleaved = ttnn.to_memory_config(xs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
