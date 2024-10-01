@@ -1,42 +1,33 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+#include "bernoulli_device_operation.hpp"
 #include "common/constants.hpp"
 #include "common/core_coord.h"
 #include "common/tt_backend_api_types.hpp"
+#include "impl/kernels/kernel_types.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "uniform_device_operation.hpp"
 
-namespace ttnn::operations::uniform {
+namespace ttnn::operations::bernoulli {
 
 using namespace tt;
 using namespace tt::tt_metal;
 
-<<<<<<< HEAD
-std::mt19937 rng(std::time(nullptr));
-std::uniform_int_distribution distribution(1, 1 << 20);
+std::mt19937 rng(std::time(0));
+std::uniform_int_distribution d(1, 1 << 20);
 
-auto get_random_seed() -> uint32_t { return distribution(rng); }
-=======
-uint32_t get_random_seed() {
-    std::mt19937 rng(std::time(0));
-    std::uniform_int_distribution d(1, 1 << 20);
-    return d(rng);
-}
->>>>>>> b4b9521731 (#13320: add draft code to test dropout op)
+uint32_t get_random_seed() { return d(rng); }
 
-UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation::ProgramFactory::create(
+BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperation::ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
+    const Tensor& input = tensor_args.input;
+
     Device* device = output.device();
     auto grid = device->compute_with_storage_grid_size();
-<<<<<<< HEAD
-    auto core_h = grid.y;
-=======
     int core_h = grid.y;
->>>>>>> b4b9521731 (#13320: add draft code to test dropout op)
 
     uint32_t units_to_divide = output.volume() / constants::TILE_HW;
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
@@ -48,40 +39,54 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
 
     Program program = Program();
 
-    DataType output_dtype = output.dtype();
-    auto out_data_format = datatype_to_dataformat_converter(output_dtype);
-    const uint32_t dtype_tile_size = tile_size(out_data_format);
+    constexpr uint32_t num_tiles = 2;
+    auto in_data_format = datatype_to_dataformat_converter(input.dtype());
+    const uint32_t in_dtype_tile_size = tile_size(in_data_format);
+    constexpr uint32_t in_cb_id = CB::c_in0;
+    CircularBufferConfig cb_in_config =
+        CircularBufferConfig(num_tiles * in_dtype_tile_size, {{in_cb_id, in_data_format}})
+            .set_page_size(in_cb_id, in_dtype_tile_size);
+    CBHandle cb_input = tt_metal::CreateCircularBuffer(program, all_cores, cb_in_config);
+
     const uint32_t uint32_tile_size = tile_size(tt::DataFormat::UInt32);
-
-    constexpr uint32_t in_out_num_tiles = 1;
-    constexpr uint32_t intermed_num_tiles = 2;
-
     constexpr uint32_t intermed_cb_id = CB::c_intermed0;
     CircularBufferConfig cb_intermed_config =
-        CircularBufferConfig(intermed_num_tiles * uint32_tile_size, {{intermed_cb_id, tt::DataFormat::UInt32}})
+        CircularBufferConfig(num_tiles * uint32_tile_size, {{intermed_cb_id, tt::DataFormat::UInt32}})
             .set_page_size(intermed_cb_id, uint32_tile_size);
     CBHandle cb_intermed = tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed_config);
 
-    constexpr uint32_t dst_cb_id = CB::c_in0;
-    CircularBufferConfig cb_output_config =
-        CircularBufferConfig(in_out_num_tiles * dtype_tile_size, {{dst_cb_id, out_data_format}})
-            .set_page_size(dst_cb_id, dtype_tile_size);
-    CBHandle cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    auto out_data_format = datatype_to_dataformat_converter(output.dtype());
+    const uint32_t out_dtype_tile_size = tile_size(out_data_format);
+    constexpr uint32_t intermed1_cb_id = CB::c_intermed1;
+    CircularBufferConfig cb_intermed1_config =
+        CircularBufferConfig(1 * out_dtype_tile_size, {{intermed1_cb_id, out_data_format}})
+            .set_page_size(intermed1_cb_id, out_dtype_tile_size);
+    CBHandle cb_intermed1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
 
-    const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/uniform/device/kernels/";
-    const uint32_t output_is_dram = output.buffer()->buffer_type() == BufferType::DRAM ? 1 : 0;
-    const std::vector<uint32_t> writer_compile_time_args{intermed_cb_id, dst_cb_id, output_is_dram};
-    const std::string writer_file_path = kernels_dir_path + "writer_uniform.cpp";
+    const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/bernoulli/device/kernels/";
+    const uint32_t input_is_dram = input.buffer()->buffer_type() == BufferType::DRAM ? 1 : 0;
+    const std::vector<uint32_t> reader_compile_time_args{in_cb_id, input_is_dram};
+    const std::string reader_file_path = kernels_dir_path + "reader_bernoulli.cpp";
     const std::vector<uint32_t> compute_compile_time_args{intermed_cb_id};
-    const std::string compute_file_path = kernels_dir_path + "compute_uniform.cpp";
+    const std::string compute_file_path = kernels_dir_path + "compute_bernoulli.cpp";
+    const uint32_t output_is_dram = output.buffer()->buffer_type() == BufferType::DRAM ? 1 : 0;
+    const std::vector<uint32_t> writer_compile_time_args{in_cb_id, intermed_cb_id, intermed1_cb_id, output_is_dram};
+    const std::string writer_file_path = kernels_dir_path + "writer_bernoulli.cpp";
 
     std::map<string, string> writer_defines;
-    switch (output_dtype) {
+    switch (input.dtype()) {
+        case DataType::BFLOAT16: writer_defines["INPUT_DTYPE_BFLOAT16"] = "1"; break;
+        case DataType::FLOAT32: writer_defines["INPUT_DTYPE_FLOAT32"] = "1"; break;
+        default: break;
+    }
+    switch (output.dtype()) {
         case DataType::BFLOAT16: writer_defines["OUTPUT_DTYPE_BFLOAT16"] = "1"; break;
         case DataType::FLOAT32: writer_defines["OUTPUT_DTYPE_FLOAT32"] = "1"; break;
         default: break;
     }
 
+    KernelHandle reader_kernel_id = tt_metal::CreateKernel(
+        program, reader_file_path, all_cores, ReaderDataMovementConfig(reader_compile_time_args));
     KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program, writer_file_path, all_cores, WriterDataMovementConfig(writer_compile_time_args, writer_defines));
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -110,19 +115,13 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
             TT_THROW("Core not in specified core ranges");
         }
 
+        std::vector<uint32_t> reader_runtime_args = {input.buffer()->address(), tile_offset, units_per_core};
+        SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+
         std::vector<uint32_t> compute_runtime_args = {get_random_seed(), tile_offset, units_per_core};
         SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
 
-        const float eps = 1e-10;
-        union {
-            float f;
-            uint32_t u;
-        } f2u_from, f2u_to;
-        f2u_from.f = operation_attributes.from;
-        f2u_to.f = operation_attributes.to - eps;  // -eps make sure that generated number is < operation_attributes.to
-
-        std::vector<uint32_t> writer_runtime_args = {
-            output.buffer()->address(), f2u_from.u, f2u_to.u, tile_offset, units_per_core};
+        std::vector<uint32_t> writer_runtime_args = {output.buffer()->address(), tile_offset, units_per_core};
         SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 
         tile_offset += units_per_core;
@@ -130,22 +129,31 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
 
     return {
         std::move(program),
-        {.compute_kernel_id = compute_kernel_id, .writer_kernel_id = writer_kernel_id, .cores = cores}};
+        {.reader_kernel_id = reader_kernel_id,
+         .compute_kernel_id = compute_kernel_id,
+         .writer_kernel_id = writer_kernel_id,
+         .cores = cores}};
 }
 
-void UniformDeviceOperation::ProgramFactory::override_runtime_arguments(
+void BernoulliDeviceOperation::ProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto& program = cached_program.program;
+    auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
     auto& compute_kernel_id = cached_program.shared_variables.compute_kernel_id;
     auto& cores = cached_program.shared_variables.cores;
 
+    const uint32_t input_addr = tensor_args.input.buffer()->address();
     const uint32_t output_addr = output.buffer()->address();
 
     for (const auto& core : cores) {
+        {
+            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            runtime_args[0] = input_addr;
+        }
         {
             auto& runtime_args = GetRuntimeArgs(program, compute_kernel_id, core);
             runtime_args[0] = get_random_seed();
@@ -157,4 +165,4 @@ void UniformDeviceOperation::ProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::uniform
+}  // namespace ttnn::operations::bernoulli
