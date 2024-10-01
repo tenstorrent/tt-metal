@@ -83,6 +83,10 @@ on:
           - eltwise.unary_backward.div_bw.div_bw
           - eltwise.unary_backward.log_bw.log_bw
           - eltwise.unary_backward.relu6_bw.relu6_bw
+          - eltwise.unary.lgamma
+          - eltwise.unary.logit
+          - eltwise.unary.mish
+          - eltwise.unary.multigammaln
           - eltwise.unary.isfinite
           - eltwise.unary.isinf
           - eltwise.unary.isnan
