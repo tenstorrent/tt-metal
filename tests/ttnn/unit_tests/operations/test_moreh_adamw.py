@@ -110,7 +110,7 @@ def run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device, 
     tt_param_in, tt_grad, tt_exp_avg_in, tt_exp_avg_sq_in, tt_max_exp_avg_sq_in = tt_input_tensors
     tt_param_out, tt_exp_avg_out, tt_exp_avg_sq_out, tt_max_exp_avg_sq_out = tt_output_tensors
 
-    ret_list_ = ttnn.operations.moreh.moreh_adamw(
+    ret_list_ = ttnn.operations.moreh.adamw(
         tt_param_in,
         tt_grad,
         tt_exp_avg_in,
