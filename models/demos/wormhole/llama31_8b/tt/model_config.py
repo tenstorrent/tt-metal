@@ -309,15 +309,6 @@ class TtModelArgs:
                 fuse_batch=seq_len <= 2048,
             )
 
-            # Update OUTPUT_MM_PROGCFG for DECODE (DRAM-sharded)
-            self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-                # Grid size = [8, 8]
-                in0_block_w=2,  # K(4096) / TILE_WIDTH(32) / Grid_Size(64)
-                per_core_M=1,  # M(32) / TILE_HEIGHT(32)
-                per_core_N=32,  # N(128256 / 2) / TILE_WIDTH(32) / Grid_Size(64)
-                fused_activation=None,
-            )
-
             self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
                 (seq_len // 8, self.head_dim),
                 ttnn.CoreGrid(y=8, x=8),
