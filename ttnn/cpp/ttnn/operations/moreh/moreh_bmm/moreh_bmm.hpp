@@ -8,7 +8,7 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::moreh::moreh_bmm {
-struct MorehBmm {
+struct MorehBMM {
     static Tensor invoke(
         const Tensor& input,
         const Tensor& mat2,
@@ -20,5 +20,5 @@ struct MorehBmm {
 
 namespace ttnn {
 constexpr auto moreh_bmm =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_bmm", ttnn::operations::moreh::moreh_bmm::MorehBmm>();
+    ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_bmm", ttnn::operations::moreh::moreh_bmm::MorehBMM>();
 }
