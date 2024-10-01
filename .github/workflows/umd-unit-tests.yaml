@@ -53,7 +53,7 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build UMD device and tests
         run: |
-          cmake -B build -G Ninja
+          cmake -B build -G Ninja -DTT_UMD_BUILD_TESTS=ON
           cmake --build build --target umd_tests
       - name: Run UMD unit tests
         timeout-minutes: ${{ inputs.timeout }}

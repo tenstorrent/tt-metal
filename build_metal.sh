@@ -167,12 +167,11 @@ ln -nsf $build_dir build
 
 # Prepare cmake arguments
 # -DCXX_INCLUDE_WHAT_YOU_USE=include-what-you-use
-cmake_args="$cmake_args -B $build_dir -G Ninja -DCMAKE_BUILD_TYPE=$build_type -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands"
+cmake_args="$cmake_args -B $build_dir -G Ninja -DCMAKE_BUILD_TYPE=$build_type -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands -DTT_METAL_BUILD_TESTS=ON -DTTNN_BUILD_TESTS=ON -DTT_UMD_BUILD_TESTS=ON"
 
 # Configure cmake
 cmake $cmake_args
 
 # Build libraries and cpp tests
 echo "Building libraries and cpp tests"
-cmake --build $build_dir --target tests      # <- Can also just run `ninja tests -C build`
 cmake --build $build_dir --target install    # <- This is a general cmake way, can also just run `ninja install -C build`
