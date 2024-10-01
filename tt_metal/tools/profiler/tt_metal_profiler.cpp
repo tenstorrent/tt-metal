@@ -488,7 +488,7 @@ void FreshProfilerDeviceLog(){
 #if defined(TRACY_ENABLE)
     for (auto& device_id : tt_metal_device_profiler_map)
     {
-        tt_metal_device_profiler_map.at(device_id.first).setNewLogFlag(true);
+        tt_metal_device_profiler_map.at(device_id.first).freshDeviceLog();
     }
 #endif
 }

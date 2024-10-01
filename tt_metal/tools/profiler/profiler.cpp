@@ -252,12 +252,11 @@ void DeviceProfiler::dumpResultToFile(
 
     firstTimestamp(timestamp);
 
-    if (new_log || !std::filesystem::exists(log_path))
+    if (!std::filesystem::exists(log_path))
     {
         log_file.open(log_path);
         log_file << "ARCH: " << get_string_lowercase(device_architecture) << ", CHIP_FREQ[MHz]: " << device_core_frequency << std::endl;
         log_file << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], stat value, run ID, run host ID,  zone name, zone phase, source line, source file" << std::endl;
-        new_log = false;
     }
     else
     {
@@ -288,10 +287,14 @@ DeviceProfiler::DeviceProfiler(const bool new_logs)
 {
 #if defined(TRACY_ENABLE)
     ZoneScopedC(tracy::Color::Green);
-    new_log = new_logs;
     output_dir = std::filesystem::path(string(PROFILER_RUNTIME_ROOT_DIR) + string(PROFILER_LOGS_DIR_NAME));
     std::filesystem::create_directories(output_dir);
+    std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
 
+    if (new_logs)
+    {
+        std::filesystem::remove(log_path);
+    }
 #endif
 }
 
@@ -308,10 +311,11 @@ DeviceProfiler::~DeviceProfiler()
 }
 
 
-void DeviceProfiler::setNewLogFlag(bool new_log_flag)
+void DeviceProfiler::freshDeviceLog()
 {
 #if defined(TRACY_ENABLE)
-    new_log = new_log_flag;
+    std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
+    std::filesystem::remove(log_path);
 #endif
 }
 
