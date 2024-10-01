@@ -11,25 +11,25 @@
 ////
 
 // used for ops with USE_MULTI_MOC defined
-const uint32_t MULTI_NOC_NCRISC_WR_CMD_BUF = 2; // all writes share cmd buf
-const uint32_t MULTI_NOC_NCRISC_WR_REG_CMD_BUF = 2;
-const uint32_t MULTI_NOC_NCRISC_AT_CMD_BUF = 2;
-const uint32_t MULTI_NOC_NCRISC_RD_CMD_BUF = 3;
+constexpr uint32_t MULTI_NOC_NCRISC_WR_CMD_BUF = 2; // all writes share cmd buf
+constexpr uint32_t MULTI_NOC_NCRISC_WR_REG_CMD_BUF = 2;
+constexpr uint32_t MULTI_NOC_NCRISC_AT_CMD_BUF = 2;
+constexpr uint32_t MULTI_NOC_NCRISC_RD_CMD_BUF = 3;
 
-const uint32_t MULTI_NOC_BRISC_WR_CMD_BUF = 0; // all writes share cmd buf
-const uint32_t MULTI_NOC_BRISC_WR_REG_CMD_BUF = 0;
-const uint32_t MULTI_NOC_BRISC_AT_CMD_BUF = 0;
-const uint32_t MULTI_NOC_BRISC_RD_CMD_BUF = 1;
+constexpr uint32_t MULTI_NOC_BRISC_WR_CMD_BUF = 0; // all writes share cmd buf
+constexpr uint32_t MULTI_NOC_BRISC_WR_REG_CMD_BUF = 0;
+constexpr uint32_t MULTI_NOC_BRISC_AT_CMD_BUF = 0;
+constexpr uint32_t MULTI_NOC_BRISC_RD_CMD_BUF = 1;
 
-const uint32_t NCRISC_WR_CMD_BUF = 0;  // for large writes
-const uint32_t NCRISC_RD_CMD_BUF = 1;  // for all reads
-const uint32_t NCRISC_WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
-const uint32_t NCRISC_AT_CMD_BUF = 3; // for atomics
+constexpr uint32_t NCRISC_WR_CMD_BUF = 0;  // for large writes
+constexpr uint32_t NCRISC_RD_CMD_BUF = 1;  // for all reads
+constexpr uint32_t NCRISC_WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
+constexpr uint32_t NCRISC_AT_CMD_BUF = 3; // for atomics
 
-const uint32_t BRISC_WR_CMD_BUF = 0;  // for large writes
-const uint32_t BRISC_RD_CMD_BUF = 1;  // for all reads
-const uint32_t BRISC_WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
-const uint32_t BRISC_AT_CMD_BUF = 3; // for atomics
+constexpr uint32_t BRISC_WR_CMD_BUF = 0;  // for large writes
+constexpr uint32_t BRISC_RD_CMD_BUF = 1;  // for all reads
+constexpr uint32_t BRISC_WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
+constexpr uint32_t BRISC_AT_CMD_BUF = 3; // for atomics
 
 // 36 bits of address followed by coordinate. First 32 bits of address go into lo register, remaining address bits and coordinates are in the mid register
 constexpr uint32_t NOC_ADDR_COORD_SHIFT = 32; // address is lower 36 bits and upper bits are the coordinates, 32 bits in lo reg and rest goes to mid
