@@ -11,7 +11,7 @@ Tensor MorehGetItem::invoke(
     const std::vector<uint32_t> index_dims,
     const std::optional<Tensor>& output,
     // const CoreRange core_range,
-    const std::optional<MemoryConfig> output_memory_config) {
-    return ttnn::prim::moreh_getitem(input, index_tensors, index_dims, output, output_memory_config);
+    const std::optional<MemoryConfig> memory_config) {
+    return ttnn::prim::moreh_getitem(input, index_tensors, index_dims, output, memory_config);
 }
 }  // namespace ttnn::operations::moreh::moreh_getitem

@@ -9,6 +9,7 @@
 
 #include "common/constants.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/program/program.hpp"
@@ -27,6 +28,9 @@ struct RingTopology {
         uint32_t num_links,
         uint32_t ring_size,
         uint32_t ring_index);
+
+    bool is_first_device_in_line(bool in_clockwise_direction) const;
+    bool is_last_device_in_line(bool in_clockwise_direction) const;
 
     const Device *device;
 
@@ -189,10 +193,34 @@ struct LegacyCclTensorSlicer {
     bool is_sharded;
 };
 
+
+struct TensorSlice {
+    using ords_t = tt_xy_pair;
+    ords_t tensor_shape;
+    ords_t tensor_slice_shape;
+    ords_t tensor_slice_offset;
+    ords_t worker_slice_shape;
+    ords_t worker_slice_offset;
+    std::size_t dim;
+};
+
+// Workers iterate over tensor slices in a sequence along a
+// single, specified dimension. Workers iterator over the tensor
+// slice in wrapped mode
+std::vector<TensorSlice> generate_slice_sequence_on_dim(
+    TensorSlice::ords_t tensor_shape,
+    TensorSlice::ords_t worker_slice_shape,
+    std::size_t fracture_dim,
+    std::size_t num_slices,
+    std::int64_t start_slice_index,
+    std::int64_t end_slice_index,
+    std::size_t worker_index
+);
+
 // Uniform Tensor Worker Slice
 struct InterleavedTensorWorkerSlice {
     InterleavedTensorWorkerSlice(
-        tt_xy_pair const& tensor_shape,  // Don't _really_ need this
+        tt_xy_pair const& tensor_shape,
         tt_xy_pair const& tensor_slice_shape,
         tt_xy_pair const& worker_slice_shape,
         tt_xy_pair const& worker_slice_offset,
@@ -204,6 +232,7 @@ struct InterleavedTensorWorkerSlice {
         worker_slice_is_wrapped(worker_slice_is_wrapped) {}
 
     // Could probably be solved in some closed form
+
     std::size_t compute_num_worker_slice_iterations(std::size_t num_workers) const {
         auto slice_offset = coord_t(worker_slice_offset.x, worker_slice_offset.y);
         auto const& slice_shape = coord_t(worker_slice_shape.x, worker_slice_shape.y);
@@ -245,11 +274,13 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
         uint32_t half_cb_n_pages);
 
     ccl::InterleavedTensorWorkerSlice get_worker_slice(std::size_t global_worker_index, bool wrapped) {
+        TT_ASSERT(global_worker_index < this->worker_slice_shapes.size(), "Invalid worker index {} in `worker_slice_shapes` of size {}", global_worker_index, worker_slice_shapes.size());
+        TT_ASSERT(global_worker_index < this->worker_slice_offsets.size(), "Invalid worker index {} in `worker_slice_offsets` of size {}", global_worker_index, worker_slice_offsets.size());
         return ccl::InterleavedTensorWorkerSlice(
             this->flattened_tensor_shape,
             this->tensor_slice_shape,
-            this->worker_slice_shapes.at(global_worker_index),
-            this->worker_slice_offsets.at(global_worker_index),
+            this->worker_slice_shapes[global_worker_index],
+            this->worker_slice_offsets[global_worker_index],
             wrapped);
     }
 
@@ -260,7 +291,8 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
 
    public:
     std::vector<tt_xy_pair> get_worker_slice_shapes() const { return this->worker_slice_shapes; }
-    uint32_t get_worker_slice_size_bytes(int worker_index) {
+    uint32_t get_worker_slice_size_bytes(std::size_t worker_index) {
+        TT_ASSERT(this->worker_slice_shapes.size() > worker_index, "Invalid worker index {} in `worker_slice_shapes` of size {}", worker_index, worker_slice_shapes.size());
         auto worker_slice_shape = this->worker_slice_shapes.at(worker_index);
         return worker_slice_shape.x * worker_slice_shape.y * this->input_page_size;
     }
@@ -426,14 +458,6 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
         this->input_start_page_idx += num_pages /*pages_per_worker*/;
     }
 };
-
-struct ShardedAddrGenArgBuilder {
-    static bool shard_grid_is_transposed(Tensor const& t);
-    static std::vector<uint32_t> emit_ct_args(Tensor const& t);
-    static std::vector<uint32_t> emit_rt_args(Device const* d, Tensor const& t);
-    static void log_sharded_tensor_kernel_args(Tensor const& t, std::string const& prefix);
-};
-
 
 
 KernelHandle generate_edm_kernel(

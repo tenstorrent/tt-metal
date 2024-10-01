@@ -94,6 +94,7 @@ def run_reduce_scatter_test(
     function_level_defaults,
     enable_async=True,
     num_iters=1,
+    topology=ttnn.Topology.Ring,
 ):
     if len(t3k_mesh_device.get_device_ids()) != 8:
         pytest.skip("Not T3000!")
@@ -142,6 +143,7 @@ def run_reduce_scatter_test(
             math_op=math_op,
             num_links=num_links,
             memory_config=mem_config,
+            topology=topology,
         )
 
         for device_id in t3k_mesh_device.get_device_ids():
@@ -218,7 +220,7 @@ def run_reduce_scatter_test(
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("enable_async", [True])
-def test_reduce_scatter_post_commit(
+def test_ring_reduce_scatter_post_commit(
     t3k_mesh_device,
     num_devices,
     per_chip_output_shape,
@@ -247,6 +249,67 @@ def test_reduce_scatter_post_commit(
         function_level_defaults,
         num_iters=num_iters,
         enable_async=enable_async,
+    )
+
+
+# ~2:45 extra time in the current state
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize(
+    "num_devices, num_links",
+    [
+        (8, 1),
+    ],
+)
+@pytest.mark.parametrize(
+    "per_chip_output_shape, scatter_dim, layout",
+    [
+        ([1, 1, 32, 32 * 8], 3, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+    ],
+)
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("enable_async", [True])
+def test_line_reduce_scatter_post_commit(
+    t3k_mesh_device,
+    num_devices,
+    per_chip_output_shape,
+    scatter_dim,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    mem_config,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    num_iters=1,
+):
+    run_reduce_scatter_test(
+        t3k_mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        scatter_dim,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        mem_config,
+        use_program_cache,
+        function_level_defaults,
+        num_iters=num_iters,
+        enable_async=enable_async,
+        topology=ttnn.Topology.Linear,
     )
 
 

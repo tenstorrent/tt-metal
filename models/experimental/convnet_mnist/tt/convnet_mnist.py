@@ -41,8 +41,10 @@ class TtConvNet(torch.nn.Module):
         out = ttnn.relu(out)
         out = self.max_pool2d(out)
 
-        last_dim_size = out.get_legacy_shape()[-1] * out.get_legacy_shape()[-2] * out.get_legacy_shape()[-3]
-        out = fallback_ops.reshape(out, out.get_legacy_shape()[0], 1, 1, last_dim_size)
+        last_dim_size = (
+            out.shape.with_tile_padding()[-1] * out.shape.with_tile_padding()[-2] * out.shape.with_tile_padding()[-3]
+        )
+        out = fallback_ops.reshape(out, out.shape.with_tile_padding()[0], 1, 1, last_dim_size)
 
         out = ttnn.matmul(out, self.linear1_weights)
         out = ttnn.add(out, self.linear1_bias)

@@ -3,8 +3,10 @@ add_library(test_eager_common_libs INTERFACE)
 target_link_libraries(test_eager_common_libs INTERFACE test_common_libs)
 
 set(TT_EAGER_TESTS_OPS
+    ops/ccl/test_ccl_commands.cpp
     ops/ccl/test_ccl_helpers.cpp
     ops/ccl/test_ccl_tensor_slicers.cpp
+    ops/ccl/test_ccl_reduce_scatter_host_helpers.cpp
     ops/test_average_pool.cpp
     ops/test_eltwise_binary_op.cpp
     ops/test_eltwise_unary_op.cpp

@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 import torch
 import ttnn
-from ttnn import ReplicateTensorToMesh, ListMeshToTensor
+from ttnn import ReplicateTensorToMesh
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.tg.llama3_70b.tt.llama_decoder_galaxy import TtLlamaDecoder_galaxy
@@ -359,9 +359,9 @@ def run_test_LlamaDecoder_inference(
 
     tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_LlamaDecoder_model.attention.layer_past]
     tt_layer_present_all = [
-        ttnn.to_torch(
-            lp, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(1, 0), cluster_shape=cluster_shape)
-        ).transpose(0, 1)[:batch, ...]
+        ttnn.to_torch(lp, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(0, 1), cluster_shape=cluster_shape))[
+            :batch, ...
+        ]
         for lp in tt_layer_present_all
     ]
 

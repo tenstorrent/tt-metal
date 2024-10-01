@@ -17,24 +17,27 @@ namespace detail {
 
 void bind_indexed_fill(pybind11::module& module) {
     auto doc = fmt::format(
-        R"doc({0}(batch_id: ttnn.Tensor, input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: Optional[MemoryConfig] = std::nullopt, dim: int = 0, queue_id: int = 0) -> ttnn.Tensor
+        R"doc(
 
             Replaces batch of input in input_b denoted by batch_ids into input_a.
 
             Args:
-                * :attr:`batch_id`
-                * :attr:`input_tensor_a`
-                * :attr:`input_tensor_b`
+                batch_id (ttnn.Tensor): the input tensor.
+                input_tensor_a (ttnn.Tensor): the input tensor.
+                input_tensor_b (ttnn.Tensor): the input tensor.
 
             Keyword Args:
-                * :attr:`memory_config` : Memory Config of the output tensor
-                * :attr:`dim` : Default value is 0
-                * :attr:`queue_id`: command queue id.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                dim (int, optional): Dimension value. Defaults to `0`.
+                queue_id (int, optional): command queue id. Defaults to `0`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
 
             Example:
-                >>> batch_id = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.UINT32)), device)
-                >>> input_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-                >>> input_b = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+                >>> batch_id = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.UINT32)), device=device)
+                >>> input_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+                >>> input_b = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
                 >>> output = ttnn.indexed_fill(batch_id, tensor1, tensor2)
         )doc",
         ttnn::indexed_fill.base_name());

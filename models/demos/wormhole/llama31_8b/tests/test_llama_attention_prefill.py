@@ -61,18 +61,16 @@ def test_llama_attention_inference(seq_len, device, use_program_cache, reset_see
         layer_num=0,
         dtype=dtype,
         configuration=model_args,
-        rot_mat=None,
-        start_pos=generation_start_pos,
     )
 
     pt_attention_input = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1
     tt_attention_input = pt_attention_input.clone()
-    attention_input, attn_mask, attn_mask_torch = prepare_inputs_ttnn_prefill(
+    attention_input = prepare_inputs_ttnn_prefill(
         tt_attention_input,
         device,
     )
 
-    tt_out = tt_model([attention_input], 0, [attn_mask], rot_mats, transformation_mats, user_id=0, mode="prefill")
+    tt_out = tt_model([attention_input], 0, None, rot_mats, transformation_mats, user_id=0, mode="prefill")
     # multi-device attention module returns replicated output
     assert isinstance(tt_out, list)
     tt_out = tt_out[0]
@@ -82,6 +80,8 @@ def test_llama_attention_inference(seq_len, device, use_program_cache, reset_see
     freqs_cis_i = precompute_freqs_cis(
         model_args.head_dim, model_args.max_seq_len * 2, model_args.rope_theta, model_args.use_scaled_rope
     )[positions]
+    attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
+    attn_mask_torch = torch.triu(attn_mask, diagonal=1)
     reference_output = reference_model(pt_attention_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)

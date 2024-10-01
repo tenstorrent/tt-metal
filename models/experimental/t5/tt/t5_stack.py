@@ -282,7 +282,7 @@ class TtT5Stack(nn.Module):
             input_shape = input_ids.size()
             input_ids = input_ids.view(-1, input_shape[-1])
         elif inputs_embeds is not None:
-            input_shape = (inputs_embeds.get_legacy_shape()[1], inputs_embeds.get_legacy_shape()[2])
+            input_shape = (inputs_embeds.shape.with_tile_padding()[1], inputs_embeds.shape.with_tile_padding()[2])
         else:
             err_msg_prefix = "decoder_" if self.is_decoder else ""
             raise ValueError(f"You have to specify either {err_msg_prefix}input_ids or {err_msg_prefix}inputs_embeds")
@@ -326,7 +326,7 @@ class TtT5Stack(nn.Module):
                 _,
                 encoder_sequence_length,
                 _,
-            ) = encoder_hidden_states.get_legacy_shape()
+            ) = encoder_hidden_states.shape.with_tile_padding()
             encoder_extended_attention_mask = self.get_encoder_extended_attention_mask(
                 encoder_attention_mask, encoder_batch_size, encoder_sequence_length
             )

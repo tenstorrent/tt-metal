@@ -102,6 +102,7 @@ jobs:
         with:
           image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
           options: |
+            --rm
             -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
             -v ${{ github.workspace }}:${{ github.workspace }}
             -v /etc/passwd:/etc/passwd:ro

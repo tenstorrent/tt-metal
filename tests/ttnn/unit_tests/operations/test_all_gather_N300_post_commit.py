@@ -17,29 +17,49 @@ from tests.ttnn.unit_tests.operations.test_all_gather import (
 # Enumerate the post-commit cases explicitly
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "num_devices, num_links, input_shape, dim, layout",
+    "num_devices, num_links, output_shape, dim, layout",
     [
         (2, 1, [1, 1, 64, 16384], 3, ttnn.TILE_LAYOUT),
+        (2, 1, [8, 5, 32, 768], 3, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 1, 32, 736], 3, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 1, 32, 704], 3, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 1, 64, 704], 3, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 1, 32, 736], 3, ttnn.ROW_MAJOR_LAYOUT),
+        (2, 1, [1, 1, 32, 704], 3, ttnn.ROW_MAJOR_LAYOUT),
+        (2, 1, [1, 1, 64, 704], 3, ttnn.ROW_MAJOR_LAYOUT),
+        (2, 1, [4, 1, 256, 32], 0, ttnn.ROW_MAJOR_LAYOUT),
+        (2, 1, [8, 1, 256, 32], 0, ttnn.ROW_MAJOR_LAYOUT),
+        (2, 1, [1, 1, 32, 8192], 3, ttnn.ROW_MAJOR_LAYOUT),
+        (2, 1, [8, 5, 13, 512], 3, ttnn.ROW_MAJOR_LAYOUT),
+        (2, 1, [8, 5, 13, 768], 3, ttnn.ROW_MAJOR_LAYOUT),
+        (2, 1, [8, 8, 256, 384], 1, ttnn.ROW_MAJOR_LAYOUT),
+        (2, 1, [1, 1, 64, 2048], 3, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 1, 32, 4096], 3, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 1, 32, 1024], 3, ttnn.ROW_MAJOR_LAYOUT),
+        (2, 1, [1, 2, 32, 4096], 3, ttnn.ROW_MAJOR_LAYOUT),
+        (2, 1, [1, 2, 32, 1024], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
         ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("num_iters", [1])
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_all_gather_on_n300_post_commit(
-    all_devices,
+    n300_mesh_device,
     num_devices,
-    input_shape,
+    output_shape,
     dim,
     num_links,
     input_dtype,
@@ -51,9 +71,9 @@ def test_all_gather_on_n300_post_commit(
     enable_async,
 ):
     run_all_gather_on_n300_impl(
-        all_devices,
+        n300_mesh_device,
         num_devices,
-        input_shape,
+        output_shape,
         dim,
         num_links,
         input_dtype,
@@ -89,15 +109,20 @@ def test_all_gather_on_n300_post_commit(
     "input_shape, input_shard_shape,shard_grid",
     (
         (
-            (1, 1, 512, 2048),
+            (1, 1, 128, 8192),
             (128, 256),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        ),
+        (
+            (1, 1, 32, 1792),
+            (32, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
         ),
     ),
 )
 @pytest.mark.parametrize("enable_async", [True])
 def test_all_gather_sharded_n300_post_commit(
-    all_devices,
+    n300_mesh_device,
     num_devices,
     input_shape,
     input_shard_shape,
@@ -114,7 +139,7 @@ def test_all_gather_sharded_n300_post_commit(
     enable_async,
 ):
     run_all_gather_sharded_n300(
-        all_devices,
+        n300_mesh_device,
         num_devices,
         input_shape,
         input_shard_shape,

@@ -23,7 +23,7 @@ class memory {
 
  private:
   static constexpr uint32_t initial_data_space_ = 0x400;
-  static constexpr uint32_t initial_span_space_ = 8;
+  static constexpr uint32_t initial_span_space_ = 4;
 
   struct span {
       // Note: the offset of the data for a span in data_ is generated on the
@@ -38,8 +38,9 @@ class memory {
 
  public:
   memory();
-  memory(std::istream& is);
+  memory(std::string const &path);
 
+ public:
   const std::vector<word_t>& data() const { return this->data_; }
 
   // memory& operator=(memory &&src);
@@ -49,15 +50,19 @@ class memory {
 
   size_t num_spans() const { return link_spans_.size(); }
 
+private:
   // Read from file
-  void fill_from_discontiguous_hex(std::istream& is);
+  void fill_from_discontiguous_hex(std::string const &path);
 
+public:
   // Process spans in arg mem to fill data in *this (eg, from device)
   void fill_from_mem_template(const memory& mem_template, const std::function<void (std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback);
 
   // Iterate over spans_ to act on data_ (eg., to device)
   void process_spans(const std::function<void (std::vector<uint32_t>::const_iterator, uint64_t addr, uint32_t len)>& callback) const;
   void process_spans(const std::function<void (std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback);
+
+  void pack_data_into_text(std::uint64_t text_start, std::uint64_t data_start);
 };
 
 }  // namespace ll_api

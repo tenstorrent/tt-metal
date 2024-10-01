@@ -1871,14 +1871,16 @@ def test_swin_s_conv(
 @pytest.mark.parametrize(
     "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, shard_layout, config_override, use_shallow_conv_variant",
     (
-        # mlp sub_module
-        # (1, 3, 32, 512, 512, 7, 7, 4, 4, 3, 3, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None, False),
-        # efficient selfattention sub_module
         (1, 32, 32, 128, 128, 8, 8, 8, 8, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
         (1, 64, 64, 64, 64, 4, 4, 4, 4, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
         (1, 256, 150, 128, 128, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
         (1, 32, 16, 64, 64, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
         (1, 96, 24, 32, 32, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
+        (1, 576, 576, 8, 8, 3, 3, 1, 1, 0, 0, 576, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None, False),
+        (1, 576, 576, 8, 8, 3, 3, 2, 2, 0, 0, 576, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None, False),
+        (1, 960, 960, 4, 4, 3, 3, 1, 1, 0, 0, 960, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None, False),
+        (1, 144, 24, 32, 32, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
+        (1, 144, 32, 16, 16, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
     ),
 )
 @pytest.mark.parametrize(
@@ -2000,4 +2002,85 @@ def test_model_k_256x256(
         use_1d_systolic_array,
         None,
         dilation=dilation_h,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels,input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override, use_shallow_conv_variant",
+    (
+        (1, 32, 3, 480, 640, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 64}, True),
+        (1, 32, 32, 480, 640, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 32}, False),
+        (1, 64, 32, 240, 320, 3, 3, 1, 1, 1, 1, True, None, False),
+        (1, 64, 64, 240, 320, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 64}, False),
+        (1, 128, 64, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False),
+        (1, 128, 128, 120, 160, 3, 3, 1, 1, 1, 1, True, None, False),
+        (1, 256, 128, 60, 80, 3, 3, 1, 1, 1, 1, True, None, False),
+        (1, 256, 256, 60, 80, 3, 3, 1, 1, 1, 1, True, None, False),
+        (1, 512, 256, 30, 40, 3, 3, 1, 1, 1, 1, True, None, False),
+        (1, 512, 512, 30, 40, 3, 3, 1, 1, 1, 1, False, None, False),
+        (1, 256, 512, 60, 80, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}, False),
+        (1, 128, 256, 120, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 32}, False),
+        (1, 64, 128, 240, 320, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 32}, False),
+        (1, 32, 64, 256, 256, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 32}, False),
+        (1, 1, 32, 480, 640, 1, 1, 1, 1, 0, 0, True, None, False),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@skip_for_grayskull()
+def test_conv_for_vanilla_unet(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    use_1d_systolic_array,
+    config_override,
+    use_shallow_conv_variant,
+    output_layout,
+):
+    if device.core_grid.y == 7:
+        pytest.skip("This test is not supported for N300")
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        use_1d_systolic_array,
+        config_override,
+        use_shallow_conv_variant=use_shallow_conv_variant,
+        groups=1,
+        output_layout=output_layout,
+        has_bias=False,
     )

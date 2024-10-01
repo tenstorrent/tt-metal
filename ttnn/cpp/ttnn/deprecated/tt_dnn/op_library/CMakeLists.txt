@@ -9,10 +9,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/moreh_clip_grad_norm_step1.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_clip_grad_norm/moreh_clip_grad_norm_step2/moreh_clip_grad_norm_step2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_clip_grad_norm/moreh_clip_grad_norm_step3/moreh_clip_grad_norm_step3.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_nll_loss/moreh_nll_loss_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_nll_loss/moreh_nll_loss_step1/moreh_nll_loss_step1.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_nll_loss/moreh_nll_loss_step2/moreh_nll_loss_step2.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_nll_loss_unreduced/moreh_nll_loss_unreduced_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax/moreh_softmax_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax/softmax_w_small/softmax_w_small.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax/softmax_h_small/softmax_h_small.cpp

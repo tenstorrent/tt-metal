@@ -446,19 +446,40 @@ std::vector<ttnn::Tensor> _eq_bw_inter(
     return output_tensors;
 }
 
-std::vector<ttnn::Tensor> ExecuteBackwardAssign::invoke(
-    uint8_t cq_id, const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    grad_tensor.emplace_back(grad);
-    grad_tensor.emplace_back(grad);
+std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardAssign::invoke(
+    uint8_t cq_id, const Tensor& grad, const Tensor& input, const Tensor& other, const std::vector<bool>& are_required_outputs, const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> input_grad, std::optional<Tensor> other_grad) {
+    std::vector<std::optional<ttnn::Tensor>> grad_tensor = {std::nullopt, std::nullopt};
+
+    preallocated_tensors_check(input_grad, other_grad, input, other, {are_required_outputs[0], are_required_outputs[1]});
+
+    if (are_required_outputs[0]) {
+        ttnn::assign(cq_id, grad, input_grad.value());
+        grad_tensor[0] = input_grad;
+    }
+    if (are_required_outputs[1]) {
+        ttnn::assign(cq_id, grad, other_grad.value());
+        grad_tensor[1] = other_grad;
+    }
     return grad_tensor;
 }
 
-std::vector<ttnn::Tensor> ExecuteBackwardAssign::invoke(
-    uint8_t cq_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    grad_tensor.emplace_back(grad);
+std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardAssign::invoke(
+    uint8_t cq_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
+    std::vector<std::optional<ttnn::Tensor>> grad_tensor = {std::nullopt};
+    grad_tensor[0] = input_grad.has_value() ? ttnn::assign(cq_id, grad, input_grad.value()) : grad;
     return grad_tensor;
+}
+
+std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardAssign::invoke(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::vector<bool>& are_required_outputs, const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> input_grad, std::optional<Tensor> other_grad) {
+    return ExecuteBackwardAssign::invoke(ttnn::DefaultQueueId, grad, input, other, are_required_outputs, output_mem_config, input_grad, other_grad);
+}
+
+std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardAssign::invoke(
+    const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
+    return ExecuteBackwardAssign::invoke(ttnn::DefaultQueueId, grad, input, output_mem_config, input_grad);
 }
 
 std::vector<std::optional<Tensor>> ExecuteBackwardConcat::invoke(

@@ -28,14 +28,6 @@ namespace tt_metal {
 
 class Device;
 
-enum class BufferType {
-    DRAM,
-    L1,
-    SYSTEM_MEMORY,
-    L1_SMALL,
-    TRACE,
-};
-
 struct ShardSpec {
     /* The individual cores the shard grid is mapped to */
     CoreRangeSet grid;

@@ -17,8 +17,11 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+
 #include <sstream>
 #include <type_traits>
+#include <ranges>
 
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
@@ -94,7 +97,7 @@ get_all_worker_cores(AllGatherConfig const& all_gather_config, uint32_t num_link
 }
 
 static std::vector<std::vector<uint32_t>> compute_worker_sender_num_transfers(
-    AllGatherConfig const& all_gather_config, uint32_t num_links, uint32_t ring_size, uint32_t ring_index, all_gather_op::Topology topology, uint32_t direction
+    AllGatherConfig const& all_gather_config, uint32_t num_links, uint32_t ring_size, uint32_t ring_index, ccl::Topology topology, uint32_t direction
 ) {
     std::vector<std::vector<uint32_t>> worker_sender_num_transfers;
     worker_sender_num_transfers.reserve(num_links);
@@ -103,11 +106,11 @@ static std::vector<std::vector<uint32_t>> compute_worker_sender_num_transfers(
         for(uint32_t b = 0; b < all_gather_config.get_num_workers_per_link(); ++b) {
             uint32_t &worker_num_transfers = worker_sender_num_transfers.at(l).at(b);
             switch (topology) {
-                case all_gather_op::Topology::Linear:
+                case ccl::Topology::Linear:
                     worker_num_transfers = direction == 0 ? ring_index + 1 : ring_size - ring_index;
                     break;
 
-                case all_gather_op::Topology::Ring:
+                case ccl::Topology::Ring:
                     switch (all_gather_config.get_bidirectional_mode()) {
                         case ttnn::AllGatherBidirectionalMode::SPLIT_TENSOR:
                             worker_num_transfers = ring_size - 1;
@@ -133,7 +136,7 @@ static std::vector<std::vector<uint32_t>> compute_worker_sender_num_transfers(
     return worker_sender_num_transfers;
 }
 static std::vector<std::vector<uint32_t>> compute_worker_receiver_num_transfers(
-    AllGatherConfig const& all_gather_config, uint32_t num_links, uint32_t ring_size, uint32_t ring_index, all_gather_op::Topology topology, uint32_t direction) {
+    AllGatherConfig const& all_gather_config, uint32_t num_links, uint32_t ring_size, uint32_t ring_index, ccl::Topology topology, uint32_t direction) {
     std::vector<std::vector<uint32_t>> worker_sender_num_transfers;
     worker_sender_num_transfers.reserve(num_links);
     for (uint32_t l = 0; l < num_links; ++l) {
@@ -141,11 +144,11 @@ static std::vector<std::vector<uint32_t>> compute_worker_receiver_num_transfers(
         for(uint32_t b = 0; b < all_gather_config.get_num_workers_per_link(); ++b) {
             uint32_t &worker_num_transfers = worker_sender_num_transfers.at(l).at(b);
             switch (topology) {
-                case all_gather_op::Topology::Linear:
+                case ccl::Topology::Linear:
                     worker_num_transfers = (direction == 0 ? ring_index + 1: ring_size - ring_index) - 1;
                     break;
 
-                case all_gather_op::Topology::Ring:
+                case ccl::Topology::Ring:
                     switch (all_gather_config.get_bidirectional_mode()) {
                         case ttnn::AllGatherBidirectionalMode::SPLIT_TENSOR:
                             worker_num_transfers = ring_size - 1;
@@ -196,8 +199,8 @@ static bool shard_grid_is_transposed(Tensor const& t) {
 }
 
 static void emit_sharded_tensor_kernel_ct_args(Device *d, Tensor const& tensor, std::vector<uint32_t> &args, std::size_t pages_per_shard_y, std::size_t pages_per_shard_x) {
-    auto const& new_args = ShardedAddrGenArgBuilder::emit_ct_args(tensor);
-    std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
+    std::ranges::copy(std::vector<uint32_t>{static_cast<uint32_t>(tensor.memory_config().memory_layout)}, std::back_inserter(args));
+    std::ranges::copy(ShardedAddrGenArgBuilder::emit_ct_args(tensor), std::back_inserter(args));
 };
 
 
@@ -209,7 +212,7 @@ static void log_sharded_tensor_kernel_args(Tensor const& tensor, std::size_t pag
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
 //   (in other words, disable the "bidirectional" send flag)
-operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor& input_tensor, Tensor& output_tensor, const uint32_t dim, const uint32_t num_links, const uint32_t ring_size, const uint32_t ring_index, const std::optional<chip_id_t> receiver_device_id, const std::optional<chip_id_t> sender_device_id, all_gather_op::Topology topology, const std::optional<size_t> user_defined_num_workers, const std::optional<size_t> user_defined_num_buffers_per_channel) {
+operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor& input_tensor, Tensor& output_tensor, const uint32_t dim, const uint32_t num_links, const uint32_t ring_size, const uint32_t ring_index, const std::optional<chip_id_t> receiver_device_id, const std::optional<chip_id_t> sender_device_id, ccl::Topology topology, const std::optional<size_t> user_defined_num_workers, const std::optional<size_t> user_defined_num_buffers_per_channel) {
 
     tt::tt_metal::Program program{};
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
@@ -226,7 +229,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     const uint32_t ring_index,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
-    all_gather_op::Topology topology,
+    ccl::Topology topology,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
@@ -234,7 +237,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
 
     TT_FATAL(!(receiver_device_id == std::nullopt && sender_device_id == std::nullopt), "At least one of receiver_device_id or sender_device_id must be specified");
 
-    bool is_linear = topology == all_gather_op::Topology::Linear;
+    bool is_linear = topology == ccl::Topology::Linear;
     std::unique_ptr<ccl::CclOpTensorConfig> input_tensor_config = ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(input_tensor);
     std::unique_ptr<ccl::CclOpTensorConfig> output_tensor_config = ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(output_tensor);
 
@@ -300,8 +303,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     }
 
     bool full_send_both_directions =
-        (topology == all_gather_op::Topology::Linear ||
-         (topology == all_gather_op::Topology::Ring &&
+        (topology == ccl::Topology::Linear ||
+         (topology == ccl::Topology::Ring &&
           all_gather_config.get_bidirectional_mode() == ttnn::AllGatherBidirectionalMode::FULL_TENSOR));
     const uint32_t num_full_send_directions = full_send_both_directions ? 2 : 1;
     constexpr uint32_t max_num_full_send_directions = 2;
@@ -942,7 +945,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                     uint32_t receiver_output_start_addr_offset = receiver_ring_index * tensor_slicer.output_addr_offset;
 
                     uint32_t receiver_output_start_page_idx = tensor_slicer.output_start_page_idx;
-                    if (topology == all_gather_op::Topology::Linear) {
+                    if (topology == ccl::Topology::Linear) {
                         if (is_clockwise_direction) {
                             receiver_output_start_page_idx -= tensor_slicer.output_page_offset;
                         } else {

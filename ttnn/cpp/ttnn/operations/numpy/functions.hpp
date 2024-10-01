@@ -61,14 +61,13 @@ static Tensor full(
         if (shape.rank() < 2) {
             TT_THROW("TILE layout requires rank >= 2");
         }
-        TT_ASSERT(
-            shape[-1] % tt::constants::TILE_WIDTH == 0,
-            "TILE layout requires width dimension to be multiple of {}",
-            tt::constants::TILE_WIDTH);
-        TT_ASSERT(
-            shape[-2] % tt::constants::TILE_HEIGHT == 0,
-            "TILE layout requires height dimension to be multiple of {}",
-            tt::constants::TILE_HEIGHT);
+        TT_FATAL(
+                shape[-1] % tt::constants::TILE_WIDTH == 0,
+                "TILE layout requires width dimension to be multiple of 32");
+
+        TT_FATAL(
+                shape[-2] % tt::constants::TILE_HEIGHT == 0,
+                "TILE layout requires height dimension to be multiple of 32");
     }
 
         constexpr DataType data_type = detail::get_data_type<T>();

@@ -640,8 +640,8 @@ inline void generate_random_packed_payload(vector<uint32_t>& cmds,
             }
         }
 
-        cmds.resize(padded_size(cmds.size(), L1_ALIGNMENT / sizeof(uint32_t)));
-        data.pad(core, bank_id, L1_ALIGNMENT);
+        cmds.resize(padded_size(cmds.size(), hal.get_alignment(HalMemType::L1) / sizeof(uint32_t)));
+        data.pad(core, bank_id, hal.get_alignment(HalMemType::L1));
         first_core = false;
     }
 }
@@ -661,7 +661,7 @@ inline void generate_random_packed_large_payload(vector<uint32_t>& generated_dat
         uint32_t datum = (use_coherent_data_g) ? ((first_worker.x << 16) | (first_worker.y << 24) | coherent_count++) : std::rand();
         generated_data.push_back(datum);
     }
-    generated_data.resize(padded_size(generated_data.size(), L1_ALIGNMENT / sizeof(uint32_t)));
+    generated_data.resize(padded_size(generated_data.size(), hal.get_alignment(HalMemType::L1) / sizeof(uint32_t)));
 
     for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; y++) {
         for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; x++) {
@@ -669,7 +669,7 @@ inline void generate_random_packed_large_payload(vector<uint32_t>& generated_dat
             for (uint32_t i = 0; i < size_words; i++) {
                 data.push_one(core, bank_id, generated_data[data_base + i]);
             }
-            data.pad(core, bank_id, L1_ALIGNMENT);
+            data.pad(core, bank_id, hal.get_alignment(HalMemType::L1));
         }
     }
 }
@@ -787,7 +787,7 @@ inline void add_dispatcher_packed_cmd(Device *device,
         CoreCoord phys_worker_core = device->worker_core_from_logical_core(core);
         cmds.push_back(NOC_XY_ENCODING(phys_worker_core.x, phys_worker_core.y));
     }
-    cmds.resize(padded_size(cmds.size(), L1_ALIGNMENT/sizeof(uint32_t)));
+    cmds.resize(padded_size(cmds.size(), hal.get_alignment(HalMemType::L1)/sizeof(uint32_t)));
 
     generate_random_packed_payload(cmds, worker_cores, device_data, size_words, repeat);
 
@@ -813,7 +813,7 @@ inline void gen_bare_dispatcher_unicast_write_cmd(Device *device,
     cmd.write_linear.length = length;
     cmd.write_linear.num_mcast_dests = 0;
 
-    TT_FATAL((cmd.write_linear.addr & (L1_ALIGNMENT - 1)) == 0, "Error");
+    TT_FATAL((cmd.write_linear.addr & (hal.get_alignment(HalMemType::L1) - 1)) == 0, "Error");
 
     add_bare_dispatcher_cmd(cmds, cmd);
 }
@@ -965,7 +965,7 @@ inline void gen_rnd_dispatcher_packed_write_cmd(Device *device,
     bool repeat = std::rand() % 2;
     if (repeat) {
         // TODO fix this if/when we add mcast
-        uint32_t sub_cmds_size = padded_size(gets_data.size() * sizeof(uint32_t), L1_ALIGNMENT);
+        uint32_t sub_cmds_size = padded_size(gets_data.size() * sizeof(uint32_t), hal.get_alignment(HalMemType::L1));
         if (xfer_size_bytes + sizeof (CQDispatchCmd) + sub_cmds_size > dispatch_buffer_page_size_g) {
             static bool warned = false;
             if (!warned) {
@@ -992,7 +992,7 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(Device *device,
     vector<uint32_t> sizes;
     for (int i = 0; i < ntransactions; i++) {
         constexpr uint32_t max_pages = 4;
-        uint32_t xfer_size_16b = (std::rand() % (dispatch_buffer_page_size_g * max_pages / L1_ALIGNMENT)) + 1;
+        uint32_t xfer_size_16b = (std::rand() % (dispatch_buffer_page_size_g * max_pages / hal.get_alignment(HalMemType::L1))) + 1;
         uint32_t xfer_size_words = xfer_size_16b * 4;
         uint32_t xfer_size_bytes = xfer_size_words * sizeof(uint32_t);
         if (perf_test_g) {
@@ -1017,7 +1017,7 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(Device *device,
     memset(&cmd, 0, sizeof(CQDispatchCmd));
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED_LARGE;
     cmd.write_packed_large.count = ntransactions;
-    cmd.write_packed_large.alignment = L1_ALIGNMENT;
+    cmd.write_packed_large.alignment = hal.get_alignment(HalMemType::L1);
     add_bare_dispatcher_cmd(cmds, cmd);
 
     vector<uint32_t> data;
@@ -1050,7 +1050,7 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(Device *device,
 
         generate_random_packed_large_payload(data, range, device_data, xfer_size_bytes / sizeof(uint32_t));
     }
-    cmds.resize(padded_size(cmds.size(), L1_ALIGNMENT / sizeof(uint32_t)));
+    cmds.resize(padded_size(cmds.size(), hal.get_alignment(HalMemType::L1) / sizeof(uint32_t)));
 
     for (uint32_t datum : data) {
         cmds.push_back(datum);

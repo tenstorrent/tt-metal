@@ -389,11 +389,12 @@ uint32_t get_max_write_packed_sub_cmds(
     uint32_t sub_cmd_sizeB =
         is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
     // Approximate calculation due to alignment
+    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
     uint32_t max_prefetch_size =
-        max_prefetch_cmd_size - sizeof(CQPrefetchCmd) - PCIE_ALIGNMENT - sizeof(CQDispatchCmd) - L1_ALIGNMENT;
+        max_prefetch_cmd_size - sizeof(CQPrefetchCmd) - hal.get_alignment(HalMemType::HOST) - sizeof(CQDispatchCmd) - l1_alignment;
     uint32_t max_prefetch_num_packed_cmds =
-        no_stride ? (max_prefetch_size - align(data_size * sizeof(uint32_t), L1_ALIGNMENT)) / sub_cmd_sizeB
-                  : max_prefetch_size / (align(data_size * sizeof(uint32_t), L1_ALIGNMENT) + sub_cmd_sizeB);
+        no_stride ? (max_prefetch_size - align(data_size * sizeof(uint32_t), l1_alignment)) / sub_cmd_sizeB
+                  : max_prefetch_size / (align(data_size * sizeof(uint32_t), l1_alignment) + sub_cmd_sizeB);
 
     uint32_t packed_write_max_multicast_sub_cmds =
         get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
@@ -409,18 +410,20 @@ uint32_t insert_write_packed_payloads(
     const uint32_t max_prefetch_command_size,
     const uint32_t packed_write_max_unicast_sub_cmds,
     std::vector<std::pair<uint32_t, uint32_t>>& packed_cmd_payloads) {
-    const uint32_t aligned_sub_cmd_sizeB = align(sub_cmd_sizeB, L1_ALIGNMENT);
+    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+    const uint32_t aligned_sub_cmd_sizeB = align(sub_cmd_sizeB, l1_alignment);
     const uint32_t max_packed_sub_cmds_per_cmd = get_max_write_packed_sub_cmds<PackedSubCmd>(
         aligned_sub_cmd_sizeB, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, false);
     uint32_t rem_num_sub_cmds = num_sub_cmds;
     uint32_t cmd_payload_sizeB = 0;
+    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     while (rem_num_sub_cmds != 0) {
         const uint32_t num_sub_cmds_in_cmd = std::min(max_packed_sub_cmds_per_cmd, rem_num_sub_cmds);
         const uint32_t aligned_data_sizeB = aligned_sub_cmd_sizeB * num_sub_cmds_in_cmd;
         const uint32_t dispatch_cmd_sizeB =
-            align(sizeof(CQDispatchCmd) + num_sub_cmds_in_cmd * sizeof(PackedSubCmd), L1_ALIGNMENT);
+            align(sizeof(CQDispatchCmd) + num_sub_cmds_in_cmd * sizeof(PackedSubCmd), l1_alignment);
         packed_cmd_payloads.emplace_back(num_sub_cmds_in_cmd, dispatch_cmd_sizeB + aligned_data_sizeB);
-        cmd_payload_sizeB += align(sizeof(CQPrefetchCmd) + packed_cmd_payloads.back().second, PCIE_ALIGNMENT);
+        cmd_payload_sizeB += align(sizeof(CQPrefetchCmd) + packed_cmd_payloads.back().second, pcie_alignment);
         rem_num_sub_cmds -= num_sub_cmds_in_cmd;
     }
     return cmd_payload_sizeB;
@@ -444,18 +447,20 @@ void generate_runtime_args_cmds(
 
     thread_local static auto get_runtime_payload_sizeB =
         [](uint32_t num_packed_cmds, uint32_t runtime_args_len, bool is_unicast, bool no_stride) {
+            uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
             uint32_t sub_cmd_sizeB =
                 is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
-            uint32_t dispatch_cmd_sizeB = sizeof(CQDispatchCmd) + align(num_packed_cmds * sub_cmd_sizeB, L1_ALIGNMENT);
+            uint32_t dispatch_cmd_sizeB = sizeof(CQDispatchCmd) + align(num_packed_cmds * sub_cmd_sizeB, l1_alignment);
             uint32_t aligned_runtime_data_sizeB =
-                (no_stride ? 1 : num_packed_cmds) * align(runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT);
+                (no_stride ? 1 : num_packed_cmds) * align(runtime_args_len * sizeof(uint32_t), l1_alignment);
             return dispatch_cmd_sizeB + aligned_runtime_data_sizeB;
         };
     thread_local static auto get_runtime_args_data_offset =
         [](uint32_t num_packed_cmds, uint32_t runtime_args_len, bool is_unicast) {
+            uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
             uint32_t sub_cmd_sizeB =
                 is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
-            uint32_t dispatch_cmd_sizeB = sizeof(CQDispatchCmd) + align(num_packed_cmds * sub_cmd_sizeB, L1_ALIGNMENT);
+            uint32_t dispatch_cmd_sizeB = sizeof(CQDispatchCmd) + align(num_packed_cmds * sub_cmd_sizeB, l1_alignment);
             return sizeof(CQPrefetchCmd) + dispatch_cmd_sizeB;
         };
 
@@ -472,12 +477,14 @@ void generate_runtime_args_cmds(
             num_packed_cmds_in_seq,
             max_packed_cmds);
     }
+    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
+    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
     while (num_packed_cmds_in_seq != 0) {
         // Generate the device command
         uint32_t num_packed_cmds = std::min(num_packed_cmds_in_seq, max_packed_cmds);
         uint32_t rt_payload_sizeB =
             get_runtime_payload_sizeB(num_packed_cmds, max_runtime_args_len, unicast, no_stride);
-        uint32_t cmd_sequence_sizeB = align(sizeof(CQPrefetchCmd) + rt_payload_sizeB, PCIE_ALIGNMENT);
+        uint32_t cmd_sequence_sizeB = align(sizeof(CQPrefetchCmd) + rt_payload_sizeB, pcie_alignment);
         runtime_args_command_sequences.emplace_back(cmd_sequence_sizeB);
         runtime_args_command_sequences.back().add_dispatch_write_packed<PackedSubCmd>(
             num_packed_cmds,
@@ -494,7 +501,7 @@ void generate_runtime_args_cmds(
         // Update kernel RTA pointers to point into the generated command
         // Future RTA updates through the API will update the command sequence directly
         uint32_t data_offset = (uint32_t)get_runtime_args_data_offset(num_packed_cmds, max_runtime_args_len, unicast);
-        const uint32_t data_inc = align(max_runtime_args_len * sizeof(uint32_t), L1_ALIGNMENT);
+        const uint32_t data_inc = align(max_runtime_args_len * sizeof(uint32_t), l1_alignment);
         uint32_t num_data_copies = no_stride ? 1 : num_packed_cmds;
         for (uint32_t i = offset_idx; i < offset_idx + num_data_copies; ++i) {
             uint32_t offset = 0;
@@ -843,9 +850,10 @@ void EnqueueProgramCommand::assemble_device_commands(
                 max_overall_base_index = std::max(max_overall_base_index, max_base_index);
                 i++;
             }
+            uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
             cb_config_size_bytes =
                 (max_overall_base_index + UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG) * sizeof(uint32_t);
-            aligned_cb_config_size_bytes = align(cb_config_size_bytes, L1_ALIGNMENT);
+            aligned_cb_config_size_bytes = align(cb_config_size_bytes, l1_alignment);
             cmd_sequence_sizeB += insert_write_packed_payloads<CQDispatchWritePackedMulticastSubCmd>(
                 num_multicast_cb_sub_cmds,
                 cb_config_size_bytes,
@@ -922,7 +930,7 @@ void EnqueueProgramCommand::assemble_device_commands(
                     uint32_t base_address = this->program.kernels_buffer->address();
                     uint32_t page_offset = kg_transfer_info.page_offsets[kernel_idx];
                     uint32_t dst_addr = kg_transfer_info.dst_base_addrs[kernel_idx];
-                    uint32_t aligned_length = align(kg_transfer_info.lengths[kernel_idx], DRAM_ALIGNMENT);
+                    uint32_t aligned_length = align(kg_transfer_info.lengths[kernel_idx], hal.get_alignment(HalMemType::DRAM));
                     uint32_t padding = aligned_length - kg_transfer_info.lengths[kernel_idx];
                     while (aligned_length != 0) {
                         if (kernel_bins_dispatch_subcmds.empty() ||
@@ -966,15 +974,16 @@ void EnqueueProgramCommand::assemble_device_commands(
                 kernel_bins_dispatch_subcmds.back().back().flags |= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
             }
         }
+        uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
         for (uint32_t i = 0; i < kernel_bins_dispatch_subcmds.size(); ++i) {
             cmd_sequence_sizeB += align(
                 ((sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd))) +
                     kernel_bins_dispatch_subcmds[i].size() * sizeof(CQDispatchWritePackedLargeSubCmd),
-                PCIE_ALIGNMENT);
+                pcie_alignment);
             cmd_sequence_sizeB += align(
                 kernel_bins_prefetch_subcmds[i].size() * sizeof(CQPrefetchRelayPagedPackedSubCmd) +
                     sizeof(CQPrefetchCmd),
-                PCIE_ALIGNMENT);
+                pcie_alignment);
         }
 
         // Wait Cmd
@@ -989,8 +998,8 @@ void EnqueueProgramCommand::assemble_device_commands(
         std::vector<std::pair<uint32_t, uint32_t>> multicast_go_signals_payload;
         std::vector<std::pair<uint32_t, uint32_t>> unicast_go_signals_payload;
         constexpr uint32_t go_signal_sizeB = sizeof(launch_msg_t);
-        constexpr uint32_t aligned_go_signal_sizeB = align(go_signal_sizeB, L1_ALIGNMENT);
-        constexpr uint32_t go_signal_size_words = aligned_go_signal_sizeB / sizeof(uint32_t);
+        uint32_t aligned_go_signal_sizeB = align(go_signal_sizeB, hal.get_alignment(HalMemType::L1));
+        uint32_t go_signal_size_words = aligned_go_signal_sizeB / sizeof(uint32_t);
 
         // TODO: eventually the code below could be structured to loop over programmable_indices
         // and check for mcast/unicast
@@ -1067,6 +1076,8 @@ void EnqueueProgramCommand::assemble_device_commands(
 
         auto& program_command_sequence = cached_program_command_sequence.program_command_sequence;
 
+        uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+
         // Semaphores
         // Multicast Semaphore Cmd
         uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
@@ -1140,7 +1151,7 @@ void EnqueueProgramCommand::assemble_device_commands(
                 RecordDispatchData(program, DISPATCH_DATA_CB_CONFIG, mcast_cb_payload_sizeB);
                 uint32_t curr_sub_cmd_data_offset_words =
                     (write_offset_bytes + (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)) +
-                     align(num_sub_cmds_in_cmd * sizeof(CQDispatchWritePackedMulticastSubCmd), L1_ALIGNMENT)) /
+                     align(num_sub_cmds_in_cmd * sizeof(CQDispatchWritePackedMulticastSubCmd), l1_alignment)) /
                     sizeof(uint32_t);
                 for (uint32_t i = 0; i < num_sub_cmds_in_cmd; ++i) {
                     cached_program_command_sequence.cb_configs_payloads.push_back(
@@ -1161,9 +1172,10 @@ void EnqueueProgramCommand::assemble_device_commands(
                 kernel_bins_unicast_cmd.size_bytes(),
                 kernel_bins_unicast_cmd.size_bytes());
         }
+        uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
         for (uint32_t i = 0; i < kernel_bins_dispatch_subcmds.size(); ++i) {
             program_command_sequence.add_dispatch_write_packed_large(
-                DRAM_ALIGNMENT, kernel_bins_dispatch_subcmds[i].size(), kernel_bins_dispatch_subcmds[i]);
+                dram_alignment, kernel_bins_dispatch_subcmds[i].size(), kernel_bins_dispatch_subcmds[i]);
             program_command_sequence.add_prefetch_relay_paged_packed(
                 kernel_bins_write_packed_large_data_aligned_sizeB[i],
                 kernel_bins_prefetch_subcmds[i],
@@ -1194,7 +1206,7 @@ void EnqueueProgramCommand::assemble_device_commands(
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
                 uint32_t curr_sub_cmd_data_offset_words =
                     (write_offset_bytes + (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)) +
-                     align(num_sub_cmds_in_cmd * sizeof(CQDispatchWritePackedMulticastSubCmd), L1_ALIGNMENT)) /
+                     align(num_sub_cmds_in_cmd * sizeof(CQDispatchWritePackedMulticastSubCmd), l1_alignment)) /
                     sizeof(uint32_t);
                 for (uint32_t i = 0; i < num_sub_cmds_in_cmd; ++i) {
                     cached_program_command_sequence.go_signals.push_back(
@@ -1220,7 +1232,7 @@ void EnqueueProgramCommand::assemble_device_commands(
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
                 uint32_t curr_sub_cmd_data_offset_words =
                     (write_offset_bytes + (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)) +
-                     align(num_sub_cmds_in_cmd * sizeof(CQDispatchWritePackedUnicastSubCmd), L1_ALIGNMENT)) /
+                     align(num_sub_cmds_in_cmd * sizeof(CQDispatchWritePackedUnicastSubCmd), l1_alignment)) /
                     sizeof(uint32_t);
                 for (uint32_t i = 0; i < num_sub_cmds_in_cmd; ++i) {
                     cached_program_command_sequence.go_signals.push_back(
@@ -1492,12 +1504,14 @@ void EnqueueRecordEventCommand::process() {
     std::vector<uint32_t> event_payload(dispatch_constants::EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
     event_payload[0] = this->event_id;
 
+    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
+    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
     uint8_t num_hw_cqs =
         this->device->num_hw_cqs();  // Device initialize asserts that there can only be a maximum of 2 HW CQs
     uint32_t packed_event_payload_sizeB =
-        align(sizeof(CQDispatchCmd) + num_hw_cqs * sizeof(CQDispatchWritePackedUnicastSubCmd), L1_ALIGNMENT) +
-        (align(dispatch_constants::EVENT_PADDED_SIZE, L1_ALIGNMENT) * num_hw_cqs);
-    uint32_t packed_write_sizeB = align(sizeof(CQPrefetchCmd) + packed_event_payload_sizeB, PCIE_ALIGNMENT);
+        align(sizeof(CQDispatchCmd) + num_hw_cqs * sizeof(CQDispatchWritePackedUnicastSubCmd), l1_alignment) +
+        (align(dispatch_constants::EVENT_PADDED_SIZE, l1_alignment) * num_hw_cqs);
+    uint32_t packed_write_sizeB = align(sizeof(CQPrefetchCmd) + packed_event_payload_sizeB, pcie_alignment);
 
     uint32_t cmd_sequence_sizeB =
         CQ_PREFETCH_CMD_BARE_MIN_SIZE +  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
@@ -1505,13 +1519,7 @@ void EnqueueRecordEventCommand::process() {
                               // payload
         align(
             sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + dispatch_constants::EVENT_PADDED_SIZE,
-            PCIE_ALIGNMENT);  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_LINEAR_HOST + event ID
-
-    if (not device->is_mmio_capable()) {
-        cmd_sequence_sizeB +=
-            CQ_PREFETCH_CMD_BARE_MIN_SIZE *
-            num_hw_cqs;  // CQ_DISPATCH_REMOTE_WRITE (number of writes = number of prefetch_h cores on this CQ)
-    }
+            pcie_alignment);  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_LINEAR_HOST + event ID
 
     void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
 
@@ -1550,18 +1558,6 @@ void EnqueueRecordEventCommand::process() {
         event_payloads,
         packed_write_max_unicast_sub_cmds);
 
-    if (not device->is_mmio_capable()) {
-        for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-            tt_cxy_pair prefetch_location =
-                dispatch_core_manager::instance().prefetcher_core(this->device->id(), channel, cq_id);
-            CoreCoord prefetch_physical_core = get_physical_core_coordinate(prefetch_location, core_type);
-            command_sequence.add_dispatch_write_remote(
-                this->event_id,
-                this->device->get_noc_unicast_encoding(this->noc_index, prefetch_physical_core),
-                address);
-        }
-    }
-
     bool flush_prefetch = true;
     command_sequence.add_dispatch_write_host<true>(
         flush_prefetch, dispatch_constants::EVENT_PADDED_SIZE, true, event_payload.data());
@@ -1592,18 +1588,15 @@ EnqueueWaitForEventCommand::EnqueueWaitForEventCommand(
 
 void EnqueueWaitForEventCommand::process() {
     uint32_t cmd_sequence_sizeB = CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-                                                                  // or CQ_PREFETCH_CMD_WAIT_FOR_EVENT
 
     void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
     uint32_t last_completed_event_address =
         sync_event.cq_id == 0 ? CQ0_COMPLETION_LAST_EVENT : CQ1_COMPLETION_LAST_EVENT;
-    if (this->device->is_mmio_capable()) {
-        command_sequence.add_dispatch_wait(false, last_completed_event_address, sync_event.event_id, this->clear_count);
-    } else {
-        command_sequence.add_prefetch_wait_for_event(sync_event.event_id, last_completed_event_address);
-    }
+
+    command_sequence.add_dispatch_wait(false, last_completed_event_address, sync_event.event_id, this->clear_count);
+
     this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
 
     this->manager.fetch_queue_reserve_back(this->command_queue_id);
@@ -2017,8 +2010,9 @@ void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool 
         if (write_partial_pages) {
             TT_FATAL(buffer.num_pages() == 1, "TODO: add support for multi-paged buffer with page size > 64KB");
             uint32_t partial_size = dispatch_constants::BASE_PARTIAL_PAGE_SIZE;
+            uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
             while (padded_buffer_size % partial_size != 0) {
-                partial_size += PCIE_ALIGNMENT;
+                partial_size += pcie_alignment;
             }
             page_size_to_write = partial_size;
             total_pages_to_write = padded_buffer_size / page_size_to_write;

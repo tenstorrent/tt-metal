@@ -27,7 +27,7 @@ class JitBuildOptions {
 
     // We can keep for future WH support, otherwise not used in GS
     bool fp32_dest_acc_en;
-    bool preserve_fp32_precision;
+    std::vector<UnpackToDestMode> unpack_to_dest_mode;
 
     // BRISC config
     std::string brisc_kernel_file_name;

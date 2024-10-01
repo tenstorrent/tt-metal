@@ -213,10 +213,10 @@ def synchronize_devices(devices: Union["ttnn.Device", "ttnn.MeshDevice"], queue_
     otherwise operations for all command queues are waited on.
     """
     if isinstance(devices, ttnn.Device):
-        ttnn._ttnn.device.Synchronize(devices, queue_id)
+        ttnn._ttnn.device.synchronize_device(devices, queue_id)
     else:
         for device in devices.get_device_ids():
-            ttnn._ttnn.device.Synchronize(devices.get_device(device), queue_id)
+            ttnn._ttnn.device.synchronize_device(devices.get_device(device), queue_id)
 
 
 class TensorToMesh:

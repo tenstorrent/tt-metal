@@ -2,17 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
 from typing import List
-import torch
 import ttnn
-from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 from models.demos.tg.llama3_70b.tt.llama_attention_galaxy import TtLlamaAttention_galaxy
 from models.demos.tg.llama3_70b.tt.llama_mlp_galaxy import TtLlamaMLP_galaxy
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     ShardTensor2dMesh,
-    ConcatMesh2DToTensor,
 )
 from models.demos.tg.llama3_70b.tt.llama_common import tt_all_gather
 
@@ -80,60 +76,6 @@ class TtLlamaDecoder_galaxy:
 
         self.load_weights()
 
-    def get_decoder_config(self, mode):
-        self.LN_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-        )
-
-        if mode == "decode":
-            self.LN_PROGCFG = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=[8, 4],
-                subblock_w=8,
-                block_h=32 // 32,
-                block_w=8,
-                inplace=False,
-            )
-
-            shard_spec_32_cores_grid = ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(
-                        ttnn.CoreCoord(0, 0),
-                        ttnn.CoreCoord(7, 3),
-                    ),
-                }
-            )
-
-            self.LN_OUTPUT_MEMCFG = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    shard_spec_32_cores_grid,
-                    [
-                        32,
-                        8192 // 32,
-                    ],
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
-                ),
-            )
-            self.ATTN_ACT_MEMCFG = ttnn.create_sharded_memory_config(
-                shape=(32, 2048 // 32),
-                core_grid=ttnn.CoreGrid(y=4, x=8),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            self.MLP_ACT_MEMCFG = ttnn.create_sharded_memory_config(
-                shape=(32, 2048 // 8),
-                core_grid=ttnn.CoreGrid(y=1, x=8),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-
     def set_model_config(self, model_config):
         self.model_config = model_config
         self.attention.set_model_config(model_config)
@@ -190,7 +132,7 @@ class TtLlamaDecoder_galaxy:
         user_id: int = 0,
         mode="decode",
     ) -> ttnn.Tensor:
-        self.get_decoder_config(mode)
+        self.decoder_config = self.model_config["decoder"][mode]
         if mode == "decode":
             return self.decode_forward(xs, rot_mats, start_pos, attn_masks)
         elif mode == "prefill":
@@ -201,11 +143,12 @@ class TtLlamaDecoder_galaxy:
     def tt_distributed_rmsnorm(self, inp, epsilon, gamma):
         # Run distributed rmsnorm part 1
         tt_stats = ttnn.rms_norm_pre_all_gather(
-            inp, compute_kernel_config=self.LN_COMPUTE_KERNEL_CONFIG, dtype=ttnn.bfloat16
+            inp, compute_kernel_config=self.decoder_config["LN_COMPUTE_KERNEL_CONFIG"], dtype=ttnn.bfloat16
         )
 
         tt_stats = ttnn.reshape(
-            tt_stats, ttnn.Shape((1, 1, inp.get_legacy_shape()[-2], 32), (1, 1, inp.get_legacy_shape()[-2], 32))
+            tt_stats,
+            ttnn.Shape((1, 1, inp.shape.with_tile_padding()[-2], 32), (1, 1, inp.shape.with_tile_padding()[-2], 32)),
         )  # TODO: Figure out why we need this
 
         tt_stats = tt_all_gather(
@@ -219,7 +162,11 @@ class TtLlamaDecoder_galaxy:
 
         # Run distributed rmsnorm part 2
         tt_out = ttnn.rms_norm_post_all_gather(
-            inp, tt_stats, epsilon=epsilon, weight=gamma, compute_kernel_config=self.LN_COMPUTE_KERNEL_CONFIG
+            inp,
+            tt_stats,
+            epsilon=epsilon,
+            weight=gamma,
+            compute_kernel_config=self.decoder_config["LN_COMPUTE_KERNEL_CONFIG"],
         )
 
         tt_stats.deallocate(True)
@@ -241,9 +188,9 @@ class TtLlamaDecoder_galaxy:
             gamma=self.attn_norm_sharded,
         )
 
-        attn_norm_out = ttnn.to_memory_config(attn_norm_out, memory_config=self.ATTN_ACT_MEMCFG)
+        attn_norm_out = ttnn.to_memory_config(attn_norm_out, memory_config=self.decoder_config["ATTN_ACT_MEMCFG"])
         attn_outs = self.attention(attn_norm_out, rot_mats, start_pos, attn_masks, mode="decode")
-        attn_outs = ttnn.to_memory_config(attn_outs, memory_config=self.MLP_ACT_MEMCFG)
+        attn_outs = ttnn.to_memory_config(attn_outs, memory_config=self.decoder_config["MLP_ACT_MEMCFG"])
 
         output = xs
         output = ttnn.add(
@@ -260,7 +207,7 @@ class TtLlamaDecoder_galaxy:
             gamma=self.ffn_norm_sharded,
         )
 
-        ffn_norm_out = ttnn.to_memory_config(ffn_norm_out, memory_config=self.MLP_ACT_MEMCFG)
+        ffn_norm_out = ttnn.to_memory_config(ffn_norm_out, memory_config=self.decoder_config["MLP_ACT_MEMCFG"])
         ffn_out = self.mlp(ffn_norm_out, mode="decode")
 
         ### residual add

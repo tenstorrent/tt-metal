@@ -257,6 +257,8 @@ parameters = {
             # {"shape": ["s0 + 1", "s0 + 1", 16], "dims": [2, 0, 1]},
             # {"shape": ["s0 + 1", "s0 + 1", 6], "dims": [2, 0, 1]},
             # {"shape": ["s0 + 1", "s0 + 1", 8], "dims": [2, 0, 1]}
+            {"shape": [1, 16, 256, 64], "dims": [0, 2, 1, 3]},
+            {"shape": [1, 256, 16, 64], "dims": [0, 2, 1, 3]},
         ],
         "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "layout": [ttnn.TILE_LAYOUT],

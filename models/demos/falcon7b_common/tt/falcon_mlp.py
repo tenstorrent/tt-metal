@@ -54,7 +54,7 @@ def falcon_dense_h_to_4h_matmul(
     output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
     output_dtype=None,
 ):
-    seq_len = input_tensor_a.get_legacy_shape()[2]
+    seq_len = input_tensor_a.shape.with_tile_padding()[2]
     if seq_len > 1024:
         # TODO: Review if this path is used? If not, we can delete
         assert fused_activation == None

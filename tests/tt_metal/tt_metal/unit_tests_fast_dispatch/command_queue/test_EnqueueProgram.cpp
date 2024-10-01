@@ -164,10 +164,10 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, Progr
         {
             vector<uint32_t> semaphore_vals;
             uint32_t expected_semaphore_vals_for_core_idx = 0;
-            const uint32_t semaphore_buffer_size = program_config.num_sems * L1_ALIGNMENT;
+            const uint32_t semaphore_buffer_size = program_config.num_sems * hal.get_alignment(HalMemType::L1);
             uint32_t semaphore_base = program.get_sem_base_addr(device, core_coord, CoreType::WORKER);
             tt::tt_metal::detail::ReadFromDeviceL1(device, core_coord, semaphore_base, semaphore_buffer_size, semaphore_vals);
-            for (uint32_t i = 0; i < semaphore_vals.size(); i += (L1_ALIGNMENT / sizeof(uint32_t)))
+            for (uint32_t i = 0; i < semaphore_vals.size(); i += (hal.get_alignment(HalMemType::L1) / sizeof(uint32_t)))
             {
                 const bool is_semaphore_value_correct = semaphore_vals[i] == expected_semaphore_vals_for_core[expected_semaphore_vals_for_core_idx];
                 expected_semaphore_vals_for_core_idx++;

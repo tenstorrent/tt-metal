@@ -9,7 +9,7 @@ import ttnn
 
 def test_open_device():
     """Simple unit test to test device open/close APIs"""
-    device = ttnn.open_device(0)
+    device = ttnn.open_device(device_id=0)
     ttnn.close_device(device)
 
 

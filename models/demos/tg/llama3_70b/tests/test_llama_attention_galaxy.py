@@ -11,9 +11,9 @@ import gc
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.tg.llama3_70b.tt.llama_attention_galaxy import TtLlamaAttention_galaxy
+from models.demos.tg.llama3_70b.tt.llama_common import setup_llama_env
 from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute_freqs_cis
 from models.demos.t3000.llama2_70b.tt.llama_common import (
-    setup_llama_env,
     check_mesh_device,
     extract_pcc_from_log,
     generate_rot_emb,
@@ -31,30 +31,12 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     get_rot_transformation_mat,
     should_skip_model_load,
     check_kv_cache,
-)
-
-from models.utility_functions import skip_for_grayskull
-from models.demos.t3000.llama2_70b.tt.llama_common import (
-    setup_llama_env,
-    check_mesh_device,
-    extract_pcc_from_log,
-    generate_rot_emb,
-    get_rotation_mat,
-    MAX_SEQ_LEN,
-    MAX_SEQ_LEN_LLAMA3,
-    BASE_URL,
-    UNIT_TEST_N_LAYER,
-    UNIT_TEST_LAYER_NUM,
-    UNIT_TEST_START_POS,
-    UNIT_TEST_GENERATION_LENGTH,
-    comp_pcc,
-    get_rot_transformation_mat,
-    should_skip_model_load,
-    check_kv_cache,
     num_to_corerange,
     ConcatMesh2DToTensor,
     ShardTensor2dMesh,
 )
+
+from models.utility_functions import skip_for_grayskull
 
 
 class PytorchLlamaAttentionModel(torch.nn.Module):
@@ -395,9 +377,9 @@ def run_test_LlamaAttention_inference(
     tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_LlamaAttention_model.layer_past]
 
     tt_layer_present_all = [
-        ttnn.to_torch(
-            lp, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(1, 0), cluster_shape=cluster_shape)
-        ).transpose(0, 1)[:batch, ...]
+        ttnn.to_torch(lp, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(0, 1), cluster_shape=cluster_shape))[
+            :batch, ...
+        ]
         for lp in tt_layer_present_all
     ]
 
@@ -476,7 +458,6 @@ def test_LlamaAttention_inference(
         max_batch_size=max_batch_size,
         max_context_len=max_context_len,
     )
-
     check_mesh_device(mesh_device, model_config)
     run_test_LlamaAttention_inference(
         mesh_device,

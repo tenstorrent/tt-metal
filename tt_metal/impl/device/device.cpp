@@ -27,10 +27,6 @@ namespace tt {
 
 namespace tt_metal {
 
-void ::detail::ProgramDeleter::operator()(Program *p) {
-    delete p;
-}
-
 Device::Device(
     chip_id_t device_id, const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap, bool minimal, uint32_t worker_core) :
     id_(device_id), worker_thread_core(worker_core), work_executor(worker_core, device_id) {
@@ -266,7 +262,7 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) 
         if (active_eth_cores.find(logical_core_from_ethernet_core(phys_core)) != active_eth_cores.end()) {
             if (not llrt::OptionsG.get_skip_loading_fw()) {
                 int eriscv_id = build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 0;
-                ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""));
+                ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""), eriscv_id);
                 uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, eriscv_id);
                 log_debug(LogDevice, "ERISC fw binary size: {} in bytes", kernel_size16 * 16);
                 llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
@@ -276,7 +272,7 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) 
             tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), phys_core));
             if (not llrt::OptionsG.get_skip_loading_fw()) {
                 int eriscv_id = build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 1;
-                ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""));
+                ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""), eriscv_id);
                 uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, eriscv_id);
                 log_debug(LogDevice, "ERISC fw binary size: {} in bytes", kernel_size16 * 16);
                 llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
@@ -287,7 +283,7 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) 
         llrt::program_risc_startup_addr(this->id(), phys_core);
         for (int riscv_id = 0; riscv_id < 5; riscv_id++) {
             ll_api::memory binary_mem =
-                llrt::get_risc_binary(firmware_build_states_[riscv_id]->get_target_out_path(""));
+                llrt::get_risc_binary(firmware_build_states_[riscv_id]->get_target_out_path(""), riscv_id);
             uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, riscv_id);
             if (riscv_id == 1) {
                 launch_msg->kernel_config.ncrisc_kernel_size16 = kernel_size16;
@@ -1049,7 +1045,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     prefetch_d_settings.upstream_cores.push_back(demux_d_settings.worker_physical_core);
                     prefetch_d_settings.downstream_cores.push_back(dispatch_d_settings.worker_physical_core);
 
-                    uint32_t scratch_db_base = (prefetch_d_settings.cb_start_address + prefetch_d_settings.cb_size_bytes + PCIE_ALIGNMENT - 1) & (~(PCIE_ALIGNMENT - 1));
+                    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
+                    uint32_t scratch_db_base = (prefetch_d_settings.cb_start_address + prefetch_d_settings.cb_size_bytes + pcie_alignment - 1) & (~(pcie_alignment - 1));
                     uint32_t scratch_db_size = dispatch_constants::get(dispatch_core_type).scratch_db_size();
                     const uint32_t l1_size = dispatch_core_type == CoreType::WORKER ? MEM_L1_SIZE : MEM_ETH_SIZE;
                     TT_ASSERT(scratch_db_base + scratch_db_size <= l1_size);
@@ -1455,8 +1452,8 @@ void Device::setup_tunnel_for_remote_devices() {
 
 void Device::compile_command_queue_programs() {
     ZoneScoped;
-    std::unique_ptr<Program, detail::ProgramDeleter> command_queue_program_ptr(new Program);
-    std::unique_ptr<Program, detail::ProgramDeleter> mmio_command_queue_program_ptr(new Program);
+    auto command_queue_program_ptr = std::make_unique<Program>();
+    auto mmio_command_queue_program_ptr = std::make_unique<Program>();
 
     std::string prefetch_kernel_path = "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp";
     std::string dispatch_kernel_path = "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp";
@@ -1916,8 +1913,11 @@ void Device::configure_command_queue_programs() {
         tt_cxy_pair prefetch_location = dispatch_core_manager::instance().prefetcher_core(device_id, channel, cq_id);
         tt_cxy_pair completion_q_writer_location = dispatch_core_manager::instance().completion_queue_writer_core(device_id, channel, cq_id);
         tt_cxy_pair dispatch_location = dispatch_core_manager::instance().dispatcher_core(device_id, channel, cq_id);
+        tt_cxy_pair remote_dispatcher_location;
+        if (not this->is_mmio_capable()) {
+            remote_dispatcher_location = dispatch_core_manager::instance().dispatcher_d_core(device_id, channel, cq_id);
+        }
         CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(mmio_device_id);
-
         TT_ASSERT(prefetch_location.chip == mmio_device_id and completion_q_writer_location.chip == mmio_device_id,
             "Issue queue interface is on device {} and completion queue interface is on device {} but they are expected to be on device {}", prefetch_location.chip, completion_q_writer_location.chip, mmio_device_id);
 
@@ -1930,9 +1930,11 @@ void Device::configure_command_queue_programs() {
         detail::WriteToDeviceL1(mmio_device, prefetch_location, CQ_PREFETCH_Q_RD_PTR, prefetch_q_rd_ptr_addr_data, dispatch_core_type);
         detail::WriteToDeviceL1(mmio_device, prefetch_location, CQ_PREFETCH_Q_PCIE_RD_PTR, prefetch_q_pcie_rd_ptr_addr_data, dispatch_core_type);
         detail::WriteToDeviceL1(mmio_device, prefetch_location, dispatch_constants::PREFETCH_Q_BASE, prefetch_q, dispatch_core_type);
-        // Used for prefetch_h, since a wait_for_event on remote chips requires prefetch_h to spin until dispatch_d notfiies completion
-        detail::WriteToDeviceL1(mmio_device, prefetch_location, CQ0_COMPLETION_LAST_EVENT, zero, dispatch_core_type);
-        detail::WriteToDeviceL1(mmio_device, prefetch_location, CQ1_COMPLETION_LAST_EVENT, zero, dispatch_core_type);
+        if (not this->is_mmio_capable()) {
+            // Initialize event counters to 0 on dispatch_d on r-chip
+            detail::WriteToDeviceL1(this, remote_dispatcher_location, CQ0_COMPLETION_LAST_EVENT, zero, dispatch_core_type);
+            detail::WriteToDeviceL1(this, remote_dispatcher_location, CQ1_COMPLETION_LAST_EVENT, zero, dispatch_core_type);
+        }
         // Initialize completion queue write pointer and read pointer copy
         uint32_t issue_queue_size = this->sysmem_manager_->get_issue_queue_size(cq_id);
         uint32_t completion_queue_start_addr = CQ_START + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
@@ -2203,6 +2205,10 @@ CoreCoord Device::dram_grid_size() const {
 CoreCoord Device::physical_core_from_logical_core(const CoreCoord &logical_coord, const CoreType &core_type) const {
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
     return soc_desc.get_physical_core_from_logical_core(logical_coord, core_type);
+}
+
+CoreCoord Device::physical_core_from_logical_core(const CoreDescriptor &logical_core) const {
+    return physical_core_from_logical_core(logical_core.coord, logical_core.type);
 }
 
 CoreType Device::core_type_from_physical_core(const CoreCoord &physical_coord) const {

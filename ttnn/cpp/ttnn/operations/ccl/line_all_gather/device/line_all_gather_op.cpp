@@ -54,7 +54,7 @@ Tensor line_all_gather(
 
             return operation::run(
                 ttnn::AllGather{
-                    dim, num_links, num_devices, device_index, user_defined_num_workers, user_defined_num_buffers_per_channel, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config()), ttnn::all_gather_op::Topology::Linear},
+                    dim, num_links, num_devices, device_index, user_defined_num_workers, user_defined_num_buffers_per_channel, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config()), ttnn::ccl::Topology::Linear},
                 {input_tensor});
         },
         {input_tensor},
@@ -106,7 +106,7 @@ Tensor line_all_gather(
 
             return operation::run(
                 ttnn::AllGather{
-                    dim, num_links, num_devices, device_index, user_defined_num_workers, user_defined_num_buffers_per_channel, receiver_device_id, sender_device_id, memory_config.value_or(input_device_tensor.memory_config()), ttnn::all_gather_op::Topology::Linear},
+                    dim, num_links, num_devices, device_index, user_defined_num_workers, user_defined_num_buffers_per_channel, receiver_device_id, sender_device_id, memory_config.value_or(input_device_tensor.memory_config()), ttnn::ccl::Topology::Linear},
                 {input_device_tensor});
         },
         {input_tensor},
