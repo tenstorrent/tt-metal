@@ -62,20 +62,20 @@ Wormhole multipliers are 5b x 7b multipliers, this means it uses 5 bits from Src
 
 Math Fidelity specifies the number of times an operation is run to consume the full precision of the inputs. Math Fidelity has 4 values: LoFi, HiFi2, HiFi3, HiFi4.
 
-LoFi -> SrcA register: uses 1 hidden bit + 4 most significant bits of the mantissa (MSB of the mantissa), SrcB register: uses 1 hidden bit + 6 most significant bits of the mantissa \
-HiFi2 -> SrcA register: uses next 5 bits of mantissa least significant bits of the mantissa, SrcB register: uses 1 hidden bit + 6 most significant bits of the mantissa \
-HiFi3 -> SrcA register: uses 1 hidden bit + 4 most significant bits of the mantissa (MSB of the mantissa), SrcB register: Uses the remaining least significant bits of the mantissa \
-HiFi4 -> SrcA register: uses next 5 bits of mantissa least significant bits of the mantissa, SrcB register: Uses the remaining least significant bits of the mantissa 
+LoFi -> SrcA register: uses 1 hidden bit + 4 most significant bits of the mantissa (MSB of the mantissa), SrcB register: uses 1 hidden bit + 6 MSB of the mantissa \
+HiFi2 -> SrcA register: uses next 5 bits of LSBs of the mantissa, SrcB register: uses 1 hidden bit + 6 MSB of the mantissa \
+HiFi3 -> SrcA register: uses 1 hidden bit + 4 most significant bits of the mantissa, SrcB register: Uses the remaining LSB of the mantissa \
+HiFi4 -> SrcA register: uses next 5 bits of LSBs of the mantissa, SrcB register: Uses the remaining LSB of the mantissa 
 
 ### Math Approx Mode
 
 Some SFPU operations come in approximate mode, this means the operation can either be run as high precision and low performance, or high performance and lower precision.
 
-Not all SFPU operations support this. But some examples include exponential, gelu, sqrt, etc.
+Not all SFPU operations support this. But some examples include exponential, gelu, sqrt, etc. In order to enable high performance but lower precision for these sfpu ops, then `math_approx_mode` needs to be set.
 
 ### Fp32 Dest Acc (or DST_ACCUM_MODE)
 
-Wormhole can have the FPU operate with Float16/Float16_b values, or Float32 values. In order to set Float32 values, fp32_dest_acc_en must be set.
+Wormhole can have the FPU operate with Float16/Float16_b values, or Float32 values. In order to set Float32 values, `fp32_dest_acc_en` must be set.
 
 Warning: If this flag is set, the math destination register can fit as half as many tiles as Float16_b. So if using DstSync::Half, then Float16_b can fit 8 tiles, while Float32 can only fit 4.
 
@@ -83,7 +83,7 @@ Warning: If this flag is set, the math destination register can fit as half as m
 
 Wormhole has the ability to do accumulation in the L1 memory, the packer will read the input address, and accumulate it with the values read from dest, then write back into the same address.
 This feature is useful for accumulations in higher precision, and then a final pack call can be done to convert into lower precision (for example accumulate in fp32, then final output as float16_b).
-In order to enable this feature, packer_l1_acc must be set.
+In order to enable this feature, `packer_l1_acc` must be set.
 
 
 
