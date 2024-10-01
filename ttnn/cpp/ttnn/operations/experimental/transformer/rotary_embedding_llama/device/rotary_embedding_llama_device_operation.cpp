@@ -34,7 +34,6 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
     uint32_t head_dim = input_tensor.get_legacy_shape()[-1];
 
     TT_FATAL(head_dim <= 128 || std::get<ttnn::WormholeComputeKernelConfig>(this->compute_kernel_config).fp32_dest_acc_en == false, "If head_dim is > 128, fp32_dest_acc_en must be False");
-    TT_FATAL(((seq_len & (seq_len - 1)) == 0), "Sequence must be a power of 2");
     // Check that head_dim is less than 256
     TT_FATAL(head_dim <= 256, "Head dim must be less than 256");
     // Check that head_dim is a multiple of 32

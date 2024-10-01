@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <vector>
 #include "rotary_embedding_llama_program_factory.hpp"
 #include "tt_metal/common/work_split.hpp"
 
@@ -40,11 +41,11 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     const tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     const uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
-    const uint32_t num_tiles = input.volume() / TILE_HW;
-    const uint32_t num_rows = input.volume() / input.get_legacy_shape()[-1] / TILE_HEIGHT;
-    const uint32_t Ht = input.get_legacy_shape()[-2] / TILE_HEIGHT; // 128 // 32 = 4
-    const uint32_t Wt = input.get_legacy_shape()[-1] / TILE_WIDTH; // 128 // 32 = 4
-    const uint32_t HtWt = Ht * Wt; // 4 * 4 = 16
+    const uint32_t batch = input.get_legacy_shape()[0];
+    const uint32_t n_heads = input.get_legacy_shape()[1];
+    const uint32_t seq_len_t = input.get_legacy_shape()[2] / TILE_HEIGHT;
+    const uint32_t head_dim_t = input.get_legacy_shape()[3] / TILE_WIDTH;
+
     const uint32_t Wbytes = input.get_legacy_shape()[-1] * sizeof(bfloat16);
 
     tt_metal::Device *device = input.device();
@@ -74,33 +75,35 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    uint32_t num_cores, num_rows_per_core_group_1, num_rows_per_core_group_2, num_rows_per_core;
-
-    CoreRangeSet all_cores({}), core_group_1({}), core_group_2({});
+    CoreRange all_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
     bool in_sharded = input.shard_spec().has_value();
     bool out_sharded = output.shard_spec().has_value();
     std::optional<ShardSpec> shard_spec = in_sharded ? input.shard_spec() : output.shard_spec();
 
-    uint32_t num_input_tiles, num_output_tiles;
-    num_input_tiles = 2 * Wt;
-    num_output_tiles = num_input_tiles;
+    const uint32_t num_input_tiles = 2 * head_dim_t;
+    const uint32_t num_output_tiles = num_input_tiles;
 
     bool row_major = true;
-    std::tie(
-        num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2) =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows, row_major);
 
-    num_rows_per_core = num_rows_per_core_group_1; // Will always find equal split
-    uint32_t num_sin_cos_rows_per_core = std::max((uint32_t) 1, (uint32_t) (Ht / num_cores));
-    uint32_t num_cos_sin_tiles = 2 * Wt * num_sin_cos_rows_per_core;
+    // Parallelization
+    const uint32_t num_cores = num_cores_x * num_cores_y;
+    const uint32_t batch_parallel_factor = std::min(batch, num_cores);
+    const uint32_t seq_parallel_factor = std::min(num_cores / batch_parallel_factor, seq_len_t);
+    const uint32_t batch_per_core = (batch + batch_parallel_factor - 1) / batch_parallel_factor;
+    const uint32_t seq_per_core = (seq_len_t + seq_parallel_factor - 1) / seq_parallel_factor;
+
+    const uint32_t num_sin_cos_rows_per_core = (seq_len_t + seq_parallel_factor - 1) / seq_parallel_factor;
+    const uint32_t num_rows_per_core = num_sin_cos_rows_per_core * n_heads;
+
+    uint32_t num_cos_sin_tiles = 2 * head_dim_t * num_sin_cos_rows_per_core;
 
     uint32_t input_cb_num_tiles = num_sin_cos_rows_per_core * num_input_tiles;
 
     const bool use_reload_impl = num_rows_per_core > 8;
     if (use_reload_impl) {
         // Do reload implementation of kernel to reduce buffer sizes
-        // Only size CBs to double buffer Wt tiles for all inputs
+        // Only size CBs to double buffer head_dim_t tiles for all inputs
         input_cb_num_tiles = num_input_tiles;
         num_cos_sin_tiles = num_input_tiles;
     }
@@ -133,7 +136,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
             .set_page_size(trans_mat_cb_index, trans_mat_single_tile_size);
     auto cb_trans_mat = tt_metal::CreateCircularBuffer(program, all_cores, cb_trans_mat_config);
 
-    uint32_t num_interm_tiles = Wt;
+    uint32_t num_interm_tiles = head_dim_t;
     uint32_t rotated_input_interm_cb_index = CB::c_intermed0;
     tt_metal::CircularBufferConfig cb_rotated_input_interm_config =
         tt_metal::CircularBufferConfig(
@@ -187,16 +190,18 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         (std::uint32_t)cos_is_dram,
         (std::uint32_t)sin_is_dram,
         (std::uint32_t)trans_mat_is_dram,
-        (std::uint32_t)Ht,
-        (std::uint32_t)Wt,
-        (std::uint32_t)HtWt,
-        (std::uint32_t)num_rows_per_core,
-        (std::uint32_t)num_sin_cos_rows_per_core,
-        (std::uint32_t)(Wt * num_sin_cos_rows_per_core)
+        (std::uint32_t)n_heads,
+        (std::uint32_t)seq_len_t,
+        (std::uint32_t)head_dim_t,
     };
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram, (std::uint32_t)num_rows_per_core, (std::uint32_t)num_sin_cos_rows_per_core, Wt, Ht};
+        (std::uint32_t)output_cb_index,
+        (std::uint32_t)dst_is_dram,
+        (std::uint32_t)n_heads,
+        (std::uint32_t)head_dim_t,
+        (std::uint32_t)seq_len_t,
+    };
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -210,7 +215,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
 
-    vector<uint32_t> compute_kernel_args = {
+    std::vector<uint32_t> compute_kernel_args = {
         (std::uint32_t)input_cb_index,
         (std::uint32_t)cos_cb_index,
         (std::uint32_t)sin_cb_index,
@@ -219,10 +224,8 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         (std::uint32_t)cos_interm_cb_index,
         (std::uint32_t)sin_interm_cb_index,
         (std::uint32_t)output_cb_index,
-        (std::uint32_t)num_rows_per_core,
-        (std::uint32_t)num_sin_cos_rows_per_core,
-        (std::uint32_t)(Wt * num_sin_cos_rows_per_core),
-        (std::uint32_t)Wt,
+        (std::uint32_t)head_dim_t,
+        (std::uint32_t)n_heads,
         };
 
     auto rotary_embedding_kernel_id = tt_metal::CreateKernel(
@@ -233,8 +236,6 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
 
     const auto &cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
-    uint32_t num_cores_per_sin_cos_row = std::max((uint32_t) 1, (uint32_t)(num_cores / Ht)); // since sin/cos matrices have Ht rows
-    uint32_t core_idx = 0;
     /*
         Overall loop iterations: # total cores
     */
@@ -245,46 +246,84 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         sin_buffer->address(),
         trans_mat_buffer->address(),
         0,
+        0,
+        0,
         0
     };
 
     std::vector<uint32_t> default_writer_args = {
         dst_buffer->address(),
+        0,
+        0,
+        0,
         0
     };
 
-    std::vector< std::vector<uint32_t> > unary_reader_args = {cores.size(), default_reader_args}; // 6 is the number of args in the reader kernel
-    std::vector< std::vector<uint32_t> > unary_writer_args = {cores.size(), default_writer_args}; // 2 is the number of args in the writer kernel
+    std::vector<uint32_t> default_compute_args = {
+        0,
+        0,
+        0,
+        0
+    };
 
-    for (uint32_t sin_cos_row = 0; sin_cos_row < Ht; sin_cos_row+=num_sin_cos_rows_per_core) {
-        uint32_t anchor_row = sin_cos_row;
-        for (uint32_t i = 0; i < num_cores_per_sin_cos_row; i++) {
+    std::vector< std::vector<uint32_t> > unary_reader_args = {cores.size(), default_reader_args};
+    std::vector< std::vector<uint32_t> > unary_writer_args = {cores.size(), default_writer_args};
+    std::vector< std::vector<uint32_t> > unary_compute_args = {cores.size(), default_compute_args};
+
+    uint32_t num_active_cores = 0;
+
+    for (uint32_t batch_parallel = 0; batch_parallel < batch_parallel_factor; batch_parallel++) {
+        for (uint32_t seq_parallel = 0; seq_parallel < seq_parallel_factor; seq_parallel++) {
+            uint32_t core_idx = batch_parallel * seq_parallel_factor + seq_parallel;
             const CoreCoord &core = cores.at(core_idx);
-            uint32_t start_row = anchor_row + (i * num_rows_per_core * Ht); // anchor_row + stride
+            uint32_t start_batch = batch_parallel * batch_per_core;
+            uint32_t end_batch = std::min(start_batch + batch_per_core, batch);
+            uint32_t start_seq = seq_parallel * seq_per_core;
+            uint32_t end_seq = std::min(start_seq + seq_per_core, seq_len_t);
+
+            if (start_seq >= seq_len_t || start_batch >= batch) {
+                // Important to skip cores which have no work to do, otherwise they will wait
+                // on cos/sin data which will never arrive.
+                continue;
+            }
+            tt::log_debug(tt::LogTest, "core: {}, start_batch: {}, end_batch: {}, start_seq: {}, end_seq: {}",
+                         core_idx, start_batch, end_batch, start_seq, end_seq);
+
 
             // Reader runtime args
             auto& reader_rt_args = unary_reader_args[core_idx];
-            reader_rt_args[4] = start_row * Wt;
-            reader_rt_args[5] = sin_cos_row * Wt; // This range of this idx must be [0, HtWt - 1], where HtWt is the size of the sin/cos matrices in # of tiles
+            reader_rt_args[4] = start_batch;
+            reader_rt_args[5] = end_batch;
+            reader_rt_args[6] = start_seq;
+            reader_rt_args[7] = end_seq;
 
             // Writer runtime args
             auto& writer_rt_args = unary_writer_args[core_idx];
-            writer_rt_args[1] = start_row;
+            writer_rt_args[1] = start_batch;
+            writer_rt_args[2] = end_batch;
+            writer_rt_args[3] = start_seq;
+            writer_rt_args[4] = end_seq;
 
-            // Go to next core
-            core_idx++;
+            // Compute runtime args
+            auto& compute_rt_args = unary_compute_args[core_idx];
+            compute_rt_args[0] = start_batch;
+            compute_rt_args[1] = end_batch;
+            compute_rt_args[2] = start_seq;
+            compute_rt_args[3] = end_seq;
+
+            num_active_cores = core_idx + 1;
+
         }
     }
 
     tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, cores, unary_reader_args);
     tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, cores, unary_writer_args);
+    tt_metal::SetRuntimeArgs(program, rotary_embedding_kernel_id, cores, unary_compute_args);
 
     auto override_runtime_arguments_callback = [unary_reader_kernel_id,
                                                 unary_writer_kernel_id,
                                                 cores,
-                                                num_rows_per_core,
-                                                Wt
-                                                ](
+                                                num_active_cores](
                                                    const void *operation,
                                                    const Program &program,
                                                    const std::vector<Tensor> &input_tensors,
@@ -301,7 +340,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         auto &cached_reader_args = GetRuntimeArgs(program, unary_reader_kernel_id);
         auto &cached_writer_args = GetRuntimeArgs(program, unary_writer_kernel_id);
 
-        for (uint32_t i = 0, num_tiles_written = 0; i < cores.size(); ++i) {
+        for (uint32_t i = 0; i < num_active_cores; ++i) {
             const CoreCoord &core = cores.at(i);
             {
                 auto& runtime_args = cached_reader_args.at(core.x).at(core.y);
@@ -315,7 +354,6 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
                 auto& runtime_args = cached_writer_args.at(core.x).at(core.y);
                 runtime_args[0] = dst_buffer->address();
             }
-            num_tiles_written += num_rows_per_core * Wt;
         }
     };
 
