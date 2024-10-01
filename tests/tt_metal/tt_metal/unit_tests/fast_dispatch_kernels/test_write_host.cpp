@@ -127,11 +127,14 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
     tt::llrt::write_hex_vec_to_core(device->id(), phys_spoof_prefetch_core, dispatch_cmds, l1_buf_base);
     tt::Cluster::instance().l1_barrier(device->id());
 
-    constexpr uint32_t dispatch_cb_sem = 0;
-    constexpr uint32_t prefetch_sync_sem = 1;
-    tt::tt_metal::CreateSemaphore(program, {spoof_prefetch_core}, dispatch_buffer_pages);
-    tt::tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
-    tt::tt_metal::CreateSemaphore(program, {spoof_prefetch_core}, 0);
+    const uint32_t spoof_prefetch_core_sem_0_id =
+        tt::tt_metal::CreateSemaphore(program, {spoof_prefetch_core}, dispatch_buffer_pages);
+    const uint32_t dispatch_core_sem_id = tt::tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
+    TT_ASSERT(spoof_prefetch_core_sem_0_id == dispatch_core_sem_id);
+    const uint32_t dispatch_cb_sem = spoof_prefetch_core_sem_0_id;
+
+    const uint32_t spoof_prefetch_core_sem_1_id = tt::tt_metal::CreateSemaphore(program, {spoof_prefetch_core}, 0);
+    const uint32_t prefetch_sync_sem = spoof_prefetch_core_sem_1_id;
 
     std::vector<uint32_t> dispatch_compile_args = {
         l1_buf_base,
