@@ -11,7 +11,7 @@ if [[ -z "$ARCH_NAME" ]]; then
     exit 1
 fi
 
-cmake -B build -G Ninja -DENABLE_TRACY=ON
+cmake -B build -G Ninja -DENABLE_TRACY=ON -DTT_METAL_BUILD_TESTS -DTTNN_BUILD_TESTS=ON
 
 if [[ $1 == "NO_CLEAN" ]]; then
     cmake --build build
