@@ -300,7 +300,7 @@ static float make_float(uint8_t exp_bit_count, uint8_t mantissa_bit_count, uint3
 }
 
 // Prints a given datum in the array, given the data_format
-static void PrintTensixRegisterData(ostream& stream, int setwidth, uint32_t raw_element_count, uint32_t datum, uint16_t data_format) {
+static void PrintTensixRegisterData(ostream& stream, int setwidth, uint32_t datum, uint16_t data_format) {
     switch (data_format) {
         case static_cast<std::uint8_t>(tt::DataFormat::Float16):
         case static_cast<std::uint8_t>(tt::DataFormat::Bfp8):
@@ -321,7 +321,11 @@ static void PrintTensixRegisterData(ostream& stream, int setwidth, uint32_t raw_
             stream << setw(setwidth) << make_float(8, 10, datum) << " ";
             break;
         case static_cast<std::uint8_t>(tt::DataFormat::Float32):
-            stream << setw(setwidth) << *reinterpret_cast<float*>(&datum) << " "; // Treat datum as if it stores bits for a float
+            {
+                float value;
+                memcpy(&value, &datum, sizeof(float));
+                stream << setw(setwidth) << value << " ";
+            }
             break;
         case static_cast<std::uint8_t>(tt::DataFormat::UInt32):
             stream << setw(setwidth) << datum << " ";
@@ -352,7 +356,7 @@ static void PrintTypedUint32Array(ostream& stream, int setwidth, uint32_t raw_el
                 stream << std::hex << "0x" << data[i] << " ";
                 break;
             case TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type:
-                PrintTensixRegisterData(stream, setwidth, raw_element_count, data[i], array_subtype);
+                PrintTensixRegisterData(stream, setwidth, data[i], array_subtype);
                 break;
             default:
                 stream << "Unknown type " << array_type;

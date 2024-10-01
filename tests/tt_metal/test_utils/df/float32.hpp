@@ -20,13 +20,13 @@ class float32 {
     uint32_t uint32_data = 0;
 
    public:
-    static const size_t SIZEOF = 4;
+    static constexpr size_t SIZEOF = 4;
 
     // create from float: no rounding, just truncate
     float32(float float_num) {
         static_assert(sizeof float_num == sizeof uint32_data, "Can only support 32bit fp");
         // just move upper 16 to lower 16 (truncate)
-        uint32_data = (*reinterpret_cast<uint32_t*>(&float_num) >> 16);
+        uint32_data = (*reinterpret_cast<uint32_t*>(&float_num));
     }
 
     // store lower 16 as 16-bit uint
