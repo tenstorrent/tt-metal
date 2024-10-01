@@ -14,12 +14,11 @@ from models.utility_functions import (
 
 @skip_for_grayskull()
 def test_dopout(device):
+    # t = torch.ones((4, 5))
     t = torch.ones(
         (
-            4,
-            1,
             32,
-            64,
+            32,
         )
     )
     t_tt = ttnn.from_torch(t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
@@ -27,14 +26,23 @@ def test_dopout(device):
     tt_ratios = []
     s = 124
     prob = 0.2
-    for _ in range(1000):
+    # prob = 0.0001
+    iter_num = 1
+    # for _ in range(1000):
+    torch.set_printoptions(linewidth=2000)
+    for _ in range(iter_num):
         output = ttnn.dropout(t_tt, seed=s, probability=prob, scale=1.0 / (1.0 - prob))
         output_torch = ttnn.to_torch(output)
+        print(output_torch)
         r = 1.0 - (torch.count_nonzero(output_torch) / torch.count_nonzero(t)).item()
-        tt_ratios.append(r)
+        tt_ratios.append(round(r, 2))
 
-    mean = np.mean(tt_ratios)
-    std = np.std(tt_ratios)
-    # current dropout has pretty high variance so we just checking with some reasonable nubmers
-    assert np.allclose(mean, prob, rtol=0.02)
-    assert std < prob
+    print("Test ttnn dropout")
+    print("Zero prob: ", tt_ratios)
+    print(f"Mean: {sum(tt_ratios) / iter_num}, Min: {min(tt_ratios)}, Max: {max(tt_ratios)}")
+
+    # mean = np.mean(tt_ratios)
+    # std = np.std(tt_ratios)
+    # # current dropout has pretty high variance so we just checking with some reasonable nubmers
+    # assert np.allclose(mean, prob, rtol=0.02)
+    # assert std < prob

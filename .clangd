@@ -2,3 +2,6 @@
 CompileFlags:
   Add:
     - "std=c++20"
+    - "-I/home/ubuntu/tt-metal/tt_metal/hw/ckernels/wormhole_b0/metal/common"
+    - "-I/home/ubuntu/tt-metal/tt_metal/include"
+    - "-I/home/ubuntu/tt-metal/tt_metal/third_party/tt_llk_wormhole_b0/common/inc"
