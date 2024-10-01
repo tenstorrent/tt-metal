@@ -12,7 +12,7 @@ import pytest
 from models.utility_functions import (
     comp_allclose_and_pcc,
 )
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
+from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
@@ -110,18 +110,18 @@ def run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device, 
     tt_param_in, tt_grad, tt_exp_avg_in, tt_exp_avg_sq_in, tt_max_exp_avg_sq_in = tt_input_tensors
     tt_param_out, tt_exp_avg_out, tt_exp_avg_sq_out, tt_max_exp_avg_sq_out = tt_output_tensors
 
-    ret_list_ = ttnn.moreh_adamw(
+    ret_list_ = ttnn.operations.moreh.moreh_adamw(
         tt_param_in,
         tt_grad,
         tt_exp_avg_in,
         tt_exp_avg_sq_in,
-        lr=lr,
-        beta1=betas[0],
-        beta2=betas[1],
-        eps=eps,
-        weight_decay=weight_decay,
-        step=step,
-        amsgrad=amsgrad,
+        lr,
+        betas[0],
+        betas[1],
+        eps,
+        weight_decay,
+        step,
+        amsgrad,
         max_exp_avg_sq_in=tt_max_exp_avg_sq_in,
         param_out=tt_param_out,
         exp_avg_out=tt_exp_avg_out,
@@ -201,10 +201,15 @@ def test_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device)
 @pytest.mark.parametrize("step", [8])
 def test_moreh_adamw_callback(shape, lr, betas, eps, weight_decay, amsgrad, step, device, use_program_cache):
     torch.manual_seed(0)
-    for _ in range(2):
+    for i in range(2):
         run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device)
         # Add dummy tensor to make sure that created tensor in 2 iteration don't share the same addr
         tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+        if i == 0:
+            num_program_cache_entries = device.num_program_cache_entries()
+            assert num_program_cache_entries > 0
+        else:
+            assert device.num_program_cache_entries() == num_program_cache_entries
 
 
 @pytest.mark.parametrize(

@@ -31,13 +31,13 @@ MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation
 
     uint32_t num_units = param_in.volume() / tt::constants::TILE_HW;
 
-    const std::optional<const Tensor> max_exp_avg_sq_in = tensor_args.max_exp_avg_sq_in;
+    const std::optional<Tensor>& max_exp_avg_sq_in = tensor_args.max_exp_avg_sq_in;
 
     // It's guarantee that param_out, exp_avg_out, exp_avg_sq_out are created.
     const Tensor& param_out = tensor_return_value.at(0).value();
     const Tensor& exp_avg_out = tensor_return_value.at(1).value();
     const Tensor& exp_avg_sq_out = tensor_return_value.at(2).value();
-    const std::optional<const Tensor> max_exp_avg_sq_out =
+    const std::optional<Tensor>& max_exp_avg_sq_out =
         amsgrad ? std::optional<const Tensor>{tensor_return_value.at(3)} : std::nullopt;
 
     DeviceComputeKernelConfig compute_kernel_config = operation_attributes.compute_kernel_config;
@@ -100,13 +100,15 @@ MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation
         static_cast<uint32_t>(tt::operations::primary::is_dram(grad)),
         static_cast<uint32_t>(tt::operations::primary::is_dram(exp_avg_in)),
         static_cast<uint32_t>(tt::operations::primary::is_dram(exp_avg_sq_in)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(max_exp_avg_sq_in))};
+        static_cast<uint32_t>(
+            max_exp_avg_sq_in.has_value() ? tt::operations::primary::is_dram(max_exp_avg_sq_in.value()) : false)};
 
     const std::vector<uint32_t> writer_compile_time_args{
         static_cast<uint32_t>(tt::operations::primary::is_dram(param_out)),
         static_cast<uint32_t>(tt::operations::primary::is_dram(exp_avg_out)),
         static_cast<uint32_t>(tt::operations::primary::is_dram(exp_avg_sq_out)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(max_exp_avg_sq_out))};
+        static_cast<uint32_t>(
+            max_exp_avg_sq_out.has_value() ? tt::operations::primary::is_dram(max_exp_avg_sq_out.value()) : false)};
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_adamw/device/kernels/"
