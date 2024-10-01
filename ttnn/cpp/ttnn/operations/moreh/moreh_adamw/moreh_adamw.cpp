@@ -60,7 +60,7 @@ std::vector<Tensor> MorehAdamw::create_async_output_tensors(
         Tensor(operation::get_workers_for_op_output({input_tensor}))};
 }
 
-std::vector<bool> create_async_return_flag(
+std::vector<bool> MorehAdamw::create_async_return_flag(
     const Tensor& param_in,
     const Tensor& grad,
     const Tensor& exp_avg_in,
