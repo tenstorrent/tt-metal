@@ -78,28 +78,28 @@ void py_bind_all_gather(pybind11::module& module) {
     detail::bind_all_gather(
         module,
         ttnn::all_gather,
-        R"doc(all_gather(input_tensor: ttnn.Tensor, dim: int, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None, num_workers: int = None, num_buffers_per_channel: int = None, Topology: ttnn.Topology = ttnn.Topology.Ring) -> ttnn.Tensor
+        R"doc(
 
         Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
 
         Args:
-            * :attr:`input_tensor` (ttnn.Tensor): multi-device tensor
-            * :attr:`dim` (int)
-            * Following are applicable only for Linear Topology
-            * :attr:`cluster_axis` (int):
-                Provided a MeshTensor, the axis corresponding to MeshDevice
-                to perform the line-all-gather operation on.
-            * :attr:`mesh_device` (MeshDevice):
-                Device mesh to perform the line-all-gather operation on.
+            input_tensor (ttnn.Tensor): multi-device tensor.
+            dim (int): Dimension to perform operation.
+            cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-all-gather operation on.
+            mesh_device (MeshDevice): Device mesh to perform the line-all-gather operation on.
+        * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
 
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
 
         Keyword Args:
-            * :attr:`num_links` (int): Number of links to use for the all-gather operation.
-            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-            * :attr:`num_workers` (int): Number of workers to use for the operation.
-            * :attr:`num_buffers_per_channel` (int): Number of buffers per channel to use for the operation.
-            * :attr:`topology`: Topology to be used for the operation. Allowable options are Linear and Ring
+            num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
+            num_workers (int, optional): Number of workers to use for the operation. Defaults to `None`.
+            num_buffers_per_channel (int, optional): Number of buffers per channel to use for the operation. Defaults to `None`.
+            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
 
         Example:
 
