@@ -67,27 +67,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     tt::DataFormat in0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t in0_tile_size = tt::tt_metal::detail::TileSize(in0_cb_data_format);
 
-    MathFidelity math_fidelity;
-    bool math_approx_mode;
-    bool fp32_dest_acc_en;
-
-    std::visit([&](auto&& compute_kernel_config) {
-        using T = std::decay_t<decltype(compute_kernel_config)>;
-        if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-            TT_ASSERT(device->arch() == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
-            math_fidelity = compute_kernel_config.math_fidelity;
-            math_approx_mode = compute_kernel_config.math_approx_mode;
-            fp32_dest_acc_en = false;
-        } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-            TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
-            math_fidelity = compute_kernel_config.math_fidelity;
-            math_approx_mode = compute_kernel_config.math_approx_mode;
-            fp32_dest_acc_en = in0_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
-        } else {
-            TT_THROW("arch not supported");
-        }
-
-    }, compute_kernel_config);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
     uint32_t scalar_tile_size = tt::tt_metal::detail::TileSize(scalar_cb_data_format);
@@ -487,29 +468,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     // convert data format
     tt::DataFormat in0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
-    MathFidelity math_fidelity;
-    bool math_approx_mode;
-    bool fp32_dest_acc_en;
-
-    std::visit([&](auto&& compute_kernel_config) {
-        using T = std::decay_t<decltype(compute_kernel_config)>;
-        if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-            TT_ASSERT(device->arch() == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
-            math_fidelity = compute_kernel_config.math_fidelity;
-            math_approx_mode = compute_kernel_config.math_approx_mode;
-            fp32_dest_acc_en = false;
-        } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-            TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
-            math_fidelity = compute_kernel_config.math_fidelity;
-            math_approx_mode = compute_kernel_config.math_approx_mode;
-            fp32_dest_acc_en = in0_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
-            if (fp32_dest_acc_en)
-                TT_FATAL(subblock_wt <= 4, "in fp32 mode, subblock width must be smaller/equal than 4");
-        } else {
-            TT_THROW("arch not supported");
-        }
-
-    }, compute_kernel_config);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     tt::DataFormat out0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
     tt::DataFormat im_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;

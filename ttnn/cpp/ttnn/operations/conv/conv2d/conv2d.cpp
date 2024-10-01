@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "impl/buffers/buffer_constants.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/pool/downsample/device/downsample_op.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "tt_metal/common/work_split.hpp"
@@ -791,32 +792,14 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     // call optimized conv op or matmul micro op
     bool input_is_on_device = ttnn::is_tensor_on_device_or_multidevice(input_tensor_post_tm);
     TT_ASSERT(input_is_on_device);
-    DeviceComputeKernelConfig compute_kernel_config;
-    switch (device->arch()) {
-        case tt::ARCH::WORMHOLE_B0:
-            compute_kernel_config = WormholeComputeKernelConfig(
-                {.math_fidelity = conv_config.math_fidelity,
-                .math_approx_mode = conv_config.math_approx_mode_enabled,
-                .fp32_dest_acc_en = conv_config.fp32_dest_acc_enabled,
-                .packer_l1_acc = conv_config.packer_l1_accum_enabled});
-            break;
+    DeviceComputeKernelConfig compute_kernel_config = ttnn::init_device_compute_kernel_config(
+        device->arch(),
+        std::nullopt,
+        conv_config.math_fidelity,
+        conv_config.math_approx_mode_enabled,
+        conv_config.fp32_dest_acc_enabled,
+        conv_config.packer_l1_accum_enabled);
 
-        case tt::ARCH::GRAYSKULL:
-            compute_kernel_config = GrayskullComputeKernelConfig(
-                {.math_fidelity = conv_config.math_fidelity, .math_approx_mode = conv_config.math_approx_mode_enabled});
-            break;
-
-        case tt::ARCH::BLACKHOLE:
-            compute_kernel_config = BlackholeComputeKernelConfig(
-                {.math_fidelity = conv_config.math_fidelity,
-                .math_approx_mode = conv_config.math_approx_mode_enabled,
-                .fp32_dest_acc_en = conv_config.fp32_dest_acc_enabled,
-                .packer_l1_acc = conv_config.packer_l1_accum_enabled});
-            break;
-
-        default:
-            TT_ASSERT(false);
-    }
     if (!use_matmul_for_1x1_conv) {
         // call halo op
         SlidingWindowConfig sliding_window_config = SlidingWindowConfig{
