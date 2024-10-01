@@ -22,11 +22,11 @@ std::vector<std::optional<Tensor>> MorehAdamw::invoke(
     const std::optional<uint32_t> step,
     const std::optional<bool> amsgrad,
 
-    const std::optional<const Tensor> max_exp_avg_sq_in,
-    const std::optional<const Tensor> param_out,
-    const std::optional<const Tensor> exp_avg_out,
-    const std::optional<const Tensor> exp_avg_sq_out,
-    const std::optional<const Tensor> max_exp_avg_sq_out,
+    const std::optional<Tensor>& max_exp_avg_sq_in,
+    const std::optional<Tensor>& param_out,
+    const std::optional<Tensor>& exp_avg_out,
+    const std::optional<Tensor>& exp_avg_sq_out,
+    const std::optional<Tensor>& max_exp_avg_sq_out,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     return ttnn::prim::moreh_adamw(
@@ -58,5 +58,29 @@ std::vector<Tensor> MorehAdamw::create_async_output_tensors(
         Tensor(operation::get_workers_for_op_output({input_tensor})),
         Tensor(operation::get_workers_for_op_output({input_tensor})),
         Tensor(operation::get_workers_for_op_output({input_tensor}))};
+}
+
+std::vector<bool> create_async_return_flag(
+    const Tensor& param_in,
+    const Tensor& grad,
+    const Tensor& exp_avg_in,
+    const Tensor& exp_avg_sq_in,
+
+    const std::optional<float> lr,
+    const std::optional<float> beta1,
+    const std::optional<float> beta2,
+    const std::optional<float> eps,
+    const std::optional<float> weight_decay,
+    const std::optional<uint32_t> step,
+    const std::optional<bool> amsgrad,
+
+    const std::optional<Tensor>& max_exp_avg_sq_in,
+    const std::optional<Tensor>& param_out,
+    const std::optional<Tensor>& exp_avg_out,
+    const std::optional<Tensor>& exp_avg_sq_out,
+    const std::optional<Tensor>& max_exp_avg_sq_out,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    return std::vector<bool>{true, true, true, amsgrad.has_value() ? amsgrad.value() : false};
 }
 }  // namespace ttnn::operations::moreh::moreh_adamw
