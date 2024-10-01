@@ -14,19 +14,30 @@ smallest matrix that can be fed into in1.
 If the input matrices fed into the engine are "shorter" than 8x16, for example 1x16, the engine will still perform 8x16 x 16x16 = 8x16, but the effective throughput will be 1/8. 
 Thus, for 1x16 x 16x16 matricies, the effective throughput is 0.5 TFLOP per matrix engine.
 
-## Dot Product
+MATH_FIDELITY is used for higher precision, and TFLOPs are calculated by dividing by the MATH_FIDELITY value.
+
+LoFi ->  4 TFLOPs \
+HiFi2 -> 2 TFLOPs \
+HiFi3 -> 1.33 TFLOPs \
+HiFi4 -> 1 TFLOPs
 
 ## Reduction: Addition and Max
 The WH matrix engine performs 16x16 reduce max/average operations in a single cycle. \
 This is 2*16\*16 multiply + adds in a single cycle. At 1GHz, this is 0.512 TFLOPs per matrix engine. 
 
+Reduce max does not use MATH_FIDELITY; however reduce average does use MATH_FIDELITY for higher precision, and TFLOPs are calculated by dividing by the MATH_FIDELITY value.
+
+LoFi ->  0.512 TFLOPs \
+HiFi2 -> 0.256 TFLOPs \
+HiFi3 -> 0.171 TFLOPs \
+HiFi4 -> 0.128 TFLOPs
 
 ## Eltwise: Add, Sub, Mul
 The WH matrix engine performs 8x16 elementwise addition/subtraction/multiplication in a single cycle. \
 This is 8\*16 (multiply or adds, not both) in a single cycle. At 1Ghz, this is 0.128 TFLOPs per matrix engine. \
-Elementwise addition and subtraction do not use MATH_FIDELITY; however, Elementwise multiplication does use MATH_FIDELITY, and TFLOPs are calculated by dividing by the MATH_FIDELITY value.
+Elementwise addition and subtraction do not use MATH_FIDELITY; however, Elementwise multiplication does use MATH_FIDELITY for higher precision, and TFLOPs are calculated by dividing by the MATH_FIDELITY value.
 
-LoFi -> 0.128 TFLOPs \
+LoFi ->  0.128 TFLOPs \
 HiFi2 -> 0.064 TFLOPs \
 HiFi3 -> 0.043 TFLOPs \
 HiFi4 -> 0.032 TFLOPs
