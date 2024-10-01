@@ -7,7 +7,6 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/eltwise/binary_backward/device/binary_backward_op.hpp"
 #include "ttnn/operations/eltwise/unary_backward/device/unary_backward_op.hpp"
 
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -45,7 +44,7 @@ void preallocated_tensors_check(std::optional<Tensor>& input_grad, std::optional
     }
 }
 
-std::vector<ttnn::Tensor> _atan2_bw(
+std::vector<ttnn::Tensor> ExecuteBackwardAtan2::invoke(
     const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     float t_nan = std::nanf("");
@@ -251,7 +250,7 @@ std::vector<ComplexTensor> ExecuteBackwardSub::invoke(
     return grad_tensor;
 }
 
-std::vector<ttnn::Tensor> _xlogy_bw(
+std::vector<ttnn::Tensor> ExecuteBackwardXlogy::invoke(
     const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor grad1_result = ttnn::log(other, output_mem_config);
@@ -284,7 +283,7 @@ std::vector<ttnn::Tensor> _xlogy_bw(
 }
 
 
-std::vector<ttnn::Tensor> _hypot_bw(
+std::vector<ttnn::Tensor> ExecuteBackwardHypot::invoke(
     const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
@@ -304,7 +303,7 @@ std::vector<ttnn::Tensor> _hypot_bw(
 //   self: grad * 2^other
 //   other: grad * self * ln(2) * (2^other)
 // # M_LN2 = ln(2)= 0.693147180559945309417
-std::vector<ttnn::Tensor> _ldexp_bw(
+std::vector<ttnn::Tensor> ExecuteBackwardLdexp::invoke(
     const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
@@ -322,7 +321,7 @@ name: logaddexp(Tensor self, Tensor other) -> Tensor
 self: grad / (1 + exp(other - self)).conj()
 other: grad / (1 + exp(self - other)).conj()
 */
-std::vector<ttnn::Tensor> _logaddexp_bw(
+std::vector<ttnn::Tensor> ExecuteBackwardLogaddexp::invoke(
     const Tensor& grad, const Tensor& input_a, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor opexp =
@@ -342,7 +341,7 @@ self: grad / (1 + pow(2, other - self))
 other: grad / (1 + pow(2, self - other))
 */
 
-std::vector<ttnn::Tensor> _logaddexp2_bw(
+std::vector<ttnn::Tensor> ExecuteBackwardLogaddexp2::invoke(
     const Tensor& grad, const Tensor& input_a, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(input_a.memory_config());
@@ -393,7 +392,7 @@ std::vector<Tensor> ExecuteBackwardFmod::invoke(
     return grad_tensor;
 }
 
-std::vector<ttnn::Tensor> _squared_difference_bw(
+std::vector<ttnn::Tensor> ExecuteBackwardSquaredDifference::invoke(
     const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor difference = ttnn::subtract(input, other);
@@ -681,12 +680,21 @@ std::vector<Tensor> _min_or_max_bw(
     return grad_tensor;
 }
 
+
 template std::vector<Tensor> _min_or_max_bw<true>(
     const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 
 template std::vector<Tensor> _min_or_max_bw<false>(
     const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 
+
+std::vector<ttnn::Tensor> ExecuteBackwardMax::invoke(const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
+    return _min_or_max_bw<true>(grad, input, other, output_mem_config);
+}
+
+std::vector<ttnn::Tensor> ExecuteBackwardMin::invoke(const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
+    return _min_or_max_bw<false>(grad, input, other, output_mem_config);
+}
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
     uint8_t queue_id, const Tensor& grad, const Tensor& input, float scalar, std::string round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
