@@ -33,12 +33,12 @@ struct MorehAdamWDeviceOperation {
         const Tensor& grad;
         const Tensor& exp_avg_in;
         const Tensor& exp_avg_sq_in;
-        const std::optional<const Tensor> max_exp_avg_sq_in;
+        const std::optional<Tensor>& max_exp_avg_sq_in;
 
-        const std::optional<const Tensor> param_out;
-        const std::optional<const Tensor> exp_avg_out;
-        const std::optional<const Tensor> exp_avg_sq_out;
-        const std::optional<const Tensor> max_exp_avg_sq_out;
+        const std::optional<Tensor>& param_out;
+        const std::optional<Tensor>& exp_avg_out;
+        const std::optional<Tensor>& exp_avg_sq_out;
+        const std::optional<Tensor>& max_exp_avg_sq_out;
     };
 
     using shape_return_value_t = std::vector<ttnn::Shape>;
@@ -95,11 +95,11 @@ struct MorehAdamWDeviceOperation {
         const std::optional<uint32_t> step,
         const std::optional<bool> amsgrad,
 
-        const std::optional<const Tensor> max_exp_avg_sq_in,
-        const std::optional<const Tensor> param_out,
-        const std::optional<const Tensor> exp_avg_out,
-        const std::optional<const Tensor> exp_avg_sq_out,
-        const std::optional<const Tensor> max_exp_avg_sq_out,
+        const std::optional<Tensor>& max_exp_avg_sq_in,
+        const std::optional<Tensor>& param_out,
+        const std::optional<Tensor>& exp_avg_out,
+        const std::optional<Tensor>& exp_avg_sq_out,
+        const std::optional<Tensor>& max_exp_avg_sq_out,
         const std::optional<ttnn::MemoryConfig>& memory_config,
         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config);
 };

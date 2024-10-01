@@ -25,16 +25,38 @@ struct MorehAdamw {
         const std::optional<uint32_t> step,
         const std::optional<bool> amsgrad,
 
-        const std::optional<const Tensor> max_exp_avg_sq_in,
-        const std::optional<const Tensor> param_out,
-        const std::optional<const Tensor> exp_avg_out,
-        const std::optional<const Tensor> exp_avg_sq_out,
-        const std::optional<const Tensor> max_exp_avg_sq_out,
+        const std::optional<Tensor>& max_exp_avg_sq_in,
+        const std::optional<Tensor>& param_out,
+        const std::optional<Tensor>& exp_avg_out,
+        const std::optional<Tensor>& exp_avg_sq_out,
+        const std::optional<Tensor>& max_exp_avg_sq_out,
         const std::optional<ttnn::MemoryConfig>& memory_config,
         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config);
 
     static std::vector<Tensor> create_async_output_tensors(
         const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs);
+
+    static std::vector<bool> create_async_return_flag(
+        const Tensor& param_in,
+        const Tensor& grad,
+        const Tensor& exp_avg_in,
+        const Tensor& exp_avg_sq_in,
+
+        const std::optional<float> lr,
+        const std::optional<float> beta1,
+        const std::optional<float> beta2,
+        const std::optional<float> eps,
+        const std::optional<float> weight_decay,
+        const std::optional<uint32_t> step,
+        const std::optional<bool> amsgrad,
+
+        const std::optional<Tensor>& max_exp_avg_sq_in,
+        const std::optional<Tensor>& param_out,
+        const std::optional<Tensor>& exp_avg_out,
+        const std::optional<Tensor>& exp_avg_sq_out,
+        const std::optional<Tensor>& max_exp_avg_sq_out,
+        const std::optional<ttnn::MemoryConfig>& memory_config,
+        const std::optional<const DeviceComputeKernelConfig> compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::moreh::moreh_adamw
