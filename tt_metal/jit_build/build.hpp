@@ -113,7 +113,6 @@ class alignas(CACHE_LINE_ALIGNMENT) JitBuildState {
     virtual ~JitBuildState() = default;
     void finish_init();
 
-    virtual void pre_compile(const string& kernel_in_path, const string& op_out_path) const;
     void build(const JitBuildSettings *settings) const;
 
     const string& get_out_path() const { return this->out_path_; };
@@ -165,9 +164,9 @@ class JitBuildSettings {
     bool use_multi_threaded_compile = true;
 };
 
-void jit_build(const JitBuildState& build, const JitBuildSettings *settings, const string& kernel_in_path);
-void jit_build_set(const JitBuildStateSet& builds, const JitBuildSettings *settings, const string& kernel_in_path);
-void jit_build_subset(const JitBuildStateSubset& builds, const JitBuildSettings *settings, const string& kernel_in_path);
+void jit_build(const JitBuildState& build, const JitBuildSettings* settings);
+void jit_build_set(const JitBuildStateSet& builds, const JitBuildSettings* settings);
+void jit_build_subset(const JitBuildStateSubset& builds, const JitBuildSettings* settings);
 
 inline const string jit_build_get_kernel_compile_outpath(int build_key) {
     // TODO(pgk), get rid of this

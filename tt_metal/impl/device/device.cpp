@@ -247,7 +247,7 @@ void Device::build_firmware() {
     ZoneScoped;
 
     this->generate_device_headers(this->build_env_.get_out_firmware_root_path());
-    jit_build_set(this->firmware_build_states_, nullptr, "");
+    jit_build_set(this->firmware_build_states_, nullptr);
 }
 
 void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) {
