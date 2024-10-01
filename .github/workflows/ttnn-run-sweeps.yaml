@@ -27,6 +27,8 @@ on:
           - eltwise.unary.trunc.trunc
           - eltwise.unary.floor.floor
           - eltwise.unary.clone.clone
+          - eltwise.unary.elu.elu
+          - eltwise.unary.erfc.erfc
           - eltwise.unary.exp.exp
           - eltwise.unary.exp2.exp2
           - eltwise.unary.expm1.expm1
