@@ -63,9 +63,9 @@ Wormhole multipliers are 5b x 7b multipliers, this means it uses 5 bits from Src
 Math Fidelity specifies the number of times an operation is run to consume the full precision of the inputs. Math Fidelity has 4 values: LoFi, HiFi2, HiFi3, HiFi4.
 
 LoFi -> SrcA register: uses 1 hidden bit + 4 most significant bits of the mantissa (MSB of the mantissa), SrcB register: uses 1 hidden bit + 6 MSB of the mantissa \
-HiFi2 -> SrcA register: uses next 5 bits of LSBs of the mantissa, SrcB register: uses 1 hidden bit + 6 MSB of the mantissa \
-HiFi3 -> SrcA register: uses 1 hidden bit + 4 most significant bits of the mantissa, SrcB register: Uses the remaining LSB of the mantissa \
-HiFi4 -> SrcA register: uses next 5 bits of LSBs of the mantissa, SrcB register: Uses the remaining LSB of the mantissa 
+HiFi2 -> SrcA register: uses 1 hidden bit + next 4 bits of LSBs of the mantissa, SrcB register: uses 1 hidden bit + 6 MSB of the mantissa \
+HiFi3 -> SrcA register: uses 1 hidden bit + 4 MSB of the mantissa, SrcB register: Uses 1 hidden bit + next 6 LSB of the mantissa \
+HiFi4 -> SrcA register: uses 1 hidden bit + next 4 bits of LSBs of the mantissa, SrcB register: Uses 1 hidden bit + next 6 LSB of the mantissa 
 
 ### Math Approx Mode
 
