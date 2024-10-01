@@ -1,6 +1,6 @@
 
 add_executable(watcher_dump ${CMAKE_CURRENT_SOURCE_DIR}/watcher_dump.cpp)
-target_link_libraries(watcher_dump PRIVATE test_metal_common_libs)
+target_link_libraries(watcher_dump PRIVATE tt_metal)
 target_include_directories(watcher_dump PRIVATE
     ${UMD_HOME}
     ${PROJECT_SOURCE_DIR}

@@ -253,7 +253,11 @@ endif()
 add_subdirectory(${PROJECT_SOURCE_DIR}/tt_metal)
 add_subdirectory(${PROJECT_SOURCE_DIR}/ttnn)
 
-add_subdirectory(${PROJECT_SOURCE_DIR}/tests EXCLUDE_FROM_ALL)
+option(TT_METAL_BUILD_TESTS "Enables build of tt_metal tests" OFF)
+option(TTNN_BUILD_TESTS "Enables build of ttnn tests" OFF)
+if(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
+    add_subdirectory(${PROJECT_SOURCE_DIR}/tests)
+endif(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
 
 ############################################################################################################################
 # Install targets for build artifacts and pybinds
@@ -273,7 +277,7 @@ install(TARGETS ttnn
 )
 if(WITH_PYTHON_BINDINGS)
     # Install .so into src files for pybinds implementation
-    install(FILES ${PROJECT_BINARY_DIR}/lib/_ttnn.so
+    install(TARGETS ttnn
     DESTINATION ${PROJECT_SOURCE_DIR}/ttnn/ttnn
     COMPONENT tt_pybinds
     )

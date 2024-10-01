@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "tt_metal/hostdevcommon/dprint_common.h"
 #include <dev_msgs.h>
 
 // Returns the buffer address for current thread+core. Differs for NC/BR/ER/TR0-2.
