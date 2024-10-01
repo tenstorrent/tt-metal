@@ -8,7 +8,6 @@
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
-#include "ttnn/operations/eltwise/binary_backward/device/binary_backward_op.hpp"
 
 namespace ttnn::operations::unary_backward {
 
