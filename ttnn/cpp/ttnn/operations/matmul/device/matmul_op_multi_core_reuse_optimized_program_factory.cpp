@@ -505,31 +505,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
     tt_metal::Buffer* in0_buffer = a.buffer();
     tt_metal::Buffer* in1_buffer = b.buffer();
 
-    MathFidelity math_fidelity;
-    bool math_approx_mode;
-    bool fp32_dest_acc_en;
-    bool packer_l1_acc;
-
-    std::visit(
-        [&](auto&& compute_kernel_config) {
-            using T = std::decay_t<decltype(compute_kernel_config)>;
-            if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-                TT_FATAL(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
-                math_fidelity = compute_kernel_config.math_fidelity;
-                math_approx_mode = compute_kernel_config.math_approx_mode;
-                fp32_dest_acc_en = false;
-                packer_l1_acc = false;
-            } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                TT_FATAL(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
-                math_fidelity = compute_kernel_config.math_fidelity;
-                math_approx_mode = compute_kernel_config.math_approx_mode;
-                fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
-                packer_l1_acc = compute_kernel_config.packer_l1_acc;
-            } else {
-                TT_THROW("arch not supported");
-            }
-        },
-        compute_kernel_config);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     if (fp32_dest_acc_en) {
         TT_FATAL(

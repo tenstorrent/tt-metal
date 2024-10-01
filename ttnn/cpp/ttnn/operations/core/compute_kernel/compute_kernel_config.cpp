@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "compute_kernel_config.hpp"
+#include "ttnn/device.hpp"
 
 namespace ttnn {
 
@@ -53,13 +54,15 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
         if (arch == tt::ARCH::GRAYSKULL) {
             return GrayskullComputeKernelConfig{
                 .math_fidelity = default_fidelity, .math_approx_mode = default_approx_mode};
-        } else {
+        } else if (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE) {
             return WormholeComputeKernelConfig{
                 .math_fidelity = default_fidelity,
                 .math_approx_mode = default_approx_mode,
                 .fp32_dest_acc_en = default_fp32_acc,
                 .packer_l1_acc = default_l1_acc,
                 .dst_full_sync_en = default_dst_full_sync_en};
+        } else {
+            TT_THROW("arch not supported");
         }
     }
 }
@@ -75,6 +78,24 @@ bool get_fp32_dest_acc_en(const std::optional<DeviceComputeKernelConfig>& comput
                 return false;
             } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
                 return compute_kernel_config.fp32_dest_acc_en;
+            } else {
+                TT_THROW("arch not supported");
+            }
+        },
+        compute_kernel_config.value());
+}
+
+MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    if (not compute_kernel_config.has_value()) {
+        return MathFidelity::Invalid;
+    }
+    return std::visit(
+        [](auto&& compute_kernel_config) -> MathFidelity {
+            using T = std::decay_t<decltype(compute_kernel_config)>;
+            if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+                return compute_kernel_config.math_fidelity;
+            } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+                return compute_kernel_config.math_fidelity;
             } else {
                 TT_THROW("arch not supported");
             }

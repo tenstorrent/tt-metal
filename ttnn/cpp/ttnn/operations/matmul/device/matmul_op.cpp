@@ -11,8 +11,8 @@
 
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/hostdevcommon/common_values.hpp"
 #include "tt_metal/common/work_split.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
 
@@ -103,20 +103,7 @@ operation::OpPerformanceModel create_op_performance_model_for_matmul(
     uint32_t batch_size = get_batch_size(out_shape);
     int64_t num_mul_adds = num_mul_adds_per_elem * out_shape[-2] * out_shape[-1] * batch_size;
 
-    MathFidelity math_fidelity = MathFidelity::Invalid;
-
-    std::visit(
-        [&](auto&& compute_kernel_config) {
-            using T = std::decay_t<decltype(compute_kernel_config)>;
-            if constexpr (std::is_same_v<T, ttnn::GrayskullComputeKernelConfig>) {
-                math_fidelity = compute_kernel_config.math_fidelity;
-            } else if constexpr (std::is_same_v<T, ttnn::WormholeComputeKernelConfig>) {
-                math_fidelity = compute_kernel_config.math_fidelity;
-            } else {
-                TT_THROW("arch not supported");
-            }
-        },
-        compute_kernel_config);
+    MathFidelity math_fidelity = ttnn::get_math_fidelity(compute_kernel_config);
 
     int ideal_dev_clock_cycles = std::ceil(
         ((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi)) *

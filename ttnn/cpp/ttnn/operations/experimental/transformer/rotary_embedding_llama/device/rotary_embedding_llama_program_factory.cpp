@@ -49,26 +49,8 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
 
     tt_metal::Device *device = input.device();
 
-    MathFidelity math_fidelity;
-    bool fp32_dest_acc_en;
-
-    std::visit([&](auto&& compute_kernel_config) {
-        using T = std::decay_t<decltype(compute_kernel_config)>;
-        if constexpr (std::is_same_v<T, ttnn::GrayskullComputeKernelConfig>) {
-            TT_ASSERT(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
-            math_fidelity = compute_kernel_config.math_fidelity;
-            fp32_dest_acc_en = false;
-        } else if constexpr (std::is_same_v<T, ttnn::WormholeComputeKernelConfig>) {
-            TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
-            math_fidelity = compute_kernel_config.math_fidelity;
-            fp32_dest_acc_en = input_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
-        } else {
-            TT_THROW("arch not supported");
-        }
-
-    }, compute_kernel_config);
-
-
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
