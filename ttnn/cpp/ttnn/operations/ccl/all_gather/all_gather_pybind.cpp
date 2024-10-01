@@ -92,6 +92,8 @@ void py_bind_all_gather(pybind11::module& module) {
             * :attr:`mesh_device` (MeshDevice):
                 Device mesh to perform the line-all-gather operation on.
 
+        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
+
         Keyword Args:
             * :attr:`num_links` (int): Number of links to use for the all-gather operation.
             * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.

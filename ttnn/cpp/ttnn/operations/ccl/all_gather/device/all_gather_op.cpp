@@ -233,7 +233,7 @@ Tensor all_gather(
     const std::optional<size_t> user_defined_num_buffers_per_channel,
     const ttnn::ccl::Topology topology) {
 
-    TT_FATAL(topology == ttnn::ccl::Topology::Linear, "This api currently supported only for Linear topology");
+    TT_FATAL(topology == ttnn::ccl::Topology::Linear, "This all_gather API with cluster_axis is currently supported only for the Linear topology");
     const auto mesh_view = mesh_device.get_view();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view->num_rows() : mesh_view->num_cols();
 

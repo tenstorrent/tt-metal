@@ -73,7 +73,7 @@ def test_line_all_gather_on_t3000_nightly(
         mem_config,
         use_program_cache,
         function_level_defaults,
-        all_gather_operation=ttnn.line_all_gather,
+        all_gather_topology=ttnn.Topology.Linear,
         enable_async=enable_async,
         num_iters=num_iters,
     )
@@ -132,7 +132,7 @@ def test_line_all_gather_on_t3000_nightly_two_link(
         mem_config,
         use_program_cache,
         function_level_defaults,
-        all_gather_operation=ttnn.line_all_gather,
+        all_gather_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
         enable_async=enable_async,
     )
