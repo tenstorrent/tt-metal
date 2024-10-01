@@ -11,7 +11,8 @@ on:
         options:
           - ALL SWEEPS (Nightly)
           - add
-          - line_all_gather
+          - ccl.line_all_gather
+          - ccl.all_gather_n300
           - eltwise.unary.relu.relu
           - eltwise.unary.gelu.gelu
           - eltwise.unary.cos.cos
