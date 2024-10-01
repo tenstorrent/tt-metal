@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/core_coord.h"
 #include "jit_build/settings.hpp"
 #include "jit_build/build.hpp"
 #include <iostream>
@@ -20,11 +18,6 @@ namespace tt::tt_metal
     {
         name = n;
         path = build_env.get_out_kernel_root_path() + n;
-    }
-
-    void JitBuildOptions::set_hlk_file_name_all_cores(std::string file_name)
-    {
-        hlk_desc.set_hlk_file_name(file_name);
     }
 
     void JitBuildOptions::set_hlk_math_fidelity_all_cores(MathFidelity math_fidelity)

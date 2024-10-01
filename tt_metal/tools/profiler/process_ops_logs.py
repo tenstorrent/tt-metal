@@ -61,9 +61,9 @@ OPS_CSV_HEADER = [
     "DEVICE COMPUTE CB RESERVE BACK [ns]",
     "INPUTS",
     "OUTPUTS",
-    "COMPUTE KERNEL PATH",
+    "COMPUTE KERNEL SOURCE",
     "COMPUTE KERNEL HASH",
-    "DATA MOVEMENT KERNEL PATH",
+    "DATA MOVEMENT KERNEL SOURCE",
     "DATA MOVEMENT KERNEL HASH",
     "PM IDEAL [ns]",
     "PM COMPUTE [ns]",
@@ -477,17 +477,17 @@ def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
                 rowDict["HOST DURATION [ns]"] = int(opData["host_time"]["exec_time_ns"])
 
                 if "kernel_info" in opData.keys():
-                    rowDict["COMPUTE KERNEL PATH"] = []
+                    rowDict["COMPUTE KERNEL SOURCE"] = []
                     rowDict["COMPUTE KERNEL HASH"] = []
-                    rowDict["DATA MOVEMENT KERNEL PATH"] = []
+                    rowDict["DATA MOVEMENT KERNEL SOURCE"] = []
                     rowDict["DATA MOVEMENT KERNEL HASH"] = []
                     for computeKernel in opData["kernel_info"]["compute_kernels"]:
                         rowDict["MATH FIDELITY"] = computeKernel["math_fidelity"]
-                        rowDict["COMPUTE KERNEL PATH"].append(computeKernel["path"])
+                        rowDict["COMPUTE KERNEL SOURCE"].append(computeKernel["source"])
                         rowDict["COMPUTE KERNEL HASH"].append(computeKernel["name"])
 
                     for dmKernel in opData["kernel_info"]["datamovement_kernels"]:
-                        rowDict["DATA MOVEMENT KERNEL PATH"].append(dmKernel["path"])
+                        rowDict["DATA MOVEMENT KERNEL SOURCE"].append(dmKernel["source"])
                         rowDict["DATA MOVEMENT KERNEL HASH"].append(dmKernel["name"])
 
                 if "core_usage" in opData.keys():

@@ -6,8 +6,6 @@
 
 #include <map>
 
-#include "common/core_coord.h"
-#include "common/utils.hpp"
 #include "hlk_desc.hpp"
 #include "hostdevcommon/kernel_structs.h"
 
@@ -29,15 +27,6 @@ class JitBuildOptions {
     bool fp32_dest_acc_en;
     std::vector<UnpackToDestMode> unpack_to_dest_mode;
 
-    // BRISC config
-    std::string brisc_kernel_file_name;
-
-    // NCRISC config
-    std::string ncrisc_kernel_file_name;
-
-    // ERISC config
-    std::string erisc_kernel_file_name;
-
     std::map<std::string, std::string> hlk_defines;  // preprocessor defines for HLK
     std::map<std::string, std::string> ncrisc_defines;
     std::map<std::string, std::string> brisc_defines;
@@ -46,7 +35,6 @@ class JitBuildOptions {
     JitBuildOptions(const JitBuildEnv& env);
     void set_name(const std::string& name);
 
-    void set_hlk_file_name_all_cores(std::string file_name);
     void set_hlk_math_fidelity_all_cores(MathFidelity math_fidelity);
     void set_hlk_math_approx_mode_all_cores(bool approx_mode);
     void set_hlk_args_all_cores(void* args, size_t size);

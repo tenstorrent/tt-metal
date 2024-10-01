@@ -33,6 +33,7 @@ set (TT_METAL_TESTS_SRCS
     test_compile_program.cpp
     test_kernel_path_env_var.cpp
     test_clean_init.cpp
+    test_create_kernel_from_string.cpp
 )
 
 foreach (TEST_SRC ${TT_METAL_TESTS_SRCS})

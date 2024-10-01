@@ -1,0 +1,4 @@
+CreateKernelFromString
+=======================
+
+.. doxygenfunction:: CreateKernelFromString

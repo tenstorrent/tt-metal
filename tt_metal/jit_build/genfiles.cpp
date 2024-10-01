@@ -15,7 +15,6 @@
 #include "hostdevcommon/common_values.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/settings.hpp"
-#include "llrt/rtoptions.hpp"
 #include "noc/noc_parameters.h"
 
 namespace fs = std::filesystem;
@@ -24,10 +23,15 @@ using namespace std;
 
 namespace tt::tt_metal {
 
-static void gen_kernel_cpp(const string& src_name, const string& dst_name, vector<string>& prolog) {
+static void gen_kernel_cpp(const string& src, const string& dst_name, const vector<string>& prolog) {
     std::ofstream out(dst_name);
-    for (auto s : prolog) out << s;
-    out << "#include \"" << src_name << "\"\n";
+    for (const string& s : prolog) out << s;
+    out << src;
+}
+
+static void gen_kernel_cpp(const string& src, const string& dst_name) {
+    vector<string> empty_prolog;
+    gen_kernel_cpp(src, dst_name, empty_prolog);
 }
 
 static fs::path get_file_path_relative_to_dir(const string& dir, const fs::path& file_path) {
@@ -77,22 +81,31 @@ static string get_absolute_path(const string& file_path_string) {
     return absolute_file_path.string();
 }
 
+static string get_kernel_source_to_include(const KernelSource& kernel_src) {
+    switch (kernel_src.source_type_) {
+        case KernelSource::FILE_PATH: return "#include \"" + get_absolute_path(kernel_src.source_) + "\"\n";
+        case KernelSource::SOURCE_CODE: return kernel_src.source_;
+        default: {
+            TT_THROW("Unsupported kernel source type!");
+        }
+    }
+}
+
 void jit_build_genfiles_kernel_include(
-    const JitBuildEnv& env, const JitBuildSettings& settings, const string& input_hlk_file_path) {
+    const JitBuildEnv& env, const JitBuildSettings& settings, const KernelSource& kernel_src) {
     // Note: assumes dirs (and descriptors) already created
     log_trace(tt::LogBuildKernels, "Generating defines for BRISC/NCRISC/ERISC user kernel");
 
     string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
     string kernel_header = out_dir + "kernel_includes.hpp";
 
-    // Get absolute path of kernel file to include
-    string abs_file_path = get_absolute_path(input_hlk_file_path);
+    const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
 
-    vector<string> prolog;
-    gen_kernel_cpp(abs_file_path, kernel_header, prolog);
+    gen_kernel_cpp(kernel_src_to_include, kernel_header);
 }
+
 void jit_build_genfiles_triscs_src(
-    const JitBuildEnv& env, const JitBuildSettings& settings, const string& input_hlk_file_path) {
+    const JitBuildEnv& env, const JitBuildSettings& settings, const KernelSource& kernel_src) {
     // Note: assumes dirs (and descriptors) already created
     log_trace(tt::LogBuildKernels, "Generating defines for TRISCs");
 
@@ -107,8 +120,7 @@ void jit_build_genfiles_triscs_src(
     string pack_cpp = pack_base + ".cpp";
     string pack_llk_args_h = pack_base + "_llk_args.h";
 
-    // Get absolute path of kernel file to include
-    string abs_file_path = get_absolute_path(input_hlk_file_path);
+    const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
 
     vector<string> unpack_prolog;
     unpack_prolog.push_back("#define TRISC_UNPACK\n");
@@ -121,9 +133,9 @@ void jit_build_genfiles_triscs_src(
     pack_prolog.push_back("#include \"defines_generated.h\"\n");
 
     // TODO(pgk) - is this really worth it?
-    std::thread t0([&]() { gen_kernel_cpp(abs_file_path, unpack_cpp, unpack_prolog); });
-    std::thread t1([&]() { gen_kernel_cpp(abs_file_path, math_cpp, math_prolog); });
-    std::thread t2([&]() { gen_kernel_cpp(abs_file_path, pack_cpp, pack_prolog); });
+    std::thread t0([&]() { gen_kernel_cpp(kernel_src_to_include, unpack_cpp, unpack_prolog); });
+    std::thread t1([&]() { gen_kernel_cpp(kernel_src_to_include, math_cpp, math_prolog); });
+    std::thread t2([&]() { gen_kernel_cpp(kernel_src_to_include, pack_cpp, pack_prolog); });
     t0.join();
     t1.join();
     t2.join();

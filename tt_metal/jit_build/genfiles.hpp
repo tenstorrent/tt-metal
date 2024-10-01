@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "common/core_coord.h"
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
 
@@ -16,9 +17,9 @@ class JitBuildSettings;
 class JitBuildOptions;
 
 void jit_build_genfiles_kernel_include(
-    const JitBuildEnv& env, const JitBuildSettings& settings, const std::string& input_hlk_file_path);
+    const JitBuildEnv& env, const JitBuildSettings& settings, const KernelSource& kernel_src);
 void jit_build_genfiles_triscs_src(
-    const JitBuildEnv& env, const JitBuildSettings& settings, const std::string& kernel_in_path);
+    const JitBuildEnv& env, const JitBuildSettings& settings, const KernelSource& kernel_src);
 
 void jit_build_genfiles_bank_to_noc_coord_descriptor(
     const std::string& path,
