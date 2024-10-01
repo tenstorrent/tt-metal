@@ -81,7 +81,7 @@ def test_all_gather_on_n300_post_commit(
         mem_config,
         use_program_cache,
         function_level_defaults,
-        all_gather_operation=ttnn.all_gather,
+        all_gather_topology=ttnn.Topology.Ring,
         num_iters=num_iters,
         enable_async=enable_async,
     )
@@ -153,6 +153,6 @@ def test_all_gather_sharded_n300_post_commit(
         # num_cores,
         use_program_cache,
         function_level_defaults,
-        all_gather_operation=ttnn.all_gather,
+        all_gather_topology=ttnn.Topology.Ring,
         enable_async=enable_async,
     )

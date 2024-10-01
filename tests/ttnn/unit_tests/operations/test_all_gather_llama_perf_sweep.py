@@ -108,7 +108,7 @@ def test_all_gather_sharded_post_commit(
         # num_cores,
         use_program_cache,
         function_level_defaults,
-        all_gather_operation=ttnn.all_gather,
+        all_gather_topology=ttnn.Topology.Ring,
         enable_async=enable_async,
         n_worker=n_worker,
         n_buffer=n_buffer,

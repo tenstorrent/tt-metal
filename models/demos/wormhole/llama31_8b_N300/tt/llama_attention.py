@@ -395,7 +395,7 @@ class TtLlamaAttention(nn.Module):
             dense_outputs.append(dense_out)
 
         # All reduce
-        dense_out_gathered = ttnn.line_all_gather(dense_out, dim=1, num_links=1)
+        dense_out_gathered = ttnn.all_gather(dense_out, dim=1, num_links=1, topology=ttnn.Topology.Linear)
         dense_out_reduced = ttnn.experimental.fast_reduce_nc(
             dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
         )
@@ -547,7 +547,7 @@ class TtLlamaAttention(nn.Module):
         attn_output_11SH.deallocate(True)
 
         # All reduce
-        dense_out_gathered = ttnn.line_all_gather(output_11SH, dim=1, num_links=1)
+        dense_out_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1, topology=ttnn.Topology.Linear)
         dense_out_reduced = ttnn.experimental.fast_reduce_nc(
             dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
         )

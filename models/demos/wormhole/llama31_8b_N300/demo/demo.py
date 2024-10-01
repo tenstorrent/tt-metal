@@ -302,7 +302,7 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
         # Compile
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
         tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
-        tt_out_gathered = ttnn.line_all_gather(tt_out, dim=3, num_links=1)
+        tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
         ttnn.deallocate(tt_out)
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
         ttnn.deallocate(tt_out_gathered)
@@ -317,7 +317,7 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
 
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
         tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
-        tt_out_gathered = ttnn.line_all_gather(tt_out, dim=3, num_links=1)
+        tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
         ttnn.deallocate(tt_out)
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
         ttnn.deallocate(tt_out_gathered)
