@@ -33,17 +33,20 @@ def transpose(
     else:
         x = torch.randn(input_shape).bfloat16().float()
 
-    xt = ttnn.Tensor(
-        x,
-        input_dtype,
-    ).to(ttnn.TILE_LAYOUT)
+    xt = ttnn.to_layout(
+        ttnn.Tensor(
+            x,
+            input_dtype,
+        ),
+        ttnn.TILE_LAYOUT,
+    )
 
     xt = xt.to(device, input_mem_config)
     xtt = ttnn.transpose(xt, dim0, dim1, memory_config=output_mem_config)
-    assert list(xtt.shape.with_tile_padding()) == output_shape
+    assert list(xtt.shape) == output_shape
     transposed_ref = x.transpose(dim0, dim1)
 
-    tt_got_back = xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    tt_got_back = ttnn.to_torch(xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
 
     if input_dtype == ttnn.bfloat16:
         passing, output = comp_equal(transposed_ref, tt_got_back)
@@ -130,7 +133,7 @@ def test_transpose_hc_program_cache(dtype, device, use_program_cache):
     input_shape = (N, C, H, W)
     # CACHE MISS since its single core
     # Cache size 2 more because of pad op in single core impl + transpose
-    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=5, input_dtype=dtype)
+    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=4, input_dtype=dtype)
 
 
 @pytest.mark.parametrize(
@@ -630,3 +633,21 @@ def test_transpose_bfloat8_b(device, shape, swap_dims):
     tt_output = ttnn.to_torch(tt_output)
 
     assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    (ttnn.bfloat16, ttnn.float32),
+    ids=["bfloat16", "float"],
+)
+@pytest.mark.parametrize(
+    "shape",
+    [(1, 32, 12, 100), (1, 12, 32, 100), (1, 35, 7, 7), (1, 1, 1, 1)],
+)
+def test_transpose_hc(dtype, shape, device):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Skipping float32 tests on Grayskull")
+
+    logger.info("transpose on C H dim")
+
+    transpose(shape, device, dim0=1, dim1=-2, input_dtype=dtype)
