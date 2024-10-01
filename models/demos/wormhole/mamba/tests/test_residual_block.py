@@ -48,14 +48,14 @@ class PytorchResidualBlock(torch.nn.Module):
             ModelMode.PREFILL,
             1,
             128,
-            0.9973,
+            0.9980,
         ),
         (
             "state-spaces/mamba-2.8b",
             ModelMode.DECODE,
             32,
             1,
-            0.9996,
+            0.9998,
         ),
     ),
 )
