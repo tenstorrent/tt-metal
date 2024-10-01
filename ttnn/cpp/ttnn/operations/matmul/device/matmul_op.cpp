@@ -27,6 +27,7 @@ namespace {
 using namespace ttnn::operations::matmul;
 // Ensure there are always symmetrical values. Different paths use different
 // index ordering (0,1 vs 1,0) to meet test PCC requirements.
+#define MAX_HALF_DST_MODE_DST_REG_COUNT 8
 constexpr std::array<std::tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {{
     {4, 2}, {2, 4}, {8, 1}, {1, 8},  // subblock_hw = 8
     {7, 1}, {1, 7},                  // subblock_hw = 7
@@ -1280,6 +1281,12 @@ void Matmul::validate(
                 TT_FATAL(
                     program_config.per_core_N % program_config.out_subblock_w == 0,
                     "per_core_N must be divisible by out_subblock_w");
+                TT_FATAL(
+                    (program_config.out_subblock_w * program_config.out_subblock_h) <= MAX_HALF_DST_MODE_DST_REG_COUNT,
+                    "out_subblock_w {} times out_subblock_h {} needs to be at most {} to fit in hardware",
+                    program_config.out_subblock_w,
+                    program_config.out_subblock_h,
+                    MAX_HALF_DST_MODE_DST_REG_COUNT);
             }
         },
         chosen_program_config);
