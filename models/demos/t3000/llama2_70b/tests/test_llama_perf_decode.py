@@ -212,7 +212,7 @@ def run_test_LlamaModel_end_to_end(
     ),
     ids=["gen32", "gen128", "gen2k", "gen8k", "gen128k"],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 14227456}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 20000000}], indirect=True)
 def test_Llama_perf_host(
     generation_length,
     expected_compile_time,
