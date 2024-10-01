@@ -147,7 +147,7 @@ class TtLlamaMLP(torch.nn.Module):
             w2_out = ttnn.reshape(w2_out, [1, 1, seq_len, -1])
 
         # All reduce
-        w2_out_gathered = ttnn.line_all_gather(w2_out, dim=1, num_links=1)
+        w2_out_gathered = ttnn.all_gather(w2_out, dim=1, num_links=1, topology=ttnn.Topology.Linear)
         w2_out_reduced = ttnn.experimental.fast_reduce_nc(
             w2_out_gathered, dims=[1], output=None, compute_kernel_config=None
         )
