@@ -71,24 +71,6 @@ void Cluster::detect_arch_and_target() {
                 get_arch_str(detected_arch));
         }
     }
-#ifdef ARCH_GRAYSKULL
-    TT_FATAL(
-        this->arch_ == tt::ARCH::GRAYSKULL,
-        "Arch={} doesn't match compile-time build for GRAYSKULL",
-        get_string(this->arch_));
-#endif
-#ifdef ARCH_WORMHOLE
-    TT_FATAL(
-        (this->arch_ == tt::ARCH::WORMHOLE_B0) || (this->arch_ == tt::ARCH::WORMHOLE),
-        "Arch={} doesn't match compile-time build for WORMHOLE",
-        get_string(this->arch_));
-#endif
-#ifdef ARCH_BLACKHOLE
-    TT_FATAL(
-        this->arch_ == tt::ARCH::BLACKHOLE,
-        "Arch={} doesn't match compile-time build for BLACKHOLE",
-        get_string(this->arch_));
-#endif
 
     TT_FATAL(
         this->target_type_ == TargetDevice::Silicon or this->target_type_ == TargetDevice::Simulator,
