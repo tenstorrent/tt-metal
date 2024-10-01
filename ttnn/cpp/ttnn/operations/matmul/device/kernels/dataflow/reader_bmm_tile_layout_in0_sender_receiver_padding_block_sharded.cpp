@@ -240,8 +240,12 @@ void kernel_main() {
                         in0_mcast_receiver_semaphore_noc_addr,
                         in0_mcast_num_cores);
                 }
-                // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc,
-                // same cmd_buf Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
+                // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc even though cmd bufs are different
+                // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
+#ifdef ARCH_BLACKHOLE
+                // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and may not be sent in order they are issued
+                noc_async_writes_flushed();
+#endif
 
                 local_read_addr += in0_block_size_bytes;
             } else if constexpr (core_in_in0_receiver_mcast_grid) {
