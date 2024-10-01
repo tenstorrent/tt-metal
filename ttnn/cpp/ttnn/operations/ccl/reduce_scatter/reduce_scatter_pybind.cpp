@@ -75,8 +75,10 @@ void py_bind_reduce_scatter(pybind11::module& module) {
 
         Example:
 
+            >>> device_id = 0
+            >>> device = ttnn.open_device(device_id=device_id)
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.reduce_scatter(tensor, dim=0)
+            >>> output = ttnn.reduce_scatter(tensor, dim=0, topology=ttnn.Topology.Linear)
 
         )doc");
 }
