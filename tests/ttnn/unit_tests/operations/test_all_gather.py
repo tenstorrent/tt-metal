@@ -212,7 +212,7 @@ def run_all_gather_on_n300_impl(
         mem_config,
         use_program_cache,
         function_level_defaults,
-        all_gather_topology,
+        all_gather_topology=all_gather_topology,
         num_iters=num_iters,
         enable_async=enable_async,
     )
@@ -253,7 +253,7 @@ def run_all_gather_on_t3000_impl(
         mem_config,
         use_program_cache,
         function_level_defaults,
-        all_gather_topology,
+        all_gather_topology=all_gather_topology,
         num_iters=num_iters,
         enable_async=enable_async,
     )
@@ -285,7 +285,7 @@ def run_all_gather_on_t3000_impl_tight_loop(
         mem_config,
         use_program_cache,
         function_level_defaults,
-        all_gather_topology,
+        all_gather_topology=all_gather_topology,
         num_iters=num_iters,
         enable_async=enable_async,
     )
@@ -463,7 +463,7 @@ def test_all_gather_on_t3000_nightly_commit_looping_4chip_ring(
         mem_config,
         use_program_cache,
         function_level_defaults,
-        all_gather_operation=ttnn.all_gather,
+        all_gather_topology=ttnn.Topology.Ring,
         num_iters=num_iters,
         enable_async=enable_async,
     )
@@ -512,7 +512,7 @@ def test_all_gather_on_t3000_post_commit_for_profiler_regression(
         mem_config,
         use_program_cache,
         function_level_defaults,
-        all_gather_operation=ttnn.all_gather,
+        all_gather_topology=ttnn.Topology.Ring,
     )
 
 
