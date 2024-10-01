@@ -20,7 +20,7 @@ using KernelHandle = std::uint16_t;
 struct DataMovementConfig {
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0;  // For data transfer kernels: NCRISC & BRISC
     NOC noc = NOC::RISCV_0_default;
-    NOC_MODE noc_mode = NOC_MODE::DEDICATED_NOC_PER_DM;
+    NOC_MODE noc_mode = NOC_MODE::DM_DEDICATED_NOC;
     std::vector<uint32_t> compile_args;
     // Will cause CompileProgram to emit a file hlk_defines_generated.h
     // Each unique combination of defines will produce a unique compiled instantiation
@@ -33,7 +33,7 @@ struct ReaderDataMovementConfig : public DataMovementConfig {
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = detail::GetPreferredNOCForDRAMRead(tt::Cluster::instance().arch()),
-            .noc_mode = NOC_MODE::DEDICATED_NOC_PER_DM,
+            .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = compile_args,
             .defines = defines} {}
 };
@@ -43,7 +43,7 @@ struct WriterDataMovementConfig : public DataMovementConfig {
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = detail::GetPreferredNOCForDRAMWrite(tt::Cluster::instance().arch()),
-            .noc_mode = NOC_MODE::DEDICATED_NOC_PER_DM,
+            .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = compile_args,
             .defines = defines} {}
 };

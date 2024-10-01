@@ -30,10 +30,10 @@
 
 uint8_t noc_index;
 
-const uint32_t read_cmd_buf __attribute__((used)) = NCRISC_RD_CMD_BUF;
-const uint32_t write_cmd_buf __attribute__((used)) = NCRISC_WR_CMD_BUF;
-const uint32_t write_reg_cmd_buf __attribute__((used)) = NCRISC_WR_REG_CMD_BUF;
-const uint32_t write_at_cmd_buf __attribute__((used)) = NCRISC_AT_CMD_BUF;
+constexpr uint32_t read_cmd_buf __attribute__((used)) = NCRISC_RD_CMD_BUF;
+constexpr uint32_t write_cmd_buf __attribute__((used)) = NCRISC_WR_CMD_BUF;
+constexpr uint32_t write_reg_cmd_buf __attribute__((used)) = NCRISC_WR_REG_CMD_BUF;
+constexpr uint32_t write_at_cmd_buf __attribute__((used)) = NCRISC_AT_CMD_BUF;
 
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));

@@ -127,7 +127,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .noc_mode = tt_metal::NOC_MODE::ANY_NOC_PER_DM,
+            .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
             .compile_args = reader_compile_time_args});
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -145,7 +145,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt_metal::NOC::RISCV_1_default,
-            .noc_mode = tt_metal::NOC_MODE::ANY_NOC_PER_DM,
+            .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
             .compile_args = writer_compile_time_args});
 
     std::vector<uint32_t> bank_ids;

@@ -21,10 +21,10 @@
 
 uint8_t noc_index = NOC_INDEX;
 uint8_t noc_mode = NOC_MODE;
-const uint32_t read_cmd_buf __attribute__((used)) = NOC_MODE == DEDICATED_NOC_PER_DM ? NCRISC_RD_CMD_BUF : MULTI_NOC_NCRISC_RD_CMD_BUF;
-const uint32_t write_cmd_buf __attribute__((used)) = NOC_MODE == DEDICATED_NOC_PER_DM ? NCRISC_WR_CMD_BUF : MULTI_NOC_NCRISC_WR_CMD_BUF;
-const uint32_t write_reg_cmd_buf __attribute__((used)) = NOC_MODE == DEDICATED_NOC_PER_DM ? NCRISC_WR_REG_CMD_BUF : MULTI_NOC_NCRISC_WR_REG_CMD_BUF;
-const uint32_t write_at_cmd_buf __attribute__((used)) = NOC_MODE == DEDICATED_NOC_PER_DM ? NCRISC_AT_CMD_BUF : MULTI_NOC_NCRISC_AT_CMD_BUF;
+constexpr uint32_t read_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_RD_CMD_BUF : DYNAMIC_NOC_NCRISC_RD_CMD_BUF;
+constexpr uint32_t write_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_WR_CMD_BUF : DYNAMIC_NOC_NCRISC_WR_CMD_BUF;
+constexpr uint32_t write_reg_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_WR_REG_CMD_BUF : DYNAMIC_NOC_NCRISC_WR_REG_CMD_BUF;
+constexpr uint32_t write_at_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_AT_CMD_BUF : DYNAMIC_NOC_NCRISC_AT_CMD_BUF;
 
 uint32_t noc_reads_num_issued[NUM_NOCS];
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
@@ -49,7 +49,7 @@ void kernel_launch() {
     firmware_kernel_common_init((void tt_l1_ptr *)(MEM_NCRISC_INIT_IRAM_L1_BASE + (uint32_t)__kernel_init_local_l1_base - MEM_NCRISC_IRAM_BASE));
 #endif
 
-    if constexpr (NOC_MODE == DEDICATED_NOC_PER_DM) {
+    if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
         noc_local_state_init(noc_index);
     } else {
         noc_local_state_init(NOC_0);

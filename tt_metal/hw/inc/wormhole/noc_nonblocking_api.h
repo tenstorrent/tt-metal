@@ -11,15 +11,15 @@
 ////
 
 // used for ops with USE_MULTI_MOC defined
-constexpr uint32_t MULTI_NOC_NCRISC_WR_CMD_BUF = 2; // all writes share cmd buf
-constexpr uint32_t MULTI_NOC_NCRISC_WR_REG_CMD_BUF = 2;
-constexpr uint32_t MULTI_NOC_NCRISC_AT_CMD_BUF = 2;
-constexpr uint32_t MULTI_NOC_NCRISC_RD_CMD_BUF = 3;
+constexpr uint32_t DYNAMIC_NOC_NCRISC_WR_CMD_BUF = 2; // all writes share cmd buf
+constexpr uint32_t DYNAMIC_NOC_NCRISC_WR_REG_CMD_BUF = 2;
+constexpr uint32_t DYNAMIC_NOC_NCRISC_AT_CMD_BUF = 2;
+constexpr uint32_t DYNAMIC_NOC_NCRISC_RD_CMD_BUF = 3;
 
-constexpr uint32_t MULTI_NOC_BRISC_WR_CMD_BUF = 0; // all writes share cmd buf
-constexpr uint32_t MULTI_NOC_BRISC_WR_REG_CMD_BUF = 0;
-constexpr uint32_t MULTI_NOC_BRISC_AT_CMD_BUF = 0;
-constexpr uint32_t MULTI_NOC_BRISC_RD_CMD_BUF = 1;
+constexpr uint32_t DYNAMIC_NOC_BRISC_WR_CMD_BUF = 0; // all writes share cmd buf
+constexpr uint32_t DYNAMIC_NOC_BRISC_WR_REG_CMD_BUF = 0;
+constexpr uint32_t DYNAMIC_NOC_BRISC_AT_CMD_BUF = 0;
+constexpr uint32_t DYNAMIC_NOC_BRISC_RD_CMD_BUF = 1;
 
 constexpr uint32_t NCRISC_WR_CMD_BUF = 0;  // for large writes
 constexpr uint32_t NCRISC_RD_CMD_BUF = 1;  // for all reads
@@ -185,7 +185,7 @@ inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
   }
 }
 
-inline __attribute__((always_inline)) void noc_init_multi_noc() {
+inline __attribute__((always_inline)) void noc_init_dynamic_noc() {
 #pragma GCC unroll 0
   for (int noc = 0; noc < NUM_NOCS; noc++) {
     uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
@@ -196,18 +196,18 @@ inline __attribute__((always_inline)) void noc_init_multi_noc() {
     uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
 
     // program brisc cmd_buf 0
-    NOC_CMD_BUF_WRITE_REG(noc, MULTI_NOC_BRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
-    NOC_CMD_BUF_WRITE_REG(noc, MULTI_NOC_BRISC_RD_CMD_BUF, NOC_RET_ADDR_COORDINATE, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
+    NOC_CMD_BUF_WRITE_REG(noc, DYNAMIC_NOC_BRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, DYNAMIC_NOC_BRISC_RD_CMD_BUF, NOC_RET_ADDR_COORDINATE, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
 
     // program brisc cmd_buf 1
-    NOC_CMD_BUF_WRITE_REG(noc, MULTI_NOC_BRISC_WR_CMD_BUF, NOC_TARG_ADDR_COORDINATE, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
+    NOC_CMD_BUF_WRITE_REG(noc, DYNAMIC_NOC_BRISC_WR_CMD_BUF, NOC_TARG_ADDR_COORDINATE, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
 
     // program ncrisc cmd_buf 2
-    NOC_CMD_BUF_WRITE_REG(noc, MULTI_NOC_NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
-    NOC_CMD_BUF_WRITE_REG(noc, MULTI_NOC_NCRISC_RD_CMD_BUF, NOC_RET_ADDR_COORDINATE, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
+    NOC_CMD_BUF_WRITE_REG(noc, DYNAMIC_NOC_NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, DYNAMIC_NOC_NCRISC_RD_CMD_BUF, NOC_RET_ADDR_COORDINATE, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
 
     // program ncrisc cmd_buf 3
-    NOC_CMD_BUF_WRITE_REG(noc, MULTI_NOC_NCRISC_WR_CMD_BUF, NOC_TARG_ADDR_COORDINATE, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
+    NOC_CMD_BUF_WRITE_REG(noc, DYNAMIC_NOC_NCRISC_WR_CMD_BUF, NOC_TARG_ADDR_COORDINATE, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
   }
 }
 

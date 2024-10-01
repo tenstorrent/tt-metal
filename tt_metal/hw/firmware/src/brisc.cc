@@ -33,10 +33,10 @@
 
 uint8_t noc_index;
 uint8_t noc_mode;
-const uint32_t read_cmd_buf __attribute__((used)) = BRISC_RD_CMD_BUF;
-const uint32_t write_cmd_buf __attribute__((used)) = BRISC_WR_CMD_BUF;
-const uint32_t write_reg_cmd_buf __attribute__((used)) = BRISC_WR_REG_CMD_BUF;
-const uint32_t write_at_cmd_buf __attribute__((used)) = BRISC_AT_CMD_BUF;
+constexpr uint32_t read_cmd_buf __attribute__((used)) = BRISC_RD_CMD_BUF;
+constexpr uint32_t write_cmd_buf __attribute__((used)) = BRISC_WR_CMD_BUF;
+constexpr uint32_t write_reg_cmd_buf __attribute__((used)) = BRISC_WR_REG_CMD_BUF;
+constexpr uint32_t write_at_cmd_buf __attribute__((used)) = BRISC_AT_CMD_BUF;
 
 constexpr uint32_t RISCV_IC_BRISC_MASK = 0x1;
 constexpr uint32_t RISCV_IC_NCRISC_MASK = 0x10;
@@ -420,7 +420,7 @@ int main() {
 
             // re-initialize the NoCs
             if (prev_noc_mode != noc_mode) {
-                noc_init_multi_noc();
+                noc_init_dynamic_noc();
             }
             prev_noc_mode = noc_mode;
 
@@ -438,7 +438,7 @@ int main() {
                 RECORD_STACK_USAGE();
             } else {
                 // This was not initialized in kernel_init
-                if (noc_mode == DEDICATED_NOC_PER_DM) {
+                if (noc_mode == DM_DEDICATED_NOC) {
                     noc_local_state_init(noc_index);
                 } else {
                     noc_local_state_init(NOC_0);

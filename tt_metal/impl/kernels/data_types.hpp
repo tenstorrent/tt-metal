@@ -19,8 +19,8 @@ enum NOC : uint8_t {
 };
 
 enum NOC_MODE : uint8_t {
-    DEDICATED_NOC_PER_DM = 0,
-    ANY_NOC_PER_DM = 1,
+    DM_DEDICATED_NOC = 0,
+    DM_DYNAMIC_NOC = 1,
 };
 
 enum Eth : uint8_t {
