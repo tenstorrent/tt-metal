@@ -38,7 +38,7 @@ def test_llama_decoder_inference(device, seq_len, use_program_cache, reset_seeds
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     partial_state_dict = {k[9:]: v for k, v in state_dict.items() if (k.startswith("layers.0."))}
 
-    model_args.max_batch_size = 1
+    model_args.max_batch_size = 16  # 16
     batch = 1
     reference_model = TransformerBlock(layer_id=0, args=model_args)
     reference_model.load_state_dict(partial_state_dict)
