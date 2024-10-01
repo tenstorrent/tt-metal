@@ -432,7 +432,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
         "instruct_weights-3_batch",
     ],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 7815168, "num_command_queues": 2}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 7860224, "num_command_queues": 2}], indirect=True)
 def test_llama_demo(
     device, use_program_cache, input_prompts, instruct_weights, is_ci_env, is_single_card_n300, num_batches
 ):
