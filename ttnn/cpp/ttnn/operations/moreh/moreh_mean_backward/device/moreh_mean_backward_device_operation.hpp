@@ -19,7 +19,6 @@ struct MorehMeanBackwardOperation {
         const bool keepdim;
         const std::optional<Shape> input_grad_shape;
         const MemoryConfig memory_config;
-        // const CoreRange core_range; // unused for now
         const DeviceComputeKernelConfig compute_kernel_config;
     };
     struct tensor_args_t {
@@ -43,13 +42,13 @@ struct MorehMeanBackwardOperation {
         static cached_program_t create(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output_tensor);
+            tensor_return_value_t& output);
 
         static void override_runtime_arguments(
             cached_program_t& cached_program,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output_tensor);
+            tensor_return_value_t& output);
     };
 
     using program_factory_t = std::variant<MorehMeanBackwardFactory>;
