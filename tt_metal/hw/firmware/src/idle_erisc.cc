@@ -24,6 +24,7 @@
 #include "dataflow_api.h"
 #include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 
+#include "debug/watcher_common.h"
 #include "debug/waypoint.h"
 #include "debug/dprint.h"
 #include "debug/stack_usage.h"
@@ -105,30 +106,33 @@ int main() {
     //device_setup();
     noc_init();
 
-    mailboxes->launch.go.run = RUN_MSG_DONE;
-
+    mailboxes->go_message.signal = RUN_MSG_DONE;
+    mailboxes->launch_msg_rd_ptr = 0; // Initialize the rdptr to 0
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
 
         init_sync_registers();
         // Wait...
         WAYPOINT("GW");
-        while (mailboxes->launch.go.run != RUN_MSG_GO)
+        while (mailboxes->go_message.signal != RUN_MSG_GO)
         {
             RISC_POST_HEARTBEAT(heartbeat);
         };
         WAYPOINT("GD");
 
         {
+            // Idle ERISC Kernels aren't given go-signals corresponding to empty launch messages. Always profile this iteration, since it's guaranteed to be valid.
             DeviceZoneScopedMainN("ERISC-IDLE-FW");
-            DeviceZoneSetCounter(mailboxes->launch.kernel_config.host_assigned_id);
+            uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+            launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
+            DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
 
-            noc_index = mailboxes->launch.kernel_config.brisc_noc_id;
+            noc_index = launch_msg_address->kernel_config.brisc_noc_id;
 
             uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, DISPATCH_CLASS_ETH_DM0);
             uint32_t tt_l1_ptr *cb_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-                mailboxes->launch.kernel_config.cb_offset);
-            setup_cb_read_write_interfaces(cb_l1_base, 0, mailboxes->launch.kernel_config.max_cb_index, true, true, false);
+                launch_msg_address->kernel_config.cb_offset);
+            setup_cb_read_write_interfaces(cb_l1_base, 0, launch_msg_address->kernel_config.max_cb_index, true, true, false);
 
             flush_icache();
 
@@ -137,16 +141,18 @@ int main() {
             kernel_init();
             RECORD_STACK_USAGE();
             WAYPOINT("D");
-
-            mailboxes->launch.go.run = RUN_MSG_DONE;
+            mailboxes->go_message.signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that it has completed
-            if (mailboxes->launch.kernel_config.mode == DISPATCH_MODE_DEV) {
+            if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
+                launch_msg_address->kernel_config.enables = 0;
                 uint64_t dispatch_addr =
-                    NOC_XY_ADDR(NOC_X(mailboxes->launch.kernel_config.dispatch_core_x),
-                        NOC_Y(mailboxes->launch.kernel_config.dispatch_core_y), DISPATCH_MESSAGE_ADDR);
+                    NOC_XY_ADDR(NOC_X(mailboxes->go_message.master_x),
+                        NOC_Y(mailboxes->go_message.master_x), DISPATCH_MESSAGE_ADDR);
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                 noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31 /*wrap*/, false /*linked*/);
+                mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
+                CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
             }
 
             while (1) {

@@ -683,11 +683,12 @@ void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done,
             CoreType core_type = hal.get_core_type(programmable_core_type_index);
             for (const auto &logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
                 launch_msg_t *msg = &program.kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
+                go_msg_t* go_msg = &program.kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
                 msg->kernel_config.host_assigned_id = program.get_runtime_id();
 
                 auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);
-                tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg, device->get_dev_addr(physical_core, HalMemAddrType::LAUNCH));
+                tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg, go_msg, device->get_dev_addr(physical_core, HalMemAddrType::LAUNCH));
             }
         }
         if (wait_until_cores_done) {
@@ -888,7 +889,7 @@ Device *CreateDevice(
 
 Device *CreateDeviceMinimal(chip_id_t device_id, const uint8_t num_hw_cqs, DispatchCoreType dispatch_core_type) {
     ZoneScoped;
-    tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_type);
+    tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_type, num_hw_cqs);
     Device *dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     return dev;
