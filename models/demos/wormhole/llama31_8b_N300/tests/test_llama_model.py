@@ -55,7 +55,7 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
 
     instruct = True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
-    model_args = TtModelArgs(mesh_device.get_devices()[0], instruct=instruct, dummy_weights=dummy_weights)
+    model_args = TtModelArgs(mesh_device, instruct=instruct, dummy_weights=dummy_weights)
     model_args.n_layers = layers
     state_dict = model_args.load_state_dict()
 
@@ -91,7 +91,7 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
     # Load TTNN model
     tt_model = TtTransformer(
         args=model_args,
-        device_mesh=mesh_device,
+        mesh_device=mesh_device,
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
@@ -122,7 +122,7 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
         decode_input = prepare_inputs_ttnn(
             tt_decode_input,
             model_args.dim,
-            tt_model.device_mesh,
+            tt_model.mesh_device,
         )
         current_pos_tensor = ttnn.from_torch(
             torch.tensor([current_pos] * batch),

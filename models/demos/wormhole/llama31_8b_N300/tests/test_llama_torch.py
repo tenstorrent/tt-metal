@@ -14,7 +14,7 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import T
 def test_llama_torch_inference():
     iterations = 20
 
-    model_args = TtModelArgs(device=None)
+    model_args = TtModelArgs(mesh_device=None)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
     tokenizer = Tokenizer(model_args.tokenizer_path)
 

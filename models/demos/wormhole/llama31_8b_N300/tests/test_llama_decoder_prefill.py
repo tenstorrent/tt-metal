@@ -33,7 +33,7 @@ from models.utility_functions import skip_for_grayskull
 def test_llama_decoder_inference(mesh_device, seq_len, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(mesh_device.get_devices()[0])
+    model_args = TtModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -61,7 +61,7 @@ def test_llama_decoder_inference(mesh_device, seq_len, use_program_cache, reset_
     # Initialize TT model
     tt_model = TtTransformerBlock(
         args=model_args,
-        device_mesh=mesh_device,
+        mesh_device=mesh_device,
         dtype=dtype,
         state_dict=state_dict,
         layer_num=0,
@@ -75,7 +75,7 @@ def test_llama_decoder_inference(mesh_device, seq_len, use_program_cache, reset_
         tt_decode_input = pt_decode_input.clone()
         decode_input = prepare_inputs_ttnn_prefill(
             tt_decode_input,
-            tt_model.device_mesh,
+            tt_model.mesh_device,
         )
         positions = torch.LongTensor(range(seq_len))
         freqs_cis_i = precompute_freqs_cis(

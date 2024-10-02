@@ -22,7 +22,7 @@ from models.demos.wormhole.llama31_8b_N300.tt.llama_common import HostEmbedding
 def test_llama_embedding(mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat16
 
-    model_args = TtModelArgs(mesh_device.get_devices()[0])
+    model_args = TtModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
@@ -30,7 +30,7 @@ def test_llama_embedding(mesh_device, use_program_cache, reset_seeds):
     reference_emb.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
 
     tt_emb = TtLlamaEmbedding(
-        device_mesh=mesh_device,
+        mesh_device=mesh_device,
         args=model_args,
         weight_cache_path=model_args.weight_cache_path(dtype),
         state_dict=state_dict,

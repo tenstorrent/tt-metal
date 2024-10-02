@@ -48,8 +48,8 @@ def test_llama_model_inference(mesh_device, seq_len, use_program_cache, reset_se
     # Use instruct weights instead of general weights
     instruct = False
 
-    model_args = TtModelArgs(mesh_device.get_devices()[0], instruct=instruct)
-    model_args.n_layers = 32  # Full model
+    model_args = TtModelArgs(mesh_device, instruct=instruct)
+    # model_args.n_layers = 1
 
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
@@ -99,7 +99,7 @@ def test_llama_model_inference(mesh_device, seq_len, use_program_cache, reset_se
     # Load TTNN model
     tt_model = TtTransformer(
         args=model_args,
-        device_mesh=mesh_device,
+        mesh_device=mesh_device,
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
@@ -121,7 +121,7 @@ def test_llama_model_inference(mesh_device, seq_len, use_program_cache, reset_se
 
     decode_input = prepare_inputs_ttnn_prefill(
         tt_decode_input,
-        tt_model.device_mesh,
+        tt_model.mesh_device,
     )
     for i in range(1):
         start_pos = 0

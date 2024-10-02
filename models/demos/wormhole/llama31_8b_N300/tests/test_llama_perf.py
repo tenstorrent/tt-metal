@@ -41,10 +41,10 @@ def test_llama_model_perf(
 ):
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(mesh_device.get_devices()[0])
+    model_args = TtModelArgs(mesh_device)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
-    model_args.n_layers = 32  # Full model
+    # model_args.n_layers = 1
     # Clear global profiler state before starting measurements
     profiler.clear()
 
@@ -75,7 +75,7 @@ def test_llama_model_perf(
     # Load TTNN model
     tt_model = TtTransformer(
         args=model_args,
-        device_mesh=mesh_device,
+        mesh_device=mesh_device,
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
@@ -83,7 +83,7 @@ def test_llama_model_perf(
     )
     # Load TTNN embedding module
     tt_embd = TtLlamaEmbedding(
-        device_mesh=mesh_device,
+        mesh_device=mesh_device,
         args=model_args,
         weight_cache_path=model_args.weight_cache_path(dtype),
         state_dict=state_dict,
@@ -128,11 +128,11 @@ def test_llama_model_perf(
 def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos, generation_length):
     seqlen = 1  # Generating one token per user at a time
     batch = tt_model.args.max_batch_size
-    mesh_device = tt_model.device_mesh
+    mesh_device = tt_model.mesh_device
     # pre-compute the rotational embedding matrix and send to device
     current_rot_mat, rot_matrix = get_single_rot_mat(
         tt_model.args.head_dim,
-        tt_model.device_mesh,
+        tt_model.mesh_device,
         start_pos=0,
     )
 
@@ -146,7 +146,7 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
         decode_input = prepare_inputs_ttnn(
             tt_decode_input,
             tt_model.args.dim,
-            tt_model.device_mesh,
+            tt_model.mesh_device,
         )
 
         current_pos_tensor = ttnn.from_torch(

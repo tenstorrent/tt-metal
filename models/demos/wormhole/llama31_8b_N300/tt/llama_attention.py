@@ -15,7 +15,7 @@ from models.utility_functions import (
 class TtLlamaAttention(nn.Module):
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         weight_cache_path,
         layer_num,
@@ -25,8 +25,8 @@ class TtLlamaAttention(nn.Module):
         super().__init__()
 
         self.state_dict = state_dict
-        self.device_mesh = device_mesh
-        self.num_devices = 2
+        self.mesh_device = mesh_device
+        self.num_devices = configuration.num_devices
 
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
@@ -36,8 +36,8 @@ class TtLlamaAttention(nn.Module):
         self.n_kv_heads = configuration.n_kv_heads
         self.paged_attention_config = configuration.paged_attention_config
 
-        self.n_local_heads = self.n_heads // self.num_devices
-        self.n_local_kv_heads = self.n_kv_heads // self.num_devices
+        self.n_local_heads = self.n_heads // configuration.num_devices
+        self.n_local_kv_heads = self.n_kv_heads // configuration.num_devices
 
         self.dtype = dtype
 
@@ -62,8 +62,8 @@ class TtLlamaAttention(nn.Module):
         wo_str = f"{layer_name}.wo.weight"
 
         # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
-        assert self.n_heads % self.num_devices == 0
-        assert self.n_kv_heads % self.num_devices == 0
+        assert self.n_heads % configuration.num_devices == 0
+        assert self.n_kv_heads % configuration.num_devices == 0
 
         self.wqkv_list = []
         self.wo_list = []
@@ -71,15 +71,8 @@ class TtLlamaAttention(nn.Module):
 
         for i in range(1):
             # wqkv: 4096 x 3072 (2 devices): width-sharded on 12 banks, 3072 over 12 banks.
-            wqkv_shard_shape = (
-                4096,
-                3072 // 12,
-            )
-            wqkv_shard_spec = ttnn.ShardSpec(
-                configuration.dram_weight_grid, wqkv_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False
-            )
-            wqkv_mem_config = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, wqkv_shard_spec
+            wqkv_mem_config = configuration.create_dram_sharded_mem_config(
+                configuration.dim, 3 * configuration.dim // 2
             )
             wqkv = ttnn.as_tensor(
                 torch.concat(
@@ -87,29 +80,29 @@ class TtLlamaAttention(nn.Module):
                         torch.concat(
                             [
                                 torch.transpose(
-                                    torch.chunk(self.state_dict[wq_str], self.num_devices)[i],
+                                    torch.chunk(self.state_dict[wq_str], configuration.num_devices)[i],
                                     -2,
                                     -1,
                                 ),
                                 torch.transpose(
-                                    torch.chunk(self.state_dict[wk_str], self.num_devices)[i],
+                                    torch.chunk(self.state_dict[wk_str], configuration.num_devices)[i],
                                     -2,
                                     -1,
                                 ),
                                 torch.transpose(
-                                    torch.chunk(self.state_dict[wv_str], self.num_devices)[i],
+                                    torch.chunk(self.state_dict[wv_str], configuration.num_devices)[i],
                                     -2,
                                     -1,
                                 ),
                             ],
                             dim=-1,
                         )
-                        for i in range(self.num_devices)
+                        for i in range(configuration.num_devices)
                     ],
                     dim=-1,
                 ),
-                device=self.device_mesh,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.device_mesh, dim=-1),
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
                 dtype=self.dtype,
                 memory_config=wqkv_mem_config,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
@@ -117,24 +110,15 @@ class TtLlamaAttention(nn.Module):
             )
 
             # wo: 2048 (2devices) x 4096: width-sharded on 12 banks, 4224 over 12 banks.
-            wo_shard_shape = (
-                2048,
-                4224 // 12,
-            )  # (11 shards) 4224 - padded cols to divide by 12 dram cores (and divisible by tile size of 32)
-            wo_shard_spec = ttnn.ShardSpec(
-                configuration.dram_weight_grid, wo_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False
-            )
-            wo_mem_config = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, wo_shard_spec
-            )
+            wo_mem_config = configuration.create_dram_sharded_mem_config(configuration.dim // 2, configuration.dim)
             wo = ttnn.as_tensor(
                 torch.transpose(
                     self.state_dict[wo_str],
                     -2,
                     -1,
                 ),
-                device=self.device_mesh,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.device_mesh, dim=-2),
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-2),
                 memory_config=wo_mem_config,
                 dtype=self.dtype,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
@@ -145,7 +129,7 @@ class TtLlamaAttention(nn.Module):
                 cache_k = torch.zeros(
                     (
                         self.paged_attention_config.max_num_blocks,
-                        self.n_kv_heads // self.num_devices,
+                        self.n_kv_heads // configuration.num_devices,
                         self.paged_attention_config.block_size,
                         self.head_dim,
                     )
@@ -153,7 +137,7 @@ class TtLlamaAttention(nn.Module):
                 cache_v = torch.zeros(
                     (
                         self.paged_attention_config.max_num_blocks,
-                        self.n_kv_heads // self.num_devices,
+                        self.n_kv_heads // configuration.num_devices,
                         self.paged_attention_config.block_size,
                         self.head_dim,
                     )
@@ -180,8 +164,8 @@ class TtLlamaAttention(nn.Module):
             layer_past = [
                 ttnn.as_tensor(
                     lp,
-                    device=self.device_mesh,
-                    mesh_mapper=ttnn.ShardTensorToMesh(self.device_mesh, dim=1),
+                    device=self.mesh_device,
+                    mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
                     layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                     dtype=self.dtype,
                     cache_file_name=cache_name(f"kvcache_{id}_{lp.shape}_n300"),
@@ -334,7 +318,7 @@ class TtLlamaAttention(nn.Module):
 
             # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
             # v_heads [seqlen, n_kv_heads, bsz, head_dim]
-            # keys, [max_batch_size, n_kv_heads // self.num_devices, sliding_window, head_dim]
+            # keys, [max_batch_size, n_kv_heads // configuration.num_devices, sliding_window, head_dim]
             ttnn.experimental.paged_update_cache(
                 keys, k_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
             )
@@ -395,11 +379,14 @@ class TtLlamaAttention(nn.Module):
             dense_outputs.append(dense_out)
 
         # All reduce
-        dense_out_gathered = ttnn.all_gather(dense_out, dim=1, num_links=1, topology=ttnn.Topology.Linear)
-        dense_out_reduced = ttnn.experimental.fast_reduce_nc(
-            dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
-        )
-        return dense_out_reduced
+        if self.num_devices > 1:
+            dense_out_gathered = ttnn.all_gather(dense_out, dim=1, num_links=1, topology=ttnn.Topology.Linear)
+            dense_out_reduced = ttnn.experimental.fast_reduce_nc(
+                dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
+            )
+            return dense_out_reduced
+        else:
+            return dense_out
 
     def forward_prefill(self, xs_11SH, rot_mats, transformation_mats, user_id: int = 0, page_table=None):
         seq_len = xs_11SH.shape[-2]
@@ -547,11 +534,14 @@ class TtLlamaAttention(nn.Module):
         attn_output_11SH.deallocate(True)
 
         # All reduce
-        dense_out_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1, topology=ttnn.Topology.Linear)
-        dense_out_reduced = ttnn.experimental.fast_reduce_nc(
-            dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
-        )
-        return dense_out_reduced
+        if self.num_devices > 1:
+            dense_out_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1, topology=ttnn.Topology.Linear)
+            dense_out_reduced = ttnn.experimental.fast_reduce_nc(
+                dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
+            )
+            return dense_out_reduced
+        else:
+            return output_11SH
 
     def forward(
         self, xs, current_pos, rot_mats=None, transformation_mats=None, user_id=0, mode="decode", page_table=None
