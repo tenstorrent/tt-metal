@@ -33,10 +33,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum_backward/moreh_sum_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_bmm/moreh_bmm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_bmm_backward/moreh_bmm_backward_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_linear/moreh_linear_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_linear_backward/moreh_linear_backward_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_linear_backward/bias_backward_h/moreh_bias_backward_multi_core_h.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_linear_backward/bias_backward_hw/moreh_bias_backward_single_core_hw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_matmul/multi_core/moreh_matmul_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_matmul/moreh_matmul_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_matmul_backward/moreh_matmul_backward_op.cpp
@@ -48,11 +44,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_layernorm_backward/moreh_layernorm_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_layernorm_backward/input_grad/moreh_layernorm_backward_input_grad.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_layernorm_backward/gamma_beta_grad/moreh_layernorm_backward_gamma_beta_grad.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_groupnorm/moreh_groupnorm_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_groupnorm/moreh_groupnorm.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_groupnorm_backward/moreh_groupnorm_backward_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_groupnorm_backward/input_grad/moreh_groupnorm_backward_input_grad.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_groupnorm_backward/gamma_beta_grad/moreh_groupnorm_backward_gamma_beta_grad.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_cumsum/moreh_cumsum_nc/moreh_cumsum_nc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_cumsum/moreh_cumsum_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sgd/moreh_sgd_op.cpp

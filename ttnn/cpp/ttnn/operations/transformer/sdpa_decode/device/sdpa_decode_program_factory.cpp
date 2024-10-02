@@ -140,11 +140,13 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     // balance the number of cores to use based on batch
     uint32_t num_cores_per_batch = num_cores_available / B;
     uint32_t num_active_cores = num_cores_per_batch * B;
-    uint32_t num_cores_per_head = num_cores_per_batch / num_kv_heads;
-    uint32_t num_reducer_cores = (num_cores_per_head == 0) ? B : num_kv_heads*B;
+    //// for core assignment, it is the same whether there's 1 core for head or 1 core for many heads
+    uint32_t num_cores_per_head = std::max((uint32_t) 1, num_cores_per_batch / num_kv_heads);
+    uint32_t num_heads_per_core = std::max((uint32_t) 1, num_kv_heads / num_cores_per_batch);
+    uint32_t num_reducer_cores = num_kv_heads*B / num_heads_per_core;
     uint32_t num_output_cores = B;
 
-    TT_FATAL(num_cores_per_head > 0, "Case not supported for more n_kv_heads*batch > number of cores. Got batch={}, n_kv_heads={} and num_cores_available={}. Let's assume each core can handle at most one head", B, num_kv_heads, num_cores_available);
+    TT_FATAL(((num_cores_per_head >= 1) && (num_heads_per_core == 1)) || ((num_cores_per_head == 1) && (num_heads_per_core >= 1)), "This assertion should always be true, unless core assignment logic is wrong");
 
     // create core group, assume n batch and k_heads:
     // this is a 1D list of cores sorted by batch_output1, worker, ..., batch_output2, worker, ..., batch_output n, worker, ...
@@ -189,6 +191,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     log_debug("num_cores_available: {}", num_cores_available);
     log_debug("num_cores_per_batch: {}", num_cores_per_batch);
     log_debug("num_cores_per_head: {}", num_cores_per_head);
+    log_debug("num_heads_per_core: {}", num_heads_per_core);
     log_debug("num_active_cores: {}", num_active_cores);
     log_debug("num_reducer_cores: {}", num_reducer_cores);
     log_debug("num_output_cores: {}", num_output_cores);
@@ -456,7 +459,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         CoreCoord core = core_group[i];
-        uint32_t worker_id_for_reduce = (num_cores_per_head == 0) ? -1 : i % num_cores_per_head - 1;
+        uint32_t worker_id_for_reduce = i % num_cores_per_head - 1;
         bool do_reduce = (worker_id_for_reduce == -1);
         if (do_reduce) {
             reduce_core_noc_x = core.x;
@@ -506,7 +509,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         B, PNHt, St, DHt, Sk_chunk_t, num_active_cores, is_q_sharded,
         num_cores_per_batch, k_chunk_size, log2_page_size, index_stick_size,
         (uint32_t)is_paged_attention, num_kv_heads, page_block_size_t,
-        log2_page_table_page_size, page_table_stick_size, Bkv, num_cores_per_head, num_output_cores
+        log2_page_table_page_size, page_table_stick_size, Bkv, num_cores_per_head, num_heads_per_core, num_output_cores
     };
 
     std::vector<uint32_t> writer_compile_time_args_common = {
@@ -522,6 +525,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         num_q_heads,
         num_kv_heads,
         num_cores_per_head,
+        num_heads_per_core,
         num_reducer_cores,
         num_output_cores,
         output_tensor.element_size()
@@ -531,7 +535,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         St, DHt, PNHt, Sk_chunk_t,
         qk_in0_block_w, qk_out_subblock_w, qk_out_subblock_h, qk_in0_num_subblocks, qk_in1_num_subblocks, qk_num_blocks,
         out_in0_block_w, out_out_subblock_w, out_out_subblock_h, out_in0_num_subblocks, out_in1_num_subblocks, out_num_blocks,
-        num_cores_per_batch, k_chunk_size, num_cores_per_head
+        num_cores_per_batch, k_chunk_size, num_cores_per_head, num_heads_per_core
     };
 
     std::map<string, string> defines;
@@ -585,17 +589,14 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     // Set rt args
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         CoreCoord core = core_group[i];
-        uint32_t worker_id_for_reduce = (num_cores_per_head == 0) ? -1 : i % num_cores_per_head - 1;
+        uint32_t worker_id_for_reduce = i % num_cores_per_head - 1;
         uint32_t worker_id_for_output = i % num_cores_per_batch - 1;
         bool do_reduce = (worker_id_for_reduce == -1);
         bool do_output = (worker_id_for_output == -1);
 
-        // 64 cores, 4 batch, 8 head
-        // num_cores_per_batch = 16
-        // num_cores_per_head = 2
-        uint32_t cur_head = (num_cores_per_head == 0) ? 0 : (i % num_cores_per_batch) / num_cores_per_head;
+        uint32_t cur_head = (i % num_cores_per_batch) / num_cores_per_head;
         uint32_t cur_batch = i / num_cores_per_batch;
-        uint32_t core_num_in_reduce = (num_cores_per_head == 0) ? 0 : i % num_cores_per_head;
+        uint32_t core_num_in_reduce = i % num_cores_per_head;
         uint32_t core_num_in_output = i % num_cores_per_batch;
 
         uint32_t cur_pos = use_cur_pos_tensor ? -1 : cur_pos_ids.at(cur_batch);

@@ -73,14 +73,14 @@ uint32_t firmware_config_init(tt_l1_ptr mailboxes_t* const mailboxes, uint32_t c
 #pragma GCC unroll ProgrammableCoreType::COUNT
     for (uint32_t index = 0; index < ProgrammableCoreType::COUNT; index++) {
         kernel_config_base[index] =
-            mailboxes->launch.kernel_config.kernel_config_base[index];
+            mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_config_base[index];
         sem_l1_base[index] = (uint32_t tt_l1_ptr *)(kernel_config_base[index] +
-            mailboxes->launch.kernel_config.sem_offset[index]);
+            mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.sem_offset[index]);
     }
     rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base[core_type_index] +
-        mailboxes->launch.kernel_config.mem_map[dispatch_class].rta_offset);
+        mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.mem_map[dispatch_class].rta_offset);
     crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base[core_type_index] +
-        mailboxes->launch.kernel_config.mem_map[dispatch_class].crta_offset);
+        mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.mem_map[dispatch_class].crta_offset);
 
     return kernel_config_base[core_type_index];
 }

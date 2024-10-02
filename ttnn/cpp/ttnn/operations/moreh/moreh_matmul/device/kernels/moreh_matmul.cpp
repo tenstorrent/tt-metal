@@ -3,10 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Implemented based on bmm.cpp
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
-
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/transpose_wh.h"
+#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 
@@ -28,12 +27,13 @@ constexpr uint32_t cb_out0 = tt::CB::c_out0;
 constexpr uint32_t cb_intermed0 = tt::CB::c_intermed0;
 constexpr uint32_t cb_intermed1 = tt::CB::c_intermed1;
 constexpr uint32_t cb_intermed2 = tt::CB::c_intermed2;
+constexpr uint32_t cb_intermed3 = tt::CB::c_intermed3;
 
 ////////////////////
 // inline functions
 ////////////////////
-FORCE_INLINE void unravel_output_tidx(uint32_t output_tidx, uint32_t* output_idxes,  uint32_t* output_stride) {
-    for (int32_t i = MAX_NUM_DIMENSIONS - 1; i >= 0;--i) {
+FORCE_INLINE void unravel_output_tidx(uint32_t output_tidx, uint32_t* output_idxes, uint32_t* output_stride) {
+    for (int32_t i = MAX_NUM_DIMENSIONS - 1; i >= 0; --i) {
         uint32_t dim = output_tidx / output_stride[i];
         output_idxes[i] = dim;
         output_tidx -= (output_idxes[i] * output_stride[i]);
@@ -41,26 +41,25 @@ FORCE_INLINE void unravel_output_tidx(uint32_t output_tidx, uint32_t* output_idx
 }
 
 // TODO: move it to moreh_common.hpp if more use cases.
-FORCE_INLINE void transpose_wh_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32_t idst = 0)
-{
-    #if defined FP32_DEST_ACC_EN
-        unpack_reconfig_data_format_srca(icb);
-    #endif
+FORCE_INLINE void transpose_wh_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32_t idst = 0) {
+#if defined FP32_DEST_ACC_EN
+    unpack_reconfig_data_format_srca(icb);
+#endif
     transpose_wh_init_short(icb);
     tile_regs_acquire();
     transpose_wh_tile(icb, itile, idst);
     tile_regs_commit();
     cb_reserve_back(ocb, onetile);
     tile_regs_wait();
-    #if defined FP32_DEST_ACC_EN
-        pack_reconfig_data_format(ocb);
-    #endif
+#if defined FP32_DEST_ACC_EN
+    pack_reconfig_data_format(ocb);
+#endif
     pack_tile(idst, ocb);
     tile_regs_release();
     cb_push_back(ocb, onetile);
 }
 
-FORCE_INLINE void transpose_tile(uint32_t &mm_src, bool transpose, bool need_mask, bool is_input) {
+FORCE_INLINE void transpose_tile(uint32_t& mm_src, bool transpose, bool need_mask, bool is_input) {
     if (!transpose) {
         return;
     }
@@ -69,27 +68,33 @@ FORCE_INLINE void transpose_tile(uint32_t &mm_src, bool transpose, bool need_mas
         cb_wait_front(mm_src, onetile);
         transpose_wh_tile_to_cb(mm_src, mm_src);
         cb_pop_front(mm_src, onetile);
-    }
-    else {
+    } else {
         uint32_t trans_src = (is_input) ? (cb_in0) : (cb_in1);
         mm_src = (is_input) ? (cb_intermed1) : (cb_intermed2);
         transpose_wh_tile_to_cb(trans_src, mm_src);
     }
 }
 
-FORCE_INLINE void pack_onetile_to_cb(uint32_t ocb = 16, uint32_t idst = 0)
-{
+FORCE_INLINE void pack_onetile_to_cb(uint32_t ocb = 16, uint32_t idst = 0) {
     cb_reserve_back(ocb, onetile);
     tile_regs_wait();
-    #if defined FP32_DEST_ACC_EN
-        pack_reconfig_data_format(ocb);
-    #endif
+#if defined FP32_DEST_ACC_EN
+    pack_reconfig_data_format(ocb);
+#endif
     pack_tile(idst, ocb);
     tile_regs_release();
     cb_push_back(ocb, onetile);
 }
 
-FORCE_INLINE void mask_tile_to_cb(uint32_t& mm_src, bool& need_mask, bool need_mask_h, bool need_mask_w, bool last_out, bool last_line, bool transpose, bool is_input) {
+FORCE_INLINE void mask_tile_to_cb(
+    uint32_t& mm_src,
+    bool& need_mask,
+    bool need_mask_h,
+    bool need_mask_w,
+    bool last_out,
+    bool last_line,
+    bool transpose,
+    bool is_input) {
     bool need_mask_last_line_and_out = (last_line && last_out);
     bool need_mask_last_line = false;
     bool need_mask_last_out = false;
@@ -101,8 +106,7 @@ FORCE_INLINE void mask_tile_to_cb(uint32_t& mm_src, bool& need_mask, bool need_m
     if (is_input) {
         need_mask_last_line = last_line && ((transpose) ? (need_mask_w) : (need_mask_h));
         need_mask_last_out = last_out && ((transpose) ? (need_mask_h) : (need_mask_w));
-    }
-    else {
+    } else {
         need_mask_last_line = last_line && ((transpose) ? (need_mask_h) : (need_mask_w));
         need_mask_last_out = last_out && ((transpose) ? (need_mask_w) : (need_mask_h));
     }
@@ -114,29 +118,25 @@ FORCE_INLINE void mask_tile_to_cb(uint32_t& mm_src, bool& need_mask, bool need_m
         uint32_t mask_tidx = MASK_TILE_H_IDX;
         if (need_mask_last_line_and_out) {
             mask_tidx = MASK_TILE_HW_IDX;
-        }
-        else if (need_mask_last_line) {
+        } else if (need_mask_last_line) {
             if (is_input) {
                 mask_tidx = (transpose) ? (MASK_TILE_W_IDX) : (MASK_TILE_H_IDX);
-            }
-            else {
+            } else {
                 mask_tidx = (transpose) ? (MASK_TILE_H_IDX) : (MASK_TILE_W_IDX);
             }
-        }
-        else {
+        } else {
             if (is_input) {
                 mask_tidx = (transpose) ? (MASK_TILE_H_IDX) : (MASK_TILE_W_IDX);
-            }
-            else {
+            } else {
                 mask_tidx = (transpose) ? (MASK_TILE_W_IDX) : (MASK_TILE_H_IDX);
             }
         }
 
         // mul input tile with mask tile
         tile_regs_acquire();
-        #if defined FP32_DEST_ACC_EN
-            unpack_reconfig_data_format(cb_in0, cb_mask);
-        #endif
+#if defined FP32_DEST_ACC_EN
+        unpack_reconfig_data_format(cb_in0, cb_mask);
+#endif
         mul_tiles_init(cb_in, cb_mask);
         mul_tiles(cb_in, cb_mask, 0, mask_tidx, 0);
         tile_regs_commit();
@@ -148,11 +148,10 @@ FORCE_INLINE void mask_tile_to_cb(uint32_t& mm_src, bool& need_mask, bool need_m
 }
 
 #ifdef FUSE_BIAS
-FORCE_INLINE void bias_add(bool is_scalar_bias)
-{
+FORCE_INLINE void bias_add(bool is_scalar_bias) {
     static bool scalar_bias_loaded = false;
-    pack_onetile_to_cb(cb_intermed0);
-    cb_wait_front(cb_intermed0, onetile);
+    pack_onetile_to_cb(cb_intermed3);
+    cb_wait_front(cb_intermed3, onetile);
 
     if (is_scalar_bias && !scalar_bias_loaded) {
         cb_wait_front(bias_cb_id, onetile);
@@ -163,32 +162,41 @@ FORCE_INLINE void bias_add(bool is_scalar_bias)
 
     tile_regs_acquire();
     if (is_scalar_bias) {
-        #if defined FP32_DEST_ACC_EN
-            unpack_reconfig_data_format(cb_intermed0, bias_cb_id);
-        #endif
-        add_bcast_scalar_init_short(cb_intermed0, bias_cb_id);
-        add_tiles_bcast_scalar(cb_intermed0, bias_cb_id, 0, 0, 0);
-    }
-    else {
-        #if defined FP32_DEST_ACC_EN
-            unpack_reconfig_data_format(cb_intermed0, bias_cb_id);
-        #endif
-        add_bcast_rows_init_short(cb_intermed0, bias_cb_id);
-        add_tiles_bcast_rows(cb_intermed0, bias_cb_id, 0, 0, 0);
+#if defined FP32_DEST_ACC_EN
+        unpack_reconfig_data_format(cb_intermed3, bias_cb_id);
+#endif
+        add_bcast_scalar_init_short(cb_intermed3, bias_cb_id);
+        add_tiles_bcast_scalar(cb_intermed3, bias_cb_id, 0, 0, 0);
+    } else {
+#if defined FP32_DEST_ACC_EN
+        unpack_reconfig_data_format(cb_intermed3, bias_cb_id);
+#endif
+        add_bcast_rows_init_short(cb_intermed3, bias_cb_id);
+        add_tiles_bcast_rows(cb_intermed3, bias_cb_id, 0, 0, 0);
     }
     tile_regs_commit();
 
-    cb_pop_front(cb_intermed0, onetile);
+    cb_pop_front(cb_intermed3, onetile);
     if (!is_scalar_bias) {
         cb_pop_front(bias_cb_id, onetile);
     }
 }
 #endif
 
-FORCE_INLINE void matmul_with_transpose_and_mask(uint32_t output_tidx, uint32_t num_output_tiles, uint32_t Kt, bool transpose_input, bool transpose_other,
-    bool need_input_mask_h, bool need_input_mask_w, uint32_t *output_stride, uint32_t Mt, uint32_t Nt,
-    bool need_other_mask_h, bool need_other_mask_w, bool is_scalar_bias)
-{
+FORCE_INLINE void matmul_with_transpose_and_mask(
+    uint32_t output_tidx,
+    uint32_t num_output_tiles,
+    uint32_t Kt,
+    bool transpose_input,
+    bool transpose_other,
+    bool need_input_mask_h,
+    bool need_input_mask_w,
+    uint32_t* output_stride,
+    uint32_t Mt,
+    uint32_t Nt,
+    bool need_other_mask_h,
+    bool need_other_mask_w,
+    bool is_scalar_bias) {
     // TODO: checking required when the input cb format and intermediate cb format are different.
     mm_init(cb_in0, cb_in1, cb_out0);
     if (transpose_input || transpose_other) {
@@ -203,7 +211,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(uint32_t output_tidx, uint32_t 
         cb_wait_front(cb_in3, num_mask_tiles);
     }
 
-    #pragma GCC unroll 0
+#pragma GCC unroll 0
     for (uint32_t i = 0; i < num_output_tiles; ++i) {
         bool spill = Kt > 1;
         bool enable_reload = false;
@@ -214,7 +222,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(uint32_t output_tidx, uint32_t 
         bool input_last_row = (output_idxes[1] == Mt - 1) ? (true) : (false);
         bool other_last_col = (output_idxes[0] == Nt - 1) ? (true) : (false);
 
-        #pragma GCC unroll 0
+#pragma GCC unroll 0
         for (uint32_t kt = 0; kt < Kt; kt++) {
             bool last_out = kt == (Kt - 1);
             bool need_input_mask = false;
@@ -233,10 +241,26 @@ FORCE_INLINE void matmul_with_transpose_and_mask(uint32_t output_tidx, uint32_t 
             // mask: the first two arguments (mm_src0, need_input_mask) are passed by reference.
             // transpose: the first argument (mm_src0) is passed by reference.
             ////////////////////
-            mask_tile_to_cb(mm_src0, need_input_mask, need_input_mask_h, need_input_mask_w, last_out, input_last_row, transpose_input, true);
+            mask_tile_to_cb(
+                mm_src0,
+                need_input_mask,
+                need_input_mask_h,
+                need_input_mask_w,
+                last_out,
+                input_last_row,
+                transpose_input,
+                true);
             transpose_tile(mm_src0, transpose_input, need_input_mask, true);
 
-            mask_tile_to_cb(mm_src1, need_other_mask, need_other_mask_h, need_other_mask_w, last_out, other_last_col, transpose_other, false);
+            mask_tile_to_cb(
+                mm_src1,
+                need_other_mask,
+                need_other_mask_h,
+                need_other_mask_w,
+                last_out,
+                other_last_col,
+                transpose_other,
+                false);
             transpose_tile(mm_src1, transpose_other, need_other_mask, false);
 
             ////////////////////
@@ -245,9 +269,9 @@ FORCE_INLINE void matmul_with_transpose_and_mask(uint32_t output_tidx, uint32_t 
             tile_regs_acquire();
             if (enable_reload) {
                 cb_wait_front(cb_intermed0, onetile);
-                #if defined FP32_DEST_ACC_EN
-                    unpack_reconfig_data_format_srca(cb_intermed0);
-                #endif
+#if defined FP32_DEST_ACC_EN
+                unpack_reconfig_data_format_srca(cb_intermed0);
+#endif
                 copy_tile_to_dst_init_short(cb_intermed0);
                 copy_tile(cb_intermed0, 0, 0);
                 cb_pop_front(cb_intermed0, onetile);
@@ -262,9 +286,9 @@ FORCE_INLINE void matmul_with_transpose_and_mask(uint32_t output_tidx, uint32_t 
             }
 
             mm_init_short(mm_src0, mm_src1);
-            #if defined FP32_DEST_ACC_EN
-                unpack_reconfig_data_format(mm_src0, mm_src1);
-            #endif
+#if defined FP32_DEST_ACC_EN
+            unpack_reconfig_data_format(mm_src0, mm_src1);
+#endif
             matmul_tiles(mm_src0, mm_src1, 0, 0, 0, false);
             tile_regs_commit();
 
@@ -279,15 +303,14 @@ FORCE_INLINE void matmul_with_transpose_and_mask(uint32_t output_tidx, uint32_t 
             }
 
             if (last_out) {
-                ////////////////////
-                // bias add
-                ////////////////////
-                #ifdef FUSE_BIAS
+////////////////////
+// bias add
+////////////////////
+#ifdef FUSE_BIAS
                 bias_add(is_scalar_bias);
-                #endif
+#endif
                 pack_onetile_to_cb(cb_out0);
-            }
-            else {
+            } else {
                 pack_onetile_to_cb(cb_intermed0);
             }
 
@@ -327,13 +350,13 @@ void MAIN {
     constexpr uint32_t input_mask_w = get_compile_time_arg_val(7);
     constexpr uint32_t other_mask_h = get_compile_time_arg_val(8);
     constexpr uint32_t other_mask_w = get_compile_time_arg_val(9);
-    #ifdef FUSE_BIAS
+#ifdef FUSE_BIAS
     constexpr bool is_scalar_bias = (get_compile_time_arg_val(10) == 1);
     constexpr bool need_bias_add = true;
-    #else
+#else
     constexpr bool is_scalar_bias = false;
     constexpr bool need_bias_add = false;
-    #endif
+#endif
     constexpr bool need_input_mask_h = (input_mask_h != 32);
     constexpr bool need_input_mask_w = (input_mask_w != 32);
     constexpr bool need_other_mask_h = (other_mask_h != 32);
@@ -345,15 +368,26 @@ void MAIN {
     ArgFetcher arg_fetcher;
     uint32_t output_tile_start_idx = arg_fetcher.get_next_arg_val<uint32_t>();
     uint32_t output_stride[MAX_NUM_DIMENSIONS];
-    for (int32_t i = 0; i < MAX_NUM_DIMENSIONS;++i) {
+    for (int32_t i = 0; i < MAX_NUM_DIMENSIONS; ++i) {
         output_stride[i] = arg_fetcher.get_next_arg_val<uint32_t>();
     }
 
     if (need_transpose || need_mask || need_bias_add) {
-        matmul_with_transpose_and_mask(output_tile_start_idx, num_output_tiles, Kt, transpose_input, transpose_other,
-            need_input_mask_h, need_input_mask_w, output_stride, Mt, Nt, need_other_mask_h, need_other_mask_w, is_scalar_bias);
-    }
-    else {
+        matmul_with_transpose_and_mask(
+            output_tile_start_idx,
+            num_output_tiles,
+            Kt,
+            transpose_input,
+            transpose_other,
+            need_input_mask_h,
+            need_input_mask_w,
+            output_stride,
+            Mt,
+            Nt,
+            need_other_mask_h,
+            need_other_mask_w,
+            is_scalar_bias);
+    } else {
         matmul(num_output_tiles, Kt);
     }
 }
