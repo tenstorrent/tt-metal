@@ -152,7 +152,7 @@ def test_moreh_sgd(
 
         dev_momentum_buffer_out = create_tt_tensor(cpu_param_in, device)
 
-    dev_param_out, dev_momentum_buffer_out = ttnn.experimental.operations.primary.moreh_sgd(
+    dev_param_out, dev_momentum_buffer_out = ttnn.operations.moreh.sgd(
         dev_param_in,
         dev_grad,
         dev_momentum_buffer_in,
@@ -163,11 +163,11 @@ def test_moreh_sgd(
         dampening,
         weight_decay,
         nesterov,
-        momentum_initialized,
+        momentum_initialized=momentum_initialized,
         compute_kernel_config=compute_kernel_config,
     )
 
-    assert dev_param_in.shape.with_tile_padding() == list(model.weight.shape)
+    assert dev_param_in.shape == list(model.weight.shape)
 
     # check param_out
     param_result = dev_param_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
@@ -189,6 +189,8 @@ def test_moreh_sgd(
         logger.debug(f"Momentum_out pcc={out}")
 
         assert passing
+    if momentum == 0:
+        assert dev_momentum_buffer_out == None
 
 
 @pytest.mark.parametrize(
@@ -288,8 +290,7 @@ def test_moreh_sgd_callback(
                     dev_momentum_buffer_in = create_tt_tensor(cpu_param_in, device)
 
             dev_momentum_buffer_out = create_tt_tensor(cpu_param_in, device)
-
-        dev_param_out, dev_momentum_buffer_out = ttnn.experimental.operations.primary.moreh_sgd(
+        dev_param_out, dev_momentum_buffer_out = ttnn.operations.moreh.sgd(
             dev_param_in,
             dev_grad,
             dev_momentum_buffer_in,
@@ -300,12 +301,11 @@ def test_moreh_sgd_callback(
             dampening,
             weight_decay,
             nesterov,
-            momentum_initialized,
+            momentum_initialized=momentum_initialized,
             compute_kernel_config=compute_kernel_config,
         )
 
-    assert dev_param_in.shape.with_tile_padding() == list(model.weight.shape)
-
+    assert dev_param_in.shape == list(model.weight.shape)
     # check param_out
     param_result = dev_param_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
@@ -314,7 +314,6 @@ def test_moreh_sgd_callback(
 
     logger.debug(f"Out passing (param)={passing}")
     logger.debug(f"Output pcc={out}")
-
     assert passing
 
     # check momentum_out
