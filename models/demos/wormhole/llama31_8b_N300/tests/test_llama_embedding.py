@@ -17,6 +17,7 @@ from models.utility_functions import skip_for_grayskull
 from models.demos.wormhole.llama31_8b_N300.tt.llama_common import HostEmbedding
 
 
+@torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 def test_llama_embedding(mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat16

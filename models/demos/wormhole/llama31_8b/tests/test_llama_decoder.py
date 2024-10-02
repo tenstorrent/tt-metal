@@ -21,6 +21,7 @@ from models.utility_functions import (
 from models.utility_functions import skip_for_grayskull
 
 
+@torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 def test_llama_decoder_inference(device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b

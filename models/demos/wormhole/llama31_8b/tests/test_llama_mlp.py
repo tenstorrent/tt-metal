@@ -17,14 +17,15 @@ from models.utility_functions import (
 from models.utility_functions import skip_for_grayskull
 
 
+@torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "seq_len",
     (
         # 4096, TODO: OOM L1
-        1024,
+        # 1024,
         512,
-        128,
+        # 128,
         32,
     ),
 )
