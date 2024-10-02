@@ -18,9 +18,8 @@ struct MorehMeanOperation {
         const int64_t dim;
         const bool keepdim;
         const std::optional<uint32_t> divisor;
-        // const CoreRange core_range;  // unused for now
-        const MemoryConfig output_memory_config;
-        const std::optional<DeviceComputeKernelConfig> compute_kernel_config;
+        const MemoryConfig memory_config;
+        const DeviceComputeKernelConfig compute_kernel_config;
     };
     struct tensor_args_t {
         const Tensor& input;
@@ -43,13 +42,13 @@ struct MorehMeanOperation {
         static cached_program_t create(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output_tensor);
+            tensor_return_value_t& output);
 
         static void override_runtime_arguments(
             cached_program_t& cached_program,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output_tensor);
+            tensor_return_value_t& output);
     };
 
     struct MorehMeanNCFactory {
@@ -65,13 +64,13 @@ struct MorehMeanOperation {
         static cached_program_t create(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output_tensor);
+            tensor_return_value_t& output);
 
         static void override_runtime_arguments(
             cached_program_t& cached_program,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output_tensor);
+            tensor_return_value_t& output);
     };
 
     struct MorehMeanWFactory {
@@ -87,13 +86,13 @@ struct MorehMeanOperation {
         static cached_program_t create(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output_tensor);
+            tensor_return_value_t& output);
 
         static void override_runtime_arguments(
             cached_program_t& cached_program,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output_tensor);
+            tensor_return_value_t& output);
     };
 
     using program_factory_t = std::variant<MorehMeanHFactory, MorehMeanNCFactory, MorehMeanWFactory>;
@@ -110,7 +109,7 @@ struct MorehMeanOperation {
         const bool keepdim,
         const std::optional<uint32_t>& divisor,
         const std::optional<Tensor>& output,
-        const std::optional<MemoryConfig>& output_memory_config,
+        const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_mean_backward_device_operation.hpp"
-#include <iostream>
 
 #include "tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -76,7 +75,7 @@ MorehMeanBackwardOperation::tensor_return_value_t MorehMeanBackwardOperation::cr
         output_grad.get_dtype(),
         Layout::TILE,
         output_grad.device(),
-        operation_attributes.output_memory_config);
+        operation_attributes.memory_config);
 }
 
 std::tuple<MorehMeanBackwardOperation::operation_attributes_t, MorehMeanBackwardOperation::tensor_args_t>
@@ -86,16 +85,14 @@ MorehMeanBackwardOperation::invoke(
     const bool keepdim,
     const std::optional<Shape>& input_grad_shape,
     const std::optional<Tensor>& input_grad,
-    const std::optional<MemoryConfig>& output_memory_config,
+    const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-
     return {
-        {
-            dims,
-            keepdim,
-            input_grad_shape,
-            output_memory_config.value_or(output_grad.memory_config()),
-            compute_kernel_config},
+        {dims,
+         keepdim,
+         input_grad_shape,
+         memory_config.value_or(output_grad.memory_config()),
+         init_device_compute_kernel_config(output_grad.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
         {
             output_grad,
             input_grad,
