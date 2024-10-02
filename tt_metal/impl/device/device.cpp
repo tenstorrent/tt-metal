@@ -2911,9 +2911,7 @@ void Device::generate_device_headers(const std::string &path) const
         dram_noc_coord_per_bank,
         dram_offsets_per_bank,
         l1_noc_coord_per_bank,
-        l1_offset_per_bank,
-        soc_d.profiler_ceiled_core_count_perf_dram_bank,
-        soc_d.physical_routing_to_profiler_flat_id
+        l1_offset_per_bank
     );
 }
 
