@@ -169,6 +169,8 @@ class Device {
 
     allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type) const;
 
+    uint32_t get_allocator_alignment() const;
+
     size_t get_l1_small_size() const;
 
     void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const;

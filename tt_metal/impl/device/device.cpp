@@ -209,6 +209,10 @@ void Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->id_);
     // Construct allocator config from soc_desc
+    // Take max alignment to satisfy NoC rd/wr constraints
+    // Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned
+    // PCIe/DRAM -> Tensix/Eth src and dst addrs must be DRAM_ALIGNMENT aligned
+    // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
     AllocatorConfig config(
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_channels()),
          .dram_bank_size = soc_desc.dram_bank_size,
@@ -224,13 +228,14 @@ void Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size
          .worker_log_to_physical_routing_x = soc_desc.worker_log_to_physical_routing_x,
          .worker_log_to_physical_routing_y = soc_desc.worker_log_to_physical_routing_y,
          .l1_bank_remap = l1_bank_remap,
-         .compute_grid_size = this->compute_with_storage_grid_size()});
+         .compute_grid_size = this->compute_with_storage_grid_size(),
+         .alignment = std::max(hal.get_alignment(HalMemType::DRAM), hal.get_alignment(HalMemType::L1))});
     TT_FATAL(config.l1_small_size < (config.storage_core_bank_size.has_value() ? config.storage_core_bank_size.value() : config.worker_l1_size - config.l1_unreserved_base),
             "Reserved size must be less than bank size");
     TT_FATAL(
-        config.l1_small_size % ALLOCATOR_ALIGNMENT == 0,
-        "Reserved size must be aligned to ALLOCATOR_ALIGNMENT {}",
-        ALLOCATOR_ALIGNMENT);
+        config.l1_small_size % config.alignment == 0,
+        "Reserved size must be aligned to allocator alignment {}",
+        config.alignment);
     // Initialize dram_offsets from soc_descriptor
     for (auto channel = 0; channel < soc_desc.get_num_dram_channels(); channel++) {
         config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));
@@ -3100,6 +3105,11 @@ allocator::Statistics Device::get_memory_allocation_statistics(const BufferType 
     return allocator::get_statistics(*this->allocator_, buffer_type);
 }
 
+uint32_t Device::get_allocator_alignment() const {
+    this->check_allocator_is_initialized();
+    return this->allocator_->config.alignment;
+}
+
 size_t Device::get_l1_small_size() const {
     this->check_allocator_is_initialized();
     return this->allocator_->config.l1_small_size;
@@ -3327,7 +3337,8 @@ void Device::generate_device_headers(const std::string &path) const
         dram_noc_coord_per_bank,
         dram_offsets_per_bank,
         l1_noc_coord_per_bank,
-        l1_offset_per_bank
+        l1_offset_per_bank,
+        this->allocator_->config.alignment
     );
 }
 

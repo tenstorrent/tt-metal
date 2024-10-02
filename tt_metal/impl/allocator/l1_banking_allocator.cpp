@@ -171,7 +171,7 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
         num_banks.total);
 
     // Storage only cores only need to reserve mailbox space to hold barriers
-    constexpr uint32_t storage_core_unreserved_base = ((MEM_MAILBOX_BASE + ALLOCATOR_ALIGNMENT - 1) / ALLOCATOR_ALIGNMENT) * ALLOCATOR_ALIGNMENT;
+    uint32_t storage_core_unreserved_base = ((MEM_MAILBOX_BASE + alloc_config.alignment - 1) / alloc_config.alignment) * alloc_config.alignment;
 
     // There is only l1_bank_size bytes available for L1 buffers to be allocated in
     uint64_t l1_bank_size = alloc_config.storage_core_bank_size.has_value()
@@ -181,7 +181,7 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
     uint64_t allocatable_l1_size =
         static_cast<uint64_t>(alloc_config.worker_l1_size) - alloc_config.l1_unreserved_base - alloc_config.l1_small_size;
     // Assuming top down allocation for L1 buffers so the allocatable memory space is the top l1_bank_size bytes of L1
-    allocator.l1_manager = BankManager(BufferType::L1, bank_id_to_bank_offset, allocatable_l1_size, interleaved_address_limit, ALLOCATOR_ALIGNMENT, alloc_config.l1_unreserved_base);
+    allocator.l1_manager = BankManager(BufferType::L1, bank_id_to_bank_offset, allocatable_l1_size, interleaved_address_limit, alloc_config.alignment, alloc_config.l1_unreserved_base);
 
     uint64_t small_interleaved_address_limit = alloc_config.worker_l1_size - alloc_config.l1_small_size;
     uint64_t small_alloc_offset = alloc_config.l1_unreserved_base + allocatable_l1_size;
@@ -193,7 +193,7 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
         small_bank_id_to_bank_offset,
         alloc_config.l1_small_size,
         small_interleaved_address_limit,
-        ALLOCATOR_ALIGNMENT,
+        alloc_config.alignment,
         small_alloc_offset);
 }
 

@@ -45,7 +45,7 @@ int main(int argc, char **argv) {
     uint32_t input_unit_size = sizeof(uint32_t);
     uint32_t shard_width_bytes = shard_width * data_size;
     uint32_t num_units_per_row = shard_width * input_unit_size;
-    uint32_t padded_offset_bytes = align(input_unit_size, ALLOCATOR_ALIGNMENT);
+    uint32_t padded_offset_bytes = align(input_unit_size, device->get_allocator_alignment());
 
     // configure and create interleaved DRAM buffer to insert source data into
     uint32_t src_buffer_size = input_unit_size * num_values / data_size;
