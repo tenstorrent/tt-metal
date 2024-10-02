@@ -11,7 +11,8 @@ on:
         options:
           - ALL SWEEPS (Nightly)
           - add
-          - line_all_gather
+          - ccl.line_all_gather
+          - ccl.all_gather_n300
           - eltwise.unary.relu.relu
           - eltwise.unary.gelu.gelu
           - eltwise.unary.cos.cos
@@ -47,6 +48,7 @@ on:
           - eltwise.binary.logical_and_.logical_and_
           - eltwise.binary.remainder.remainder
           - eltwise.binary.bcast.bcast_h_sharded
+          - eltwise.binary.bcast.bcast
           - eltwise.binary.fmod.fmod
           - eltwise.composite.binary.addalpha.addalpha
           - eltwise.composite.binary.subalpha.subalpha
@@ -70,10 +72,13 @@ on:
           - data_movement.concat.concat_interleaved_n_tensors
           - data_movement.concat.concat_interleaved
           - data_movement.concat.concat_sharded
+          - data_movement.concat.concat_pytorch2
           - data_movement.slice.slice_pytorch2_rm
           - data_movement.slice.slice_pytorch2_tiled
           - data_movement.permute.permute_pytorch2_rm
           - data_movement.permute.permute_pytorch2_tiled
+          - data_movement.transpose.transpose_pytorch2
+          - data_movement.transpose.transpose_interleaved
   schedule:
     - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 

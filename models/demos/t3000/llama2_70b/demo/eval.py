@@ -170,7 +170,14 @@ def run_forward(
     for cur_pos in range(eval_data_args.sample_len, eval_data_args.sample_len + output_tokens):
         logger.info(f"EVAL: Inference from token {prev_pos} to {cur_pos}")
         input_tokens = tokens[:, prev_pos:cur_pos]
-        logits = model.forward(input_tokens, prev_pos)
+
+        if prev_pos == 0:  # Prefill
+            logits = []
+            for b in range(bsz):
+                logits.append(model.prefill_forward_single_user(input_tokens[b : b + 1], prev_pos, b))
+            logits = torch.cat(logits, dim=0)
+        else:  # Decode
+            logits = model.forward(input_tokens, prev_pos)
 
         next_logits = logits[:, -1, :]  # batch, vocab of last token
         next_token = sampling_func(next_logits)

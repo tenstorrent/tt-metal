@@ -288,6 +288,8 @@ void MorehNormBackwardOperation::ProgramFactory::override_runtime_arguments(
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
             runtime_args[0] = tensor_args.input.buffer()->address();
+            runtime_args[1] = tensor_args.output.buffer()->address();
+            runtime_args[2] = tensor_args.output_grad.buffer()->address();
         }
 
         // writer

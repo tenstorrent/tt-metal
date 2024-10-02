@@ -62,9 +62,6 @@ def test_llama_attention_inference(device, use_program_cache, reset_seeds):
         tt_attention_input = pt_attention_input.clone()
         current_pos = generation_start_pos + i
         current_pos_tensor = ttnn.from_torch(torch.tensor([current_pos] * batch), device=device, dtype=ttnn.int32)
-        current_pos_attn_tensor = ttnn.from_torch(
-            torch.tensor([current_pos] * batch * 8), device=device, dtype=ttnn.int32
-        )
 
         attention_input = prepare_inputs_ttnn(
             tt_attention_input,
@@ -72,7 +69,7 @@ def test_llama_attention_inference(device, use_program_cache, reset_seeds):
             device,
         )
 
-        tt_out = tt_model([attention_input], current_pos_tensor, current_pos_attn_tensor, rot_mats=current_rot_mat)
+        tt_out = tt_model([attention_input], current_pos_tensor, rot_mats=current_rot_mat)
         # multi-device attention module returns replicated output
         assert isinstance(tt_out, list)
         tt_out = tt_out[0]

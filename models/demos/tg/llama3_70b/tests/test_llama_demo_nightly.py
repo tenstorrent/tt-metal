@@ -12,10 +12,8 @@ from time import time
 import pytest
 from loguru import logger
 from models.utility_functions import skip_for_grayskull
-from models.demos.t3000.llama2_70b.tt.llama_common import (
-    setup_llama_env,
-    check_mesh_device,
-)
+from models.demos.t3000.llama2_70b.tt.llama_common import check_mesh_device
+from models.demos.tg.llama3_70b.tt.llama_common import setup_llama_env
 from models.demos.tg.llama3_70b.demo.demo import run_demo, construct_arg
 
 

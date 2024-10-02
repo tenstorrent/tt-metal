@@ -10,8 +10,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from models.utility_functions import skip_for_grayskull, get_devices_for_t3000
 from tests.ttnn.unit_tests.operations.test_all_gather import (
     is_unsupported_case,
-    run_line_all_gather,
-    run_line_all_gather_deprecated,
+    run_all_gather_on_t3000_impl,
 )
 from ttnn import ShardTensorToMesh
 
@@ -63,7 +62,7 @@ def test_line_all_gather_on_t3000_nightly(
     enable_async,
     num_iters=1,
 ):
-    run_line_all_gather(
+    run_all_gather_on_t3000_impl(
         t3k_mesh_device,
         num_devices,
         input_shape,
@@ -74,8 +73,9 @@ def test_line_all_gather_on_t3000_nightly(
         mem_config,
         use_program_cache,
         function_level_defaults,
-        enable_async,
-        num_iters,
+        all_gather_topology=ttnn.Topology.Linear,
+        enable_async=enable_async,
+        num_iters=num_iters,
     )
 
 
@@ -108,7 +108,7 @@ def test_line_all_gather_on_t3000_nightly(
 )
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_line_all_gather_on_t3000_nightly_two_link(
-    all_devices,
+    pcie_mesh_device,
     num_devices,
     input_shape,
     dim,
@@ -121,8 +121,8 @@ def test_line_all_gather_on_t3000_nightly_two_link(
     enable_async,
     num_iters=1,
 ):
-    run_line_all_gather_deprecated(
-        all_devices,
+    run_all_gather_on_t3000_impl(
+        pcie_mesh_device,
         num_devices,
         input_shape,
         dim,
@@ -132,8 +132,9 @@ def test_line_all_gather_on_t3000_nightly_two_link(
         mem_config,
         use_program_cache,
         function_level_defaults,
-        enable_async,
-        num_iters,
+        all_gather_topology=ttnn.Topology.Linear,
+        num_iters=num_iters,
+        enable_async=enable_async,
     )
 
 
@@ -187,7 +188,9 @@ def run_line_all_gather_instances(
     result_mesh_tensors = []
     for loop in range(num_iters):
         for i, devices in enumerate(t3000_device_rows):
-            tt_out_tensor = ttnn.line_all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
+            tt_out_tensor = ttnn.all_gather(
+                input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=ttnn.Topology.Linear
+            )
             result_mesh_tensors.append(tt_out_tensor)
 
     for loop in range(num_iters):

@@ -30,7 +30,7 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build UMD device and tests
         run: |
-          cmake -B build -G Ninja
+          cmake -B build -G Ninja -DTT_UMD_BUILD_TESTS=ON
           cmake --build build --target umd_tests
       - name: Run UMD unit regression tests
         timeout-minutes: 10
@@ -45,7 +45,7 @@ jobs:
           {
             name: "TG unit tests",
             arch: wormhole_b0,
-            runs-on: ["config-tg", "in-service", "bare-metal", "pipeline-functional"],
+            runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-functional"],
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type unit_tg_device --dispatch-mode ""'
           },
         ]
