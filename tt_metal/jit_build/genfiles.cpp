@@ -581,7 +581,6 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << "#if defined(PROFILE_KERNEL) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || "
           "defined(COMPILE_FOR_ERISC))"
        << endl;
-    ss << "extern uint8_t noc_xy_to_profiler_flat_id[noc_size_x][noc_size_y];" << endl;
     ss << "extern uint16_t profiler_core_count_per_dram;" << endl;
     ss << "#endif" << endl;
 #endif
@@ -613,37 +612,11 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << endl;
 
 #if defined(TRACY_ENABLE)
-    /*
-     * This part is adding the 2D array for sharing the flat IDs soc descriptor has assigned to every NOC coordinate,
-     * and the ceiled number of cores per DRAM banks.
-     *
-     * The logic of flat ID assignment can be optimized to lower NOC traffic. With this design the heuristic can be
-     * implemented in host and device just does look up to the table.
-     *
-     * For DRAM banks in particular, integer division of flat_id/core_count_per_dram gives the dram bank id and the
-     * modulo is the offset.
-     * */
     ss << "#if defined(PROFILE_KERNEL) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || "
           "defined(COMPILE_FOR_ERISC))"
        << endl;
     ss << "uint16_t profiler_core_count_per_dram __attribute__((used)) = ";
     ss << core_count_per_dram << ";" << endl;
-    ss << endl;
-
-    ss << "uint8_t noc_xy_to_profiler_flat_id[noc_size_x][noc_size_y] __attribute__((used)) = {" << endl;
-    for (unsigned int x = 0; x < grid_size.x; x++) {
-        ss << "    {" << endl;
-        for (unsigned int y = 0; y < grid_size.y; y++) {
-            CoreCoord core = {x, y};
-            if (profiler_flat_id_map.find(core) == profiler_flat_id_map.end()) {
-                ss << "        " << 255 << "," << endl;
-            } else {
-                ss << "        " << profiler_flat_id_map.at(core) << "," << endl;
-            }
-        }
-        ss << "    }," << endl;
-    }
-    ss << "};" << endl;
     ss << endl;
     ss << "#endif" << endl;
 

@@ -78,6 +78,7 @@ void setControlBuffer(uint32_t device_id, std::vector<uint32_t>& control_buffer)
             profiler_msg = hal.get_dev_addr<profiler_msg_t *>(HalProgrammableCoreType::ACTIVE_ETH, HalMemAddrType::PROFILER);
         }
 
+        control_buffer[kernel_profiler::FLAT_ID] = core.second;
         tt::llrt::write_hex_vec_to_core(
             device_id,
             core.first,
