@@ -28,9 +28,14 @@ from models.utility_functions import skip_for_grayskull
         32,
     ),
 )
+@pytest.mark.parametrize(
+    "mesh_device",
+    [{"N150": (1, 1), "N300": (1, 2), "T3K": (4, 2), "TG": (8, 4)}.get(os.environ.get("FAKE_DEVICE"), None)],
+    indirect=True,
+)
 def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
-    model_args = TtModelArgs(device=mesh_device)
+    model_args = TtModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -54,7 +59,7 @@ def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seed
         dtype=dtype,
         model_config=model_args.get_model_config(),
     )
-    torch_input = torch.randn(1, 1, seq_len, 4096)
+    torch_input = torch.randn(1, 1, seq_len, model_args.dim)
     reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(
         torch_input,

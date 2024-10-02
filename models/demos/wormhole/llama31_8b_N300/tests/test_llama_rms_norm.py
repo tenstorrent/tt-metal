@@ -18,6 +18,11 @@ from models.utility_functions import skip_for_grayskull
 
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize(
+    "mesh_device",
+    [{"N150": (1, 1), "N300": (1, 2), "T3K": (4, 2), "TG": (8, 4)}.get(os.environ.get("FAKE_DEVICE"), None)],
+    indirect=True,
+)
 def test_llama_rms_norm_inference(mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
 
@@ -37,7 +42,7 @@ def test_llama_rms_norm_inference(mesh_device, use_program_cache, reset_seeds):
         weight_key="attention_norm",
         weight_dtype=dtype,
     )
-    input = torch.rand(1, 32, 4096)
+    input = torch.rand(1, 32, model_args.dim)
     reference_output = reference_model(input)
 
     tt_input = ttnn.from_torch(

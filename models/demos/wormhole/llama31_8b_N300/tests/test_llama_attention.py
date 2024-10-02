@@ -23,6 +23,11 @@ from models.utility_functions import skip_for_grayskull
 
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize(
+    "mesh_device",
+    [{"N150": (1, 1), "N300": (1, 2), "T3K": (4, 2), "TG": (8, 4)}.get(os.environ.get("FAKE_DEVICE"), None)],
+    indirect=True,
+)
 def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
     pcc = 0.99
@@ -47,6 +52,7 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds):
     current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
         mesh_device,
+        model_args.num_devices,
         start_pos=0,
     )
 
@@ -83,7 +89,7 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds):
         # multi-device attention module returns replicated output
         tt_output_torch = (
             ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[0]
-            .view(1, -1, 4096)
+            .view(1, -1, model_args.dim)
             .permute(1, 0, 2)[: model_args.max_batch_size, :, :]
         )  # [ batch, seq, hidden_dim]
 

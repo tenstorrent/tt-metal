@@ -38,7 +38,8 @@ class TtModelArgs:
     multiple_of = 256
     hidden_dim = calculate_hidden_dim(dim, ffn_dim_multiplier, multiple_of)
     unpadded_n_heads = 24
-    n_heads = pad_to_power_of_2(unpadded_n_heads)
+    # n_heads = pad_to_power_of_2(unpadded_n_heads)
+    n_heads = unpadded_n_heads
     n_kv_heads = 8
     norm_eps = 1e-05
     vocab_size = 128256
@@ -190,7 +191,7 @@ class TtModelArgs:
             self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 q_chunk_size=256 if seqlen > 2048 else 64,
-                k_chunk_size=512 if seqlen > 2048 else 64,
+                k_chunk_size=256 if seqlen > 2048 else 64,
             )
 
             # Function definitions remain the same
@@ -338,7 +339,7 @@ class TtModelArgs:
             self.model_config["MLP_KERNEL_CONFIG_HIFI2"] = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,  # full precision for bfp8 @ bfp8
                 math_approx_mode=False,
-                fp32_dest_acc_en=False,
+                fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             )
 
