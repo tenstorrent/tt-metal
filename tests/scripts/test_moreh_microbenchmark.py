@@ -697,6 +697,7 @@ def test_dram_read_12_core(arch, freq, test_vector, num_tests, nblock, data_form
 @pytest.mark.parametrize(
     "arch, freq, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id",
     [
+        ("grayskull", 1202, np.array([32768 * 2, 8 * 128]), 1, 64, 1, 8, 0),
         ("wormhole_b0", 1000, np.array([32768 * 2, 12 * 128]), 1, 64, 1, 12, 0),
     ],
 )
@@ -715,10 +716,7 @@ def test_dram_read_l1_write_core(arch, freq, test_vector, num_tests, nblock, dat
         run_dram_read_l1_write_cmd(k, n, nblock, data_format, num_banks, bank_start_id)
         cycle = profile_results_kernel_duration()
         time = cycle / freq / 1000.0 / 1000.0
-        throughput = input_size / cycle
-        logger.info("DRAM read cycle: " + str(cycle))
-        logger.info("DRAM read time: " + str(time))
-        logger.info("DRAM read throughput: " + str(throughput))
+        throughput = input_size / cycle * freq / 1000.0
         cycle_list.append(cycle)
         time_list.append(time)
         throughput_list.append(throughput)
@@ -731,7 +729,11 @@ def test_dram_read_l1_write_core(arch, freq, test_vector, num_tests, nblock, dat
     data.append([throughput])
     # check within range
     dev_freq = get_device_freq()
-    bw_bound = 260.0 * dev_freq / 1000.0
+    if arch == "grayskull":
+        target = 90.0
+    elif arch == "wormhole_b0":
+        target = 260.0
+    bw_bound = target * dev_freq / 1000.0
     assert bw_bound <= throughput
 
 

@@ -610,7 +610,6 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         uint32_t input_size = 0;
         tt::DataFormat tile_format = tt::DataFormat::Bfp8_b;
-        uint32_t total_banks = 12;
         if (df == 0) {
             input_size = k * n * 1088 / 1024;
             tile_format = tt::DataFormat::Bfp8_b;
@@ -625,7 +624,6 @@ int main(int argc, char **argv) {
         uint32_t block_h = kt / num_blocks;
         uint32_t block_w = nt / num_banks;
         uint32_t num_datum_per_slice = 32 * 32;
-        uint32_t eth_coord_y_phy = 6;
 
         uint32_t single_tile_size = tt_metal::detail::TileSize(tile_format);
         if (input_size % single_tile_size != 0) {
@@ -650,7 +648,6 @@ int main(int argc, char **argv) {
 
         uint32_t num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
         uint32_t num_cores = num_banks; // number of DRAM banks
-        // uint32_t num_banks_all = 12;
 
         CoreRangeSet all_dram_reader_cores = CoreRangeSet{{}};
         std::vector<CoreCoord> all_dram_reader_cores_ordered;
@@ -670,12 +667,12 @@ int main(int argc, char **argv) {
         log_info("all_dram_reader_cores");
         for (auto core: all_dram_reader_cores_ordered) {
             auto phys_core = device->worker_core_from_logical_core(core);
-            log_info("logical core: {}, physical coer: {}", core, phys_core);
+            log_info("logical core: {}, physical core: {}", core, phys_core);
         }
         log_info("all_l1_writer_cores");
         for (auto core: all_l1_writer_cores_ordered) {
             auto phys_core = device->worker_core_from_logical_core(core);
-            log_info("logical core: {}, physical coer: {}", core, phys_core);
+            log_info("logical core: {}, physical core: {}", core, phys_core);
         }
 
         log_info(

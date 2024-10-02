@@ -54,6 +54,22 @@ void kernel_main() {
     uint32_t src_base_addr = noc_async_read_tile_dram_sharded_set_state<page_size, true>(input_addr, bank_id, vc);
     uint32_t src_read_addr = 0;
 
+#ifdef ARCH_GRAYSKULL
+    for (uint32_t block = 0; block < num_blocks; ++block) {
+        // Operand 1
+        cb_reserve_back(cb_id, block_num_tiles);
+        auto l1_write_addr = get_write_ptr(cb_id);
+
+        for (uint32_t h = 0; h < num_pages; ++h) {
+            noc_async_read_tile_dram_sharded_with_state(src_base_addr, src_read_addr, l1_write_addr);
+            src_read_addr += page_size;
+            l1_write_addr += page_size;
+        }
+
+        noc_async_read_barrier();
+        cb_push_back(cb_id, block_num_tiles);
+    }
+#else
     constexpr uint32_t total_num_blocks_in_buffer = 3;
     constexpr uint32_t total_num_trid = 4;
     uint32_t num_free_blocks_in_buffer = total_num_blocks_in_buffer;
@@ -97,4 +113,5 @@ void kernel_main() {
     // last block to wait
     noc_async_read_barrier_with_trid(block_trid_to_wait);
     cb_push_back(cb_id, block_num_tiles);
+#endif
 }
