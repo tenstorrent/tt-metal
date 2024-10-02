@@ -48,10 +48,10 @@ class TtLlamaMLP(torch.nn.Module):
 
         # Sharded weights
         self.w1 = as_sharded_tensor(
-            "w1_sharded_n300", ttnn.bfloat8_b, dim=-1
+            "w1_sharded", ttnn.bfloat8_b, dim=-1
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2 = as_sharded_tensor("w2_sharded_n300", ttnn.bfloat8_b, dim=-2)
-        self.w3 = as_sharded_tensor("w3_sharded_n300", ttnn.bfloat8_b, dim=-1)
+        self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dim=-2)
+        self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat8_b, dim=-1)
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """

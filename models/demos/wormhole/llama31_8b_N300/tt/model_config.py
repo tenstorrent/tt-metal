@@ -13,6 +13,10 @@ from models.demos.wormhole.llama31_8b_N300.tt.llama_common import precompute_fre
 from typing import Tuple
 
 
+def pad_to_power_of_2(n):
+    return 2 ** math.ceil(math.log2(n))
+
+
 def calculate_hidden_dim(dim, ffn_dim_multiplier, multiple_of):
     """Helper function based on logic used in reference model:
     https://github.com/meta-llama/llama-models/blob/e4a6ed52a142bb9b5106dcbf48e41f97f8e7378e/models/llama3/reference_impl/model.py#L227C7-L231C83
@@ -33,7 +37,8 @@ class TtModelArgs:
     ffn_dim_multiplier = 1.0
     multiple_of = 256
     hidden_dim = calculate_hidden_dim(dim, ffn_dim_multiplier, multiple_of)
-    n_heads = 24
+    unpadded_n_heads = 24
+    n_heads = pad_to_power_of_2(unpadded_n_heads)
     n_kv_heads = 8
     norm_eps = 1e-05
     vocab_size = 128256
@@ -225,16 +230,19 @@ class TtModelArgs:
                 )
 
             # Update the existing configurations using the new function names
-            qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
+            self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
             self.model_config["XQKV_DECODE_PROGCFG"] = dram_matmul_config(
-                m=32, k=self.dim, n=qkv_size // self.num_devices, grid_size=(4, 8)
+                m=32, k=self.dim, n=self.qkv_size // self.num_devices, grid_size=(4, 8)
             )
 
             assert (
-                self.n_heads / self.num_devices
-            ) % 8 == 0, f"n_heads ({self.n_heads}) // num_devices ({self.num_devices}) must be divisible by 8, but is {self.n_heads / self.num_devices}"
+                self.unpadded_n_heads / self.num_devices
+            ) % 8 == 0, f"unpadded_n_heads ({self.unpadded_n_heads}) // num_devices ({self.num_devices}) must be divisible by 8, but is {self.unpadded_n_heads / self.num_devices}"
             self.model_config["ATTN_OUTPUT_PROGCFG"] = dram_matmul_config(
-                m=32, k=self.dim // self.num_devices, n=self.dim, grid_size=(self.n_heads // self.num_devices // 8, 8)
+                m=32,
+                k=self.dim // self.num_devices,
+                n=self.dim,
+                grid_size=(self.unpadded_n_heads // self.num_devices // 8, 8),
             )
 
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = matmul_config(
@@ -259,11 +267,11 @@ class TtModelArgs:
                 )
 
             self.model_config["DECODE_MLP_W1_W3_PRG_CONFIG"] = dram_matmul_config(
-                m=self.n_heads, k=self.dim, n=self.hidden_dim // self.num_devices, grid_size=(4, 8)
+                m=32, k=self.dim, n=self.hidden_dim // self.num_devices, grid_size=(4, 8)
             )
 
             self.model_config["DECODE_MLP_W2_PRG_CONFIG"] = dram_matmul_config(
-                m=self.n_heads, k=self.hidden_dim // self.num_devices, n=self.dim, grid_size=(4, 8)
+                m=32, k=self.hidden_dim // self.num_devices, n=self.dim, grid_size=(4, 8)
             )
 
             self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: matmul_config(
@@ -286,7 +294,7 @@ class TtModelArgs:
                 per_core_M=max(
                     1, 8 if seq_len >= 2048 else seq_len // 256
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=qkv_size // self.num_devices // 32 // 8,  # N / TILE_WIDTH / grid width
+                per_core_N=self.qkv_size // self.num_devices // 32 // 8,  # N / TILE_WIDTH / grid width
                 transpose_mcast=False,
                 fused_activation=None,
                 fuse_batch=seq_len <= 2048,

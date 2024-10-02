@@ -30,7 +30,8 @@ class TtLlamaAttention(nn.Module):
 
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
-        self.head_dim = self.hidden_size // self.n_heads
+        self.unpadded_n_heads = configuration.unpadded_n_heads
+        self.head_dim = configuration.head_dim
         self.max_seq_len = configuration.max_seq_len
         self.max_batch_size = configuration.max_batch_size
         self.n_kv_heads = configuration.n_kv_heads
@@ -69,96 +70,108 @@ class TtLlamaAttention(nn.Module):
         self.wo_list = []
         self.layer_past_list = []
 
-        for i in range(1):
-            # wqkv: 4096 x 3072 (2 devices): width-sharded on 12 banks, 3072 over 12 banks.
-            wqkv_mem_config = configuration.create_dram_sharded_mem_config(
-                configuration.dim, 3 * configuration.dim // 2
-            )
-            wqkv = ttnn.as_tensor(
-                torch.concat(
-                    [
-                        torch.concat(
-                            [
-                                torch.transpose(
-                                    torch.chunk(self.state_dict[wq_str], configuration.num_devices)[i],
-                                    -2,
-                                    -1,
-                                ),
-                                torch.transpose(
-                                    torch.chunk(self.state_dict[wk_str], configuration.num_devices)[i],
-                                    -2,
-                                    -1,
-                                ),
-                                torch.transpose(
-                                    torch.chunk(self.state_dict[wv_str], configuration.num_devices)[i],
-                                    -2,
-                                    -1,
-                                ),
-                            ],
-                            dim=-1,
-                        )
-                        for i in range(configuration.num_devices)
-                    ],
-                    dim=-1,
-                ),
-                device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-                dtype=self.dtype,
-                memory_config=wqkv_mem_config,
-                layout=self.model_config["ATTN_W_LAYOUT_TILE"],
-                cache_file_name=cache_name("wqkv_sharded_n300"),
-            )
+        # Pad the weights with zeros
+        def pad_weight(weight):
+            unpadded_size = self.unpadded_n_heads * self.head_dim
+            padded_size = self.n_heads * self.head_dim
+            if unpadded_size < padded_size:
+                padding = torch.zeros(
+                    padded_size - unpadded_size, weight.shape[1], dtype=weight.dtype, device=weight.device
+                )
+                return torch.cat([weight, padding], dim=0)
+            return weight
 
-            # wo: 2048 (2devices) x 4096: width-sharded on 12 banks, 4224 over 12 banks.
-            wo_mem_config = configuration.create_dram_sharded_mem_config(configuration.dim // 2, configuration.dim)
-            wo = ttnn.as_tensor(
-                torch.transpose(
-                    self.state_dict[wo_str],
-                    -2,
-                    -1,
-                ),
-                device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-2),
-                memory_config=wo_mem_config,
-                dtype=self.dtype,
-                layout=self.model_config["ATTN_W_LAYOUT_TILE"],
-                cache_file_name=cache_name("wo_sharded_n300"),
-            )
+        wq_padded = pad_weight(self.state_dict[wq_str])
 
-            if self.paged_attention_config:
-                cache_k = torch.zeros(
-                    (
-                        self.paged_attention_config.max_num_blocks,
-                        self.n_kv_heads // configuration.num_devices,
-                        self.paged_attention_config.block_size,
-                        self.head_dim,
+        # wqkv: 4096 x 3072 (2 devices): width-sharded on 12 banks, 3072 over 12 banks.
+        wqkv_mem_config = configuration.create_dram_sharded_mem_config(configuration.dim, configuration.qkv_size)
+        wqkv = ttnn.as_tensor(
+            torch.concat(
+                [
+                    torch.concat(
+                        [
+                            torch.transpose(
+                                torch.chunk(wq_padded, configuration.num_devices)[i],
+                                -2,
+                                -1,
+                            ),
+                            torch.transpose(
+                                torch.chunk(self.state_dict[wk_str], configuration.num_devices)[i],
+                                -2,
+                                -1,
+                            ),
+                            torch.transpose(
+                                torch.chunk(self.state_dict[wv_str], configuration.num_devices)[i],
+                                -2,
+                                -1,
+                            ),
+                        ],
+                        dim=-1,
                     )
+                    for i in range(configuration.num_devices)
+                ],
+                dim=-1,
+            ),
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+            dtype=self.dtype,
+            memory_config=wqkv_mem_config,
+            layout=self.model_config["ATTN_W_LAYOUT_TILE"],
+            cache_file_name=cache_name("wqkv_sharded"),
+        )
+
+        # wo: 2048 (2devices) x 4096: width-sharded on 12 banks, 4224 over 12 banks.
+        wo_mem_config = configuration.create_dram_sharded_mem_config(
+            configuration.dim // configuration.num_devices, configuration.dim
+        )
+        wo = ttnn.as_tensor(
+            torch.transpose(
+                self.state_dict[wo_str],
+                -2,
+                -1,
+            ),
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-2),
+            memory_config=wo_mem_config,
+            dtype=self.dtype,
+            layout=self.model_config["ATTN_W_LAYOUT_TILE"],
+            cache_file_name=cache_name("wo_sharded"),
+        )
+
+        if self.paged_attention_config:
+            cache_k = torch.zeros(
+                (
+                    self.paged_attention_config.max_num_blocks,
+                    self.n_kv_heads // configuration.num_devices,
+                    self.paged_attention_config.block_size,
+                    self.head_dim,
                 )
-                cache_v = torch.zeros(
-                    (
-                        self.paged_attention_config.max_num_blocks,
-                        self.n_kv_heads // configuration.num_devices,
-                        self.paged_attention_config.block_size,
-                        self.head_dim,
-                    )
+            )
+            cache_v = torch.zeros(
+                (
+                    self.paged_attention_config.max_num_blocks,
+                    self.n_kv_heads // configuration.num_devices,
+                    self.paged_attention_config.block_size,
+                    self.head_dim,
                 )
-            else:
-                cache_k = torch.zeros(
-                    (
-                        self.max_batch_size,
-                        self.n_kv_heads,
-                        self.sliding_window,
-                        self.head_dim,
-                    )
+            )
+        else:
+            cache_k = torch.zeros(
+                (
+                    self.max_batch_size,
+                    self.n_kv_heads,
+                    self.sliding_window,
+                    self.head_dim,
                 )
-                cache_v = torch.zeros(
-                    (
-                        self.max_batch_size,
-                        self.n_kv_heads,
-                        self.sliding_window,
-                        self.head_dim,
-                    )
+            )
+            cache_v = torch.zeros(
+                (
+                    self.max_batch_size,
+                    self.n_kv_heads,
+                    self.sliding_window,
+                    self.head_dim,
                 )
+            )
 
             layer_past = [cache_k, cache_v]
             layer_past = [
@@ -168,7 +181,7 @@ class TtLlamaAttention(nn.Module):
                     mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
                     layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                     dtype=self.dtype,
-                    cache_file_name=cache_name(f"kvcache_{id}_{lp.shape}_n300"),
+                    cache_file_name=cache_name(f"kvcache_{id}_{lp.shape}"),
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
                 for id, lp in enumerate(layer_past)
@@ -357,12 +370,14 @@ class TtLlamaAttention(nn.Module):
                 )
 
             ttnn.deallocate(q_heads_1BQD)
+
             attn_output_11BH = ttnn.to_memory_config(
                 attn_output_1G4D, memory_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"]
             )
+
             attn_output_cat = ttnn.experimental.nlp_concat_heads_decode(
                 attn_output_11BH,
-                num_heads=self.n_local_heads,
+                num_heads=self.unpadded_n_heads,
             )
             ttnn.deallocate(attn_output_11BH)
 
@@ -401,6 +416,7 @@ class TtLlamaAttention(nn.Module):
         # reshaping long sequence to matmul fit on device
         if seq_len > 2048:
             xs_11SH = ttnn.reshape(xs_11SH, [1, seq_len // 2048, 2048, -1])
+
         xqkv_fused = ttnn.linear(
             xs_11SH,
             wqkv,
@@ -508,12 +524,14 @@ class TtLlamaAttention(nn.Module):
         v_heads_V1SD_8b.deallocate(True)
 
         attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
+        attn_output_1QSD_unpadded = ttnn.slice(attn_output_1QSD, (0, 0, 0, 0), (1, self.unpadded_n_heads, -1, -1))
+        attn_output_1QSD.deallocate(True)
 
         ###
         # Output matmul
         ###
         attn_output_11SH = ttnn.experimental.nlp_concat_heads(
-            attn_output_1QSD,
+            attn_output_1QSD_unpadded,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         attn_output_1QSD.deallocate(True)
