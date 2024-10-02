@@ -209,17 +209,17 @@ TT-LIB API through ``tt_lib``
 Primary Operations
 ==================
 
-.. autofunction:: tt_lib.operations.primary.moreh_softmax
+.. autofunction:: ttnn.operations.moreh.softmax
 
-.. autofunction:: tt_lib.operations.primary.moreh_softmax_backward
+.. autofunction:: ttnn.operations.moreh.softmax_backward
 
-.. autofunction:: tt_lib.operations.primary.moreh_softmin
+.. autofunction:: ttnn.operations.moreh.softmin
 
-.. autofunction:: tt_lib.operations.primary.moreh_softmin_backward
+.. autofunction:: ttnn.operations.moreh.softmin_backward
 
-.. autofunction:: tt_lib.operations.primary.moreh_logsoftmax
+.. autofunction:: ttnn.operations.moreh.logsoftmax
 
-.. autofunction:: tt_lib.operations.primary.moreh_logsoftmax_backward
+.. autofunction:: ttnn.operations.moreh.logsoftmax_backward
 
 .. autofunction:: ttnn.operations.moreh.mean
 

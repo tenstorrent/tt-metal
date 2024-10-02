@@ -52,7 +52,6 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::tensor::pytensor_module_types(m_tensor);
     ttnn::graph::py_graph_module_types(m_graph);
 
-    tt::operations::primary::py_module_types(m_primary_ops);
 
     ttnn::types::py_module_types(m_types);
     ttnn::activation::py_module_types(m_activation);
