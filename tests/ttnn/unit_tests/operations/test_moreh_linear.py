@@ -92,10 +92,6 @@ def moreh_linear(shapes, has_bias, has_output, compute_kernel_config, device):
 @pytest.mark.parametrize("has_bias", [False, True])
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_moreh_linear(shapes, has_bias, compute_kernel_options, device):
-    # TODO: Duong Remove skiptest until PR https://github.com/tenstorrent/tt-metal/pull/12794
-    # is merged and apply fix from duong/fix_moreh_linear_fp32_dest_acc.
-    if has_bias and compute_kernel_options:
-        pytest.skip()
     torch.manual_seed(3072)
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
     passing = moreh_linear(shapes, has_bias, True, compute_kernel_config, device)
