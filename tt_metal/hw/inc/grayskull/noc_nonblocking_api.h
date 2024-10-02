@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include "noc_parameters.h"
+#include "dev_msgs.h"
 
 ////
 

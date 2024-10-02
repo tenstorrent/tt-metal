@@ -22,10 +22,10 @@
 
 
 uint8_t noc_index = NOC_INDEX;
-constexpr uint32_t read_cmd_buf __attribute__((used)) = NCRISC_RD_CMD_BUF;
-constexpr uint32_t write_cmd_buf __attribute__((used)) = NCRISC_WR_CMD_BUF;
-constexpr uint32_t write_reg_cmd_buf __attribute__((used)) = NCRISC_WR_REG_CMD_BUF;
-constexpr uint32_t write_at_cmd_buf __attribute__((used)) = NCRISC_AT_CMD_BUF;
+constexpr uint32_t read_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? BRISC_RD_CMD_BUF : DYNAMIC_NOC_BRISC_RD_CMD_BUF;
+constexpr uint32_t write_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? BRISC_WR_CMD_BUF : DYNAMIC_NOC_BRISC_WR_CMD_BUF;
+constexpr uint32_t write_reg_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? BRISC_WR_REG_CMD_BUF : DYNAMIC_NOC_BRISC_WR_REG_CMD_BUF;
+constexpr uint32_t write_at_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? BRISC_AT_CMD_BUF : DYNAMIC_NOC_BRISC_AT_CMD_BUF;
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 

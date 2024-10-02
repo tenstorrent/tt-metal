@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include "noc_parameters.h"
+#include "dev_msgs.h"
 
 ////
 /*TODO: RT review this file, currently using wormhole b0 copy, check if any changes needed for BH*/
