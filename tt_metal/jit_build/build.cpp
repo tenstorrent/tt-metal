@@ -147,6 +147,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig &
 void JitBuildState::finish_init() {
     if (this->is_fw_) {
         this->defines_ += "-DFW_BUILD ";
+        this->defines_ += "-DNOC_MODE=" + std::to_string(DM_DEDICATED_NOC) + " ";
     } else {
         this->defines_ += "-DKERNEL_BUILD ";
     }

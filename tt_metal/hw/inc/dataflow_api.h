@@ -500,7 +500,7 @@ std::uint64_t get_noc_multicast_addr(
         Get an encoding which contains tensix core and address you want to
         read from/write to via the noc
     */
-    return NOC_MULTICAST_ADDR(NOC_X(noc, noc_x_start), NOC_Y(noc, noc_y_start), NOC_X(noc, noc_x_end), NOC_Y(noc, noc_y_end), addr);
+    return NOC_MULTICAST_ADDR(DYNAMIC_NOC_X(noc, noc_x_start), DYNAMIC_NOC_Y(noc, noc_y_start), DYNAMIC_NOC_X(noc, noc_x_end), DYNAMIC_NOC_Y(noc, noc_y_end), addr);
 }
 
 FORCE_INLINE
@@ -510,7 +510,7 @@ std::uint64_t get_noc_addr(std::uint32_t noc_x, std::uint32_t noc_y, std::uint32
         write to via the noc multicast
     */
 
-    return NOC_XY_ADDR(NOC_X(noc, noc_x), NOC_Y(noc, noc_y), addr);
+    return NOC_XY_ADDR(DYNAMIC_NOC_X(noc, noc_x), DYNAMIC_NOC_Y(noc, noc_y), addr);
 }
 
 /*
@@ -547,7 +547,7 @@ uint64_t get_l1_noc_addr(const uint32_t id, const uint32_t page_size, const uint
 }
 
 uint64_t get_system_memory_noc_addr(const uint32_t id, const uint32_t page_size, const uint32_t base_addr, const uint32_t offset = 0, uint8_t noc = noc_index) {
-    uint64_t pcie_core_noc_encoding = uint64_t(NOC_XY_PCIE_ENCODING(NOC_X(noc, PCIE_NOC_X), NOC_Y(noc, PCIE_NOC_Y), noc));
+    uint64_t pcie_core_noc_encoding = uint64_t(NOC_XY_PCIE_ENCODING(DYNAMIC_NOC_X(noc, PCIE_NOC_X), DYNAMIC_NOC_Y(noc, PCIE_NOC_Y), noc));
     uint32_t addr = base_addr + page_size * id + offset;
     uint64_t noc_addr = pcie_core_noc_encoding | addr;
     return noc_addr;

@@ -378,8 +378,8 @@ int main() {
                 // to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid value.
                 // For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC txn is not issued.
                 uint64_t dispatch_addr =
-                    NOC_XY_ADDR(NOC_X(noc_index, mailboxes->go_message.master_x),
-                    NOC_Y(noc_index, mailboxes->go_message.master_y), DISPATCH_MESSAGE_ADDR);
+                    NOC_XY_ADDR(NOC_X(mailboxes->go_message.master_x),
+                    NOC_Y(mailboxes->go_message.master_y), DISPATCH_MESSAGE_ADDR);
                 mailboxes->go_message.signal = RUN_MSG_DONE;
                 // Notify dispatcher that this has been done
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
@@ -456,8 +456,8 @@ int main() {
                 // Set launch message to invalid, so that the next time this slot is encountered, kernels are only run if a valid launch message is sent.
                 launch_msg_address->kernel_config.enables = 0;
                 uint64_t dispatch_addr =
-                    NOC_XY_ADDR(NOC_X(noc_index, mailboxes->go_message.master_x),
-                        NOC_Y(noc_index, mailboxes->go_message.master_y), DISPATCH_MESSAGE_ADDR);
+                    NOC_XY_ADDR(NOC_X(mailboxes->go_message.master_x),
+                        NOC_Y(mailboxes->go_message.master_y), DISPATCH_MESSAGE_ADDR);
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                 noc_fast_atomic_increment(
                     noc_index,
