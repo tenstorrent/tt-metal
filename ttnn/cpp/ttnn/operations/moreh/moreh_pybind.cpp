@@ -15,6 +15,8 @@
 #include "ttnn/operations/moreh/moreh_group_norm_backward/moreh_group_norm_backward_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_layer_norm/moreh_layer_norm_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_layer_norm_backward/moreh_layer_norm_backward_pybind.hpp"
+#include "ttnn/operations/moreh/moreh_linear/moreh_linear_pybind.hpp"
+#include "ttnn/operations/moreh/moreh_linear_backward/moreh_linear_backward_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_matmul/moreh_matmul_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_mean/moreh_mean_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_mean_backward/moreh_mean_backward_pybind.hpp"
@@ -37,10 +39,12 @@ void bind_moreh_operations(py::module &module) {
     moreh_dot_backward::bind_moreh_dot_backward_operation(module);
     moreh_dot::bind_moreh_dot_operation(module);
     moreh_getitem::bind_moreh_getitem_operation(module);
-    moreh_group_norm::bind_moreh_group_norm_operation(module);
     moreh_group_norm_backward::bind_moreh_group_norm_backward_operation(module);
-    moreh_layer_norm::bind_moreh_layer_norm_operation(module);
+    moreh_group_norm::bind_moreh_group_norm_operation(module);
     moreh_layer_norm_backward::bind_moreh_layer_norm_backward_operation(module);
+    moreh_layer_norm::bind_moreh_layer_norm_operation(module);
+    moreh_linear_backward::bind_moreh_linear_backward_operation(module);
+    moreh_linear::bind_moreh_linear_operation(module);
     moreh_matmul::bind_moreh_matmul_operation(module);
     moreh_mean_backward::bind_moreh_mean_backward_operation(module);
     moreh_mean::bind_moreh_mean_operation(module);
