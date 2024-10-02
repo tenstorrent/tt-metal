@@ -1,8 +1,6 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
-#include "ttnn/operations/eltwise/unary_backward/device/unary_backward_op.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
@@ -289,12 +287,6 @@ std::vector<Tensor> ExecuteUnaryBackwardLgamma::invoke(const Tensor& grad, const
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = ttnn::multiply(grad, ttnn::digamma(input, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
-}
-
-std::vector<Tensor> _sub_bw(const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    grad_tensor.emplace_back(grad);
     return grad_tensor;
 }
 
