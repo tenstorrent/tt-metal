@@ -88,7 +88,7 @@ machines. They have prerequisite dependencies, model files, and other settings
 set up for users.
 
 Please refer to the [README](README.md) for source installation and environment
-setup instructions, then please read the the [Getting Started
+setup instructions, then please read the [Getting Started
 page](docs/source/get_started/get_started.rst).
 
 ### Setting up Git
@@ -177,7 +177,7 @@ that is changed.
 ## Tests in tt-metal
 
 Ensure you're in a developer Python environment with necessary environment variables
-set as documentating in the [developing section](#developing-tt-metal).
+set as documented in the [developing section](#developing-tt-metal).
 
 This includes the environment variables, Python dev environment etc.
 
@@ -416,7 +416,7 @@ k_id[15]: tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block_zm.cpp
 ```
 TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1 ./your_program
 ```
-  - If you still cannot reproduce the hang, try disabling the waypoint and assert features. This will reduce visiblity into the hang, but is better than nothing:
+  - If you still cannot reproduce the hang, try disabling the waypoint and assert features. This will reduce visibility into the hang, but is better than nothing:
 ```
 TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1 TT_METAL_WATCHER_DISABLE_WAYPOINT=1 ./your_program
 TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1 TT_METAL_WATCHER_DISABLE_WAYPOINT=1 TT_METAL_WATCHER_DISABLE_ASSERT=1 ./your_program
@@ -508,7 +508,7 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
 
 ### Skipping CI/CD for documentation updates
 - CI/CD can be skipped for *documentation only* updates that incur no functional change.
-- Upon submitting a PR and getting the necessary appovals:
+- Upon submitting a PR and getting the necessary approvals:
   - Click Squash and Merge
   - Before confirming, edit the top level commit message by prepending the token `[skip ci]`
     - Example: `[skip ci] #9999: Update CONTRIBUTING.md`
@@ -521,7 +521,7 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
 
 - Any commit message must be accompanied with an appropriate GitHub issue
   number with a colon and following message. The message must start with an
-  imperative verb and descripton of what was done. Preferably a reason is
+  imperative verb and description of what was done. Preferably a reason is
   included. Ex.
   ```
   #41: Fix data format error in Gelu op.
@@ -553,13 +553,13 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
 ### Git commit runbook
 
 The tt-metal repository has a single main branch, with pull requests being
-merged in via rebase.
+merged in via rebase or squash merge.
 
 For a pull request, you will need to deal with a local branch and an origin
 branch.
 
-The local branch should be on your VM, and you should interact with it through
-the command line or Visual Studio. The following uses the command line.
+The local branch should be on your machine, and you should interact with it
+through the command line or Visual Studio. The following uses the command line.
 
 The origin branch is on Github and you should use the Github UI to interact
 with the branch.
@@ -569,7 +569,7 @@ with the branch.
 You need to have an issue. Either someone creates one and assigns it to you, or
 you need to create an issue. For example issue 123.
 
-#### Creating a branch on a VM
+#### Creating a branch on a machine
 
 Include the user, the issue number, and optionally a description of the change.
 / and - are used as separators between user and issue number. And - and _
@@ -589,8 +589,10 @@ them in. E.g.
 
 ```
 git add abc.py
-git add -A
+git add "*.py"
 ```
+
+Please avoid using `git add -A`, which is fairly error prone.
 
 You can restore files if you need to get the original. E.g.
 
@@ -609,9 +611,11 @@ to something else, such as saying that you are addressing reviewer feedback.
 git commit -m"#123: rename method x"
 ```
 
-Note: each commit should work. That is, everything compiles properly on the
-architecture used by your VM, you can run relevant code on the card, and
-relevant unit tests pass.
+Note: each commit on the main branch and any feature branch where multiple
+engineers collaborate should work. That is, everything compiles properly on the
+architecture used by your machine, you can run relevant code on the card, and
+relevant unit tests pass. Furthermore, for the main branch, you should run
+CI pipelines and make sure that the commit doesn't break anything important.
 
 You can use git log to see the sequence of commits in the branch. That allows
 you to see where your branch is relative to main, and can help you figure out
@@ -627,6 +631,12 @@ changes in the future. E.g.
 ```
 git push origin user-123:user-123
 git branch --set-upstream-to=origin/user-123 user-123
+```
+
+or
+
+```
+git push -u branch_name
 ```
 
 Note: you may be able to push and set the upstream at the same time, but that
@@ -660,6 +670,9 @@ Your branch needs to be kept up to date with main via rebase. You should rebase
 your local branch, and then once everything looks good, push the change. You
 should not rebase your origin branch. That way, if anything goes wrong, you can
 use origin to restore your branch to a good state.
+
+Note: Before rebasing, remember to change your default comment character, which
+is mentioned earlier in [Setting up Git](#setting-up-git).
 
 Note: for very small changes where you don't expect to create a second commit
 it might be okay to use the UI to rebase origin. However, in general, it's
