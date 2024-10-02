@@ -699,6 +699,7 @@ def test_dram_read_12_core(arch, freq, test_vector, num_tests, nblock, data_form
     [
         ("grayskull", 1202, np.array([32768 * 2, 8 * 128]), 1, 64, 1, 8, 0),
         ("wormhole_b0", 1000, np.array([32768 * 2, 12 * 128]), 1, 64, 1, 12, 0),
+        ("blackhole", 800, np.array([32768 * 8, 8 * 128]), 1, 256, 1, 8, 0),
     ],
 )
 def test_dram_read_l1_write_core(arch, freq, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id):
@@ -730,10 +731,11 @@ def test_dram_read_l1_write_core(arch, freq, test_vector, num_tests, nblock, dat
     # check within range
     dev_freq = get_device_freq()
     if arch == "grayskull":
-        target = 90.0
+        bw_bound = 100.0
     elif arch == "wormhole_b0":
-        target = 260.0
-    bw_bound = target * dev_freq / 1000.0
+        bw_bound = 260.0
+    elif arch == "blackhole":
+        bw_bound = 340.0
     assert bw_bound <= throughput
 
 
