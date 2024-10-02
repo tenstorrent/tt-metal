@@ -29,8 +29,8 @@ jobs:
       matrix:
         arch: [grayskull]
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       DOCS_VERSION: ${{ inputs.version }}
+      DOCS_REPO: tenstorrent.github.io
       ARCH_NAME: ${{ matrix.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
@@ -71,8 +71,8 @@ jobs:
           git config --global user.email "${GITHUB_USER}@tenstorrent.com"
           git config --global user.name "${GITHUB_USER}"
           echo "About to clone"
-          git clone https://${GITHUB_USER}:${{ secrets.TTBOT_DOCS_ACCESS }}@github.com/tenstorrent/tenstorrent.github.io.git
-          git remote set-url origin https://${GITHUB_USER}::${{ secrets.TTBOT_DOCS_ACCESS }}@github.com/tenstorrent/tenstorrent.github.io.git
+          git clone https://${GITHUB_USER}:${{ secrets.TTBOT_DOCS_ACCESS }}@github.com/tenstorrent/$DOCS_REPO.git
+          git remote set-url origin https://${GITHUB_USER}::${{ secrets.TTBOT_DOCS_ACCESS }}@github.com/tenstorrent/$DOCS_REPO.git
       - name: Package TT-Metalium Docs
         run: |
           echo "Preparing tt-metalium docs assets"
@@ -81,7 +81,7 @@ jobs:
           cp -Lr docs/source/tt-metalium/* tt-metalium
           rm tt-metalium/conf.py  # Do not change conf.py
           echo "Copying the docs into the repo"
-          cp -r tt-metalium/* tenstorrent.github.io/tt-metalium
+          cp -r tt-metalium/* $DOCS_REPO/tt-metalium
       - name: Package TT-NN Docs
         run: |
           mkdir ttnn-docs
@@ -98,18 +98,18 @@ jobs:
           sed -i "s/.\/ttnn\/installing/\/installing/g" ttnn-docs/ttnn/get_started.rst
 
           echo "Copying the docs into the repo"
-          cp -r ttnn-docs/* tenstorrent.github.io/ttnn
+          cp -r ttnn-docs/* $DOCS_REPO/ttnn
       - name: Push new versions to the Docs repo for publishing
         run: |
-          cd tenstorrent.github.io
+          cd $DOCS_REPO
           echo "Register new documentation versions"
           python update_tags.py tt-metalium $DOCS_VERSION
           python update_tags.py ttnn $DOCS_VERSION
-          git checkout -b test_v51_deploy
+          git checkout mains
           git add .
           git commit -m "Update ttnn and tt-metalium docs from pipeline ${{ github.run_id }} with tag $DOCS_VERSION"
           echo "Tag commits to identify different versions."
           git tag -a ttnn_$DOCS_VERSION -m "ttnn and tt-metalium documentation version $DOCS_VERSION"
           git tag -a tt-metalium_$DOCS_VERSION -m "ttnn and tt-metalium documentation version $DOCS_VERSION"
           echo "Pushing the new docs"
-          git push -u origin test_v51_deploy && git push --tags
+          git push -u origin main && git push --tags
