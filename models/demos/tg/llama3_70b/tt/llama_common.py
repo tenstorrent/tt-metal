@@ -173,75 +173,33 @@ def tt_distributed_rmsnorm(inp, epsilon, gamma, mesh_device, compute_kernel_conf
     return tt_out
 
 
-# def tt_sharded_distributed_rmsnorm(
-#     inp, epsilon, gamma, mesh_device, ln_sharded_input_memcfg, ln_sharded_progcfg, ln_sharded_stats_memcfg
-# ):
-#     inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
-
-#     # Run distributed rmsnorm part 1
-#     tt_stats = ttnn.rms_norm_pre_all_gather(inp, program_config=ln_sharded_progcfg)
-
-#     # All gather stats
-#     tt_stats = ttnn.line_all_gather(
-#         tt_stats,
-#         3,
-#         num_links=1,
-#         cluster_axis=1,
-#         mesh_device=mesh_device,
-#         memory_config=ln_sharded_stats_memcfg,
-#     )
-
-#     # Run distributed rmsnorm part 2
-#     tt_out = ttnn.rms_norm_post_all_gather(
-#         inp,
-#         epsilon=epsilon,
-#         weight=gamma,
-#         program_config=ln_sharded_progcfg,
-#         stats=tt_stats,
-#     )
-#     tt_stats.deallocate(True)
-
-#     return tt_out
-
-
 def tt_sharded_distributed_rmsnorm(
     inp, epsilon, gamma, mesh_device, ln_sharded_input_memcfg, ln_sharded_progcfg, ln_sharded_stats_memcfg
 ):
-    core_grid = (4, 8)
-    num_cores = core_grid[0] * core_grid[1]
-    input_sharded_memory_config = ttnn.create_sharded_memory_config(
-        shape=(1, 1, 32, 2048),
-        core_grid=ttnn.CoreGrid(y=core_grid[0], x=core_grid[1]),
-        strategy=ttnn.ShardStrategy.WIDTH,
-    )
-    sharded_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
-        subblock_w=(2048 // num_cores) // 32,
-        block_h=1,
-        block_w=(2048 // num_cores) // 32,
-        inplace=False,
-    )
-    gathered_stats_sharded_memory_config = ttnn.create_sharded_memory_config(
-        shape=[1, 1, 32, 32 * 4],
-        core_grid=ttnn.CoreGrid(y=1, x=1),
-        strategy=ttnn.ShardStrategy.WIDTH,
-    )
-    inp = ttnn.to_memory_config(inp, memory_config=input_sharded_memory_config)
-    tt_stats = ttnn.rms_norm_pre_all_gather(inp, program_config=sharded_program_config)
-    tt_stats = ttnn.line_all_gather(
+    inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
+
+    # Run distributed rmsnorm part 1
+    tt_stats = ttnn.rms_norm_pre_all_gather(inp, program_config=ln_sharded_progcfg)
+
+    # All gather stats
+    tt_stats = ttnn.all_gather(
         tt_stats,
         3,
         num_links=1,
         cluster_axis=1,
         mesh_device=mesh_device,
-        memory_config=gathered_stats_sharded_memory_config,
+        memory_config=ln_sharded_stats_memcfg,
+        topology=ttnn.Topology.Linear,
     )
+
+    # Run distributed rmsnorm part 2
     tt_out = ttnn.rms_norm_post_all_gather(
         inp,
         epsilon=epsilon,
         weight=gamma,
-        program_config=sharded_program_config,
+        program_config=ln_sharded_progcfg,
         stats=tt_stats,
     )
     tt_stats.deallocate(True)
+
     return tt_out
