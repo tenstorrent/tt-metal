@@ -79,6 +79,7 @@ on:
           - data_movement.permute.permute_pytorch2_tiled
           - data_movement.transpose.transpose_pytorch2
           - data_movement.transpose.transpose_interleaved
+          - data_movement.copy.copy
   schedule:
     - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 
