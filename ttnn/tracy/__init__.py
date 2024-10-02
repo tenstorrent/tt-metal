@@ -17,7 +17,7 @@ from tt_metal.tools.profiler.process_ops_logs import process_ops
 from tt_metal.tools.profiler.common import (
     TT_METAL_HOME,
     PROFILER_BIN_DIR,
-    PROFILER_LOGS_DIR,
+    PROFILER_ARTIFACTS_DIR,
     PROFILER_SCRIPTS_ROOT,
     TRACY_MODULE_PATH,
     TRACY_FILE_NAME,
@@ -25,6 +25,7 @@ from tt_metal.tools.profiler.common import (
     TRACY_OPS_DATA_FILE_NAME,
     TRACY_CAPTURE_TOOL,
     TRACY_CSVEXPROT_TOOL,
+    generate_logs_folder,
 )
 
 import tracy.tracy_state
@@ -81,17 +82,18 @@ def runctx(cmd, globals, locals, partialProfile):
         finish_all_zones()
 
 
-def run_report_setup(verbose, port):
+def run_report_setup(verbose, outputFolder, port):
     toolsReady = True
 
     logger.info("Verifying tracy profiling tools")
     toolsReady &= os.path.exists(PROFILER_BIN_DIR / TRACY_CAPTURE_TOOL)
     toolsReady &= os.path.exists(PROFILER_BIN_DIR / TRACY_CSVEXPROT_TOOL)
 
+    logsFolder = generate_logs_folder(outputFolder)
     captureProcess = None
     if toolsReady:
         subprocess.run(
-            f"rm -rf {PROFILER_LOGS_DIR}; mkdir -p {PROFILER_LOGS_DIR}",
+            f"rm -rf {logsFolder}; mkdir -p {logsFolder}",
             shell=True,
             check=True,
             stdout=subprocess.DEVNULL,
@@ -101,9 +103,7 @@ def run_report_setup(verbose, port):
         if port:
             options += f"-p {port}"
 
-        captureCommand = (
-            f"{PROFILER_BIN_DIR / TRACY_CAPTURE_TOOL} -o {PROFILER_LOGS_DIR / TRACY_FILE_NAME} -f {options}",
-        )
+        captureCommand = (f"{PROFILER_BIN_DIR / TRACY_CAPTURE_TOOL} -o {logsFolder / TRACY_FILE_NAME} -f {options}",)
         if verbose:
             logger.info(f"Capture command: {captureCommand}")
             captureProcess = subprocess.Popen(captureCommand, shell=True)
@@ -120,8 +120,9 @@ def run_report_setup(verbose, port):
     return toolsReady, captureProcess
 
 
-def generate_report(outFolder, nameAppend, childCalls):
-    tracyOutFile = PROFILER_LOGS_DIR / TRACY_FILE_NAME
+def generate_report(outputFolder, nameAppend, childCalls):
+    logsFolder = generate_logs_folder(outputFolder)
+    tracyOutFile = logsFolder / TRACY_FILE_NAME
     timeOut = 15
     timeCount = 0
     while not os.path.exists(tracyOutFile):
@@ -135,7 +136,7 @@ def generate_report(outFolder, nameAppend, childCalls):
             sys.exit(1)
         timeCount += 1
         time.sleep(1)
-    with open(PROFILER_LOGS_DIR / TRACY_OPS_TIMES_FILE_NAME, "w") as csvFile:
+    with open(logsFolder / TRACY_OPS_TIMES_FILE_NAME, "w") as csvFile:
         childCallStr = ""
         childCallsList = DEFAULT_CHILD_CALLS
         if childCalls:
@@ -143,27 +144,27 @@ def generate_report(outFolder, nameAppend, childCalls):
         if childCallsList:
             childCallStr = f"-x {','.join(childCallsList)}"
         subprocess.run(
-            f"{PROFILER_BIN_DIR / TRACY_CSVEXPROT_TOOL} -u -p TT_DNN {childCallStr} {PROFILER_LOGS_DIR / TRACY_FILE_NAME}",
+            f"{PROFILER_BIN_DIR / TRACY_CSVEXPROT_TOOL} -u -p TT_DNN {childCallStr} {logsFolder / TRACY_FILE_NAME}",
             shell=True,
             check=True,
             stdout=csvFile,
             stderr=subprocess.DEVNULL,
         )
 
-    logger.info(f"Host side ops time report generated at {PROFILER_LOGS_DIR / TRACY_OPS_TIMES_FILE_NAME}")
+    logger.info(f"Host side ops time report generated at {logsFolder / TRACY_OPS_TIMES_FILE_NAME}")
 
-    with open(PROFILER_LOGS_DIR / TRACY_OPS_DATA_FILE_NAME, "w") as csvFile:
+    with open(logsFolder / TRACY_OPS_DATA_FILE_NAME, "w") as csvFile:
         subprocess.run(
-            f'{PROFILER_BIN_DIR / TRACY_CSVEXPROT_TOOL} -m -s ";" {PROFILER_LOGS_DIR / TRACY_FILE_NAME}',
+            f'{PROFILER_BIN_DIR / TRACY_CSVEXPROT_TOOL} -m -s ";" {logsFolder / TRACY_FILE_NAME}',
             shell=True,
             check=True,
             stdout=csvFile,
             stderr=subprocess.DEVNULL,
         )
 
-    logger.info(f"Host side ops data report generated at {PROFILER_LOGS_DIR / TRACY_OPS_DATA_FILE_NAME}")
+    logger.info(f"Host side ops data report generated at {logsFolder / TRACY_OPS_DATA_FILE_NAME}")
 
-    process_ops(outFolder, nameAppend, True)
+    process_ops(outputFolder, nameAppend, True)
 
 
 def get_available_port():

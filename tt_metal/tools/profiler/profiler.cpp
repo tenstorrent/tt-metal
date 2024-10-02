@@ -287,7 +287,7 @@ DeviceProfiler::DeviceProfiler(const bool new_logs)
 {
 #if defined(TRACY_ENABLE)
     ZoneScopedC(tracy::Color::Green);
-    output_dir = std::filesystem::path(string(PROFILER_RUNTIME_ROOT_DIR) + string(PROFILER_LOGS_DIR_NAME));
+    output_dir = std::filesystem::path(get_profiler_logs_dir());
     std::filesystem::create_directories(output_dir);
     std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
 

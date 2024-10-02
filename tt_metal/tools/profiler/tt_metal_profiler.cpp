@@ -124,7 +124,7 @@ void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_m
     constexpr bool force_slow_dispatch = true;
     LaunchProgram(device, sync_program, wait_for_all_cores_done, force_slow_dispatch);
 
-    std::filesystem::path output_dir = std::filesystem::path(string(PROFILER_RUNTIME_ROOT_DIR) + string(PROFILER_LOGS_DIR_NAME));
+    std::filesystem::path output_dir = std::filesystem::path(get_profiler_logs_dir());
     std::filesystem::path log_path = output_dir / "sync_device_info.csv";
     std::ofstream log_file;
 

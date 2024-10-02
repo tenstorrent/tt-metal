@@ -10,6 +10,9 @@ fi
 PROFILER_SCRIPTS_ROOT=$TT_METAL_HOME/tt_metal/tools/profiler
 PROFILER_TEST_SCRIPTS_ROOT=$TT_METAL_HOME/tests/tt_metal/tools/profiler
 PROFILER_ARTIFACTS_DIR=$TT_METAL_HOME/generated/profiler
+if [[ "$TT_METAL_PROFILER_DIR" ]]; then
+    PROFILER_ARTIFACTS_DIR=$TT_METAL_PROFILER_DIR
+fi
 PROFILER_OUTPUT_DIR=$PROFILER_ARTIFACTS_DIR/reports
 
 remove_default_log_locations(){
