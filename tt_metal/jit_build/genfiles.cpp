@@ -524,9 +524,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     std::vector<CoreCoord>& dram_bank_map,
     std::vector<int32_t>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
-    std::vector<int32_t>& l1_bank_offset_map,
-    int core_count_per_dram,
-    const std::map<CoreCoord, int32_t>& profiler_flat_id_map) {
+    std::vector<int32_t>& l1_bank_offset_map) {
     stringstream ss;
     bool is_dram_pow2 = ceil(log2(dram_bank_map.size())) == log2(dram_bank_map.size());
     bool is_l1_pow2 = ceil(log2(l1_bank_map.size())) == log2(l1_bank_map.size());
@@ -577,13 +575,6 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << "extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];" << endl;
     ss << "extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];" << endl;
     ss << "extern int32_t bank_to_l1_offset[NUM_L1_BANKS];" << endl;
-#if defined(TRACY_ENABLE)
-    ss << "#if defined(PROFILE_KERNEL) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || "
-          "defined(COMPILE_FOR_ERISC))"
-       << endl;
-    ss << "extern uint16_t profiler_core_count_per_dram;" << endl;
-    ss << "#endif" << endl;
-#endif
 
     ss << endl;
     ss << "#else // !KERNEL_BUILD (FW_BUILD)" << endl;
@@ -610,17 +601,6 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     }
     ss << "};" << endl;
     ss << endl;
-
-#if defined(TRACY_ENABLE)
-    ss << "#if defined(PROFILE_KERNEL) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || "
-          "defined(COMPILE_FOR_ERISC))"
-       << endl;
-    ss << "uint16_t profiler_core_count_per_dram __attribute__((used)) = ";
-    ss << core_count_per_dram << ";" << endl;
-    ss << endl;
-    ss << "#endif" << endl;
-
-#endif
 
     ss << "uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used)) = {" << endl;
     for (unsigned int noc = 0; noc < 2; noc++) {
@@ -654,17 +634,13 @@ void jit_build_genfiles_bank_to_noc_coord_descriptor(
     std::vector<CoreCoord>& dram_bank_map,
     std::vector<int32_t>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
-    std::vector<int32_t>& l1_bank_offset_map,
-    int core_count_per_dram,
-    const std::map<CoreCoord, int32_t>& profiler_flat_id_map) {
+    std::vector<int32_t>& l1_bank_offset_map) {
     string output_string = generate_bank_to_noc_coord_descriptor_string(
         grid_size,
         dram_bank_map,
         dram_bank_offset_map,
         l1_bank_map,
-        l1_bank_offset_map,
-        core_count_per_dram,
-        profiler_flat_id_map);
+        l1_bank_offset_map);
 
     fs::create_directories(path + "/brisc");
     ofstream file_stream_br(path + "/brisc/generated_bank_to_noc_coord_mapping.h");
