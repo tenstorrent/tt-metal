@@ -14,6 +14,7 @@ set(PROGRAMMING_EXAMPLES_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/matmul_single_core/matmul_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pad/pad_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharding/shard_data_rm.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/uniform/uniform.cpp
 )
 
 include(${PROJECT_SOURCE_DIR}/cmake/helper_functions.cmake)
