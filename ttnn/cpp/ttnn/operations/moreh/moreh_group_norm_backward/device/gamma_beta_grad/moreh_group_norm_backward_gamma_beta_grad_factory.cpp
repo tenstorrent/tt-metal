@@ -2,37 +2,29 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <functional>
-#include <map>
-#include <optional>
-#include <string>
-#include <utility>
-#include <vector>
-
-#include "ttnn/run_operation.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm_backward/moreh_groupnorm_backward_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "moreh_group_norm_backward_gamma_beta_grad_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 
-namespace tt {
-
-namespace operations {
-
-namespace primary {
-
-operation::ProgramWithOptionalOutputTensors moreh_groupnorm_backward_gamma_beta_grad_impl(
-    const Tensor &output_grad,
-    const Tensor &input,
-    const Tensor &mean,
-    const Tensor &rstd,
-    uint32_t num_groups,
-    const std::optional<const Tensor> gamma_grad,
-    const std::optional<const Tensor> beta_grad) {
+namespace ttnn::operations::moreh::moreh_group_norm_backward {
+MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGradFactory::cached_program_t
+MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGradFactory::create(
+    const operation_attributes_t &operation_attributes,
+    const tensor_args_t &tensor_args,
+    tensor_return_value_t &outputs) {
+    using namespace tt;
     using namespace tt::constants;
+    using namespace tt::operations::primary;
+
+    const auto &output_grad = tensor_args.output_grad;
+    const auto &input = tensor_args.input;
+    const auto &mean = tensor_args.mean;
+    const auto &rstd = tensor_args.rstd;
+
+    auto gamma_grad = outputs[0];
+    auto beta_grad = outputs[1];
+    auto num_groups = operation_attributes.num_groups;
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -140,11 +132,11 @@ operation::ProgramWithOptionalOutputTensors moreh_groupnorm_backward_gamma_beta_
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const std::string reader_kernel_file(
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm_backward/gamma_beta_grad/kernels/dataflow/"
-        "reader_moreh_groupnorm_backward_gamma_beta_grad.cpp");
+        "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm_backward/device/gamma_beta_grad/kernels/dataflow/"
+        "reader_moreh_group_norm_backward_gamma_beta_grad.cpp");
     const std::string writer_kernel_file(
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm_backward/gamma_beta_grad/kernels/dataflow/"
-        "writer_moreh_groupnorm_backward_gamma_beta_grad.cpp");
+        "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm_backward/device/gamma_beta_grad/kernels/dataflow/"
+        "writer_moreh_group_norm_backward_gamma_beta_grad.cpp");
 
     const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores);
     const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores);
@@ -157,8 +149,8 @@ operation::ProgramWithOptionalOutputTensors moreh_groupnorm_backward_gamma_beta_
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
 
     const std::string compute_kernel_file(
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
-        "moreh_layernorm_backward_gamma_beta_grad_kernel.cpp");
+        "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+        "moreh_layer_norm_backward_gamma_beta_grad_kernel.cpp");
 
     const std::vector<uint32_t> compute_args_group_1{
         num_channels_per_core_group_1,
@@ -243,10 +235,10 @@ operation::ProgramWithOptionalOutputTensors moreh_groupnorm_backward_gamma_beta_
         // writer
         const std::vector<uint32_t> writer_runtime_args{
             gamma_grad_addr,
-            static_cast<uint32_t>(is_dram(gamma_grad)),
+            static_cast<uint32_t>(gamma_grad_has_value ? is_dram(gamma_grad.value()) : 1),
             static_cast<uint32_t>(gamma_grad_has_value),
             beta_grad_addr,
-            static_cast<uint32_t>(is_dram(beta_grad)),
+            static_cast<uint32_t>(beta_grad_has_value ? is_dram(beta_grad.value()) : 1),
             static_cast<uint32_t>(beta_grad_has_value),
             tile_offset,
             num_channels_per_core,
@@ -258,52 +250,48 @@ operation::ProgramWithOptionalOutputTensors moreh_groupnorm_backward_gamma_beta_
         tile_offset += num_channels_per_core * HtWt;
     }
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Callback SetUp
-    ////////////////////////////////////////////////////////////////////////////
-    auto override_runtime_args_callback = [reader_kernels_id = reader_kernels_id,
-                                           writer_kernels_id = writer_kernels_id,
-                                           num_cores_to_be_used = num_cores_to_be_used,
-                                           num_cores_y = num_cores_y](
-                                              const Program &program,
-                                              const std::vector<Buffer *> &input_buffers,
-                                              const std::vector<Buffer *> &output_buffers) {
-        auto output_grad_buffer = input_buffers.at(0);
-        auto input_buffer = input_buffers.at(1);
-        auto mean_buffer = input_buffers.at(2);
-        auto rstd_buffer = input_buffers.at(3);
-
-        auto gamma_grad_buffer = output_buffers.at(0);
-        auto beta_grad_buffer = output_buffers.at(1);
-
-        for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
-            CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-            {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
-                runtime_args[0] = output_grad_buffer->address();
-                runtime_args[2] = input_buffer->address();
-                runtime_args[4] = mean_buffer->address();
-                runtime_args[6] = rstd_buffer->address();
-            }
-
-            {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
-                if (gamma_grad_buffer != nullptr) {
-                    runtime_args[0] = gamma_grad_buffer->address();
-                }
-                if (beta_grad_buffer != nullptr) {
-                    runtime_args[3] = beta_grad_buffer->address();
-                }
-            }
-        }
-    };
-
-    return {std::move(program), override_runtime_args_callback};
+    return {std::move(program), {reader_kernels_id, writer_kernels_id, num_cores_to_be_used, num_cores_y}};
 }
 
-}  // namespace primary
+void MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGradFactory::
+    override_runtime_arguments(
+        cached_program_t &cached_program,
+        const operation_attributes_t &operation_attributes,
+        const tensor_args_t &tensor_args,
+        tensor_return_value_t &outputs) {
+    auto reader_kernels_id = cached_program.shared_variables.reader_kernels_id;
+    auto writer_kernels_id = cached_program.shared_variables.writer_kernels_id;
+    auto num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
+    auto num_cores_y = cached_program.shared_variables.num_cores_y;
 
-}  // namespace operations
+    auto output_grad_buffer = tensor_args.output_grad.buffer();
+    auto input_buffer = tensor_args.input.buffer();
+    auto mean_buffer = tensor_args.mean.buffer();
+    auto rstd_buffer = tensor_args.rstd.buffer();
 
-}  // namespace tt
+    auto gamma_grad_buffer = outputs[0]->buffer();
+    auto beta_grad_buffer = outputs[1]->buffer();
+
+    for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+        {
+            auto &runtime_args = GetRuntimeArgs(cached_program.program, reader_kernels_id, core);
+            runtime_args[0] = output_grad_buffer->address();
+            runtime_args[2] = input_buffer->address();
+            runtime_args[4] = mean_buffer->address();
+            runtime_args[6] = rstd_buffer->address();
+        }
+
+        {
+            auto &runtime_args = GetRuntimeArgs(cached_program.program, writer_kernels_id, core);
+            if (gamma_grad_buffer != nullptr) {
+                runtime_args[0] = gamma_grad_buffer->address();
+            }
+            if (beta_grad_buffer != nullptr) {
+                runtime_args[3] = beta_grad_buffer->address();
+            }
+        }
+    }
+}
+}  // namespace ttnn::operations::moreh::moreh_group_norm_backward
