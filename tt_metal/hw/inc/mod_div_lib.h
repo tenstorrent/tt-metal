@@ -40,6 +40,22 @@ inline __attribute__((always_inline)) uint32_t fast_udiv_56(uint32_t n)
     return (((uint64_t) n * 0x24924925) >> 32) >> 3;
 }
 
+inline __attribute__((always_inline)) uint32_t fast_udiv_70(uint32_t n)
+{
+    // Uses embedding style magic number
+    // * fixed point 1/12 then shifting.
+    // https://web.archive.org/web/20190703172151/http://www.hackersdelight.org/magic.htm
+    return (((uint64_t) n * 0xEA0EA0EB) >> 32) >> 6;
+}
+
+inline __attribute__((always_inline)) uint32_t fast_udiv_80(uint32_t n)
+{
+    // Uses embedding style magic number
+    // * fixed point 1/12 then shifting.
+    // https://web.archive.org/web/20190703172151/http://www.hackersdelight.org/magic.htm
+    return (((uint64_t) n * 0xCCCCCCCD) >> 32) >> 6;
+}
+
 inline __attribute__((always_inline)) uint32_t fast_udiv_94(uint32_t n)
 {
     // Uses embedding style magic number
@@ -78,7 +94,11 @@ inline __attribute__((always_inline)) uint32_t udivsi3_const_divisor(uint32_t n)
     } else if constexpr (d == 56) {
         // fast divide for 56 divisor. Handles Banked L1 address generation for N300
         return fast_udiv_56(n);
-    }  else if constexpr (d == 94) {
+    } else if constexpr (d == 70) {
+        return fast_udiv_70(n);
+    } else if constexpr (d == 80) {
+        return fast_udiv_80(n);
+    } else if constexpr (d == 94) {
         // fast divide for 94 divisor. Handles Banked L1 address generation for E75
         return fast_udiv_94(n);
     } else if constexpr (d == 124) {
