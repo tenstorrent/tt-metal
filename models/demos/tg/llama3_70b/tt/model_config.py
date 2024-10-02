@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -411,36 +411,28 @@ def set_decoder_config(model_config):
         packer_l1_acc=False,
     )
 
-    decode_config["LN_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[8, 4],
-        subblock_w=8,
-        block_h=32 // 32,
-        block_w=8,
+    # Sharded LN config
+    core_grid_ln = (4, 8)
+    num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
+    hidden_size_per_device_distributed_ln = model_config["HIDDEN_SIZE"] // model_config["CLUSTER_SHAPE"][0]
+    decode_config["LN_SHARDED_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+        shape=(1, 1, 32, hidden_size_per_device_distributed_ln),
+        core_grid=ttnn.CoreGrid(y=core_grid_ln[0], x=core_grid_ln[1]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+    )
+    decode_config["LN_SHARDED_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(core_grid_ln[1], core_grid_ln[0]),
+        subblock_w=(hidden_size_per_device_distributed_ln // num_cores_ln) // 32,
+        block_h=1,
+        block_w=(hidden_size_per_device_distributed_ln // num_cores_ln) // 32,
         inplace=False,
     )
-
-    shard_spec_32_cores_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(7, 3),
-            ),
-        }
+    decode_config["LN_SHARDED_STATS_MEMCFG"] = ttnn.create_sharded_memory_config(
+        shape=[1, 1, 32, 32 * model_config["CLUSTER_SHAPE"][0]],
+        core_grid=ttnn.CoreGrid(y=1, x=1),
+        strategy=ttnn.ShardStrategy.WIDTH,
     )
 
-    decode_config["LN_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            shard_spec_32_cores_grid,
-            [
-                32,
-                8192 // 32,
-            ],
-            ttnn.ShardOrientation.ROW_MAJOR,
-            False,
-        ),
-    )
     decode_config["ATTN_ACT_MEMCFG"] = ttnn.create_sharded_memory_config(
         shape=(32, 2048 // 32),
         core_grid=ttnn.CoreGrid(y=4, x=8),
@@ -465,6 +457,29 @@ def set_decoder_config(model_config):
 
 def set_core_model_config(model_config, cluster_shape):
     decode_config = {}
+
+    # Sharded LN config
+    core_grid_ln = (4, 8)
+    num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
+    hidden_size_per_device_distributed_ln = model_config_entries["hidden_size"] // cluster_shape[0]
+    decode_config["LN_SHARDED_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+        shape=(1, 1, 32, hidden_size_per_device_distributed_ln),
+        core_grid=ttnn.CoreGrid(y=core_grid_ln[0], x=core_grid_ln[1]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+    )
+    decode_config["LN_SHARDED_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(core_grid_ln[1], core_grid_ln[0]),
+        subblock_w=(hidden_size_per_device_distributed_ln // num_cores_ln) // 32,
+        block_h=1,
+        block_w=(hidden_size_per_device_distributed_ln // num_cores_ln) // 32,
+        inplace=False,
+    )
+    decode_config["LN_SHARDED_STATS_MEMCFG"] = ttnn.create_sharded_memory_config(
+        shape=[1, 1, 32, 32 * model_config["CLUSTER_SHAPE"][0]],
+        core_grid=ttnn.CoreGrid(y=1, x=1),
+        strategy=ttnn.ShardStrategy.WIDTH,
+    )
+
     decode_config["LN_COMPUTE_KERNEL_CONFIG"] = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,

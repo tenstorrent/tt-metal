@@ -146,3 +146,60 @@ def setup_llama_env(llama_version="llama3", max_batch_size=32, max_context_len=4
     )
 
     return model_config, ckpt_dir, tokenizer_path, cache_path
+
+
+def tt_distributed_rmsnorm(inp, epsilon, gamma, mesh_device, compute_kernel_config):
+    # Run distributed rmsnorm part 1
+    tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
+
+    padded_shape = (1, 1, inp.shape[-2], 32)
+    tt_stats = ttnn.reshape(tt_stats, ttnn.Shape(padded_shape, padded_shape))  # TODO: Figure out why we need this
+    tt_stats = tt_all_gather(
+        tt_stats,
+        mesh_device=mesh_device,
+        dim=3,
+        cluster_axis=1,
+        num_links=1,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Run distributed rmsnorm part 2
+    tt_out = ttnn.rms_norm_post_all_gather(
+        inp, tt_stats, epsilon=epsilon, weight=gamma, compute_kernel_config=compute_kernel_config
+    )
+
+    tt_stats.deallocate(True)
+
+    return tt_out
+
+
+def tt_sharded_distributed_rmsnorm(
+    inp, epsilon, gamma, mesh_device, ln_sharded_input_memcfg, ln_sharded_progcfg, ln_sharded_stats_memcfg
+):
+    inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
+
+    # Run distributed rmsnorm part 1
+    tt_stats = ttnn.rms_norm_pre_all_gather(inp, program_config=ln_sharded_progcfg)
+
+    # All gather stats
+    tt_stats = ttnn.all_gather(
+        tt_stats,
+        3,
+        num_links=1,
+        cluster_axis=1,
+        mesh_device=mesh_device,
+        memory_config=ln_sharded_stats_memcfg,
+        topology=ttnn.Topology.Linear,
+    )
+
+    # Run distributed rmsnorm part 2
+    tt_out = ttnn.rms_norm_post_all_gather(
+        inp,
+        epsilon=epsilon,
+        weight=gamma,
+        program_config=ln_sharded_progcfg,
+        stats=tt_stats,
+    )
+    tt_stats.deallocate(True)
+
+    return tt_out
