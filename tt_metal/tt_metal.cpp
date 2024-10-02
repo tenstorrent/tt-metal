@@ -53,9 +53,16 @@ CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeS
     );
 }
 
-void CheckDataMovementConfig(Program &program, const std::string &file_name, const CoreRangeSet &core_ranges) {
-    bool riscv0_in_use = false; bool riscv1_in_use = false;
-    bool noc0_in_use = false; bool noc1_in_use = false;
+struct DataMovementConfigStatus {
+    bool riscv0_in_use;
+    bool riscv1_in_use;
+    bool noc0_in_use;
+    bool noc1_in_use;
+};
+
+DataMovementConfigStatus CheckDataMovementConfig(Program &program, const CoreRangeSet &core_ranges) {
+    DataMovementConfigStatus data_movement_config_status{
+        .riscv0_in_use = false, .riscv1_in_use = false, .noc0_in_use = false, .noc1_in_use = false};
 
     auto set_global_and_local_noc_usage = [&](KernelHandle kernel_id, bool &local_noc0_usage, bool &local_noc1_usage) {
         const auto kernel = detail::GetKernel(program, kernel_id);
@@ -63,36 +70,46 @@ void CheckDataMovementConfig(Program &program, const std::string &file_name, con
         auto noc_value = magic_enum::enum_integer(kernel_config.noc);
         local_noc0_usage = noc_value == 0;
         local_noc1_usage = noc_value == 1;
-        noc0_in_use = local_noc0_usage;
-        noc1_in_use = local_noc1_usage;
+        data_movement_config_status.noc0_in_use = local_noc0_usage;
+        data_movement_config_status.noc1_in_use = local_noc1_usage;
     };
 
     for (const auto &core_range : core_ranges.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                const KernelGroup * kernel_group = program.kernels_on_core(CoreCoord(x, y),
-                    hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
+                const KernelGroup *kernel_group = program.kernels_on_core(
+                    CoreCoord(x, y), hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
                 if (kernel_group != nullptr) {
-                    bool local_noc0_in_use = false; bool local_noc1_in_use = false;
+                    bool local_noc0_in_use = false;
+                    bool local_noc1_in_use = false;
                     if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value()) {
-                        riscv0_in_use = true;
-                        set_global_and_local_noc_usage(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value(), local_noc0_in_use, local_noc1_in_use);
+                        data_movement_config_status.riscv0_in_use = true;
+                        set_global_and_local_noc_usage(
+                            kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value(),
+                            local_noc0_in_use,
+                            local_noc1_in_use);
                     }
                     if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value()) {
-                        riscv1_in_use = true;
-                        set_global_and_local_noc_usage(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value(), local_noc0_in_use, local_noc1_in_use);
+                        data_movement_config_status.riscv1_in_use = true;
+                        set_global_and_local_noc_usage(
+                            kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value(),
+                            local_noc0_in_use,
+                            local_noc1_in_use);
                     }
                     if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value() and
                         kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value()) {
-                        TT_FATAL(local_noc0_in_use and local_noc1_in_use, "Illegal NOC usage: data movement kernels on logical core {} cannot use the same NOC, doing so results in hangs!", CoreCoord(x, y).str());
+                        TT_FATAL(
+                            local_noc0_in_use and local_noc1_in_use,
+                            "Illegal NOC usage: data movement kernels on logical core {} cannot use the same NOC, "
+                            "doing so results in hangs!",
+                            CoreCoord(x, y).str());
                     }
                 }
             }
         }
     }
 
-    TT_FATAL(not (riscv0_in_use and riscv1_in_use), "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified cores because both data movement processors are in use!", file_name);
-    TT_FATAL(not (noc0_in_use and noc1_in_use), "DataMovementKernel creation failure: Cannot create data movement kernels for {} across specified cores because both NOCs are in use!", file_name);
+    return data_movement_config_status;
 }
 
 void ConfigureKernelGroup(
@@ -640,7 +657,6 @@ void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_u
     LaunchProgram(device, *program, wait_until_cores_done, force_slow_dispatch);
 }
 
-
 void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done, bool force_slow_dispatch) {
     {  // Profiler scope start
         ZoneScoped;
@@ -842,8 +858,6 @@ void DeallocateBuffer(Buffer *buffer) {
         false);
 }
 
-
-
 }  // namespace detail
 
 size_t GetNumAvailableDevices() {
@@ -888,6 +902,60 @@ bool CloseDevice(Device *device) {
 
 Program CreateProgram() { return Program(); }
 
+KernelHandle CreateDataMovementKernel(
+    Program &program,
+    const KernelSource &kernel_src,
+    const CoreRangeSet &core_range_set,
+    const DataMovementConfig &config) {
+    const DataMovementConfigStatus &data_movement_config_status = CheckDataMovementConfig(program, core_range_set);
+    const bool are_both_riscv_in_use =
+        data_movement_config_status.riscv0_in_use && data_movement_config_status.riscv1_in_use;
+    const bool are_both_noc_in_use = data_movement_config_status.noc0_in_use && data_movement_config_status.noc1_in_use;
+
+    string kernel_name;
+    if (kernel_src.source_type_ == KernelSource::FILE_PATH) {
+        kernel_name = kernel_src.source_;
+    } else {
+        TT_FATAL(kernel_src.source_type_ == KernelSource::SOURCE_CODE, "Unsupported kernel source type!");
+        kernel_name = "kernel";
+    }
+
+    TT_FATAL(
+        !(are_both_riscv_in_use),
+        "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified "
+        "cores because both data movement processors are in use!",
+        kernel_name);
+    TT_FATAL(
+        !(are_both_noc_in_use),
+        "DataMovementKernel creation failure: Cannot create data movement kernels for {} across specified "
+        "cores because both NOCs are in use!",
+        kernel_name);
+
+    std::shared_ptr<Kernel> kernel = std::make_shared<DataMovementKernel>(kernel_src, core_range_set, config);
+    return detail::AddKernel(program, kernel, HalProgrammableCoreType::TENSIX);
+}
+
+KernelHandle CreateComputeKernel(
+    Program &program, const KernelSource &kernel_src, const CoreRangeSet &core_range_set, const ComputeConfig &config) {
+    std::shared_ptr<Kernel> kernel = std::make_shared<ComputeKernel>(kernel_src, core_range_set, config);
+    return detail::AddKernel(program, kernel, HalProgrammableCoreType::TENSIX);
+}
+
+KernelHandle CreateEthernetKernel(
+    Program &program,
+    const KernelSource &kernel_src,
+    const CoreRangeSet &core_range_set,
+    const EthernetConfig &config) {
+    KernelHandle kernel_handle;
+    std::shared_ptr<Kernel> kernel = std::make_shared<EthernetKernel>(kernel_src, core_range_set, config);
+    if (config.eth_mode == Eth::IDLE) {
+        kernel_handle = detail::AddKernel(program, kernel, HalProgrammableCoreType::IDLE_ETH);
+    } else {
+        kernel_handle = detail::AddKernel(program, kernel, HalProgrammableCoreType::ACTIVE_ETH);
+    }
+    return kernel_handle;
+}
+
 KernelHandle CreateKernel(
     Program &program,
     const std::string &file_name,
@@ -896,22 +964,35 @@ KernelHandle CreateKernel(
     return std::visit(
         [&](auto &&cfg) -> KernelHandle {
             CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
-            std::shared_ptr<Kernel> kernel;
+            KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
             using T = std::decay_t<decltype(cfg)>;
             if constexpr (std::is_same_v<T, DataMovementConfig>) {
-                CheckDataMovementConfig(program, file_name, core_ranges);
-                kernel = std::make_shared<DataMovementKernel>(file_name, core_ranges, cfg);
-                return detail::AddKernel(program, kernel, HalProgrammableCoreType::TENSIX);
+                return CreateDataMovementKernel(program, kernel_src, core_ranges, cfg);
             } else if constexpr (std::is_same_v<T, ComputeConfig>) {
-                kernel = std::make_shared<ComputeKernel>(file_name, core_ranges, cfg);
-                return detail::AddKernel(program, kernel, HalProgrammableCoreType::TENSIX);
+                return CreateComputeKernel(program, kernel_src, core_ranges, cfg);
             } else if constexpr (std::is_same_v<T, EthernetConfig>) {
-                kernel = std::make_shared<EthernetKernel>(file_name, core_ranges, cfg);
-                if (cfg.eth_mode == Eth::IDLE) {
-                    return detail::AddKernel(program, kernel, HalProgrammableCoreType::IDLE_ETH);
-                } else {
-                    return detail::AddKernel(program, kernel, HalProgrammableCoreType::ACTIVE_ETH);
-                }
+                return CreateEthernetKernel(program, kernel_src, core_ranges, cfg);
+            }
+        },
+        config);
+}
+
+KernelHandle CreateKernelFromString(
+    Program &program,
+    const std::string &kernel_src_code,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config) {
+    return std::visit(
+        [&](auto &&cfg) -> KernelHandle {
+            CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+            KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
+            using T = std::decay_t<decltype(cfg)>;
+            if constexpr (std::is_same_v<T, DataMovementConfig>) {
+                return CreateDataMovementKernel(program, kernel_src, core_ranges, cfg);
+            } else if constexpr (std::is_same_v<T, ComputeConfig>) {
+                return CreateComputeKernel(program, kernel_src, core_ranges, cfg);
+            } else if constexpr (std::is_same_v<T, EthernetConfig>) {
+                return CreateEthernetKernel(program, kernel_src, core_ranges, cfg);
             }
         },
         config);

@@ -332,7 +332,7 @@ mesh_tensor = ttnn.from_torch(
 )
 
 # Execute Line All-Gather on the tensor
-output_tensor = ttnn.line_all_gather(mesh_tensor, dim=3, cluster_axis=0, mesh_device=mesh_device)
+output_tensor = ttnn.all_gather(mesh_tensor, dim=3, cluster_axis=0, mesh_device=mesh_device, topology=ttnn.Topology.Linear)
 ```
 
 

@@ -73,11 +73,11 @@ class TtTransformerBlock(torch.nn.Module):
         self,
         x: ttnn.Tensor,
         current_pos,
-        current_pos_attn,
         rot_mat=None,
         transformation_mats=None,
         user_id=0,
         mode="decode",
+        page_table=None,
     ) -> ttnn.Tensor:
         if mode == "prefill":
             skip_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
@@ -88,11 +88,11 @@ class TtTransformerBlock(torch.nn.Module):
         r = self.attention.forward(
             [attn_norm],
             current_pos,
-            current_pos_attn,
             rot_mat,
             transformation_mats,
             user_id,
             mode,
+            page_table,
         )
         h = ttnn.add(x, r, memory_config=skip_mem_cfg)
         r = self.feed_forward.forward(self.ffn_norm(h), mode)

@@ -73,12 +73,6 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds):
             dtype=ttnn.int32,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
-        current_pos_attn_tensor = ttnn.from_torch(
-            torch.tensor([current_pos] * batch * 4),
-            device=mesh_device,
-            dtype=ttnn.int32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
 
         decode_input = prepare_inputs_ttnn(
             tt_decode_input,
@@ -87,7 +81,7 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds):
         )
 
         # Run TT model
-        tt_out = tt_model(decode_input, current_pos_tensor, current_pos_attn_tensor, rot_mat=current_rot_mat)
+        tt_out = tt_model(decode_input, current_pos_tensor, rot_mat=current_rot_mat)
         tt_output_torch = (
             ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[:, :1, :, :]
             .permute(2, 1, 0, 3)

@@ -109,10 +109,10 @@ def gather_rotary_emb(rot_emb_matrix, position_ids):
     return rot_emb
 
 
-def get_rotation_mat(dhead, end, start_pos, seqlen, batch):
-    cos, sin = precompute_freqs(dhead, end)
-    rot_mat = freqs_to_rotation_matrix(cos, sin)
-    position_ids = torch.ones(seqlen, batch, dtype=torch.long) * start_pos
+def get_rotation_mat_batched(rot_mat, start_pos, seqlen, batch):
+    if isinstance(start_pos, int):
+        start_pos = torch.ones(seqlen, batch, dtype=torch.long) * start_pos
+    position_ids = start_pos.view(seqlen, batch)
     rot_emb = gather_rotary_emb(rot_mat, position_ids)
     return rot_emb
 
