@@ -81,6 +81,6 @@ std::vector<bool> MorehAdamw::create_async_return_flag(
     const std::optional<Tensor>& max_exp_avg_sq_out,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    return std::vector<bool>{true, true, true, amsgrad.has_value() ? amsgrad.value() : false};
+    return std::vector<bool>{true, true, true, amsgrad.value_or(false)};
 }
 }  // namespace ttnn::operations::moreh::moreh_adamw
