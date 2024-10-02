@@ -39,8 +39,14 @@ on:
           - eltwise.unary.log1p.log1p
           - eltwise.unary.log2.log2
           - eltwise.unary.log10.log10
+          - eltwise.unary.bitwise.bitwise_and
+          - eltwise.unary.bitwise.bitwise_left_shift
+          - eltwise.unary.bitwise.bitwise_not
+          - eltwise.unary.bitwise.bitwise_or
+          - eltwise.unary.bitwise.bitwise_right_shift
+          - eltwise.unary.bitwise.bitwise_xor
           - eltwise.binary.subtract.subtract
-          - eltwise.binary.multiply.multipl
+          - eltwise.binary.multiply.multiply
           - eltwise.binary.div.div
           - eltwise.binary.div_no_nan.div_no_nan
           - eltwise.binary.logical_or_.logical_or_

@@ -101,3 +101,17 @@ def gen_rand_exclude_range(size, excluderange=None, low=0, high=100):
         res = torch.where((res < lower) & (res > upper), res, random.uniform(low, high))
 
     return res
+
+
+def gen_rand_bitwise_left_shift(size, shift_bits=None, low=-2147483647, high=2147483648):
+    res = torch.randint(low, high, size, dtype=torch.int32)
+    if shift_bits is None:
+        return res
+
+    changebit = 31 - shift_bits
+    exludebit_mask = torch.bitwise_not(torch.tensor(2**changebit).to(torch.int32))
+    includebit_mask = torch.tensor(2**changebit).to(torch.int32)
+
+    res = torch.where(res < 0, torch.bitwise_or(res, includebit_mask), torch.bitwise_and(res, exludebit_mask))
+
+    return res
