@@ -187,11 +187,12 @@ namespace kernel_profiler{
         if (profiler_control_buffer[PROFILER_DONE] == 1){
             return;
         }
-        uint32_t pageSize =
-            PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * profiler_core_count_per_dram;
-
         while (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]);
         uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
+        uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
+
+        uint32_t pageSize =
+            PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * profiler_core_count_per_dram;
 
         for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID ++)
 	{
@@ -267,6 +268,7 @@ namespace kernel_profiler{
 
         while (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]);
         uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
+        uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
 
         profiler_data_buffer[myRiscID][ID_LH] = ((core_flat_id & 0xFF) << 3) | myRiscID;
 
