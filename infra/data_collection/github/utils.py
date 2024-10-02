@@ -7,8 +7,11 @@ import csv
 import pathlib
 import os
 from datetime import datetime
+from typing import Optional, Union
 
 from loguru import logger
+
+from infra.data_collection.models import InfraErrorV1
 
 BENCHMARK_ENVIRONMENT_CSV_FIELDS = (
     "git_repo_name",
@@ -117,6 +120,22 @@ def return_first_string_starts_with(starting_string, strings):
     raise Exception(f"{strings} do not have any that match {starting_string}")
 
 
+def get_job_failure_signature_(github_job) -> Optional[Union[InfraErrorV1]]:
+    if github_job["conclusion"] == "success":
+        return None
+    for step in github_job["steps"]:
+        is_generic_setup_failure = (
+            step["name"] == "Set up runner"
+            and step["status"] in ("completed", "cancelled")
+            and step["conclusion"] != "success"
+            and step["started_at"] is not None
+            and step["completed_at"] is None
+        )
+        if is_generic_setup_failure:
+            return str(InfraErrorV1.GENERIC_SET_UP_FAILURE)
+    return None
+
+
 def get_job_row_from_github_job(github_job):
     github_job_id = github_job["id"]
 
@@ -220,6 +239,8 @@ def get_job_row_from_github_job(github_job):
 
     github_job_link = github_job["html_url"]
 
+    failure_signature = get_job_failure_signature_(github_job)
+
     return {
         "github_job_id": github_job_id,
         "host_name": host_name,
@@ -235,6 +256,7 @@ def get_job_row_from_github_job(github_job):
         "job_matrix_config": job_matrix_config,
         "docker_image": docker_image,
         "github_job_link": github_job_link,
+        "failure_signature": failure_signature,
     }
 
 
