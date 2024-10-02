@@ -310,11 +310,12 @@ def get_padded_prefill_len(seq_len):
     If seq_len is more than 32, pad to whichever is smaller: a power of 2 or a multiple of 1024
     TODO: Generalize for max_mm_seq_len different from 1024
     """
+    if seq_len <= 32:
+        return 32
     pow_2_pad = nearest_pow_2(seq_len)
-    mult_1024_pad = 1024 * math.ceil(pow_2_pad / 1024)
-    min_pad = 32
+    mult_1024_pad = 1024 * math.ceil(seq_len / 1024)
     min_extended_pad = min(pow_2_pad, mult_1024_pad)
-    return max(min_pad, min_extended_pad)
+    return min_extended_pad
 
 
 def get_block_size(kv_cache):
