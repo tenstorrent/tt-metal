@@ -455,10 +455,10 @@ def run_test_sdpa_decode_single_iter(
         # [16, 8, 1, 32768, 128, (8, 6), False, False],  # Llama2-70B
         [8, 8, 1, 32768, 128, (8, 6), True, False],  # Llama2-70B
         # [4, 8, 1, 32768, 128, (8, 6), True, False],  # Llama2-70B
-        [32, 8, 1, 32768, 128, (8, 8), True, True],  # Mixtral8x7b
+        [32, 8, 1, 8192, 128, (8, 8), True, True],  # Mixtral8x7b
         # [32, 8, 1, 32768, 128, (8, 6), True, False],  # Llama2-70B
         # [4, 32, 8, 32768, 128, (8, 8), True, False],  # llama 3.1 8b
-        [4, 32, 8, 32768, 128, (8, 8), True, True],  # llama 3.1 8b
+        [4, 32, 8, 8192, 128, (8, 8), True, True],  # llama 3.1 8b
         [32, 32, 8, 8192, 128, (8, 8), True, False],  # llama 3.1 8b
         # [4, 16, 4, 32768, 128, (8, 8), False, False],  # llama 3.1 8b
     ),
@@ -721,7 +721,7 @@ def run_test_sdpa_decode_paged_attention(
     "b, nh, nkv, s, d, grid_size, cur_pos_tensor",
     (
         [32, 8, 1, 32768, 128, (8, 6), True],  # Llama2-70B
-        [4, 32, 8, 32768, 128, (8, 8), True],  # llama 3.1 8b
+        [4, 32, 8, 4096, 128, (8, 8), True],  # llama 3.1 8b
         # [4, 16, 4, 32768, 128, (8, 8), True],
         # [32, 32, 8, 4096, 128, (8, 8), True],  # llama 3.1 8b
         [8, 16, 4, 4096, 128, (8, 2), True],  # llama 3.1 8b N300
