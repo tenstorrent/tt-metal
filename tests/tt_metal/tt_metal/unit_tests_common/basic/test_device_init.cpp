@@ -85,7 +85,8 @@ TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
     for (unsigned int id = 0; id < num_devices; id++) {
         ids.push_back(id);
     }
-    tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, tt_metal::DispatchCoreType::WORKER);
+    const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
+    tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
     devices = tt::DevicePool::instance().get_all_active_devices();
     for (auto device : devices) {
         ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
@@ -104,7 +105,8 @@ TEST_P(DeviceParamFixture, DeviceLoadBlankKernels) {
     for (unsigned int id = 0; id < num_devices; id++) {
         ids.push_back(id);
     }
-    tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, tt_metal::DispatchCoreType::WORKER);
+    const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
+    tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
     devices = tt::DevicePool::instance().get_all_active_devices();
     for (auto device : devices) {
         ASSERT_TRUE(unit_tests_common::basic::test_device_init::load_all_blank_kernels(device));
