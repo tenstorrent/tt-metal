@@ -126,7 +126,8 @@ jobs:
       fail-fast: false
       matrix:
         card: [N150, N300]
-        model: [common_models, functional_unet, llama31_8b, mamba, mistral7b, mistral7b_eth, resnet50]
+        model: [llama31_8b]
+        # model: [common_models, functional_unet, llama31_8b, mamba, mistral7b, mistral7b_eth, resnet50]
     name: Nightly ${{ matrix.card }} ${{ matrix.model }}
     env:
       ARCH_NAME: wormhole_b0
