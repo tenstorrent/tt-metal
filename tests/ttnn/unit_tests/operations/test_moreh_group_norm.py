@@ -39,7 +39,7 @@ def to_npu(
     return npu_tensor
 
 
-def torch_groupnorm(input, num_groups, gamma=None, beta=None, eps=1e-05, compute_mean_rstd=True):
+def torch_group_norm(input, num_groups, gamma=None, beta=None, eps=1e-05, compute_mean_rstd=True):
     N, _, _, _ = input.shape
 
     output = F.group_norm(input, num_groups, gamma, beta, eps)
@@ -56,7 +56,7 @@ def torch_groupnorm(input, num_groups, gamma=None, beta=None, eps=1e-05, compute
     return output, mean, rstd
 
 
-def torch_groupnorm_backward(
+def torch_group_norm_backward(
     input,
     output_grad,
     num_groups,
@@ -88,7 +88,7 @@ def torch_groupnorm_backward(
     return input.grad, gamma_grad, beta_grad
 
 
-def tt_groupnorm(input, num_groups, gamma=None, beta=None, eps=1e-05, compute_mean_rstd=True, device=None):
+def tt_group_norm(input, num_groups, gamma=None, beta=None, eps=1e-05, compute_mean_rstd=True, device=None):
     N, C, _, _ = input.shape
 
     gamma_beta_shape = [1, 1, 1, C]
@@ -106,7 +106,7 @@ def tt_groupnorm(input, num_groups, gamma=None, beta=None, eps=1e-05, compute_me
         npu_rstd = to_npu(npu_rstd, device)
 
     # Forward
-    npu_output, npu_mean, npu_rstd = ttnn.experimental.operations.primary.moreh_groupnorm(
+    npu_output, npu_mean, npu_rstd = ttnn.operations.moreh.group_norm(
         npu_input,
         num_groups,
         eps,
@@ -127,7 +127,7 @@ def tt_groupnorm(input, num_groups, gamma=None, beta=None, eps=1e-05, compute_me
     return tt_output, tt_mean, tt_rstd
 
 
-def tt_groupnorm_backward(
+def tt_group_norm_backward(
     input,
     output_grad,
     num_groups,
@@ -170,7 +170,7 @@ def tt_groupnorm_backward(
         npu_db = to_npu(npu_db, device)
 
     # Backward
-    npu_dx, npu_dg, npu_db = ttnn.experimental.operations.primary.moreh_groupnorm_backward(
+    npu_dx, npu_dg, npu_db = ttnn.operations.moreh.group_norm_backward(
         npu_output_grad,
         npu_input,
         npu_mean,
@@ -226,45 +226,7 @@ def make_input_tensors(input_shape, affine, do_backward=False):
     return input, gamma, beta, output_grad
 
 
-@pytest.mark.parametrize(
-    "N",
-    [
-        2,
-    ],
-)
-@pytest.mark.parametrize(
-    "C_num_groups",
-    [
-        [4, 1],
-        [4, 2],
-        [4, 4],
-    ],
-)
-@pytest.mark.parametrize(
-    "HW",
-    [[23, 23], [512, 512]],
-)
-@pytest.mark.parametrize(
-    "eps",
-    [
-        1e-05,
-    ],
-)
-@pytest.mark.parametrize(
-    "affine",
-    [
-        True,
-        False,
-    ],
-)
-@pytest.mark.parametrize(
-    "compute_mean_rstd",
-    [
-        True,
-        False,
-    ],
-)
-def test_moreh_groupnorm(N, C_num_groups, HW, eps, affine, compute_mean_rstd, device):
+def run_test_moreh_group_norm(N, C_num_groups, HW, eps, affine, compute_mean_rstd, device):
     torch.manual_seed(2024)
 
     H, W = HW
@@ -273,11 +235,11 @@ def test_moreh_groupnorm(N, C_num_groups, HW, eps, affine, compute_mean_rstd, de
     cpu_input, cpu_beta, cpu_gamma, _ = make_input_tensors(input_shape, affine)
 
     # expected
-    expected_output, expected_mean, expected_rstd = torch_groupnorm(
+    expected_output, expected_mean, expected_rstd = torch_group_norm(
         cpu_input, num_groups, cpu_gamma, cpu_beta, eps, compute_mean_rstd
     )
     # actual
-    actual_output, actual_mean, actual_rstd = tt_groupnorm(
+    actual_output, actual_mean, actual_rstd = tt_group_norm(
         cpu_input, num_groups, cpu_gamma, cpu_beta, eps, compute_mean_rstd, device
     )
 
@@ -340,27 +302,60 @@ def test_moreh_groupnorm(N, C_num_groups, HW, eps, affine, compute_mean_rstd, de
     ],
 )
 @pytest.mark.parametrize(
-    "input_requires_grad",
+    "compute_mean_rstd",
     [
         True,
         False,
+    ],
+)
+def test_moreh_group_norm(N, C_num_groups, HW, eps, affine, compute_mean_rstd, device):
+    run_test_moreh_group_norm(N, C_num_groups, HW, eps, affine, compute_mean_rstd, device)
+
+
+@pytest.mark.parametrize(
+    "N",
+    [
+        2,
     ],
 )
 @pytest.mark.parametrize(
-    "gamma_requires_grad",
+    "C_num_groups",
     [
-        True,
-        False,
+        [4, 1],
     ],
 )
 @pytest.mark.parametrize(
-    "beta_requires_grad",
+    "HW",
     [
-        True,
-        False,
+        [23, 23],
     ],
 )
-def test_moreh_groupnorm_backward(
+@pytest.mark.parametrize(
+    "eps",
+    [
+        1e-05,
+    ],
+)
+@pytest.mark.parametrize(
+    "affine",
+    [
+        True,
+    ],
+)
+@pytest.mark.parametrize(
+    "compute_mean_rstd",
+    [
+        True,
+    ],
+)
+def test_moreh_group_norm_callback(N, C_num_groups, HW, eps, affine, compute_mean_rstd, device, use_program_cache):
+    for _ in range(2):
+        run_test_moreh_group_norm(N, C_num_groups, HW, eps, affine, compute_mean_rstd, device)
+        torch_dummy = torch.randn([32, 32])
+        tt_dummy = to_npu(torch_dummy, device)
+
+
+def run_test_moreh_group_norm_backward(
     N, C_num_groups, HW, eps, affine, input_requires_grad, gamma_requires_grad, beta_requires_grad, device
 ):
     H, W = HW
@@ -374,7 +369,7 @@ def test_moreh_groupnorm_backward(
     cpu_input, cpu_gamma, cpu_beta, cpu_output_grad = make_input_tensors(input_shape, affine, do_backward=True)
 
     # expected
-    expected_input_grad, expected_gamma_grad, expected_beta_grad = torch_groupnorm_backward(
+    expected_input_grad, expected_gamma_grad, expected_beta_grad = torch_group_norm_backward(
         cpu_input,
         cpu_output_grad,
         num_groups,
@@ -386,7 +381,7 @@ def test_moreh_groupnorm_backward(
         eps,
     )
     # actual
-    actual_input_grad, actual_gamma_grad, actual_beta_grad = tt_groupnorm_backward(
+    actual_input_grad, actual_gamma_grad, actual_beta_grad = tt_group_norm_backward(
         cpu_input,
         cpu_output_grad,
         num_groups,
@@ -433,3 +428,131 @@ def test_moreh_groupnorm_backward(
         assert pass_beta_grad
     else:
         assert actual_beta_grad is None
+
+
+@pytest.mark.parametrize(
+    "N",
+    [
+        2,
+    ],
+)
+@pytest.mark.parametrize(
+    "C_num_groups",
+    [
+        [4, 1],
+        [4, 2],
+        [4, 4],
+    ],
+)
+@pytest.mark.parametrize(
+    "HW",
+    [[23, 23], [512, 512]],
+)
+@pytest.mark.parametrize(
+    "eps",
+    [
+        1e-05,
+    ],
+)
+@pytest.mark.parametrize(
+    "affine",
+    [
+        True,
+        False,
+    ],
+)
+@pytest.mark.parametrize(
+    "input_requires_grad",
+    [
+        True,
+        False,
+    ],
+)
+@pytest.mark.parametrize(
+    "gamma_requires_grad",
+    [
+        True,
+        False,
+    ],
+)
+@pytest.mark.parametrize(
+    "beta_requires_grad",
+    [
+        True,
+        False,
+    ],
+)
+def test_moreh_group_norm_backward(
+    N, C_num_groups, HW, eps, affine, input_requires_grad, gamma_requires_grad, beta_requires_grad, device
+):
+    run_test_moreh_group_norm_backward(
+        N, C_num_groups, HW, eps, affine, input_requires_grad, gamma_requires_grad, beta_requires_grad, device
+    )
+
+
+@pytest.mark.parametrize(
+    "N",
+    [
+        2,
+    ],
+)
+@pytest.mark.parametrize(
+    "C_num_groups",
+    [
+        [4, 1],
+    ],
+)
+@pytest.mark.parametrize(
+    "HW",
+    [
+        [23, 23],
+    ],
+)
+@pytest.mark.parametrize(
+    "eps",
+    [
+        1e-05,
+    ],
+)
+@pytest.mark.parametrize(
+    "affine",
+    [
+        True,
+    ],
+)
+@pytest.mark.parametrize(
+    "input_requires_grad",
+    [
+        True,
+    ],
+)
+@pytest.mark.parametrize(
+    "gamma_requires_grad",
+    [
+        True,
+    ],
+)
+@pytest.mark.parametrize(
+    "beta_requires_grad",
+    [
+        True,
+    ],
+)
+def test_moreh_group_norm_backward_callback(
+    N,
+    C_num_groups,
+    HW,
+    eps,
+    affine,
+    input_requires_grad,
+    gamma_requires_grad,
+    beta_requires_grad,
+    device,
+    use_program_cache,
+):
+    for _ in range(2):
+        run_test_moreh_group_norm_backward(
+            N, C_num_groups, HW, eps, affine, input_requires_grad, gamma_requires_grad, beta_requires_grad, device
+        )
+        torch_dummy = torch.randn([32, 32])
+        tt_dummy = to_npu(torch_dummy, device)

@@ -204,37 +204,6 @@ void kernel_main() {
             }
             noc_async_read_barrier();
             cb_push_back(cb_id_input, onetile);
-
-            // output_grad (N, C, H, W)
-            output_grad_tile_idx = input_tile_idx;
-            cb_reserve_back(cb_id_output_grad, onetile);
-            if (output_grad_is_dram) {
-                noc_async_read_tile(output_grad_tile_idx, dram_output_grad_addrg, output_grad_l1_write_ptr);
-            } else {
-                noc_async_read_tile(output_grad_tile_idx, l1_output_grad_addrg, output_grad_l1_write_ptr);
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_id_output_grad, onetile);
-
-            if (gamma_has_value) {
-                // gamma (1, 1, 1, C)
-                const auto gamma_c_idx = (input_tile_idx / (Ht * Wt)) % C;
-                const auto gamma_tile_idx = gamma_c_idx / TILE_W;
-                const auto gamma_w_idx_in_tile = gamma_c_idx % TILE_W;
-                const auto tilized_gamma_idx_in_tile = get_tilized_idx(0, gamma_w_idx_in_tile, TILE_H, TILE_W);
-                cb_reserve_back(cb_id_gamma, onetile);
-                if (gamma_is_dram) {
-                    noc_async_read_tile(gamma_tile_idx, dram_gamma_addrg, gamma_l1_write_ptr);
-                } else {
-                    noc_async_read_tile(gamma_tile_idx, l1_gamma_addrg, gamma_l1_write_ptr);
-                }
-                noc_async_read_barrier();
-                if (tilized_gamma_idx_in_tile != 0) {
-                    auto gamma_ptr = reinterpret_cast<uint16_t *>(gamma_l1_write_ptr);
-                    gamma_ptr[0] = gamma_ptr[tilized_gamma_idx_in_tile];
-                }
-                cb_push_back(cb_id_gamma, onetile);
-            }
         }  // inner_idx loop
 
         for (uint32_t inner_idx = 0; inner_idx < num_inner_tiles; ++inner_idx) {
@@ -268,18 +237,7 @@ void kernel_main() {
                 }
                 cb_push_back(cb_id_gamma, onetile);
             }
-
-            // input (N, C, H, W)
-            input_tile_idx = output_grad_tile_idx;
-            cb_reserve_back(cb_id_input, onetile);
-            if (input_is_dram) {
-                noc_async_read_tile(input_tile_idx, dram_input_addrg, input_l1_write_ptr);
-            } else {
-                noc_async_read_tile(input_tile_idx, l1_input_addrg, input_l1_write_ptr);
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_id_input, onetile);
         }  // inner_idx loop
-    }      // outer_idx loop
+    }  // outer_idx loop
 
 }  // void kernel_main()

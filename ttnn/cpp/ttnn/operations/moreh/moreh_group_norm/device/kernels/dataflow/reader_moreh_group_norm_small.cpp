@@ -177,6 +177,6 @@ void kernel_main() {
                 cb_push_back(cb_id_beta, block_size);
             }
         }  // inner_idx loop
-    }      // outer_idx loop
+    }  // outer_idx loop
 
 }  // void kernel_main()
