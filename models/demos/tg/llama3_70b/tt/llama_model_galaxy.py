@@ -290,6 +290,7 @@ class TtLlamaModel_galaxy:
             )
 
             rot_mats = [cos_gathereds, sin_gathereds]
+
             if not attn_mask:
                 attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
                 attn_mask = torch.triu(attn_mask, diagonal=1)

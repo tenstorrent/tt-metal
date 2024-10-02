@@ -129,8 +129,10 @@ def run_test_LlamaModel_inference(
         logger.info(f"Finished PyTorch inference")
 
         # TT hardware execution -------------------------------------------------------------
-        tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tt_inp_ids, start_pos, mode=mode)
-        tt_out = tt_model(tt_inp_emb, rot_mat, start_pos, attn_mask, mode=mode)
+        tt_inp_emb, start_pos, rot_mat, cache_idxs, attn_masks = tt_model.prepare_inputs(
+            tt_inp_ids, start_pos, mode=mode
+        )
+        tt_out = tt_model(tt_inp_emb, rot_mat, start_pos, cache_idxs=cache_idxs, attn_masks=attn_masks, mode=mode)
         del tt_inp_emb, rot_mat, attn_mask
 
         tt_out = ttnn.to_torch(

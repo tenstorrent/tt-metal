@@ -167,6 +167,22 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_
 
         attn_masks = None
 
+        if isinstance(start_pos, int):
+            cache_idxs = torch.tensor(
+                [start_pos for _ in range(batch // llama_attention_model.cluster_shape[0])], dtype=torch.int64
+            )
+        else:
+            cache_idxs = start_pos.to(dtype=torch.int64)
+
+        cache_idxs_tt = ttnn.as_tensor(
+            cache_idxs,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ReplicateTensorToMesh(llama_attention_model.mesh_device),
+            device=llama_attention_model.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     elif mode == "prefill":
         assert (
             seq_len % 256 == 0 and seq_len > 0 and seq_len <= 8192
@@ -226,10 +242,13 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_
             device=llama_attention_model.mesh_device,
         )
 
+        cache_idxs_tt = None
+
     return (
         xs,
         start_pos,
         rot_mats,
+        cache_idxs_tt,
         attn_masks,
     )
 
@@ -328,14 +347,15 @@ def run_test_LlamaAttention_inference(
         )
 
         # TT hardware execution -------------------------------------------------------------
-        attention_input, start_pos, rot_mat, attn_mask = tt_llama_attention_prepare_inputs(
+        attention_input, start_pos, rot_mat, cache_idxs, attn_masks = tt_llama_attention_prepare_inputs(
             tt_LlamaAttention_model, tt_input, start_pos, configuration.rope_theta, mode=mode
         )
         tt_out = tt_LlamaAttention_model(
             attention_input,
             rot_mat,
             start_pos,
-            attn_mask,
+            cache_idxs=cache_idxs,
+            attn_masks=attn_masks,
             mode=mode,
         )
         # tt_out = ttnn.to_torch(tt_out, mesh_composer=ListMeshToTensor(mesh_device))[0]

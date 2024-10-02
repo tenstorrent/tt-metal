@@ -162,6 +162,22 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode):
 
         attn_masks = None
 
+        if isinstance(start_pos, int):
+            cache_idxs = torch.tensor(
+                [start_pos for _ in range(batch // llama_decoder_model.cluster_shape[0])], dtype=torch.int64
+            )
+        else:
+            cache_idxs = start_pos.to(dtype=torch.int64)
+
+        cache_idxs_tt = ttnn.as_tensor(
+            cache_idxs,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.mesh_device),
+            device=llama_decoder_model.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     elif mode == "prefill":
         x = x.unsqueeze(1)  # [batch, seq_len, hidden_dim] -> [batch, 1, seq_len, hidden_dim]
 
@@ -221,10 +237,13 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode):
             device=llama_decoder_model.mesh_device,
         )
 
+        cache_idxs_tt = None
+
     return (
         xs,
         start_pos,
         rot_mats,
+        cache_idxs_tt,
         attn_masks,
     )
 
@@ -318,11 +337,13 @@ def run_test_LlamaDecoder_inference(
         )
 
         # TT hardware execution -------------------------------------------------------------
-        x_input, start_pos, rot_mat, attn_mask = tt_llama_decoder_prepare_inputs(
+        x_input, start_pos, rot_mat, cache_idxs, attn_masks = tt_llama_decoder_prepare_inputs(
             tt_LlamaDecoder_model, tt_input, start_pos, mode=mode
         )
 
-        tt_out = tt_LlamaDecoder_model(x_input, rot_mat, start_pos, attn_mask, mode=mode)
+        tt_out = tt_LlamaDecoder_model(
+            x_input, rot_mat, start_pos, cache_idxs=cache_idxs, attn_masks=attn_masks, mode=mode
+        )
 
         tt_out = ttnn.to_torch(
             tt_out, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(3, 1), cluster_shape=cluster_shape)
