@@ -29,24 +29,27 @@ def determine_num_cores_for_upsample(nhw: int, width: int, max_cores=64) -> int:
     return cores
 
 
-# TODO: Make this valid over any num_cores
-def get_core_grid_from_num_cores(num_cores: int):
-    if num_cores == 44:
-        return ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(7, 4),
-                ),
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 5),
-                    ttnn.CoreCoord(3, 5),
-                ),
-            }
+def get_core_grid_from_num_cores(num_cores: int, grid_rows: int = 8, grid_cols: int = 8):
+    rows = num_cores // grid_cols
+    assert rows <= grid_rows, "Not enough cores for specified core grid"
+    ranges = []
+    if rows != 0:
+        ranges.append(
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(grid_rows - 1, rows - 1),
+            )
         )
-    elif num_cores == 48:
-        return ttnn.CoreGrid(x=8, y=6)
-    raise RuntimeError(f"Could not get core grid given num_cores={num_cores}")
+    remainder = num_cores % grid_rows
+    if remainder != 0:
+        assert rows + 1 <= grid_rows, "Not enough cores for specified core grid"
+        ranges.append(
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, rows),
+                ttnn.CoreCoord(remainder - 1, rows),
+            )
+        )
+    return ttnn.CoreRangeSet({*ranges})
 
 
 def unet_concat(inputs: List, dim=-1):
@@ -535,6 +538,15 @@ class UNet:
         x = self.bnc(x)
         return self.bnc2(x)
 
+    def postprocess_output_tensor(self, x):
+        # Convert the output tensor (in TILE layout) to RM to prevent transferring padding back to host.
+        return ttnn.to_layout(
+            ttnn.reshape(
+                x, shape=ttnn.Shape([1, 1, x.shape[2], 16], [1, 1, x.shape[2], 32])
+            ),  # At the moment we can only reduce the padding from 32 to 16 because reshape is broken.
+            ttnn.ROW_MAJOR_LAYOUT,
+        )
+
     def __call__(self, x, move_input_tensor_to_device=True):
         assert len(x.shape) == 4, f"Expected UNet input tensors to be rank 4 (was {len(x.shape)})"
 
@@ -559,4 +571,4 @@ class UNet:
 
         x = self.output_layer(x)
 
-        return x
+        return self.postprocess_output_tensor(x)
