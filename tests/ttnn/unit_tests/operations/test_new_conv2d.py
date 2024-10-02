@@ -71,6 +71,7 @@ def run_conv(
     groups=1,
     has_bias=True,
     shard_layout=None,
+    auto_shard=False,
 ):
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
@@ -115,7 +116,7 @@ def run_conv(
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
 
-    if shard_layout is None:
+    if shard_layout is None and not auto_shard:
         shard_layout = (
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED if use_1d_systolic_array else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         )
@@ -249,13 +250,14 @@ def run_conv_with_split(
     torch_input2_tensor = torch.permute(split_input_tensors[1], (0, 2, 3, 1))
     reader_patterns_cache = {}
 
+    shard_layout = (
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED if use_1d_systolic_array else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    )
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
         math_fidelity=math_fidelity,
-        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        if use_1d_systolic_array
-        else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        shard_layout=shard_layout if use_1d_systolic_array else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         fp32_dest_acc_enabled=fp32_accum,
         packer_l1_accum_enabled=packer_l1_acc,
         # input_channels_alignment=(16 if use_shallow_conv_variant else 32),
@@ -346,6 +348,7 @@ def run_conv_with_split(
     "activations_dtype",
     [ttnn.bfloat16],
 )
+@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_conv_ws(
     device,
     use_program_cache,
@@ -362,6 +365,7 @@ def test_conv_ws(
     has_bias,
     weights_dtype,
     activations_dtype,
+    auto_shard,
 ):
     stride_h = stride
     stride_w = stride
@@ -419,7 +423,7 @@ def test_conv_ws(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
         math_fidelity=ttnn.MathFidelity.HiFi4,
-        shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED if not auto_shard else None,
         input_channels_alignment=32,
         deallocate_activation=deallocate_activation,
         fp32_dest_acc_enabled=fp32_accum,
@@ -498,6 +502,7 @@ def test_conv_ws(
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 @skip_for_grayskull()
 def test_conv_for_segformer_512x512(
     device,
@@ -521,6 +526,7 @@ def test_conv_for_segformer_512x512(
     use_shallow_conv_variant,
     groups,
     output_layout,
+    auto_shard,
 ):
     run_conv(
         device,
@@ -544,6 +550,7 @@ def test_conv_for_segformer_512x512(
         groups=groups,
         output_layout=output_layout,
         has_bias=False,
+        auto_shard=auto_shard,
     )
 
 
@@ -585,6 +592,7 @@ def test_conv_for_segformer_512x512(
     [ttnn.bfloat16, ttnn.bfloat8_b],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_resnet50_conv_gs(
     device,
     use_program_cache,
@@ -604,6 +612,7 @@ def test_resnet50_conv_gs(
     pad_w,
     use_1d_systolic_array,
     config_override,
+    auto_shard,
 ):
     if is_blackhole():
         pytest.skip("This test is for Grayskull only")
@@ -646,6 +655,7 @@ def test_resnet50_conv_gs(
         use_shallow_conv_variant=input_channels == 16,
         padded_input_channels=16 if input_channels == 16 else None,
         debug=not (batch_size == 20 and input_height == 115),
+        auto_shard=auto_shard,
     )
 
 
@@ -713,6 +723,7 @@ def test_resnet50_conv_gs(
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
 @pytest.mark.parametrize("has_bias", [True, False], ids=["with_bias", "no_bias"])
+@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_resnet50_conv_wh(
     device,
     use_program_cache,
@@ -734,6 +745,7 @@ def test_resnet50_conv_wh(
     config_override,
     packer_l1_acc,
     has_bias,
+    auto_shard,
 ):
     if device.core_grid.y == 7:
         pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
@@ -781,6 +793,7 @@ def test_resnet50_conv_wh(
         packer_l1_acc=packer_l1_acc,
         fp32_accum=False,
         has_bias=has_bias,
+        auto_shard=auto_shard,
     )
 
 
@@ -838,6 +851,7 @@ def test_resnet50_conv_wh(
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4])
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
+@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_resnet50_conv_wh_fp32(
     device,
     use_program_cache,
@@ -859,6 +873,7 @@ def test_resnet50_conv_wh_fp32(
     use_1d_systolic_array,
     config_override,
     packer_l1_acc,
+    auto_shard,
 ):
     if batch_size > 8 and (activations_dtype != ttnn.bfloat8_b or weights_dtype != ttnn.bfloat8_b):
         pytest.skip("Batch > 8 must be run fully bfp8")
@@ -899,6 +914,7 @@ def test_resnet50_conv_wh_fp32(
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
         transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
+        auto_shard=auto_shard,
     )
 
 
@@ -1249,6 +1265,7 @@ def test_sd_conv_wh(
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_unet_conv(
     device,
     use_program_cache,
@@ -1270,6 +1287,7 @@ def test_unet_conv(
     config_override,
     use_shallow_conv_variant,
     output_layout,
+    auto_shard,
 ):
     if is_blackhole():
         pytest.skip("This test is for Grayskull only")
@@ -1299,6 +1317,7 @@ def test_unet_conv(
         use_shallow_conv_variant=use_shallow_conv_variant,
         padded_input_channels=16 if input_channels == 3 else None,
         output_layout=output_layout,
+        auto_shard=auto_shard,
     )
 
 
@@ -1339,6 +1358,7 @@ def test_unet_conv(
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_unet_conv_wh(
     device,
     use_program_cache,
@@ -1360,6 +1380,7 @@ def test_unet_conv_wh(
     config_override,
     use_shallow_conv_variant,
     output_layout,
+    auto_shard,
 ):
     if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
         pytest.skip("Test is not supported on n300 (8,7) grid")
@@ -1389,6 +1410,7 @@ def test_unet_conv_wh(
         transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         padded_input_channels=None,
         output_layout=output_layout,
+        auto_shard=auto_shard,
     )
 
 
@@ -1406,6 +1428,7 @@ def test_unet_conv_wh(
     ),
 )
 @pytest.mark.parametrize("use_1d_systolic_array", [False, True])
+@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_halo_reshard_conv(
     device,
     use_program_cache,
@@ -1422,6 +1445,7 @@ def test_halo_reshard_conv(
     pad_h,
     pad_w,
     config_override,
+    auto_shard,
 ):
     math_fidelity = ttnn.MathFidelity.HiFi4
     activations_dtype = ttnn.bfloat16
@@ -1445,6 +1469,7 @@ def test_halo_reshard_conv(
         pad_w,
         use_1d_systolic_array,
         config_override,
+        auto_shard=auto_shard,
     )
 
 
@@ -1461,6 +1486,7 @@ def test_halo_reshard_conv(
     ),
 )
 @pytest.mark.parametrize("use_1d_systolic_array", [False, True])
+@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_conv_core_nondivis(
     device,
     use_program_cache,
@@ -1478,6 +1504,7 @@ def test_conv_core_nondivis(
     pad_w,
     config_override,
     xfail,
+    auto_shard,
 ):
     if xfail:
         pytest.xfail()
@@ -1504,6 +1531,7 @@ def test_conv_core_nondivis(
         pad_w,
         use_1d_systolic_array,
         config_override,
+        auto_shard=auto_shard,
     )
 
 
@@ -1538,6 +1566,7 @@ def test_conv_core_nondivis(
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 @pytest.mark.parametrize(
     "filter, dilation, pad",
     [
@@ -1563,6 +1592,7 @@ def test_conv_dilation(
     pad,
     output_layout,
     dilation,
+    auto_shard,
 ):
     config_override = {"act_block_w_div": act_block_w_div}
     run_conv(
@@ -1587,6 +1617,7 @@ def test_conv_dilation(
         output_layout=output_layout,
         dilation=dilation,
         has_bias=False,
+        auto_shard=auto_shard,
     )
 
 
@@ -1632,6 +1663,8 @@ def test_conv_dilation(
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+# ToDo: Renable this when auto shard heuristic is imporved, currently we run out of L1 in for some test cases
+# @pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_conv_groups(
     device,
     use_program_cache,
@@ -1745,6 +1778,7 @@ def test_conv_groups(
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 # @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_yolov4_conv_groups_larger_than_one(
     device,
     use_program_cache,
@@ -1767,6 +1801,7 @@ def test_yolov4_conv_groups_larger_than_one(
     use_shallow_conv_variant,
     groups,
     output_layout,
+    auto_shard,
 ):
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
@@ -1794,6 +1829,7 @@ def test_yolov4_conv_groups_larger_than_one(
         groups=groups,
         padded_input_channels=16 if input_channels == 3 else None,
         output_layout=output_layout,
+        auto_shard=auto_shard,
     )
 
 
@@ -1816,6 +1852,7 @@ def test_yolov4_conv_groups_larger_than_one(
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_swin_s_conv(
     device,
     use_program_cache,
@@ -1838,6 +1875,7 @@ def test_swin_s_conv(
     use_shallow_conv_variant,
     groups,
     output_layout,
+    auto_shard,
 ):
     if device.core_grid.y == 7:
         pytest.skip("This test is not supported for N300")
@@ -1864,6 +1902,7 @@ def test_swin_s_conv(
         use_shallow_conv_variant=use_shallow_conv_variant,
         groups=groups,
         output_layout=output_layout,
+        auto_shard=auto_shard,
     )
 
 
@@ -1893,6 +1932,7 @@ def test_swin_s_conv(
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 @skip_for_grayskull()
 def test_conv_for_segformer_512x512(
     device,
@@ -1916,6 +1956,7 @@ def test_conv_for_segformer_512x512(
     use_shallow_conv_variant,
     groups,
     output_layout,
+    auto_shard,
 ):
     run_conv(
         device,
@@ -1939,6 +1980,7 @@ def test_conv_for_segformer_512x512(
         groups=groups,
         output_layout=output_layout,
         shard_layout=shard_layout,
+        auto_shard=auto_shard,
     )
 
 
@@ -1963,6 +2005,7 @@ def test_conv_for_segformer_512x512(
     [ttnn.bfloat8_b],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_model_k_256x256(
     device,
     use_program_cache,
@@ -1984,6 +2027,7 @@ def test_model_k_256x256(
     dilation_w,
     groups,
     use_1d_systolic_array,
+    auto_shard,
 ):
     run_conv(
         device,
@@ -2004,6 +2048,7 @@ def test_model_k_256x256(
         use_1d_systolic_array,
         None,
         dilation=dilation_h,
+        auto_shard=auto_shard,
     )
 
 
