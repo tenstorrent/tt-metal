@@ -26,13 +26,14 @@
 #if defined(TARGET_IERISC)
 #define MEM_PAD MEM_IERISC_KERNEL_PAD
 #else
-#define MEM_PAD MEM_TENSIX_KERNEL_PAD
-#endif
-#else
 #define MEM_PAD 0
 #endif
-
-#define MEM_ALIGN (MEM_PAD + 4)
+/* FW must align to 16 byte boundary so kernel begins aligned to meet noc alignment constraints */
+#define MEM_ALIGN 16
+#else
+#define MEM_PAD 0
+#define MEM_ALIGN 4
+#endif
 
 OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
 	      "elf32-littleriscv")
@@ -144,9 +145,7 @@ SECTIONS
   } > REGION_DATA
 
 #ifdef TYPE_FIRMWARE
-  /* FW must align to 16 byte boundary so Kernel begins aligned to meet noc
-     alignment constraints */
-  . = ALIGN(16);
+  . = ALIGN(MEM_ALIGN);
   __fw_export_ldm_end = .;
 #endif
 
