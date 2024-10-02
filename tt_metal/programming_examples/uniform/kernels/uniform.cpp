@@ -22,11 +22,12 @@ inline void _my_calculate_dropout_(const int iterations) {
 #pragma GCC unroll 0
     for (int d = 0; d < iterations; d++) {
         TTI_SFPMOV(0, 9, p_sfpu::LREG0, 8);
-        // TTI_SFPSETSGN(0, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+        TTI_SFPSETSGN(0, p_sfpu::LREG0, p_sfpu::LREG0, 1);
         TTI_SFPSTORE(0, 4, 3, 0);
         TTI_SFPIADD(32, p_sfpu::LREG0, p_sfpu::LREG0, 5);
-        // vFloat a = 0;
-        // dst_reg[0] = a;
+        // vUInt a = 31;
+        // vUInt b = dst_reg[0];
+        // dst_reg[0] = b >> 29;
         dst_reg++;
     }
 }

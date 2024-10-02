@@ -63,13 +63,13 @@ int main(int argc, char **argv) {
     /* Specify data movement kernels for reading/writing data to/from DRAM */
     KernelHandle binary_reader_kernel_id = CreateKernel(
         program,
-        "tt_metal/programming_examples/add_2_integers_in_compute/kernels/dataflow/reader_binary_1_tile.cpp",
+        "tt_metal/programming_examples/uniform/kernels/reader.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
-        "tt_metal/programming_examples/add_2_integers_in_compute/kernels/dataflow/writer_1_tile.cpp",
+        "tt_metal/programming_examples/uniform/kernels/writer.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
@@ -79,7 +79,7 @@ int main(int argc, char **argv) {
     /* Use the add_tiles operation in the compute kernel */
     KernelHandle eltwise_binary_kernel_id = CreateKernel(
         program,
-        "tt_metal/programming_examples/add_2_integers_in_compute/kernels/compute/add_2_tiles.cpp",
+        "tt_metal/programming_examples/uniform/kernels/uniform.cpp",
         core,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
