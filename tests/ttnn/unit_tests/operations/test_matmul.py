@@ -1185,6 +1185,8 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
 def test_matmul_in0_in1_bias_sharded(
     device, in0_dtype, in1_dtype, num_activation_cores, num_compute_cores, has_bias, config, M, K, N
 ):
+    torch.manual_seed(0)
+
     def padded_size_per_device_for_num_cores(size, num_devices, num_cores):
         padded_size = math.ceil(size / num_devices / num_cores / TILE_SIZE) * num_cores * TILE_SIZE
         return padded_size
@@ -1276,7 +1278,7 @@ def test_matmul_in0_in1_bias_sharded(
     )
 
     input_shape = [1, 1, M, K]
-    input_tensor = torch.randn(input_shape).float()
+    input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
     tt_input_tensor = ttnn.as_tensor(
         input_tensor,
         dtype=in0_dtype,
@@ -1285,7 +1287,7 @@ def test_matmul_in0_in1_bias_sharded(
         memory_config=mem_config_input,
     )
 
-    weights_tensor = torch.randn([1, 1, K, N]).float()
+    weights_tensor = torch.randn([1, 1, K, N], dtype=torch.bfloat16)
     weight_tt = ttnn.as_tensor(
         weights_tensor,
         dtype=in1_dtype,
@@ -1295,7 +1297,7 @@ def test_matmul_in0_in1_bias_sharded(
     )
 
     if has_bias:
-        bias_tensor = torch.randn([1, 1, 1, N]).float() * 2.0
+        bias_tensor = torch.randn([1, 1, 1, N], dtype=torch.bfloat16) * 2.0
         bias_tt = ttnn.as_tensor(
             bias_tensor,
             dtype=ttnn.bfloat16,
