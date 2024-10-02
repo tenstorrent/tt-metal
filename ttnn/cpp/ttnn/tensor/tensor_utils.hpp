@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "types.hpp"
 
 namespace tt {
 
@@ -37,10 +38,18 @@ const tt::tt_metal::LegacyShape infer_dims_for_reshape(int N, int C, int H, int 
 
 const tt::tt_metal::LegacyShape infer_dims_for_reshape_RM(int N, int C, int H, int W, uint32_t old_volume);
 
-template <typename T>
-static std::size_t compute_volume(const T& shape) {
+static std::size_t compute_volume(const tt::tt_metal::LegacyShape& shape) {
     size_t volume = 1;
     for (auto index = 0; index < shape.size(); index++) {
+        volume *= shape[index];
+    }
+    return volume;
+}
+
+static std::size_t compute_volume(const ttnn::Shape& shape) {
+    size_t volume = 1;
+    const ttnn::Shape physical_shape = shape.with_tile_padding();
+    for (auto index = 0; index < physical_shape.size(); index++) {
         volume *= shape[index];
     }
     return volume;

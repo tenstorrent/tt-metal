@@ -62,7 +62,7 @@ AllGatherBidirectionalMode AllGatherConfig::choose_bidirectional_mode(Tensor con
     }
 
     std::size_t eth_l1_capacity = eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
-    std::size_t tensor_size_bytes = input_tensor.shape().volume() * input_tensor.element_size();
+    std::size_t tensor_size_bytes = input_tensor.intended_volume() * input_tensor.element_size();
     // This is currently a guestimate. We need a lot more hard data to identify where this dividing line is.
     bool perf_degradation_from_full_tensor_mode = tensor_size_bytes > (2 * eth_l1_capacity);
     if (perf_degradation_from_full_tensor_mode) {

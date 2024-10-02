@@ -123,10 +123,8 @@ auto preprocess_inputs(
 
     return [](const auto &input_tensor_a, const auto &input_tensor_b) {
         if constexpr (detail::is_associative(binary_op_type)) {
-            const auto input_shape_a = input_tensor_a.get_shape();
-            const auto input_shape_b = input_tensor_b.get_shape();
             // Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
-            if (tt::tt_metal::compute_volume(input_shape_a) < tt::tt_metal::compute_volume(input_shape_b)) {
+            if (input_tensor_a.volume() < input_tensor_b.volume()) {
                 return std::make_tuple(input_tensor_b, input_tensor_a);
             }
         }

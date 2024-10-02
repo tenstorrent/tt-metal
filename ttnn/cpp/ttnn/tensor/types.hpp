@@ -724,15 +724,6 @@ struct Shape {
 
     const auto operator[](std::int64_t index) const { return this->value.without_padding()[index]; }
 
-    const auto volume() const {
-        auto rank = this->rank();
-        auto volume = 1;
-        for (auto index = 0; index < rank; index++) {
-            volume *= this->operator[](index);
-        }
-        return volume;
-    }
-
     template <std::size_t NewRank>
     const Shape to_rank() const {
         auto rank = this->rank();
