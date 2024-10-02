@@ -8,7 +8,7 @@
 #include <optional>
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/eltwise/unary_backward/device/unary_backward_op.hpp"
+#include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 
 using namespace tt::constants;
 

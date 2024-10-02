@@ -5,13 +5,14 @@
 
 #pragma once
 
-#include "device/unary_backward_op.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 
 namespace ttnn {
 
 namespace operations::unary_backward {
+
+Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config);
 
 struct ExecuteUnaryBackwardNeg {
     static std::vector<std::optional<Tensor>> invoke(
