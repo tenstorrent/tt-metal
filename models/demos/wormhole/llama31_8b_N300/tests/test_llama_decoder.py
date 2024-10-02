@@ -23,6 +23,11 @@ from models.utility_functions import skip_for_grayskull
 
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize(
+    "mesh_device",
+    [{"N150": (1, 1), "N300": (1, 2), "T3K": (4, 2), "TG": (8, 4)}.get(os.environ.get("FAKE_DEVICE"), None)],
+    indirect=True,
+)
 def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
 
@@ -42,6 +47,7 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds):
     current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
         mesh_device,
+        model_args.num_devices,
         start_pos=0,
     )
 

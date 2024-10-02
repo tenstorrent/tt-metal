@@ -33,9 +33,14 @@ from models.utility_functions import skip_for_grayskull
     "weights, layers",
     [
         ("random", 1),
-        ("general", 32),
+        ("general", None),
     ],
     ids=["quick", "full"],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [{"N150": (1, 1), "N300": (1, 2), "T3K": (4, 2), "TG": (8, 4)}.get(os.environ.get("FAKE_DEVICE"), None)],
+    indirect=True,
 )
 def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, reset_seeds):
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
@@ -56,7 +61,8 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
     instruct = True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
     model_args = TtModelArgs(mesh_device, instruct=instruct, dummy_weights=dummy_weights)
-    model_args.n_layers = layers
+    if layers is not None:
+        model_args.n_layers = layers
     state_dict = model_args.load_state_dict()
 
     prompts = ["This is a test"] * model_args.max_batch_size
@@ -85,6 +91,7 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
     current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
         mesh_device,
+        model_args.num_devices,
         start_pos=0,
     )
 

@@ -120,7 +120,7 @@ class TtLlamaMLP(torch.nn.Module):
             self.w2,
             compute_kernel_config=compute_kernel_config_hifi2,
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             program_config=pc_2,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
         )

@@ -72,16 +72,30 @@ class TtLlamaAttention(nn.Module):
 
         # Pad the weights with zeros
         def pad_weight(weight):
+            # TODO: pad_weight is currently broken. Unclear how Q heads are grouped and laid out in memory.
             unpadded_size = self.unpadded_n_heads * self.head_dim
             padded_size = self.n_heads * self.head_dim
+            num_padded_q_per_group = (self.n_heads - self.unpadded_n_heads) // self.n_kv_heads
             if unpadded_size < padded_size:
-                padding = torch.zeros(
-                    padded_size - unpadded_size, weight.shape[1], dtype=weight.dtype, device=weight.device
+                weight_heads = weight.reshape(
+                    self.n_kv_heads, self.unpadded_n_heads // self.n_kv_heads, self.head_dim, configuration.dim
                 )
-                return torch.cat([weight, padding], dim=0)
+                padding = torch.zeros(
+                    self.n_kv_heads,
+                    num_padded_q_per_group,
+                    self.head_dim,
+                    weight.shape[1],
+                    dtype=weight.dtype,
+                    device=weight.device,
+                )
+                padded_weight = torch.cat([weight_heads, padding], dim=1).reshape(
+                    self.n_heads * self.head_dim, configuration.dim
+                )
+                return padded_weight
             return weight
 
-        wq_padded = pad_weight(self.state_dict[wq_str])
+        # wq_padded = pad_weight(self.state_dict[wq_str])
+        wq_padded = self.state_dict[wq_str]
 
         # wqkv: 4096 x 3072 (2 devices): width-sharded on 12 banks, 3072 over 12 banks.
         wqkv_mem_config = configuration.create_dram_sharded_mem_config(configuration.dim, configuration.qkv_size)
@@ -181,7 +195,7 @@ class TtLlamaAttention(nn.Module):
                     mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
                     layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                     dtype=self.dtype,
-                    cache_file_name=cache_name(f"kvcache_{id}_{lp.shape}"),
+                    cache_file_name=f"{weight_cache_path}/kvcache_{lp.shape}",
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
                 for id, lp in enumerate(layer_past)
@@ -428,7 +442,7 @@ class TtLlamaAttention(nn.Module):
         if seq_len > 2048:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
-        xs_11SH.deallocate(True)
+        ttnn.deallocate(xs_11SH)
 
         # split qkv into heads
         (
@@ -443,7 +457,7 @@ class TtLlamaAttention(nn.Module):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        xqkv_fused.deallocate(True)
+        ttnn.deallocate(xqkv_fused)
 
         ###
         # Rotary embeddings
@@ -452,12 +466,12 @@ class TtLlamaAttention(nn.Module):
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
             q_heads_1QSD_pre_rot, rot_mats[0], rot_mats[1], transformation_mats
         )
-        q_heads_1QSD_pre_rot.deallocate(True)
+        ttnn.deallocate(q_heads_1QSD_pre_rot)
 
         k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
             k_heads_1KSD_pre_rot, rot_mats[0], rot_mats[1], transformation_mats
         )
-        k_heads_1KSD_pre_rot.deallocate(True)
+        ttnn.deallocate(k_heads_1KSD_pre_rot)
 
         # Fill KV-Cache
         keys_BKSD = self.layer_past[0]
@@ -519,13 +533,12 @@ class TtLlamaAttention(nn.Module):
             program_config=self.model_config["SDPA_PROGCFG"](seq_len),
         )
         # deallocate keys and values
-        q_heads_84SD_8b.deallocate(True)
-        k_heads_K1SD_8b.deallocate(True)
-        v_heads_V1SD_8b.deallocate(True)
+        ttnn.deallocate(q_heads_84SD_8b)
+        ttnn.deallocate(k_heads_K1SD_8b)
+        ttnn.deallocate(v_heads_V1SD_8b)
 
         attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
         attn_output_1QSD_unpadded = ttnn.slice(attn_output_1QSD, (0, 0, 0, 0), (1, self.unpadded_n_heads, -1, -1))
-        attn_output_1QSD.deallocate(True)
 
         ###
         # Output matmul
@@ -534,7 +547,7 @@ class TtLlamaAttention(nn.Module):
             attn_output_1QSD_unpadded,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        attn_output_1QSD.deallocate(True)
+        ttnn.deallocate(attn_output_1QSD_unpadded)
 
         # reshaping long sequence to matmul fit on device
         if seq_len > 2048:
@@ -549,7 +562,7 @@ class TtLlamaAttention(nn.Module):
         )
         if seq_len > 2048:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
-        attn_output_11SH.deallocate(True)
+        ttnn.deallocate(attn_output_11SH)
 
         # All reduce
         if self.num_devices > 1:
