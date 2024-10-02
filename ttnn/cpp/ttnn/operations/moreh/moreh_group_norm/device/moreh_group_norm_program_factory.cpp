@@ -21,7 +21,7 @@ namespace ttnn::operations::moreh::moreh_group_norm {
 MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormOperation::MorehGroupNormFactory::create(
     const operation_attributes_t &operation_attributes,
     const tensor_args_t &tensor_args,
-    tensor_return_value_t &output_tensors) {
+    tensor_return_value_t &outputs) {
     using namespace tt;
     using namespace tt::constants;
     using namespace tt::operations::primary;
@@ -29,10 +29,10 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
     const auto &input = tensor_args.input;
     auto gamma = tensor_args.gamma;
     auto beta = tensor_args.beta;
-    auto mean = output_tensors[1];
-    auto rstd = output_tensors[2];
+    auto mean = outputs[1];
+    auto rstd = outputs[2];
 
-    auto &output = output_tensors[0].value();
+    auto &output = outputs[0].value();
 
     auto num_groups = operation_attributes.num_groups;
     auto eps = operation_attributes.eps;

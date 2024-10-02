@@ -61,4 +61,30 @@ std::vector<std::optional<Tensor>> MorehGroupNormBackward::invoke(
     }
     return std::move(outputs);
 }
+std::vector<Tensor> MorehGroupNormBackward::create_async_output_tensors(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
+    return {
+        Tensor(operation::get_workers_for_op_output(input_tensors, optional_inputs)),
+        Tensor(operation::get_workers_for_op_output(input_tensors, optional_inputs)),
+        Tensor(operation::get_workers_for_op_output(input_tensors, optional_inputs)),
+    };
+}
+
+std::vector<bool> MorehGroupNormBackward::create_async_return_flag(
+    const Tensor& output_grad,
+    const Tensor& input,
+    const Tensor& mean,
+    const Tensor& rstd,
+    const uint32_t num_groups,
+    const std::vector<bool>& are_required_outputs,
+    const std::optional<const Tensor> gamma,
+    const std::optional<const Tensor> input_grad,
+    const std::optional<const Tensor> gamma_grad,
+    const std::optional<const Tensor> beta_grad,
+    const std::optional<MemoryConfig>& input_grad_memory_config,
+    const std::optional<MemoryConfig>& gamma_grad_memory_config,
+    const std::optional<MemoryConfig>& beta_grad_memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    return are_required_outputs;
+}
 }  // namespace ttnn::operations::moreh::moreh_group_norm_backward

@@ -19,20 +19,20 @@ void MorehGroupNormBackwardGammaBetaGradOperation::validate_tensors(
     const auto& mean = tensor_args.mean;
     const auto& rstd = tensor_args.rstd;
 
-    auto& gamma_grad = tensor_args.output_tensors[0];
-    auto& beta_grad = tensor_args.output_tensors[1];
+    auto& gamma_grad = tensor_args.gamma_grad;
+    auto& beta_grad = tensor_args.beta_grad;
 
     auto num_groups = operation_attributes.num_groups;
 
     using namespace tt::operations::primary;
 
-    check_tensor(output_grad, "moreh_groupnorm_backward_gamma_beta_grad", "output_grad");
-    check_tensor(input, "moreh_groupnorm_backward_gamma_beta_grad", "input");
-    check_tensor(mean, "moreh_groupnorm_backward_gamma_beta_grad", "mean");
-    check_tensor(rstd, "moreh_groupnorm_backward_gamma_beta_grad", "rstd");
+    check_tensor(output_grad, "moreh_group_norm_backward_gamma_beta_grad", "output_grad");
+    check_tensor(input, "moreh_group_norm_backward_gamma_beta_grad", "input");
+    check_tensor(mean, "moreh_group_norm_backward_gamma_beta_grad", "mean");
+    check_tensor(rstd, "moreh_group_norm_backward_gamma_beta_grad", "rstd");
 
-    check_tensor(gamma_grad, "moreh_groupnorm_backward_gamma_beta_grad", "gamma_grad");
-    check_tensor(beta_grad, "moreh_groupnorm_backward_gamma_beta_grad", "beta_grad");
+    check_tensor(gamma_grad, "moreh_group_norm_backward_gamma_beta_grad", "gamma_grad");
+    check_tensor(beta_grad, "moreh_group_norm_backward_gamma_beta_grad", "beta_grad");
 
     // output_grad (N, C, H, W)
     auto C = output_grad.get_shape().value[1];
@@ -110,8 +110,8 @@ MorehGroupNormBackwardGammaBetaGradOperation::create_output_tensors(
 
     // gamma_grad
     if (gamma_requires_grad) {
-        if (tensor_args.output_tensors[0].has_value()) {
-            result[0] = tensor_args.output_tensors[0].value();
+        if (tensor_args.gamma_grad.has_value()) {
+            result[0] = tensor_args.gamma_grad.value();
         } else {
             result[0] = create_device_tensor(
                 output_shapes[0].value(), dtype, layout, device, operation_attributes.gamma_grad_mem_config);
@@ -120,8 +120,8 @@ MorehGroupNormBackwardGammaBetaGradOperation::create_output_tensors(
 
     // beta_grad
     if (beta_requires_grad) {
-        if (tensor_args.output_tensors[1].has_value()) {
-            result[1] = tensor_args.output_tensors[1].value();
+        if (tensor_args.beta_grad.has_value()) {
+            result[1] = tensor_args.beta_grad.value();
         } else {
             result[1] = create_device_tensor(
                 output_shapes[1].value(), dtype, layout, device, operation_attributes.beta_grad_mem_config);
@@ -149,10 +149,10 @@ MorehGroupNormBackwardGammaBetaGradOperation::invoke(
     operation_attributes_t operation_attributes{
         num_groups,
         are_required_outputs,
-        gamma_grad_mem_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-        beta_grad_mem_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-        compute_kernel_config};
-    tensor_args_t tensor_args{output_grad, input, mean, rstd, {gamma_grad, beta_grad}};
+        gamma_grad_mem_config.value_or(output_grad.memory_config()),
+        beta_grad_mem_config.value_or(output_grad.memory_config()),
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+    tensor_args_t tensor_args{output_grad, input, mean, rstd, gamma_grad, beta_grad};
     return {operation_attributes, tensor_args};
 }
 }  // namespace ttnn::operations::moreh::moreh_group_norm_backward

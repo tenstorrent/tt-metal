@@ -20,7 +20,7 @@ void bind_moreh_group_norm_backward_operation(py::module &module) {
             py::arg("rstd"),
             py::arg("num_groups"),
             py::kw_only(),
-            py::arg("are_required_outputs") = std::vector<bool>{true, false, false, false},
+            py::arg("are_required_outputs") = std::vector<bool>{true, false, false},
             py::arg("gamma") = std::nullopt,
             py::arg("input_grad") = std::nullopt,
             py::arg("gamma_grad") = std::nullopt,

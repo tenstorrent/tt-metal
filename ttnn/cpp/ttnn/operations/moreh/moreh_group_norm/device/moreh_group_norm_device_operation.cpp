@@ -12,9 +12,9 @@ void MorehGroupNormOperation::validate_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
 
-    auto& output = tensor_args.output_tensors[0];
-    auto& mean = tensor_args.output_tensors[1];
-    auto& rstd = tensor_args.output_tensors[2];
+    auto& output = tensor_args.output;
+    auto& mean = tensor_args.mean;
+    auto& rstd = tensor_args.rstd;
 
     auto& gamma = tensor_args.gamma;
     auto& beta = tensor_args.beta;
@@ -112,16 +112,16 @@ MorehGroupNormOperation::tensor_return_value_t MorehGroupNormOperation::create_o
     result.reserve(3);
 
     // output
-    if (tensor_args.output_tensors[0].has_value()) {
-        result.push_back(tensor_args.output_tensors[0].value());
+    if (tensor_args.output.has_value()) {
+        result.push_back(tensor_args.output.value());
     } else {
         result.push_back(
             create_device_tensor(output_shapes[0].value(), dtype, layout, device, operation_attributes.memory_config));
     }
 
     // mean
-    if (tensor_args.output_tensors[1].has_value()) {
-        result.push_back(tensor_args.output_tensors[1].value());
+    if (tensor_args.mean.has_value()) {
+        result.push_back(tensor_args.mean.value());
     } else if (operation_attributes.are_required_outputs[1]) {
         result.push_back(create_device_tensor(
             output_shapes[1].value(), dtype, layout, device, operation_attributes.mean_memory_config));
@@ -130,8 +130,8 @@ MorehGroupNormOperation::tensor_return_value_t MorehGroupNormOperation::create_o
     }
 
     // rstd
-    if (tensor_args.output_tensors[2].has_value()) {
-        result.push_back(tensor_args.output_tensors[2].value());
+    if (tensor_args.rstd.has_value()) {
+        result.push_back(tensor_args.rstd.value());
     } else if (operation_attributes.are_required_outputs[2]) {
         result.push_back(create_device_tensor(
             output_shapes[2].value(), dtype, layout, device, operation_attributes.rstd_memory_config));
@@ -160,11 +160,11 @@ MorehGroupNormOperation::invoke(
         num_groups,
         eps,
         are_required_outputs,
-        memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-        mean_memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-        rstd_memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-        compute_kernel_config};
-    tensor_args_t tensor_args{input, gamma, beta, {output, mean, rstd}};
+        memory_config.value_or(input.memory_config()),
+        mean_memory_config.value_or(input.memory_config()),
+        rstd_memory_config.value_or(input.memory_config()),
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+    tensor_args_t tensor_args{input, gamma, beta, output, mean, rstd};
     return {operation_attributes, tensor_args};
 }
 }  // namespace ttnn::operations::moreh::moreh_group_norm

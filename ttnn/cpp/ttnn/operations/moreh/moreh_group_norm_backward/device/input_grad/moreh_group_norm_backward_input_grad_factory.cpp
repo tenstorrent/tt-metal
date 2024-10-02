@@ -13,7 +13,7 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
 MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensors) {
+    tensor_return_value_t& outputs) {
     using namespace tt;
     using namespace tt::constants;
     using namespace tt::operations::primary;
@@ -23,7 +23,7 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     const auto& mean = tensor_args.mean;
     const auto& rstd = tensor_args.rstd;
 
-    auto input_grad = output_tensors;
+    auto input_grad = outputs;
     auto gamma = tensor_args.gamma;
     auto num_groups = operation_attributes.num_groups;
     ////////////////////////////////////////////////////////////////////////////
@@ -216,9 +216,6 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
 
     const auto gamma_addr = gamma_has_value ? gamma.value().buffer()->address() : 0;
 
-    // std::cout << "output_grad_addr: " << output_grad_addr << std::endl;
-
-    // std::cout << "num_cores_to_be_used: " << num_cores_to_be_used << std::endl;
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -274,7 +271,7 @@ void MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFa
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensors) {
+    tensor_return_value_t& outputs) {
     auto reader_kernels_id = cached_program.shared_variables.reader_kernels_id;
     auto writer_kernels_id = cached_program.shared_variables.writer_kernels_id;
     auto num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
@@ -285,7 +282,7 @@ void MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFa
     auto mean_buffer = tensor_args.mean.buffer();
     auto rstd_buffer = tensor_args.rstd.buffer();
     auto gamma_buffer = tensor_args.gamma.has_value() ? tensor_args.gamma.value().buffer() : nullptr;
-    auto input_grad_buffer = output_tensors.buffer();
+    auto input_grad_buffer = outputs.buffer();
 
     for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

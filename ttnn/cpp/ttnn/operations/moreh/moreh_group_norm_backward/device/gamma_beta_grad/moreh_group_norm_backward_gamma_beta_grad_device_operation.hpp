@@ -19,14 +19,15 @@ struct MorehGroupNormBackwardGammaBetaGradOperation {
         const std::vector<bool> are_required_outputs;
         const MemoryConfig gamma_grad_mem_config;
         const MemoryConfig beta_grad_mem_config;
-        const std::optional<DeviceComputeKernelConfig> compute_kernel_config;
+        const DeviceComputeKernelConfig compute_kernel_config;
     };
     struct tensor_args_t {
         const Tensor& output_grad;
         const Tensor& input;
         const Tensor& mean;
         const Tensor& rstd;
-        const std::vector<std::optional<Tensor>> output_tensors;
+        const std::optional<const Tensor> gamma_grad;
+        const std::optional<const Tensor> beta_grad;
     };
 
     using shape_return_value_t = std::vector<std::optional<Shape>>;
@@ -45,13 +46,13 @@ struct MorehGroupNormBackwardGammaBetaGradOperation {
         static cached_program_t create(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output_tensors);
+            tensor_return_value_t& outputs);
 
         static void override_runtime_arguments(
             cached_program_t& cached_program,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output_tensors);
+            tensor_return_value_t& outputs);
     };
 
     using program_factory_t = std::variant<MorehGroupNormBackwardGammaBetaGradFactory>;

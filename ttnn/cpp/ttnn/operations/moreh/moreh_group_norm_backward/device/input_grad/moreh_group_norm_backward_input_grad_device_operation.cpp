@@ -22,14 +22,14 @@ void MorehGroupNormBackwardInputGradOperation::validate_tensors(
 
     using namespace tt::operations::primary;
 
-    check_tensor(output_grad, "moreh_groupnorm_backward_input_grad", "output_grad");
-    check_tensor(input, "moreh_groupnorm_backward_input_grad", "input");
-    check_tensor(mean, "moreh_groupnorm_backward_input_grad", "mean");
-    check_tensor(rstd, "moreh_groupnorm_backward_input_grad", "rstd");
+    check_tensor(output_grad, "moreh_group_norm_backward_input_grad", "output_grad");
+    check_tensor(input, "moreh_group_norm_backward_input_grad", "input");
+    check_tensor(mean, "moreh_group_norm_backward_input_grad", "mean");
+    check_tensor(rstd, "moreh_group_norm_backward_input_grad", "rstd");
 
-    check_tensor(input_grad, "moreh_groupnorm_backward_input_grad", "input_grad");
+    check_tensor(input_grad, "moreh_group_norm_backward_input_grad", "input_grad");
 
-    check_tensor(gamma, "moreh_groupnorm_backward_input_grad", "gamma");
+    check_tensor(gamma, "moreh_group_norm_backward_input_grad", "gamma");
 
     // output_grad (N, C, H, W)
     auto C = output_grad.get_shape().value[1];
@@ -105,7 +105,9 @@ MorehGroupNormBackwardInputGradOperation::invoke(
     const std::optional<MemoryConfig>& input_grad_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     operation_attributes_t operation_attributes{
-        num_groups, input_grad_memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG), compute_kernel_config};
+        num_groups,
+        input_grad_memory_config.value_or(output_grad.memory_config()),
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
     tensor_args_t tensor_args{output_grad, input, mean, rstd, gamma, input_grad};
     return {operation_attributes, tensor_args};
 }

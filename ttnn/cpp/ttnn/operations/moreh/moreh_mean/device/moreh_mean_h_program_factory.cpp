@@ -150,7 +150,6 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
             units_per_core = units_per_core_group_2;
         } else {
-            std::cout << "i " << i << "\n";
             TT_ASSERT(false, "Core not in specified core ranges");
         }
         SetRuntimeArgs(

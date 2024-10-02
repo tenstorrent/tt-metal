@@ -15,14 +15,16 @@ struct MorehGroupNormOperation {
         const MemoryConfig memory_config;
         const MemoryConfig mean_memory_config;
         const MemoryConfig rstd_memory_config;
-        const std::optional<DeviceComputeKernelConfig> compute_kernel_config;
+        const DeviceComputeKernelConfig compute_kernel_config;
     };
 
     struct tensor_args_t {
         const Tensor& input;
         const std::optional<const Tensor> gamma;
         const std::optional<const Tensor> beta;
-        const std::vector<std::optional<Tensor>> output_tensors;
+        const std::optional<const Tensor> output;
+        const std::optional<const Tensor> mean;
+        const std::optional<const Tensor> rstd;
     };
 
     using shape_return_value_t = std::vector<std::optional<Shape>>;
@@ -41,13 +43,13 @@ struct MorehGroupNormOperation {
         static cached_program_t create(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output_tensors);
+            tensor_return_value_t& outputs);
 
         static void override_runtime_arguments(
             cached_program_t& cached_program,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output_tensors);
+            tensor_return_value_t& outputs);
     };
 
     using program_factory_t = std::variant<MorehGroupNormFactory>;
