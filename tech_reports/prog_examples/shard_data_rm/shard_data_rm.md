@@ -63,7 +63,7 @@ uint32_t shard_size = shard_height * shard_width;
 uint32_t input_unit_size = sizeof(uint32_t);
 uint32_t shard_width_bytes = shard_width * data_size;
 uint32_t num_units_per_row = shard_width * input_unit_size;
-uint32_t padded_offset_bytes = align(input_unit_size, ALLOCATOR_ALIGNMENT);
+uint32_t padded_offset_bytes = align(input_unit_size, device->get_allocator_alignment());
 ```
 
 In order to shard the correct data segments to the respective core, we indicate the shard height, width, size, and other data for the kernel function.

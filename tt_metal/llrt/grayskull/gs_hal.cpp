@@ -28,6 +28,7 @@ void Hal::initialize_gs() {
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
 
     constexpr uint32_t num_proc_per_tensix_core = 5;
+    uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
     std::vector<DeviceAddr> mem_map_bases;
 
     mem_map_bases.resize(utils::underlying_type<HalMemAddrType>(HalMemAddrType::COUNT));
@@ -37,7 +38,7 @@ void Hal::initialize_gs() {
     mem_map_bases[utils::underlying_type<HalMemAddrType>(HalMemAddrType::DPRINT)] = GET_MAILBOX_ADDRESS_HOST(dprint_buf);
     mem_map_bases[utils::underlying_type<HalMemAddrType>(HalMemAddrType::PROFILER)] = GET_MAILBOX_ADDRESS_HOST(profiler);
     mem_map_bases[utils::underlying_type<HalMemAddrType>(HalMemAddrType::KERNEL_CONFIG)] = L1_KERNEL_CONFIG_BASE;
-    mem_map_bases[utils::underlying_type<HalMemAddrType>(HalMemAddrType::UNRESERVED)] = ((L1_KERNEL_CONFIG_BASE + L1_KERNEL_CONFIG_SIZE - 1) | (ALLOCATOR_ALIGNMENT - 1)) + 1;
+    mem_map_bases[utils::underlying_type<HalMemAddrType>(HalMemAddrType::UNRESERVED)] = ((L1_KERNEL_CONFIG_BASE + L1_KERNEL_CONFIG_SIZE - 1) | (max_alignment - 1)) + 1;
     mem_map_bases[utils::underlying_type<HalMemAddrType>(HalMemAddrType::CORE_INFO)] = GET_MAILBOX_ADDRESS_HOST(core_info);
     mem_map_bases[utils::underlying_type<HalMemAddrType>(HalMemAddrType::GO_MSG)] = GET_MAILBOX_ADDRESS_HOST(go_message);
     mem_map_bases[utils::underlying_type<HalMemAddrType>(HalMemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = GET_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);

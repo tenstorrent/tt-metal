@@ -215,7 +215,7 @@ void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &allo
         bank_offsets.at(channel_id) = static_cast<int32_t>(alloc_config.dram_bank_offsets.at(channel_id));
     }
     allocator.dram_manager =
-        BankManager(BufferType::DRAM, bank_offsets, dram_bank_size, ALLOCATOR_ALIGNMENT, alloc_config.dram_unreserved_base);
+        BankManager(BufferType::DRAM, bank_offsets, dram_bank_size, alloc_config.alignment, alloc_config.dram_unreserved_base);
     for (uint32_t bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
         CoreCoord logical_core = CoreCoord{bank_id, 0};
         allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
@@ -228,7 +228,7 @@ void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &allo
         BufferType::TRACE,
         bank_offsets,
         alloc_config.trace_region_size,
-        ALLOCATOR_ALIGNMENT,
+        alloc_config.alignment,
         dram_bank_size + alloc_config.dram_unreserved_base);
     for (uint32_t bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
         CoreCoord logical_core = CoreCoord{bank_id, 0};
@@ -244,7 +244,7 @@ void init_one_bank_per_l1(Allocator &allocator, const AllocatorConfig &alloc_con
     // Space up to L1 unreserved base is reserved for risc binaries, kernel args, debug and perf monitoring tools
     DeviceAddr l1_bank_size = alloc_config.worker_l1_size - alloc_config.l1_unreserved_base;
     std::vector<int64_t> bank_offsets(num_l1_banks, 0);
-    allocator.l1_manager = BankManager(BufferType::L1, bank_offsets, l1_bank_size, ALLOCATOR_ALIGNMENT, alloc_config.l1_unreserved_base);
+    allocator.l1_manager = BankManager(BufferType::L1, bank_offsets, l1_bank_size, alloc_config.alignment, alloc_config.l1_unreserved_base);
 
     uint32_t bank_id = 0;
     for (uint32_t y = 0; y < alloc_config.worker_grid_size.y; y++) {
