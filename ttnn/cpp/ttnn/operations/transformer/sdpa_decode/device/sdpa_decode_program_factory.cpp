@@ -58,10 +58,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     uint32_t page_block_size_t = 0;
 
     if (is_paged_attention) {
-        const auto page_table_shape = page_table_tensor.value().get_legacy_shape();
-        uint32_t max_blocks_per_seq = page_table_shape[1];
         uint32_t block_size = k_shape[2];
-        S = max_blocks_per_seq * block_size;
         page_block_size_t = block_size / TILE_HEIGHT;
     }
     uint32_t Bkv = k_shape[0];
@@ -507,9 +504,9 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     std::vector<uint32_t> reader_compile_time_args_common = {
         B, PNHt, St, DHt, Sk_chunk_t, num_active_cores, is_q_sharded,
-        num_cores_per_batch, k_chunk_size, log2_page_size, index_stick_size,
+        num_cores_per_batch, k_chunk_size, index_stick_size,
         (uint32_t)is_paged_attention, num_kv_heads, page_block_size_t,
-        log2_page_table_page_size, page_table_stick_size, Bkv, num_cores_per_head, num_heads_per_core, num_output_cores
+        Bkv, num_cores_per_head, num_heads_per_core, num_output_cores
     };
 
     std::vector<uint32_t> writer_compile_time_args_common = {
@@ -613,7 +610,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         log_debug("cur_pos: {}", cur_pos);
 
         // reader runtime args
-        std::vector<uint32_t> reader_rt_args = { q_addr, k_addr, v_addr, pos_addr, page_table_addr, do_reduce, do_output, cur_head, cur_batch, core_num_in_reduce, core_num_in_output, cur_pos};
+        std::vector<uint32_t> reader_rt_args = { q_addr, k_addr, v_addr, pos_addr, page_table_addr, page_table_stick_size, do_reduce, do_output, cur_head, cur_batch, core_num_in_reduce, core_num_in_output, cur_pos};
         reader_rt_args.insert(reader_rt_args.end(), output_core_physical_xs.begin(), output_core_physical_xs.end());
         reader_rt_args.insert(reader_rt_args.end(), output_core_physical_ys.begin(), output_core_physical_ys.end());
 
@@ -684,6 +681,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         uint32_t v_addr = v_buffer->address();
         uint32_t pos_addr = use_cur_pos_tensor ? optional_input_tensors.at(0).value().buffer()->address() : 0;
         uint32_t page_table_addr = is_paged_attention ? optional_input_tensors.at(1).value().buffer()->address() : 0;
+        auto page_table_buffer = is_paged_attention ? optional_input_tensors.at(1).value().buffer() : nullptr;
+        uint32_t page_table_stick_size = is_paged_attention ? page_table_buffer->aligned_page_size() : 0;
         uint32_t out_addr = out0_buffer->address();
 
         auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
@@ -714,6 +713,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             reader_args[arg_idx++] = v_addr;
             reader_args[arg_idx++] = pos_addr;
             reader_args[arg_idx++] = page_table_addr;
+            reader_args[arg_idx++] = page_table_stick_size;
             reader_args[arg_idx++] = do_reduce;
             reader_args[arg_idx++] = do_output;
             reader_args[arg_idx++] = cur_head;

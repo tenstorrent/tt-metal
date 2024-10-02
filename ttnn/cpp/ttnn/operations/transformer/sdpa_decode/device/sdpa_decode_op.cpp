@@ -156,10 +156,6 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_legacy_shape()[-1]));
     }
 
-    // TODO: get this from program_config
-    std::size_t q_chunk_size = program_config.has_value() ? program_config->q_chunk_size : 32;
-    std::size_t k_chunk_size = program_config.has_value() ? program_config->k_chunk_size : 32;
-
     return detail::sdpa_decode_multi_core(
         input_tensor_q,
         input_tensor_k,
@@ -183,8 +179,7 @@ operation::Hash ScaledDotProductAttentionDecode::compute_program_hash(const std:
         this->compute_kernel_config,
         this->k_chunk_size,
         this->paged_attention,
-        input_tensors,
-        optional_input_tensors);
+        input_tensors);
 }
 
 }  // namespace ttnn::operations::transformer
