@@ -12,8 +12,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_bmm_backward/moreh_bmm_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_cumsum/moreh_cumsum_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm/moreh_groupnorm_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm_backward/moreh_groupnorm_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_linear/moreh_linear_op.hpp"
@@ -345,49 +343,6 @@ void py_module(py::module& m_primary) {
         py::arg("momentum_buffer_out_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a SGD operation.");
-
-    // moreh_groupnorm
-    m_primary.def(
-        "moreh_groupnorm",
-        &moreh_groupnorm,
-        py::arg("input").noconvert(),
-        py::arg("num_groups").noconvert(),
-        py::arg("eps").noconvert() = 1e-5f,
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("beta").noconvert() = std::nullopt,
-        py::kw_only(),
-        py::arg("are_required_outputs").noconvert() = std::vector<bool>{true, false, false},
-        py::arg("output").noconvert() = std::nullopt,
-        py::arg("mean").noconvert() = std::nullopt,
-        py::arg("rstd").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("mean_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("rstd_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-        Performs a moreh_groupnorm operation.
-    )doc");
-
-    // moreh_groupnorm_backward
-    m_primary.def(
-        "moreh_groupnorm_backward",
-        &moreh_groupnorm_backward,
-        py::arg("output_grad").noconvert(),
-        py::arg("input").noconvert(),
-        py::arg("mean").noconvert(),
-        py::arg("rstd").noconvert(),
-        py::arg("num_groups").noconvert(),
-        py::kw_only(),
-        py::arg("are_required_outputs").noconvert() = std::vector<bool>{true, true, true},
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("input_grad").noconvert() = std::nullopt,
-        py::arg("gamma_grad").noconvert() = std::nullopt,
-        py::arg("beta_grad").noconvert() = std::nullopt,
-        py::arg("input_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("gamma_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("beta_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-        Performs a moreh_groupnorm_backward operation.
-    )doc");
 }
 
 }  // namespace

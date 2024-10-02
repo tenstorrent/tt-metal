@@ -47,6 +47,6 @@ void kernel_main() {
             noc_async_write_barrier();
             cb_pop_front(cb_id_input_grad, onetile);
         }  // inner_idx loop
-    }      // outer_idx loop
+    }  // outer_idx loop
 
 }  // void kernel_main()

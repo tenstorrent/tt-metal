@@ -106,7 +106,7 @@ def tt_groupnorm(input, num_groups, gamma=None, beta=None, eps=1e-05, compute_me
         npu_rstd = to_npu(npu_rstd, device)
 
     # Forward
-    npu_output, npu_mean, npu_rstd = ttnn.experimental.operations.primary.moreh_groupnorm(
+    npu_output, npu_mean, npu_rstd = ttnn.operations.moreh.group_norm(
         npu_input,
         num_groups,
         eps,
@@ -170,7 +170,7 @@ def tt_groupnorm_backward(
         npu_db = to_npu(npu_db, device)
 
     # Backward
-    npu_dx, npu_dg, npu_db = ttnn.experimental.operations.primary.moreh_groupnorm_backward(
+    npu_dx, npu_dg, npu_db = ttnn.operations.moreh.group_norm_backward(
         npu_output_grad,
         npu_input,
         npu_mean,

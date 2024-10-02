@@ -206,6 +206,6 @@ void kernel_main() {
             }  // gamma_grad_has_value
 
         }  // inner_idx loop
-    }      // outer_idx loop
+    }  // outer_idx loop
 
 }  // void kernel_main()

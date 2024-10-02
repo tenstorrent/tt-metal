@@ -2,37 +2,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <functional>
-#include <map>
-#include <optional>
-#include <string>
-#include <utility>
-#include <vector>
+#include <iostream>
 
-#include "ttnn/run_operation.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm_backward/moreh_groupnorm_backward_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "moreh_group_norm_backward_input_grad_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 
-namespace tt {
-
-namespace operations {
-
-namespace primary {
-
-operation::ProgramWithCallbacks moreh_groupnorm_backward_input_grad_impl(
-    const Tensor &output_grad,
-    const Tensor &input,
-    const Tensor &mean,
-    const Tensor &rstd,
-    uint32_t num_groups,
-    Tensor &input_grad,
-    const std::optional<const Tensor> gamma) {
+namespace ttnn::operations::moreh::moreh_group_norm_backward {
+MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory::cached_program_t
+MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensors) {
+    using namespace tt;
     using namespace tt::constants;
+    using namespace tt::operations::primary;
+
+    const auto& output_grad = tensor_args.output_grad;
+    const auto& input = tensor_args.input;
+    const auto& mean = tensor_args.mean;
+    const auto& rstd = tensor_args.rstd;
+
+    auto input_grad = output_tensors;
+    auto gamma = tensor_args.gamma;
+    auto num_groups = operation_attributes.num_groups;
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -42,14 +35,14 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_input_grad_impl(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto output_grad_shape = output_grad.get_legacy_shape();
+    const auto output_grad_shape = output_grad.get_shape();
 
-    const auto n = output_grad_shape[0];
-    const auto c = output_grad_shape[1];
-    const auto h = output_grad_shape[2];
-    const auto w = output_grad_shape[3];
+    const auto n = output_grad_shape.value[0];
+    const auto c = output_grad_shape.value[1];
+    const auto h = output_grad_shape.value[2];
+    const auto w = output_grad_shape.value[3];
 
-    const auto origin_output_grad_shape = output_grad_shape.without_padding();
+    const auto origin_output_grad_shape = output_grad_shape.value.without_padding();
 
     const auto origin_h = origin_output_grad_shape[2];
     const auto origin_w = origin_output_grad_shape[3];
@@ -156,14 +149,15 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_input_grad_impl(
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const auto reader_kernel_file =
-        use_large_algorithm ? "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm_backward/input_grad/kernels/dataflow/"
-                              "reader_moreh_groupnorm_backward_input_grad_large.cpp"
-                            : "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm_backward/input_grad/kernels/dataflow/"
-                              "reader_moreh_groupnorm_backward_input_grad_small.cpp";
+        use_large_algorithm
+            ? "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm_backward/device/input_grad/kernels/dataflow/"
+              "reader_moreh_group_norm_backward_input_grad_large.cpp"
+            : "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm_backward/device/input_grad/kernels/dataflow/"
+              "reader_moreh_group_norm_backward_input_grad_small.cpp";
 
     const std::string writer_kernel_file(
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm_backward/input_grad/kernels/dataflow/"
-        "writer_moreh_groupnorm_backward_input_grad.cpp");
+        "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm_backward/device/input_grad/kernels/dataflow/"
+        "writer_moreh_group_norm_backward_input_grad.cpp");
 
     const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores);
     const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores);
@@ -176,10 +170,10 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_input_grad_impl(
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
 
     const auto compute_kernel_file = use_large_algorithm
-                                         ? "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
-                                           "moreh_layernorm_backward_input_grad_large_kernel.cpp"
-                                         : "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
-                                           "moreh_layernorm_backward_input_grad_small_kernel.cpp";
+                                         ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+                                           "moreh_layer_norm_backward_input_grad_large_kernel.cpp"
+                                         : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
+                                           "moreh_layer_norm_backward_input_grad_small_kernel.cpp";
 
     const std::vector<uint32_t> compute_args_group_1{
         num_rows_per_core_group_1,
@@ -222,6 +216,9 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_input_grad_impl(
 
     const auto gamma_addr = gamma_has_value ? gamma.value().buffer()->address() : 0;
 
+    // std::cout << "output_grad_addr: " << output_grad_addr << std::endl;
+
+    // std::cout << "num_cores_to_be_used: " << num_cores_to_be_used << std::endl;
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -245,7 +242,7 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_input_grad_impl(
             rstd_addr,
             static_cast<uint32_t>(is_dram(rstd)),
             gamma_addr,
-            static_cast<uint32_t>(is_dram(gamma)),
+            static_cast<uint32_t>(gamma_has_value ? is_dram(gamma) : 1),
             static_cast<uint32_t>(gamma_has_value),
             tile_offset,
             num_rows_per_core,
@@ -270,50 +267,44 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_input_grad_impl(
         tile_offset += num_rows_per_core * num_inner_tiles;
     }
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Callback SetUp
-    ////////////////////////////////////////////////////////////////////////////
-    auto override_runtime_args_callback = [reader_kernels_id = reader_kernels_id,
-                                           writer_kernels_id = writer_kernels_id,
-                                           num_cores_to_be_used = num_cores_to_be_used,
-                                           num_cores_y = num_cores_y](
-                                              const Program &program,
-                                              const std::vector<Buffer *> &input_buffers,
-                                              const std::vector<Buffer *> &output_buffers) {
-        auto output_grad_buffer = input_buffers.at(0);
-        auto input_buffer = input_buffers.at(1);
-        auto mean_buffer = input_buffers.at(2);
-        auto rstd_buffer = input_buffers.at(3);
-        auto gamma_buffer = input_buffers.at(4);
-
-        auto input_grad_buffer = output_buffers.at(0);
-
-        for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
-            CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-            {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
-                runtime_args[0] = output_grad_buffer->address();
-                runtime_args[2] = input_buffer->address();
-                runtime_args[4] = mean_buffer->address();
-                runtime_args[6] = rstd_buffer->address();
-                if (gamma_buffer != nullptr) {
-                    runtime_args[8] = gamma_buffer->address();
-                }
-            }
-
-            {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
-                runtime_args[0] = input_grad_buffer->address();
-            }
-        }
-    };
-
-    return {std::move(program), override_runtime_args_callback};
+    return {std::move(program), {reader_kernels_id, writer_kernels_id, num_cores_to_be_used, num_cores_y}};
 }
 
-}  // namespace primary
+void MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensors) {
+    auto reader_kernels_id = cached_program.shared_variables.reader_kernels_id;
+    auto writer_kernels_id = cached_program.shared_variables.writer_kernels_id;
+    auto num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
+    auto num_cores_y = cached_program.shared_variables.num_cores_y;
 
-}  // namespace operations
+    auto output_grad_buffer = tensor_args.output_grad.buffer();
+    auto input_buffer = tensor_args.input.buffer();
+    auto mean_buffer = tensor_args.mean.buffer();
+    auto rstd_buffer = tensor_args.rstd.buffer();
+    auto gamma_buffer = tensor_args.gamma.has_value() ? tensor_args.gamma.value().buffer() : nullptr;
+    auto input_grad_buffer = output_tensors.buffer();
 
-}  // namespace tt
+    for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+        {
+            auto& runtime_args = GetRuntimeArgs(cached_program.program, reader_kernels_id, core);
+            runtime_args[0] = output_grad_buffer->address();
+            runtime_args[2] = input_buffer->address();
+            runtime_args[4] = mean_buffer->address();
+            runtime_args[6] = rstd_buffer->address();
+            if (gamma_buffer != nullptr) {
+                runtime_args[8] = gamma_buffer->address();
+            }
+        }
+
+        {
+            auto& runtime_args = GetRuntimeArgs(cached_program.program, writer_kernels_id, core);
+            runtime_args[0] = input_grad_buffer->address();
+        }
+    }
+}
+}  // namespace ttnn::operations::moreh::moreh_group_norm_backward

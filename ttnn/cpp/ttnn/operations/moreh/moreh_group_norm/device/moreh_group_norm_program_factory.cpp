@@ -2,29 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <functional>
-#include <map>
-#include <optional>
-#include <string>
-#include <utility>
-#include <vector>
-
-#include "ttnn/run_operation.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm/moreh_groupnorm_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "moreh_group_norm_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
-
-namespace tt {
-
-namespace operations {
-
-namespace primary {
-
-namespace {
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 
 inline uint32_t get_block_size(uint32_t num_tiles, uint32_t max_block_size) {
     uint32_t block_size{1};
@@ -37,18 +17,26 @@ inline uint32_t get_block_size(uint32_t num_tiles, uint32_t max_block_size) {
     return block_size;
 }
 
-}  // namespace
-
-operation::ProgramWithCallbacks moreh_groupnorm_impl(
-    const Tensor &input,
-    uint32_t num_groups,
-    float eps,
-    const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> beta,
-    Tensor &output,
-    const std::optional<const Tensor> mean,
-    const std::optional<const Tensor> rstd) {
+namespace ttnn::operations::moreh::moreh_group_norm {
+MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormOperation::MorehGroupNormFactory::create(
+    const operation_attributes_t &operation_attributes,
+    const tensor_args_t &tensor_args,
+    tensor_return_value_t &output_tensors) {
+    using namespace tt;
     using namespace tt::constants;
+    using namespace tt::operations::primary;
+
+    const auto &input = tensor_args.input;
+    auto gamma = tensor_args.gamma;
+    auto beta = tensor_args.beta;
+    auto mean = output_tensors[1];
+    auto rstd = output_tensors[2];
+
+    auto &output = output_tensors[0].value();
+
+    auto num_groups = operation_attributes.num_groups;
+    auto eps = operation_attributes.eps;
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -58,20 +46,20 @@ operation::ProgramWithCallbacks moreh_groupnorm_impl(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_shape = input.get_legacy_shape();
+    const auto input_shape = input.get_shape();
 
-    const auto n = input_shape[0];
-    const auto c = input_shape[1];
-    const auto h = input_shape[2];
-    const auto w = input_shape[3];
+    const auto n = input_shape.value[0];
+    const auto c = input_shape.value[1];
+    const auto h = input_shape.value[2];
+    const auto w = input_shape.value[3];
 
-    const auto origin_input_shape = input_shape.without_padding();
+    const auto origin_input_shape = input_shape.value.without_padding();
 
     const auto origin_h = origin_input_shape[2];
     const auto origin_w = origin_input_shape[3];
 
     const bool is_lastdim_layernorm = false;
-    const bool is_groupnorm = true;
+    const bool is_group_norm = true;
 
     const bool do_mask_h = (origin_h % TILE_HEIGHT) != 0;
     const auto mask_h = do_mask_h ? origin_h % TILE_HEIGHT : TILE_HEIGHT;
@@ -142,7 +130,7 @@ operation::ProgramWithCallbacks moreh_groupnorm_impl(
     const uint32_t im6_t = (gamma_has_value || beta_has_value) ? 2 * block_size : 0;  // x * gamm + beta
     const uint32_t im7_t = 2;                                                         // Sum[x]
 
-    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
+    const auto cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
     const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     const auto cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + out1_t + out2_t + im0_t +
@@ -152,12 +140,12 @@ operation::ProgramWithCallbacks moreh_groupnorm_impl(
     const bool use_large_algorithm = cb_usage >= available_L1;
 
     if (use_large_algorithm) {
-        log_info(LogTest, "Large moreh_groupnorm algorithm is selected.");
+        log_info(LogTest, "Large moreh_group_norm algorithm is selected.");
         in0_t = block_size;
         im1_t = 2 * block_size;
         im2_t = 2 * block_size;
     } else {
-        log_info(LogTest, "Small moreh_groupnorm algorithm is selected.");
+        log_info(LogTest, "Small moreh_group_norm algorithm is selected.");
     }
 
     CreateCircularBuffer(
@@ -188,13 +176,13 @@ operation::ProgramWithCallbacks moreh_groupnorm_impl(
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto reader_kernel_file =
-        use_large_algorithm
-            ? "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm/kernels/dataflow/reader_moreh_groupnorm_large.cpp"
-            : "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm/kernels/dataflow/reader_moreh_groupnorm_small.cpp";
+    const auto reader_kernel_file = use_large_algorithm ? "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm/device/"
+                                                          "kernels/dataflow/reader_moreh_group_norm_large.cpp"
+                                                        : "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm/device/"
+                                                          "kernels/dataflow/reader_moreh_group_norm_small.cpp";
 
     const std::string writer_kernel_file(
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm/kernels/dataflow/writer_moreh_groupnorm.cpp");
+        "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm/device/kernels/dataflow/writer_moreh_group_norm.cpp");
 
     const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores);
     const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores);
@@ -207,8 +195,9 @@ operation::ProgramWithCallbacks moreh_groupnorm_impl(
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
 
     const auto compute_kernel_file =
-        use_large_algorithm ? "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm/kernels/moreh_layernorm_large_kernel.cpp"
-                            : "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_layernorm/kernels/moreh_layernorm_small_kernel.cpp";
+        use_large_algorithm
+            ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_large_kernel.cpp"
+            : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_small_kernel.cpp";
 
     const std::vector<uint32_t> compute_args_group_1{
         num_rows_per_core_group_1,
@@ -221,7 +210,7 @@ operation::ProgramWithCallbacks moreh_groupnorm_impl(
         static_cast<uint32_t>(mean_has_value),
         static_cast<uint32_t>(rstd_has_value),
         static_cast<uint32_t>(is_lastdim_layernorm),
-        static_cast<uint32_t>(is_groupnorm)};
+        static_cast<uint32_t>(is_group_norm)};
 
     CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_rows_per_core_group_1, compute_args_group_1}, compute_defines);
@@ -238,7 +227,7 @@ operation::ProgramWithCallbacks moreh_groupnorm_impl(
             static_cast<uint32_t>(mean_has_value),
             static_cast<uint32_t>(rstd_has_value),
             static_cast<uint32_t>(is_lastdim_layernorm),
-            static_cast<uint32_t>(is_groupnorm)};
+            static_cast<uint32_t>(is_group_norm)};
 
         CreateComputeKernel(
             program,
@@ -298,10 +287,10 @@ operation::ProgramWithCallbacks moreh_groupnorm_impl(
             output_addr,
             static_cast<uint32_t>(is_dram(output)),
             mean_addr,
-            static_cast<uint32_t>(is_dram(mean)),
+            static_cast<uint32_t>(mean_has_value ? is_dram(mean.value()) : 1),
             static_cast<uint32_t>(mean_has_value),
             rstd_addr,
-            static_cast<uint32_t>(is_dram(rstd)),
+            static_cast<uint32_t>(rstd_has_value ? is_dram(rstd.value()) : 1),
             static_cast<uint32_t>(rstd_has_value),
             tile_offset,
             num_rows_per_core,
@@ -314,56 +303,51 @@ operation::ProgramWithCallbacks moreh_groupnorm_impl(
         tile_offset += num_rows_per_core * num_inner_tiles;
     }
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Callback SetUp
-    ////////////////////////////////////////////////////////////////////////////
-    auto override_runtime_args_callback = [reader_kernels_id = reader_kernels_id,
-                                           writer_kernels_id = writer_kernels_id,
-                                           num_cores_to_be_used = num_cores_to_be_used,
-                                           num_cores_y = num_cores_y](
-                                              const Program &program,
-                                              const std::vector<Buffer *> &input_buffers,
-                                              const std::vector<Buffer *> &output_buffers) {
-        auto input_buffer = input_buffers.at(0);
-        auto gamma_buffer = input_buffers.at(1);
-        auto beta_buffer = input_buffers.at(2);
-
-        auto ouput_buffer = output_buffers.at(0);
-        auto mean_buffer = output_buffers.at(1);
-        auto rstd_buffer = output_buffers.at(2);
-
-        for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
-            CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-            {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
-                runtime_args[0] = input_buffer->address();
-                if (gamma_buffer != nullptr) {
-                    runtime_args[2] = gamma_buffer->address();
-                }
-                if (beta_buffer != nullptr) {
-                    runtime_args[5] = beta_buffer->address();
-                }
-            }
-
-            {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
-                runtime_args[0] = ouput_buffer->address();
-                if (mean_buffer != nullptr) {
-                    runtime_args[2] = mean_buffer->address();
-                }
-                if (rstd_buffer != nullptr) {
-                    runtime_args[5] = rstd_buffer->address();
-                }
-            }
-        }
-    };
-
-    return {std::move(program), override_runtime_args_callback};
+    return {std::move(program), {reader_kernels_id, writer_kernels_id, num_cores_to_be_used, num_cores_y}};
 }
 
-}  // namespace primary
+void MorehGroupNormOperation::MorehGroupNormFactory::override_runtime_arguments(
+    cached_program_t &cached_program,
+    const operation_attributes_t &operation_attributes,
+    const tensor_args_t &tensor_args,
+    tensor_return_value_t &tensor_return_value) {
+    auto input_buffer = tensor_args.input.buffer();
+    auto gamma_buffer = tensor_args.gamma.has_value() ? tensor_args.gamma.value().buffer() : nullptr;
+    auto beta_buffer = tensor_args.beta.has_value() ? tensor_args.beta.value().buffer() : nullptr;
 
-}  // namespace operations
+    auto ouput_buffer = tensor_return_value[0]->buffer();
+    auto mean_buffer = tensor_return_value[1]->buffer();
+    auto rstd_buffer = tensor_return_value[2]->buffer();
 
-}  // namespace tt
+    auto reader_kernels_id = cached_program.shared_variables.reader_kernels_id;
+    auto writer_kernels_id = cached_program.shared_variables.writer_kernels_id;
+    auto num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
+    auto num_cores_y = cached_program.shared_variables.num_cores_y;
+
+    for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+        {
+            auto &runtime_args = GetRuntimeArgs(cached_program.program, reader_kernels_id, core);
+            runtime_args[0] = input_buffer->address();
+            if (gamma_buffer != nullptr) {
+                runtime_args[2] = gamma_buffer->address();
+            }
+            if (beta_buffer != nullptr) {
+                runtime_args[5] = beta_buffer->address();
+            }
+        }
+
+        {
+            auto &runtime_args = GetRuntimeArgs(cached_program.program, writer_kernels_id, core);
+            runtime_args[0] = ouput_buffer->address();
+            if (mean_buffer != nullptr) {
+                runtime_args[2] = mean_buffer->address();
+            }
+            if (rstd_buffer != nullptr) {
+                runtime_args[5] = rstd_buffer->address();
+            }
+        }
+    }
+}
+}  // namespace ttnn::operations::moreh::moreh_group_norm
