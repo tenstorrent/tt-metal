@@ -30,7 +30,7 @@ from models.utility_functions import skip_for_grayskull
 )
 def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
-    model_args = TtModelArgs(device=mesh_device.get_devices()[0])
+    model_args = TtModelArgs(device=mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -46,7 +46,7 @@ def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seed
     reference_model.load_state_dict(partial_state_dict)
 
     tt_model = TtLlamaMLP(
-        device_mesh=mesh_device,
+        mesh_device=mesh_device,
         args=model_args,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),

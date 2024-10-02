@@ -18,7 +18,7 @@ class TtTransformer(nn.Module):
         self,
         args,
         dtype,
-        device_mesh,
+        mesh_device,
         state_dict,
         weight_cache_path,
         layers,
@@ -27,7 +27,7 @@ class TtTransformer(nn.Module):
         self.args = args
         self.vocab_size = args.vocab_size
         self.n_layers = args.n_layers
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
         self.dtype = dtype
         self.model_config = args.get_model_config()
         self.grid_size = self.args.max_grid_size
@@ -37,7 +37,7 @@ class TtTransformer(nn.Module):
             [
                 TtTransformerBlock(
                     args=args,
-                    device_mesh=device_mesh,
+                    mesh_device=mesh_device,
                     dtype=dtype,
                     state_dict=state_dict,
                     weight_cache_path=weight_cache_path,
@@ -47,7 +47,7 @@ class TtTransformer(nn.Module):
             ]
         )
         self.norm = RMSNorm(
-            device=device_mesh,
+            device=mesh_device,
             dim=args.dim,
             state_dict=state_dict,
             layer_num=None,
@@ -58,7 +58,7 @@ class TtTransformer(nn.Module):
 
         self.lm_head = LMHead(
             args=args,
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             dtype=dtype,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
@@ -82,7 +82,7 @@ class TtTransformer(nn.Module):
 
         # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
         if get_last_token != -1:
-            x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, 4096))
+            x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, self.args.dim))
 
         x = self.norm(x)
         output = self.lm_head(x)
@@ -96,18 +96,18 @@ class LMHead(nn.Module):
     def __init__(
         self,
         args,
-        device_mesh,
+        mesh_device,
         dtype,
         state_dict,
         weight_cache_path,
     ):
         super().__init__()
         self.args = args
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
         self.dtype = dtype
         self.vocab_size = args.vocab_size
         self.num_splits = 2  # TODO This is hardcoded for now. The logic below does not work for 1 split, but even if did, it would lead to OOM
-        self.num_devices = device_mesh.get_num_devices()
+        self.num_devices = mesh_device.get_num_devices()
 
         split_size = self.vocab_size // self.num_splits  # TODO Must be divisible
         split_size_per_device = math.ceil((split_size // self.num_devices) / (32 * 12)) * (
@@ -140,8 +140,8 @@ class LMHead(nn.Module):
             self.output_weights.append(
                 ttnn.as_tensor(
                     weight_part,
-                    device=device_mesh,
-                    mesh_mapper=ttnn.ShardTensorToMesh(device_mesh, dim=-1),
+                    device=mesh_device,
+                    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
                     layout=ttnn.TILE_LAYOUT,
                     dtype=dtype,
                     memory_config=create_output_mem_config(split_size, num_devices=self.num_devices),

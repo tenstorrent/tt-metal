@@ -197,7 +197,7 @@ def gather_cos_sin(position_ids, cos, sin):
     return cos, sin
 
 
-def get_prefill_rot_mat(head_dim, max_seq_len, device_mesh, seq_len):
+def get_prefill_rot_mat(head_dim, max_seq_len, mesh_device, seq_len):
     cos, sin = precompute_freqs(head_dim, max_seq_len * 2)
     cos_gathered, sin_gathered = gather_cos_sin(torch.arange(0, seq_len), cos, sin)
     assert cos_gathered.size() == (1, 1, seq_len, head_dim)
@@ -207,15 +207,15 @@ def get_prefill_rot_mat(head_dim, max_seq_len, device_mesh, seq_len):
         cos_gathered,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device_mesh,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     sin_gathereds = ttnn.from_torch(
         sin_gathered,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device_mesh,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     rot_mats = [cos_gathereds, sin_gathereds]
@@ -257,7 +257,9 @@ def prepare_inputs_ttnn_prefill(x_bsh, mesh_device):
     return xs_1BSH
 
 
-def get_single_rot_mat(dhead, mesh_device, start_pos=0, theta: float = 500000.0, use_scaled=True, on_host=False):
+def get_single_rot_mat(
+    dhead, mesh_device, num_devices, start_pos=0, theta: float = 500000.0, use_scaled=True, on_host=False
+):
     freqs_unscaled = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
     if use_scaled:
         freqs = apply_scaling(freqs_unscaled)
@@ -285,11 +287,11 @@ def get_single_rot_mat(dhead, mesh_device, start_pos=0, theta: float = 500000.0,
         device=mesh_device if not on_host else None,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if num_devices > 1 or not on_host else None,
     ), ttnn.from_torch(
         rot_matrix.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
         device=mesh_device if not on_host else None,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if num_devices > 1 or not on_host else None,
     )

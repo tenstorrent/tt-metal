@@ -113,7 +113,7 @@ def preprocess_inputs_prefill(
     )
 
 
-def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_ci_env, num_batches, print_to_file):
+def run_llama_demo_n300(user_input, batch_size, mesh_device, instruct_mode, is_ci_env, num_batches, print_to_file):
     # Creat batch output file
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output_directory = "models/demos/wormhole/llama31_8b_N300/demo/output"
@@ -146,10 +146,10 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
         batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
 
     # Load model args, weights, and tokenizer
-    model_args = TtModelArgs(device_mesh.get_devices()[0], instruct=instruct_mode)
+    model_args = TtModelArgs(mesh_device, instruct=instruct_mode)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
-    model_args.n_layers = 32
+    # model_args.n_layers = 1
 
     logger.info("Loading weights...")
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
@@ -167,14 +167,14 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
     logger.info("Loading weights to device...")
     tt_model = TtTransformer(
         args=model_args,
-        device_mesh=device_mesh,
+        mesh_device=mesh_device,
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         layers=list(range(model_args.n_layers)),
     )
     tt_embd = TtLlamaEmbedding(
-        device_mesh=device_mesh,
+        mesh_device=mesh_device,
         args=model_args,
         weight_cache_path=model_args.weight_cache_path(dtype),
         state_dict=state_dict,
@@ -184,7 +184,7 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
     embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
 
     logger.info("Finished loading weights to device. Starting inference...")
-    max_generated_tokens = 120  # Maximum number of tokens to generate per user
+    max_generated_tokens = 220  # Maximum number of tokens to generate per user
     num_tokens_generated_decode = []
     for batch_idx, input_prompts in enumerate(batch_prompts):
         logger.info(f"Processing batch {batch_idx}")
@@ -219,8 +219,8 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
             transformation_mat_torch,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            device=device_mesh,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
@@ -231,7 +231,7 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
         for batch_id in range(batch_size):
             prefill_seq_len = prefill_lens[batch_id]
             rot_mats_prefill = get_prefill_rot_mat(
-                model_args.head_dim, model_args.max_seq_len, device_mesh, seq_len=prefill_seq_len
+                model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=prefill_seq_len
             )
             if decoding_pos[batch_id] < prefill_seq_len:
                 pt_prefill_input[batch_id][
@@ -240,7 +240,7 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
 
             prefill_input = prepare_inputs_ttnn_prefill(
                 pt_prefill_input[batch_id],
-                device_mesh,
+                mesh_device,
             )
 
             tt_out = tt_model(
@@ -253,7 +253,7 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
                 get_last_token=((decoding_pos[batch_id] - 1) // 32) * 32,
             )
             pt_out.append(
-                ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(device_mesh, dim=-1))[
+                ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
                     0, 0, (decoding_pos[batch_id] - 1) % 32, :
                 ]
             )
@@ -267,8 +267,8 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
         tt_out_tok = ttnn.from_torch(
             torch.nn.functional.pad(pt_out_batched.unsqueeze(0).unsqueeze(0).unsqueeze(0), (0, 31), "constant", 0),
             # pt_out_batched.unsqueeze(0).unsqueeze(0).unsqueeze(0),
-            device=device_mesh,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             dtype=ttnn.uint32,
         )
 
@@ -284,26 +284,30 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
 
         current_rot_mat, rot_matrix = get_single_rot_mat(
             model_args.head_dim,
-            device_mesh,
+            mesh_device,
+            model_args.num_devices,
             start_pos=decoding_pos[0] - 2,
         )
 
         # Create events
-        op_event = ttnn.create_event(device_mesh)
-        write_event = ttnn.create_event(device_mesh)
+        op_event = ttnn.create_event(mesh_device)
+        write_event = ttnn.create_event(mesh_device)
 
         current_pos = ttnn.from_torch(
             torch.tensor(decoding_pos, dtype=torch.int32),
-            device=device_mesh,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             dtype=ttnn.int32,
         )
 
         # Compile
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
         tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
-        tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
-        ttnn.deallocate(tt_out)
+        if tt_model.args.num_devices > 1:
+            tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+            ttnn.deallocate(tt_out)
+        else:
+            tt_out_gathered = tt_out
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
         ttnn.deallocate(tt_out_gathered)
         tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
@@ -313,12 +317,15 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
         ttnn.plus_one(current_pos)
 
         # Capture Trace
-        trace_id = ttnn.begin_trace_capture(device_mesh, cq_id=0)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
 
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
         tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
-        tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
-        ttnn.deallocate(tt_out)
+        if tt_model.args.num_devices > 1:
+            tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+            ttnn.deallocate(tt_out)
+        else:
+            tt_out_gathered = tt_out
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
         ttnn.deallocate(tt_out_gathered)
         tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
@@ -327,20 +334,21 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
         current_rot_mat = ttnn.copy(new_rot_mat, current_rot_mat)
         ttnn.plus_one(current_pos)
 
-        ttnn.end_trace_capture(device_mesh, trace_id, cq_id=0)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         current_pos_reset = ttnn.from_torch(
             torch.tensor(decoding_pos, dtype=torch.int32),
             dtype=ttnn.int32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if tt_model.args.num_devices > 1 else None,
         )
         tt_out_tok_reset = ttnn.from_torch(
             torch.nn.functional.pad(pt_out_batched.unsqueeze(0).unsqueeze(0).unsqueeze(0), (0, 31), "constant", 0),
             dtype=ttnn.uint32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if tt_model.args.num_devices > 1 else None,
         )
 
         ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos)
         ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
+
         # Start decoding
         iteration = 0
         users_decoding = True  # reset to handle next batch
@@ -349,17 +357,19 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
 
         while users_decoding:
             iteration_time_start = time()
+
             # Execute trace
             ttnn.wait_for_event(0, write_event)
-            ttnn.execute_trace(device_mesh, trace_id, cq_id=0, blocking=True)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
             ttnn.record_event(0, op_event)
 
             # Write to host
             ttnn.wait_for_event(1, op_event)
             tt_output_torch = ttnn.to_torch(
-                tt_out_tok.cpu(blocking=False, cq_id=1), mesh_composer=ttnn.ConcatMeshToTensor(device_mesh, dim=1)
+                tt_out_tok.cpu(blocking=False, cq_id=1), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
             )[0, 0, 0, :batch_size]
             ttnn.record_event(1, write_event)
+
             # Save output token to print out later
             for user in range(batch_size):
                 user_tok = tt_output_torch[user].tolist()
@@ -397,7 +407,8 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
             if iteration % 100 == 0:
                 current_rot_mat_reset, rot_matrix_reset = get_single_rot_mat(
                     model_args.head_dim,
-                    device_mesh,
+                    mesh_device,
+                    model_args.num_devices,
                     start_pos=decoding_pos[0] + iteration,
                     on_host=True,
                 )
@@ -433,7 +444,7 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
         )  # Save the number of tokens generated for each batch (excluding the first token which is used for compile time)
 
         # Release trace
-        ttnn.release_trace(device_mesh, trace_id)
+        ttnn.release_trace(mesh_device, trace_id)
 
 
 @pytest.mark.parametrize(
@@ -452,6 +463,11 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 5487616, "num_command_queues": 2}], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [{"N150": (1, 1), "N300": (1, 2), "T3K": (4, 2), "TG": (8, 4)}.get(os.environ.get("FAKE_DEVICE"), None)],
+    indirect=True,
+)
 def test_llama_demo(mesh_device, use_program_cache, input_prompts, instruct_weights, is_ci_env, num_batches):
     if is_ci_env and instruct_weights == False:
         pytest.skip("CI demo test only runs instruct weights to reduce CI pipeline load (both are supported)")
@@ -459,7 +475,7 @@ def test_llama_demo(mesh_device, use_program_cache, input_prompts, instruct_weig
     return run_llama_demo_n300(
         user_input=input_prompts,
         batch_size=1,
-        device_mesh=mesh_device,
+        mesh_device=mesh_device,
         instruct_mode=instruct_weights,
         is_ci_env=is_ci_env,
         num_batches=num_batches,

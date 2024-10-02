@@ -2,43 +2,30 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
 import os
 import ttnn
 from pathlib import Path
 from loguru import logger
 import torch
+import json
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.demos.wormhole.llama31_8b_N300.tt.llama_common import precompute_freqs, freqs_to_rotation_matrix
 from typing import Tuple
 
 
-def calculate_hidden_dim(dim, ffn_dim_multiplier, multiple_of):
-    """Helper function based on logic used in reference model:
-    https://github.com/meta-llama/llama-models/blob/e4a6ed52a142bb9b5106dcbf48e41f97f8e7378e/models/llama3/reference_impl/model.py#L227C7-L231C83
-    """
-    hidden_dim = int(2 * (4 * dim) / 3)
-    if ffn_dim_multiplier is not None:
-        hidden_dim = int(ffn_dim_multiplier * hidden_dim)
-    hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
-    return hidden_dim
-
-
 class TtModelArgs:
     """Model args for Llama 3.1 8B as provided by the params.json config file"""
 
-    dim = 3072
-    n_layers = 28
+    dim = 4096
+    n_layers = 32
     head_dim = 128
-    ffn_dim_multiplier = 1.0
-    multiple_of = 256
-    hidden_dim = calculate_hidden_dim(dim, ffn_dim_multiplier, multiple_of)
-    n_heads = 24
+    hidden_dim = 14336
+    n_heads = 32
     n_kv_heads = 8
     norm_eps = 1e-05
     vocab_size = 128256
-    ffn_dim_multiplier = 1.0
-    multiple_of = 256
+    ffn_dim_multiplier = 1.3
+    multiple_of = 1024
     rope_theta = 500000.0
     use_scaled_rope = True
     paged_attention_config = None
@@ -49,6 +36,21 @@ class TtModelArgs:
     max_seq_len = 8192 * 4 * 4  # 128k
     kv_seq_len = 8192 * 4 * 4  # 128k
     sliding_window = 8192 * 4 * 4  # 128k
+
+    # Default folder location for weights and cached files
+    LLAMA_DIR = os.getenv("LLAMA_DIR")
+    if LLAMA_DIR:
+        if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH"), os.getenv("LLAMA_CACHE_PATH")]):
+            logger.warning(
+                "LLAMA_DIR is set and will override LLAMA_CKPT_DIR, LLAMA_TOKENIZER_PATH, and LLAMA_CACHE_PATH"
+            )
+        DEFAULT_CKPT_DIR = LLAMA_DIR
+        DEFAULT_TOKENIZER_PATH = LLAMA_DIR
+        DEFAULT_CACHE_PATH = os.path.join(LLAMA_DIR, "N300")
+    else:
+        DEFAULT_CKPT_DIR = os.getenv("LLAMA_CKPT_DIR", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B/")
+        DEFAULT_TOKENIZER_PATH = os.getenv("LLAMA_TOKENIZER_PATH", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B/")
+        DEFAULT_CACHE_PATH = os.getenv("LLAMA_CACHE_PATH", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B/N300/")
 
     OP_KEYS = (
         # Embedding
@@ -75,31 +77,10 @@ class TtModelArgs:
         "OUTPUT_MM",
     )
 
-    def __init__(self, mesh_device, instruct=False, dummy_weights=False, max_batch_size=1):
-        # Add this near the top of the class, with other class attributes
-        self.num_devices = mesh_device.get_num_devices()
-        device = mesh_device.get_devices()[0]
-        device_name = {1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
+    # Add this near the top of the class, with other class attributes
+    num_devices = 2
 
-        # Default folder location for weights and cached files
-        LLAMA_DIR = os.getenv("LLAMA_DIR")
-        if LLAMA_DIR:
-            if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH"), os.getenv("LLAMA_CACHE_PATH")]):
-                logger.warning(
-                    "LLAMA_DIR is set and will override LLAMA_CKPT_DIR, LLAMA_TOKENIZER_PATH, and LLAMA_CACHE_PATH"
-                )
-            self.DEFAULT_CKPT_DIR = LLAMA_DIR
-            self.DEFAULT_TOKENIZER_PATH = LLAMA_DIR
-            self.DEFAULT_CACHE_PATH = os.path.join(LLAMA_DIR, device_name)
-        else:
-            self.DEFAULT_CKPT_DIR = os.getenv("LLAMA_CKPT_DIR", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B/")
-            self.DEFAULT_TOKENIZER_PATH = os.getenv(
-                "LLAMA_TOKENIZER_PATH", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B/"
-            )
-            self.DEFAULT_CACHE_PATH = os.getenv(
-                "LLAMA_CACHE_PATH", f"/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B/{device_name}/"
-            )
-
+    def __init__(self, device, instruct=False, dummy_weights=False, max_batch_size=1):
         if not dummy_weights:
             # Assert if all folders and files exist
             assert os.path.exists(
@@ -192,8 +173,8 @@ class TtModelArgs:
             def matmul_config(
                 m: int, k: int, n: int, grid_size: Tuple[int, int], in0_block_w: int = None, fuse_batch: bool = False
             ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
-                per_core_M = math.ceil(m / (32 * grid_size[1]))
-                per_core_N = math.ceil(n / (32 * grid_size[0]))
+                per_core_M = m // (32 * grid_size[1])
+                per_core_N = n // (32 * grid_size[0])
 
                 out_subblock_h = 1
                 out_subblock_w = 4
@@ -204,7 +185,7 @@ class TtModelArgs:
 
                 return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=grid_size,
-                    in0_block_w=1,  # in0_block_w if in0_block_w is not None else max(1, k // (32 * grid_size[0])), # FIXME
+                    in0_block_w=in0_block_w if in0_block_w is not None else k // (32 * grid_size[0]),
                     out_subblock_h=out_subblock_h,
                     out_subblock_w=out_subblock_w,
                     per_core_M=per_core_M,
@@ -218,23 +199,19 @@ class TtModelArgs:
                 m: int, k: int, n: int, grid_size: Tuple[int, int]
             ) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:
                 return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-                    in0_block_w=math.ceil(k / (32 * grid_size[0] * grid_size[1])),
-                    per_core_M=math.ceil(m / 32),
-                    per_core_N=math.ceil(n / (32 * grid_size[0] * grid_size[1])),
+                    in0_block_w=k // (32 * grid_size[0] * grid_size[1]),
+                    per_core_M=m // 32,
+                    per_core_N=n // (32 * grid_size[0] * grid_size[1]),
                     fused_activation=None,
                 )
 
             # Update the existing configurations using the new function names
-            qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
             self.model_config["XQKV_DECODE_PROGCFG"] = dram_matmul_config(
-                m=32, k=self.dim, n=qkv_size // self.num_devices, grid_size=(4, 8)
+                m=32, k=self.dim, n=3 * self.dim, grid_size=(4, 8)
             )
 
-            assert (
-                self.n_heads / self.num_devices
-            ) % 8 == 0, f"n_heads ({self.n_heads}) // num_devices ({self.num_devices}) must be divisible by 8, but is {self.n_heads / self.num_devices}"
             self.model_config["ATTN_OUTPUT_PROGCFG"] = dram_matmul_config(
-                m=32, k=self.dim // self.num_devices, n=self.dim, grid_size=(self.n_heads // self.num_devices // 8, 8)
+                m=32, k=self.dim // self.num_devices, n=self.dim, grid_size=(2, 8)
             )
 
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = matmul_config(
@@ -270,14 +247,7 @@ class TtModelArgs:
                 m=seq_len, k=self.dim, n=self.dim, grid_size=(8, 8), in0_block_w=1, fuse_batch=seq_len <= 2048
             )
 
-            self.model_config["LM_HEAD_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
-                (32, self.dim // (8 * 8)),  # Shard shape: [32, 128] -> 1 shard per core
-                ttnn.CoreGrid(y=8, x=8),
-                ttnn.ShardStrategy.WIDTH,
-                ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-
+            # N = dim * 3
             self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 in0_block_w=1,  # how much inner dim you take each time
@@ -286,38 +256,40 @@ class TtModelArgs:
                 per_core_M=max(
                     1, 8 if seq_len >= 2048 else seq_len // 256
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=qkv_size // self.num_devices // 32 // 8,  # N / TILE_WIDTH / grid width
+                per_core_N=self.dim * 3 // 2 // 32 // 8,  # previously 12 for 8b :shrug:,  # N / TILE_WIDTH / grid width
                 transpose_mcast=False,
                 fused_activation=None,
                 fuse_batch=seq_len <= 2048,
             )
 
-            # if self.di_dt_workaround:
-            #     per_core_N = math.ceil((self.vocab_size // self.num_devices) / (7 * 8 * 32))
-            #     self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            #         compute_with_storage_grid_size=(7, 8),
-            #         in0_block_w=1,
-            #         per_core_M=1,
-            #         per_core_N=per_core_N,  # vocab size / num_devices / (7 * 8 * 32 cores), rounded up
-            #         out_subblock_h=1,
-            #         out_subblock_w=1,
-            #         fuse_batch=True,
-            #         fused_activation=None,
-            #         mcast_in0=True,
-            #     )
-            # else:
-            #     per_core_N = math.ceil((self.vocab_size // self.num_devices) / (8 * 8 * 32))
-            #     self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            #         compute_with_storage_grid_size=(8, 8),
-            #         in0_block_w=2,
-            #         out_subblock_h=1,
-            #         out_subblock_w=4,
-            #         per_core_M=1,
-            #         per_core_N=per_core_N,  # vocab size / num_devices / (8 * 8 * 32 cores), rounded up
-            #         fuse_batch=True,
-            #         fused_activation=None,
-            #         mcast_in0=True,
-            #     )
+            import math
+
+            if self.di_dt_workaround:
+                per_core_N = math.ceil((self.vocab_size // self.num_devices) // (7 * 8 * 32))
+                self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=(7, 8),
+                    in0_block_w=1,
+                    per_core_M=1,
+                    per_core_N=per_core_N,  # vocab size / num_devices / (7 * 8 * 32 cores), rounded up
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    fuse_batch=True,
+                    fused_activation=None,
+                    mcast_in0=True,
+                )
+            else:
+                per_core_N = math.ceil((self.vocab_size // self.num_devices) // (8 * 8 * 32))
+                self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=(8, 8),
+                    in0_block_w=2,
+                    out_subblock_h=1,
+                    out_subblock_w=4,
+                    per_core_M=1,
+                    per_core_N=per_core_N,  # vocab size / num_devices / (8 * 8 * 32 cores), rounded up
+                    fuse_batch=True,
+                    fused_activation=None,
+                    mcast_in0=True,
+                )
 
             self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
                 (seq_len // 16, self.head_dim),
@@ -383,7 +355,7 @@ class TtModelArgs:
             )
 
             self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(math.ceil(self.n_heads / 32) * 32, self.head_dim),  # self.n_heads padded to tile size
+                shape=(32, 128),
                 core_grid=core_grid_by_batch,
                 strategy=ttnn.ShardStrategy.HEIGHT,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -458,13 +430,3 @@ class TtModelArgs:
                 state_dict.pop(k)
 
         return state_dict
-
-    def create_dram_sharded_mem_config(self, k, n):
-        """Create DRAM-sharded memory config for width-sharded tensors"""
-        dram_cores = 12
-        tile_size = 32
-        padded_size = math.ceil(n / (tile_size * dram_cores)) * (tile_size * dram_cores)
-        shard_spec = ttnn.ShardSpec(
-            self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR, False
-        )
-        return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)

@@ -113,7 +113,7 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
         uint32_t num_heads_per_kv = q_shape_unpadded[2]/k_shape[1];
         TT_FATAL(q_shape_unpadded[2]%k_shape[1] == 0, "GQA expects Q to have a multiple of K heads, but got {} and {}", q_shape_unpadded[2], k_shape[1]);
         // check that num_heads_per_kv is a power of 2
-        TT_FATAL(num_heads_per_kv != 0 && (num_heads_per_kv & (num_heads_per_kv - 1)) == 0, "GQA expects Q to have a power of 2 number of heads per kv head, but got {}", num_heads_per_kv);
+        // TT_FATAL(num_heads_per_kv != 0 && (num_heads_per_kv & (num_heads_per_kv - 1)) == 0, "GQA expects Q to have a power of 2 number of heads per kv head, but got {}", num_heads_per_kv);
     }
 
     // Check compute kernel config

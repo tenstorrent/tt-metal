@@ -10,11 +10,11 @@ from models.common.rmsnorm import RMSNorm
 
 
 class TtTransformerBlock(torch.nn.Module):
-    def __init__(self, args, device_mesh, dtype, state_dict, layer_num, weight_cache_path):
+    def __init__(self, args, mesh_device, dtype, state_dict, layer_num, weight_cache_path):
         super().__init__()
 
         self.state_dict = state_dict
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
         self.num_devices = 1
 
         self.args = args
@@ -34,7 +34,7 @@ class TtTransformerBlock(torch.nn.Module):
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices
 
         self.attention = TtLlamaAttention(
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
@@ -42,7 +42,7 @@ class TtTransformerBlock(torch.nn.Module):
             configuration=args,
         )
         self.feed_forward = TtLlamaMLP(
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             args=args,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
@@ -51,7 +51,7 @@ class TtTransformerBlock(torch.nn.Module):
             model_config=self.model_config,
         )
         self.attention_norm = RMSNorm(
-            device=device_mesh,
+            device=mesh_device,
             dim=args.dim,
             state_dict=state_dict,
             layer_num=layer_num,
@@ -60,7 +60,7 @@ class TtTransformerBlock(torch.nn.Module):
             weight_key="attention_norm",
         )
         self.ffn_norm = RMSNorm(
-            device=device_mesh,
+            device=mesh_device,
             dim=args.dim,
             state_dict=state_dict,
             layer_num=layer_num,

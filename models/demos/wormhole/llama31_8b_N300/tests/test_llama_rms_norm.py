@@ -21,7 +21,7 @@ from models.utility_functions import skip_for_grayskull
 def test_llama_rms_norm_inference(mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(mesh_device.get_devices()[0])
+    model_args = TtModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
