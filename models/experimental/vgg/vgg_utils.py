@@ -22,7 +22,7 @@ def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):
         else:
             return ttnn.tilize(x, memory_config=output_mem_config, use_multicore=True)
     elif x.get_layout() == ttnn.TILE_LAYOUT and target_layout == ttnn.ROW_MAJOR_LAYOUT:
-        if x.shape.with_tile_padding() != x.shape_without_padding():
+        if x.shape.with_tile_padding() != x.shape:
             return ttnn.format_output_tensor(x, x.shape_without_padding(), device, target_layout, output_mem_config)
         else:
             return ttnn.untilize(x, memory_config=output_mem_config, use_multicore=True)

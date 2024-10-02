@@ -28,7 +28,7 @@ def run_max_pool_on_device_wrapper(
     reshape_2d=False,
 ):
     def max_pool_2d(x):
-        # x_shape_nopad = x.shape_without_padding()
+        # x_shape_nopad = x.shape
         # out_shape_nopad = compute_max_pool_shape(kernel_size, stride, padding, x_shape_nopad)
         # if reshape_2d and channels_last:
         #     x = x.reshape(x_shape_nopad[0], 1, x_shape_nopad[1] * x_shape_nopad[2], x_shape_nopad[3])

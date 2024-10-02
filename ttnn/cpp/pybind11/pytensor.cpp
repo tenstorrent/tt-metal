@@ -1592,16 +1592,6 @@ void pytensor_module(py::module &m_tensor) {
                 dtype = tt_tensor.get_dtype()
         )doc")
         .def(
-            "shape_without_padding",
-            [](const Tensor &self) { return Shape{self.get_legacy_shape().without_padding()}; },
-            R"doc(
-            Get shape without padding of TT Tensor.
-
-            .. code-block:: python
-
-                dtype = tt_tensor.shape_without_padding()
-        )doc")
-        .def(
             "reshape",
             [](Tensor &self, int N, int C, int H, int W) { return self.reshape(N, C, H, W); },
             R"doc(
