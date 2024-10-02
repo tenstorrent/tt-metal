@@ -262,9 +262,7 @@ def run_decode(
     # capture trace
     if trace_mode:
         logger.info("Capturing trace")
-        trace_id, tt_inp_emb, rot_mat, cache_idxs_tt, tt_logits = model.capture_trace(
-            tokens[:, prev_pos:min_prompt_len], prev_pos
-        )
+        trace_id, tt_inp_emb, rot_mat, cache_idxs_tt, tt_logits = model.capture_trace(tokens[:, 0:1], prev_pos)
 
     for cur_pos in range(min_prompt_len, total_len):
         start = time()
@@ -396,7 +394,6 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
     ),
     ids=("chat_completion", "text_completion"),
 )
-
 @pytest.mark.parametrize("trace_mode", (True, False), ids=("trace_mode_on", "trace_mode_off"))
 @pytest.mark.parametrize("decode_only", (True, False), ids=("decode_only", "prefill_decode"))
 @pytest.mark.parametrize("num_layers", (1, 2, 10, 80), ids=("1L", "2L", "10L", "80L"))

@@ -197,49 +197,19 @@ class TtLlamaModel_galaxy:
             mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
         )
 
-        xs = self.tt_embd(x)
-
         if mode == "decode":
             assert seq_len == 1, "Decode mode only supports seq_len=1"
             xs = x
-
-            ACT_MEMCFG = ttnn.create_sharded_memory_config(
-                shape=(xs.shape[2], xs.shape[3] // 8),
-                core_grid=ttnn.CoreGrid(y=1, x=8),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-
-            xs = ttnn.to_memory_config(xs, memory_config=ACT_MEMCFG)
 
             # TODO : Create different rot_mat for each user_groups in the cluster
             # rot_mat = get_rotation_mat(self.rot_emb, cache_idxs, seq_len, batch // self.cluster_shape[0])
             rot_mat = get_rotation_mat(self.rot_emb, start_pos, seq_len, batch // self.cluster_shape[0])
             assert rot_mat.size() == (1, batch // self.cluster_shape[0], self.head_dim, self.head_dim)
 
-            shard_spec_n_cores_grid = ttnn.CoreRangeSet({num_to_corerange(batch // 4)})
-            ROT_MAT_MEMCFG = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    shard_spec_n_cores_grid,
-                    [
-                        self.head_dim,
-                        self.head_dim,
-                    ],
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
-                ),
-            )
-
             rot_mats = ttnn.as_tensor(
                 rot_mat,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                cache_file_name=cache_name(f"rot_mat_decode_galaxy_{start_pos}"),
-                memory_config=ROT_MAT_MEMCFG,
                 mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             )
 
@@ -316,7 +286,6 @@ class TtLlamaModel_galaxy:
             cache_idxs_tt,
             attn_masks,
         )
-
 
     def __call__(
         self,
