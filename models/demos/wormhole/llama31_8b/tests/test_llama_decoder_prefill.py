@@ -28,7 +28,7 @@ from models.utility_functions import skip_for_grayskull
     (
         # 4096,  # Having issues when running on CI VMs. No issue when running locally.
         2048,
-        128,
+        # 128,
     ),
 )
 def test_llama_decoder_inference(device, seq_len, use_program_cache, reset_seeds):

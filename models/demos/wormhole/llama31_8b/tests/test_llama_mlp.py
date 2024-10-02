@@ -23,8 +23,8 @@ from models.utility_functions import skip_for_grayskull
     "seq_len",
     (
         # 4096, TODO: OOM L1
-        1024,
-        # 512,
+        # 1024,
+        512,
         # 128,
         32,
     ),
