@@ -40,7 +40,6 @@ set(UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/multichip/device_cluster_api.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/multichip/erisc_app_direct_send.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/multichip/ring_gather_kernels.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tt_stl/slotmap.cpp
 )
 
 add_executable(unit_tests ${UNIT_TESTS_SRC} $<TARGET_OBJECTS:unit_tests_common_o>)
