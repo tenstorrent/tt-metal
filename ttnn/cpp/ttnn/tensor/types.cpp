@@ -293,3 +293,12 @@ MemoryConfig load_memory_config(const std::string& file_name) {
 }  // namespace tt_metal
 
 }  // namespace tt
+
+namespace ttnn {
+namespace types {
+
+uint32_t Shape::operator[](std::int64_t index) const { return this->value.without_padding()[index]; }
+
+}  // namespace ttnn
+
+}  // namespace types
