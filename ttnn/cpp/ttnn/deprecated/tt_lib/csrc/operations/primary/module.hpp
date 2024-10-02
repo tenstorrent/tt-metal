@@ -16,7 +16,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_sgd/moreh_sgd_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_softmax_backward/moreh_softmax_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
@@ -288,25 +287,6 @@ void py_module(py::module& m_primary) {
         py::kw_only(),
         py::arg("dim").noconvert(),
         "Performs cumsum backward operation. Returns an input_grad tensor.");
-
-    m_primary.def(
-        "moreh_sgd",
-        &moreh_sgd,
-        py::arg("param_in").noconvert(),
-        py::arg("grad").noconvert(),
-        py::arg("momentum_buffer_in").noconvert() = std::nullopt,
-        py::arg("param_out").noconvert() = std::nullopt,
-        py::arg("momentum_buffer_out").noconvert() = std::nullopt,
-        py::arg("lr").noconvert(),
-        py::arg("momentum").noconvert(),
-        py::arg("dampening").noconvert(),
-        py::arg("weight_decay").noconvert(),
-        py::arg("nesterov").noconvert(),
-        py::arg("momentum_initialized").noconvert(),
-        py::arg("param_out_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("momentum_buffer_out_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs a SGD operation.");
 }
 
 }  // namespace

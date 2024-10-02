@@ -26,9 +26,6 @@
 #include "ttnn/operations/embedding/embedding_pybind.hpp"
 #include "ttnn/operations/embedding_backward/embedding_backward_pybind.hpp"
 #include "ttnn/operations/examples/examples_pybind.hpp"
-#include "ttnn/operations/matmul/matmul_pybind.hpp"
-#include "ttnn/operations/moreh/moreh_pybind.hpp"
-#include "ttnn/operations/transformer/transformer_pybind.hpp"
 #include "ttnn/operations/experimental/experimental_pybind.hpp"
 #include "ttnn/operations/kv_cache/kv_cache_pybind.hpp"
 #include "ttnn/operations/loss/loss_pybind.hpp"
@@ -41,7 +38,6 @@
 #include "ttnn/operations/pool/upsample/upsample_pybind.hpp"
 #include "ttnn/operations/reduction/reduction_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
-#include "ttnn/operations/moreh/moreh_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -136,7 +132,6 @@ void py_module(py::module& module) {
     auto m_moreh = module.def_submodule("moreh", "moreh operations");
     moreh::bind_moreh_operations(m_moreh);
 }
-
 }  // namespace operations
 
 }  // namespace ttnn
