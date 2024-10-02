@@ -44,6 +44,30 @@ void bind_all_gather(pybind11::module& module, const ccl_operation_t& operation,
             py::arg("memory_config") = std::nullopt,
             py::arg("num_workers") = std::nullopt,
             py::arg("num_buffers_per_channel") = std::nullopt,
+            py::arg("topology") = ttnn::ccl::Topology::Ring},
+
+        ttnn::pybind_overload_t{
+            [](const ccl_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               const uint32_t dim,
+               const uint32_t cluster_axis,
+               const MeshDevice& mesh_device,
+               const uint32_t num_links,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<size_t> num_workers,
+               const std::optional<size_t> num_buffers_per_channel,
+               const ttnn::ccl::Topology topology) -> ttnn::Tensor {
+                return self(input_tensor, dim, cluster_axis, mesh_device, num_links, memory_config, num_workers, num_buffers_per_channel, topology);
+            },
+            py::arg("input_tensor"),
+            py::arg("dim"),
+            py::arg("cluster_axis"),
+            py::arg("mesh_device"),
+            py::kw_only(),
+            py::arg("num_links") = 1,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("num_workers") = std::nullopt,
+            py::arg("num_buffers_per_channel") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Ring});
 }
 
@@ -61,6 +85,14 @@ void py_bind_all_gather(pybind11::module& module) {
         Args:
             * :attr:`input_tensor` (ttnn.Tensor): multi-device tensor
             * :attr:`dim` (int)
+            * Following are applicable only for Linear Topology
+            * :attr:`cluster_axis` (int):
+                Provided a MeshTensor, the axis corresponding to MeshDevice
+                to perform the line-all-gather operation on.
+            * :attr:`mesh_device` (MeshDevice):
+                Device mesh to perform the line-all-gather operation on.
+
+        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
 
         Keyword Args:
             * :attr:`num_links` (int): Number of links to use for the all-gather operation.

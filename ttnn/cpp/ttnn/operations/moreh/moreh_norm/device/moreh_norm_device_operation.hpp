@@ -75,3 +75,5 @@ namespace ttnn::prim {
 constexpr auto moreh_norm =
     ttnn::register_operation<"ttnn::prim::moreh_norm", ttnn::operations::moreh::moreh_norm::MorehNormOperation>();
 }
+
+#undef DEFINE_PROGRAM_FACTORY

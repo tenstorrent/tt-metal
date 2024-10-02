@@ -71,7 +71,7 @@ def test_llama_attention_inference(seq_len, mesh_device, use_program_cache, rese
         mesh_device,
     )
 
-    tt_out = tt_model([attention_input], 0, None, rot_mats, transformation_mats, user_id=0, mode="prefill")
+    tt_out = tt_model([attention_input], 0, rot_mats, transformation_mats, user_id=0, mode="prefill")
     tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[:, 0, :, :].view(
         batch, seq_len, -1
     )  # [ batch, seq, hidden_dim]

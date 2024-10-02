@@ -33,18 +33,25 @@ from tests.ttnn.unit_tests.operations.test_all_gather import (
         (2, 1, [8, 5, 13, 512], 3, ttnn.ROW_MAJOR_LAYOUT),
         (2, 1, [8, 5, 13, 768], 3, ttnn.ROW_MAJOR_LAYOUT),
         (2, 1, [8, 8, 256, 384], 1, ttnn.ROW_MAJOR_LAYOUT),
+        (2, 1, [1, 1, 64, 2048], 3, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 1, 32, 4096], 3, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 1, 32, 1024], 3, ttnn.ROW_MAJOR_LAYOUT),
+        (2, 1, [1, 2, 32, 4096], 3, ttnn.ROW_MAJOR_LAYOUT),
+        (2, 1, [1, 2, 32, 1024], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
         ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("num_iters", [1])
@@ -74,7 +81,7 @@ def test_all_gather_on_n300_post_commit(
         mem_config,
         use_program_cache,
         function_level_defaults,
-        all_gather_operation=ttnn.all_gather,
+        all_gather_topology=ttnn.Topology.Ring,
         num_iters=num_iters,
         enable_async=enable_async,
     )
@@ -146,6 +153,6 @@ def test_all_gather_sharded_n300_post_commit(
         # num_cores,
         use_program_cache,
         function_level_defaults,
-        all_gather_operation=ttnn.all_gather,
+        all_gather_topology=ttnn.Topology.Ring,
         enable_async=enable_async,
     )

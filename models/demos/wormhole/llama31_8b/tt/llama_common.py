@@ -162,6 +162,14 @@ def get_rotation_mat(dhead, end, start_pos, seqlen, batch):
     return rot_emb
 
 
+def get_rotation_mat_batched(rot_mat, start_pos, seqlen, batch):
+    if isinstance(start_pos, int):
+        start_pos = torch.ones(seqlen, batch, dtype=torch.long) * start_pos
+    position_ids = start_pos.view(seqlen, batch)
+    rot_emb = gather_rotary_emb(rot_mat, position_ids)
+    return rot_emb
+
+
 def prepare_inputs_ttnn(x, hidden_size, device):
     """
     Prepare inputs for decode mode.

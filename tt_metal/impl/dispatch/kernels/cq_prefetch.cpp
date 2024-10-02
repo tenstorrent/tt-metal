@@ -45,16 +45,25 @@ constexpr uint32_t upstream_cb_sem_id = get_compile_time_arg_val(18);
 constexpr uint32_t cmddat_q_log_page_size = get_compile_time_arg_val(19);
 constexpr uint32_t cmddat_q_blocks = get_compile_time_arg_val(20);
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(21);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(22);
+// used for prefetch_d <--> dispatch_s data path
+constexpr uint32_t dispatch_s_buffer_base = get_compile_time_arg_val(21);
+constexpr uint32_t my_dispatch_s_cb_sem_id = get_compile_time_arg_val(22);
+constexpr uint32_t downstream_dispatch_s_cb_sem_id = get_compile_time_arg_val(23);
+constexpr uint32_t dispatch_s_buffer_size = get_compile_time_arg_val(24);
+constexpr uint32_t dispatch_s_cb_log_page_size = get_compile_time_arg_val(25);
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(26);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(27);
 
 constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
+constexpr uint32_t dispatch_s_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SLAVE_NOC_X, DOWNSTREAM_SLAVE_NOC_Y));
 constexpr uint64_t pcie_noc_xy = uint64_t(NOC_XY_PCIE_ENCODING(NOC_0_X(static_cast<uint8_t>(NOC_INDEX), noc_size_x, PCIE_NOC_X), NOC_0_Y(static_cast<uint8_t>(NOC_INDEX), noc_size_y, PCIE_NOC_Y), NOC_INDEX));
 constexpr uint32_t downstream_cb_page_size = 1 << downstream_cb_log_page_size;
+constexpr uint32_t dispatch_s_cb_page_size = 1 << dispatch_s_cb_log_page_size;
 constexpr uint32_t downstream_cb_end = downstream_cb_base + (1 << downstream_cb_log_page_size) * downstream_cb_pages;
+constexpr uint32_t dispatch_s_buffer_end = dispatch_s_buffer_base + dispatch_s_buffer_size;
 constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uint32_t cmddat_q_page_size = 1 << cmddat_q_log_page_size;
 constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
@@ -78,6 +87,28 @@ constexpr uint32_t l1_cache_elements_rounded =
     ((l1_cache_elements + l1_to_local_cache_copy_chunk - 1) / l1_to_local_cache_copy_chunk) *
     l1_to_local_cache_copy_chunk +  (l1_to_local_cache_copy_chunk - 1);
 
+// Define these constexpr structs for a cleaner interface for process_relay_inline_cmd and process_exec_buf_relay_inline_cmd
+// while ensuring that state for dispatch_master and dispatch_slave is passed in during compile time.
+struct DispatchRelayInlineState {
+    static constexpr uint32_t my_downstream_cb_sem = my_downstream_cb_sem_id;
+    static constexpr uint32_t downstream_cb_sem = downstream_cb_sem_id;
+    static constexpr uint32_t downstream_noc_encoding = downstream_noc_xy;
+    static constexpr uint32_t downstream_page_size = downstream_cb_page_size;
+    static constexpr uint32_t downstream_log_page_size = downstream_cb_log_page_size;
+    static constexpr uint32_t downstream_cb_base_addr = downstream_cb_base;
+    static constexpr uint32_t downstream_cb_end_addr = downstream_cb_end;
+};
+
+struct DispatchSRelayInlineState {
+    static constexpr uint32_t my_downstream_cb_sem = my_dispatch_s_cb_sem_id;
+    static constexpr uint32_t downstream_cb_sem = downstream_dispatch_s_cb_sem_id;
+    static constexpr uint32_t downstream_noc_encoding = dispatch_s_noc_xy;
+    static constexpr uint32_t downstream_page_size = dispatch_s_cb_page_size;
+    static constexpr uint32_t downstream_log_page_size = dispatch_s_cb_log_page_size;
+    static constexpr uint32_t downstream_cb_base_addr = dispatch_s_buffer_base;
+    static constexpr uint32_t downstream_cb_end_addr = dispatch_s_buffer_end;
+};
+
 typedef struct PrefetchExecBufState {
     uint32_t page_id;
     uint32_t base_addr;
@@ -89,6 +120,7 @@ typedef struct PrefetchExecBufState {
 // Global Variables
 static uint32_t pcie_read_ptr = pcie_base;
 static uint32_t downstream_data_ptr = downstream_cb_base;
+static uint32_t downstream_data_ptr_s = dispatch_s_buffer_base;
 static uint32_t block_next_start_addr[cmddat_q_blocks];
 static uint32_t rd_block_idx = 0;
 static uint32_t upstream_total_acquired_page_count = 0;
@@ -105,23 +137,26 @@ bool process_cmd(uint32_t& cmd_ptr,
                  uint32_t* l1_cache,
                  PrefetchExecBufState& exec_buf_state);
 
+template<uint32_t downstream_cb_base_addr>
 FORCE_INLINE
 void write_downstream(uint32_t& data_ptr,
-                      uint32_t& downstream_data_ptr,
-                      uint32_t length) {
+                      uint32_t& local_downstream_data_ptr,
+                      uint32_t length,
+                      uint32_t downstream_end,
+                      uint32_t downstream_noc_encoding = downstream_noc_xy) {
 
-    uint32_t remaining = downstream_cb_end - downstream_data_ptr;
+    uint32_t remaining = downstream_end - local_downstream_data_ptr;
     if (length > remaining) {
         if (remaining > 0) {
-            noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), remaining);
+            noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr), remaining);
             data_ptr += remaining;
             length -= remaining;
         }
-        downstream_data_ptr = downstream_cb_base;
+        local_downstream_data_ptr = downstream_cb_base_addr;
     }
 
-    noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length);
-    downstream_data_ptr += length;
+    noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_encoding, local_downstream_data_ptr), length);
+    local_downstream_data_ptr += length;
 }
 
 // If prefetcher must stall after this fetch, wait for data to come back, and move to stalled state.
@@ -243,7 +278,6 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
     if (!cmd_ready) {
         if (pending_read_size != 0) {
             noc_async_read_barrier();
-
             // wrap the cmddat_q
             if (fence < cmd_ptr) {
                 cmd_ptr = fence;
@@ -295,6 +329,9 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
 uint32_t process_debug_cmd(uint32_t cmd_ptr) {
 
     volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
+#if 0
+    // Out of code memory for prefetcher + DPRINT
+    // Hack this off for now, have to revisit soon
     uint32_t checksum = 0;
     uint32_t data_start = (uint32_t)cmd + sizeof(CQPrefetchCmd);
     uint32_t *data = (uint32_t *)data_start;
@@ -316,41 +353,37 @@ uint32_t process_debug_cmd(uint32_t cmd_ptr) {
         WAYPOINT("!CHK");
         ASSERT(0);
     }
-
+#endif
     return cmd->debug.stride;
 }
 
-template<bool cmddat_wrap_enable>
+template<bool cmddat_wrap_enable, typename RelayInlineState>
 static uint32_t process_relay_inline_cmd(uint32_t cmd_ptr,
-                                         uint32_t& downstream_data_ptr) {
+                                         uint32_t& local_downstream_data_ptr) {
 
     volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
-
     uint32_t length = cmd->relay_inline.length;
     uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
 
-    uint32_t npages = (length + downstream_cb_page_size - 1) >> downstream_cb_log_page_size;
+    uint32_t npages = (length + RelayInlineState::downstream_page_size - 1) >> RelayInlineState::downstream_log_page_size;
 
     // Assume the downstream buffer is big relative to cmddat command size that we can
     // grab what we need in one chunk
-    cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(npages);
+    cb_acquire_pages<my_noc_xy, RelayInlineState::my_downstream_cb_sem>(npages);
 
     uint32_t remaining = cmddat_q_end - data_ptr;
     if (cmddat_wrap_enable && length > remaining) {
         // wrap cmddat
-        write_downstream(data_ptr, downstream_data_ptr, remaining);
+        write_downstream<RelayInlineState::downstream_cb_base_addr>(data_ptr, local_downstream_data_ptr, remaining, RelayInlineState::downstream_cb_end_addr, RelayInlineState::downstream_noc_encoding);
         length -= remaining;
         data_ptr = cmddat_q_base;
     }
 
-    write_downstream(data_ptr, downstream_data_ptr, length);
+    write_downstream<RelayInlineState::downstream_cb_base_addr>(data_ptr, local_downstream_data_ptr, length, RelayInlineState::downstream_cb_end_addr, RelayInlineState::downstream_noc_encoding);
 
-    // Round to nearest page
-    downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
-
+    local_downstream_data_ptr = round_up_pow2(local_downstream_data_ptr, RelayInlineState::downstream_page_size);
     noc_async_writes_flushed();
-    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
-
+    cb_release_pages<my_noc_index, RelayInlineState::downstream_noc_encoding, RelayInlineState::downstream_cb_sem>(npages);
     return cmd->relay_inline.stride;
 }
 
@@ -529,16 +562,6 @@ uint32_t process_relay_paged_cmd_large(uint32_t cmd_ptr,
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-}
-
-inline uint32_t process_prefetch_h_wait_cmd(uint32_t cmd_ptr) {
-    volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
-    volatile tt_l1_ptr uint32_t* event_addr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cmd->event_wait.sync_event_addr);
-    do {
-        invalidate_l1_cache();
-    } while (*event_addr < cmd->event_wait.sync_event);
-    return CQ_PREFETCH_CMD_BARE_MIN_SIZE + sizeof(CQPrefetchHToPrefetchDHeader);
 }
 
 // This fn prefetches data from DRAM memory and writes data to the dispatch core.
@@ -892,7 +915,8 @@ void paged_read_into_cmddat_q(uint32_t read_ptr, PrefetchExecBufState& exec_buf_
     uint32_t pages = exec_buf_state.pages;
 
     // TODO: tune how much is read
-    uint32_t pages_at_once = (pages > NUM_DRAM_BANKS) ? NUM_DRAM_BANKS : pages;
+    uint32_t max_trace_buffer_pages_in_cmd_dat_q = cmddat_q_size >> log_page_size;
+    uint32_t pages_at_once = (max_trace_buffer_pages_in_cmd_dat_q > pages) ? pages : max_trace_buffer_pages_in_cmd_dat_q;
     uint32_t read_length = pages_at_once << log_page_size;
 
     InterleavedAddrGen<true> addr_gen{.bank_base_address = base_addr, .page_size = page_size};
@@ -903,39 +927,39 @@ void paged_read_into_cmddat_q(uint32_t read_ptr, PrefetchExecBufState& exec_buf_
         read_ptr += page_size;
         page_id++;
         pages_at_once--;
-        pages--;
     }
 
     exec_buf_state.page_id = page_id;
-    exec_buf_state.pages = pages;
+    exec_buf_state.pages -= pages_at_once;
     exec_buf_state.length += read_length;
 }
 
 // processes the relay_inline cmd from an exec_buf
 // ie, reads the data from dram and relays it on
 // Separate implementation that fetches more data from exec buf when cmd has been split
+template<typename RelayInlineState>
+FORCE_INLINE
 static uint32_t process_exec_buf_relay_inline_cmd(uint32_t& cmd_ptr,
-                                                  uint32_t& downstream_data_ptr,
+                                                  uint32_t& local_downstream_data_ptr,
                                                   PrefetchExecBufState& exec_buf_state) {
 
     volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
-
+    uint8_t dispatcher_type = cmd->relay_inline.dispatcher_type;
     uint32_t length = cmd->relay_inline.length;
     uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
 
     //DPRINT << "relay_inline_exec_buf_cmd:" << length << ENDL();
-    uint32_t npages = (length + downstream_cb_page_size - 1) >> downstream_cb_log_page_size;
+    uint32_t npages = (length + RelayInlineState::downstream_page_size - 1) >> RelayInlineState::downstream_log_page_size;
 
     // Assume the downstream buffer is big relative to cmddat command size that we can
     // grab what we need in one chunk
-    cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(npages);
-
+    cb_acquire_pages<my_noc_xy, RelayInlineState::my_downstream_cb_sem>(npages);
     uint32_t stride = cmd->relay_inline.stride;
     uint32_t remaining_stride = exec_buf_state.length;
     uint32_t remaining = exec_buf_state.length - sizeof(CQPrefetchCmd);
     while (length > remaining) {
         // wrap cmddat
-        write_downstream(data_ptr, downstream_data_ptr, remaining);
+        write_downstream<RelayInlineState::downstream_cb_base_addr>(data_ptr, local_downstream_data_ptr, remaining, RelayInlineState::downstream_cb_end_addr, RelayInlineState::downstream_noc_encoding);
         length -= remaining;
         stride -= remaining_stride;
         exec_buf_state.length = 0;
@@ -945,18 +969,14 @@ static uint32_t process_exec_buf_relay_inline_cmd(uint32_t& cmd_ptr,
         // fetch more
         noc_async_writes_flushed();
         paged_read_into_cmddat_q(cmd_ptr, exec_buf_state);
-        noc_async_read_barrier();
         remaining = exec_buf_state.length;
         remaining_stride = exec_buf_state.length;
+        noc_async_read_barrier();
     }
-
-    write_downstream(data_ptr, downstream_data_ptr, length);
-
-    // Round to nearest page
-    downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
-
+    write_downstream<RelayInlineState::downstream_cb_base_addr>(data_ptr, local_downstream_data_ptr, length, RelayInlineState::downstream_cb_end_addr, RelayInlineState::downstream_noc_encoding);
+    local_downstream_data_ptr = round_up_pow2(local_downstream_data_ptr, RelayInlineState::downstream_page_size);
     noc_async_writes_flushed();
-    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
+    cb_release_pages<my_noc_index, RelayInlineState::downstream_noc_encoding, RelayInlineState::downstream_cb_sem>(npages);
 
     return stride;
 }
@@ -1134,10 +1154,19 @@ bool process_cmd(uint32_t& cmd_ptr,
 
     case CQ_PREFETCH_CMD_RELAY_INLINE:
         //DPRINT << "relay inline" << ENDL();
-        if (exec_buf) {
-            stride = process_exec_buf_relay_inline_cmd(cmd_ptr, downstream_data_ptr, exec_buf_state);
+        if constexpr (exec_buf) {
+            if (cmd->relay_inline.dispatcher_type == DispatcherSelect::DISPATCH_MASTER) {
+                stride = process_exec_buf_relay_inline_cmd<DispatchRelayInlineState>(cmd_ptr, downstream_data_ptr, exec_buf_state);
+            } else {
+                stride = process_exec_buf_relay_inline_cmd<DispatchSRelayInlineState>(cmd_ptr, downstream_data_ptr_s, exec_buf_state);
+            }
         } else {
-            stride = process_relay_inline_cmd<cmddat_wrap_enable>(cmd_ptr, downstream_data_ptr);
+            if (cmd->relay_inline.dispatcher_type == DispatcherSelect::DISPATCH_MASTER) {
+                stride = process_relay_inline_cmd<cmddat_wrap_enable, DispatchRelayInlineState>(cmd_ptr, downstream_data_ptr);
+            }
+            else {
+                stride = process_relay_inline_cmd<cmddat_wrap_enable, DispatchSRelayInlineState>(cmd_ptr, downstream_data_ptr_s);
+            }
         }
         break;
 
@@ -1163,7 +1192,7 @@ bool process_cmd(uint32_t& cmd_ptr,
     case CQ_PREFETCH_CMD_EXEC_BUF_END:
         //DPRINT << "exec buf end: " << cmd_ptr << ENDL();
         ASSERT(exec_buf);
-        stride = process_exec_buf_relay_inline_cmd(cmd_ptr, downstream_data_ptr, exec_buf_state);
+        stride = process_exec_buf_relay_inline_cmd<DispatchRelayInlineState>(cmd_ptr, downstream_data_ptr, exec_buf_state);
         done = true;
         break;
 
@@ -1181,10 +1210,6 @@ bool process_cmd(uint32_t& cmd_ptr,
         stride = process_debug_cmd(cmd_ptr);
         break;
 
-    case CQ_PREFETCH_CMD_WAIT_FOR_EVENT:
-        stride = CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-        break;
-
     case CQ_PREFETCH_CMD_TERMINATE:
         //DPRINT << "prefetch terminating_" << is_h_variant << is_d_variant << ENDL();
         ASSERT(!exec_buf);
@@ -1192,12 +1217,12 @@ bool process_cmd(uint32_t& cmd_ptr,
         break;
 
     default:
-        // DPRINT << "prefetch invalid command:" << (uint32_t)cmd->base.cmd_id << " " << cmd_ptr << " " << cmddat_q_base << ENDL();
-        DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
-        DPRINT << HEX() << *((uint32_t*)cmd_ptr+1) << ENDL();
-        DPRINT << HEX() << *((uint32_t*)cmd_ptr+2) << ENDL();
-        DPRINT << HEX() << *((uint32_t*)cmd_ptr+3) << ENDL();
-        DPRINT << HEX() << *((uint32_t*)cmd_ptr+4) << ENDL();
+        //DPRINT << "prefetch invalid command:" << (uint32_t)cmd->base.cmd_id << " " << cmd_ptr << " " << cmddat_q_base << ENDL();
+        // DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
+        // DPRINT << HEX() << *((uint32_t*)cmd_ptr+1) << ENDL();
+        // DPRINT << HEX() << *((uint32_t*)cmd_ptr+2) << ENDL();
+        // DPRINT << HEX() << *((uint32_t*)cmd_ptr+3) << ENDL();
+        // DPRINT << HEX() << *((uint32_t*)cmd_ptr+4) << ENDL();
         WAYPOINT("!CMD");
         ASSERT(0);
     }
@@ -1262,7 +1287,7 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
 // This grabs whole (possibly sets of if multiple in a page) commands
 inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr) {
 
-    DPRINT << "get_commands: " << data_ptr << " " << fence << " " << cmddat_q_base << " " << cmddat_q_end << ENDL();
+    // DPRINT << "get_commands: " << data_ptr << " " << fence << " " << cmddat_q_base << " " << cmddat_q_end << ENDL();
     if (data_ptr == fence) {
         get_cb_page<
             cmddat_q_base,
@@ -1319,11 +1344,6 @@ void kernel_main_h() {
 
         volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
         uint32_t cmd_id = cmd->base.cmd_id;
-        if (cmd_id == CQ_PREFETCH_CMD_WAIT_FOR_EVENT) {
-            // prefetch_h will stop execution until it recieves an event update from the
-            // dispatch_d core assigned to the other CQ
-            uint32_t stride = process_prefetch_h_wait_cmd(cmd_ptr);
-        }
         // Infer that an exec_buf command is to be executed based on the stall state.
         bool is_exec_buf = (stall_state == STALLED);
         cmd_ptr = process_relay_inline_all(cmd_ptr, fence, is_exec_buf);
@@ -1331,7 +1351,7 @@ void kernel_main_h() {
         // Note: one fetch_q entry can contain multiple commands
         // The code below assumes these commands arrive individually, packing them would require parsing all cmds
         if (cmd_id == CQ_PREFETCH_CMD_TERMINATE) {
-            DPRINT << "prefetch terminating_10" << ENDL();
+            // DPRINT << "prefetch terminating_10" << ENDL();
             done = true;
         }
     }
@@ -1392,7 +1412,7 @@ void kernel_main_d() {
     // in case prefetch_d is connected to a depacketizing stage.
     // TODO: This should be replaced with a signal similar to what packetized
     // components use.
-    DPRINT << "prefetch_d done" << ENDL();
+    // DPRINT << "prefetch_d done" << ENDL();
     noc_semaphore_inc(get_noc_addr_helper(upstream_noc_xy, get_semaphore<fd_core_type>(upstream_cb_sem_id)), 0x80000000);
 }
 

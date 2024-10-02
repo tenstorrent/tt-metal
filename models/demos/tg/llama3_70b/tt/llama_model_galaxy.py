@@ -22,6 +22,8 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 from models.demos.tg.llama3_70b.tt.llama_common import (
     tt_all_reduce,
     tt_all_gather,
+    tt_sharded_distributed_rmsnorm,
+    tt_distributed_rmsnorm,
 )
 
 
@@ -296,36 +298,6 @@ class TtLlamaModel_galaxy:
         else:
             raise ValueError(f"Unknown llm_mode: {mode}")
 
-    def tt_distributed_rmsnorm(self, inp, epsilon, gamma):
-        # Run distributed rmsnorm part 1
-        tt_stats = ttnn.rms_norm_pre_all_gather(
-            inp, compute_kernel_config=self.core_model_config["LN_COMPUTE_KERNEL_CONFIG"], dtype=ttnn.bfloat16
-        )
-
-        padded_shape = (1, 1, inp.shape[-2], 32)
-        tt_stats = ttnn.reshape(tt_stats, ttnn.Shape(padded_shape, padded_shape))  # TODO: Figure out why we need this
-        tt_stats = tt_all_gather(
-            tt_stats,
-            mesh_device=self.mesh_device,
-            dim=3,
-            cluster_axis=1,
-            num_links=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # Run distributed rmsnorm part 2
-        tt_out = ttnn.rms_norm_post_all_gather(
-            inp,
-            tt_stats,
-            epsilon=epsilon,
-            weight=gamma,
-            compute_kernel_config=self.core_model_config["LN_COMPUTE_KERNEL_CONFIG"],
-        )
-
-        tt_stats.deallocate(True)
-
-        return tt_out
-
     def decode_forward(
         self,
         xs: List[ttnn.Tensor],
@@ -337,12 +309,14 @@ class TtLlamaModel_galaxy:
         for layer in self.layers:
             xs = layer(xs, rot_mats, start_pos, attn_masks, mode="decode")  # xs is fractured
 
-        xs_interleaved = ttnn.to_memory_config(xs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        norm_out = self.tt_distributed_rmsnorm(
-            xs_interleaved,
+        norm_out = tt_sharded_distributed_rmsnorm(
+            xs,
             epsilon=self.norm_eps,
             gamma=self.norm_sharded,
+            mesh_device=self.mesh_device,
+            ln_sharded_input_memcfg=self.core_model_config["LN_SHARDED_INPUT_MEMCFG"],
+            ln_sharded_progcfg=self.core_model_config["LN_SHARDED_PROGCFG"],
+            ln_sharded_stats_memcfg=self.core_model_config["LN_SHARDED_STATS_MEMCFG"],
         )
 
         norm_out = ttnn.to_memory_config(norm_out, memory_config=self.core_model_config["LM_HEAD_ACT_MEMCFG"])
@@ -380,10 +354,12 @@ class TtLlamaModel_galaxy:
         for id, layer in enumerate(self.layers):
             xs = layer(xs, rot_mats, start_pos, attn_masks, user_id, mode="prefill")
 
-        norm_out = self.tt_distributed_rmsnorm(
+        norm_out = tt_distributed_rmsnorm(
             xs,
             epsilon=self.norm_eps,
             gamma=self.norm_sharded,
+            mesh_device=self.mesh_device,
+            compute_kernel_config=self.LN_COMPUTE_KERNEL_CONFIG,
         )
         # Slice out last padding_length(32) tokens in LM head to produce next token
         # TODO: Does not work for perplexity, or if we padded input to current sequence length

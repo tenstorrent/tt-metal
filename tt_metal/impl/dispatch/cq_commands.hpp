@@ -27,8 +27,7 @@ enum CQPrefetchCmdId : uint8_t {
     CQ_PREFETCH_CMD_EXEC_BUF_END = 7,         // finish executing commands from a buffer (return), payload like relay_inline
     CQ_PREFETCH_CMD_STALL = 8,                // drain pipe through dispatcher
     CQ_PREFETCH_CMD_DEBUG = 9,                // log waypoint data to watcher, checksum
-    CQ_PREFETCH_CMD_WAIT_FOR_EVENT = 10,      // wait_for_event: stall until dispatcher signals event completion
-    CQ_PREFETCH_CMD_TERMINATE = 11,           // quit
+    CQ_PREFETCH_CMD_TERMINATE = 10,           // quit
     CQ_PREFETCH_CMD_MAX_COUNT,                // for checking legal IDs
 };
 
@@ -47,10 +46,22 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_CMD_DEBUG = 10,             // log waypoint data to watcher, checksum
     CQ_DISPATCH_CMD_DELAY = 11,             // insert delay (for testing)
     CQ_DISPATCH_CMD_EXEC_BUF_END = 12,      // dispatch_d notify prefetch_h that exec_buf has completed
-    CQ_DISPATCH_CMD_REMOTE_WRITE = 13,      // dispatch_d issues write to address on L-Chip through dispatch_h
-    CQ_DISPATCH_CMD_SET_WRITE_OFFSET = 14,  // set the offset to add to all non-host destination addresses (relocation)
-    CQ_DISPATCH_CMD_TERMINATE = 15,         // quit
+    CQ_DISPATCH_CMD_SET_WRITE_OFFSET = 13,  // set the offset to add to all non-host destination addresses (relocation)
+    CQ_DISPATCH_CMD_TERMINATE = 14,         // quit
+    CQ_DISPATCH_CMD_SEND_GO_SIGNAL = 15,
+    CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL = 16,
+    CQ_DISPATCH_SET_UNICAST_ONLY_CORES = 17,
     CQ_DISPATCH_CMD_MAX_COUNT,              // for checking legal IDs
+};
+
+enum GoSignalMcastSettings : uint8_t {
+    SEND_MCAST = 1,
+    SEND_UNICAST = 2,
+};
+
+enum DispatcherSelect : uint8_t {
+    DISPATCH_MASTER = 0,
+    DISPATCH_SLAVE = 1,
 };
 
 //////////////////////////////////////////////////////////////////////////////
@@ -109,17 +120,10 @@ struct CQPrefetchRelayPagedPackedSubCmd {
 constexpr uint32_t CQ_PREFETCH_CMD_RELAY_PAGED_PACKED_MAX_SUB_CMDS = 35;
 
 struct CQPrefetchRelayInlineCmd {
-    uint8_t pad1;
-    uint16_t pad2;
+    uint8_t dispatcher_type;
+    uint16_t pad;
     uint32_t length;
     uint32_t stride;          // explicit stride saves a few insns on device
-} __attribute__((packed));
-
-struct CQPrefetchWaitForEventCmd {
-    uint8_t pad1;
-    uint16_t pad2;
-    uint32_t sync_event;
-    uint32_t sync_event_addr;
 } __attribute__((packed));
 
 struct CQPrefetchExecBufCmd {
@@ -138,7 +142,6 @@ struct CQPrefetchCmd {
         CQPrefetchRelayPagedPackedCmd relay_paged_packed;
         CQPrefetchRelayInlineCmd relay_inline;
         CQPrefetchExecBufCmd exec_buf;
-        CQPrefetchWaitForEventCmd event_wait;
         CQGenericDebugCmd debug;
     } __attribute__((packed));
 };
@@ -241,24 +244,33 @@ struct CQDispatchDelayCmd {
     uint32_t delay;
 } __attribute__((packed));
 
-// When dispatch_d gets this command, it will be
-// forwarded to dispatch_h, which will write data
-// to local noc_xy_addr at offset addr. The data
-// is currently a uint32_t field, which is inlined in
-// the command.
-struct CQDispatchRemoteWriteCmd {
-    uint32_t data;
-    uint32_t noc_xy_addr;
-    uint32_t addr;
-} __attribute__((packed));
-
-
 struct CQDispatchSetWriteOffsetCmd {
     uint8_t pad1;
     uint16_t pad2;
     uint32_t offset0;
     uint32_t offset1;
     uint32_t offset2;
+} __attribute__((packed));
+
+struct CQDispatchSetUnicastOnlyCoresCmd {
+    uint8_t pad1;
+    uint16_t pad2;
+    uint32_t num_unicast_only_cores;
+} __attribute__ ((packed));
+
+struct CQDispatchGoSignalMcastCmd {
+    uint32_t go_signal;
+    uint8_t mcast_flag; // mcast or unicast or both
+    uint32_t wait_count;
+    uint32_t wait_addr;
+} __attribute__((packed));
+
+struct CQDispatchNotifySlaveGoSignalCmd {
+    // Currently doesn't need any metadata, since dispatcher
+    // just sends a counter update to dispatch_s when it sees this cmd
+    uint8_t pad1;
+    uint16_t pad2;
+    uint32_t pad3;
 } __attribute__((packed));
 
 struct CQDispatchCmd {
@@ -270,11 +282,13 @@ struct CQDispatchCmd {
         CQDispatchWritePagedCmd write_paged;
         CQDispatchWritePackedCmd write_packed;
         CQDispatchWritePackedLargeCmd write_packed_large;
-        CQDispatchRemoteWriteCmd write_from_remote;
         CQDispatchWaitCmd wait;
         CQGenericDebugCmd debug;
         CQDispatchDelayCmd delay;
         CQDispatchSetWriteOffsetCmd set_write_offset;
+        CQDispatchGoSignalMcastCmd mcast;
+        CQDispatchSetUnicastOnlyCoresCmd set_unicast_only_cores;
+        CQDispatchNotifySlaveGoSignalCmd notify_dispatch_s_go_signal;
     } __attribute__((packed));
 };
 

@@ -148,8 +148,8 @@ void kernel_main() {
             }
             all_outputs_finished &= output_finished;
         }
-
-        tt_l1_ptr launch_msg_t * const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch);
+        uint32_t launch_msg_rd_ptr = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
+        tt_l1_ptr launch_msg_t * const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_msg_rd_ptr]);
         if (launch_msg->kernel_config.exit_erisc_kernel) {
             return;
         }

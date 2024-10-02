@@ -162,6 +162,10 @@ namespace kernel_profiler{
         }
     }
 
+    inline __attribute__((always_inline)) void set_profiler_zone_valid(bool condition) {
+        profiler_control_buffer[PROFILER_DONE] = !condition;
+    }
+
     inline __attribute__((always_inline)) void risc_finished_profiling()
     {
         for (int i = 0; i < SUM_COUNT; i ++)
@@ -361,7 +365,6 @@ namespace kernel_profiler{
 
         static_assert (start_index < CUSTOM_MARKERS);
         static_assert (end_index < CUSTOM_MARKERS);
-
         inline __attribute__((always_inline)) profileScopeGuaranteed ()
         {
             if constexpr  (index == 0)
@@ -412,6 +415,8 @@ namespace kernel_profiler{
 
 #endif
 
+#define DeviceValidateProfiler( condition ) kernel_profiler::set_profiler_zone_valid(condition);
+
 #define DeviceZoneScopedMainN( name ) DO_PRAGMA(message(PROFILER_MSG_NAME(name))); auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); kernel_profiler::profileScopeGuaranteed<hash, 0> zone = kernel_profiler::profileScopeGuaranteed<hash, 0>();
 
 #define DeviceZoneScopedMainChildN( name ) DO_PRAGMA(message(PROFILER_MSG_NAME(name))); auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));kernel_profiler::profileScopeGuaranteed<hash, 1> zone = kernel_profiler::profileScopeGuaranteed<hash, 1>();
@@ -423,6 +428,8 @@ namespace kernel_profiler{
 #define DeviceZoneSetCounter( counter ) kernel_profiler::set_host_counter(counter);
 
 #else
+
+#define DeviceValidateProfiler( condition )
 
 #define DeviceZoneScopedMainN( name )
 

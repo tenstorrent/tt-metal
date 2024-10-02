@@ -129,15 +129,9 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
             dtype=ttnn.int32,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
-        current_pos_attn_tensor = ttnn.from_torch(
-            torch.tensor([current_pos] * batch * 4),
-            device=mesh_device,
-            dtype=ttnn.int32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
 
         # Run TT model
-        tt_out = tt_model(decode_input, current_pos_tensor, current_pos_attn_tensor, rot_mat=current_rot_mat)
+        tt_out = tt_model(decode_input, current_pos_tensor, rot_mat=current_rot_mat)
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
             ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))

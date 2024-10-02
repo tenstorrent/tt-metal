@@ -183,7 +183,9 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd *cmd, uint32_t cmd_addr, std::ofstream 
             case CQ_DISPATCH_CMD_GO: break;
             case CQ_DISPATCH_CMD_SINK: break;
             case CQ_DISPATCH_CMD_EXEC_BUF_END: break;
-            case CQ_DISPATCH_CMD_REMOTE_WRITE: break;
+            case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: break;
+            case CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL: break;
+            case CQ_DISPATCH_SET_UNICAST_ONLY_CORES: break;
             case CQ_DISPATCH_CMD_TERMINATE: break;
             case CQ_DISPATCH_CMD_SET_WRITE_OFFSET: break;
             default: TT_THROW("Unrecognized dispatch command: {}", cmd_id); break;
@@ -248,13 +250,6 @@ uint32_t dump_prefetch_cmd(CQPrefetchCmd *cmd, uint32_t cmd_addr, std::ofstream 
                     val(cmd->debug.size),
                     val(cmd->debug.stride));
                 stride = cmd->debug.stride;
-                break;
-            case CQ_PREFETCH_CMD_WAIT_FOR_EVENT:
-                iq_file << fmt::format(
-                    " (sync_event={:#08x}, sync_event_addr={:#08x})",
-                    val(cmd->event_wait.sync_event),
-                    val(cmd->event_wait.sync_event_addr));
-                stride = CQ_PREFETCH_CMD_BARE_MIN_SIZE + sizeof(CQPrefetchHToPrefetchDHeader);
                 break;
             // These commands don't have any additional data to dump.
             case CQ_PREFETCH_CMD_ILLEGAL: break;

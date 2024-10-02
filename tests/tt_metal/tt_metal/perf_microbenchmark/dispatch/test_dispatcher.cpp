@@ -441,11 +441,13 @@ int main(int argc, char **argv) {
         gen_cmds(device, cmds, all_workers_g, device_data, dispatch_buffer_page_size_g);
         llrt::write_hex_vec_to_core(device->id(), phys_spoof_prefetch_core, cmds, l1_buf_base);
 
-        constexpr uint32_t dispatch_cb_sem = 0;
-        constexpr uint32_t prefetch_sync_sem = 1;
-        tt_metal::CreateSemaphore(program, {spoof_prefetch_core}, dispatch_buffer_pages);
-        tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
-        tt_metal::CreateSemaphore(program, {spoof_prefetch_core}, 0);
+        const uint32_t spoof_prefetch_core_sem_0_id = tt_metal::CreateSemaphore(program, {spoof_prefetch_core}, dispatch_buffer_pages);
+        const uint32_t dispatch_core_sem_id = tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
+        TT_ASSERT(spoof_prefetch_core_sem_0_id == dispatch_core_sem_id);
+        const uint32_t dispatch_cb_sem = spoof_prefetch_core_sem_0_id;
+
+        const uint32_t spoof_prefetch_core_sem_1_id = tt_metal::CreateSemaphore(program, {spoof_prefetch_core}, 0);
+        const uint32_t prefetch_sync_sem = spoof_prefetch_core_sem_1_id;
 
         std::vector<uint32_t> dispatch_compile_args =
             {l1_buf_base,
@@ -469,8 +471,13 @@ int main(int argc, char **argv) {
              0,    // prefetch_local_downstream_sem_addr
              0,    // prefetch_downstream_buffer_pages
              num_compute_cores, // max_write_packed_cores
+             0,
+             0,
+             0,
+             0,
+             0,
              true, // is_dram_variant
-             true // is_host_variant
+             true, // is_host_variant
             };
         std::vector<uint32_t> spoof_prefetch_compile_args =
             {l1_buf_base,

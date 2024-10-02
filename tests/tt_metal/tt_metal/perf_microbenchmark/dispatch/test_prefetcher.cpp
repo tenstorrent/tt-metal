@@ -6,6 +6,7 @@
 #include <functional>
 #include <random>
 
+#include "assert.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
@@ -1577,47 +1578,57 @@ void configure_for_single_chip(Device *device,
     tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, CQ_COMPLETION_READ_PTR);
     dirty_host_completion_buffer(host_hugepage_completion_buffer);
 
-    constexpr uint32_t prefetch_sync_sem = 0;
-
-    tt_metal::CreateSemaphore(program, {prefetch_core}, 0);
-    tt_metal::CreateSemaphore(program, {prefetch_d_core}, 0);
+    const uint32_t prefetch_core_sem_0_id = tt_metal::CreateSemaphore(program, {prefetch_core}, 0);
+    const uint32_t prefetch_d_core_sem_0_id = tt_metal::CreateSemaphore(program, {prefetch_d_core}, 0);
+    TT_ASSERT(prefetch_core_sem_0_id == prefetch_d_core_sem_0_id);
     if (packetized_path_en_g) {
-        tt_metal::CreateSemaphore(program, {prefetch_relay_mux_core}, 0); // unused
-        tt_metal::CreateSemaphore(program, {prefetch_relay_demux_core}, 0); // unused
+        const uint32_t prefetch_relay_mux_core_sem_0_id = tt_metal::CreateSemaphore(program, {prefetch_relay_mux_core}, 0); // unused
+        const uint32_t prefetch_relay_demux_core_sem_0_id = tt_metal::CreateSemaphore(program, {prefetch_relay_demux_core}, 0); // unused
+        TT_ASSERT(prefetch_relay_mux_core_sem_0_id == prefetch_relay_demux_core_sem_0_id);
+        TT_ASSERT(prefetch_relay_mux_core_sem_0_id == prefetch_core_sem_0_id);
     }
-    constexpr uint32_t prefetch_downstream_cb_sem = 1;
-    uint32_t prefetch_downstream_buffer_pages = split_prefetcher_g ? prefetch_d_buffer_pages : dispatch_buffer_pages;
-    tt_metal::CreateSemaphore(program, {prefetch_core}, prefetch_downstream_buffer_pages);
-    tt_metal::CreateSemaphore(program, {prefetch_core}, prefetch_d_buffer_pages);
+    const uint32_t prefetch_sync_sem = prefetch_core_sem_0_id;
+
+    const uint32_t prefetch_downstream_buffer_pages = split_prefetcher_g ? prefetch_d_buffer_pages : dispatch_buffer_pages;
+    const uint32_t prefetch_core_sem_1_id = tt_metal::CreateSemaphore(program, {prefetch_core}, prefetch_downstream_buffer_pages);
     if (packetized_path_en_g) {
         // for the unpacketize stage, we use rptr/wptr for flow control, and poll semaphore
         // value only to update the rptr:
-        tt_metal::CreateSemaphore(program, {prefetch_relay_demux_core}, 0);
+        const uint32_t prefetch_relay_demux_core_sem_1_id = tt_metal::CreateSemaphore(program, {prefetch_relay_demux_core}, 0);
+        TT_ASSERT(prefetch_core_sem_1_id == prefetch_relay_demux_core_sem_1_id);
     }
+    const uint32_t prefetch_downstream_cb_sem = prefetch_core_sem_1_id;
 
-    constexpr uint32_t prefetch_d_upstream_cb_sem = 1;
-    constexpr uint32_t prefetch_d_downstream_cb_sem = 2;
+    const uint32_t prefetch_d_core_sem_1_id = tt_metal::CreateSemaphore(program, {prefetch_d_core}, 0);
+    const uint32_t prefetch_d_core_sem_2_id = tt_metal::CreateSemaphore(program, {prefetch_d_core}, dispatch_buffer_pages);
     if (packetized_path_en_g) {
-        tt_metal::CreateSemaphore(program, {prefetch_relay_mux_core}, 0);
+        const uint32_t prefetch_relay_mux_core_sem_1_id = tt_metal::CreateSemaphore(program, {prefetch_relay_mux_core}, 0);
+        TT_ASSERT(prefetch_d_core_sem_1_id == prefetch_relay_mux_core_sem_1_id);
     }
-    tt_metal::CreateSemaphore(program, {prefetch_d_core}, 0);
-    tt_metal::CreateSemaphore(program, {prefetch_d_core}, dispatch_buffer_pages);
+    const uint32_t prefetch_d_upstream_cb_sem = prefetch_d_core_sem_1_id;
+    const uint32_t prefetch_d_downstream_cb_sem = prefetch_d_core_sem_2_id;
 
-    constexpr uint32_t dispatch_sync_sem = 0;
-    constexpr uint32_t dispatch_cb_sem = 1;
-    constexpr uint32_t dispatch_downstream_cb_sem = 2;
-    tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
-    tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
-    tt_metal::CreateSemaphore(program, {dispatch_core}, dispatch_buffer_pages);
-    tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0); // unused
-    tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0); // unused
+    const uint32_t dispatch_core_sem_0_id = tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
+    const uint32_t dispatch_relay_demux_core_sem_0_id = tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0); // unused
+    TT_ASSERT(dispatch_core_sem_0_id == dispatch_relay_demux_core_sem_0_id);
+    const uint32_t dispatch_sync_sem = dispatch_core_sem_0_id;
+
+    const uint32_t dispatch_core_sem_1_id = tt_metal::CreateSemaphore(program, {dispatch_core}, 0); // 1
+    const uint32_t dispatch_relay_demux_core_sem_1_id = tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0); // unused
+    TT_ASSERT(dispatch_core_sem_1_id == dispatch_relay_demux_core_sem_1_id);
+    const uint32_t dispatch_cb_sem = dispatch_core_sem_1_id;
+
+    const uint32_t dispatch_core_sem_2_id = tt_metal::CreateSemaphore(program, {dispatch_core}, dispatch_buffer_pages);
     // for the unpacketize stage, we use rptr/wptr for flow control, and poll semaphore
     // value only to update the rptr:
-    tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0);
+    const uint32_t dispatch_relay_demux_core_sem_2_id = tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0);
+    TT_ASSERT(dispatch_core_sem_2_id == dispatch_relay_demux_core_sem_2_id);
+    const uint32_t dispatch_downstream_cb_sem = dispatch_core_sem_2_id;
 
-    constexpr uint32_t dispatch_h_cb_sem = 0;
-    tt_metal::CreateSemaphore(program, {dispatch_h_core}, 0);
-    tt_metal::CreateSemaphore(program, {dispatch_relay_mux_core}, 0);
+    const uint32_t dispatch_h_core_sem_0_id = tt_metal::CreateSemaphore(program, {dispatch_h_core}, 0);
+    const uint32_t dispatch_relay_mux_core_sem_0_id = tt_metal::CreateSemaphore(program, {dispatch_relay_mux_core}, 0);
+    TT_ASSERT(dispatch_h_core_sem_0_id == dispatch_relay_mux_core_sem_0_id);
+    const uint32_t dispatch_h_cb_sem = dispatch_h_core_sem_0_id;
 
     std::vector<uint32_t> prefetch_compile_args = {
         dispatch_buffer_base, // overridden below for prefetch_h
@@ -1641,6 +1652,11 @@ void configure_for_single_chip(Device *device,
         prefetch_downstream_cb_sem, // prefetch_d only
         dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
         dispatch_constants::PREFETCH_D_BUFFER_BLOCKS, // prefetch_d only
+        0, // unused: for prefetch_hd <--> dispatch_hd
+        0, // unused: for prefetch_hd <--> dispatch_hd
+        0, // unused: for prefetch_hd <--> dispatch_hd
+        0, // unused: for prefetch_hd <--> dispatch_hd
+        0, // unused: for prefetch_hd <--> dispatch_hd
     };
 
     constexpr NOC my_noc_index = NOC::NOC_0;
@@ -1659,7 +1675,6 @@ void configure_for_single_chip(Device *device,
         prefetch_compile_args[11] = prefetch_d_buffer_base;
         prefetch_compile_args[12] = prefetch_d_buffer_pages * (1 << dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
         prefetch_compile_args[13] = scratch_db_base;
-
         CoreCoord phys_prefetch_d_upstream_core =
             packetized_path_en_g ? phys_prefetch_relay_demux_core : phys_prefetch_core_g;
         configure_kernel_variant<true, false>(program,
@@ -1683,7 +1698,6 @@ void configure_for_single_chip(Device *device,
         prefetch_compile_args[11] = cmddat_q_base;
         prefetch_compile_args[12] = cmddat_q_size_g;
         prefetch_compile_args[13] = 0;
-
         CoreCoord phys_prefetch_h_downstream_core =
             packetized_path_en_g ? phys_prefetch_relay_mux_core : phys_prefetch_d_core;
         configure_kernel_variant<false, true>(program,
@@ -1890,7 +1904,12 @@ void configure_for_single_chip(Device *device,
          NOC_XY_ENCODING(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
          prefetch_downstream_cb_sem,
          prefetch_downstream_buffer_pages,
-         num_compute_cores // max_write_packed_cores
+         num_compute_cores, // max_write_packed_cores
+         0,
+         0,
+         0,
+         0,
+         0,
     };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
@@ -2201,47 +2220,61 @@ void configure_for_multi_chip(Device *device,
     tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, CQ_COMPLETION_READ_PTR);
     dirty_host_completion_buffer(host_hugepage_completion_buffer);
 
-    constexpr uint32_t prefetch_sync_sem = 0;
-
-    tt_metal::CreateSemaphore(program, {prefetch_core}, 0);
-    tt_metal::CreateSemaphore(program_r, {prefetch_d_core}, 0);
+    const uint32_t prefetch_core_sem_0_id = tt_metal::CreateSemaphore(program, {prefetch_core}, 0);
+    const uint32_t prefetch_d_core_sem_0_id = tt_metal::CreateSemaphore(program_r, {prefetch_d_core}, 0);
+    TT_ASSERT(prefetch_core_sem_0_id == prefetch_d_core_sem_0_id);
     if (packetized_path_en_g) {
-        tt_metal::CreateSemaphore(program, {prefetch_relay_mux_core}, 0); // unused
-        tt_metal::CreateSemaphore(program_r, {prefetch_relay_demux_core}, 0); // unused
+        const uint32_t prefetch_relay_mux_core_sem_0_id =
+            tt_metal::CreateSemaphore(program, {prefetch_relay_mux_core}, 0);  // unused
+        const uint32_t prefetch_relay_demux_core_sem_0_id =
+            tt_metal::CreateSemaphore(program_r, {prefetch_relay_demux_core}, 0);  // unused
+        TT_ASSERT(prefetch_relay_mux_core_sem_0_id == prefetch_relay_demux_core_sem_0_id);
+        TT_ASSERT(prefetch_relay_mux_core_sem_0_id == prefetch_core_sem_0_id);
     }
-    constexpr uint32_t prefetch_downstream_cb_sem = 1;
-    uint32_t prefetch_downstream_buffer_pages = split_prefetcher_g ? prefetch_d_buffer_pages : dispatch_buffer_pages;
-    tt_metal::CreateSemaphore(program, {prefetch_core}, prefetch_downstream_buffer_pages);
-    tt_metal::CreateSemaphore(program, {prefetch_core}, prefetch_d_buffer_pages);
+    const uint32_t prefetch_sync_sem = prefetch_core_sem_0_id;
+
+    const uint32_t prefetch_downstream_buffer_pages = split_prefetcher_g ? prefetch_d_buffer_pages : dispatch_buffer_pages;
+    const uint32_t prefetch_core_sem_1_id = tt_metal::CreateSemaphore(program, {prefetch_core}, prefetch_downstream_buffer_pages);
     if (packetized_path_en_g) {
         // for the unpacketize stage, we use rptr/wptr for flow control, and poll semaphore
         // value only to update the rptr:
-        tt_metal::CreateSemaphore(program_r, {prefetch_relay_demux_core}, 0);
+        const uint32_t prefetch_relay_demux_core_sem_1_id = tt_metal::CreateSemaphore(program_r, {prefetch_relay_demux_core}, 0);
+        TT_ASSERT(prefetch_core_sem_1_id == prefetch_relay_demux_core_sem_1_id);
     }
+    const uint32_t prefetch_downstream_cb_sem = prefetch_core_sem_1_id;
 
-    constexpr uint32_t prefetch_d_upstream_cb_sem = 1;
-    constexpr uint32_t prefetch_d_downstream_cb_sem = 2;
+    const uint32_t prefetch_d_core_sem_1_id = tt_metal::CreateSemaphore(program_r, {prefetch_d_core}, 0);
+    const uint32_t prefetch_d_core_sem_2_id =
+        tt_metal::CreateSemaphore(program_r, {prefetch_d_core}, dispatch_buffer_pages);
     if (packetized_path_en_g) {
-        tt_metal::CreateSemaphore(program, {prefetch_relay_mux_core}, 0);
+        const uint32_t prefetch_relay_mux_core_sem_1_id =
+            tt_metal::CreateSemaphore(program, {prefetch_relay_mux_core}, 0);
+        TT_ASSERT(prefetch_d_core_sem_1_id == prefetch_relay_mux_core_sem_1_id);
     }
-    tt_metal::CreateSemaphore(program_r, {prefetch_d_core}, 0);
-    tt_metal::CreateSemaphore(program_r, {prefetch_d_core}, dispatch_buffer_pages);
+    const uint32_t prefetch_d_upstream_cb_sem = prefetch_d_core_sem_1_id;
+    const uint32_t prefetch_d_downstream_cb_sem = prefetch_d_core_sem_2_id;
 
-    constexpr uint32_t dispatch_sync_sem = 0;
-    constexpr uint32_t dispatch_cb_sem = 1;
-    constexpr uint32_t dispatch_downstream_cb_sem = 2;
-    tt_metal::CreateSemaphore(program_r, {dispatch_core}, 0);
-    tt_metal::CreateSemaphore(program_r, {dispatch_core}, 0);
-    tt_metal::CreateSemaphore(program_r, {dispatch_core}, dispatch_buffer_pages);
-    tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0); // unused
-    tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0); // unused
+    const uint32_t dispatch_core_sem_0_id = tt_metal::CreateSemaphore(program_r, {dispatch_core}, 0);
+    const uint32_t dispatch_relay_demux_core_sem_0_id = tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0); // unused
+    TT_ASSERT(dispatch_core_sem_0_id == dispatch_relay_demux_core_sem_0_id);
+    const uint32_t dispatch_sync_sem = dispatch_core_sem_0_id;
+
+    const uint32_t dispatch_core_sem_1_id =tt_metal::CreateSemaphore(program_r, {dispatch_core}, 0);
+    const uint32_t dispatch_relay_demux_core_sem_1_id = tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0); // unused
+    TT_ASSERT(dispatch_core_sem_1_id == dispatch_relay_demux_core_sem_1_id);
+    const uint32_t dispatch_cb_sem = dispatch_core_sem_1_id;
+
+    const uint32_t dispatch_core_sem_2_id = tt_metal::CreateSemaphore(program_r, {dispatch_core}, dispatch_buffer_pages);
     // for the unpacketize stage, we use rptr/wptr for flow control, and poll semaphore
     // value only to update the rptr:
-    tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0);
+    const uint32_t dispatch_relay_demux_core_sem_2_id = tt_metal::CreateSemaphore(program, {dispatch_relay_demux_core}, 0);
+    TT_ASSERT(dispatch_core_sem_2_id == dispatch_relay_demux_core_sem_2_id);
+    const uint32_t dispatch_downstream_cb_sem = dispatch_core_sem_2_id;
 
-    constexpr uint32_t dispatch_h_cb_sem = 0;
-    tt_metal::CreateSemaphore(program, {dispatch_h_core}, 0);
-    tt_metal::CreateSemaphore(program_r, {dispatch_relay_mux_core}, 0);
+    const uint32_t dispatch_h_core_sem_0_id = tt_metal::CreateSemaphore(program, {dispatch_h_core}, 0);
+    const uint32_t dispatch_relay_mux_core_sem_0_id = tt_metal::CreateSemaphore(program_r, {dispatch_relay_mux_core}, 0);
+    TT_ASSERT(dispatch_h_core_sem_0_id == dispatch_relay_mux_core_sem_0_id);
+    const uint32_t dispatch_h_cb_sem = dispatch_h_core_sem_0_id;
 
     std::vector<uint32_t> prefetch_compile_args = {
         dispatch_buffer_base, // overridden below for prefetch_h
@@ -2265,6 +2298,11 @@ void configure_for_multi_chip(Device *device,
         prefetch_downstream_cb_sem, // prefetch_d only
         dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
         dispatch_constants::PREFETCH_D_BUFFER_BLOCKS, // prefetch_d only
+        0, // unused: for prefetch_d <--> dispatch_d
+        0, // unused: for prefetch_d <--> dispatch_d
+        0, // unused: for prefetch_d <--> dispatch_d
+        0, // unused: for prefetch_d <--> dispatch_d
+        0, // unused: for prefetch_d <--> dispatch_d
     };
 
     constexpr NOC my_noc_index = NOC::NOC_0;
@@ -2599,7 +2637,12 @@ void configure_for_multi_chip(Device *device,
          NOC_XY_ENCODING(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
          prefetch_downstream_cb_sem,
          prefetch_downstream_buffer_pages,
-         num_compute_cores
+         num_compute_cores,
+         0,
+         0,
+         0,
+         0,
+         0,
     };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;

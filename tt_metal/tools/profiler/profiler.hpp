@@ -29,10 +29,6 @@ namespace tt_metal {
 
 class DeviceProfiler {
     private:
-
-        // Recreate device side log file with header
-        bool new_log;
-
         // Device architecture
         tt::ARCH device_architecture;
 
@@ -108,8 +104,8 @@ class DeviceProfiler {
         // Device-core Syncdata
         std::map<CoreCoord, std::tuple<double,double,double>> device_core_sync_info;
 
-        //Set the device side file flag
-        void setNewLogFlag(bool new_log_flag);
+        //Freshen device logs
+        void freshDeviceLog();
 
         //Set the device architecture
         void setDeviceArchitecture(tt::ARCH device_arch);

@@ -68,9 +68,6 @@ def test_llama_decoder_inference(device, use_program_cache, reset_seeds):
         tt_decode_input = pt_decode_input.clone()
         current_pos = generation_start_pos + i
         current_pos_tensor = ttnn.from_torch(torch.tensor([current_pos] * batch), device=device, dtype=ttnn.int32)
-        current_pos_attn_tensor = ttnn.from_torch(
-            torch.tensor([current_pos] * batch * 8), device=device, dtype=ttnn.int32
-        )
 
         decode_input = prepare_inputs_ttnn(
             tt_decode_input,
@@ -79,7 +76,7 @@ def test_llama_decoder_inference(device, use_program_cache, reset_seeds):
         )
 
         # Run TT model
-        tt_out = tt_model(decode_input, current_pos_tensor, current_pos_attn_tensor, rot_mat=current_rot_mat)
+        tt_out = tt_model(decode_input, current_pos_tensor, rot_mat=current_rot_mat)
         tt_output_torch = (
             ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[: model_args.max_batch_size, :, :]
         )  # [seq, batch, hidden_dim]

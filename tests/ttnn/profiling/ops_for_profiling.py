@@ -2398,7 +2398,7 @@ def group_norm(x, y, z):
 
 
 def primary_moreh_groupnorm(x, y, z):
-    tt_lib.operations.primary.moreh_groupnorm(
+    ttnn.operations.moreh.group_norm(
         input=x, num_groups=4, eps=0.0001, gamma=y, beta=y, are_required_outputs=(True, True, True), mean=z, rstd=z
     )
 

@@ -81,9 +81,10 @@ class DeviceCommand {
     vector_memcpy_aligned<uint32_t> cmd_vector() const { return this->cmd_region_vector; }
 
     void add_dispatch_wait(
-        uint8_t barrier, uint32_t address, uint32_t count, uint8_t clear_count = 0, bool notify_prefetch = false, bool do_wait = true) {
+        uint8_t barrier, uint32_t address, uint32_t count, uint8_t clear_count = 0, bool notify_prefetch = false, bool do_wait = true, uint8_t dispatcher_type = 0) {
         auto initialize_wait_cmds = [&](CQPrefetchCmd *relay_wait, CQDispatchCmd *wait_cmd) {
             relay_wait->base.cmd_id = CQ_PREFETCH_CMD_RELAY_INLINE;
+            relay_wait->relay_inline.dispatcher_type = dispatcher_type;
             relay_wait->relay_inline.length = sizeof(CQDispatchCmd);
             relay_wait->relay_inline.stride = CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 
@@ -126,48 +127,6 @@ class DeviceCommand {
             this->memcpy(stall_cmd_dst, &stall_cmd, sizeof(CQPrefetchCmd));
         } else {
             initialize_stall_cmd(stall_cmd_dst);
-        }
-    }
-
-    void add_prefetch_wait_for_event(uint32_t event_id, uint32_t event_addr) {
-        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), this->pcie_alignment);
-        auto initialize_wait_cmd = [&](CQPrefetchCmd *wait_cmd) {
-            *wait_cmd = {};
-            wait_cmd->base.cmd_id = CQ_PREFETCH_CMD_WAIT_FOR_EVENT;
-            wait_cmd->event_wait.sync_event = event_id;
-            wait_cmd->event_wait.sync_event_addr = event_addr;
-        };
-        CQPrefetchCmd *wait_cmd_dst = this->reserve_space<CQPrefetchCmd *>(increment_sizeB);
-        if constexpr (hugepage_write) {
-            alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd wait_cmd;
-            initialize_wait_cmd(&wait_cmd);
-            this->memcpy(wait_cmd_dst, &wait_cmd, sizeof(CQPrefetchCmd));
-        } else {
-            initialize_wait_cmd(wait_cmd_dst);
-        }
-    }
-
-    void add_dispatch_write_remote(uint32_t data, uint32_t noc_xy_addr, uint32_t addr) {
-        auto initialize_cross_prefetch_write = [&](CQPrefetchCmd *relay_write, CQDispatchCmd *write_cmd) {
-            relay_write->base.cmd_id = CQ_PREFETCH_CMD_RELAY_INLINE;
-            relay_write->relay_inline.length = sizeof(CQDispatchCmd);
-            relay_write->relay_inline.stride = CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-            write_cmd->base.cmd_id = CQ_DISPATCH_CMD_REMOTE_WRITE;
-            write_cmd->write_from_remote.data = data;
-            write_cmd->write_from_remote.noc_xy_addr = noc_xy_addr;
-            write_cmd->write_from_remote.addr = addr;
-        };
-        CQPrefetchCmd *relay_write_dst = this->reserve_space<CQPrefetchCmd *>(sizeof(CQPrefetchCmd));
-        CQDispatchCmd *write_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
-
-        if constexpr (hugepage_write) {
-            alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd relay_write;
-            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd write_cmd;
-            initialize_cross_prefetch_write(&relay_write, &write_cmd);
-            this->memcpy(relay_write_dst, &relay_write, sizeof(CQPrefetchCmd));
-            this->memcpy(write_cmd_dst, &write_cmd, sizeof(CQDispatchCmd));
-        } else {
-            initialize_cross_prefetch_write(write_cmd_dst);
         }
     }
 
@@ -284,6 +243,46 @@ class DeviceCommand {
         }
     }
 
+    void add_dispatch_go_signal_mcast(uint32_t wait_count, uint8_t mcast_flag, uint32_t go_signal, uint32_t wait_addr, DispatcherSelect dispatcher_type) {
+        this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd), dispatcher_type);
+        auto initialize_mcast_cmd = [&](CQDispatchCmd *mcast_cmd) {
+            *mcast_cmd = {};
+            mcast_cmd->base.cmd_id = CQ_DISPATCH_CMD_SEND_GO_SIGNAL;
+            mcast_cmd->mcast.go_signal = go_signal;
+            mcast_cmd->mcast.wait_count = wait_count;
+            mcast_cmd->mcast.mcast_flag = mcast_flag;
+            mcast_cmd->mcast.wait_addr = wait_addr;
+        };
+        CQDispatchCmd *mcast_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
+
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd mcast_cmd;
+            initialize_mcast_cmd(&mcast_cmd);
+            this->memcpy(mcast_cmd_dst, &mcast_cmd, sizeof(CQDispatchCmd));
+        } else {
+            initialize_mcast_cmd(mcast_cmd_dst);
+        }
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+    }
+
+    void add_notify_dispatch_s_go_signal_cmd() {
+        // Command to have dispatch_master send a notification to dispatch_slave
+        this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd), DispatcherSelect::DISPATCH_MASTER);
+        auto initialize_sem_update_cmd = [&](CQDispatchCmd *sem_update_cmd) {
+            *sem_update_cmd = {};
+            sem_update_cmd->base.cmd_id = CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL;
+        };
+        CQDispatchCmd *dispatch_s_sem_update_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd dispatch_s_sem_update_cmd;
+            initialize_sem_update_cmd(&dispatch_s_sem_update_cmd);
+            this->memcpy(dispatch_s_sem_update_dst, &dispatch_s_sem_update_cmd, sizeof(CQDispatchCmd));
+        } else {
+            initialize_sem_update_cmd(dispatch_s_sem_update_dst);
+        }
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+    }
+
     template <bool inline_data = false>
     void add_dispatch_write_paged(
         bool flush_prefetch,
@@ -368,6 +367,26 @@ class DeviceCommand {
             initialize_exec_buf_cmd(exec_buf_cmd_dst);
         }
     }
+    void add_dispatch_set_unicast_only_cores(const std::vector<uint32_t>& noc_encodings, DispatcherSelect dispatcher_type) {
+        TT_ASSERT(noc_encodings.size());
+        this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd) + noc_encodings.size() * sizeof(uint32_t), dispatcher_type);
+        auto initialize_set_unicast_only_cores_cmd = [&] (CQDispatchCmd *set_unicast_only_cores_cmd) {
+            *set_unicast_only_cores_cmd = {};
+            set_unicast_only_cores_cmd->base.cmd_id = CQ_DISPATCH_SET_UNICAST_ONLY_CORES;
+            set_unicast_only_cores_cmd->set_unicast_only_cores.num_unicast_only_cores = noc_encodings.size();
+        };
+        CQDispatchCmd *set_unicast_only_cores_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd set_unicast_only_cores_cmd;
+            initialize_set_unicast_only_cores_cmd(&set_unicast_only_cores_cmd);
+            this->memcpy(set_unicast_only_cores_cmd_dst, &set_unicast_only_cores_cmd, sizeof(CQDispatchCmd));
+        } else {
+            initialize_set_unicast_only_cores_cmd(set_unicast_only_cores_cmd_dst);
+        }
+        uint32_t data_sizeB = noc_encodings.size() * sizeof(uint32_t);
+        uint32_t increment_sizeB = align(data_sizeB, PCIE_ALIGNMENT);
+        this->add_data(noc_encodings.data(), data_sizeB, increment_sizeB);
+    }
 
     void add_dispatch_set_write_offsets(uint32_t write_offset0, uint32_t write_offset1, uint32_t write_offset2) {
         this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd));
@@ -390,8 +409,8 @@ class DeviceCommand {
         this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
-    void add_dispatch_terminate() {
-        this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd));
+    void add_dispatch_terminate(DispatcherSelect dispatcher_type = DispatcherSelect::DISPATCH_MASTER) {
+        this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd), dispatcher_type);
         auto initialize_terminate_cmd = [&](CQDispatchCmd *terminate_cmd) {
             *terminate_cmd = {};
             terminate_cmd->base.cmd_id = CQ_DISPATCH_CMD_TERMINATE;
@@ -661,12 +680,13 @@ class DeviceCommand {
    private:
     static bool zero_init_enable;
 
-    void add_prefetch_relay_inline(bool flush, uint32_t lengthB) {
+    void add_prefetch_relay_inline(bool flush, uint32_t lengthB, DispatcherSelect dispatcher_type = DispatcherSelect::DISPATCH_MASTER) {
         if (!flush) {
             TT_ASSERT(lengthB <= (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE), "Data to relay for inline no flush must fit within one page");
         }
         auto initialize_relay_write = [&](CQPrefetchCmd *relay_write) {
             relay_write->base.cmd_id = flush ? CQ_PREFETCH_CMD_RELAY_INLINE : CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH;
+            relay_write->relay_inline.dispatcher_type = (uint8_t)(dispatcher_type);
             relay_write->relay_inline.length = lengthB;
             relay_write->relay_inline.stride = align(sizeof(CQPrefetchCmd) + lengthB, this->pcie_alignment);
         };
