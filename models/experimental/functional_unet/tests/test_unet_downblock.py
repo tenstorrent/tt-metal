@@ -115,5 +115,5 @@ def test_unet_downblock_multi_device(
 
     assert len(ttnn_output.devices()) == 2, "Expected output tensor to be sharded across 2 devices"
     assert len(ttnn_residual.devices()) == 2, "Expected residual output tensor to be sharded across 2 devices"
-    check_pcc_conv(torch_residual, ttnn_residual, mesh_composer=output_mesh_composer)
-    check_pcc_pool(torch_output, ttnn_output, mesh_composer=output_mesh_composer)
+    check_pcc_conv(torch_residual, ttnn_residual, pcc=0.999, mesh_composer=output_mesh_composer)
+    check_pcc_pool(torch_output, ttnn_output, pcc=0.999, mesh_composer=output_mesh_composer)

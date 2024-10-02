@@ -147,4 +147,4 @@ def test_unet_upblock_multi_device(
     ttnn_output = getattr(ttnn_model, block_name)(ttnn_input, ttnn_residual)
 
     assert len(ttnn_output.devices()) == 2, "Expected output tensor to be sharded across 2 devices"
-    check_pcc_conv(torch_output, ttnn_output, mesh_composer=output_mesh_composer, pcc=0.998)
+    check_pcc_conv(torch_output, ttnn_output, pcc=0.999, mesh_composer=output_mesh_composer)
