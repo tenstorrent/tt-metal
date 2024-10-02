@@ -4,6 +4,8 @@
 
 #include "moreh_adamw_device_operation.hpp"
 
+#include <optional>
+
 #include "tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -96,9 +98,11 @@ MorehAdamWDeviceOperation::tensor_return_value_t MorehAdamWDeviceOperation::crea
         result.push_back(tensor_args.max_exp_avg_sq_out.value());
     } else if (operation_attributes.amsgrad) {
         result.push_back(create_device_tensor(output_shapes.at(3), dtype, layout, device, memory_config));
+    } else {
+        result.push_back(std::nullopt);
     }
 
-    return std::move(result);
+    return result;
 }
 
 std::tuple<MorehAdamWDeviceOperation::operation_attributes_t, MorehAdamWDeviceOperation::tensor_args_t>
