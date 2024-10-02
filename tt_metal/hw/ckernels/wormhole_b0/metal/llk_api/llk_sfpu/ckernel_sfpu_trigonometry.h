@@ -21,41 +21,31 @@ static const float PI_2 = 1.5707964f;
 static const float FRAC_1_PI = 0.31830987f;
 
 template <bool APPROXIMATION_MODE>
-sfpi_inline vFloat sfpu_tangent_maclaurin_series(vFloat val)
+static vFloat sfpu_xcot(vFloat x);
+
+template <>
+sfpi_inline vFloat sfpu_xcot<true>(vFloat x)
 {
-    // Mclauren series
-    // tan(x) = x + (x^3)/3 + (2x^5)/15 + (17x^7)/315 + (62x^9)/2835 + (1382x^11)/155925 + (21844x^13)/6081075 + ...
+    x *= x;
 
-    vFloat tmp = val;
-    vFloat val_square = val * val;
+    return ((-0xf.28e58p-12f
+        * x - 0x4.f8cc1p-8f)
+        * x - 0x5.5b78b8p-4f)
+        * x + 0x1.00081cp+0f;
+}
 
-    // x
-    vFloat output = tmp;
-    // x^3/3
-    tmp = tmp * val_square;
-    output += 0.3333333333333333 * tmp;
-    // (2x^5)/15
-    tmp = tmp * val_square;
-    output += 0.13333333333333333 * tmp;
+template <>
+sfpi_inline vFloat sfpu_xcot<false>(vFloat x)
+{
+    x *= x;
 
-    //(17x^7)/315
-    tmp = tmp * val_square;
-    output += 0.05396825396825397 * tmp;
-
-    //(62x^9)/2835
-    tmp = tmp * val_square;
-    output += 0.021869488536155203 * tmp;
-
-	// (1382x^11)/155925
-    tmp = tmp * val_square;
-    output += 0.008863235529902197 * tmp;
-
-	// (21844x^13)/6081075
-	tmp = tmp * val_square;
-	output += 0.003592128036572481 * tmp;
-
-    // Write out output
-    return output;
+    return (((((-0x6.0847c8p-20f
+        * x - 0x7.19fff8p-20f)
+        * x - 0xf.a306ap-16f)
+        * x - 0x8.914dp-12f)
+        * x - 0x5.b10dcp-8f)
+        * x - 0x5.55538p-4f)
+        * x + 0xf.fffffp-4f;
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
@@ -66,10 +56,8 @@ inline void calculate_tangent()
     {
         vFloat v = dst_reg[0] * FRAC_1_PI;
         vInt whole_v = float_to_int16(v);
-        v -= int32_to_float(whole_v, 0);
-        v *= PI;
-        v = sfpu_tangent_maclaurin_series<APPROXIMATION_MODE>(v);
-        dst_reg[0] = v;
+        v = PI * (v - int32_to_float(whole_v, 0));
+        dst_reg[0] = v * sfpu_reciprocal<8>(sfpu_xcot<APPROXIMATION_MODE>(v));
         dst_reg++;
     }
 }
