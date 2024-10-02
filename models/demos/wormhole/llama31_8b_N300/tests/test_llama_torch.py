@@ -10,6 +10,7 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Trans
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 
 
+@torch.no_grad()
 def test_llama_torch_inference():
     iterations = 20
 
