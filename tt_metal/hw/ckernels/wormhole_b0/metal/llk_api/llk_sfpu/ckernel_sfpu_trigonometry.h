@@ -64,16 +64,10 @@ inline void calculate_tangent()
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++)
     {
-        vFloat v = dst_reg[0];
-        //Periodic, Range Reduction: To cover more input range
-        v_if(v > PI_2){
-            v = v - PI;
-        }v_elseif(v < -PI_2){
-            v = v + PI;
-        }v_else{
-            v = v;
-        }v_endif;
-
+        vFloat v = dst_reg[0] * FRAC_1_PI;
+        vInt whole_v = float_to_int16(v);
+        v -= int32_to_float(whole_v, 0);
+        v *= PI;
         v = sfpu_tangent_maclaurin_series<APPROXIMATION_MODE>(v);
         dst_reg[0] = v;
         dst_reg++;
