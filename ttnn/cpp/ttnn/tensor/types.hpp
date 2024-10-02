@@ -667,10 +667,12 @@ struct Shape {
     // It is used to flip the default value of operator[] to return the shape without padding
     tt::tt_metal::LegacyShape value;
 
-    explicit Shape(const tt::tt_metal::LegacyShape &shape) : value{shape} {}
+    Shape(const std::initializer_list<uint32_t> dimensions) : value{dimensions} {}
+
+    Shape(const tt::tt_metal::LegacyShape &shape) : value{shape} {}
 
     template <std::size_t Rank>
-    explicit Shape(const std::array<uint32_t, Rank> &shape) : value{shape} {}
+    Shape(const std::array<uint32_t, Rank> &shape) : value{shape} {}
 
     template <std::size_t Rank>
     explicit Shape(const std::array<uint32_t, Rank> &shape, const std::array<uint32_t, Rank> &shape_with_tile_padding) :
@@ -681,14 +683,24 @@ struct Shape {
         const std::array<uint32_t, Rank> &shape, const std::array<std::array<uint32_t, 2>, Rank> &tile_padding) :
         value{detail::compute_ttl_shape(shape, tile_padding)} {}
 
-    explicit Shape(const std::vector<uint32_t> &shape) : value{tt::tt_metal::LegacyShape{shape}} {}
+    Shape(const std::vector<uint32_t> &shape) : value{tt::tt_metal::LegacyShape{shape}} {}
 
     explicit Shape(const std::vector<uint32_t> &shape, const std::vector<uint32_t> &shape_with_tile_padding) :
         value{tt::tt_metal::LegacyShape{shape, shape_with_tile_padding}} {}
 
+    explicit Shape(const std::vector<uint32_t> &shape, const Padding &padding) :
+        value{tt::tt_metal::LegacyShape{shape, padding}} {}
+
+    explicit Shape(const Shape &shape, const Padding &padding) :
+        value{tt::tt_metal::LegacyShape{shape.value, padding}} {}
+
     const auto rank() const { return this->value.rank(); }
 
     const auto size() const { return this->rank(); }
+
+    const tt::tt_metal::Padding &padding() const { return this->value.padding(); }
+
+    const uint32_t get_normalized_index(std::int64_t index) const { return this->value.get_normalized_index(index); }
 
     Shape with_tile_padding() const {
         return Shape{tt::tt_metal::LegacyShape{this->value, tt::tt_metal::Padding{this->value.rank()}}};
@@ -722,7 +734,7 @@ struct Shape {
 
     bool operator!=(const Shape &other) const { return not(*this == other); }
 
-    const auto operator[](std::int64_t index) const { return this->value.without_padding()[index]; }
+    uint32_t operator[](std::int64_t index) const;
 
     const auto volume() const {
         auto rank = this->rank();
