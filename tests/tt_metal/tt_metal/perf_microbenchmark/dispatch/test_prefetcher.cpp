@@ -125,7 +125,7 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -hp: host huge page issue buffer size (default {})", DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE);
         log_info(LogTest, "  -pq: prefetch queue entries (default {})", DEFAULT_PREFETCH_Q_ENTRIES);
         log_info(LogTest, "  -cs: cmddat q size (default {})", DEFAULT_CMDDAT_Q_SIZE);
-        log_info(LogTest, "-pdcs: prefetch_d cmddat cb size (default {})", dispatch_constants::get(CoreType::WORKER).prefetch_d_buffer_size());
+        log_info(LogTest, "-pdcs: prefetch_d cmddat cb size (default {})", dispatch_constants::get(CoreType::WORKER, 1).prefetch_d_buffer_size());
         log_info(LogTest, "  -ss: scratch cb size (default {})", DEFAULT_SCRATCH_DB_SIZE);
         log_info(LogTest, " -pcies: size of data to transfer in pcie bw test type (default: {})", PCIE_TRANSFER_SIZE_DEFAULT);
         log_info(LogTest, " -dpgs: dram page size in dram bw test type (default: {})", DRAM_PAGE_SIZE_DEFAULT);
@@ -154,7 +154,7 @@ void init(int argc, char **argv) {
     pcie_transfer_size_g = test_args::get_command_option_uint32(input_args, "-pcies", PCIE_TRANSFER_SIZE_DEFAULT);
     dram_page_size_g = test_args::get_command_option_uint32(input_args, "-dpgs", DRAM_PAGE_SIZE_DEFAULT);
     dram_pages_to_read_g = test_args::get_command_option_uint32(input_args, "-dpgr", DRAM_PAGES_TO_READ_DEFAULT);
-    prefetch_d_buffer_size_g = test_args::get_command_option_uint32(input_args, "-pdcs", dispatch_constants::get(CoreType::WORKER).prefetch_d_buffer_size());
+    prefetch_d_buffer_size_g = test_args::get_command_option_uint32(input_args, "-pdcs", dispatch_constants::get(CoreType::WORKER, 1).prefetch_d_buffer_size());
 
     test_type_g = test_args::get_command_option_uint32(input_args, "-t", DEFAULT_TEST_TYPE);
     all_workers_g.end_coord.x = test_args::get_command_option_uint32(input_args, "-wx", all_workers_g.end_coord.x);
@@ -1514,7 +1514,7 @@ void configure_for_single_chip(Device *device,
                                uint32_t packetized_path_test_results_size) {
 
     const CoreType dispatch_core_type = CoreType::WORKER;
-    uint32_t dispatch_buffer_pages = dispatch_constants::get(dispatch_core_type).dispatch_buffer_block_size_pages() * dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS;
+    uint32_t dispatch_buffer_pages = dispatch_constants::get(dispatch_core_type, 1).dispatch_buffer_block_size_pages() * dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS;
     uint32_t num_compute_cores = device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
 
     CoreCoord prefetch_core = {0, 0};
@@ -1872,7 +1872,7 @@ void configure_for_single_chip(Device *device,
     std::vector<uint32_t> dispatch_compile_args = {
          dispatch_buffer_base,
          dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
-         dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS * dispatch_constants::get(dispatch_core_type).dispatch_buffer_block_size_pages(),
+         dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS * dispatch_constants::get(dispatch_core_type, 1).dispatch_buffer_block_size_pages(),
          dispatch_cb_sem, // overridden below for h
          split_prefetcher_g ? prefetch_d_downstream_cb_sem : prefetch_downstream_cb_sem, // overridden below for dispatch_h
          dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS,
@@ -2124,7 +2124,7 @@ void configure_for_multi_chip(Device *device,
                               uint32_t packetized_path_test_results_size) {
 
     const CoreType dispatch_core_type = CoreType::WORKER;
-    uint32_t dispatch_buffer_pages = dispatch_constants::get(dispatch_core_type).dispatch_buffer_block_size_pages() * dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS;
+    uint32_t dispatch_buffer_pages = dispatch_constants::get(dispatch_core_type, 1).dispatch_buffer_block_size_pages() * dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS;
     uint32_t num_compute_cores = device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
     TT_ASSERT(num_compute_cores == (device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y));
 
@@ -2581,7 +2581,7 @@ void configure_for_multi_chip(Device *device,
     std::vector<uint32_t> dispatch_compile_args = {
          dispatch_buffer_base,
          dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
-         dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS * dispatch_constants::get(dispatch_core_type).dispatch_buffer_block_size_pages(),
+         dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS * dispatch_constants::get(dispatch_core_type, 1).dispatch_buffer_block_size_pages(),
          dispatch_cb_sem, // overridden below for h
          split_prefetcher_g ? prefetch_d_downstream_cb_sem : prefetch_downstream_cb_sem,
          dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS,

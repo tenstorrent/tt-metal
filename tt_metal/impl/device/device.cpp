@@ -640,13 +640,14 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     auto mux_settings = std::get<1>(device_worker_variants[DispatchWorkerType::MUX][mux_index]);
 
                     uint32_t downstream_cb_base = mux_settings.cb_start_address + mux_settings.cb_size_bytes * mux_sem[mux_index];
+                    uint32_t downstream_cb_pages = mux_settings.cb_pages;
                     settings.upstream_cores.push_back(tt_cxy_pair(0, 0, 0));
                     settings.downstream_cores.push_back(mux_settings.worker_physical_core);
                     settings.compile_args.resize(23);
                     auto& compile_args = settings.compile_args;
                     compile_args[0]  = downstream_cb_base;
                     compile_args[1]  = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-                    compile_args[2]  = dispatch_constants::get(dispatch_core_type).mux_buffer_pages(num_hw_cqs);
+                    compile_args[2]  = downstream_cb_pages; //dispatch_constants::get(dispatch_core_type).mux_buffer_pages(num_hw_cqs);
                     compile_args[3]  = settings.producer_semaphore_id;
                     compile_args[4]  = mux_sem[mux_index];
                     compile_args[5]  = settings.issue_queue_start_addr;
@@ -1521,7 +1522,12 @@ void Device::setup_tunnel_for_remote_devices() {
                 settings.kernel_file = "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp";
                 //prefetch needs three semaphores.
                 settings.semaphores.push_back(0);
-                settings.semaphores.push_back(dispatch_constants::get(dispatch_core_type).mux_buffer_pages(num_hw_cqs));
+                if (tunnel.size() > 2) {
+                    //Galaxy
+                    settings.semaphores.push_back(dispatch_constants::get(dispatch_core_type).mux_buffer_pages(1));
+                } else {
+                    settings.semaphores.push_back(dispatch_constants::get(dispatch_core_type).mux_buffer_pages(num_hw_cqs));
+                }
                 settings.semaphores.push_back(0);
                 settings.producer_semaphore_id = 1;
                 tunnel_core_allocations[PREFETCH].push_back(std::make_tuple(prefetch_location, settings));
@@ -1584,6 +1590,7 @@ void Device::setup_tunnel_for_remote_devices() {
                     settings.kernel_file = "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp";
                     settings.cb_size_bytes = dispatch_constants::get(dispatch_core_type).mux_buffer_size(num_hw_cqs);
                     settings.cb_start_address = dispatch_constants::DISPATCH_BUFFER_BASE;
+                    settings.cb_pages = dispatch_constants::get(dispatch_core_type).mux_buffer_pages(num_hw_cqs);
                     tunnel_core_allocations[MUX].push_back(std::make_tuple(mux_location, settings));
 
                     tt_cxy_pair demux_location = dispatch_core_manager::instance().demux_core(device_id, channel, 0);
@@ -1600,6 +1607,7 @@ void Device::setup_tunnel_for_remote_devices() {
                     settings.kernel_file = "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp";
                     settings.cb_start_address = dispatch_constants::DISPATCH_BUFFER_BASE;
                     settings.cb_size_bytes = dispatch_constants::get(dispatch_core_type).mux_buffer_size(1);
+                    settings.cb_pages = dispatch_constants::get(dispatch_core_type).mux_buffer_pages(1);
                     tunnel_core_allocations[MUX].push_back(std::make_tuple(mux_location, settings));
                     if (num_prefetchers == 8) {
                         tt_cxy_pair mux_location = dispatch_core_manager::instance().mux_core(device_id, channel, 1);
