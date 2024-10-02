@@ -1088,8 +1088,8 @@ void Matmul::validate(
 
                         TT_FATAL(program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1, "Error");
                     }
-                    if (input_tensor_b.memory_config().is_sharded()) {
-                        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Operand B can only be interleaved or width sharded.");
+                    if (input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::L1 && input_tensor_b.memory_config().is_sharded()) {
+                        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Operand B can only be interleaved or L1 width sharded.");
                         TT_FATAL(program_config.per_core_N == (input_tensor_b.shard_spec().value().shape[1] / in1_tile_shape[1]), "Shard width must match per core N.");
                         if (optional_bias.has_value()) {
                             TT_FATAL(
