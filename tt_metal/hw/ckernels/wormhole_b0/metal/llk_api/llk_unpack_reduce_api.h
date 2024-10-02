@@ -35,15 +35,6 @@ inline void llk_unpack_reduce_hw_configure(
         unpA_num_faces,
         unpA_num_faces
     );
-
-    if constexpr (type != PoolType::MAX) {
-        union {
-            float f;
-            uint32_t u;
-        } f2u = {.f = const_mult};
-
-        for (uint i = 0; i < 16; i++) l1_buffer[i] = f2u.u;  // Load const into L1 buffer
-    }
 }
 
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en=false, StochRndType stoch_rnd_mode = StochRndType::None>
