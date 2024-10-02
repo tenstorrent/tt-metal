@@ -73,7 +73,7 @@ std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoor
 
 CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, CoreCoord &physical_core);
 
-void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg, uint64_t addr, bool send_go = true);
+void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg, go_msg_t * go_msg, uint64_t addr, bool send_go = true);
 
 void launch_erisc_app_fw_on_core(chip_id_t chip, CoreCoord core);
 

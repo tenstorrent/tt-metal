@@ -43,6 +43,7 @@ struct KernelGroup {
     uint32_t rta_sizes[DISPATCH_CLASS_MAX];
     uint32_t total_rta_size;
     launch_msg_t launch_msg;
+    go_msg_t go_msg;
 
     KernelGroup();
     KernelGroup(
@@ -249,6 +250,9 @@ class Program {
     uint32_t finalize_sems(uint32_t programmable_core_type_index, uint32_t base_offset);
     uint32_t finalize_cbs(uint32_t programmable_core_type_index, uint32_t base_offset);
     void set_launch_msg_sem_offsets();
+
+    bool runs_on_noc_unicast_only_cores();
+    bool runs_on_noc_multicast_only_cores();
 
     friend class HWCommandQueue;
     friend class EnqueueProgramCommand;

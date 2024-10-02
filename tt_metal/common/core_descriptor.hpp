@@ -69,6 +69,8 @@ inline const std::string get_product_name(tt::ARCH arch, uint32_t num_harvested_
 
 const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, const uint8_t num_hw_cqs, CoreType dispatch_core_type);
 
+const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(chip_id_t chip, uint8_t num_hw_cqs, CoreType dispatch_core_type);
+
 inline uint32_t get_l1_bank_size(chip_id_t device_id, const uint8_t num_hw_cqs, CoreType dispatch_core_type) {
     const core_descriptor_t &core_desc = get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_type);
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(device_id);

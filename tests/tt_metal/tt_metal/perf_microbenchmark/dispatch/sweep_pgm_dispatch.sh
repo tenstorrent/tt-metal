@@ -24,7 +24,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 51
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 1024 -n -t
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 2048 -n -t
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 4096 -n -t
-build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -n -t
+# build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -n -t
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 10240 -n -t
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 12880 -n -t
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 14336 -n -t
@@ -37,7 +37,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 51
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 1024 -b -t
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 2048 -b -t
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 4096 -b -t
-build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -b -t
+# build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -b -t
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 10240 -b -t
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 12880 -b -t
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 14336 -b -t
@@ -49,7 +49,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 51
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 1024 -b -n
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 2048 -b -n
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 4096 -b -n
-build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -b -n
+# build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -b -n
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 10240 -b -n
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 12880 -b -n
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 14336 -b -n
@@ -61,7 +61,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 51
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 1024 -n
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 2048 -n
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 4096 -n
-build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -n
+# build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -n
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 10240 -n
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 12880 -n
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 14336 -n
@@ -73,7 +73,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 51
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 1024
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 2048
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 4096
-build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192
+# build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 10240
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 12880
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 14336
@@ -85,7 +85,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 51
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 1024 -x $max_x -y $max_y
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 2048 -x $max_x -y $max_y
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 4096 -x $max_x -y $max_y
-build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -x $max_x -y $max_y
+# build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -x $max_x -y $max_y
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 10240 -x $max_x -y $max_y
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 12880 -x $max_x -y $max_y
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 14336 -x $max_x -y $max_y
@@ -109,7 +109,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 51
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 1024 -x $max_x -y $max_y -c 32
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 2048 -x $max_x -y $max_y -c 32
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 4096 -x $max_x -y $max_y -c 32
-build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -x $max_x -y $max_y -c 32
+# build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -x $max_x -y $max_y -c 32
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 10240 -x $max_x -y $max_y -c 32
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 12880 -x $max_x -y $max_y -c 32
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 14336 -x $max_x -y $max_y -c 32
@@ -121,7 +121,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 51
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 1024 -a 1
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 2048 -a 1
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 4096 -a 1
-build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -a 1
+# build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -a 1
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 10240 -a 1
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 12880 -a 1
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 14336 -a 1
@@ -133,7 +133,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 51
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 1024 -n -t -x $max_x -y $max_y -a 128
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 2048 -n -t -x $max_x -y $max_y -a 128
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 4096 -n -t -x $max_x -y $max_y -a 128
-build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -n -t -x $max_x -y $max_y -a 128
+# build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -n -t -x $max_x -y $max_y -a 128
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 10240 -n -t -x $max_x -y $max_y -a 128
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 12880 -n -t -x $max_x -y $max_y -a 128
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 14336 -n -t -x $max_x -y $max_y -a 128
@@ -145,7 +145,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 51
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 1024 -n -t -x $max_x -y $max_y -a 1
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 2048 -n -t -x $max_x -y $max_y -a 1
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 4096 -n -t -x $max_x -y $max_y -a 1
-build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -n -t -x $max_x -y $max_y -a 1
+# build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -n -t -x $max_x -y $max_y -a 1
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 10240 -n -t -x $max_x -y $max_y -a 1
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 12880 -n -t -x $max_x -y $max_y -a 1
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 14336 -n -t -x $max_x -y $max_y -a 1
@@ -157,7 +157,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 51
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 1024 -x $max_x -y $max_y -a 1
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 2048 -x $max_x -y $max_y -a 1
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 4096 -x $max_x -y $max_y -a 1
-build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -x $max_x -y $max_y -a 1
+# build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -x $max_x -y $max_y -a 1
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 10240 -x $max_x -y $max_y -a 1
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 12880 -x $max_x -y $max_y -a 1
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 14336 -x $max_x -y $max_y -a 1
@@ -169,7 +169,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 51
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 1024 -x $max_x -y $max_y -a 32
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 2048 -x $max_x -y $max_y -a 32
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 4096 -x $max_x -y $max_y -a 32
-build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -x $max_x -y $max_y -a 32
+# build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -x $max_x -y $max_y -a 32
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 10240 -x $max_x -y $max_y -a 32
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 12880 -x $max_x -y $max_y -a 32
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 14336 -x $max_x -y $max_y -a 32
@@ -181,7 +181,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 51
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 1024 -x $max_x -y $max_y -a 128
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 2048 -x $max_x -y $max_y -a 128
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 4096 -x $max_x -y $max_y -a 128
-build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -x $max_x -y $max_y -a 128
+# build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -x $max_x -y $max_y -a 128
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 10240 -x $max_x -y $max_y -a 128
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 12880 -x $max_x -y $max_y -a 128
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 14336 -x $max_x -y $max_y -a 128
@@ -193,7 +193,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 51
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 1024 -n -t -S 4
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 2048 -n -t -S 4
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 4096 -n -t -S 4
-build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -n -t -S 4
+# build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -n -t -S 4
 
 echo "###" sems all cores 1 processors
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 256 -n -t -x $max_x -y $max_y -S 4
@@ -201,7 +201,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 51
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 1024 -n -t -x $max_x -y $max_y -S 4
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 2048 -n -t -x $max_x -y $max_y -S 4
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 4096 -n -t -x $max_x -y $max_y -S 4
-build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -n -t -x $max_x -y $max_y -S 4
+# build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -n -t -x $max_x -y $max_y -S 4
 
 # Worst case
 echo "###" worst case
@@ -210,7 +210,7 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 51
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 1024 -x $max_x -y $max_y -S 4 -c 32 -a 128
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 2048 -x $max_x -y $max_y -S 4 -c 32 -a 128
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 4096 -x $max_x -y $max_y -S 4 -c 32 -a 128
-build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -x $max_x -y $max_y -S 4 -c 32 -a 128
+# build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -x $max_x -y $max_y -S 4 -c 32 -a 128
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 14336 -x $max_x -y $max_y -S 4 -c 32 -a 128
 
 # Kernel groups (perhaps even worse)
@@ -220,5 +220,5 @@ build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 51
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 1024 -x $max_x -y $max_y -kg $max_x
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 2048 -x $max_x -y $max_y -kg $max_x
 build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 4096 -x $max_x -y $max_y -kg $max_x
-build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -x $max_x -y $max_y -kg $max_x
+# build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 8192 -x $max_x -y $max_y -kg $max_x
 #build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch -w 5000 -s 14336 -x $max_x -y $max_y -kg $max_x

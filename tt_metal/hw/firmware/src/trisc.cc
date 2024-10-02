@@ -107,18 +107,18 @@ int main(int argc, char *argv[]) {
         while (*trisc_run != RUN_SYNC_MSG_GO);
         DeviceZoneScopedMainN("TRISC-FW");
 
-        uint32_t kernel_config_base = mailboxes->launch.kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
+        uint32_t kernel_config_base = mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
 
 #if !defined(UCK_CHLKC_MATH)
         uint32_t tt_l1_ptr *cb_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-            mailboxes->launch.kernel_config.cb_offset);
-        setup_cb_read_write_interfaces(cb_l1_base, 0, mailboxes->launch.kernel_config.max_cb_index, cb_init_read, cb_init_write, cb_init_write);
+            mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.cb_offset);
+        setup_cb_read_write_interfaces(cb_l1_base, 0, mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.max_cb_index, cb_init_read, cb_init_write, cb_init_write);
 #endif
 
         rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-            mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_TENSIX_COMPUTE].rta_offset);
+            mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.mem_map[DISPATCH_CLASS_TENSIX_COMPUTE].rta_offset);
         crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-            mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_TENSIX_COMPUTE].crta_offset);
+            mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.mem_map[DISPATCH_CLASS_TENSIX_COMPUTE].crta_offset);
 
         WAYPOINT("R");
         kernel_init();

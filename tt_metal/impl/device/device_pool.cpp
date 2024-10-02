@@ -115,7 +115,7 @@ void DevicePool::initialize(
     DispatchCoreType dispatch_core_type,
     const std::vector<uint32_t> &l1_bank_remap) noexcept {
     log_debug(tt::LogMetal, "DevicePool initialize");
-    tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_type);
+    tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_type, num_hw_cqs);
 
     if (_inst == nullptr) {
         static DevicePool device_pool(device_ids, num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap);
@@ -199,6 +199,11 @@ void DevicePool::activate_device(chip_id_t id) {
         const auto& dev = this->devices[id];
         log_debug(tt::LogMetal, "DevicePool re-initialize device {}", id);
         if (not dev->is_initialized()) {
+            if (dev->num_hw_cqs() != num_hw_cqs) {
+                // The dispatch core manager was reset, since the number of CQs was toggled.
+                // Account for chip specific idle eth dispatch cores.
+                dev->update_dispatch_cores_for_multi_cq_eth_dispatch();
+            }
             dev->initialize(num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap);
             if (!this->firmware_built_keys.contains(dev->build_key())) {
                 dev->build_firmware();

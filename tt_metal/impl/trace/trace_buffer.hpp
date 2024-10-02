@@ -17,6 +17,8 @@ namespace tt::tt_metal {
 namespace detail {
 struct TraceDescriptor {
     uint32_t num_completion_worker_cores = 0;
+    uint32_t num_traced_programs_needing_go_signal_multicast = 0;
+    uint32_t num_traced_programs_needing_go_signal_unicast = 0;
     std::vector<uint32_t> data;
 };
 }  // namespace detail

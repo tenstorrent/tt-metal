@@ -25,6 +25,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
     constexpr uint32_t num_proc_per_idle_eth_core = 1;
 
     std::vector<DeviceAddr> mem_map_bases;
+
     mem_map_bases.resize(utils::underlying_type<HalMemAddrType>(HalMemAddrType::COUNT));
     mem_map_bases[utils::underlying_type<HalMemAddrType>(HalMemAddrType::BARRIER)] = MEM_L1_BARRIER;
     mem_map_bases[utils::underlying_type<HalMemAddrType>(HalMemAddrType::LAUNCH)] = GET_IERISC_MAILBOX_ADDRESS_HOST(launch);
@@ -34,6 +35,8 @@ HalCoreInfoType create_idle_eth_mem_map() {
     mem_map_bases[utils::underlying_type<HalMemAddrType>(HalMemAddrType::KERNEL_CONFIG)] = IDLE_ERISC_L1_KERNEL_CONFIG_BASE;
     mem_map_bases[utils::underlying_type<HalMemAddrType>(HalMemAddrType::UNRESERVED)] = ERISC_L1_UNRESERVED_BASE;
     mem_map_bases[utils::underlying_type<HalMemAddrType>(HalMemAddrType::CORE_INFO)] = GET_IERISC_MAILBOX_ADDRESS_HOST(core_info);
+    mem_map_bases[utils::underlying_type<HalMemAddrType>(HalMemAddrType::GO_MSG)] = GET_IERISC_MAILBOX_ADDRESS_HOST(go_message);
+    mem_map_bases[utils::underlying_type<HalMemAddrType>(HalMemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = GET_IERISC_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);
 
     std::vector<uint32_t> mem_map_sizes;
     mem_map_sizes.resize(utils::underlying_type<HalMemAddrType>(HalMemAddrType::COUNT));
@@ -44,6 +47,8 @@ HalCoreInfoType create_idle_eth_mem_map() {
     mem_map_sizes[utils::underlying_type<HalMemAddrType>(HalMemAddrType::PROFILER)] = sizeof(profiler_msg_t);
     mem_map_sizes[utils::underlying_type<HalMemAddrType>(HalMemAddrType::KERNEL_CONFIG)] = L1_KERNEL_CONFIG_SIZE; // TODO: this is wrong, need idle eth specific value
     mem_map_sizes[utils::underlying_type<HalMemAddrType>(HalMemAddrType::UNRESERVED)] = MEM_ETH_SIZE - ERISC_L1_UNRESERVED_BASE;
+    mem_map_sizes[utils::underlying_type<HalMemAddrType>(HalMemAddrType::GO_MSG)] = sizeof(go_msg_t);
+    mem_map_sizes[utils::underlying_type<HalMemAddrType>(HalMemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(uint32_t);
 
     return {HalProgrammableCoreType::IDLE_ETH, CoreType::ETH, num_proc_per_idle_eth_core, mem_map_bases, mem_map_sizes, false};
 }

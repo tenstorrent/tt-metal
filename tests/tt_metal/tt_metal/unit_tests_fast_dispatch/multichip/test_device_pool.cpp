@@ -19,7 +19,8 @@ TEST_F(FDBasicFixture, DevicePoolOpenClose) {
     std::vector<chip_id_t> device_ids{0};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
-    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, DispatchCoreType::WORKER);
+    const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
+    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
     std::vector<tt_metal::Device *> devices = tt::DevicePool::instance().get_all_active_devices();
     for (const auto& dev: devices) {
       ASSERT_TRUE((int)(dev->get_l1_small_size()) == l1_small_size);
@@ -46,7 +47,8 @@ TEST_F(FDBasicFixture, DevicePoolReconfigDevices) {
     std::vector<chip_id_t> device_ids{0};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
-    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, DispatchCoreType::WORKER);
+    const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
+    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
     std::vector<Device *> devices = tt::DevicePool::instance().get_all_active_devices();
     for (const auto& dev: devices) {
       ASSERT_TRUE((int)(dev->get_l1_small_size()) == l1_small_size);
@@ -59,7 +61,7 @@ TEST_F(FDBasicFixture, DevicePoolReconfigDevices) {
         dev->close();
     }
     l1_small_size = 2048;
-    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, DispatchCoreType::WORKER);
+    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
     devices = tt::DevicePool::instance().get_all_active_devices();
     for (const auto& dev: devices) {
       ASSERT_TRUE((int)(dev->get_l1_small_size()) == l1_small_size);
@@ -77,7 +79,8 @@ TEST_F(FDBasicFixture, DevicePoolAddDevices) {
     std::vector<chip_id_t> device_ids{0};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
-    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, DispatchCoreType::WORKER);
+    const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
+    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
     std::vector<Device *> devices = tt::DevicePool::instance().get_all_active_devices();
     for (const auto& dev: devices) {
       ASSERT_TRUE((int)(dev->get_l1_small_size()) == l1_small_size);
@@ -90,7 +93,7 @@ TEST_F(FDBasicFixture, DevicePoolAddDevices) {
         dev->close();
     }
     device_ids = {0, 1, 2, 3};
-    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, DispatchCoreType::WORKER);
+    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
     devices = tt::DevicePool::instance().get_all_active_devices();
     ASSERT_TRUE(devices.size() >= 4);
     for (const auto& dev: devices) {
@@ -110,7 +113,8 @@ TEST_F(FDBasicFixture, DevicePoolReduceDevices) {
     std::vector<chip_id_t> device_ids{0, 1, 2, 3};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
-    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, DispatchCoreType::WORKER);
+    const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
+    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
     std::vector<Device *> devices = tt::DevicePool::instance().get_all_active_devices();
     for (const auto& dev: devices) {
       ASSERT_TRUE((int)(dev->get_l1_small_size()) == l1_small_size);
@@ -123,7 +127,7 @@ TEST_F(FDBasicFixture, DevicePoolReduceDevices) {
         dev->close();
     }
     device_ids = {0};
-    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, DispatchCoreType::WORKER);
+    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
     auto dev = tt::DevicePool::instance().get_active_device(0);
     ASSERT_TRUE(dev->id() == 0);
     ASSERT_TRUE((int)(dev->get_l1_small_size()) == l1_small_size);

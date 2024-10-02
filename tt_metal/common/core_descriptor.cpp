@@ -124,4 +124,25 @@ const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, const u
     return config_by_arch.at(arch).at(product_name).at(num_hw_cqs);
 }
 
+const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(chip_id_t chip, uint8_t num_hw_cqs, CoreType dispatch_core_type) {
+    // Get logical compute grid dimensions and num workers
+    static std::unordered_map<uint32_t, std::tuple<uint32_t, CoreRange>> physical_grid_config_cache = {};
+    // Unique hash generated based on the config that's being queried
+    uint32_t config_hash = ((uint8_t)(dispatch_core_type)) | (num_hw_cqs << 8) | (chip << 16);
+    if (physical_grid_config_cache.find(config_hash) == physical_grid_config_cache.end()) {
+        auto worker_grid = tt::get_compute_grid_size(chip, num_hw_cqs, dispatch_core_type);
+        std::size_t tensix_num_worker_cols = worker_grid.x;
+        std::size_t tensix_num_worker_rows = worker_grid.y;
+        uint32_t tensix_num_worker_cores = tensix_num_worker_cols * tensix_num_worker_rows;
+        const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip);
+        // Get physical compute grid range based on SOC Desc and Logical Coords
+        CoreCoord tensix_worker_start_phys = soc_desc.get_physical_core_from_logical_core(CoreCoord(0, 0), CoreType::WORKER); // Logical Worker Coords start at 0,0
+        CoreCoord tensix_worker_end_phys = soc_desc.get_physical_core_from_logical_core(CoreCoord(tensix_num_worker_cols - 1, tensix_num_worker_rows - 1), CoreType::WORKER);
+        CoreRange tensix_worker_physical_grid = CoreRange(tensix_worker_start_phys, tensix_worker_end_phys);
+        physical_grid_config_cache.insert({config_hash, std::make_tuple(tensix_num_worker_cores, tensix_worker_physical_grid)});
+    }
+    return physical_grid_config_cache.at(config_hash);
+
+}
+
 } // namespace tt

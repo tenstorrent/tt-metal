@@ -31,7 +31,9 @@ TEST(FastDispatchHostSuite, TestCannotAccessCommandQueueForClosedDevice) {
         GTEST_SKIP();
     }
     const unsigned int device_id = 0;
-    Device* device = CreateDevice(device_id);
+    const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
+    Device* device = tt::tt_metal::CreateDevice(device_id, tt::llrt::OptionsG.get_num_hw_cqs(), DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+
     EXPECT_NO_THROW(device->command_queue());
     CloseDevice(device);
     EXPECT_ANY_THROW(device->command_queue());

@@ -123,7 +123,9 @@ protected:
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
         const int device_id = 0;
-        this->device_ = tt::tt_metal::CreateDevice(device_id, num_hw_cqs, 0, buffer_size);;
+        const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
+        const chip_id_t mmio_device_id = 0;
+        this->device_ = tt::tt_metal::detail::CreateDevices({mmio_device_id}, 1, DEFAULT_L1_SMALL_SIZE, buffer_size, dispatch_core_type).at(mmio_device_id);
     }
 
     void TearDown() override {
