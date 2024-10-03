@@ -35,6 +35,7 @@ on:
           - eltwise.unary.exp2.exp2
           - eltwise.unary.expm1.expm1
           - eltwise.unary.tanh.tanh
+          - eltwise.unary.tanh.tanh_pytorch2
           - eltwise.unary.sign.sign
           - eltwise.unary.rad2deg.rad2deg
           - eltwise.unary.deg2rad.deg2rad
