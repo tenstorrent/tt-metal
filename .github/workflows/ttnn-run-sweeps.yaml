@@ -52,6 +52,7 @@ on:
           - eltwise.unary.i0.i0
           - eltwise.unary.silu.silu
           - eltwise.unary.glu.glu
+          - eltwise.unary.lgamma.lgamma
           - eltwise.unary.sigmoid.sigmoid
           - eltwise.unary.sigmoid_accurate.sigmoid_accurate
           - eltwise.binary.subtract.subtract
@@ -66,7 +67,6 @@ on:
           - eltwise.binary.bcast.bcast
           - eltwise.binary.fmod.fmod
           - eltwise.binary.logaddexp.logaddexp
-          - eltwise.binary.logaddexp2.logaddexp2
           - eltwise.binary.ldexp.ldexp
           - eltwise.binary.hypot.hypot
           - eltwise.composite.binary.addalpha.addalpha
