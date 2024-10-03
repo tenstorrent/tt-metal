@@ -69,6 +69,7 @@ on:
           - eltwise.unary.softmax
           - eltwise.unary.identity
           - eltwise.unary.neg
+          - eltwise.unary.sinh
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multiply
           - eltwise.binary.div.div
