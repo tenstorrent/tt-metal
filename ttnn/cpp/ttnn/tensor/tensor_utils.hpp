@@ -46,15 +46,6 @@ static std::size_t compute_volume(const tt::tt_metal::LegacyShape& shape) {
     return volume;
 }
 
-static std::size_t compute_volume(const ttnn::Shape& shape) {
-    size_t volume = 1;
-    const ttnn::Shape physical_shape = shape.with_tile_padding();
-    for (auto index = 0; index < physical_shape.size(); index++) {
-        volume *= shape[index];
-    }
-    return volume;
-}
-
 static std::vector<uint32_t> compute_strides(const tt::tt_metal::LegacyShape& shape) {
     if (shape.rank() == 0)
         return {};

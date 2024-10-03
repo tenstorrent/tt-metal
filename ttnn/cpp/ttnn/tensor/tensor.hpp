@@ -297,6 +297,8 @@ struct Tensor {
     const Layout &get_layout() const;
     const Tile &get_tile() const;
 
+    ttnn::JustShape get_logical_shape() const;
+
     // ======================================================================================
     // Non-Blocking Getters. Query attributes directly, without waiting for worker completion
     // ======================================================================================
@@ -321,7 +323,8 @@ struct Tensor {
     StorageType storage_type() const;
     const tt::tt_metal::LegacyShape strides() const;
     uint32_t volume() const;
-    uint32_t intended_volume() const;
+
+    bool is_scalar() const;
 
     bool is_allocated() const;
 

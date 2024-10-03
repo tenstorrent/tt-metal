@@ -662,6 +662,26 @@ static tt::tt_metal::LegacyShape compute_ttl_shape(
 
 }  // namespace detail
 
+
+class JustShape {
+public:
+    explicit JustShape(const std::vector<uint32_t> &shape) : value{shape} {}
+    explicit JustShape(std::vector<uint32_t> &&shape) : value{std::move(shape)} {}
+
+    const uint32_t operator[](std::int64_t index) const { return this->value[index]; }
+
+    uint32_t rank() const { return this->value.size(); }
+    uint32_t volume() const {
+        return std::accumulate(this->value.begin(), this->value.end(), 1, std::multiplies<uint32_t>());
+    }
+
+    auto cbegin() const { return this->value.cbegin(); }
+    auto cend() const { return this->value.cend(); }
+
+private:
+    std::vector<uint32_t> value;
+};
+
 struct Shape {
     // ttnn::Shape is a wrapper around tt::tt_metal::LegacyShape
     // It is used to flip the default value of operator[] to return the shape without padding
@@ -690,8 +710,18 @@ struct Shape {
 
     const auto size() const { return this->rank(); }
 
+    // Returns the padded shape, padding information is stripped
     Shape with_tile_padding() const {
         return Shape{tt::tt_metal::LegacyShape{this->value, tt::tt_metal::Padding{this->value.rank()}}};
+    }
+
+    // Returns the shape without padding, padding information is stipped
+    JustShape just_shape() const {
+        std::vector<uint32_t> values(this->rank());
+        for (auto i = 0; i < this->rank(); ++i) {
+            values.push_back(this->value[i]);
+        }
+        return JustShape(std::move(values));
     }
 
     bool has_tile_padding() const {
@@ -784,5 +814,6 @@ static std::ostream &operator<<(std::ostream &os, const Shape &shape) {
 }  // namespace types
 
 using types::Shape;
+using types::JustShape;
 
 }  // namespace ttnn
