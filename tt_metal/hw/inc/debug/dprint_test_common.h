@@ -33,11 +33,14 @@ inline void print_test_data() {
     cb_wait_front(tt::CB::c_in0, 1);
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
     // Since brisc is writing to the CB before printing, should look at read pointer
-    DPRINT << TSLICE(tt::CB::c_in0, 0, SliceRange::hw0_32_8(), TSLICE_RD_PTR);
-    DPRINT << TSLICE(tt::CB::c_in0, 0, SliceRange::hw0_32_4(), TSLICE_RD_PTR);
+    DPRINT << TSLICE(tt::CB::c_in0, 0, SliceRange::hw0_32_8(), TSLICE_INPUT_CB, TSLICE_RD_PTR);
+    DPRINT << TSLICE(tt::CB::c_in0, 0, SliceRange::hw0_32_4(), TSLICE_INPUT_CB, TSLICE_RD_PTR);
+    // This one has an unsupported data type, should show a warning instead of data
+    DPRINT << TSLICE(tt::CB::c_in1, 0, SliceRange::hw0_32_4(), TSLICE_INPUT_CB, TSLICE_RD_PTR);
 #else
     DPRINT << TSLICE(tt::CB::c_in0, 0, SliceRange::hw0_32_8());
     DPRINT << TSLICE(tt::CB::c_in0, 0, SliceRange::hw0_32_4());
+    DPRINT << TSLICE(tt::CB::c_in1, 0, SliceRange::hw0_32_4());
 #endif
 #endif
 }
