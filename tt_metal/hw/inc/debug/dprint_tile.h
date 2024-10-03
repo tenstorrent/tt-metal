@@ -38,6 +38,10 @@ struct SliceRange {
 // MAXCOUNT is the size of reserved space in the print buffer
 // if the total element count produced by the slice spec exceeds MAXCOUNT, it will be truncated
 //
+typedef bool dprint_tslice_ptr_t;
+#define TSLICE_RD_PTR true
+#define TSLICE_WR_PTR false
+
 template<int MAXCOUNT=32>
 struct TileSlice : TileSliceHostDev<MAXCOUNT> {
     static inline int min_(int a, int b) { return a < b ? a : b; } // to avoid inclusion of <algorithm>
@@ -53,16 +57,31 @@ struct TileSlice : TileSliceHostDev<MAXCOUNT> {
     // samples the tile using python style slice with strides [h0:h1:hs, w0:w1:ws]
     // endl_rows=false skips printing the endl in the end of row, so it's easier to visualize tall columns
 
-    __attribute__((__noinline__))
-    TileSlice(int cb, int itile, const SliceRange& s, bool endl_rows = true, bool print_untilized = true) {
+    __attribute__((__noinline__)) TileSlice(
+        int cb,
+        int itile,
+        const SliceRange& s,
+        // For NCRISC and BRISC, have access to both rd and wr ptr, let user choose w/ arg.
+#if defined(COMPILE_FOR_NCRISC)
+        dprint_tslice_ptr_t ptr_type = TSLICE_WR_PTR,
+#elif defined(COMPILE_FOR_BRISC)
+        dprint_tslice_ptr_t ptr_type = TSLICE_RD_PTR,
+#endif
+        bool endl_rows = true,
+        bool print_untilized = true) {
         // The math risc uses a different mechanism for syncing data, and as such doesn't have
         // access to CBs, so TileSlice printing is skipped on this risc.
         this->count_ = 0;
         volatile Tile* t;
-#if defined(UCK_CHLKC_PACK) || defined(COMPILE_FOR_NCRISC)
-        this->ptr_ = cb_interface[cb].fifo_wr_ptr<<4;
-#elif defined(UCK_CHLKC_UNPACK) || defined(COMPILE_FOR_BRISC)
-        this->ptr_ = cb_interface[cb].fifo_rd_ptr<<4;
+        // Pointer value depends on whether we're looking at read or write ptr
+#if defined(UCK_CHLKC_PACK)
+        this->ptr_ = cb_interface[cb].fifo_wr_ptr << 4; // PACK only has write pointer
+#elif defined(UCK_CHLKC_UNPACK)
+        this->ptr_ = cb_interface[cb].fifo_rd_ptr << 4; // UNPACK only has read pointer
+#elif defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+        // For BRISC/NCRISC, user chooses which pointer.
+        this->ptr_ =
+            (ptr_type == TSLICE_WR_PTR) ? cb_interface[cb].fifo_wr_ptr << 4 : cb_interface[cb].fifo_rd_ptr << 4;
 #else
         this->ptr_ = 0;
 #endif
