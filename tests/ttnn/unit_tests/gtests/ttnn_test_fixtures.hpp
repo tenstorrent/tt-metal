@@ -67,12 +67,7 @@ class T3kMultiDeviceFixture : public ::testing::Test {
         if (num_devices < 8 or arch != tt::ARCH::WORMHOLE_B0) {
             GTEST_SKIP() << "Skipping T3K Multi-Device test suite on non T3K machine.";
         }
-        constexpr auto DEFAULT_NUM_COMMAND_QUEUES = 1;
         mesh_device_ = MeshDevice::create(
-            DEFAULT_L1_SMALL_SIZE,
-            DEFAULT_TRACE_REGION_SIZE,
-            DEFAULT_NUM_COMMAND_QUEUES,
-            DispatchCoreType::WORKER,
             MeshDeviceConfig(MeshShape{2, 4}, MeshType::Ring));
     }
 

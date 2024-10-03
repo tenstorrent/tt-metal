@@ -27,7 +27,7 @@ struct MeshDeviceConfig {
 
     MeshDeviceConfig(
         const MeshShape &mesh_shape,
-        MeshType mesh_type = MeshType::RowMajor) :
+        MeshType mesh_type) :
         mesh_shape(mesh_shape),
         offset(MeshOffset{0, 0}),
         physical_device_ids(std::vector<chip_id_t>()),
@@ -174,11 +174,11 @@ class MeshDevice : public std::enable_shared_from_this<MeshDevice> {
 
     static std::shared_ptr<MeshDevice> fetch_mesh_device(const std::vector<Device*>& devices);
     static std::shared_ptr<MeshDevice> create(
-        size_t l1_small_size,
-        size_t trace_region_size,
-        size_t num_command_queues,
-        DispatchCoreType dispatch_core_type,
-        const MeshDeviceConfig &config);
+        const MeshDeviceConfig &config,
+        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+        size_t num_command_queues = 1,
+        DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER);
 };
 
 std::ostream &operator<<(std::ostream &os, const MeshDevice &mesh_device);

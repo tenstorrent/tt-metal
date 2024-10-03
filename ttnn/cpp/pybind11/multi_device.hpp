@@ -37,13 +37,12 @@ void py_module(py::module& module) {
                         const std::pair<size_t, size_t>& offset,
                         const std::vector<chip_id_t>& physical_device_ids,
                         MeshType mesh_type) {
-                auto config = MeshDeviceConfig(mesh_device_shape, offset, physical_device_ids, mesh_type);
                 return MeshDevice::create(
+                    MeshDeviceConfig(mesh_device_shape, offset, physical_device_ids, mesh_type),
                     l1_small_size,
                     trace_region_size,
                     num_command_queues,
-                    dispatch_core_type,
-                    config);
+                    dispatch_core_type);
             }),
             py::kw_only(),
             py::arg("mesh_shape"),
