@@ -14,6 +14,7 @@ on:
           - ccl.line_all_gather
           - ccl.all_gather_n300
           - eltwise.unary.relu.relu
+          - eltwise.unary.relu.relu_pytorch2
           - eltwise.unary.gelu.gelu
           - eltwise.unary.cos.cos
           - eltwise.unary.sin.sin
