@@ -162,34 +162,17 @@ FORCE_INLINE void bias_add(bool is_scalar_bias) {
 
     tile_regs_acquire();
     if (is_scalar_bias) {
-<<<<<<< HEAD
 #if defined FP32_DEST_ACC_EN
-        unpack_reconfig_data_format(cb_intermed3, bias_cb_id);
-        math_reconfig_data_format(cb_intermed3, bias_cb_id);
+        reconfig_data_format(cb_intermed3, bias_cb_id);
 #endif
         add_bcast_scalar_init_short(cb_intermed3, bias_cb_id);
         add_tiles_bcast_scalar(cb_intermed3, bias_cb_id, 0, 0, 0);
     } else {
 #if defined FP32_DEST_ACC_EN
-        unpack_reconfig_data_format(cb_intermed3, bias_cb_id);
-        math_reconfig_data_format(cb_intermed3, bias_cb_id);
+        reconfig_data_format(cb_intermed3, bias_cb_id);
 #endif
         add_bcast_rows_init_short(cb_intermed3, bias_cb_id);
->>>>>>> #11962: Split hw re(config) between unpack and math threads
-=======
-        #if defined FP32_DEST_ACC_EN
-            reconfig_data_format(cb_intermed0, bias_cb_id);
-        #endif
-        add_bcast_scalar_init_short(cb_intermed0, bias_cb_id);
-        add_tiles_bcast_scalar(cb_intermed0, bias_cb_id, 0, 0, 0);
-    }
-    else {
-        #if defined FP32_DEST_ACC_EN
-            reconfig_data_format(cb_intermed0, bias_cb_id);
-        #endif
-        add_bcast_rows_init_short(cb_intermed0, bias_cb_id);
-        add_tiles_bcast_rows(cb_intermed0, bias_cb_id, 0, 0, 0);
->>>>>>> #11962: create joined api call for unpack/math reconfig
+        add_tiles_bcast_rows(cb_intermed3, bias_cb_id, 0, 0, 0);
     }
     tile_regs_commit();
 

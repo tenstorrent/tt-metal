@@ -606,7 +606,7 @@ void MAIN {
             reconfig_data_format(cb_out_accumulate_im, cb_cur_sum); // DEBUG
             pack_reconfig_data_format(cb_out_accumulate_im);
             mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_cur_sum, Sq_chunk_t, DHt);
-            reconfig_data_format(cb_out_final);
+            pack_reconfig_data_format(cb_out_final);
             copy_block(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
 
             // free up cb_prev_max after K chunks
