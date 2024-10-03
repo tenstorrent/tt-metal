@@ -2397,6 +2397,8 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
     this->initialize_cluster();
     this->initialize_allocator(l1_small_size, trace_region_size, l1_bank_remap);
     this->initialize_build();
+    // Reset the launch_message ring buffer state seen on host, since its reset on device, each time FW is initialized
+    this->worker_launch_message_buffer_state.reset();
     // For minimal setup, don't initialize FW, watcher, dprint. They won't work if we're attaching to a hung chip.
     if (minimal)
         return true;

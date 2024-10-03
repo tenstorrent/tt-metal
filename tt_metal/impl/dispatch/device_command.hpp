@@ -368,7 +368,8 @@ class DeviceCommand {
         }
     }
     void add_dispatch_set_unicast_only_cores(const std::vector<uint32_t>& noc_encodings, DispatcherSelect dispatcher_type) {
-        TT_ASSERT(noc_encodings.size());
+        // noc_encodings are only populated if the device has active ethernet links. For devices such as Grayskull and N150, which
+        // don't have active ethernet links, this is essentially a NOP (command with empty payload).
         this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd) + noc_encodings.size() * sizeof(uint32_t), dispatcher_type);
         auto initialize_set_unicast_only_cores_cmd = [&] (CQDispatchCmd *set_unicast_only_cores_cmd) {
             *set_unicast_only_cores_cmd = {};

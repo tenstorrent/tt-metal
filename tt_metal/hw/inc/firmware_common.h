@@ -70,17 +70,18 @@ uint32_t firmware_config_init(tt_l1_ptr mailboxes_t* const mailboxes, uint32_t c
 
     // TODO: check the asm for this loop to be sure loads are scheduled ok
     uint32_t kernel_config_base[ProgrammableCoreType::COUNT];
+    launch_msg_t* launch_msg_address = &(mailboxes->launch[mailboxes->launch_msg_rd_ptr]);
 #pragma GCC unroll ProgrammableCoreType::COUNT
     for (uint32_t index = 0; index < ProgrammableCoreType::COUNT; index++) {
         kernel_config_base[index] =
-            mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_config_base[index];
+            launch_msg_address->kernel_config.kernel_config_base[index];
         sem_l1_base[index] = (uint32_t tt_l1_ptr *)(kernel_config_base[index] +
-            mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.sem_offset[index]);
+            launch_msg_address->kernel_config.sem_offset[index]);
     }
     rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base[core_type_index] +
-        mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.mem_map[dispatch_class].rta_offset);
+        launch_msg_address->kernel_config.mem_map[dispatch_class].rta_offset);
     crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base[core_type_index] +
-        mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.mem_map[dispatch_class].crta_offset);
+        launch_msg_address->kernel_config.mem_map[dispatch_class].crta_offset);
 
     return kernel_config_base[core_type_index];
 }

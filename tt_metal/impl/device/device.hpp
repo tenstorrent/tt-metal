@@ -283,6 +283,7 @@ class Device {
     WorkExecutor work_executor;
     uint32_t worker_thread_core;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
+    LaunchMessageRingBufferState worker_launch_message_buffer_state;
     uint8_t num_hw_cqs_;
 
     std::vector<std::unique_ptr<Program>> command_queue_programs;

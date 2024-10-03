@@ -749,3 +749,39 @@ class SystemMemoryManager {
     WorkerConfigBufferMgr& get_config_buffer_mgr() { return config_buffer_mgr; }
 
 };
+
+struct LaunchMessageRingBufferState {
+    public:
+    void inc_mcast_wptr(uint32_t inc_val) {
+        this->multicast_cores_launch_message_wptr = (this->multicast_cores_launch_message_wptr + inc_val) & (launch_msg_buffer_num_entries - 1);
+    }
+
+    void inc_unicast_wptr(uint32_t inc_val) {
+        this->unicast_cores_launch_message_wptr = (this->unicast_cores_launch_message_wptr + inc_val) & (launch_msg_buffer_num_entries - 1);
+    }
+
+    void set_mcast_wptr(uint32_t val) {
+        this->multicast_cores_launch_message_wptr = val & (launch_msg_buffer_num_entries - 1);
+    }
+
+    void set_unicast_wptr(uint32_t val) {
+        this->unicast_cores_launch_message_wptr = val & (launch_msg_buffer_num_entries - 1);
+    }
+
+    uint32_t get_mcast_wptr() {
+        return this->multicast_cores_launch_message_wptr;
+    }
+
+    uint32_t get_unicast_wptr() {
+        return this->unicast_cores_launch_message_wptr;
+    }
+
+    void reset() {
+        this->multicast_cores_launch_message_wptr = 0;
+        this->unicast_cores_launch_message_wptr = 0;
+    }
+
+    private:
+    uint32_t multicast_cores_launch_message_wptr = 0;
+    uint32_t unicast_cores_launch_message_wptr = 0;
+};

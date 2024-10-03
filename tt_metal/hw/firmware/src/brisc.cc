@@ -340,7 +340,7 @@ int main() {
     l1_to_local_mem_copy((uint*)__ldm_data_start, (uint tt_l1_ptr*)MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH, num_words);
 
     mailboxes->launch_msg_rd_ptr = 0; // Initialize the rdptr to 0
-
+    noc_index = 0;
     risc_init();
     device_setup();
     noc_init();
@@ -370,6 +370,9 @@ int main() {
             if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
                 // Set the rd_ptr on workers to specified value
                 mailboxes->launch_msg_rd_ptr = 0;
+                // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently guaranteed
+                // to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid value.
+                // For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC txn is not issued.
                 uint64_t dispatch_addr =
                     NOC_XY_ADDR(NOC_X(mailboxes->go_message.master_x),
                     NOC_Y(mailboxes->go_message.master_y), DISPATCH_MESSAGE_ADDR);
