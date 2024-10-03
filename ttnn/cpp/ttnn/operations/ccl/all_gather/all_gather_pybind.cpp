@@ -102,11 +102,18 @@ void py_bind_all_gather(pybind11::module& module) {
             ttnn.Tensor: the output tensor.
 
         Example:
-
-            >>> device_id = 0
-            >>> device = ttnn.open_device(device_id=device_id)
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.all_gather(tensor, dim=0, topology=ttnn.Topology.Linear)
+            >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
+            >>> physical_device_ids = ttnn.get_t3k_physical_device_ids_ring()
+            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), physical_device_ids=physical_device_ids[:8])
+            >>> ttnn_tensor = ttnn.from_torch(
+                            full_tensor,
+                            dtype=input_dtype,
+                            device=mesh_device,
+                            layout=layout,
+                            memory_config=mem_config,
+                            mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
+            >>> ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
+            >>> output = ttnn.all_gather(ttnn_tensor, dim=0, topology=ttnn.Topology.Ring)
 
         )doc");
 }
