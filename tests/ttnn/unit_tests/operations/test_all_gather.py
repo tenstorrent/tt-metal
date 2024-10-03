@@ -32,7 +32,7 @@ def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, in
     for i in input_shape:
         tensor_size_bytes *= i
     num_l1_banks = 64
-    if mem_config.buffer_type == ttnn.BufferType.L1 and tensor_size_bytes > num_l1_banks * 50 * 1024:
+    if mem_config.buffer_type == ttnn.BufferType.L1 and tensor_size_bytes > (num_l1_banks * 256 * 1024):
         return True, "L1 buffer can't support large tensor sizes"
 
     # Check that each chip has a non-zero amount of data available
