@@ -9,6 +9,7 @@ import ttnn
 class Conv:
     def __init__(
         self,
+        input_params,
         conv_params,
         parameters,
         *,
@@ -34,6 +35,7 @@ class Conv:
         self.shard_layout = (
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         )
+        self.input_params = input_params
 
     def __call__(self, device, input_tensor):
         conv_config = ttnn.Conv2dConfig(
@@ -56,32 +58,34 @@ class Conv:
             input_tensor=input_tensor,
             weight_tensor=self.weights,
             bias_tensor=self.bias,
-            in_channels=input_tensor.shape[3],
+            in_channels=self.input_params[3],
             out_channels=self.out_channels,
             device=device,
             kernel_size=self.kernel_size,
             stride=(self.conv_params[0], self.conv_params[1]),
             padding=(self.conv_params[2], self.conv_params[3]),
-            batch_size=input_tensor.shape[0],
-            input_height=input_tensor.shape[1],
-            input_width=input_tensor.shape[2],
+            batch_size=self.input_params[0],
+            input_height=self.input_params[1],
+            input_width=self.input_params[2],
             conv_config=conv_config,
             groups=self.groups,
         )
-        output_tensor = ttnn.from_device(output_tensor)  # commenting this works good until encoder3
-        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # output_tensor = ttnn.from_device(output_tensor)  # commenting this works good until encoder3
+        # output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-        output_tensor = ttnn.reshape(
-            output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[3])
-        )
-        if output_tensor.shape[-1] == 1:
-            output_tensor = ttnn.to_torch(output_tensor)  # should check this by padding
-            # output_tensor=output_tensor.permute(0,3,1,2)
-            # output_tensor=ttnn.from_torch(output_tensor,dtype=ttnn.bfloat16)
-            # output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
-            # output_tensor = ttnn.to_device(output_tensor, device=device)
-        else:
-            output_tensor = ttnn.to_device(output_tensor, device=device)  # commenting this works good until encoder3
+        # output_tensor = ttnn.reshape(
+        #     output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[3])
+        # )
+        # if output_tensor.shape[-1] == 1:
+        #     output_tensor = ttnn.to_torch(output_tensor)  # should check this by padding
+        #     # output_tensor=output_tensor.permute(0,3,1,2)
+        #     # output_tensor=ttnn.from_torch(output_tensor,dtype=ttnn.bfloat16)
+        #     # output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
+        #     # output_tensor = ttnn.to_device(output_tensor, device=device)
+        # else:
+        #     output_tensor = ttnn.to_device(output_tensor, device=device)  # commenting this works good until encoder3
         del _out_height, _out_width
+        ttnn.deallocate(self.weights)
+        ttnn.deallocate(self.bias)
 
         return output_tensor

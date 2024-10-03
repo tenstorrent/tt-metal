@@ -152,9 +152,9 @@ def test_unet(device, reset_seeds, model_location_generator):
 
     ttnn_output = ttnn_model(device, ttnn_input_tensor)
 
-    # ttnn_output = ttnn.from_device(ttnn_output)
-    # ttnn_output = ttnn.to_layout(ttnn_output, ttnn.ROW_MAJOR_LAYOUT)
-    # ttnn_output = ttnn.to_torch(ttnn_output)
+    ttnn_output = ttnn.from_device(ttnn_output)
+    ttnn_output = ttnn.to_layout(ttnn_output, ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.permute(0, 3, 1, 2)
 
-    assert_with_pcc(torch_output_tensor, ttnn_output, pcc=0.93)
+    assert_with_pcc(torch_output_tensor, ttnn_output, pcc=0.96)
