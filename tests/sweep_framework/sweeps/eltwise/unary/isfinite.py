@@ -35,14 +35,6 @@ parameters = {
 }
 
 
-# def mesh_device_fixture():
-#     device = ttnn.open_device(device_id=0)
-#     assert ttnn.device.is_wormhole_b0(device), "This op is available for Wormhole_B0 only"
-#     yield (device, "Wormhole_B0")
-#     ttnn.close_device(device)
-#     del device
-
-
 # This is the run instructions for the test, defined by the developer.
 # The run function must take the above-defined parameters as inputs.
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
