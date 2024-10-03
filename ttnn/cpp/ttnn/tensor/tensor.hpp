@@ -22,6 +22,7 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/device/mesh_device.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
+#include "types.hpp"
 
 namespace tt {
 
@@ -298,6 +299,8 @@ struct Tensor {
     const Tile &get_tile() const;
 
     ttnn::SimpleShape get_logical_shape() const;
+    ttnn::SimpleShape get_padded_shape() const;
+    tt::tt_metal::Padding get_padding() const;
 
     // ======================================================================================
     // Non-Blocking Getters. Query attributes directly, without waiting for worker completion

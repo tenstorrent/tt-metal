@@ -1493,7 +1493,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     // all_dimensions = False
     Tensor updated_grad = prod_result;
     auto step = std::vector<uint32_t>({1, 1, 1, 1});
-    if (prod_result.get_legacy_shape().without_padding() != grad.get_legacy_shape()) {
+    if (prod_result.get_logical_shape() != grad.get_padded_shape()) {
         if (dim == 3 || dim == -1) {
             std::vector<int64_t> after_permute_dims = {0, 3, 1, 2};
             Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);

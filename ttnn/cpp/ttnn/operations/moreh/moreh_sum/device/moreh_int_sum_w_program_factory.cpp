@@ -29,7 +29,7 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format{datatype_to_dataformat_converter(output.get_dtype())};
-    const auto shape{input.get_legacy_shape()};
+    const auto shape{input.get_padded_shape()};
 
     const auto [W, H, other_dims_product] = tt::operations::primary::extract_spatial_dims(shape);
     uint32_t Wt{W / tt::constants::TILE_WIDTH};
@@ -38,7 +38,7 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
     auto num_rows{other_dims_product * Ht};
 
     // check mask for w-dim
-    const auto input_shape_without_padding{shape.without_padding()};
+    const auto input_shape_without_padding{input.get_logical_shape()};
     const auto origin_W{input_shape_without_padding[-1]};
     const bool do_mask_w{(origin_W % tt::constants::TILE_WIDTH) != 0};
     const auto mask_w{do_mask_w ? origin_W % tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH};

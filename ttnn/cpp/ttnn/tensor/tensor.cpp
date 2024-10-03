@@ -523,6 +523,14 @@ ttnn::SimpleShape Tensor::get_logical_shape() const {
     return this->get_shape().logical_shape();
 }
 
+ttnn::SimpleShape Tensor::get_padded_shape() const {
+    return this->get_shape().padded_shape();
+}
+
+tt::tt_metal::Padding Tensor::get_padding() const {
+    return this->get_legacy_shape().padding();
+}
+
 Tensor create_device_tensor(
     const tt::tt_metal::LegacyShape& shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config, const std::optional<Tile>& tile) {
     ZoneScoped;

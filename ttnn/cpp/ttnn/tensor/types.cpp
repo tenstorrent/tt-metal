@@ -160,6 +160,18 @@ const LegacyShape LegacyShape::without_padding() const {
     return LegacyShape(shape_without_padding);
 }
 
+ttnn::SimpleShape LegacyShape::logical_shape() const
+{
+    const LegacyShape logical = without_padding();
+
+    std::vector<uint32_t> values;
+    values.reserve(this->rank());
+    for (size_t i = 0; i < this->rank(); ++i) {
+        values.push_back(logical[i]);
+    }
+    return ttnn::SimpleShape(std::move(values));
+}
+
 const uint32_t LegacyShape::get_normalized_index(std::int64_t index) const {
     std::int64_t rank = static_cast<std::int64_t>(this->rank_);
     std::uint64_t normalized_index = index >= 0 ? index : rank + index;

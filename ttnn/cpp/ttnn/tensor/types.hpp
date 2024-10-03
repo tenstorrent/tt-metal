@@ -9,6 +9,7 @@
 #include <optional>
 #include <variant>
 #include <vector>
+#include <algorithm>
 
 #include "common/bfloat16.hpp"
 #include "tt_metal/common/core_coord.h"
@@ -18,6 +19,79 @@
 #include "tt_metal/tt_stl/reflection.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/cpp/ttnn/tensor/enum_types.hpp"
+
+namespace ttnn {
+    /**
+SimpleShape is a temporary measure aimed at making a clear distinction between Shape/LegacyShape when padding information is stripped.
+Context:
+    Both Shape and LegacyShape can carry padding information.
+    And we use Shape or LegacyShape to carry full shape info or separately logical or physical shape.
+    Absence of distinction between full shape and logical shape leads to confusion and makes further refactoring harder.
+Plan:
+    We want to replace `Shape Shape::with_tile_padding() const` with `SimpleShape padded_shape() const`
+    We will clearly see where full shape is used vs logical or physical shape is used.
+    Need to split .hpp and .cpp
+**/
+class SimpleShape {
+public:
+    explicit SimpleShape(const std::vector<uint32_t> &shape) : value{shape} {}
+    explicit SimpleShape(std::vector<uint32_t> &&shape) : value{std::move(shape)} {}
+
+    template<std::size_t N>
+    bool operator==(const std::array<uint32_t, N> &other) const {
+        bool sameSize = value.size() == N;
+        return sameSize && std::equal(value.begin(), value.end(), other.begin());
+    }
+
+    bool operator==(const SimpleShape &other) const { return this->value == other.value; }
+    bool operator==(const std::vector<uint32_t> &other) const { return this->value == other; }
+
+    uint32_t operator[](std::size_t index) const {
+        if (index < 0) {
+            index += this->value.size();
+        }
+        return this->value.at(index);
+    }
+
+    uint32_t &operator[](std::size_t index) {
+        if (index < 0) {
+            index += this->value.size();
+        }
+        return this->value.at(index);
+    }
+
+    size_t rank() const { return this->value.size(); }
+    uint32_t volume() const {
+        return std::accumulate(this->value.begin(), this->value.end(), 1, std::multiplies<uint32_t>());
+    }
+
+    auto cbegin() const { return this->value.cbegin(); }
+    auto cend() const { return this->value.cend(); }
+
+    // to help build Shape or LegacyShape from it
+    const std::vector<uint32_t> &as_vector() const { return this->value; }
+
+    // Needed for reflect / fmt
+    static constexpr auto attribute_names = std::forward_as_tuple("value");
+    auto attribute_values() const { return std::forward_as_tuple(this->value); }
+
+private:
+    std::vector<uint32_t> value;
+};
+
+} // namespace ttnn
+
+inline std::ostream &operator<<(std::ostream &os, const ttnn::SimpleShape &shape) {
+    os << "SimpleShape([";
+    for (size_t i = 0; i < shape.rank(); ++i) {
+        if (i > 0) {
+            os << ", ";
+        }
+        os << shape[i];
+    }
+    os << "])";
+    return os;
+}
 
 namespace tt {
 
@@ -225,6 +299,8 @@ class LegacyShape {
 
     const Padding &padding() const;
     const LegacyShape without_padding() const;
+
+    ttnn::SimpleShape logical_shape() const;
 
     const uint32_t get_normalized_index(std::int64_t index) const;
 
@@ -663,39 +739,6 @@ static tt::tt_metal::LegacyShape compute_ttl_shape(
 }  // namespace detail
 
 
-/**
-SimpleShape is a temporary measure aimed at making a clear distinction between Shape/LegacyShape when padding information is stripped.
-Context:
-    Both Shape and LegacyShape can carry padding information.
-    And we use Shape or LegacyShape to carry full shape info or separately logical or physical shape.
-    Absence of distinction between full shape and logical shape leads to confusion and makes further refactoring harder.
-Plan:
-    We want to replace `Shape Shape::with_tile_padding() const` with `SimpleShape padded_shape() const`
-    We will clearly see where full shape is used vs logical or physical shape is used.
-**/
-SimpleShape class is a temporary class which we establish to make a clear distinction between Shape which carries padding information and
-class SimpleShape {
-public:
-    explicit SimpleShape(const std::vector<uint32_t> &shape) : value{shape} {}
-    explicit SimpleShape(std::vector<uint32_t> &&shape) : value{std::move(shape)} {}
-
-    const uint32_t operator[](std::int64_t index) const { return this->value[index]; }
-
-    uint32_t rank() const { return this->value.size(); }
-    uint32_t volume() const {
-        return std::accumulate(this->value.begin(), this->value.end(), 1, std::multiplies<uint32_t>());
-    }
-
-    auto cbegin() const { return this->value.cbegin(); }
-    auto cend() const { return this->value.cend(); }
-
-    // to help build Shape or LegacyShape from it
-    const std::vector<uint32_t> &as_vector() const { return this->value; }
-
-private:
-    std::vector<uint32_t> value;
-};
-
 struct Shape {
     // ttnn::Shape is a wrapper around tt::tt_metal::LegacyShape
     // It is used to flip the default value of operator[] to return the shape without padding
@@ -720,9 +763,9 @@ struct Shape {
     explicit Shape(const std::vector<uint32_t> &shape, const std::vector<uint32_t> &shape_with_tile_padding) :
         value{tt::tt_metal::LegacyShape{shape, shape_with_tile_padding}} {}
 
-    const auto rank() const { return this->value.rank(); }
+    const size_t rank() const { return this->value.rank(); }
 
-    const auto size() const { return this->rank(); }
+    const size_t size() const { return this->rank(); }
 
     // Returns the padded shape, padding information is stripped
     [[deprecated("Replaced by padded_shape()")]]
@@ -776,7 +819,7 @@ struct Shape {
     bool operator!=(const Shape &other) const { return not(*this == other); }
 
     // Returns the unpaddded value
-    const auto operator[](std::int64_t index) const { return this->value.without_padding()[index]; }
+    uint32_t operator[](std::int64_t index) const { return this->value.without_padding()[index]; }
 
     template <std::size_t NewRank>
     const Shape to_rank() const {
@@ -838,6 +881,5 @@ static std::ostream &operator<<(std::ostream &os, const Shape &shape) {
 }  // namespace types
 
 using types::Shape;
-using types::SimpleShape;
 
 }  // namespace ttnn
