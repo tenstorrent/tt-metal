@@ -11,6 +11,8 @@
 
 ////
 
+// Use VC 1 for unicast writes, and VC 4 for mcast writes
+
 // used for ops with USE_MULTI_MOC defined
 constexpr uint32_t DYNAMIC_NOC_NCRISC_WR_CMD_BUF = 2; // all writes share cmd buf
 constexpr uint32_t DYNAMIC_NOC_NCRISC_WR_REG_CMD_BUF = 2;

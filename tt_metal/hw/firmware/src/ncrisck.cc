@@ -19,7 +19,6 @@
 
 #include "kernel_includes.hpp"
 
-uint8_t noc_index = NOC_INDEX;
 
 uint32_t noc_reads_num_issued[NUM_NOCS];
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
@@ -45,7 +44,7 @@ void kernel_launch() {
 #endif
 
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
-        noc_local_state_init(noc_index);
+        noc_local_state_init(NOC_INDEX);
     } else {
         noc_local_state_init(NOC_0);
         noc_local_state_init(NOC_1);

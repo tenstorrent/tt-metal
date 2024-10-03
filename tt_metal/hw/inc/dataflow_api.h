@@ -28,7 +28,11 @@
 #include "debug/assert.h"
 #include "dev_msgs.h"
 
+#if defined(KERNEL_BUILD)
+constexpr uint8_t noc_index = NOC_INDEX;
+#else
 extern uint8_t noc_index;
+#endif
 extern uint32_t tt_l1_ptr *rta_l1_base;
 extern uint32_t tt_l1_ptr *crta_l1_base;
 extern uint32_t tt_l1_ptr *sem_l1_base[];
@@ -57,10 +61,13 @@ constexpr uint32_t write_at_cmd_buf __attribute__((used)) = NCRISC_AT_CMD_BUF;
  */
 extern CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 
-// Use VC 1 for unicast writes, and VC 4 for mcast writes
+// // Use VC 1 for unicast writes, and VC 4 for mcast writes
 #define NOC_UNICAST_WRITE_VC 1
 #define NOC_MULTICAST_WRITE_VC 4
 #define NOC_DISPATCH_MULTICAST_WRITE_VC 5 // Only to be used by the dispatch cores
+// #define NOC_UNICAST_WRITE_VC 1
+// #define NOC_MULTICAST_WRITE_VC 4
+// #define NOC_DISPATCH_MULTICAST_WRITE_VC 5 // Only to be used by the dispatch cores
 
 FORCE_INLINE
 uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }

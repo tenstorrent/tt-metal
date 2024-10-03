@@ -104,7 +104,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     uint32_t page_size, num_pages;
     get_max_page_size_and_num_pages(block_num_tiles, single_tile_size, page_size, num_pages);
 
-    uint32_t reader_cb_addr = L1_UNRESERVED_BASE;
+    uint32_t reader_cb_addr = device->get_base_allocator_addr(HalMemType::L1);
     tt_metal::CircularBufferConfig reader_cb_config =
         tt_metal::CircularBufferConfig(reader_cb_size, {{reader_cb_index, tile_format}})
             .set_page_size(reader_cb_index, single_tile_size);
