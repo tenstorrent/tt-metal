@@ -335,12 +335,16 @@ class TtLlamaAttention_galaxy:
     ):
         # K CACHE UPDATE
         keys = self.layer_past[0]
-        ttnn.experimental.paged_update_cache(keys, key_layer, update_idxs_tensor=cache_idxs, page_table=None)
+        ttnn.experimental.paged_update_cache(
+            keys, key_layer, update_idxs_tensor=cache_idxs, batch_offset=batch_offset, page_table=None
+        )  # TODO: do we need batch_offset here?
         key_layer.deallocate(True)
 
         # V CACHE UPDATE
         values = self.layer_past[1]
-        ttnn.experimental.paged_update_cache(values, value_layer, update_idxs_tensor=cache_idxs, page_table=None)
+        ttnn.experimental.paged_update_cache(
+            values, value_layer, update_idxs_tensor=cache_idxs, batch_offset=batch_offset, page_table=None
+        )
         value_layer.deallocate(True)
 
         program_config = ttnn.SDPAProgramConfig(
