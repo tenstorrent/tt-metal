@@ -21,7 +21,7 @@ from models.demos.wormhole.llama31_8b_N300.tt.llama_common import HostEmbedding
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
-    [{"N150": (1, 1), "N300": (1, 2), "T3K": (4, 2), "TG": (8, 4)}.get(os.environ.get("FAKE_DEVICE"), None)],
+    [{"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(os.environ.get("FAKE_DEVICE"), None)],
     indirect=True,
 )
 def test_llama_embedding(mesh_device, use_program_cache, reset_seeds):

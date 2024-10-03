@@ -86,7 +86,7 @@ class TtTransformerBlock(torch.nn.Module):
         attn_norm = self.attention_norm(x)
         # Attention module expects a list of inputs (multi-device support)
         r = self.attention.forward(
-            [attn_norm],
+            attn_norm,
             current_pos,
             rot_mat,
             transformation_mats,

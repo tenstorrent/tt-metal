@@ -13,10 +13,6 @@ from models.demos.wormhole.llama31_8b_N300.tt.llama_common import precompute_fre
 from typing import Tuple
 
 
-def pad_to_power_of_2(n):
-    return 2 ** math.ceil(math.log2(n))
-
-
 def calculate_hidden_dim(dim, ffn_dim_multiplier, multiple_of):
     """Helper function based on logic used in reference model:
     https://github.com/meta-llama/llama-models/blob/e4a6ed52a142bb9b5106dcbf48e41f97f8e7378e/models/llama3/reference_impl/model.py#L227C7-L231C83
@@ -37,9 +33,7 @@ class TtModelArgs:
     ffn_dim_multiplier = 1.0
     multiple_of = 256
     hidden_dim = calculate_hidden_dim(dim, ffn_dim_multiplier, multiple_of)
-    unpadded_n_heads = 24
-    # n_heads = pad_to_power_of_2(unpadded_n_heads)
-    n_heads = unpadded_n_heads
+    n_heads = 24
     n_kv_heads = 8
     norm_eps = 1e-05
     vocab_size = 128256
@@ -236,14 +230,24 @@ class TtModelArgs:
                 m=32, k=self.dim, n=self.qkv_size // self.num_devices, grid_size=(4, 8)
             )
 
+            def find_largest_divisor(n, max_divisor=8):
+                for i in range(max_divisor, 0, -1):
+                    if n % i == 0:
+                        return i
+                return 1  # Fallback to 1 if no divisor found
+
+            divisor = find_largest_divisor(self.n_heads // self.num_devices)
+            grid_size_x = self.n_heads // self.num_devices // divisor
+            grid_size_y = (self.n_heads // self.num_devices) // grid_size_x
             assert (
-                self.unpadded_n_heads / self.num_devices
-            ) % 8 == 0, f"unpadded_n_heads ({self.unpadded_n_heads}) // num_devices ({self.num_devices}) must be divisible by 8, but is {self.unpadded_n_heads / self.num_devices}"
+                grid_size_x * grid_size_y == self.n_heads // self.num_devices
+            ), f"Grid size mismatch: {grid_size_x} * {grid_size_y} != {self.n_heads // self.num_devices}"
+
             self.model_config["ATTN_OUTPUT_PROGCFG"] = dram_matmul_config(
                 m=32,
                 k=self.dim // self.num_devices,
                 n=self.dim,
-                grid_size=(self.unpadded_n_heads // self.num_devices // 8, 8),
+                grid_size=(grid_size_x, grid_size_y),
             )
 
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = matmul_config(
