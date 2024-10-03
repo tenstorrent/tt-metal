@@ -146,15 +146,23 @@ to install with `pip`:
 pip install <wheel_file.whl>
 ```
 
-If you are going to try our pre-built models in `models/`, then you must also
-further install their required dependencies and environment variables:
+4. (For models users only) Set up environment for models
+
+If you are going to try our pre-built models in `models/`, then you must execute
+the following to:
+
+- install their required dependencies
+- set appropriate environment variables
+- set the CPU performance governor to ensure high performance on the host
 
 ```sh
 export PYTHONPATH=$(pwd)
 pip install -r tt_metal/python_env/requirements-dev.txt
+sudo apt-get install cpufrequtils
+sudo cpupower frequency-set -g performance
 ```
 
-4. Start coding
+5. Start coding
 
 To verify your installation, try the executing an example:
 
