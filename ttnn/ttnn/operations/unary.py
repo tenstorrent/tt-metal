@@ -66,7 +66,6 @@ def register_ttnn_cpp_unary_function(unary_function):
             "gelu": torch.nn.functional.gelu,
             "rsqrt": torch.rsqrt,
             # Unaries with float parameter
-            "elu": torch.nn.functional.elu,
             "leaky_relu": torch.nn.functional.leaky_relu,
             # "prelu": torch_prelu, # Alias for leaky_relu. TODO(#8544): implement PReLU properly
             # Other unaries (composite operations)
@@ -151,7 +150,6 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.gelu,
     ttnn.rsqrt,
     # Unaries with float parameter
-    ttnn.elu,
     ttnn.leaky_relu,
     # ttnn.prelu,  # Alias for leaky_relu. TODO(#8544): implement PReLU properly
     # Unaries using op_chain
@@ -234,6 +232,15 @@ def _golden_function_pow(input_tensor_a, exponent, *args, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn.pow, golden_function=_golden_function_pow)
+
+
+def _golden_function_elu(input_tensor_a, *args, alpha=1.0, **kwargs):
+    import torch
+
+    return torch.nn.functional.elu(input_tensor_a, alpha=alpha)
+
+
+ttnn.attach_golden_function(ttnn.elu, golden_function=_golden_function_elu)
 
 
 def _golden_function_relu_min(input_tensor_a, *args, lower_limit, **kwargs):
