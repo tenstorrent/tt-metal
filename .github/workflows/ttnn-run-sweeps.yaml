@@ -69,9 +69,14 @@ on:
           - eltwise.unary.softmax.softmax
           - eltwise.unary.identity.identity
           - eltwise.unary.neg.neg
-          - eltwise.unary.sinh.sinh
           - eltwise.unary.relu_min.relu_min
           - eltwise.unary.relu_max.relu_max
+          - eltwise.unary.sinh.sinh
+          - eltwise.unary.cosh.cosh
+          - eltwise.unary.asinh.asinh
+          - eltwise.unary.acosh.acosh
+          - eltwise.unary.atan.atan
+          - eltwise.unary.atanh.atanh
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multiply
           - eltwise.binary.div.div
