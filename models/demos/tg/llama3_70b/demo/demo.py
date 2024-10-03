@@ -94,17 +94,15 @@ def get_prompts_for_compilation(tokenized, prompts):
 
 
 def demo_warmup(args):
+    # Skip if model_implementation is not tt
+    if model_args.implementation != "tt":
+        return
     # Copy and modify arguments
     model_args = replace(args.model, num_layers=1)
     tt_args = replace(args.tt)
     data_args = replace(args.data, max_output_tokens=2)
 
-    # Skip if model_implementation is not tt
-    if model_args.implementation != "tt":
-        return
-
     generator = build_generator(model_args, tt_args)
-
     # Load the model and tokenizer
     model, tokenizer = generator.model, generator.tokenizer
 
