@@ -140,8 +140,8 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch) {
     this->lflags_ += "-fno-exceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
 }
 
-JitBuildState::JitBuildState(const JitBuildEnv& env, int which, bool is_fw) :
-    env_(env), core_id_(which), is_fw_(is_fw) {}
+JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) :
+    env_(env), core_id_(build_config.processor_id), is_fw_(build_config.is_fw), dispatch_message_addr_(build_config.dispatch_message_addr) {}
 
 // Fill in common state derived from the default state set up in the constructors
 void JitBuildState::finish_init() {
@@ -150,6 +150,7 @@ void JitBuildState::finish_init() {
     } else {
         this->defines_ += "-DKERNEL_BUILD ";
     }
+    this->defines_ += "-DDISPATCH_MESSAGE_ADDR=" + to_string(this->dispatch_message_addr_) + " ";
 
     // Create the objs from the srcs
     for (string src : srcs_) {
@@ -196,8 +197,8 @@ void JitBuildState::finish_init() {
     this->target_full_path_ = "/" + this->target_name_ + "/" + this->target_name_ + ".hex";
 }
 
-JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, int which, bool is_fw) :
-    JitBuildState(env, which, is_fw) {
+JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) :
+    JitBuildState(env, build_config) {
     TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 2, "Invalid data movement processor");
 
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
@@ -208,9 +209,6 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, int which, bo
                       "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io ";
 
     this->defines_ = env_.defines_;
-    uint32_t dispatch_message_addr =
-        dispatch_constants::get(CoreType::WORKER).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-    this->defines_ += "-DDISPATCH_MESSAGE_ADDR=" + to_string(dispatch_message_addr) + " ";
 
     uint32_t l1_cache_disable_mask =
         tt::llrt::OptionsG.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
@@ -267,7 +265,7 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, int which, bo
     finish_init();
 }
 
-JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, int which, bool is_fw) : JitBuildState(env, which, is_fw) {
+JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) : JitBuildState(env, build_config) {
     TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 3, "Invalid compute processor");
 
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
@@ -283,9 +281,6 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, int which, bool is_fw) 
     if ((l1_cache_disable_mask & debug_compute_mask) == debug_compute_mask) {
         this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
     }
-    uint32_t dispatch_message_addr =
-        dispatch_constants::get(CoreType::WORKER).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-    this->defines_ += "-DDISPATCH_MESSAGE_ADDR=" + to_string(dispatch_message_addr) + " ";
 
     this->includes_ = env_.includes_ + "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/inc " + "-I" +
                       env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " + "-I" + env_.root_ +
@@ -355,7 +350,7 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, int which, bool is_fw) 
     finish_init();
 }
 
-JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw) : JitBuildState(env, which, is_fw) {
+JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) : JitBuildState(env, build_config) {
     TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 2, "Invalid ethernet processor");
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
 
@@ -369,9 +364,6 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw
     if ((l1_cache_disable_mask & tt::llrt::DebugHartFlags::RISCV_ER) == tt::llrt::DebugHartFlags::RISCV_ER) {
         this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
     }
-    uint32_t dispatch_message_addr =
-        dispatch_constants::get(CoreType::ETH).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-    this->defines_ += "-DDISPATCH_MESSAGE_ADDR=" + to_string(dispatch_message_addr) + " ";
 
     switch (this->core_id_) {
         case 0: {
