@@ -110,7 +110,7 @@ class LMHead(nn.Module):
 
         # Helper function to create output memory config
         def create_output_mem_config(size):
-            padded_size = math.ceil(size / (32 * 12)) * (32 * 12)
+            padded_size = math.ceil(size / (32 * 12)) * (32 * 12)  # Tile size (32) * dram cores (12)
             shard_spec = ttnn.ShardSpec(
                 args.dram_weight_grid, (4096, padded_size // 12), ttnn.ShardOrientation.ROW_MAJOR, False
             )
