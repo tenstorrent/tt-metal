@@ -112,3 +112,32 @@ def test_create_pipeline_json_to_detect_generic_set_up_error_v1_among_other_fail
             assert job.failure_signature == str(InfraErrorV1.GENERIC_SET_UP_FAILURE)
         else:
             assert job.failure_signature is None
+
+
+def test_create_pipeline_json_for_run_github_timed_out_job(workflow_run_gh_environment):
+    github_runner_environment = workflow_run_gh_environment
+    github_pipeline_json_filename = (
+        "tests/_data/data_collection/cicd/all_post_commit_github_timeout_11034942442/workflow.json"
+    )
+    github_jobs_json_filename = (
+        "tests/_data/data_collection/cicd/all_post_commit_github_timeout_11034942442/workflow_jobs.json"
+    )
+
+    workflow_outputs_dir = pathlib.Path(
+        "tests/_data/data_collection/cicd/all_post_commit_github_timeout_11034942442/"
+    ).resolve()
+    assert workflow_outputs_dir.is_dir()
+    assert workflow_outputs_dir.exists()
+
+    pipeline = create_cicd_json_for_data_analysis(
+        workflow_outputs_dir,
+        github_runner_environment,
+        github_pipeline_json_filename,
+        github_jobs_json_filename,
+    )
+
+    assert pipeline.github_pipeline_id == 11034942442
+
+    for job in pipeline.jobs:
+        if job.github_job_id == 30868260202:
+            assert len(job.tests) > 0

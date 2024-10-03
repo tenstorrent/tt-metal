@@ -176,6 +176,22 @@ def get_pydantic_test_from_pytest_testcase_(testcase, default_timestamp=datetime
     )
 
 
+def is_valid_testcase_(testcase):
+    """
+    Some cases of invalid tests include:
+
+    - GitHub times out pytest so it records something like this:
+        </testcase>
+        <testcase time="0.032"/>
+    """
+    if "name" not in testcase.attrib or "classname" not in testcase.attrib:
+        # This should be able to capture all cases where there's no info
+        logger.warning("Found invalid test case with: no name nor classname")
+        return False
+    else:
+        return True
+
+
 def get_tests_from_test_report_path(test_report_path):
     report_root_tree = junit_xml_utils.get_xml_file_root_element_tree(test_report_path)
 
@@ -189,6 +205,11 @@ def get_tests_from_test_report_path(test_report_path):
 
         get_pydantic_test = partial(get_pydantic_test_from_pytest_testcase_, default_timestamp=default_timestamp)
 
-        return list(map(get_pydantic_test, testsuite))
+        tests = []
+        for testcase in testsuite:
+            if is_valid_testcase_(testcase):
+                tests.append(get_pydantic_test(testcase))
+
+        return tests
     else:
         raise Exception("We only support pytest junit xml outputs for now")
