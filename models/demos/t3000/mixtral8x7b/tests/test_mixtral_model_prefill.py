@@ -45,8 +45,7 @@ def test_mixtral_model_inference_CI(t3k_mesh_device, use_program_cache, reset_se
     if is_ci_env:
         os.environ["MIXTRAL_REF_OUTPUT_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/prefill/"
 
-    for device in t3k_mesh_device.get_device_ids():
-        t3k_mesh_device.get_device(device).enable_async(True)
+    t3k_mesh_device.enable_async(True)
 
     n_layers = 32
 

@@ -93,9 +93,7 @@ def test_llama3_tg_nightly_demo(
     check_mesh_device(mesh_device, model_config)
 
     # TODO: Renable when issue #11089 is resolved
-    for i in mesh_device.get_device_ids():
-        device = mesh_device.get_device(i)
-        device.enable_async(True)
+    mesh_device.enable_async(True)
 
     args = construct_arg(
         implementation=implementation,
