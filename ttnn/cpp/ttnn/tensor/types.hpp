@@ -663,10 +663,21 @@ static tt::tt_metal::LegacyShape compute_ttl_shape(
 }  // namespace detail
 
 
-class JustShape {
+/**
+SimpleShape is a temporary measure aimed at making a clear distinction between Shape/LegacyShape when padding information is stripped.
+Context:
+    Both Shape and LegacyShape can carry padding information.
+    And we use Shape or LegacyShape to carry full shape info or separately logical or physical shape.
+    Absence of distinction between full shape and logical shape leads to confusion and makes further refactoring harder.
+Plan:
+    We want to replace `Shape Shape::with_tile_padding() const` with `SimpleShape padded_shape() const`
+    We will clearly see where full shape is used vs logical or physical shape is used.
+**/
+SimpleShape class is a temporary class which we establish to make a clear distinction between Shape which carries padding information and
+class SimpleShape {
 public:
-    explicit JustShape(const std::vector<uint32_t> &shape) : value{shape} {}
-    explicit JustShape(std::vector<uint32_t> &&shape) : value{std::move(shape)} {}
+    explicit SimpleShape(const std::vector<uint32_t> &shape) : value{shape} {}
+    explicit SimpleShape(std::vector<uint32_t> &&shape) : value{std::move(shape)} {}
 
     const uint32_t operator[](std::int64_t index) const { return this->value[index]; }
 
@@ -677,6 +688,9 @@ public:
 
     auto cbegin() const { return this->value.cbegin(); }
     auto cend() const { return this->value.cend(); }
+
+    // to help build Shape or LegacyShape from it
+    const std::vector<uint32_t> &as_vector() const { return this->value; }
 
 private:
     std::vector<uint32_t> value;
@@ -711,17 +725,26 @@ struct Shape {
     const auto size() const { return this->rank(); }
 
     // Returns the padded shape, padding information is stripped
+    [[deprecated("Replaced by padded_shape()")]]
     Shape with_tile_padding() const {
         return Shape{tt::tt_metal::LegacyShape{this->value, tt::tt_metal::Padding{this->value.rank()}}};
     }
 
-    // Returns the shape without padding, padding information is stipped
-    JustShape just_shape() const {
+    SimpleShape padded_shape() const {
         std::vector<uint32_t> values(this->rank());
         for (auto i = 0; i < this->rank(); ++i) {
-            values.push_back(this->value[i]);
+            values.push_back(this->value[i]); // value stored LegacyShape, its operator[] returns padded value
         }
-        return JustShape(std::move(values));
+        return SimpleShape(std::move(values));
+    }
+
+    // Returns the shape without padding, padding information is stipped
+    SimpleShape logical_shape() const {
+        std::vector<uint32_t> values(this->rank());
+        for (auto i = 0; i < this->rank(); ++i) {
+            values.push_back(this->operator[](i)); // operator[] returns the shape without padding
+        }
+        return SimpleShape(std::move(values));
     }
 
     bool has_tile_padding() const {
@@ -752,6 +775,7 @@ struct Shape {
 
     bool operator!=(const Shape &other) const { return not(*this == other); }
 
+    // Returns the unpaddded value
     const auto operator[](std::int64_t index) const { return this->value.without_padding()[index]; }
 
     template <std::size_t NewRank>
@@ -814,6 +838,6 @@ static std::ostream &operator<<(std::ostream &os, const Shape &shape) {
 }  // namespace types
 
 using types::Shape;
-using types::JustShape;
+using types::SimpleShape;
 
 }  // namespace ttnn

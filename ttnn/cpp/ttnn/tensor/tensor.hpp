@@ -297,7 +297,7 @@ struct Tensor {
     const Layout &get_layout() const;
     const Tile &get_tile() const;
 
-    ttnn::JustShape get_logical_shape() const;
+    ttnn::SimpleShape get_logical_shape() const;
 
     // ======================================================================================
     // Non-Blocking Getters. Query attributes directly, without waiting for worker completion
