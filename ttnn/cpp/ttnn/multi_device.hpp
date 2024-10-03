@@ -6,16 +6,25 @@
 
 #include <memory>
 
-#include "ttnn/types.hpp"
-#include "ttnn/tensor/tensor.hpp"
 #include "tt_metal/impl/device/mesh_device.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 
 using Device = ttnn::Device;
 
 namespace ttnn {
 namespace multi_device {
 
-std::shared_ptr<MeshDevice> open_mesh_device(const MeshShape& mesh_shape, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues, DispatchCoreType dispatch_core_type, const std::pair<size_t, size_t>& offset = {0, 0});
+std::shared_ptr<MeshDevice> open_mesh_device(
+    const MeshShape& mesh_shape,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    size_t num_command_queues,
+    DispatchCoreType dispatch_core_type,
+    MeshType mesh_type = MeshType::RowMajor,
+    const std::pair<size_t, size_t>& offset = std::pair<size_t, size_t>(0, 0),
+    const std::vector<int>& physical_device_ids = {});
+
 void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device);
 
 std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor);
