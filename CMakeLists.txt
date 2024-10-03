@@ -29,9 +29,15 @@ if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
     message(FATAL_ERROR "CMake generation is not allowed within source directory!! Please set a build folder with '-B'!!")
 endif()
 
+<<<<<<< HEAD
 project(Metalium
         VERSION 0.50.0
         DESCRIPTION "Tenstorrent Metalium"
+=======
+project(Metallium
+        VERSION 1.0
+        DESCRIPTION "Tenstorrent Metallium"
+>>>>>>> #7914: Add initial support for find_package
         HOMEPAGE_URL "https://github.com/tenstorrent/tt-metal"
         LANGUAGES CXX
 )
@@ -269,11 +275,13 @@ install(TARGETS tt_metal
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     COMPONENT dev
+    EXPORT ${PROJECT_NAME}Targets
 )
 install(TARGETS ttnn
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     COMPONENT dev
+    EXPORT ${PROJECT_NAME}Targets
 )
 if(WITH_PYTHON_BINDINGS)
     # Install .so into src files for pybinds implementation
@@ -291,3 +299,6 @@ add_custom_target(clean-built
 
 # Debian Package
 include(cmake/packaging.cmake)
+
+include(cmake/find_package)
+
