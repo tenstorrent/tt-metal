@@ -299,4 +299,7 @@ template DebugPrinter operator<< <BF16>(DebugPrinter, BF16 val);
 template DebugPrinter operator<< <F32>(DebugPrinter, F32 val);
 template DebugPrinter operator<< <U32>(DebugPrinter, U32 val);
 
+// Tile printing only supported in kernels
+#if defined(KERNEL_BUILD)
 #include "dprint_tile.h"
+#endif

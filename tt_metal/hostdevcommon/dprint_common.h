@@ -105,8 +105,10 @@ struct TileSliceHostDev {
     uint16_t w0_                 ATTR_ALIGN2;
     uint16_t w1_                 ATTR_ALIGN2;
     uint16_t ws_                 ATTR_ALIGN2;
-    uint16_t count_              ATTR_ALIGN2;
-    uint16_t endl_rows_          ATTR_ALIGN2;
+    uint8_t cb_id_               ATTR_ALIGN1;
+    uint8_t count_               ATTR_ALIGN1;
+    uint8_t endl_rows_           ATTR_ALIGN1;
+    uint8_t data_format_         ATTR_ALIGN1;
     uint16_t samples_[MAXCOUNT]  ATTR_ALIGN2;
 } ATTR_PACK;
 

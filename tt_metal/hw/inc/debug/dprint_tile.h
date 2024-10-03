@@ -41,6 +41,9 @@ struct SliceRange {
 typedef bool dprint_tslice_ptr_t;
 #define TSLICE_RD_PTR true
 #define TSLICE_WR_PTR false
+typedef bool dprint_tslice_cb_t;
+#define TSLICE_INPUT_CB true
+#define TSLICE_OUTPUT_SB false
 
 template<int MAXCOUNT=32>
 struct TileSlice : TileSliceHostDev<MAXCOUNT> {
@@ -61,10 +64,14 @@ struct TileSlice : TileSliceHostDev<MAXCOUNT> {
         int cb,
         int itile,
         const SliceRange& s,
-        // For NCRISC and BRISC, have access to both rd and wr ptr, let user choose w/ arg.
+    // For NCRISC and BRISC, CBs could be inputs or outputs, need user to specify so that we know what the DataFormat
+    // is. This isn't a problem for PACK/UNPACK because they always treat CBs as input/output. Additionally, NCRISC and
+    // BRISC have access to both rd and wr ptr, let user choose w/ arg.
 #if defined(COMPILE_FOR_NCRISC)
+        dprint_tslice_cb_t cb_type,
         dprint_tslice_ptr_t ptr_type = TSLICE_WR_PTR,
 #elif defined(COMPILE_FOR_BRISC)
+        dprint_tslice_cb_t cb_type,
         dprint_tslice_ptr_t ptr_type = TSLICE_RD_PTR,
 #endif
         bool endl_rows = true,
@@ -72,24 +79,33 @@ struct TileSlice : TileSliceHostDev<MAXCOUNT> {
         // The math risc uses a different mechanism for syncing data, and as such doesn't have
         // access to CBs, so TileSlice printing is skipped on this risc.
         this->count_ = 0;
+        this->cb_id_ = cb;
         volatile Tile* t;
-        // Pointer value depends on whether we're looking at read or write ptr
+        // Both pointer value and data format depend on RISC
 #if defined(UCK_CHLKC_PACK)
         this->ptr_ = cb_interface[cb].fifo_wr_ptr << 4; // PACK only has write pointer
+        this->data_format_ = pack_dst_format[cb];
 #elif defined(UCK_CHLKC_UNPACK)
         this->ptr_ = cb_interface[cb].fifo_rd_ptr << 4; // UNPACK only has read pointer
+        this->data_format_ = unpack_src_format[cb];
 #elif defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-        // For BRISC/NCRISC, user chooses which pointer.
+        // For BRISC/NCRISC, user chooses which pointer, and specifies whether the CB is input/output
         this->ptr_ =
             (ptr_type == TSLICE_WR_PTR) ? cb_interface[cb].fifo_wr_ptr << 4 : cb_interface[cb].fifo_rd_ptr << 4;
+        this->data_format_ = (cb_type == TSLICE_INPUT_CB) ? unpack_src_format[cb] : pack_dst_format[cb];
 #else
         this->ptr_ = 0;
+        this->data_format_ = static_cast<uint8_t>(DataFormat::Invalid);
 #endif
 #if defined(DEBUG_PRINT_ENABLED) && (defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC))
         this->ptr_ += itile * sizeof(Tile);
         if (this->ptr_ < L1_UNRESERVED_BASE || this->ptr_ >= MEM_L1_SIZE) {
             this->w0_ = 0xFFFF;
             return; // bad tile pointer, return
+        }
+        if (this->data_format_ != static_cast<uint8_t>(DataFormat::Float16_b)) {
+            this->w1_ = 0xFFFF;
+            return; // Unsupported type, return
         }
         this->endl_rows_ = endl_rows;
         this->w0_ = s.w0;  this->w1_ = s.w1;  this->ws_ = s.ws;

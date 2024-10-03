@@ -40,6 +40,7 @@ SLICE:
 0.245117188 0.249023438 0.255859375 0.263671875 0.98046875 0.99609375 1.0234375 1.0546875
 0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
 <TileSlice data truncated due to exceeding max count (32)>
+Tried printing CB::c_in1: Unsupported data format (Bfp8_b)
 Test Debug Print: Unpack
 Basic Types:
 101-1.61800337@0.122558594
@@ -64,6 +65,7 @@ SLICE:
 0.245117188 0.249023438 0.255859375 0.263671875 0.98046875 0.99609375 1.0234375 1.0546875
 0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
 <TileSlice data truncated due to exceeding max count (32)>
+Tried printing CB::c_in1: Unsupported data format (Bfp8_b)
 Test Debug Print: Math
 Basic Types:
 101-1.61800337@0.122558594
@@ -79,6 +81,7 @@ SETW:
 HEX/OCT/DEC:
 1e240361100123456
 SLICE:
+Warning: MATH core does not support TileSlice printing, omitting print...
 Warning: MATH core does not support TileSlice printing, omitting print...
 Warning: MATH core does not support TileSlice printing, omitting print...
 Test Debug Print: Pack
@@ -105,6 +108,7 @@ SLICE:
 0.245117188 0.249023438 0.255859375 0.263671875 0.98046875 0.99609375 1.0234375 1.0546875
 0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
 <TileSlice data truncated due to exceeding max count (32)>
+Tried printing CB::c_in1: Unsupported data format (Bfp8_b)
 Test Debug Print: Data1
 Basic Types:
 101-1.61800337@0.122558594
@@ -128,7 +132,8 @@ SLICE:
 0.182617188 0.186523438 0.190429688 0.194335938 0.73046875 0.74609375 0.76171875 0.77734375
 0.245117188 0.249023438 0.255859375 0.263671875 0.98046875 0.99609375 1.0234375 1.0546875
 0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
-<TileSlice data truncated due to exceeding max count (32)>)";
+<TileSlice data truncated due to exceeding max count (32)>
+Tried printing CB::c_in1: Unsupported data format (Bfp8_b))";
 
 static void RunTest(DPrintFixture* fixture, Device* device) {
     // Set up program and command queue
@@ -136,13 +141,19 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
     Program program = Program();
 
     // Create a CB for testing TSLICE, dimensions are 32x32 bfloat16s
-    constexpr uint32_t src0_cb_index = CB::c_in0;
     constexpr uint32_t buffer_size = 32*32*sizeof(bfloat16);
     CircularBufferConfig cb_src0_config = CircularBufferConfig(
         buffer_size,
-        {{src0_cb_index, tt::DataFormat::Float16_b}}
-    ).set_page_size(src0_cb_index, buffer_size);
+        {{CB::c_in0, tt::DataFormat::Float16_b}}
+    ).set_page_size(CB::c_in0, buffer_size);
     CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+
+    // A CB with an unsupported data format
+    CircularBufferConfig cb_src1_config = CircularBufferConfig(
+        buffer_size,
+        {{CB::c_in1, tt::DataFormat::Bfp8_b}}
+    ).set_page_size(CB::c_in1, buffer_size);
+    CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
     // Three different kernels to mirror typical usage and some previously
     // failing test cases, although all three kernels simply print.
