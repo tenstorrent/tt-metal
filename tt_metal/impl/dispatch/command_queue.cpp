@@ -2259,14 +2259,15 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         this->physical_enqueue_program_dispatch_core,
         this->manager,
         expected_workers_completed,
-        this->multicast_cores_launch_message_wptr,
-        this->unicast_cores_launch_message_wptr);
-    // Update wptrs for tensix and eth launch message
+        // The assembled program command will encode the location of the launch messages in the ring buffer
+        this->device->worker_launch_message_buffer_state.get_mcast_wptr(),
+        this->device->worker_launch_message_buffer_state.get_unicast_wptr());
+    // Update wptrs for tensix and eth launch message in the device class
     if (program.runs_on_noc_multicast_only_cores()) {
-        this->multicast_cores_launch_message_wptr = (this->multicast_cores_launch_message_wptr + 1) & (launch_msg_buffer_num_entries - 1);
+        this->device->worker_launch_message_buffer_state.inc_mcast_wptr(1);
     }
     if (program.runs_on_noc_unicast_only_cores()) {
-        this->unicast_cores_launch_message_wptr = (this->unicast_cores_launch_message_wptr + 1) & (launch_msg_buffer_num_entries - 1);
+        this->device->worker_launch_message_buffer_state.inc_unicast_wptr(1);
     }
     this->enqueue_command(command, blocking);
 
@@ -2346,8 +2347,10 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
 
     // Increment the expected worker cores counter due to trace programs completion
     this->expected_num_workers_completed += trace_inst->desc->num_completion_worker_cores;
-    this->multicast_cores_launch_message_wptr = trace_inst->desc->num_traced_programs_needing_go_signal_multicast & (launch_msg_buffer_num_entries - 1);
-    this->unicast_cores_launch_message_wptr = trace_inst->desc->num_traced_programs_needing_go_signal_unicast & (launch_msg_buffer_num_entries - 1);
+    // After trace runs, the rdptr on each worker will be incremented by the number of programs in the trace
+    // Update the wptr on host to match state
+    this->device->worker_launch_message_buffer_state.set_mcast_wptr(trace_inst->desc->num_traced_programs_needing_go_signal_multicast);
+    this->device->worker_launch_message_buffer_state.set_unicast_wptr(trace_inst->desc->num_traced_programs_needing_go_signal_unicast);
 
     if (blocking) {
         this->finish();
@@ -2666,12 +2669,11 @@ void HWCommandQueue::record_begin(const uint32_t tid, std::shared_ptr<detail::Tr
     this->tid = tid;
     this->trace_ctx = ctx;
     // Record original value of launch msg wptr
-    this->multicast_cores_launch_message_wptr_reset = this->multicast_cores_launch_message_wptr;
-    this->unicast_cores_launch_message_wptr_reset = this->unicast_cores_launch_message_wptr;
+    this->multicast_cores_launch_message_wptr_reset = this->device->worker_launch_message_buffer_state.get_mcast_wptr();
+    this->unicast_cores_launch_message_wptr_reset = this->device->worker_launch_message_buffer_state.get_unicast_wptr();
     // Set launch msg wptr to 0. Every time trace runs on device, it will ensure that the workers
     // reset their rptr to be in sync with device.
-    this->multicast_cores_launch_message_wptr = 0;
-    this->unicast_cores_launch_message_wptr = 0;
+    this->device->worker_launch_message_buffer_state.reset();
     this->manager.set_bypass_mode(true, true);  // start
 }
 
@@ -2679,9 +2681,10 @@ void HWCommandQueue::record_end() {
     this->tid = std::nullopt;
     this->trace_ctx = nullptr;
     // Reset the launch msg wptrs to their original value, so device can run programs after a trace
-    // was captured
-    this->multicast_cores_launch_message_wptr = this->multicast_cores_launch_message_wptr_reset;
-    this->unicast_cores_launch_message_wptr = this->unicast_cores_launch_message_wptr_reset;
+    // was captured. This is needed since trace capture modifies the wptr state on host, even though device
+    // doesn't run any programs.
+    this->device->worker_launch_message_buffer_state.set_mcast_wptr(this->multicast_cores_launch_message_wptr_reset);
+    this->device->worker_launch_message_buffer_state.set_unicast_wptr(this->unicast_cores_launch_message_wptr_reset);
     this->manager.set_bypass_mode(false, false);  // stop
 }
 
