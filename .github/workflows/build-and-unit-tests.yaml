@@ -65,3 +65,6 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U0593J2RQRZ # Bill Teng
+      - name: Generate system logs on failure
+        uses: ./.github/actions/generate-system-logs
+        if: ${{ failure() }}

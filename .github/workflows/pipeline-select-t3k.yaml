@@ -36,6 +36,11 @@ on:
         required: false
         type: boolean
         default: false
+      t3000-profiler:
+        description: "T3000 profiler tests (requires tracy build)"
+        required: false
+        type: boolean
+        default: false
 
 run-name: ${{ inputs.description }}
 jobs:
@@ -70,3 +75,8 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
     if: ${{ inputs.t3000-model-perf }}
+  t3000-profiler-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/t3000-profiler-tests-impl.yaml
+    if: ${{ inputs.t3000-profiler }}

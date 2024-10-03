@@ -12,8 +12,9 @@
 
 namespace ttnn::multi_device {
 
-std::shared_ptr<MeshDevice> open_mesh_device(const MeshShape& mesh_shape, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues, DispatchCoreType dispatch_core_type, const std::pair<size_t, size_t>& offset) {
-    return MeshDevice::create(mesh_shape, l1_small_size, trace_region_size, num_command_queues, dispatch_core_type, offset);
+std::shared_ptr<MeshDevice> open_mesh_device(const MeshShape& mesh_shape, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues, DispatchCoreType dispatch_core_type, MeshType mesh_type, const std::pair<size_t, size_t>& offset, const std::vector<int>& physical_device_ids) {
+    auto config = MeshDeviceConfig(mesh_shape, offset, physical_device_ids, mesh_type);
+    return MeshDevice::create(l1_small_size, trace_region_size, num_command_queues, dispatch_core_type, config);
 }
 
 void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) {

@@ -62,6 +62,8 @@ void setControlBuffer(uint32_t device_id, std::vector<uint32_t>& control_buffer)
 #if defined(TRACY_ENABLE)
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device_id);
 
+    control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM] = soc_d.profiler_ceiled_core_count_perf_dram_bank;
+
     auto ethCores = soc_d.get_physical_ethernet_cores() ;
     for (auto &core : soc_d.physical_routing_to_profiler_flat_id)
     {
@@ -78,6 +80,7 @@ void setControlBuffer(uint32_t device_id, std::vector<uint32_t>& control_buffer)
             profiler_msg = hal.get_dev_addr<profiler_msg_t *>(HalProgrammableCoreType::ACTIVE_ETH, HalMemAddrType::PROFILER);
         }
 
+        control_buffer[kernel_profiler::FLAT_ID] = core.second;
         tt::llrt::write_hex_vec_to_core(
             device_id,
             core.first,

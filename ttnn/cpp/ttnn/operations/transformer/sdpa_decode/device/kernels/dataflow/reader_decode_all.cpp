@@ -42,17 +42,14 @@ void kernel_main() {
     constexpr bool is_q_sharded = get_compile_time_arg_val(6);
     constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(7);
     constexpr uint32_t k_chunk_size = get_compile_time_arg_val(8);
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(9);
-    constexpr uint32_t index_stick_size_B = get_compile_time_arg_val(10);
-    constexpr bool is_paged_attention = get_compile_time_arg_val(11) == 1;
-    constexpr uint32_t num_kv_heads = get_compile_time_arg_val(12);
-    constexpr uint32_t block_size_t = get_compile_time_arg_val(13);
-    constexpr uint32_t log2_page_table_page_size = get_compile_time_arg_val(14);
-    constexpr uint32_t page_table_page_size = get_compile_time_arg_val(15);
-    constexpr uint32_t Bkv = get_compile_time_arg_val(16);
-    constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(17);
-    constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(18);
-    constexpr uint32_t num_output_cores = get_compile_time_arg_val(19);
+    constexpr uint32_t index_stick_size_B = get_compile_time_arg_val(9);
+    constexpr bool is_paged_attention = get_compile_time_arg_val(10) == 1;
+    constexpr uint32_t num_kv_heads = get_compile_time_arg_val(11);
+    constexpr uint32_t block_size_t = get_compile_time_arg_val(12);
+    constexpr uint32_t Bkv = get_compile_time_arg_val(13);
+    constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(14);
+    constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(15);
+    constexpr uint32_t num_output_cores = get_compile_time_arg_val(16);
 
     uint32_t arg_idx = 0;
     const uint32_t q_addr  = get_arg_val<uint32_t>(arg_idx++);
@@ -60,6 +57,7 @@ void kernel_main() {
     const uint32_t v_addr  = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t pos_addr  = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t page_table_addr  = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t page_table_page_size = get_arg_val<uint32_t>(arg_idx++);
     const bool is_worker = get_arg_val<uint32_t>(arg_idx++) == 0;
     const bool is_output_core = get_arg_val<uint32_t>(arg_idx++) == 1;
     const uint32_t cur_head_group = get_arg_val<uint32_t>(arg_idx++);
