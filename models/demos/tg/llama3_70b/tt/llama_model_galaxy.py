@@ -109,7 +109,7 @@ class TtLlamaModel_galaxy:
         self.load_weights()
         self.set_input_memory_config()
 
-    def set_input_memory_config(self):
+    def set_input_memory_config(self):  # TODO: move thsi to model_config!
         self.EMBD_MEMCFG = ttnn.create_sharded_memory_config(
             shape=(32, 2048 // 8),
             core_grid=ttnn.CoreGrid(y=1, x=8),

@@ -122,6 +122,8 @@ class TtLlamaModelForGeneration:
         )
 
         # Compile model
+
+        # TODO: move this into prepare_inputs with parameter "push to device"
         tt_inp = ttnn.to_device(tt_inp, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         tt_inp_emb = self.tt_model.tt_embd(tt_inp)
         tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, self.tt_model.EMBD_MEMCFG)
