@@ -162,8 +162,8 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
                 else:
                     if "DEVICE EXCEPTION" in message:
                         logger.error(
-                            "DEVICE EXCEPTION: Device could not be initialized. The following assertion was thrown: ",
-                            message,
+                            "DEVICE EXCEPTION: Device could not be initialized. The following assertion was thrown: "
+                            + message,
                         )
                         logger.info("Skipping test suite because of device error, proceeding...")
                         return []
