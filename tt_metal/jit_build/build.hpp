@@ -34,6 +34,12 @@ enum class JitBuildProcessorType {
     ETHERNET
 };
 
+struct JitBuiltStateConfig {
+    int processor_id = 0;
+    bool is_fw = false;
+    uint32_t dispatch_message_addr = 0;
+};
+
 // The build environment
 // Includes the path to the src/output and global defines, flags, etc
 // Device specific
@@ -83,6 +89,7 @@ class alignas(CACHE_LINE_ALIGNMENT) JitBuildState {
 
     int core_id_;
     int is_fw_;
+    uint32_t dispatch_message_addr_;
     bool process_defines_at_compile;
 
     string out_path_;
@@ -109,7 +116,7 @@ class alignas(CACHE_LINE_ALIGNMENT) JitBuildState {
     void extract_zone_src_locations(const string& log_file) const;
 
   public:
-    JitBuildState(const JitBuildEnv& env, int which, bool is_fw = false);
+    JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig &build_config);
     virtual ~JitBuildState() = default;
     void finish_init();
 
@@ -137,19 +144,19 @@ class JitBuildDataMovement : public JitBuildState {
   private:
 
   public:
-    JitBuildDataMovement(const JitBuildEnv& env, int which, bool is_fw = false);
+    JitBuildDataMovement(const JitBuildEnv& env, const JitBuiltStateConfig &build_config);
 };
 
 class JitBuildCompute : public JitBuildState {
   private:
   public:
-    JitBuildCompute(const JitBuildEnv& env, int which, bool is_fw = false);
+    JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConfig &build_config);
 };
 
 class JitBuildEthernet : public JitBuildState {
   private:
   public:
-    JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw = false);
+    JitBuildEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config);
 };
 
 // Abstract base class for kernel specialization

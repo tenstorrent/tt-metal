@@ -269,27 +269,38 @@ void Device::initialize_build() {
 
     this->build_env_.init(this->build_key(), this->arch());
 
-    auto init_helper = [this] (bool is_fw) -> JitBuildStateSet {
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->id());
+    uint32_t dispatch_message_addr =
+        dispatch_constants::get(dispatch_core_type, this->num_hw_cqs_).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
+
+    auto init_helper = [this, dispatch_message_addr] (bool is_fw) -> JitBuildStateSet {
         std::vector<std::shared_ptr<JitBuildState>> build_states;
 
         build_states.resize(arch() == tt::ARCH::GRAYSKULL ? 5 : 7);
 
         build_states[build_processor_type_to_index(JitBuildProcessorType::DATA_MOVEMENT).first + 0] =
-            std::make_shared<JitBuildDataMovement>(this->build_env_, 0, is_fw);
+            std::make_shared<JitBuildDataMovement>(
+                this->build_env_, JitBuiltStateConfig{.processor_id = 0, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
         build_states[build_processor_type_to_index(JitBuildProcessorType::DATA_MOVEMENT).first + 1] =
-            std::make_shared<JitBuildDataMovement>(this->build_env_, 1, is_fw);
+            std::make_shared<JitBuildDataMovement>(
+                this->build_env_, JitBuiltStateConfig{.processor_id = 1, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
         build_states[build_processor_type_to_index(JitBuildProcessorType::COMPUTE).first + 0] =
-            std::make_shared<JitBuildCompute>(this->build_env_, 0, is_fw);
+            std::make_shared<JitBuildCompute>(
+                this->build_env_, JitBuiltStateConfig{.processor_id = 0, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
         build_states[build_processor_type_to_index(JitBuildProcessorType::COMPUTE).first + 1] =
-            std::make_shared<JitBuildCompute>(this->build_env_, 1, is_fw);
+            std::make_shared<JitBuildCompute>(
+                this->build_env_, JitBuiltStateConfig{.processor_id = 1, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
         build_states[build_processor_type_to_index(JitBuildProcessorType::COMPUTE).first + 2] =
-            std::make_shared<JitBuildCompute>(this->build_env_, 2, is_fw);
+            std::make_shared<JitBuildCompute>(
+                this->build_env_, JitBuiltStateConfig{.processor_id = 2, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
 
         if (arch() != tt::ARCH::GRAYSKULL) {
             build_states[build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 0] =
-                std::make_shared<JitBuildEthernet>(this->build_env_, 0, is_fw);
+                std::make_shared<JitBuildEthernet>(
+                    this->build_env_, JitBuiltStateConfig{.processor_id = 0, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
             build_states[build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 1] =
-                std::make_shared<JitBuildEthernet>(this->build_env_, 1, is_fw);
+                std::make_shared<JitBuildEthernet>(
+                    this->build_env_, JitBuiltStateConfig{.processor_id = 1, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
         }
 
        return build_states;
@@ -1939,6 +1950,7 @@ void Device::setup_tunnel_for_remote_devices() {
             }
             if (this->dispatch_s_enabled()) {
                 // Populate settings for dispatch_s
+                uint32_t dispatch_buffer_base = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base();
                 for (uint32_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
                     // Initialize dispatch_s settings as invalid values. To be populated if dispatch_s is enabled.
                     settings.cb_log_page_size = dispatch_constants::DISPATCH_S_BUFFER_LOG_PAGE_SIZE;
