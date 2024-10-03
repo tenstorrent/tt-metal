@@ -606,6 +606,7 @@ Once you are satisfied that everything works, create a commit. The message
 needs to specify the issue number, with a pound sign and a colon, and the
 description should describe the change itself, and cannot be generic and refer
 to something else, such as saying that you are addressing reviewer feedback.
+Please see [Git rules and guidelines](#git-rules-and-guidelines) for details.
 
 ```
 git commit -m"#123: rename method x"
