@@ -751,18 +751,19 @@ void bind_binary_bw_optional(py::module& module, const binary_backward_operation
             input_tensor_b (ttnn.Tensor or Number): the input tensor.
 
         Keyword args:
-            memory_config (Optional[ttnn.MemoryConfig]): memory config for the output tensor
-            output_tensor (Optional[ttnn.Tensor]): preallocated output tensor
-            queue_id (Optional[uint8]): command queue id
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (uint8, optional): command queue id. Defaults to `0`.
 
         Note:
             {3}
 
         Example:
 
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
             >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
             >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
-            >>> output = {1}(tensor1, tensor2)
+            >>> output = {1}(grad_tensor, tensor1, tensor2)
 
         )doc",
         operation.base_name(),
@@ -1039,7 +1040,7 @@ void bind_binary_backward_overload(py::module& module, const binary_backward_ope
             >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
             >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
             >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
-            >>> output = {1}(grad_tensor, tensor1, tensor2/scalar)
+            >>> output = {1}(grad_tensor, tensor1, tensor2)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
