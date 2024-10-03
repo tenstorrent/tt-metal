@@ -152,7 +152,7 @@ rms_norm_parametrizations = [True, False]
 rms_norm_parametrization_ids = ["rmsnorm", "layernorm"]
 
 
-def test_distributed_layernorm_with_program_cache_and_checks(
+def run_test_distributed_layernorm_with_program_cache_and_checks(
     inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, mesh_device, use_program_cache, iterations
 ):
     if mesh_device.get_num_devices() < n_devices:
@@ -176,7 +176,7 @@ def test_distributed_layernorm_with_program_cache_and_checks(
 def test_distributed_layernorm_with_program_cache(
     inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, iterations, t3k_mesh_device, use_program_cache
 ):
-    test_distributed_layernorm_with_program_cache_and_checks(
+    run_test_distributed_layernorm_with_program_cache_and_checks(
         inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, t3k_mesh_device, use_program_cache, iterations=iterations
     )
 
@@ -191,6 +191,6 @@ def test_distributed_layernorm_with_program_cache(
 def test_distributed_layernorm_with_program_cache_4chip(
     inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, iterations, pcie_mesh_device, use_program_cache
 ):
-    test_distributed_layernorm_with_program_cache_and_checks(
+    run_test_distributed_layernorm_with_program_cache_and_checks(
         inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, pcie_mesh_device, use_program_cache, iterations=iterations
     )
