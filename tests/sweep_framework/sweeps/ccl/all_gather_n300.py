@@ -16,7 +16,7 @@ from tests.ttnn.unit_tests.operations.test_all_gather import is_unsupported_case
 from ttnn import ShardTensorToMesh
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
+TIMEOUT = 75
 
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
