@@ -29,7 +29,7 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [{"N150": (1, 1), "N300": (1, 2), "T3K": (4, 2), "TG": (8, 4)}.get(os.environ.get("FAKE_DEVICE"), None)],
+    [{"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(os.environ.get("FAKE_DEVICE"), None)],
     indirect=True,
 )
 def test_llama_attention_inference(seq_len, mesh_device, use_program_cache, reset_seeds):
@@ -77,7 +77,7 @@ def test_llama_attention_inference(seq_len, mesh_device, use_program_cache, rese
         mesh_device,
     )
 
-    tt_out = tt_model([attention_input], 0, rot_mats, transformation_mats, user_id=0, mode="prefill")
+    tt_out = tt_model(attention_input, 0, rot_mats, transformation_mats, user_id=0, mode="prefill")
     tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[:, 0, :, :].view(
         batch, seq_len, -1
     )  # [ batch, seq, hidden_dim]
@@ -101,21 +101,18 @@ def test_llama_attention_inference(seq_len, mesh_device, use_program_cache, rese
         logger.warning(f"Llama_Attention Failed!")
         all_tests_pass = False
 
-    if False:  # FIXME: Issue #10648
-        # Check kv cache
+    check_kv_cache = True  # May want to disable: Issue #10648
+    if check_kv_cache:
         # PyTorch output --------------------------------------------------------------------
         pytorch_layer_present = [
             reference_model.cache_k.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
             reference_model.cache_v.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
         ]
         # TT hardware execution -------------------------------------------------------------
-        tt_layer_present = []
-        for layer_past in tt_model.layer_past_list:
-            tt_layer_present.append(
-                [ttnn.to_torch(cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_deive, dim=1)) for cache in layer_past]
-            )
-
-        tt_layer_present = tt_layer_present[0]
+        tt_layer_present = [
+            ttnn.to_torch(cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+            for cache in tt_model.layer_past
+        ]
 
         for i, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
             cache_length_to_check = min(model_args.sliding_window, generation_start_pos + generation_length + 1)
