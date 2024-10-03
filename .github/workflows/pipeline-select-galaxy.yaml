@@ -1,4 +1,4 @@
-name: "(T3K) Choose your pipeline"
+name: "(TG/TGG) Choose your pipeline"
 
 on:
   workflow_dispatch:
@@ -16,28 +16,27 @@ on:
         required: false
         type: boolean
         default: false
-      t3000-unit:
+      tgg-unit:
         required: false
         type: boolean
         default: false
-      t3000-demo:
+      tgg-frequent:
         required: false
         type: boolean
         default: false
-      t3000-frequent:
+      tgg-model-perf:
         required: false
         type: boolean
         default: false
-      t3000-nightly:
+      tg-unit:
         required: false
         type: boolean
         default: false
-      t3000-model-perf:
+      tg-frequent:
         required: false
         type: boolean
         default: false
-      t3000-profiler:
-        description: "T3000 profiler tests (requires tracy build)"
+      tg-model-perf:
         required: false
         type: boolean
         default: false
@@ -50,33 +49,33 @@ jobs:
       build-type: ${{ inputs.build-type }}
       tracy: ${{ inputs.build-with-tracy }}
     secrets: inherit
-  t3000-unit-tests:
+  tgg-unit-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/t3000-unit-tests-impl.yaml
-    if: ${{ inputs.t3000-unit }}
-  t3000-demo-tests:
+    uses: ./.github/workflows/tgg-unit-tests-impl.yaml
+    if: ${{ inputs.tgg-unit }}
+  tgg-frequent-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/t3000-demo-tests-impl.yaml
-    if: ${{ inputs.t3000-demo }}
-  t3000-frequent-tests:
+    uses: ./.github/workflows/tgg-frequent-tests-impl.yaml
+    if: ${{ inputs.tgg-frequent }}
+  tgg-model-perf-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/t3000-frequent-tests-impl.yaml
-    if: ${{ inputs.t3000-frequent }}
-  t3000-nightly-tests:
+    uses: ./.github/workflows/tgg-model-perf-tests-impl.yaml
+    if: ${{ inputs.tgg-model-perf }}
+  tg-unit-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/t3000-nightly-tests-impl.yaml
-    if: ${{ inputs.t3000-nightly }}
-  t3000-model-perf-tests:
+    uses: ./.github/workflows/tg-unit-tests-impl.yaml
+    if: ${{ inputs.tg-unit }}
+  tg-frequent-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
-    if: ${{ inputs.t3000-model-perf }}
-  t3000-profiler-tests:
+    uses: ./.github/workflows/tg-frequent-tests-impl.yaml
+    if: ${{ inputs.tg-frequent }}
+  tg-model-perf-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/t3000-profiler-tests-impl.yaml
-    if: ${{ inputs.t3000-profiler }}
+    uses: ./.github/workflows/tg-model-perf-tests-impl.yaml
+    if: ${{ inputs.tg-model-perf }}
