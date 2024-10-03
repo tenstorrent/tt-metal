@@ -26,7 +26,7 @@ Table of Contents
     - [File structure and formats](#file-structure-and-formats)
     - [CI/CD Principles](#cicd-principles)
     - [Using CI/CD for development](#using-cicd-for-development)
-    - [Skipping CI/CD for documentation updates](#skipping-cicd-for-documentation-updates) 
+    - [Skipping CI/CD for documentation updates](#skipping-cicd-for-documentation-updates)
     - [Documentation](#documentation)
     - [Git rules and guidelines](#git-rules-and-guidelines)
     - [Code reviews](#code-reviews)
@@ -88,7 +88,7 @@ machines. They have prerequisite dependencies, model files, and other settings
 set up for users.
 
 Please refer to the [README](README.md) for source installation and environment
-setup instructions, then please read the the [Getting Started
+setup instructions, then please read the [Getting Started
 page](docs/source/get_started/get_started.rst).
 
 ### Setting up Git
@@ -177,7 +177,7 @@ that is changed.
 ## Tests in tt-metal
 
 Ensure you're in a developer Python environment with necessary environment variables
-set as documentating in the [developing section](#developing-tt-metal).
+set as documented in the [developing section](#developing-tt-metal).
 
 This includes the environment variables, Python dev environment etc.
 
@@ -416,7 +416,7 @@ k_id[15]: tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block_zm.cpp
 ```
 TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1 ./your_program
 ```
-  - If you still cannot reproduce the hang, try disabling the waypoint and assert features. This will reduce visiblity into the hang, but is better than nothing:
+  - If you still cannot reproduce the hang, try disabling the waypoint and assert features. This will reduce visibility into the hang, but is better than nothing:
 ```
 TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1 TT_METAL_WATCHER_DISABLE_WAYPOINT=1 ./your_program
 TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1 TT_METAL_WATCHER_DISABLE_WAYPOINT=1 TT_METAL_WATCHER_DISABLE_ASSERT=1 ./your_program
@@ -508,7 +508,7 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
 
 ### Skipping CI/CD for documentation updates
 - CI/CD can be skipped for *documentation only* updates that incur no functional change.
-- Upon submitting a PR and getting the necessary appovals:
+- Upon submitting a PR and getting the necessary approvals:
   - Click Squash and Merge
   - Before confirming, edit the top level commit message by prepending the token `[skip ci]`
     - Example: `[skip ci] #9999: Update CONTRIBUTING.md`
@@ -521,7 +521,7 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
 
 - Any commit message must be accompanied with an appropriate GitHub issue
   number with a colon and following message. The message must start with an
-  imperative verb and descripton of what was done. Preferably a reason is
+  imperative verb and description of what was done. Preferably a reason is
   included. Ex.
   ```
   #41: Fix data format error in Gelu op.
@@ -549,6 +549,253 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
   If you use squashing, when GitHub asks you to enter a new commit message,
   ensure that your commit message follows our required format as outlined above
   in this section. Failure to do so is a violation of our standards.
+
+### Git commit runbook
+
+The tt-metal repository has a single main branch, with pull requests being
+merged in via rebase or squash merge.
+
+For a pull request, you will need to deal with a local branch and an origin
+branch.
+
+The local branch should be on your machine, and you should interact with it
+through the command line or Visual Studio. The following uses the command line.
+
+The origin branch is on Github and you should use the Github UI to interact
+with the branch.
+
+#### Creating the initial Pull Request (PR)
+
+You need to have an issue. Either someone creates one and assigns it to you, or
+you need to create an issue. For example issue 123.
+
+#### Creating a branch on a machine
+
+Include the user, the issue number, and optionally a description of the change.
+/ and - are used as separators between user and issue number. And - and _
+between issue number and description. E.g.
+
+```
+git checkout -b user-123
+git checkout -b user/123
+git checkout -b user-123_rename_method_x
+git checkout -b user/123-add-x-unit-test
+```
+
+#### Saving your changes
+
+Edit the files that you want, making sure relevant unit tests pass. Then add
+them in. E.g.
+
+```
+git add abc.py
+git add "*.py"
+```
+
+Please avoid using `git add -A`, which is fairly error prone.
+
+You can restore files if you need to get the original. E.g.
+
+```
+git restore abc.py
+git restore '*'
+git restore --staged abc.py # if the file was already added
+```
+
+Once you are satisfied that everything works, create a commit. The message
+needs to specify the issue number, with a pound sign and a colon, and the
+description should describe the change itself, and cannot be generic and refer
+to something else, such as saying that you are addressing reviewer feedback.
+Please see [Git rules and guidelines](#git-rules-and-guidelines) for details.
+
+```
+git commit -m"#123: rename method x"
+```
+
+Note: each commit on the main branch and any feature branch where multiple
+engineers collaborate should work. That is, everything compiles properly on the
+architecture used by your machine, you can run relevant code on the card, and
+relevant unit tests pass. Furthermore, for the main branch, you should run
+CI pipelines and make sure that the commit doesn't break anything important.
+
+You can use git log to see the sequence of commits in the branch. That allows
+you to see where your branch is relative to main, and can help you figure out
+how the commits are structured, before and after commits and rebases.
+
+#### Saving the commit to origin and create a pull request
+
+You will need to push the change to origin. The command will provide a url that
+you should use to create pull request. This should be done the first time you
+push a change. After that you may need to set upstream to be able to push
+changes in the future. E.g.
+
+```
+git push origin user-123:user-123
+git branch --set-upstream-to=origin/user-123 user-123
+```
+
+or
+
+```
+git push -u branch_name
+```
+
+Note: you may be able to push and set the upstream at the same time, but that
+assumes that you haven't rebased, which is probably not the case. The command
+would be something like
+
+```
+git push origin --set-upstream origin user-123
+```
+
+If that doesn't work, you should use `branch --set-upstream-to`.
+
+Once you have a pull request, in the UI you can run actions against the branch.
+Go to Actions (https://github.com/tenstorrent/tt-metal/actions) and run the
+workflows that you want against your branch. At the very least, you should run
+All post-commit tests.
+
+You can make more changes, commit them, and then if everything is set up and you
+don't need to rebase, then you can just do
+
+```
+git push
+```
+
+Occasionally, and for the final set of tests before the final commit, you should
+rebase your branch.
+
+#### Rebasing your branch
+
+Your branch needs to be kept up to date with main via rebase. You should rebase
+your local branch, and then once everything looks good, push the change. You
+should not rebase your origin branch. That way, if anything goes wrong, you can
+use origin to restore your branch to a good state.
+
+Note: Before rebasing, remember to change your default comment character, which
+is mentioned earlier in [Setting up Git](#setting-up-git).
+
+Note: for very small changes where you don't expect to create a second commit
+it might be okay to use the UI to rebase origin. However, in general, it's
+better to avoid that.
+
+You should first make sure main is up to date:
+
+```
+git checkout main
+git fetch origin
+git pull --rebase --prune
+```
+
+Then you can
+
+```
+git checkout user-123
+git rebase main
+```
+
+This will apply one commit at a time. Each commit is in order. If your branch
+has two commits, then the first one is applied, then the second one is applied.
+
+If there are no conflicts, everything will complete successfully. Then you can
+push the changes to origin. This is done through a forced push to save the
+rebase information:
+
+```
+git push -f
+```
+
+If there is any conflict with the commits being processed, you will need to
+edit the files to fix the problem. Information should be printed about what to
+do. It's probably a good idea not to skip commits.
+
+Don't be surprised if changes from a subsequent commit are not there in the
+first commit. For example, if you are editing the files to fix up the first of
+two commits, the files will not have the edits of the second commit. When
+editing files, only fix up the conflicts listed. Do not change anything else.
+
+If you do change anything else, then `git rebase --continue` will complain and
+you will probably have to restart.
+
+Look for HEAD. The conflict will look something like:
+
+```
+<<<< HEAD
+Some other edits
+====
+Your edits
+>>>> Your branch
+```
+
+Update the file to have a single piece of working code and remove the commit
+info. Make sure everything compiles and all the tests pass. Then you can
+continue with the rebase.
+
+```
+git rebase --continue
+```
+
+If something is wrong enough that you want to abort the rebase and undo all the
+changes, then you can start over. Do
+
+```
+git rebase --abort # go to before the rebase
+```
+
+If your local is in a bad state, you may also want to start from scratch on your
+local by pulling from origin, reflogging, or checking out a specific commit via
+its hash:
+
+```
+git pull --rebase # will undo changes
+git reflog
+git checkout <hash>
+```
+
+If none of those work you can also try:
+
+```
+git reset --hard origin/<BRANCH>
+```
+
+Note: If you are getting errors you may need to update the origin info via
+`git branch --set-upstream-to`.
+
+If everything goes well with all the updates. Then you can update origin:
+
+```
+git push -f
+```
+
+Note: It's okay to have a few commits, as long as each one works on its own.
+If you do want to combine commits you would want to run something like:
+
+```
+git rebase -i HEAD~10 # the number indicates how many commits you want to look at - here 10 commits
+```
+
+The latest one is at the bottom. You can use fixup or squash. Usually you want
+to use fixup (indicated by f) since that discards the message. Then edit the
+messages appropriately.
+
+However, new squash and merge functionality in the UI is much easier than
+doing this process manually. Therefore you should use the UI whenever possible.
+
+#### Merging to main
+
+You will probably need to iterate several times in terms of pushing changes and
+rebasing your branch.
+
+Once you have all of your changes working locally, your pull request (PR)
+approved, and all the workflows that you want passing after a final rebase, It
+is time to merge in your branch into main. This should be done in the Github UI.
+
+Go to your PR and press the `Squash and merge` button. That will automatically
+squash all of your commits, which is very useful. The button has an alternate
+option to merge without squashing. You should use `Squash and merge` unless you
+have a good reason not to.
+
+After that, the UI will usually delete your branch.
 
 ### Code reviews
 
