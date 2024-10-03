@@ -79,7 +79,6 @@ def test_llama_model_perf(
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        layers=list(range(model_args.n_layers)),
     )
     # Load TTNN embedding module
     tt_embd = TtLlamaEmbedding(

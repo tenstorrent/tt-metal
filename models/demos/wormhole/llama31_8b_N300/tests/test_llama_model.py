@@ -64,6 +64,20 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
     if layers is not None:
         model_args.n_layers = layers
     state_dict = model_args.load_state_dict()
+    state_dict_prefix = model_args.get_state_dict_prefix("", None)
+    reference_state_dict = {
+        k[len(state_dict_prefix) :]: v
+        for k, v in state_dict.items()
+        if (
+            any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
+            or any(
+                [
+                    f"{state_dict_prefix}{name}" in k
+                    for name in ["tok_embeddings.weight", "norm.weight", "output.weight"]
+                ]
+            )
+        )
+    }
 
     prompts = ["This is a test"] * model_args.max_batch_size
     if dummy_weights:
@@ -78,11 +92,11 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
 
     if run_ref_pt:
         reference_model = Transformer(model_args)
-        reference_model.load_state_dict(state_dict)
+        reference_model.load_state_dict(reference_state_dict)
 
     # Embedding on host
     embd = HostEmbedding(model_args)
-    embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
+    embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
     generation_start_pos = 0
     generation_length = iterations
@@ -102,7 +116,6 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        layers=list(range(model_args.n_layers)),
     )
     logger.info("Model and caches loaded.")
 
@@ -207,7 +220,7 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
                     ]
 
                     tt_layer_present = []
-                    for layer_past in tt_model.layers[l].attention.layer_past_list[0]:
+                    for layer_past in tt_model.layers[l].attention.layer_past:
                         tt_layer_present.append(
                             ttnn.to_torch(layer_past, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
                         )

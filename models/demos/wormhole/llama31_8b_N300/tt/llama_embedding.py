@@ -4,9 +4,10 @@
 
 import torch
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 
 
-class TtLlamaEmbedding(torch.nn.Module):
+class TtLlamaEmbedding(LightweightModule):
     def __init__(
         self,
         mesh_device,
@@ -20,7 +21,7 @@ class TtLlamaEmbedding(torch.nn.Module):
         self.state_dict = state_dict
         self.mesh_device = mesh_device
 
-        base_name = "tok_embeddings.weight"
+        base_name = args.get_state_dict_prefix("", None) + "tok_embeddings.weight"
         torch_weight = self.state_dict[base_name]
         cache_name = weight_cache_path / base_name
         self.weights = ttnn.as_tensor(

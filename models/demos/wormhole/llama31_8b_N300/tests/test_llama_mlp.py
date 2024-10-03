@@ -39,7 +39,10 @@ def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seed
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    partial_state_dict = {k[22:]: v for k, v in state_dict.items() if (k.startswith("layers.0.feed_forward"))}
+    first_layer_prefix = model_args.get_state_dict_prefix("TtLlamaMLP", 0)
+    partial_state_dict = {
+        k[len(first_layer_prefix) + 1 :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+    }
 
     model_args.WEIGHTS_DTYPE = dtype
     reference_model = FeedForward(
