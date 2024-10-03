@@ -115,14 +115,21 @@ int main(int argc, char **argv) {
     /* Read in result into a host vector */
     std::vector<uint32_t> result_vec;
     EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
+    std::map<uint, int> mp;
 
     for (uint32_t i = 0; i < 1024; ++i) {
-        // std::cout << std::bitset<32>(result_vec[i]) << " ";
-        // std::cout << std::hex << result_vec[i] << " ";
-        std::cout << result_vec[i] << " ";
+        float a = result_vec[i] / float(1 << 31 - 1) / 2;
+        mp[result_vec[i]] += 1;
+        std::cout << a << " ";
         if ((i & 31) == 31)
             std::cout << std::endl;
     }
+
+    std::cout << mp.size() << std::endl;
+    for (const auto &pair : mp) {
+        std::cout << pair.first << " " << pair.second << std::endl;
+    }
+
     // printf("Result = %d\n", result_vec[0]); // 22 = 1102070192
     // printf("Expected = %d\n", pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>( bfloat16(22.0f),
     // bfloat16(22.0f))));

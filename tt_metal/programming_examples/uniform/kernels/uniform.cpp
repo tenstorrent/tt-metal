@@ -24,10 +24,13 @@ inline void _my_calculate_dropout_(const int iterations) {
         TTI_SFPMOV(0, 9, p_sfpu::LREG0, 8);
         TTI_SFPSETSGN(0, p_sfpu::LREG0, p_sfpu::LREG0, 1);
         TTI_SFPSTORE(0, 4, 3, 0);
-        TTI_SFPIADD(32, p_sfpu::LREG0, p_sfpu::LREG0, 5);
-        // vUInt a = 31;
-        // vUInt b = dst_reg[0];
-        // dst_reg[0] = b >> 29;
+        TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG0, 5);
+        // vInt c = dst_reg[0];
+        // vFloat a = c;
+        // a = 2001;
+        // vFloat b = 0.001;
+        // a = a * b;
+        // dst_reg[0] = a;
         dst_reg++;
     }
 }
@@ -55,6 +58,7 @@ void MAIN {
 
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
     dropout_tile_init(0xDEADBEEF);
+    // dropout_tile_init(10);
 
     // wait for a block of tiles in each of input CBs
     cb_wait_front(cb_in0, 1);
