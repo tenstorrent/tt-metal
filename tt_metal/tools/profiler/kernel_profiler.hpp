@@ -50,13 +50,10 @@ namespace kernel_profiler{
 
 #if defined(COMPILE_FOR_BRISC)
     constexpr uint32_t myRiscID = 0;
-    extern uint16_t core_flat_id;
 #elif defined(COMPILE_FOR_ERISC)
     constexpr uint32_t myRiscID = 0;
-    extern uint16_t core_flat_id;
 #elif defined(COMPILE_FOR_NCRISC)
     constexpr uint32_t myRiscID = 1;
-    extern uint16_t core_flat_id;
 #elif COMPILE_FOR_TRISC == 0
     constexpr uint32_t myRiscID = 2;
 #elif COMPILE_FOR_TRISC == 1
@@ -92,21 +89,16 @@ namespace kernel_profiler{
 
         if (runCounter == 0)
         {
-            core_flat_id = noc_xy_to_profiler_flat_id[my_x[0]][my_y[0]];
-
             for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID ++)
             {
                 for (uint32_t i = ID_HH; i < GUARANTEED_MARKER_1_H; i ++)
                 {
                     profiler_data_buffer[riscID][i] = 0;
                 }
-
-                profiler_data_buffer[riscID][ID_LH] = ((core_flat_id & 0xFF) << 3) | riscID;
             }
 
             profiler_control_buffer[NOC_X] = my_x[0];
             profiler_control_buffer[NOC_Y] = my_y[0];
-            profiler_control_buffer[FLAT_ID] = core_flat_id;
         }
 
         for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID ++)
@@ -195,14 +187,16 @@ namespace kernel_profiler{
         if (profiler_control_buffer[PROFILER_DONE] == 1){
             return;
         }
+        while (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]);
+        uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
+        uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
+
         uint32_t pageSize =
             PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * profiler_core_count_per_dram;
 
-        while (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]);
-        uint32_t dram_profiler_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS];
-
         for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID ++)
 	{
+            profiler_data_buffer[riscID][ID_LH] = ((core_flat_id & 0xFF) << 3) | riscID;
             int hostIndex = riscID;
             int deviceIndex = kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER + riscID;
 	    if (profiler_control_buffer[deviceIndex])
@@ -244,7 +238,7 @@ namespace kernel_profiler{
 
                 if (do_noc){
 		    const InterleavedAddrGen<true> s = {
-			.bank_base_address = dram_profiler_address,
+			.bank_base_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS],
 			.page_size = pageSize
 		    };
 
@@ -271,14 +265,18 @@ namespace kernel_profiler{
         SrcLocNameToHash("PROFILER-NOC-QUICK-SEND");
         mark_time_at_index_inlined(wIndex, hash);
         wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
-        core_flat_id = noc_xy_to_profiler_flat_id[my_x[0]][my_y[0]];
+
+        while (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]);
+        uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
+        uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
+
+        profiler_data_buffer[myRiscID][ID_LH] = ((core_flat_id & 0xFF) << 3) | myRiscID;
 
         uint32_t dram_offset =
             (core_flat_id % profiler_core_count_per_dram) * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
             (HOST_BUFFER_END_INDEX_BR_ER + myRiscID) * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
             profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] * sizeof(uint32_t);
 
-        while (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]);
         const InterleavedAddrGen<true> s = {
             .bank_base_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS],
             .page_size = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * profiler_core_count_per_dram

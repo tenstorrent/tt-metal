@@ -753,6 +753,8 @@ def test_sdpa_decode_paged_attention(
         sharded_out=False,
     )
 
+    assert device.num_program_cache_entries() == 3
+
 
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
@@ -896,6 +898,7 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_
             sharded_in=False,
             sharded_out=False,
             start_indices=start_indices,
+            cur_pos_tensor=True,
         )
         run_test_sdpa_decode_single_iter(
             device,
@@ -910,6 +913,7 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_
             sharded_in=True,
             sharded_out=False,
             start_indices=start_indices,
+            cur_pos_tensor=False,
         )
         run_test_sdpa_decode_single_iter(
             device,
@@ -924,6 +928,7 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_
             sharded_in=True,
             sharded_out=True,
             start_indices=start_indices,
+            cur_pos_tensor=False,
         )
         run_test_sdpa_decode_single_iter(
             device,
@@ -938,6 +943,7 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_
             sharded_in=False,
             sharded_out=True,
             start_indices=start_indices,
+            cur_pos_tensor=True,
         )
 
     assert device.num_program_cache_entries() == 4

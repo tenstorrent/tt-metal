@@ -465,7 +465,9 @@ void Device::reset_cores() {
             try {
                 llrt::internal_::wait_until_cores_done(id_and_cores.first, RUN_MSG_GO, id_and_cores.second, timeout_ms);
             } catch (std::runtime_error &e) {
-                TT_THROW("Device {} init: failed to reset cores! Try resetting the board.", this->id());
+                log_warning(
+                    "Detected dispatch kernels still running but failed to complete an early exit. This may happen "
+                    "from time to time following a reset, continuing to FW intialization...");
             }
         }
     }
@@ -602,7 +604,12 @@ void Device::initialize_and_launch_firmware() {
     // Wait until fw init is done, ensures the next launch msg doesn't get
     // written while fw is still in init
     log_debug("Waiting for firmware init complete");
-    llrt::internal_::wait_until_cores_done(this->id(), RUN_MSG_INIT, not_done_cores);
+    const int timeout_ms = 10000; // 10 seconds for now
+    try {
+        llrt::internal_::wait_until_cores_done(this->id(), RUN_MSG_INIT, not_done_cores, timeout_ms);
+    } catch (std::runtime_error &e) {
+        TT_THROW("Device {} init: failed to initialize FW! Try resetting the board.", this->id());
+    }
     log_debug("Firmware init complete");
 }
 
@@ -685,6 +692,12 @@ void Device::configure_kernel_variant(
         {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(NOC_0_Y(downstream_noc_index, grid_size.y, downstream_slave_physical_core.y))},
         {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
     };
+    if (llrt::OptionsG.watcher_dispatch_disabled()) {
+        defines["FORCE_WATCHER_OFF"] = "1";
+    }
+    if (!DPrintServerReadsDispatchCores(this)) {
+        defines["FORCE_DPRINT_OFF"] = "1";
+    }
     defines.insert(defines_in.begin(), defines_in.end());
 
     if (dispatch_core_type == CoreType::WORKER) {
@@ -2384,6 +2397,8 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
     this->initialize_cluster();
     this->initialize_allocator(l1_small_size, trace_region_size, l1_bank_remap);
     this->initialize_build();
+    // Reset the launch_message ring buffer state seen on host, since its reset on device, each time FW is initialized
+    this->worker_launch_message_buffer_state.reset();
     // For minimal setup, don't initialize FW, watcher, dprint. They won't work if we're attaching to a hung chip.
     if (minimal)
         return true;
@@ -2898,9 +2913,7 @@ void Device::generate_device_headers(const std::string &path) const
         dram_noc_coord_per_bank,
         dram_offsets_per_bank,
         l1_noc_coord_per_bank,
-        l1_offset_per_bank,
-        soc_d.profiler_ceiled_core_count_perf_dram_bank,
-        soc_d.physical_routing_to_profiler_flat_id
+        l1_offset_per_bank
     );
 }
 

@@ -159,11 +159,14 @@ void DevicePool::initialize_device(Device* dev) const {
         TT_ASSERT(dev->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
 
+    ClearNocData(dev);
     DprintServerAttach(dev);
     watcher_init(dev);
 
     // TODO: as optimization, investigate removing all this call for already initialized devivces
-    dev->reset_cores();
+    if (!llrt::OptionsG.get_skip_reset_cores_on_init()) {
+        dev->reset_cores();
+    }
     dev->initialize_and_launch_firmware();
 
     watcher_attach(dev);

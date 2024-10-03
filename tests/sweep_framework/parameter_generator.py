@@ -116,7 +116,7 @@ def export_suite_vectors(module_name, suite_name, vectors):
                 bulk_query.append(vector)
             client.bulk(index=index_name, body=bulk_query)
 
-        print(f"SWEEPS: Generated {len(new_vector_hashes)} test vectors for suite {suite_name}.")
+        logger.info(f"SWEEPS: Generated {len(new_vector_hashes)} test vectors for suite {suite_name}.")
 
 
 # Generate one or more sets of test vectors depending on module_name
