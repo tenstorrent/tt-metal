@@ -299,7 +299,7 @@ class TtModelArgs:
                 per_core_M=max(
                     1, 8 if seq_len >= 2048 else seq_len // 256
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=self.qkv_size // self.num_devices // 32 // 8,  # N / TILE_WIDTH / grid width
+                per_core_N=math.ceil(self.qkv_size / self.num_devices / 32 / 8),  # N / TILE_WIDTH / grid width
                 transpose_mcast=False,
                 fused_activation=None,
                 fuse_batch=seq_len <= 2048,
@@ -332,8 +332,9 @@ class TtModelArgs:
             #         mcast_in0=True,
             #     )
 
+            assert self.n_kv_heads % self.num_devices == 0, "n_kv_heads must be divisible by num_devices"
             self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
-                (seq_len // 16, self.head_dim),
+                (((self.n_kv_heads // self.num_devices) * seq_len // 64), self.head_dim),
                 ttnn.CoreGrid(y=8, x=8),
                 ttnn.ShardStrategy.HEIGHT,
                 ttnn.ShardOrientation.ROW_MAJOR,

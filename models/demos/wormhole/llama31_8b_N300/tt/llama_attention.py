@@ -64,6 +64,8 @@ class TtLlamaAttention(nn.Module):
         # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
         assert self.n_heads % configuration.num_devices == 0
         assert self.n_kv_heads % configuration.num_devices == 0
+        assert configuration.qkv_size % configuration.num_devices == 0
+        assert configuration.dim % configuration.num_devices == 0
 
         # wqkv: 4096 x 3072 (2 devices): width-sharded on 12 banks, 3072 over 12 banks.
         wqkv_mem_config = configuration.create_dram_sharded_mem_config(
@@ -396,6 +398,7 @@ class TtLlamaAttention(nn.Module):
             compute_kernel_config=self.compute_kernel_config_hifi2,
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
         )
+
         if seq_len > 2048:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
@@ -440,7 +443,9 @@ class TtLlamaAttention(nn.Module):
             k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         else:
             k_fill = k_heads_1KSD_8b
+
         v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
+
         ttnn.deallocate(v_heads_1VSD)
         # sharding v_fill to deal with update_cache memory limitation
         if seq_len > 256:
@@ -473,6 +478,7 @@ class TtLlamaAttention(nn.Module):
 
         # reshaping to put group in batch dim to do sdpa on 8 MQAs in parallel
         k_heads_K1SD_8b = ttnn.reshape(k_heads_1KSD_8b, [self.n_local_kv_heads, 1, -1, self.head_dim])
+
         v_heads_V1SD_8b = ttnn.reshape(v_heads_1VSD_8b, [self.n_local_kv_heads, 1, -1, self.head_dim])
 
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
