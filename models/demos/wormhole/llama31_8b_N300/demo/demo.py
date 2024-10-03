@@ -451,7 +451,7 @@ def run_llama_demo_n300(user_input, batch_size, device_mesh, instruct_mode, is_c
         "instruct_weights-3_batch",
     ],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 5451776, "num_command_queues": 2}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 5487616, "num_command_queues": 2}], indirect=True)
 def test_llama_demo(mesh_device, use_program_cache, input_prompts, instruct_weights, is_ci_env, num_batches):
     if is_ci_env and instruct_weights == False:
         pytest.skip("CI demo test only runs instruct weights to reduce CI pipeline load (both are supported)")

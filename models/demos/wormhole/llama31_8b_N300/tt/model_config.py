@@ -259,6 +259,14 @@ class TtModelArgs:
                 ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
+            self.model_config["LM_HEAD_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+                (32, 4096 // 64),  # Shard shape: [32, 128] -> 1 shard per core
+                ttnn.CoreGrid(y=8, x=8),
+                ttnn.ShardStrategy.WIDTH,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
             #     x = [32, 4096]
             # W1/W3 = [4096, 14336/2(devices)]
             self.model_config[
