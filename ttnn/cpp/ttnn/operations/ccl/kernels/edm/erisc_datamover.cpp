@@ -260,28 +260,26 @@ void kernel_main() {
                 case ChannelBufferT::STATE::SENDER_WAITING_FOR_WORKER:
                 did_something_sender =
                     erisc::datamover::sender_noc_receive_payload_ack_check_sequence(current_sender, num_senders_complete);
-                senders_in_progress = senders_in_progress && num_senders_complete != sender_num_channels;
                 break;
 
                 case ChannelBufferT::STATE::SENDER_READY_FOR_ETH_TRANSFER:
-                did_something_sender = erisc::datamover::sender_eth_send_data_sequence(current_sender);
+                did_something_sender = erisc::datamover::sender_eth_send_data_sequence(current_sender, num_senders_complete);
                     break;
 
                 case ChannelBufferT::STATE::SENDER_SIGNALING_WORKER:
                 did_something_sender = erisc::datamover::sender_notify_workers_if_buffer_available_sequence(
                                     current_sender, num_senders_complete);
-                senders_in_progress = senders_in_progress && num_senders_complete != sender_num_channels;
                 break;
 
                 case ChannelBufferT::STATE::SENDER_WAITING_FOR_ETH:
                 did_something_sender =
                     erisc::datamover::sender_eth_check_receiver_ack_sequence(current_sender, num_senders_complete);
-                senders_in_progress = senders_in_progress && num_senders_complete != sender_num_channels;
                 break;
 
                 default:
                 break;
             };
+            senders_in_progress = senders_in_progress && num_senders_complete != sender_num_channels;
         }
 
         //////////////////////////////////////
@@ -302,7 +300,7 @@ void kernel_main() {
 
                 case ChannelBufferT::STATE::RECEIVER_WAITING_FOR_WORKER:
                 did_something_receiver = erisc::datamover::receiver_noc_read_worker_completion_check_sequence(
-                                    current_receiver, num_receivers_complete);
+                                    current_receiver, num_receivers_complete, eth_transaction_ack_word_addr);
                 receivers_in_progress = receivers_in_progress && num_receivers_complete != receiver_num_channels;
                 break;
 
