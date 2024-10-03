@@ -739,7 +739,7 @@ void bind_binary_bw(py::module& module, const binary_backward_operation_t& opera
 }
 
 template <typename binary_backward_operation_t>
-void bind_binary_bw_optional(py::module& module, const binary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype = "") {
+void bind_binary_bw_optional(py::module& module, const binary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
 
@@ -751,18 +751,19 @@ void bind_binary_bw_optional(py::module& module, const binary_backward_operation
             input_tensor_b (ttnn.Tensor or Number): the input tensor.
 
         Keyword args:
-            memory_config (Optional[ttnn.MemoryConfig]): memory config for the output tensor
-            output_tensor (Optional[ttnn.Tensor]): preallocated output tensor
-            queue_id (Optional[uint8]): command queue id
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (uint8, optional): command queue id. Defaults to `0`.
 
         Note:
             {3}
 
         Example:
 
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
             >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
             >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
-            >>> output = {1}(tensor1, tensor2)
+            >>> output = {1}(grad_tensor, tensor1, tensor2)
 
         )doc",
         operation.base_name(),
@@ -1039,7 +1040,7 @@ void bind_binary_backward_overload(py::module& module, const binary_backward_ope
             >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
             >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
             >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
-            >>> output = {1}(grad_tensor, tensor1, tensor2/scalar)
+            >>> output = {1}(grad_tensor, tensor1, tensor2)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1245,7 +1246,7 @@ void py_module(py::module& module) {
     detail::bind_binary_bw_optional(
         module,
         ttnn::lt_bw,
-        R"doc(Performs backward operations for less than operation of :attr:`input_tensor_a` and attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc",
+        R"doc(Performs backward operations for less than comparison operation of :attr:`input_tensor_a` and attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc",
         R"doc(
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
@@ -1285,7 +1286,7 @@ void py_module(py::module& module) {
         |     Dtypes                 |         Layouts                 |     Ranks         |
         +----------------------------+---------------------------------+-------------------+
         |    BFLOAT16                |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc)doc");
+        +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_backward_overload(
         module,
@@ -1312,7 +1313,7 @@ void py_module(py::module& module) {
     detail::bind_binary_backward_overload(
         module,
         ttnn::le_bw,
-        R"doc(Performs backward operations for less than or equal comparison operation of :attr:`input_tensor_a` and attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc",
+        R"doc(Performs backward operations for less than or equal to comparison operation of :attr:`input_tensor_a` and attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc",
         R"doc(
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
