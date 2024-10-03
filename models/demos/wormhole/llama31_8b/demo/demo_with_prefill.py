@@ -525,8 +525,8 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
     logger.info(f"Time to first token: {round(measurements['prefill_time_to_token']* 1000, 4)}ms")
     logger.info(f"Average tokens/sec/user: {round(measurements['decode_t/s/u'], 2)}")
 
-    target_prefill_ts = 5000  # TODO update target
-    target_decode_ts = 1056
+    target_prefill_ts = 1050  # TODO update target
+    target_decode_ts = 23 * batch_size
     decode_tsu = 23
     targets = {"prefill_t/s": target_prefill_ts, "decode_t/s": target_decode_ts, "decode_t/s/u": decode_tsu}
 

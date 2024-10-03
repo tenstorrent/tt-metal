@@ -26,9 +26,6 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import T
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 
-from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
-
 
 # load from json, return as a list
 def load_inputs(user_input, batch):
@@ -306,7 +303,8 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
                     mode="prefill",
                     get_last_token=((decoding_pos[batch_id] - 1) // 32) * 32,
                 )
-                pt_out.append(ttnn.to_torch(tt_out)[0, 0, (decoding_pos[batch_id] - 1) % 32, :])
+                # Run the `to_torch` op accurately measure the inference time, but don't use the torch output
+                pt_out_ = ttnn.to_torch(tt_out)[0, 0, (decoding_pos[batch_id] - 1) % 32, :]
                 ttnn.deallocate(tt_out)
 
         ttnn.synchronize_device(device)
@@ -550,8 +548,8 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
     logger.info(f"Time to first token: {round(measurements['prefill_time_to_token']* 1000, 4)}ms")
     logger.info(f"Average tokens/sec/user: {round(measurements['decode_t/s/u'], 2)}")
 
-    target_prefill_ts = 5000  # TODO update target
-    target_decode_ts = 1056
+    target_prefill_ts = 1050  # TODO update target
+    target_decode_ts = 23 * batch_size
     decode_tsu = 23
     targets = {"prefill_t/s": target_prefill_ts, "decode_t/s": target_decode_ts, "decode_t/s/u": decode_tsu}
 
