@@ -527,7 +527,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
 
     target_prefill_ts = 5000  # TODO update target
     target_decode_ts = 1056
-    decode_tsu = 33
+    decode_tsu = 23
     targets = {"prefill_t/s": target_prefill_ts, "decode_t/s": target_decode_ts, "decode_t/s/u": decode_tsu}
 
     # Save benchmark data for CI dashboard
