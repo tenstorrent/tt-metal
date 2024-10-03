@@ -95,7 +95,7 @@ def get_prompts_for_compilation(tokenized, prompts):
 
 def demo_warmup(args):
     # Skip if model_implementation is not tt
-    if model_args.implementation != "tt":
+    if args.model.implementation != "tt":
         return
     # Copy and modify arguments
     model_args = replace(args.model, num_layers=1)
