@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import math
 import ttnn
 import torch
 import torch.nn as nn
@@ -55,14 +56,12 @@ class TtTransformer(nn.Module):
             weight_key="norm",
         )
 
-        self.output_weight = ttnn.as_tensor(
-            state_dict["output.weight"].permute(1, 0),
-            device=device_mesh,
-            mesh_mapper=ttnn.ShardTensorToMesh(device_mesh, dim=-1),
-            layout=ttnn.TILE_LAYOUT,
+        self.lm_head = LMHead(
+            args=args,
+            device_mesh=device_mesh,
             dtype=dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=None if args.dummy_weights else weight_cache_path / "output.weight",
+            state_dict=state_dict,
+            weight_cache_path=weight_cache_path,
         )
 
     def forward(
@@ -81,21 +80,104 @@ class TtTransformer(nn.Module):
         if mode == "prefill" and get_last_token == -1:
             return x
 
-        # Slicing the tensor to the nearest celing/floor multiples of 32 for the prefill_len, to get the last token
+        # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
         if get_last_token != -1:
             x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, 4096))
 
         x = self.norm(x)
-
-        output = ttnn.linear(
-            x,
-            self.output_weight,
-            compute_kernel_config=self.args.compute_kernel_config_hifi4,
-            program_config=self.model_config["OUTPUT_MM_PROGCFG"],
-            memory_config=self.model_config["OUTPUT_MM_MEMCFG"],
-            dtype=self.dtype,
-        )
+        output = self.lm_head(x)
 
         ttnn.deallocate(x)
+
+        return output
+
+
+class LMHead(nn.Module):
+    def __init__(
+        self,
+        args,
+        device_mesh,
+        dtype,
+        state_dict,
+        weight_cache_path,
+    ):
+        super().__init__()
+        self.args = args
+        self.device_mesh = device_mesh
+        self.dtype = dtype
+        self.vocab_size = args.vocab_size
+        self.num_splits = 2
+
+        split_size = self.vocab_size // self.num_splits
+        split_size_per_device = math.ceil((split_size // device_mesh.get_num_devices()) / (32 * 12)) * (
+            32 * 12
+        )  # Padded - Tile size (32) * dram cores (12)
+
+        # Helper function to create output memory config
+        def create_output_mem_config(size, num_devices):
+            padded_size = math.ceil((size // num_devices) / (32 * 12)) * (32 * 12)  # Tile size (32) * dram cores (12)
+            shard_spec = ttnn.ShardSpec(
+                args.dram_weight_grid, (4096, padded_size // 12), ttnn.ShardOrientation.ROW_MAJOR, False
+            )
+            return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+        # Split the output weight
+        output_weight = state_dict["output.weight"].permute(1, 0)
+        self.output_weights = []
+        for i in range(self.num_splits):
+            start = i * split_size
+            end = (i + 1) * split_size
+            weight_part = output_weight[:, start:end]
+            self.output_weights.append(
+                ttnn.as_tensor(
+                    weight_part,
+                    device=device_mesh,
+                    mesh_mapper=ttnn.ShardTensorToMesh(device_mesh, dim=-1),
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=dtype,
+                    memory_config=create_output_mem_config(split_size, num_devices=device_mesh.get_num_devices()),
+                    cache_file_name=None
+                    if args.dummy_weights
+                    else weight_cache_path / f"output_lm_head_{self.num_splits}split_shard_{i}",
+                )
+            )
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
+        # Calculate per_core_N based on the number of splits
+        tile_size = 32
+        core_count = 64  # Assuming 8x8 core grid
+        # TODO Miguel, this per_core_N doesn't work for 1 device!
+        # per_core_N = -(-split_size // (tile_size * core_count))  # Ceiling division
+        per_core_N = -(-split_size_per_device // (tile_size * core_count))  # Ceiling division
+        self.program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=2,  # 4096 (dim) // 32 (tile) // 64 cores
+            per_core_M=1,
+            per_core_N=per_core_N,
+            fused_activation=None,
+        )
+        # breakpoint()
+
+    def forward(self, x: ttnn.Tensor):
+        x = ttnn.interleaved_to_sharded(x, self.args.get_model_config()["SHARDED_MLP_DECODE_INPUT_MEMCFG"])
+
+        outputs = []
+        for weight in self.output_weights:
+            output = ttnn.linear(
+                x,
+                weight,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=self.program_config,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                dtype=ttnn.bfloat8_b,
+            )
+            outputs.append(ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG))
+        # breakpoint()
+        # Concatenate the outputs
+        output = ttnn.concat(outputs, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         return output

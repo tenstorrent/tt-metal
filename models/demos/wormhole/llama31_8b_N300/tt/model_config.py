@@ -308,31 +308,6 @@ class TtModelArgs:
                 fuse_batch=seq_len <= 2048,
             )
 
-            if self.di_dt_workaround:
-                self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(7, 8),
-                    in0_block_w=1,
-                    per_core_M=1,
-                    per_core_N=36,  # vocab size = 128k/2(devices) = 20048 tiles. 4004//56cores = 36
-                    out_subblock_h=1,
-                    out_subblock_w=1,
-                    fuse_batch=True,
-                    fused_activation=None,
-                    mcast_in0=True,
-                )
-            else:
-                self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=2,
-                    out_subblock_h=1,
-                    out_subblock_w=4,
-                    per_core_M=1,
-                    per_core_N=36,  # vocab size = 128k/2(devices) = 20048 tiles. 4004//56cores = 36
-                    fuse_batch=True,
-                    fused_activation=None,
-                    mcast_in0=True,
-                )
-
             self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
                 (seq_len // 16, self.head_dim),
                 ttnn.CoreGrid(y=8, x=8),
