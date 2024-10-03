@@ -1,4 +1,4 @@
-name: "(Single/TG/TGG) Choose your pipeline"
+name: "(Single) Choose your pipeline"
 
 on:
   workflow_dispatch:
@@ -33,30 +33,6 @@ on:
         required: false
         type: boolean
         default: false
-      tgg-unit:
-        required: false
-        type: boolean
-        default: false
-      tgg-frequent:
-        required: false
-        type: boolean
-        default: false
-      tgg-model-perf:
-        required: false
-        type: boolean
-        default: false
-      tg-unit:
-        required: false
-        type: boolean
-        default: false
-      tg-frequent:
-        required: false
-        type: boolean
-        default: false
-      tg-model-perf:
-        required: false
-        type: boolean
-        default: false
 
 run-name: ${{ inputs.description }}
 jobs:
@@ -86,33 +62,3 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
     if: ${{ inputs.single-card-nightly }}
-  tgg-unit-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/tgg-unit-tests-impl.yaml
-    if: ${{ inputs.tgg-unit }}
-  tgg-frequent-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/tgg-frequent-tests-impl.yaml
-    if: ${{ inputs.tgg-frequent }}
-  tgg-model-perf-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/tgg-model-perf-tests-impl.yaml
-    if: ${{ inputs.tgg-model-perf }}
-  tg-unit-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/tg-unit-tests-impl.yaml
-    if: ${{ inputs.tg-unit }}
-  tg-frequent-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/tg-frequent-tests-impl.yaml
-    if: ${{ inputs.tg-frequent }}
-  tg-model-perf-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/tg-model-perf-tests-impl.yaml
-    if: ${{ inputs.tg-model-perf }}
