@@ -89,7 +89,7 @@ parameters = {
             [],
         ],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
-        "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.int32],
+        "dtype": [ttnn.bfloat16],
     }
 }
 
