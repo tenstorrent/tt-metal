@@ -41,11 +41,19 @@ on:
         required: false
         type: boolean
         default: false
+      tgg-model-perf:
+        required: false
+        type: boolean
+        default: false
       tg-unit:
         required: false
         type: boolean
         default: false
       tg-frequent:
+        required: false
+        type: boolean
+        default: false
+      tg-model-perf:
         required: false
         type: boolean
         default: false
@@ -88,6 +96,11 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/tgg-frequent-tests-impl.yaml
     if: ${{ inputs.tgg-frequent }}
+  tgg-model-perf-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tgg-model-perf-tests-impl.yaml
+    if: ${{ inputs.tgg-model-perf }}
   tg-unit-tests:
     needs: build-artifact
     secrets: inherit
@@ -98,3 +111,8 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/tg-frequent-tests-impl.yaml
     if: ${{ inputs.tg-frequent }}
+  tg-model-perf-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tg-model-perf-tests-impl.yaml
+    if: ${{ inputs.tg-model-perf }}
