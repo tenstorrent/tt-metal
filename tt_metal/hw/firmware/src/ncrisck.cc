@@ -20,11 +20,6 @@
 #include "kernel_includes.hpp"
 
 uint8_t noc_index = NOC_INDEX;
-uint8_t noc_mode = NOC_MODE;
-constexpr uint32_t read_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_RD_CMD_BUF : DYNAMIC_NOC_NCRISC_RD_CMD_BUF;
-constexpr uint32_t write_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_WR_CMD_BUF : DYNAMIC_NOC_NCRISC_WR_CMD_BUF;
-constexpr uint32_t write_reg_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_WR_REG_CMD_BUF : DYNAMIC_NOC_NCRISC_WR_REG_CMD_BUF;
-constexpr uint32_t write_at_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_AT_CMD_BUF : DYNAMIC_NOC_NCRISC_AT_CMD_BUF;
 
 uint32_t noc_reads_num_issued[NUM_NOCS];
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];

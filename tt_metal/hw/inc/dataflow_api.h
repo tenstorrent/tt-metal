@@ -32,10 +32,23 @@ extern uint8_t noc_index;
 extern uint32_t tt_l1_ptr *rta_l1_base;
 extern uint32_t tt_l1_ptr *crta_l1_base;
 extern uint32_t tt_l1_ptr *sem_l1_base[];
-extern const uint32_t read_cmd_buf;
-extern const uint32_t write_cmd_buf;
-extern const uint32_t write_reg_cmd_buf;
-extern const uint32_t write_at_cmd_buf;
+
+#if defined(COMPILE_FOR_BRISC)
+constexpr uint32_t read_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? BRISC_RD_CMD_BUF : DYNAMIC_NOC_BRISC_RD_CMD_BUF;
+constexpr uint32_t write_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? BRISC_WR_CMD_BUF : DYNAMIC_NOC_BRISC_WR_CMD_BUF;
+constexpr uint32_t write_reg_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? BRISC_WR_REG_CMD_BUF : DYNAMIC_NOC_BRISC_WR_REG_CMD_BUF;
+constexpr uint32_t write_at_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? BRISC_AT_CMD_BUF : DYNAMIC_NOC_BRISC_AT_CMD_BUF;
+#elif defined(COMPILE_FOR_NCRISC)
+constexpr uint32_t read_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_RD_CMD_BUF : DYNAMIC_NOC_NCRISC_RD_CMD_BUF;
+constexpr uint32_t write_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_WR_CMD_BUF : DYNAMIC_NOC_NCRISC_WR_CMD_BUF;
+constexpr uint32_t write_reg_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_WR_REG_CMD_BUF : DYNAMIC_NOC_NCRISC_WR_REG_CMD_BUF;
+constexpr uint32_t write_at_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_AT_CMD_BUF : DYNAMIC_NOC_NCRISC_AT_CMD_BUF;
+#else // use the default cmf buffers for compute/eth
+constexpr uint32_t read_cmd_buf __attribute__((used)) = NCRISC_RD_CMD_BUF;
+constexpr uint32_t write_cmd_buf __attribute__((used)) = NCRISC_WR_CMD_BUF;
+constexpr uint32_t write_reg_cmd_buf __attribute__((used)) = NCRISC_WR_REG_CMD_BUF;
+constexpr uint32_t write_at_cmd_buf __attribute__((used)) = NCRISC_AT_CMD_BUF;
+#endif
 
 /** @file */
 

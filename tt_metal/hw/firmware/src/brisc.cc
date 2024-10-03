@@ -33,10 +33,6 @@
 
 uint8_t noc_index;
 uint8_t noc_mode;
-constexpr uint32_t read_cmd_buf __attribute__((used)) = BRISC_RD_CMD_BUF;
-constexpr uint32_t write_cmd_buf __attribute__((used)) = BRISC_WR_CMD_BUF;
-constexpr uint32_t write_reg_cmd_buf __attribute__((used)) = BRISC_WR_REG_CMD_BUF;
-constexpr uint32_t write_at_cmd_buf __attribute__((used)) = BRISC_AT_CMD_BUF;
 
 constexpr uint32_t RISCV_IC_BRISC_MASK = 0x1;
 constexpr uint32_t RISCV_IC_NCRISC_MASK = 0x10;
@@ -361,7 +357,7 @@ int main() {
 
     mailboxes->go_message.signal = RUN_MSG_DONE;
 
-    uint8_t prev_noc_mode = 0;
+    uint8_t prev_noc_mode = DM_DEDICATED_NOC;
     while (1) {
         init_sync_registers();
         reset_ncrisc_with_iram();
@@ -420,7 +416,11 @@ int main() {
 
             // re-initialize the NoCs
             if (prev_noc_mode != noc_mode) {
-                noc_init_dynamic_noc();
+                if (noc_mode == DM_DEDICATED_NOC) {
+                    noc_init();
+                } else {
+                    dynamic_noc_init();
+                }
             }
             prev_noc_mode = noc_mode;
 

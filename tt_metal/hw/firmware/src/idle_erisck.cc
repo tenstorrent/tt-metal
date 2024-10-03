@@ -24,11 +24,6 @@
 uint8_t noc_index = NOC_INDEX;
 extern uint32_t __kernel_init_local_l1_base[];
 
-constexpr uint32_t read_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? BRISC_RD_CMD_BUF : DYNAMIC_NOC_BRISC_RD_CMD_BUF;
-constexpr uint32_t write_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? BRISC_WR_CMD_BUF : DYNAMIC_NOC_BRISC_WR_CMD_BUF;
-constexpr uint32_t write_reg_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? BRISC_WR_REG_CMD_BUF : DYNAMIC_NOC_BRISC_WR_REG_CMD_BUF;
-constexpr uint32_t write_at_cmd_buf __attribute__((used)) = NOC_MODE == DM_DEDICATED_NOC ? BRISC_AT_CMD_BUF : DYNAMIC_NOC_BRISC_AT_CMD_BUF;
-
 void kernel_launch() {
     DeviceZoneScopedMainChildN("ERISC-KERNEL");
     firmware_kernel_common_init((void tt_l1_ptr *)__kernel_init_local_l1_base);
