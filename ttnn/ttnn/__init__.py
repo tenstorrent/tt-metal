@@ -197,6 +197,7 @@ from ttnn.multi_device import (
     visualize_mesh_device,
     ConcatMesh2dToTensor,
     distribute,
+    MeshType,
 )
 
 from ttnn.core import (

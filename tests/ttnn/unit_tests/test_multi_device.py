@@ -587,3 +587,28 @@ def test_validate_as_tensor(tmp_path, mesh_device, height, width):
     for device in mesh_device.get_devices():
         device_tensor = ttnn.get_device_tensor(tensor, device)
         assert torch.allclose(ttnn.to_torch(device_tensor), torch_input_tensor)
+
+
+def test_visualize_mesh_device(t3k_mesh_device):
+    ttnn.visualize_mesh_device(t3k_mesh_device)
+
+
+def test_all_gather_multiple_submeshes(t3k_mesh_device):
+    """Test all_gather with multiple submeshes"""
+
+    def model(submesh):
+        full_tensor = torch.ones((1, 1, 32, 32 * submesh.get_num_devices()), dtype=torch.bfloat16)
+        for i in range(submesh.get_num_devices()):
+            full_tensor[..., i * 32 : (i + 1) * 32] = i
+
+        ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ShardTensorToMesh(submesh, dim=3))
+        ttnn_tensor = ttnn.to_device(ttnn_tensor, submesh)
+        ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1)
+
+        for device_tensor in ttnn.get_device_tensors(ttnn_tensor):
+            device_tensor_torch = ttnn.to_torch(device_tensor)
+            assert torch.all(device_tensor_torch == full_tensor)
+
+    submesh_devices = t3k_mesh_device.create_submeshes((2, 2), ttnn.MeshType.Ring)
+    for submesh in submesh_devices:
+        model(submesh)
