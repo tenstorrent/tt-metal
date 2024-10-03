@@ -4,6 +4,7 @@
 
 import math
 import os
+import json
 import ttnn
 from pathlib import Path
 from loguru import logger
@@ -24,23 +25,21 @@ def calculate_hidden_dim(dim, ffn_dim_multiplier, multiple_of):
     return hidden_dim
 
 
-class TtModelArgs:
-    """Model args for Llama 3.1 8B as provided by the params.json config file"""
+DEFAULT_LLAMA3_2_3B_PARAMS = {
+    "dim": 3072,
+    "ffn_dim_multiplier": 1.0,
+    "multiple_of": 256,
+    "n_heads": 24,
+    "n_kv_heads": 8,
+    "n_layers": 28,
+    "norm_eps": 1e-05,
+    "rope_theta": 500000.0,
+    "use_scaled_rope": True,
+    "vocab_size": 128256,
+}
 
-    dim = 3072
-    n_layers = 28
-    head_dim = 128
-    ffn_dim_multiplier = 1.0
-    multiple_of = 256
-    hidden_dim = calculate_hidden_dim(dim, ffn_dim_multiplier, multiple_of)
-    n_heads = 24
-    n_kv_heads = 8
-    norm_eps = 1e-05
-    vocab_size = 128256
-    ffn_dim_multiplier = 1.0
-    multiple_of = 256
-    rope_theta = 500000.0
-    use_scaled_rope = True
+
+class TtModelArgs:
     paged_attention_config = None
 
     # Parameters for our use
@@ -121,6 +120,9 @@ class TtModelArgs:
         logger.info(f"Cache directory: {self.DEFAULT_CACHE_PATH}")
         if dummy_weights:
             logger.info(f"Note: Using dummy weights, weight caching disabled")
+            self._set_llama_params_from_dict(DEFAULT_LLAMA3_2_3B_PARAMS)
+        else:
+            self._set_llama_params(self.DEFAULT_CKPT_DIR)
 
         # Some consumers like SentencePiece only accept str not Path for files
         self.model_base_path = Path(self.DEFAULT_CKPT_DIR)
@@ -190,7 +192,13 @@ class TtModelArgs:
 
             # Function definitions remain the same
             def matmul_config(
-                m: int, k: int, n: int, grid_size: Tuple[int, int], in0_block_w: int = None, fuse_batch: bool = False
+                m: int,
+                k: int,
+                n: int,
+                grid_size: Tuple[int, int],
+                in0_block_w: int = None,
+                fuse_batch: bool = False,
+                fused_activation=None,
             ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
                 per_core_M = math.ceil(m / (32 * grid_size[1]))
                 per_core_N = math.ceil(n / (32 * grid_size[0]))
@@ -210,7 +218,7 @@ class TtModelArgs:
                     per_core_M=per_core_M,
                     per_core_N=per_core_N,
                     transpose_mcast=False,
-                    fused_activation=None,
+                    fused_activation=fused_activation,
                     fuse_batch=fuse_batch,
                 )
 
@@ -280,7 +288,12 @@ class TtModelArgs:
             )
 
             self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: matmul_config(
-                m=seq_len, k=self.dim, n=self.dim, grid_size=(8, 8), in0_block_w=1, fuse_batch=seq_len <= 2048
+                m=min(seq_len, 2048),
+                k=self.dim,
+                n=self.dim,
+                grid_size=(8, 8),
+                in0_block_w=1,
+                fuse_batch=seq_len <= 2048,
             )
 
             self.model_config["LM_HEAD_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
@@ -440,6 +453,108 @@ class TtModelArgs:
                 ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
+
+            # Vision model configs
+            self.model_config["IMAGE_MLP_FC_PROGCFG"] = lambda seq_len: matmul_config(
+                m=min(seq_len, 1024),
+                k=self.vision_dim,
+                n=self.vision_hidden_dim // self.num_devices,
+                grid_size=(8, 8),
+                in0_block_w=1,
+                fuse_batch=seq_len <= 1024,
+            )
+            self.model_config["IMAGE_MLP_PROJ_PROGCFG"] = lambda seq_len: matmul_config(
+                m=min(seq_len, 1024),
+                k=self.vision_hidden_dim // self.num_devices,
+                n=self.vision_dim,
+                grid_size=(8, 8),
+                in0_block_w=1,
+                fuse_batch=seq_len <= 1024,
+            )
+            self.model_config["IMAGE_ATTN_QKV_PROGCFG"] = lambda seq_len: matmul_config(
+                m=min(seq_len, 1024),
+                k=self.vision_dim,
+                n=(self.vision_dim * 3),
+                grid_size=(8, 8),
+                in0_block_w=1,
+                fuse_batch=seq_len <= 1024,
+            )
+            self.model_config["IMAGE_ATTN_OUT_PROGCFG"] = lambda seq_len: matmul_config(
+                m=min(seq_len, 1024),
+                k=self.vision_dim,
+                n=self.vision_dim,
+                grid_size=(8, 8),
+                in0_block_w=1,
+                fuse_batch=seq_len <= 1024,
+            )
+
+    def _set_llama_params_from_dict(self, params):
+        # Text params
+        self.dim = params["dim"]
+        self.ffn_dim_multiplier = params["ffn_dim_multiplier"]
+        self.multiple_of = params["multiple_of"]
+        self.n_heads = params["n_heads"]
+        self.n_kv_heads = params["n_kv_heads"]
+        self.n_layers = params["n_layers"]
+        self.norm_eps = params["norm_eps"]
+        self.rope_theta = params["rope_theta"]
+        self.use_scaled_rope = params["use_scaled_rope"]
+        self.vocab_size = params["vocab_size"]
+        self.head_dim = self.dim // self.n_heads
+        self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
+
+        # Vision params
+        self.vision_chunk_size = params.get("vision_chunk_size", -1)
+        self.vision_max_num_chunks = params.get("vision_max_num_chunks", 4)
+        self.vision_num_cross_attention_layers = params.get("vision_num_cross_attention_layers", -1)
+
+        self.vision_dim = 1280
+        self.vision_mlp_ratio = 4
+        self.vision_hidden_dim = int(self.vision_dim * self.vision_mlp_ratio)
+        self.vision_act_layer = ttnn.UnaryOpType.GELU
+        self.vision_dropout = 0.0
+        self.vision_attn_n_heads = 16
+        self.vision_head_dim = self.vision_hidden_dim // self.vision_attn_n_heads
+
+    def _set_llama_params(self, checkpoint_dir):
+        params_file = os.path.join(checkpoint_dir, "params.json")
+        assert os.path.exists(params_file), f"params.json file not found at {params_file}"
+        with open(params_file, "r") as f:
+            params = json.load(f)
+        self._set_llama_params_from_dict(params)
+
+    def __repr__(self):
+        return f"""ModelArgs(
+    dim={self.dim},
+    n_layers={self.n_layers},
+    n_heads={self.n_heads},
+    n_kv_heads={self.n_kv_heads},
+    vocab_size={self.vocab_size},
+    multiple_of={self.multiple_of},
+    ffn_dim_multiplier={self.ffn_dim_multiplier},
+    norm_eps={self.norm_eps},
+    rope_theta={self.rope_theta},
+    use_scaled_rope={self.use_scaled_rope},
+    max_batch_size={self.max_batch_size},
+    max_seq_len={self.max_seq_len},
+    vision_chunk_size={self.vision_chunk_size},
+    vision_max_num_chunks={self.vision_max_num_chunks},
+    vision_num_cross_attention_layers={self.vision_num_cross_attention_layers}
+)"""
+
+    def is_vision(self):
+        return self.vision_chunk_size > 0
+
+    def get_state_dict_prefix(self, module_name, layer_num):
+        text_prefix = "text_model." if self.is_vision() else ""
+        layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
+        module_map = {
+            "TtLlamaMLP": "feed_forward",
+            "TtLlamaAttention": "attention",
+            "TtTransformerBlock": "",
+            "": "",  # If no module is given, just get layer prefix
+        }
+        return text_prefix + layer_prefix + module_map[module_name]
 
     def weight_cache_path(self, dtype):
         # Keep the weight cache separate for generative and instruct weights

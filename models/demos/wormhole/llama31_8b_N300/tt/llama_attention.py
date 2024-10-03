@@ -4,15 +4,15 @@
 
 from typing import List, Optional
 import torch
-from torch import nn
 
 import ttnn
 from models.utility_functions import (
     nearest_32,
 )
+from models.common.lightweightmodule import LightweightModule
 
 
-class TtLlamaAttention(nn.Module):
+class TtLlamaAttention(LightweightModule):
     def __init__(
         self,
         mesh_device,
@@ -50,7 +50,7 @@ class TtLlamaAttention(nn.Module):
 
         self.model_config = configuration.get_model_config()
 
-        layer_name = f"layers.{layer_num}.attention"
+        layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
         if configuration.dummy_weights or (weight_cache_path is None):
             cache_name = lambda _: None
         else:
@@ -174,58 +174,6 @@ class TtLlamaAttention(nn.Module):
             for k_or_v in [cache_k, cache_v]
         ]
 
-        self.q_heads_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(self.grid_size.x, self.grid_size.y),
-            in0_block_w=4,
-            out_subblock_h=4,
-            out_subblock_w=1,
-            per_core_M=4,
-            per_core_N=1,
-            transpose_mcast=False,
-            fused_activation=None,
-        )
-        self.k_heads_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(self.grid_size.x, self.grid_size.y),
-            in0_block_w=4,
-            out_subblock_h=1,
-            out_subblock_w=1,
-            per_core_M=1,
-            per_core_N=1,
-            transpose_mcast=False,
-            fused_activation=None,
-        )
-
-        self.expand_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(self.grid_size.x, self.grid_size.y),
-            in0_block_w=4,
-            out_subblock_h=2,
-            out_subblock_w=2,
-            per_core_M=4,
-            per_core_N=4,
-            transpose_mcast=False,
-            fused_activation=None,
-        )
-
-        self.reduce_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(self.grid_size.x, self.grid_size.y),
-            in0_block_w=4,
-            out_subblock_h=4,
-            out_subblock_w=1,
-            per_core_M=4,
-            per_core_N=1,
-            transpose_mcast=False,
-            fused_activation=None,
-        )
-
-        self.attn_program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
-            in0_block_w=1,
-            out_subblock_h=1,
-            out_subblock_w=4,
-            per_core_M=1,
-            per_core_N=32,
-        )
-        self.attention_grid = ttnn.CoreCoord(8, 4)
         self.scale = self.head_dim**-0.5
 
     def forward_decode(

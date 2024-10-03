@@ -4,9 +4,10 @@
 
 import torch
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 
 
-class TtLlamaMLP(torch.nn.Module):
+class TtLlamaMLP(LightweightModule):
     def __init__(
         self,
         mesh_device,
@@ -23,14 +24,13 @@ class TtLlamaMLP(torch.nn.Module):
         self.mesh_device = mesh_device
         self.args = args
         self.model_config = model_config
-
-        base_name = f"layers.{layer_num}.feed_forward"
-        torch_weight = lambda name: torch.transpose(self.state_dict[f"{base_name}.{name}.weight"], -2, -1)
+        state_dict_prefix = args.get_state_dict_prefix(self.__class__.__name__, layer_num)
+        torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
 
         if args.dummy_weights:
             cache_name = lambda _: None
         else:
-            cache_name = lambda name: weight_cache_path / (base_name + f".{name}")
+            cache_name = lambda name: weight_cache_path / (state_dict_prefix + f".{name}")
 
         w1_w3_mem_config = args.create_dram_sharded_mem_config(args.dim, args.hidden_dim // args.num_devices)
         w2_mem_config = args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
@@ -41,17 +41,17 @@ class TtLlamaMLP(torch.nn.Module):
             dtype=type,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=dim),
-            layout=self.model_config["MLP_W_LAYOUT_TILE"],
+            layout=ttnn.TILE_LAYOUT,
             memory_config=w2_mem_config if "w2" in name else w1_w3_mem_config,
             cache_file_name=cache_name(name),
         )
 
         # Sharded weights
         self.w1 = as_sharded_tensor(
-            "w1_sharded", ttnn.bfloat8_b, dim=-1
+            "w1_sharded", dtype, dim=-1
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dim=-2)
-        self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat8_b, dim=-1)
+        self.w2 = as_sharded_tensor("w2_sharded", dtype, dim=-2)
+        self.w3 = as_sharded_tensor("w3_sharded", dtype, dim=-1)
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """

@@ -59,13 +59,20 @@ def test_llama_model_inference(mesh_device, seq_len, use_program_cache, reset_se
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     logger.info("Loading weights...")
+    state_dict_prefix = model_args.get_state_dict_prefix("", None)
+
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
-    state_dict = {
-        k: v
+    reference_state_dict = {
+        k[len(state_dict_prefix) :]: v
         for k, v in state_dict.items()
         if (
-            any([f"layers.{i}." in k for i in range(model_args.n_layers)])
-            or k in ["tok_embeddings.weight", "norm.weight", "output.weight"]
+            any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
+            or any(
+                [
+                    f"{state_dict_prefix}{name}" in k
+                    for name in ["tok_embeddings.weight", "norm.weight", "output.weight"]
+                ]
+            )
         )
     }
     logger.info("Finished loading weights...")
@@ -84,10 +91,10 @@ def test_llama_model_inference(mesh_device, seq_len, use_program_cache, reset_se
 
     if run_ref_pt:
         reference_model = Transformer(model_args)
-        reference_model.load_state_dict(state_dict)
+        reference_model.load_state_dict(reference_state_dict)
     # Embedding on host
     embd = HostEmbedding(model_args)
-    embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
+    embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = get_prefill_rot_mat(model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=seq_len)
@@ -108,7 +115,6 @@ def test_llama_model_inference(mesh_device, seq_len, use_program_cache, reset_se
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        layers=list(range(model_args.n_layers)),
     )
 
     logger.info("Model and caches loaded.")

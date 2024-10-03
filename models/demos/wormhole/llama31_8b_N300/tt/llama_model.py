@@ -11,9 +11,10 @@ from models.demos.wormhole.llama31_8b_N300.tt.llama_decoder import TtTransformer
 from models.common.rmsnorm import RMSNorm
 import ttnn
 from typing import Optional
+from models.common.lightweightmodule import LightweightModule
 
 
-class TtTransformer(nn.Module):
+class TtTransformer(LightweightModule):
     def __init__(
         self,
         args,
@@ -32,25 +33,24 @@ class TtTransformer(nn.Module):
         self.model_config = args.get_model_config()
         self.grid_size = self.args.max_grid_size
         assert self.vocab_size > 0
+        state_dict_prefix = args.get_state_dict_prefix("", None)
 
-        self.layers = torch.nn.ModuleList(
-            [
-                TtTransformerBlock(
-                    args=args,
-                    mesh_device=mesh_device,
-                    dtype=dtype,
-                    state_dict=state_dict,
-                    weight_cache_path=weight_cache_path,
-                    layer_num=i,
-                )
-                for i in layers
-            ]
-        )
+        self.layers = [
+            TtTransformerBlock(
+                args=args,
+                mesh_device=mesh_device,
+                dtype=dtype,
+                state_dict=state_dict,
+                weight_cache_path=weight_cache_path,
+                layer_num=i,
+            )
+            for i in range(self.n_layers)
+        ]
         self.norm = RMSNorm(
             device=mesh_device,
             dim=args.dim,
             state_dict=state_dict,
-            layer_num=None,
+            state_dict_prefix=args.get_state_dict_prefix("", None),
             weight_cache_path=None if args.dummy_weights else weight_cache_path,
             weight_dtype=dtype,
             weight_key="norm",
@@ -61,7 +61,16 @@ class TtTransformer(nn.Module):
             mesh_device=mesh_device,
             dtype=dtype,
             state_dict=state_dict,
-            weight_cache_path=weight_cache_path,
+            weight_cache_path=weight_cache_path, 
+        # output_key = f"{state_dict_prefix}output.weight"
+        # self.output_weight = ttnn.as_tensor(
+        #     state_dict[output_key].permute(1, 0),
+        #     device=mesh_device,
+        #     mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        #     layout=ttnn.TILE_LAYOUT,
+        #     dtype=dtype,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     cache_file_name=None if args.dummy_weights else weight_cache_path / output_key,
         )
 
     def forward(

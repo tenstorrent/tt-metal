@@ -7,9 +7,10 @@ from typing import Optional
 from models.demos.wormhole.llama31_8b_N300.tt.llama_attention import TtLlamaAttention
 from models.demos.wormhole.llama31_8b_N300.tt.llama_mlp import TtLlamaMLP
 from models.common.rmsnorm import RMSNorm
+from models.common.lightweightmodule import LightweightModule
 
 
-class TtTransformerBlock(torch.nn.Module):
+class TtTransformerBlock(LightweightModule):
     def __init__(self, args, mesh_device, dtype, state_dict, layer_num, weight_cache_path):
         super().__init__()
 
@@ -54,7 +55,7 @@ class TtTransformerBlock(torch.nn.Module):
             device=mesh_device,
             dim=args.dim,
             state_dict=state_dict,
-            layer_num=layer_num,
+            state_dict_prefix=args.get_state_dict_prefix("", layer_num),
             weight_cache_path=None if args.dummy_weights else weight_cache_path,
             weight_dtype=dtype,
             weight_key="attention_norm",
@@ -63,7 +64,7 @@ class TtTransformerBlock(torch.nn.Module):
             device=mesh_device,
             dim=args.dim,
             state_dict=state_dict,
-            layer_num=layer_num,
+            state_dict_prefix=args.get_state_dict_prefix("", layer_num),
             weight_cache_path=None if args.dummy_weights else weight_cache_path,
             weight_dtype=dtype,
             weight_key="ffn_norm",

@@ -171,7 +171,6 @@ def run_llama_demo_n300(user_input, batch_size, mesh_device, instruct_mode, is_c
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        layers=list(range(model_args.n_layers)),
     )
     tt_embd = TtLlamaEmbedding(
         mesh_device=mesh_device,
