@@ -18,6 +18,8 @@ on:
           - eltwise.unary.cos.cos
           - eltwise.unary.sin.sin
           - eltwise.unary.clamp.clamp
+          - eltwise.unary.clamp.clamp_pytorch2
+          - eltwise.unary.clamp_min.clamp_min_pytorch2
           - eltwise.unary.clip.clip
           - eltwise.unary.cbrt.cbrt
           - eltwise.unary.rsub.rsub
@@ -51,6 +53,8 @@ on:
           - eltwise.unary.logical_not.logical_not_
           - eltwise.unary.logical_not.logical_not
           - eltwise.unary.logical_not.logical_not_output
+          - eltwise.unary.logical_not.logical_not_pytorch2
+          - eltwise.unary.neg.neg_pytorch2
           - eltwise.unary.erf.erf
           - eltwise.unary.erfinv.erfinv
           - eltwise.unary.i0.i0
@@ -77,9 +81,14 @@ on:
           - eltwise.unary.softplus.softplus
           - eltwise.unary_backward.log_bw.log_bw
           - eltwise.unary_backward.relu6_bw.relu6_bw
+          - eltwise.unary.hardswish.hardswish_pytorch2
+          - eltwise.unary.hardtanh.hardtanh_pytorch2
           - eltwise.binary.subtract.subtract
+          - eltwise.binary.subtract.subtract_tensor_pytorch2
           - eltwise.binary.multiply.multiply
+          - eltwise.binary.multiply.multiply_scalar_pytorch2
           - eltwise.binary.div.div
+          - eltwise.binary.div.div_tensor_pytorch2
           - eltwise.binary.div_no_nan.div_no_nan
           - eltwise.binary.logical_or.logical_or_
           - eltwise.binary.logical_or.logical_or
@@ -98,6 +107,9 @@ on:
           - eltwise.binary.fmod.fmod
           - eltwise.binary.logaddexp.logaddexp
           - eltwise.binary.ldexp.ldexp
+          - eltwise.binary.lt.lt_tensor_pytorch2
+          - eltwise.binary.lt.lt_scalar_pytorch2
+          - eltwise.binary.ne.ne_scalar_pytorch2
           - eltwise.binary.hypot.hypot
           - eltwise.binary.xlogy.xlogy
           - eltwise.composite.binary.addalpha.addalpha
