@@ -142,23 +142,20 @@ inp_shapes = [
 ]
 inp_shape_ids = ["inp_shape0", "inp_shape1", "inp_shape2"]
 
-stats_dtypes = [(ttnn.bfloat16, ttnn.bfloat8_b)]
+stats_dtypes = [ttnn.bfloat16, ttnn.bfloat8_b]
 stats_dtypes_ids = ["BFLOAT16_stats", "BFLOAT8_B_stats"]
 
 dtypes = [ttnn.bfloat16, ttnn.bfloat8_b]
 dtype_ids = ["BFLOAT16_in", "BFLOAT8_B_in"]
 
-iterations = [2]
-iteration_ids = ["loops2"]
-
-rms_norm_parametrizations = ([True, False],)
-rms_norm_parametrization_ids = (["rmsnorm", "layernorm"],)
+rms_norm_parametrizations = [True, False]
+rms_norm_parametrization_ids = ["rmsnorm", "layernorm"]
 
 
 def test_distributed_layernorm_with_program_cache_and_checks(
-    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, iterations, mesh_device, use_program_cache
+    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, mesh_device, use_program_cache, iterations
 ):
-    if mesh_device.get_num_devices() != 8:
+    if mesh_device.get_num_devices() < n_devices:
         pytest.skip("Not T3000!")
 
     run_distributed_layernorm(inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, mesh_device, iterations=iterations)
@@ -170,7 +167,7 @@ def test_distributed_layernorm_with_program_cache_and_checks(
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.parametrize("iterations", iterations, ids=iteration_ids)
+@pytest.mark.parametrize("iterations", [2], ids=["loops2"])
 @pytest.mark.parametrize("dtype", dtypes, ids=dtype_ids)
 @pytest.mark.parametrize("stats_dtype", stats_dtypes, ids=stats_dtypes_ids)
 @pytest.mark.parametrize("inp_shape", inp_shapes, ids=inp_shape_ids)
@@ -180,20 +177,20 @@ def test_distributed_layernorm_with_program_cache(
     inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, iterations, t3k_mesh_device, use_program_cache
 ):
     test_distributed_layernorm_with_program_cache_and_checks(
-        inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, t3k_mesh_device, iterations=iterations
+        inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, t3k_mesh_device, use_program_cache, iterations=iterations
     )
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.parametrize("iterations", iterations, ids=iteration_ids)
+@pytest.mark.parametrize("iterations", [2], ids=["loops2"])
 @pytest.mark.parametrize("dtype", dtypes, ids=dtype_ids)
 @pytest.mark.parametrize("stats_dtype", stats_dtypes, ids=stats_dtypes_ids)
 @pytest.mark.parametrize("inp_shape", inp_shapes, ids=inp_shape_ids)
 @pytest.mark.parametrize("n_devices", [4])
 @pytest.mark.parametrize("is_rmsnorm", rms_norm_parametrizations, ids=rms_norm_parametrization_ids)
-def test_distributed_layernorm_with_program_cache(
+def test_distributed_layernorm_with_program_cache_4chip(
     inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, iterations, pcie_mesh_device, use_program_cache
 ):
     test_distributed_layernorm_with_program_cache_and_checks(
-        inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, pcie_mesh_device, iterations=iterations
+        inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, pcie_mesh_device, use_program_cache, iterations=iterations
     )
