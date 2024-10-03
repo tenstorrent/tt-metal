@@ -639,7 +639,7 @@ void Program::populate_dispatch_data(Device *device) {
     };
     static const uint32_t processor_to_firmware_size[] = {
         MEM_BRISC_FIRMWARE_SIZE,
-        MEM_NCRISC_FIRMWARE_SIZE,
+        MEM_NCRISC_INIT_IRAM_L1_SIZE,
         MEM_TRISC0_FIRMWARE_SIZE,
         MEM_TRISC1_FIRMWARE_SIZE,
         MEM_TRISC2_FIRMWARE_SIZE,
