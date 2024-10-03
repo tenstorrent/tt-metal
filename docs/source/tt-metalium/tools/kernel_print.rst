@@ -86,7 +86,13 @@ back of the CB, the ``DPRINT`` call has to occur between the ``cb_reserve_back``
         // Print a full tile
         for (int32_t r = 0; r < 32; ++r) {
             SliceRange sr = SliceRange{.h0 = r, .h1 = r+1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-            DPRINT << (uint)r << " --READ--cin0-- " << TileSlice(0, 0, sr, true, false) << ENDL();
+            // On data movement RISCs, tiles can be printed from either the CB read or write pointers
+            DPRINT_DATA0({ DPRINT << (uint)r << " --READ--cin1-- " << TileSlice(0, 0, sr, TSLICE_RD_PTR, true, false) << ENDL(); });
+            DPRINT_DATA1({ DPRINT << (uint)r << " --READ--cin1-- " << TileSlice(0, 0, sr, TSLICE_WR_PTR, true, false) << ENDL(); });
+            // Unpacker RISC only has rd_ptr, so no extra arg
+            DPRINT_UNPACK({ DPRINT << (uint)r << " --READ--cin1-- " << TileSlice(0, 0, sr, true, false) << ENDL(); });
+            // Packer RISC only has wr_ptr
+            DPRINT_PACK({ DPRINT << (uint)r << " --READ--cin1-- " << TileSlice(0, 0, sr, true, false) << ENDL(); });
         }
 
         ...
