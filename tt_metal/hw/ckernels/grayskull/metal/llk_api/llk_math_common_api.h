@@ -52,22 +52,22 @@ inline void llk_math_debug_dump(std::uint8_t *data, std::uint32_t byte_size) { _
 inline void llk_math_debug_dump_seek(std::uint8_t offset) { _llk_math_debug_dump_seek_(offset); }
 
 //The following functions are only needed for WHB0, they call empty functions for GS
-template <bool float_only = true /*not used*/>
+template <bool to_from_int8 = false /*not used*/, bool is_fp32_dest_acc_en = false /*not used*/>
 inline void llk_math_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
     _llk_math_reconfig_data_format_srca_();
 }
 
-template <bool float_only = true /*not used*/>
+template <bool to_from_int8 = false /*not used*/, bool is_fp32_dest_acc_en = false /*not used*/>
 inline void llk_math_reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {
     _llk_math_reconfig_data_format_srcb_();
 }
 
-template <bool float_only = true /*not used*/>
+template <bool to_from_int8 = false /*not used*/, bool is_fp32_dest_acc_en = false /*not used*/>
 inline void llk_math_reconfig_data_format(const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {
     _llk_math_reconfig_data_format_();
 }
 
-template <bool float_only = true /*not used*/>
+template <bool to_from_int8 = false /*not used*/, bool is_fp32_dest_acc_en = false /*not used*/>
 inline void llk_math_reconfig_data_format(
     const std::uint32_t srca_old_operand,
     const std::uint32_t srca_new_operand,
@@ -76,13 +76,13 @@ inline void llk_math_reconfig_data_format(
     _llk_math_reconfig_data_format_();
 }
 
-template <bool float_only = true /*not used*/>
+template <bool to_from_int8 = false /*not used*/, bool is_fp32_dest_acc_en = false /*not used*/>
 inline void llk_math_reconfig_data_format_srca(
     const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
     _llk_math_reconfig_data_format_srca_();
 }
 
-template <bool float_only = true /*not used*/>
+template <bool to_from_int8 = false /*not used*/, bool is_fp32_dest_acc_en = false /*not used*/>
 inline void llk_math_reconfig_data_format_srcb(
     const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
     _llk_math_reconfig_data_format_srcb_();
