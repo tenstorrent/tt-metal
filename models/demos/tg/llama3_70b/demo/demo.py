@@ -258,20 +258,22 @@ def run_decode(
     # some profiling and logging
     latencies = []
     full_logits = []
-
-    # capture trace
-    if trace_mode:
-        logger.info("Capturing trace")
-        trace_id, tt_inp_emb, rot_mat, cache_idxs_tt, tt_logits = model.capture_trace(tokens[:, 0:1], prev_pos)
+    trace_id = None
 
     for cur_pos in range(min_prompt_len, total_len):
         start = time()
         input_tokens = tokens[:, prev_pos:cur_pos]
-        if trace_mode and input_tokens.shape[1] == 1:
+        is_decode = input_tokens.shape[1] == 1
+        if trace_mode and is_decode and trace_id is None:
+            logger.info("Capturing trace")
+            trace_id, tt_inp_emb, rot_mat, cache_idxs_tt, tt_logits = model.capture_trace(tokens[:, 0:1], prev_pos)
+        elif trace_mode and is_decode:
             logits = model.decode_forward_trace(
                 input_tokens, prev_pos, trace_id, tt_inp_emb, rot_mat, cache_idxs_tt, tt_logits
             )
-        else:
+        else:  # prefill or no tracing
+            if trace_id is not None:
+                model.delete_trace(trace_id)
             logits = model.forward(input_tokens, prev_pos)
 
         next_logits = logits[:, -1, :]  # batch, vocab of last token
@@ -310,7 +312,7 @@ def run_decode(
         output = (output, full_logits)
 
     # delete trace
-    if trace_mode:
+    if trace_id is not None:
         model.delete_trace(trace_id)
 
     return output

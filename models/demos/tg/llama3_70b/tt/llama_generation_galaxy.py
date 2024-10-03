@@ -148,14 +148,16 @@ class TtLlamaModelForGeneration:
         assert batch == 1
         assert start_pos == 0, "start_pos must be 0 for prefill_forward_single_user"
         assert seq_len % 32 == 0, f"seq_len must be divisible by 32, got {seq_len}"
-        tt_inp_emb, start_pos, rot_mat, attn_mask = self.tt_model.prepare_inputs(
+        tt_inp_emb, start_pos, rot_mat, _, attn_mask = self.tt_model.prepare_inputs(
             tokens,
             start_pos=start_pos,
             valid_seq_len=seq_len,
             mode="prefill",
         )
 
-        tt_logits = self.tt_model(tt_inp_emb, rot_mat, start_pos, attn_mask, user_id=user_id, mode="prefill")
+        tt_logits = self.tt_model(
+            tt_inp_emb, rot_mat, start_pos, cache_idxs=None, attn_masks=attn_mask, user_id=user_id, mode="prefill"
+        )
 
         del tt_inp_emb
         del rot_mat
