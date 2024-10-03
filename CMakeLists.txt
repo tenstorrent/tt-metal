@@ -29,15 +29,9 @@ if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
     message(FATAL_ERROR "CMake generation is not allowed within source directory!! Please set a build folder with '-B'!!")
 endif()
 
-<<<<<<< HEAD
 project(Metalium
         VERSION 0.50.0
         DESCRIPTION "Tenstorrent Metalium"
-=======
-project(Metallium
-        VERSION 1.0
-        DESCRIPTION "Tenstorrent Metallium"
->>>>>>> #7914: Add initial support for find_package
         HOMEPAGE_URL "https://github.com/tenstorrent/tt-metal"
         LANGUAGES CXX
 )
@@ -272,6 +266,7 @@ endif(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
 include(GNUInstallDirs)
 
 install(TARGETS tt_metal
+    EXPORT ${PROJECT_NAME}Targets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     COMPONENT dev
@@ -300,5 +295,5 @@ add_custom_target(clean-built
 # Debian Package
 include(cmake/packaging.cmake)
 
-include(cmake/find_package)
+include(cmake/find_package.cmake)
 
