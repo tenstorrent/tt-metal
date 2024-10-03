@@ -195,8 +195,7 @@ static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
     uint16_t *samples_ = reinterpret_cast<uint16_t *>(ptr) + offsetof(TileSliceHostDev<0>, samples_) / sizeof(uint16_t);
 
     if (ts->w0_ == 0xFFFF) {
-        stream << "BAD TILE POINTER" << std::flush;
-        stream << " count=" << ts->count_ << std::flush;
+        stream << fmt::format("BAD TILE POINTER (ptr={}, count={})\n", ts->ptr_, ts->count_) << std::flush;
     } else {
         uint32_t i = 0;
         bool count_exceeded = false;
