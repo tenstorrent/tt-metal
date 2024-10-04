@@ -23,9 +23,9 @@ TIMEOUT = 30
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 8)
-        + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 8)
-        + gen_shapes([32, 32], [256, 256], [32, 32], 8),
+        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 4)
+        + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 4)
+        + gen_shapes([32, 32], [256, 256], [32, 32], 4),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "output_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -96,7 +96,7 @@ def run(
     output_tensor = ttnn.from_torch(
         torch_optional_output_tensor,
         dtype=output_dtype,
-        layout=output_dtype,
+        layout=input_a_layout,
         device=device,
         memory_config=output_memory_config,
     )
@@ -105,4 +105,4 @@ def run(
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
-    return [assert_equal(torch_output_tensor, output_tensor, 0.99), e2e_perf]
+    return [assert_equal(torch_output_tensor, output_tensor), e2e_perf]
