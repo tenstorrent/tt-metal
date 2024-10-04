@@ -62,6 +62,7 @@ on:
           - eltwise.unary.silu.silu_pytorch2
           - eltwise.unary.glu.glu
           - eltwise.unary.sigmoid.sigmoid
+          - eltwise.unary.sigmoid.sigmoid_pytorch2
           - eltwise.unary.sigmoid_accurate.sigmoid_accurate
           - eltwise.unary.tril.tril
           - eltwise.unary.triu.triu
