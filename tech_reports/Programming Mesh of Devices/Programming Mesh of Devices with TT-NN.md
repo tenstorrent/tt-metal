@@ -418,7 +418,7 @@ ttnn.close_device(device)
 
 4. **Executing TT-NN Falcon-7B MLP Module on MeshDevice with Data Parallel**
 
-Full code example can be found in `tests/ttnn/multichip_unit_tests/test_data_parallel_example_TG.py`
+Full code example can be found in `tests/ttnn/distributed/test_data_parallel_example_TG.py`
 
 ```py
 # Load Falcon MLP model from huggingface
@@ -507,7 +507,7 @@ model = transformers.models.falcon.modeling_falcon.FalconMLP(config).eval()
 
 3. **Executing TT-NN Falcon-7B MLP Module on MeshDevice with Tensor Parallel**
 
-See full code example in `tests/ttnn/multichip_unit_tests/test_tensor_parallel_example_T3000.py`
+See full code example in `tests/ttnn/distributed/test_tensor_parallel_example_T3000.py`
 
 ```py
 # Initialize hidden states

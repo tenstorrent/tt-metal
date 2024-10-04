@@ -7,7 +7,7 @@
 #include "ttnn/cpp/ttnn/tensor/types.hpp"
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 
-namespace ttnn::multi_device::test {
+namespace ttnn::distributed::test {
 
 using namespace tt::tt_metal;
 
@@ -45,4 +45,4 @@ TEST_F(T3kMultiDeviceFixture, TestGetDistributedTensorConfigFromMultiDeviceStora
     EXPECT_TRUE(std::holds_alternative<ReplicateTensor>(distributed_tensor_config));
 }
 
-}  // namespace ttnn::multi_device::test
+}  // namespace ttnn::distributed::test

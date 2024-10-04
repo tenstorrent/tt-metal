@@ -2,19 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#pragma once
+#include "ttnn/distributed/distributed_pybind.hpp"
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-
-#include "ttnn/multi_device.hpp"
+#include "ttnn/distributed/mesh_device.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+#include "tt_metal/impl/dispatch/command_queue.hpp"
+
+
+namespace ttnn::distributed {
 
 namespace py = pybind11;
-
-namespace ttnn {
-
-namespace multi_device {
 
 void py_module_types(py::module& module) {
     py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice");
@@ -172,6 +171,4 @@ void py_module(py::module& module) {
     module.def("get_t3k_physical_device_ids_ring", &tt::tt_metal::get_t3k_physical_device_ids_ring);
 }
 
-}  // namespace multi_device
-
-}  // namespace ttnn
+}  // namespace ttnn::distributed

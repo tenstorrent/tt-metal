@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/device/mesh_device_view.hpp"
+#include "tt_metal/distributed/mesh_device_view.hpp"
 
 namespace tt::tt_metal {
 

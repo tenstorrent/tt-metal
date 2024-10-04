@@ -3,9 +3,10 @@ set(ALL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/device.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/multi_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/events.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/run_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/distributed/mesh_device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/distributed/distributed_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph/graph_processor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph/graph_trace_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph/graph_pybind.cpp

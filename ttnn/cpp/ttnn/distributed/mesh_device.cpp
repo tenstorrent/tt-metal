@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device.hpp"
+#include "ttnn/distributed/mesh_device.hpp"
 
 #include <memory>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "tt_metal/impl/device/mesh_device.hpp"
+#include "tt_metal/distributed/mesh_device.hpp"
 
-namespace ttnn::multi_device {
+namespace ttnn::distributed {
 
 std::shared_ptr<MeshDevice> open_mesh_device(const MeshShape& mesh_shape, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues, DispatchCoreType dispatch_core_type, MeshType mesh_type, const std::pair<size_t, size_t>& offset, const std::vector<int>& physical_device_ids) {
     auto config = MeshDeviceConfig(mesh_shape, offset, physical_device_ids, mesh_type);
@@ -82,4 +82,4 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards)
     }
 }
 
-}  // namespace ttnn::multi_device
+}  // namespace ttnn::distributed
