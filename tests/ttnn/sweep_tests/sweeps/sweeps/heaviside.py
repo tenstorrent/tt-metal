@@ -16,27 +16,12 @@ parameters = {
     "batch_sizes": [(1,)],
     "height": [384, 1024],
     "width": [1024, 4096],
-    "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+    "input_dtype": [ttnn.bfloat16],
     "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    "layout": [ttnn.TILE_LAYOUT],
     "value": [0.5, 0.6],
 }
-
-
-def skip(
-    batch_sizes,
-    height,
-    width,
-    input_dtype,
-    input_memory_config,
-    output_memory_config,
-    layout,
-    value,
-) -> Tuple[bool, Optional[str]]:
-    if layout == ttnn.ROW_MAJOR_LAYOUT or input_dtype == ttnn.bfloat8_b:
-        return True, "Skipped since ROW_MAJOR_LAYOUT is not supported and test fails for bfloat8_b"
-    return False, None
 
 
 def torch_heaviside(x, *args, **kwargs):
