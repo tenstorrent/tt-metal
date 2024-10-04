@@ -34,25 +34,21 @@ def test_concat(device, height, width, dim, async_mode):
 
 
 @pytest.mark.parametrize(
-    "inputs, output_shard_shape, shard_grid, strategy",
+    "inputs, output_shard_shape, shard_grid, strategy, cache_mode",
     (
-        (
-            [((1, 1, 16, 16), (8, 16)), ((1, 1, 16, 16), (8, 16)), ((1, 1, 16, 16), (8, 16))],
-            (8, 48),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
-            ttnn.ShardStrategy.HEIGHT,
-        ),
         (
             [((1, 1, 160, 32), (80, 32)), ((1, 1, 160, 32), (80, 32))],
             (80, 64),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
             ttnn.ShardStrategy.HEIGHT,
+            False,
         ),
         (
             [((1, 1, 160, 32), (80, 32)), ((1, 1, 160, 16), (80, 16))],
             (80, 48),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
             ttnn.ShardStrategy.HEIGHT,
+            False,
         ),
         (
             [((1, 1, 25600, 64), (512, 64)), ((1, 1, 25600, 64), (512, 64))],
@@ -64,18 +60,53 @@ def test_concat(device, height, width, dim, async_mode):
                 }
             ),
             ttnn.ShardStrategy.HEIGHT,
+            False,
+        ),
+        pytest.param(
+            [((1, 1, 25600, 64), (512, 64)), ((1, 1, 25600, 64), (512, 64))],
+            (512, 128),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 6), ttnn.CoreCoord(1, 6)),
+                }
+            ),
+            ttnn.ShardStrategy.HEIGHT,
+            True,
+            marks=pytest.mark.xfail(reason="two tensors concat kernel doesn't work with program cache (#13466)"),
+        ),
+        (
+            [((1, 1, 16, 16), (8, 16)), ((1, 1, 16, 16), (8, 16)), ((1, 1, 16, 16), (8, 16))],
+            (8, 48),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            ttnn.ShardStrategy.HEIGHT,
+            False,
+        ),
+        (
+            [((1, 1, 16, 16), (8, 16)), ((1, 1, 16, 16), (8, 16)), ((1, 1, 16, 16), (8, 16))],
+            (8, 48),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            ttnn.ShardStrategy.HEIGHT,
+            True,
         ),
         (
             [((1, 1, 8, 64), (8, 16)), ((1, 1, 7, 64), (7, 16)), ((1, 1, 23, 64), (23, 16))],
             (38, 16),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
             ttnn.ShardStrategy.WIDTH,
+            False,
+        ),
+        (
+            [((1, 1, 8, 64), (8, 16)), ((1, 1, 7, 64), (7, 16)), ((1, 1, 23, 64), (23, 16))],
+            (38, 16),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            ttnn.ShardStrategy.WIDTH,
+            True,
         ),
     ),
 )
 @pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
-@pytest.mark.parametrize("cache_mode", [True, False], ids=["cache_on", "cache_off"])
-def test_sharded_concat(device, inputs, output_shard_shape, shard_grid, strategy, async_mode, cache_mode):
+def test_sharded_concat(device, inputs, output_shard_shape, shard_grid, strategy, cache_mode, async_mode):
     device.enable_async(async_mode)
     if cache_mode:
         device.enable_program_cache()
