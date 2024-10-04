@@ -1567,6 +1567,19 @@ void py_module(py::module& module) {
 
     detail::bind_unary_operation_with_float_parameter(module, ttnn::heaviside, "value", "The value parameter for the Heaviside function", "",
         R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
+
+
+    detail::bind_unary_operation_with_float_parameter(module, ttnn::leaky_relu, "slope", "The slope parameter for the Leaky ReLU function", "",
+        R"doc(Supported dtypes, layouts, and ranks:
+
            +----------------------------+---------------------------------+-------------------+
            |     Dtypes                 |         Layouts                 |     Ranks         |
            +----------------------------+---------------------------------+-------------------+
