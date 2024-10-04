@@ -28,12 +28,9 @@ parameters = {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 8)
         + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 8)
         + gen_shapes([32, 32], [256, 256], [32, 32], 8),
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
-        "input_b_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
@@ -46,13 +43,8 @@ parameters = {
 def run(
     input_shape,
     input_a_dtype,
-    input_b_dtype,
     input_a_layout,
-    input_b_layout,
-    input_b_memory_config,
     input_a_memory_config,
-    input_a_memory_config,
-    input_b_memory_config,
     output_memory_config,
     *,
     device,
@@ -63,10 +55,8 @@ def run(
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
-    torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
-    )(input_shape)
-    torch_output_tensor = tensor_to_dtype(torch.logical_xor(torch_input_tensor_a, torch_input_tensor_b), input_a_dtype)
+
+    torch_output_tensor = tensor_to_dtype(torch.logical_not(torch_input_tensor_a), input_a_dtype)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -75,16 +65,10 @@ def run(
         device=device,
         memory_config=input_a_memory_config,
     )
-    input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b,
-        dtype=input_b_dtype,
-        layout=input_b_layout,
-        device=device,
-        memory_config=input_b_memory_config,
-    )
+
     start_time = start_measuring_time()
-    output_tensor = ttnn.logical_xor(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+    output_tensor = ttnn.logical_not(input_tensor_a, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
-    return [assert_equal(torch_output_tensor, output_tensor), e2e_perf]
 
+    return [assert_equal(torch_output_tensor, output_tensor), e2e_perf]

@@ -38,7 +38,6 @@ parameters = {
 def mesh_device_fixture():
     device = ttnn.open_device(device_id=0)
     assert not ttnn.device.is_grayskull(device), "This op is not supported on Grayskull"
-    device_name = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "default")).lower()
     yield (device, device_name)
     ttnn.close_device(device)
     del device

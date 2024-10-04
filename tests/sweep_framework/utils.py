@@ -11,6 +11,9 @@ import ttnn
 
 
 def tensor_to_dtype(x, dtype):
+    if x.dtype == torch.bool:
+        x = x.to(torch.bfloat16)
+
     if dtype == ttnn.bfloat16:
         x = x.to(torch.bfloat16)
 
