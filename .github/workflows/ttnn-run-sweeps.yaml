@@ -57,6 +57,15 @@ on:
           - eltwise.unary.lgamma.lgamma
           - eltwise.unary.sigmoid.sigmoid
           - eltwise.unary.sigmoid_accurate.sigmoid_accurate
+          - eltwise.unary.tril.tril
+          - eltwise.unary.triu.triu
+          - eltwise.unary.normalize_hw.normalize_hw
+          - eltwise.unary.normalize_global.normalize_global
+          - eltwise.unary.heaviside.heaviside
+          - eltwise.unary.hardtanh.hardtanh
+          - eltwise.unary.hardswish.hardswish
+          - eltwise.unary.hardsigmoid.hardsigmoid
+          - eltwise.unary.hardshrink.hardshrink
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multiply
           - eltwise.binary.div.div

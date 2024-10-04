@@ -26,23 +26,10 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16),
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_b_dtype": [ttnn.bfloat16],
+        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 64),
+        "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
-        "input_b_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-    },
-    "xfail": {
-        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16),
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_a_layout": [ttnn.TILE_LAYOUT],
-        "input_b_layout": [ttnn.TILE_LAYOUT],
-        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
@@ -55,11 +42,8 @@ parameters = {
 def run(
     input_shape,
     input_a_dtype,
-    input_b_dtype,
     input_a_layout,
-    input_b_layout,
     input_a_memory_config,
-    input_b_memory_config,
     output_memory_config,
     *,
     device,
@@ -68,13 +52,18 @@ def run(
     torch.manual_seed(data_seed)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(input_shape)
-    torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
+        partial(torch_random, low=-10, high=10, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    torch_output_tensor = torch.where(torch_input_tensor_b == 0, 0, torch_input_tensor_a / torch_input_tensor_b)
+    torch_output_tensor = torch_input_tensor_a.clone()
+    mean_hw = torch.mean(torch_output_tensor, [-2, -1], keepdim=True)
+    std_hw = torch.std(torch_output_tensor, [-2, -1], keepdim=True)
+
+    for i in range(torch_output_tensor.shape[0]):
+        for j in range(torch_output_tensor.shape[1]):
+            torch_output_tensor[i, j, :, :] = (torch_output_tensor[i, j, :, :] - mean_hw[i, j, :, :]) / std_hw[
+                i, j, :, :
+            ]
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -84,16 +73,8 @@ def run(
         memory_config=input_a_memory_config,
     )
 
-    input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b,
-        dtype=input_b_dtype,
-        layout=input_b_layout,
-        device=device,
-        memory_config=input_b_memory_config,
-    )
-
     start_time = start_measuring_time()
-    output_tensor = ttnn.div_no_nan(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+    output_tensor = ttnn.normalize_hw(input_tensor_a, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
