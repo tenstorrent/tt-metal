@@ -781,7 +781,7 @@ struct Shape {
         return SimpleShape(std::move(values));
     }
 
-    // Returns the shape without padding, padding information is stipped
+    // Returns the shape without padding, padding information is stripped
     SimpleShape logical_shape() const {
         std::vector<uint32_t> values(this->rank());
         for (size_t i = 0; i < values.size(); i++) {
