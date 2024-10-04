@@ -313,11 +313,6 @@ class Device {
         return program_cache.num_entries();
     }
 
-    inline bool in_main_thread() {
-        // Detect if an instruction is being called in the main thread or worker thread
-        return (std::hash<std::thread::id>{}(std::this_thread::get_id()) == this->work_executor.get_parent_thread_id())
-                or get_worker_mode() == WorkExecutorMode::SYNCHRONOUS;
-    }
    uint32_t trace_buffers_size = 0;
    void update_dispatch_cores_for_multi_cq_eth_dispatch();
 
