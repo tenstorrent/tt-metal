@@ -32,7 +32,6 @@
 // clang-format on
 
 uint8_t noc_index;
-uint8_t noc_mode;
 
 constexpr uint32_t RISCV_IC_BRISC_MASK = 0x1;
 constexpr uint32_t RISCV_IC_NCRISC_MASK = 0x10;
@@ -342,7 +341,6 @@ int main() {
     noc_index = 0;
     risc_init();
     device_setup();
-    noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 
     // Set ncrisc's resume address to 0 so we know when ncrisc has overwritten it
     mailboxes->ncrisc_halt.resume_addr = 0;
@@ -357,7 +355,8 @@ int main() {
 
     mailboxes->go_message.signal = RUN_MSG_DONE;
 
-    uint8_t prev_noc_mode = DM_DEDICATED_NOC;
+    uint8_t noc_mode;
+    uint8_t prev_noc_mode = DM_INVALID_NOC;
     while (1) {
         init_sync_registers();
         reset_ncrisc_with_iram();
@@ -417,7 +416,7 @@ int main() {
             // re-initialize the NoCs
             if (prev_noc_mode != noc_mode) {
                 if (noc_mode == DM_DEDICATED_NOC) {
-                    noc_init();
+                    noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
                 } else {
                     dynamic_noc_init();
                 }
