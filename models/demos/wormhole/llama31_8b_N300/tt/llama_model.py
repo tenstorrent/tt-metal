@@ -22,17 +22,16 @@ class TtTransformer(LightweightModule):
         mesh_device,
         state_dict,
         weight_cache_path,
-        layers,
     ):
         super().__init__()
         self.args = args
         self.vocab_size = args.vocab_size
+        assert self.vocab_size > 0
         self.n_layers = args.n_layers
         self.mesh_device = mesh_device
         self.dtype = dtype
         self.model_config = args.get_model_config()
         self.grid_size = self.args.max_grid_size
-        assert self.vocab_size > 0
         state_dict_prefix = args.get_state_dict_prefix("", None)
 
         self.layers = [
@@ -61,16 +60,8 @@ class TtTransformer(LightweightModule):
             mesh_device=mesh_device,
             dtype=dtype,
             state_dict=state_dict,
-            weight_cache_path=weight_cache_path, 
-        # output_key = f"{state_dict_prefix}output.weight"
-        # self.output_weight = ttnn.as_tensor(
-        #     state_dict[output_key].permute(1, 0),
-        #     device=mesh_device,
-        #     mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-        #     layout=ttnn.TILE_LAYOUT,
-        #     dtype=dtype,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     cache_file_name=None if args.dummy_weights else weight_cache_path / output_key,
+            state_dict_prefix=state_dict_prefix,
+            weight_cache_path=weight_cache_path,
         )
 
     def forward(
@@ -108,55 +99,58 @@ class LMHead(nn.Module):
         mesh_device,
         dtype,
         state_dict,
+        state_dict_prefix,
         weight_cache_path,
+        max_columns_per_device=128256 // 4,  # larger values per device lead to OOM or hangs
+        grid_size=(8, 8),
     ):
         super().__init__()
         self.args = args
         self.mesh_device = mesh_device
         self.dtype = dtype
         self.vocab_size = args.vocab_size
-        self.num_splits = 2  # TODO This is hardcoded for now. The logic below does not work for 1 split, but even if did, it would lead to OOM
-        self.num_devices = mesh_device.get_num_devices()
+        self.num_devices = args.num_devices
 
-        split_size = self.vocab_size // self.num_splits  # TODO Must be divisible
-        split_size_per_device = math.ceil((split_size // self.num_devices) / (32 * 12)) * (
-            32 * 12
-        )  # Padded - Tile size (32) * dram cores (12)
+        size_per_device = self.vocab_size // self.num_devices
 
-        # Helper function to create output memory config
-        def create_output_mem_config(size, num_devices):
-            padded_size = math.ceil((size // num_devices) / (32 * 12)) * (32 * 12)  # Tile size (32) * dram cores (12)
-            shard_spec = ttnn.ShardSpec(
-                args.dram_weight_grid, (4096, padded_size // 12), ttnn.ShardOrientation.ROW_MAJOR, False
-            )
-            return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+        num_splits = math.ceil(size_per_device / max_columns_per_device)
 
-        # Split the output weight
-        output_weight = state_dict["output.weight"].permute(1, 0)
+        split_sizes = [min(size_per_device, max_columns_per_device)] * (num_splits - 1)
+        split_sizes.append(size_per_device - sum(split_sizes))  # remaining columns
+        print(f"split_sizes: {split_sizes}")
+
+        # Split the output weights
+        torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"].permute(1, 0)
+
         self.output_weights = []
-        for i in range(self.num_splits):
-            # weight chunk size
-            cs = split_size // self.num_devices  # TODO Make sure that split/devices is divisible
-            start = i * cs
-            end = (i + 1) * cs
-            d_step = (self.num_devices * i) + 1 if i > 0 else self.num_devices
-
-            # This logic only works for 2+ splits
-            weight_part = torch.cat(
-                [output_weight[:, start:end], output_weight[:, d_step * cs : (d_step + 1) * cs]], dim=-1
+        for i, split_size in enumerate(split_sizes):
+            cache_file_name = (
+                None if args.dummy_weights else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_{i}"
             )
 
+            # Create a list to store the split tensors for each device
+            device_splits = []
+            for device in range(self.num_devices):
+                start = device * size_per_device + sum(split_sizes[:i])
+                end = start + split_size
+                device_splits.append(torch_output_weights[:, start:end])
+                print(f"device {device}: {start} {end} (split size: {split_size})")
+
+            # Concatenate the splits from all devices
+            combined_split = torch.cat(device_splits, dim=-1)
+            print(f"combined_split shape: {combined_split.shape}")
+
+            memory_config = args.create_dram_sharded_mem_config(k=args.dim, n=combined_split.shape[-1])
+            print(f"memory_config: {memory_config}")
             self.output_weights.append(
                 ttnn.as_tensor(
-                    weight_part,
+                    combined_split,
                     device=mesh_device,
                     mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
                     layout=ttnn.TILE_LAYOUT,
                     dtype=dtype,
-                    memory_config=create_output_mem_config(split_size, num_devices=self.num_devices),
-                    cache_file_name=None
-                    if args.dummy_weights
-                    else weight_cache_path / f"output_lm_head_{self.num_splits}split_shard_{i}",
+                    memory_config=memory_config,
+                    cache_file_name=cache_file_name,
                 )
             )
 
@@ -167,27 +161,25 @@ class LMHead(nn.Module):
             packer_l1_acc=True,
         )
 
-        # Calculate per_core_N based on the number of splits
-        tile_size = 32
-        core_count = 64  # Assuming 8x8 core grid
-        # TODO Generalize this logic to work for 1 device as well
-        per_core_N = -(-split_size_per_device // (tile_size * core_count))  # Ceiling division
-        self.program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=2,  # 4096 (dim) // 32 (tile) // 64 cores
-            per_core_M=1,
-            per_core_N=per_core_N,
-            fused_activation=None,
-        )
+        self.program_configs = [
+            args.dram_matmul_config(
+                args.batch_rows,
+                args.dim,
+                split_size,
+                grid_size,
+            )
+            for split_size in split_sizes
+        ]
 
     def forward(self, x: ttnn.Tensor):
         x = ttnn.interleaved_to_sharded(x, self.args.get_model_config()["LM_HEAD_INPUT_MEMCFG"])
         outputs = []
-        for weight in self.output_weights:
+        for weight, pc in zip(self.output_weights, self.program_configs):
             output = ttnn.linear(
                 x,
                 weight,
                 compute_kernel_config=self.compute_kernel_config,
-                program_config=self.program_config,
+                program_config=pc,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 dtype=ttnn.bfloat8_b,
             )
