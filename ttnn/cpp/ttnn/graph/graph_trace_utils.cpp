@@ -215,5 +215,9 @@ std::vector<TensorInfo> extract_output_info(const nlohmann::json& trace)
     return output;
 }
 
+std::ostream &operator<<(std::ostream &os, const TensorInfo &info) {
+    os << "TensorInfo{shape: " << info.shape << ", size: " << info.size << ", type: " << static_cast<int>(info.type) << "}";
+    return os;
+}
 
 } // namespace ttnn::graph

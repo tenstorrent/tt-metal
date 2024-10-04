@@ -1,4 +1,4 @@
-set(ALL_TTNN_SRCS
+set(TTNN_BASE_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/async_runtime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/core.cpp
@@ -10,6 +10,9 @@ set(ALL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph/graph_processor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph/graph_trace_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph/graph_pybind.cpp
+)
+
+set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_gather/all_gather.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_gather/all_gather_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.cpp
@@ -485,6 +488,46 @@ set(ALL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_sum/moreh_sum.cpp
 )
 
+set(TTNN_SUBLIBRARIES
+    ttnn/operations/ccl/
+    ttnn/operations/conv/conv2d
+    ttnn/operations/core
+    ttnn/operations/data_movement
+    ttnn/operations/eltwise/binary
+    ttnn/operations/eltwise/binary_backward
+    ttnn/operations/eltwise/complex
+    ttnn/operations/eltwise/complex_binary
+    ttnn/operations/eltwise/complex_unary
+    ttnn/operations/eltwise/complex_unary_backward
+    ttnn/operations/eltwise/ternary
+    ttnn/operations/eltwise/ternary_backward
+    ttnn/operations/eltwise/unary
+    ttnn/operations/eltwise/unary_backward
+    ttnn/operations/embedding_backward
+    ttnn/operations/embedding
+    ttnn/operations/examples
+    ttnn/operations/experimental/auto_format
+    ttnn/operations/experimental/ccl
+    ttnn/operations/experimental/copy
+    ttnn/operations/experimental/experimental_pybind
+    ttnn/operations/experimental/matmul
+    ttnn/operations/experimental/paged_cache
+    ttnn/operations/experimental/reduction
+    ttnn/operations/experimental/ssm
+    ttnn/operations/experimental/transformer
+    ttnn/operations/kv_cache
+    ttnn/operations/loss
+    ttnn/operations/matmul
+    ttnn/operations/moreh
+    ttnn/operations/normalization
+    ttnn/operations/pool
+    ttnn/operations/reduction
+    ttnn/operations/sliding_window
+    ttnn/operations/transformer
+)
+
+
+
 # Split src and python bindings
 # We only build python bindings optionally
 set(TTNN_SRC)
@@ -497,7 +540,7 @@ set(PYBIND_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/pytensor.cpp
 )
 
-foreach(FILE ${ALL_TTNN_SRCS})
+foreach(FILE ${TTNN_OP_SRCS})
     if(FILE MATCHES "_pybind.cpp$")
         list(APPEND PYBIND_SRC ${FILE})
     else()
@@ -505,14 +548,12 @@ foreach(FILE ${ALL_TTNN_SRCS})
     endif()
 endforeach()
 
+
+
 ### Setup TTNN as a shared library with optional Python bindings
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor)
 add_subdirectory(cpp/ttnn/deprecated)
-set(TTNN_FINAL_SRC
-    ${TTNN_SRC}
-    ${QUEUE_SRCS}
-    ${TENSOR_SRCS}
-    ${TT_DNN_SRCS})
+
 
 set(TTNN_PUBLIC_INCLUDE_DIRS
     ${UMD_HOME}
@@ -544,7 +585,7 @@ set(TTNN_PRECOMPILED_HEADERS
 if(WITH_PYTHON_BINDINGS)
     # TODO: should be using pybind11_add_module, but right now it introduces many build problems
     # pybinds will always be built as a shared library
-    list(APPEND TTNN_FINAL_SRC
+    list(APPEND TTNN_BASE_SRCS
         ${PROJECT_SOURCE_DIR}/ttnn/cpp/pybind11/__init__.cpp
         ${PYBIND_SRC}
         ${TT_LIB_SRCS}) # TT_LIB_SRCS from tt_eager/tt_lib/CMakeLists.txt for python bindigns
@@ -559,17 +600,76 @@ if(WITH_PYTHON_BINDINGS)
     list(APPEND TTNN_PUBLIC_LINK_LIBRARIES pch_pybinds ${Python3_LIBRARIES})
 endif()
 
-add_library(ttnn SHARED ${TTNN_FINAL_SRC})
+message (STATUS "CMAKE COMPILER ID ${CMAKE_CXX_COMPILER_ID}")
+
+function(use_precompiled_header TARGET)
+    message(STATUS "PRECOMPILED_HEADER_TARGET: ${PRECOMPILED_HEADER_TARGET}")
+    if("${PRECOMPILED_HEADER_TARGET}" STREQUAL "")
+        set(PRECOMPILED_HEADER_TARGET "${TARGET}" PARENT_SCOPE)
+        target_precompile_headers(${TARGET} PUBLIC ${TTNN_PRECOMPILED_HEADERS})
+    else()
+        target_precompile_headers(${TARGET} REUSE_FROM ${PRECOMPILED_HEADER_TARGET})
+    endif()
+endfunction()
+
+set(PRECOMPILED_HEADER_TARGET "")
+
+function(add_ttnn_sublibrary SUBLIBRARY_NAME)
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        add_library(${SUBLIBRARY_NAME} SHARED ${ARGN})
+        install(TARGETS ${SUBLIBRARY_NAME}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT tt_build_artifacts
+        )
+    else()
+        add_library(${SUBLIBRARY_NAME} STATIC ${ARGN})
+    endif()
+    target_include_directories(${SUBLIBRARY_NAME} PRIVATE ${TTNN_PUBLIC_INCLUDE_DIRS})
+    target_link_libraries(${SUBLIBRARY_NAME} PRIVATE ${TTNN_PUBLIC_LINK_LIBRARIES})
+    target_link_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
+    use_precompiled_header(${SUBLIBRARY_NAME})
+    set(PRECOMPILED_HEADER_TARGET "${PRECOMPILED_HEADER_TARGET}" PARENT_SCOPE)
+    target_compile_options(${SUBLIBRARY_NAME} PRIVATE -MP -Wno-int-to-pointer-cast -fno-var-tracking -ffunction-sections)
+    set_target_properties(${SUBLIBRARY_NAME} PROPERTIES  DEFINE_SYMBOL "")
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_compile_definitions(${SUBLIBRARY_NAME} PRIVATE DISABLE_NAMESPACE_STATIC_ASSERT)
+        target_link_options(${SUBLIBRARY_NAME} PRIVATE "-Wl,--gc-sections" "-Wl,--no-as-needed")
+    endif()
+
+endfunction()
+
+foreach(SUBLIBRARY_PATH ${TTNN_SUBLIBRARIES})
+    set(SUBLIBRARY_SRCS ${TTNN_SRC})
+    list(FILTER SUBLIBRARY_SRCS INCLUDE REGEX "${SUBLIBRARY_PATH}")
+    list(FILTER TTNN_SRC EXCLUDE REGEX "${SUBLIBRARY_PATH}")
+    if(SUBLIBRARY_SRCS)
+        string(REPLACE "/"  "_"  SUBLIBRARY_NAME ${SUBLIBRARY_PATH})
+        add_ttnn_sublibrary(${SUBLIBRARY_NAME} ${SUBLIBRARY_SRCS})
+        list(APPEND ALL_TTNN_SUBLIBRARIES ${SUBLIBRARY_NAME})
+    endif()
+endforeach(SUBLIBRARY_PATH ${TTNN_SUBLIBRARIES})
+
+add_ttnn_sublibrary(ttnn_tensor ${TENSOR_SRCS})
+add_ttnn_sublibrary(tt_dnn ${TT_DNN_SRCS})
+
+add_library(ttnn SHARED ${TTNN_BASE_SRCS} ${QUEUE_SRCS})
 target_compile_options(ttnn PUBLIC -MP -Wno-int-to-pointer-cast -fno-var-tracking)
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_definitions(ttnn PUBLIC DISABLE_NAMESPACE_STATIC_ASSERT)
+    target_link_options(ttnn PUBLIC  "-Wl,--gc-sections" "-Wl,--no-as-needed")
 endif()
 
 target_include_directories(ttnn PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
 target_link_libraries(ttnn PUBLIC ${TTNN_PUBLIC_LINK_LIBRARIES})
+target_link_libraries(ttnn PUBLIC ${ALL_TTNN_SUBLIBRARIES})
+target_link_libraries(ttnn PUBLIC ttnn_tensor)
+target_link_libraries(ttnn PUBLIC tt_dnn)
+set_target_properties(ttnn PROPERTIES  DEFINE_SYMBOL "")
+
 target_link_directories(ttnn PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
-target_precompile_headers(ttnn PRIVATE ${TTNN_PRECOMPILED_HEADERS})
+target_precompile_headers(ttnn REUSE_FROM ${PRECOMPILED_HEADER_TARGET})
 
 # We move the library binaries to a different path rather than PROJECT_BINARY_DIR
 # in the Python wheel
@@ -589,3 +689,5 @@ set_target_properties(ttnn PROPERTIES
     CXX_VISIBILITY_PRESET "default"
     ADDITIONAL_CLEAN_FILES "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_ttnn.so;${PROJECT_SOURCE_DIR}/ttnn/ttnn.egg-info"
 )
+
+set_property(GLOBAL PROPERTY TTNN_SUBLIB  ${ALL_TTNN_SUBLIBRARIES})
