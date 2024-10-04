@@ -36,7 +36,6 @@ inline std::string get_core_descriptor_file(const tt::ARCH &arch, CoreType dispa
     if (targeting_sim) {
         switch (arch) {
             case tt::ARCH::Invalid: throw std::runtime_error("Invalid arch not supported"); // will be overwritten in tt_global_state constructor
-            case tt::ARCH::JAWBRIDGE: throw std::runtime_error("JAWBRIDGE arch not supported");
             case tt::ARCH::GRAYSKULL: throw std::runtime_error("GRAYSKULL arch not supported for simulator");
             case tt::ARCH::WORMHOLE: throw std::runtime_error("WORMHOLE arch not supported for simulator");
             case tt::ARCH::WORMHOLE_B0: throw std::runtime_error("WORMHOLE_B0 arch not supported for simulator");
@@ -46,7 +45,6 @@ inline std::string get_core_descriptor_file(const tt::ARCH &arch, CoreType dispa
     } else {
         switch (arch) {
             case tt::ARCH::Invalid: throw std::runtime_error("Invalid arch not supported"); // will be overwritten in tt_global_state constructor
-            case tt::ARCH::JAWBRIDGE: throw std::runtime_error("JAWBRIDGE arch not supported");
             case tt::ARCH::GRAYSKULL: return core_desc_dir + "grayskull_120_arch.yaml";
             case tt::ARCH::WORMHOLE: throw std::runtime_error("WORMHOLE arch not supported");
             case tt::ARCH::WORMHOLE_B0: return core_desc_dir + (dispatch_core_type == CoreType::ETH ? "wormhole_b0_80_arch_eth_dispatch.yaml" : "wormhole_b0_80_arch.yaml");
