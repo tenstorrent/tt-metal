@@ -344,7 +344,7 @@ void get_dram_reader_core_coords_blackhole(
         all_worker_cores_x_physical.push_back(core_phy.x);
     }
 
-    // get the harvested rows, we treat dram and eth cores as harvested as well
+    // get the harvested cols, we treat dram and eth cores as harvested as well
     std::vector<uint32_t> harvested_cols;
     for (int i = 0; i < full_grid_size_x; ++i) {
         auto x = i;
@@ -368,7 +368,7 @@ void get_dram_reader_core_coords_blackhole(
     for (auto& coord : adj_core_physical) {
         auto x = coord.x;
 
-        // if row is harvested, move core down by 1
+        // if col is harvested, move core right by 1
         while (std::find(harvested_cols.begin(), harvested_cols.end(), x) != harvested_cols.end() and x < (full_grid_size_x - 1)) {
             x += 1;
         }
