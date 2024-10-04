@@ -66,7 +66,7 @@ struct TileSlice : TileSliceHostDev<MAXCOUNT> {
 #else
         this->ptr_ = 0;
 #endif
-#if defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+#if defined(DEBUG_PRINT_ENABLED) && (defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC))
         this->ptr_ += itile * sizeof(Tile);
         if (this->ptr_ < L1_UNRESERVED_BASE || this->ptr_ >= MEM_L1_SIZE) {
             this->w0_ = 0xFFFF;

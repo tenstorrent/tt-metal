@@ -156,8 +156,7 @@ def run_line_all_gather_instances(
     if t3k_mesh_device.get_num_devices() != 8:
         pytest.skip("Not T3000!")
 
-    for device in t3k_mesh_device.get_devices():
-        device.enable_async(enable_async)
+    t3k_mesh_device.enable_async(enable_async)
 
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")

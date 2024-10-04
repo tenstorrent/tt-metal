@@ -96,7 +96,8 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
     host_hugepage_base = (void *)tt::Cluster::instance().host_dma_address(0, mmio_device_id, channel);
     host_hugepage_base = (void *)((uint8_t *)host_hugepage_base + dev_hugepage_base);
 
-    uint32_t l1_buf_base = align(L1_UNRESERVED_BASE, dispatch_buffer_page_size_g);
+    uint32_t l1_unreserved_base = devices_.at(id)->get_base_allocator_addr(HalMemType::L1);
+    uint32_t l1_buf_base = align(l1_unreserved_base, dispatch_buffer_page_size_g);
 
     std::vector<uint32_t> dispatch_cmds;
     CQDispatchCmd cmd;
@@ -118,11 +119,13 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
     std::vector<uint32_t> write_ptr_val = {(write_ptr_start.first >> 4) | (write_ptr_start.second << 31)};
     std::vector<uint32_t> read_ptr_val = {(read_ptr_start.first >> 4) | (read_ptr_start.second << 31)};
 
+    uint32_t completion_q_wr_ptr = dispatch_constants::get(CoreType::WORKER).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
+    uint32_t completion_q_rd_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
     // Write the read and write ptrs
     tt::llrt::write_hex_vec_to_core(
-        device->id(), phys_dispatch_core, write_ptr_val, CQ_COMPLETION_WRITE_PTR);
+        device->id(), phys_dispatch_core, write_ptr_val, completion_q_wr_ptr);
     tt::llrt::write_hex_vec_to_core(
-        device->id(), phys_dispatch_core, read_ptr_val, CQ_COMPLETION_READ_PTR);
+        device->id(), phys_dispatch_core, read_ptr_val, completion_q_rd_ptr);
 
     tt::llrt::write_hex_vec_to_core(device->id(), phys_spoof_prefetch_core, dispatch_cmds, l1_buf_base);
     tt::Cluster::instance().l1_barrier(device->id());
@@ -215,7 +218,7 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
             sleep(1);
             std::vector<uint32_t> read_ptr_update_val = {(read_ptr_update.value().first >> 4) | (read_ptr_update.value().second << 31)};
             tt::llrt::write_hex_vec_to_core(
-                device->id(), phys_dispatch_core, read_ptr_update_val, CQ_COMPLETION_READ_PTR);
+                device->id(), phys_dispatch_core, read_ptr_update_val, completion_q_rd_ptr);
         });
         tt::tt_metal::detail::LaunchProgram(device, program);
         t1.join();

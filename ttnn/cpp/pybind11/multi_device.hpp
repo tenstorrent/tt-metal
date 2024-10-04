@@ -37,13 +37,12 @@ void py_module(py::module& module) {
                         const std::pair<size_t, size_t>& offset,
                         const std::vector<chip_id_t>& physical_device_ids,
                         MeshType mesh_type) {
-                auto config = MeshDeviceConfig(mesh_device_shape, offset, physical_device_ids, mesh_type);
                 return MeshDevice::create(
+                    MeshDeviceConfig(mesh_device_shape, offset, physical_device_ids, mesh_type),
                     l1_small_size,
                     trace_region_size,
                     num_command_queues,
-                    dispatch_core_type,
-                    config);
+                    dispatch_core_type);
             }),
             py::kw_only(),
             py::arg("mesh_shape"),
@@ -103,6 +102,16 @@ void py_module(py::module& module) {
 
             Returns:
                 Arch: The arch of the first device in the device mesh.
+        )doc")
+        .def(
+            "enable_async",
+            &MeshDevice::enable_async,
+            py::arg("enable"),
+            R"doc(
+                Enable or disable async mode across all devices in the mesh.
+
+                Args:
+                    enable (bool): True to enable async mode, False to disable it.
         )doc")
         .def_property_readonly("shape", &MeshDevice::shape, R"doc(
             Get the shape of the device mesh.
