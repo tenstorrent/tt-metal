@@ -359,7 +359,7 @@ class TtLlamaModel_galaxy:
             epsilon=self.norm_eps,
             gamma=self.norm_sharded,
             mesh_device=self.mesh_device,
-            compute_kernel_config=self.LN_COMPUTE_KERNEL_CONFIG,
+            compute_kernel_config=self.core_model_config["LN_COMPUTE_KERNEL_CONFIG"],
         )
         # Slice out last padding_length(32) tokens in LM head to produce next token
         # TODO: Does not work for perplexity, or if we padded input to current sequence length
