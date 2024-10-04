@@ -64,6 +64,7 @@ struct dispatch_constants {
         return *inst;
     }
 
+
     static constexpr uint8_t MAX_NUM_HW_CQS = 2;
     typedef uint16_t prefetch_q_entry_type;
     static constexpr uint32_t PREFETCH_Q_LOG_MINSIZE = 4;

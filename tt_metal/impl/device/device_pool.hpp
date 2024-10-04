@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "tt_metal/host_api.hpp"
 #include "impl/debug/dprint_server.hpp"
 #include "impl/debug/noc_logging.hpp"
 #include "impl/debug/watcher_server.hpp"
@@ -35,6 +36,7 @@ class DevicePool {
     Device *get_active_device(chip_id_t device_id) const;
     std::vector<Device *> get_all_active_devices() const;
     bool close_device(chip_id_t device_id);
+    void close_devices(std::vector<Device *> devices);
     bool is_device_active(chip_id_t id) const;
     void register_worker_thread_for_device(Device* device, std::thread::id worker_thread_id);
     void unregister_worker_thread_for_device(Device* device);
@@ -61,6 +63,7 @@ class DevicePool {
     std::thread::id device_pool_creation_thread_id;
     bool skip_remote_devices;
     std::unordered_set<uint32_t> firmware_built_keys;
+
 
     // Determine which CPU cores the worker threads need to be placed on for each device
     std::unordered_map<uint32_t, uint32_t> device_to_core_map;

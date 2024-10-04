@@ -134,3 +134,78 @@ TEST_F(FDBasicFixture, DevicePoolReduceDevices) {
     ASSERT_TRUE(dev->is_initialized());
     tt::DevicePool::instance().close_device(0);
 }
+
+TEST_F(FDBasicFixture, DevicePoolShutdownSubmesh) {
+    if (tt::tt_metal::GetNumAvailableDevices() != 32) {
+        GTEST_SKIP();
+    }
+    chip_id_t mmio_device_id = 0;
+    std::vector<chip_id_t> device_ids{mmio_device_id};
+    int num_hw_cqs = 1;
+    int l1_small_size = 1024;
+    const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
+    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+    std::vector<Device *> devices = tt::DevicePool::instance().get_all_active_devices();
+    for (const auto& dev: devices) {
+      ASSERT_TRUE((int)(dev->get_l1_small_size()) == l1_small_size);
+      ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
+      ASSERT_TRUE(dev->is_initialized());
+    }
+    std::vector<Device*> tunnel_0;
+    std::vector<Device*> tunnel_1;
+    auto mmio_dev_handle = tt::DevicePool::instance().get_active_device(mmio_device_id);
+    auto tunnels_from_mmio = mmio_dev_handle->tunnels_from_mmio_;
+    //iterate over all tunnels origination from this mmio device
+    for (uint32_t ts = tunnels_from_mmio[0].size() - 1; ts > 0; ts--) {
+        tunnel_0.push_back(tt::DevicePool::instance().get_active_device(tunnels_from_mmio[0][ts]));
+    }
+    for (uint32_t ts = tunnels_from_mmio[1].size() - 1; ts > 0; ts--) {
+        tunnel_1.push_back(tt::DevicePool::instance().get_active_device(tunnels_from_mmio[1][ts]));
+    }
+
+    tt::DevicePool::instance().close_devices(tunnel_0);
+    for (const auto& dev: tunnel_1) {
+      ASSERT_TRUE((int)(dev->get_l1_small_size()) == l1_small_size);
+      ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
+      ASSERT_TRUE(dev->is_initialized());
+    }
+    tt::DevicePool::instance().close_devices(tunnel_1);
+}
+
+TEST_F(FDBasicFixture, DevicePoolReopenSubmesh) {
+     GTEST_SKIP();
+
+    chip_id_t mmio_device_id = 0;
+    std::vector<chip_id_t> device_ids{mmio_device_id};
+    int num_hw_cqs = 1;
+    int l1_small_size = 1024;
+    const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
+    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+    std::vector<Device *> devices = tt::DevicePool::instance().get_all_active_devices();
+    for (const auto& dev: devices) {
+      ASSERT_TRUE((int)(dev->get_l1_small_size()) == l1_small_size);
+      ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
+      ASSERT_TRUE(dev->is_initialized());
+    }
+    std::vector<Device*> tunnel_0;
+    std::vector<Device*> tunnel_1;
+    auto mmio_dev_handle = tt::DevicePool::instance().get_active_device(mmio_device_id);
+    auto tunnels_from_mmio = mmio_dev_handle->tunnels_from_mmio_;
+    //iterate over all tunnels origination from this mmio device
+    for (uint32_t ts = tunnels_from_mmio[0].size() - 1; ts > 0; ts--) {
+        tunnel_0.push_back(tt::DevicePool::instance().get_active_device(tunnels_from_mmio[0][ts]));
+    }
+    for (uint32_t ts = tunnels_from_mmio[1].size() - 1; ts > 0; ts--) {
+        tunnel_1.push_back(tt::DevicePool::instance().get_active_device(tunnels_from_mmio[1][ts]));
+    }
+
+    tt::DevicePool::instance().close_devices(tunnel_0);
+    for (const auto& dev: tunnel_1) {
+      ASSERT_TRUE((int)(dev->get_l1_small_size()) == l1_small_size);
+      ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
+      ASSERT_TRUE(dev->is_initialized());
+    }
+    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+    tt::DevicePool::instance().close_devices(tunnel_1);
+    tt::DevicePool::instance().close_devices(tunnel_0);
+}
