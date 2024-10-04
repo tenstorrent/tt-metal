@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_memory.h"
 
 #include <cassert>
 #include <cstdio>
@@ -9,10 +10,10 @@
 #include <limits>
 #include <stdexcept>
 
-#include "tensix.h"
-#include "tt_memory.h"
-#include "tt_hexfile.h"
 #include "hostdevcommon/common_runtime_address_map.h"
+#include "tensix.h"
+#include "tt_elffile.hpp"
+#include "tt_hexfile.h"
 #include "tt_metal/common/assert.hpp"
 
 using std::numeric_limits;
@@ -39,7 +40,33 @@ memory::memory() {
 }
 
 memory::memory(std::string const &path) : memory() {
-  fill_from_discontiguous_hex(path);
+    // TODO: Eventually we'll have only elf, and this hack can go away.
+    if (path.ends_with(".hex")) {
+        fill_from_discontiguous_hex(path);
+        return;
+    }
+
+    ElfFile elf(path);
+
+    // The ELF file puts the text segment first, but memory wants ordered spans
+    // FIXME: Perhaps we can relax that?
+    auto emit_segment = [&](ElfFile::Segment const& segment) {
+        link_spans_.emplace_back(
+            // We want the byte address, not the word address
+            segment.address * sizeof(decltype(data_)::value_type),
+            segment.contents.size());
+        data_.insert(data_.end(), segment.contents.begin(), segment.contents.end());
+    };
+    auto* text = &elf.GetSegments()[0];
+    for (auto& segment : std::span(elf.GetSegments()).subspan(1)) {
+        if (text && segment.address > text->address) {
+            emit_segment(*text);
+            text = nullptr;
+        }
+        emit_segment(segment);
+    }
+    if (text)
+        emit_segment(*text);
 }
 
 bool memory::operator==(const memory& other) const {

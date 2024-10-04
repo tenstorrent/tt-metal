@@ -27,11 +27,11 @@ from models.demos.tg.llama3_70b.tests.test_llama_model_galaxy import run_test_Ll
     "batch, seq_len",
     [
         (32, 1),
-        #  (1, 256)
+        (1, 256),
     ],
     ids=[
         "decode",
-        #  "prefill"
+        "prefill",
     ],
 )
 @pytest.mark.parametrize(

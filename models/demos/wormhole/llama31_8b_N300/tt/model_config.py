@@ -259,6 +259,14 @@ class TtModelArgs:
                 ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
+            self.model_config["LM_HEAD_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+                (32, 4096 // 64),  # Shard shape: [32, 128] -> 1 shard per core
+                ttnn.CoreGrid(y=8, x=8),
+                ttnn.ShardStrategy.WIDTH,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
             #     x = [32, 4096]
             # W1/W3 = [4096, 14336/2(devices)]
             self.model_config[
@@ -307,31 +315,6 @@ class TtModelArgs:
                 fused_activation=None,
                 fuse_batch=seq_len <= 2048,
             )
-
-            if self.di_dt_workaround:
-                self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(7, 8),
-                    in0_block_w=1,
-                    per_core_M=1,
-                    per_core_N=36,  # vocab size = 128k/2(devices) = 20048 tiles. 4004//56cores = 36
-                    out_subblock_h=1,
-                    out_subblock_w=1,
-                    fuse_batch=True,
-                    fused_activation=None,
-                    mcast_in0=True,
-                )
-            else:
-                self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
-                    in0_block_w=2,
-                    out_subblock_h=1,
-                    out_subblock_w=4,
-                    per_core_M=1,
-                    per_core_N=36,  # vocab size = 128k/2(devices) = 20048 tiles. 4004//56cores = 36
-                    fuse_batch=True,
-                    fused_activation=None,
-                    mcast_in0=True,
-                )
 
             self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
                 (seq_len // 16, self.head_dim),

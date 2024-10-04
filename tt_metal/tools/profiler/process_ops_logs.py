@@ -177,6 +177,18 @@ def get_device_op_data(ops):
     return deviceOps
 
 
+def device_log_ops_compare(op):
+    if (
+        "timeseries" in op
+        and len(op["timeseries"]) > 0
+        and len(op["timeseries"][0]) > 0
+        and "run_host_id" in op["timeseries"][0][0]
+    ):
+        return int(op["timeseries"][0][0]["run_host_id"])
+    else:
+        return 0
+
+
 # Append device data to device ops and return the list of mapped device op ref list
 def append_device_data(ops, deviceLogFolder):
     deviceOps = get_device_op_data(ops)
@@ -190,6 +202,7 @@ def append_device_data(ops, deviceLogFolder):
         for device in deviceOps:
             assert device in deviceData["devices"].keys()
             deviceOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
+            deviceOpsTime.sort(key=device_log_ops_compare)
             if len(deviceOps[device]) != len(deviceOpsTime):
                 deviceOPId = None
                 hostOPId = None
@@ -209,7 +222,7 @@ def append_device_data(ops, deviceLogFolder):
                     ), f"Device data mismatch: Expected {len(deviceOps[device])} but received {len(deviceOpsTime)} ops on device {device}. Device is showing op ID {deviceOPId} when host is showing op ID {hostOPId}"
                 else:
                     assert (
-                        True
+                        False
                     ), f"Device data mismatch: Expected {len(deviceOps[device])} but received {len(deviceOpsTime)} ops on device {device}"
             for deviceOp, deviceOpTime in zip(deviceOps[device], deviceOpsTime):
                 cores = set()

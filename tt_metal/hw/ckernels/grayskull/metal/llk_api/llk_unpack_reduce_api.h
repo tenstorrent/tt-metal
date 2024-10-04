@@ -20,15 +20,6 @@ inline void llk_unpack_reduce_hw_configure(
         unpack_src_format[unpA_operand_id],
         unpack_dst_format[unpA_operand_id]
     );
-
-    if constexpr (type != PoolType::MAX) {
-        union {
-            float f;
-            uint32_t u;
-        } f2u = {.f = const_mult};
-
-        for (uint i = 0; i < 16; i++) l1_buffer[i] = f2u.u;  // Load const into L1 buffer
-    }
 }
 
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en=false /*not used*/, StochRndType stoch_rnd_mode = StochRndType::None /*not used*/>
@@ -74,9 +65,6 @@ inline void llk_unpack_reduce_init(const std::uint32_t within_face_16x16_transpo
 
     cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32] = tile_descriptor.val[0];
     cfg[THCON_SEC1_REG2_Out_data_format_ADDR32] = config.val[0];
-
-    cfg[THCON_SEC1_REG3_Base_address_ADDR32] = (((uint)l1_buffer) >> 4) - 1;        // Set l1 buffer address
-    cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = (((uint)l1_buffer) >> 4) - 1;  // Set l1 buffer address
 
     _llk_unpack_reduce_init_<type, dim>(within_face_16x16_transpose);
     WAYPOINT("UPRD");
