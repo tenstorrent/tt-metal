@@ -148,7 +148,7 @@ void test_shape_padding() {
     auto output_tensor = ttnn::sqrt(padded_input_tensor);
     output_tensor = output_tensor.cpu();
 
-    TT_FATAL(output_tensor.get_padded_shape == padded_input_shape, "Error");
+    TT_FATAL(output_tensor.get_padded_shape() == padded_input_shape, "Error");
     TT_FATAL(output_tensor.get_logical_shape() == input_shape, "Error");
 
     TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
