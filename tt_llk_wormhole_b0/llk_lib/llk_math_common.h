@@ -126,3 +126,11 @@ inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format
     constexpr uint config_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK;
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, config_mask>(config_data);
 }
+
+inline std::uint32_t _llk_math_get_compute_special_value_flags_() {
+    return reg_read(RISCV_DEBUG_REG_FPU_STICKY_BITS); 
+}
+
+inline void _llk_math_clear_compute_special_value_flags_() {
+    reg_write(RISCV_DEBUG_REG_FPU_STICKY_BITS, 0);
+}
