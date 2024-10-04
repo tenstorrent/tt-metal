@@ -6,14 +6,10 @@
 
 #include <memory>
 
-#include "tt_metal/impl/device/mesh_device.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
-using Device = ttnn::Device;
-
-namespace ttnn {
-namespace multi_device {
+namespace ttnn::distributed {
 
 std::shared_ptr<MeshDevice> open_mesh_device(
     const MeshShape& mesh_shape,
@@ -33,8 +29,4 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards);
 
 std::vector<int> get_t3k_physical_device_ids_ring();
 
-}  // namespace multi_device
-
-using namespace multi_device;
-
-}  // namespace ttnn
+}  // namespace ttnn::distributed

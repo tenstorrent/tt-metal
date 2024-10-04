@@ -20,7 +20,7 @@
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/tile/tile.hpp"
 #include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/device/mesh_device.hpp"
+#include "tt_metal/distributed/mesh_device.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 #include "types.hpp"
 

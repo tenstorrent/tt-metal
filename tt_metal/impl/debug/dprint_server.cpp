@@ -194,9 +194,14 @@ static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
     TT_ASSERT(offsetof(TileSliceHostDev<0>, samples_) % sizeof(uint16_t) == 0, "TileSliceHostDev<0> samples_ field is not properly aligned");
     uint16_t *samples_ = reinterpret_cast<uint16_t *>(ptr) + offsetof(TileSliceHostDev<0>, samples_) / sizeof(uint16_t);
 
+    enum CB cb = static_cast<enum CB>(ts->cb_id_);
     if (ts->w0_ == 0xFFFF) {
-        stream << "BAD TILE POINTER" << std::flush;
-        stream << " count=" << ts->count_ << std::flush;
+        uint32_t ptr = ts->ptr_;
+        uint8_t count = ts->count_;
+        stream << fmt::format("Tried printing {}: BAD TILE POINTER (ptr={}, count={})\n", cb, ptr, count) << std::flush;
+    } else if (ts->w1_ == 0xFFFF) {
+        tt::DataFormat data_format = static_cast<tt::DataFormat>(ts->data_format_);
+        stream << fmt::format("Tried printing {}: Unsupported data format ({})\n", cb, data_format);
     } else {
         uint32_t i = 0;
         bool count_exceeded = false;
