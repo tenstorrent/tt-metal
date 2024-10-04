@@ -56,7 +56,7 @@ int main(int argc, char **argv) {
     constexpr uint32_t output_cb_index = CB::c_out0;
     constexpr uint32_t num_output_tiles = 1;
     CircularBufferConfig cb_output_config =
-        CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Int32}})
+        CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float32}})
             .set_page_size(output_cb_index, single_tile_size);
     CBHandle cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
@@ -113,22 +113,22 @@ int main(int argc, char **argv) {
     Finish(cq);
 
     /* Read in result into a host vector */
-    std::vector<uint32_t> result_vec;
-    EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
+    std::vector<float> result_vec(1024);
+    EnqueueReadBuffer(cq, dst_dram_buffer, result_vec.data(), true);
     std::map<uint, int> mp;
 
     for (uint32_t i = 0; i < 1024; ++i) {
-        float a = result_vec[i] / float(1 << 31 - 1) / 2;
+        float a = result_vec[i];  // / float(1 << 31 - 1) / 2;
         mp[result_vec[i]] += 1;
-        std::cout << a << " ";
+        std::cout << result_vec[i] << " ";
         if ((i & 31) == 31)
             std::cout << std::endl;
     }
 
-    std::cout << mp.size() << std::endl;
-    for (const auto &pair : mp) {
-        std::cout << pair.first << " " << pair.second << std::endl;
-    }
+    // std::cout << mp.size() << std::endl;
+    // for (const auto &pair : mp) {
+    //     std::cout << std::bitset<32>(pair.first) << " " << pair.second << std::endl;
+    // }
 
     // printf("Result = %d\n", result_vec[0]); // 22 = 1102070192
     // printf("Expected = %d\n", pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>( bfloat16(22.0f),

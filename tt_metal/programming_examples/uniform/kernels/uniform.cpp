@@ -12,6 +12,7 @@
 #include "llk_math_eltwise_unary_sfpu_dropout.h"
 #include "noc_nonblocking_api.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_typecast.h"
 
 using namespace sfpi;
 
@@ -25,12 +26,21 @@ inline void _my_calculate_dropout_(const int iterations) {
         TTI_SFPSETSGN(0, p_sfpu::LREG0, p_sfpu::LREG0, 1);
         TTI_SFPSTORE(0, 4, 3, 0);
         TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG0, 5);
-        // vInt c = dst_reg[0];
-        // vFloat a = c;
-        // a = 2001;
-        // vFloat b = 0.001;
-        // a = a * b;
+        // vFloat a = 1.1f;
         // dst_reg[0] = a;
+        // vInt b = static_cast<vInt>(a);
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _normalize_(const int iterations) {
+#pragma GCC unroll 0
+    for (int d = 0; d < iterations; d++) {
+        vFloat a = dst_reg[0];
+        vFloat divisor = 1.0 / (1000);
+        a = a * divisor;
+        dst_reg[0] = a;
         dst_reg++;
     }
 }
@@ -38,6 +48,8 @@ inline void _my_calculate_dropout_(const int iterations) {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void my_calculate_dropout() {
     _my_calculate_dropout_<APPROXIMATION_MODE, ITERATIONS>(ITERATIONS);
+    sfpu::_calculate_typecast_int32_to_fp32_<APPROXIMATION_MODE, ITERATIONS>();
+    // _normalize_<APPROXIMATION_MODE, ITERATIONS>(ITERATIONS);
 }
 
 template <bool APPROXIMATE>
