@@ -135,6 +135,7 @@ class TtModelArgs:
         self.instruct = instruct
         self.dummy_weights = dummy_weights
         self.max_batch_size = max_batch_size
+        self.batch_rows = int(math.ceil(self.max_batch_size / 32))
 
         # Enable workarounds by default until di/dt issues are fixed
         self.di_dt_workaround = os.getenv("DISABLE_DI_DT_WORKAROUND") != "1"
@@ -190,52 +191,10 @@ class TtModelArgs:
                 k_chunk_size=256 if seqlen > 2048 else 64,
             )
 
-            # Function definitions remain the same
-            def matmul_config(
-                m: int,
-                k: int,
-                n: int,
-                grid_size: Tuple[int, int],
-                in0_block_w: int = None,
-                fuse_batch: bool = False,
-                fused_activation=None,
-            ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
-                per_core_M = math.ceil(m / (32 * grid_size[1]))
-                per_core_N = math.ceil(n / (32 * grid_size[0]))
-
-                out_subblock_h = 1
-                out_subblock_w = 4
-                while out_subblock_w > 1:
-                    if out_subblock_w * out_subblock_h <= 4 and per_core_N % out_subblock_w == 0:
-                        break
-                    out_subblock_w -= 1
-
-                return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=grid_size,
-                    in0_block_w=1,  # in0_block_w if in0_block_w is not None else max(1, k // (32 * grid_size[0])), # FIXME
-                    out_subblock_h=out_subblock_h,
-                    out_subblock_w=out_subblock_w,
-                    per_core_M=per_core_M,
-                    per_core_N=per_core_N,
-                    transpose_mcast=False,
-                    fused_activation=fused_activation,
-                    fuse_batch=fuse_batch,
-                )
-
-            def dram_matmul_config(
-                m: int, k: int, n: int, grid_size: Tuple[int, int]
-            ) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:
-                return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-                    in0_block_w=math.ceil(k / (32 * grid_size[0] * grid_size[1])),
-                    per_core_M=math.ceil(m / 32),
-                    per_core_N=math.ceil(n / (32 * grid_size[0] * grid_size[1])),
-                    fused_activation=None,
-                )
-
-            # Update the existing configurations using the new function names
+            # Update the existing configurations using the new class methods
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
-            self.model_config["XQKV_DECODE_PROGCFG"] = dram_matmul_config(
-                m=32, k=self.dim, n=self.qkv_size // self.num_devices, grid_size=(4, 8)
+            self.model_config["XQKV_DECODE_PROGCFG"] = self.dram_matmul_config(
+                m=self.batch_rows, k=self.dim, n=self.qkv_size // self.num_devices, grid_size=(4, 8)
             )
 
             def find_largest_divisor(n, max_divisor=8):
@@ -251,43 +210,43 @@ class TtModelArgs:
                 grid_size_x * grid_size_y == self.n_heads // self.num_devices
             ), f"Grid size mismatch: {grid_size_x} * {grid_size_y} != {self.n_heads // self.num_devices}"
 
-            self.model_config["ATTN_OUTPUT_PROGCFG"] = dram_matmul_config(
-                m=32,
+            self.model_config["ATTN_OUTPUT_PROGCFG"] = self.dram_matmul_config(
+                m=self.batch_rows,
                 k=self.dim // self.num_devices,
                 n=self.dim,
                 grid_size=(grid_size_x, grid_size_y),
             )
 
-            self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = matmul_config(
+            self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = self.matmul_config(
                 m=1024, k=self.dim, n=self.hidden_dim // self.num_devices, grid_size=(8, 8)
             )
 
-            self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = matmul_config(
+            self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = self.matmul_config(
                 m=1024, k=self.hidden_dim, n=self.dim, grid_size=(8, 8)
             )
 
-            self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG_128"] = lambda seq_len: matmul_config(
+            self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG_128"] = lambda seq_len: self.matmul_config(
                 m=seq_len, k=self.dim, n=self.hidden_dim // self.num_devices, grid_size=(8, 4)
             )
 
             if self.di_dt_workaround:
-                self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"] = lambda seq_len: matmul_config(
+                self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"] = lambda seq_len: self.matmul_config(
                     m=seq_len, k=self.hidden_dim, n=self.dim, grid_size=(8, 4)
                 )
             else:
-                self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"] = lambda seq_len: matmul_config(
+                self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"] = lambda seq_len: self.matmul_config(
                     m=seq_len, k=self.hidden_dim, n=self.dim, grid_size=(8, 4)
                 )
 
-            self.model_config["DECODE_MLP_W1_W3_PRG_CONFIG"] = dram_matmul_config(
-                m=32, k=self.dim, n=self.hidden_dim // self.num_devices, grid_size=(4, 8)
+            self.model_config["DECODE_MLP_W1_W3_PRG_CONFIG"] = self.dram_matmul_config(
+                m=self.batch_rows, k=self.dim, n=self.hidden_dim // self.num_devices, grid_size=(4, 8)
             )
 
-            self.model_config["DECODE_MLP_W2_PRG_CONFIG"] = dram_matmul_config(
-                m=32, k=self.hidden_dim // self.num_devices, n=self.dim, grid_size=(4, 8)
+            self.model_config["DECODE_MLP_W2_PRG_CONFIG"] = self.dram_matmul_config(
+                m=self.batch_rows, k=self.hidden_dim // self.num_devices, n=self.dim, grid_size=(4, 8)
             )
 
-            self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: matmul_config(
+            self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 2048),
                 k=self.dim,
                 n=self.dim,
@@ -297,7 +256,7 @@ class TtModelArgs:
             )
 
             self.model_config["LM_HEAD_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
-                (32, self.dim // (8 * 8)),  # Shard shape: [32, 128] -> 1 shard per core
+                (self.batch_rows, self.dim // (8 * 8)),  # Shard shape: [32, 128] -> 1 shard per core
                 ttnn.CoreGrid(y=8, x=8),
                 ttnn.ShardStrategy.WIDTH,
                 ttnn.ShardOrientation.ROW_MAJOR,
@@ -440,14 +399,14 @@ class TtModelArgs:
 
             # Width sharded
             self.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
-                (32, self.dim // 32),  # Shard shape: [32, 128] -> 1 shard per core
+                (self.batch_rows, self.dim // 32),  # Shard shape: [32, 128] -> 1 shard per core
                 ttnn.CoreGrid(y=4, x=8),
                 ttnn.ShardStrategy.WIDTH,
                 ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
             self.model_config["SHARDED_SKIP_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
-                (32, self.dim // 32),  # Shard shape: [32, 128] -> 1 shard per core
+                (self.batch_rows, self.dim // 32),  # Shard shape: [32, 128] -> 1 shard per core
                 ttnn.CoreGrid(y=4, x=8),
                 ttnn.ShardStrategy.WIDTH,
                 ttnn.ShardOrientation.ROW_MAJOR,
@@ -455,7 +414,7 @@ class TtModelArgs:
             )
 
             # Vision model configs
-            self.model_config["IMAGE_MLP_FC_PROGCFG"] = lambda seq_len: matmul_config(
+            self.model_config["IMAGE_MLP_FC_PROGCFG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 1024),
                 k=self.vision_dim,
                 n=self.vision_hidden_dim // self.num_devices,
@@ -463,7 +422,7 @@ class TtModelArgs:
                 in0_block_w=1,
                 fuse_batch=seq_len <= 1024,
             )
-            self.model_config["IMAGE_MLP_PROJ_PROGCFG"] = lambda seq_len: matmul_config(
+            self.model_config["IMAGE_MLP_PROJ_PROGCFG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 1024),
                 k=self.vision_hidden_dim // self.num_devices,
                 n=self.vision_dim,
@@ -471,7 +430,7 @@ class TtModelArgs:
                 in0_block_w=1,
                 fuse_batch=seq_len <= 1024,
             )
-            self.model_config["IMAGE_ATTN_QKV_PROGCFG"] = lambda seq_len: matmul_config(
+            self.model_config["IMAGE_ATTN_QKV_PROGCFG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 1024),
                 k=self.vision_dim,
                 n=(self.vision_dim * 3),
@@ -479,7 +438,7 @@ class TtModelArgs:
                 in0_block_w=1,
                 fuse_batch=seq_len <= 1024,
             )
-            self.model_config["IMAGE_ATTN_OUT_PROGCFG"] = lambda seq_len: matmul_config(
+            self.model_config["IMAGE_ATTN_OUT_PROGCFG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 1024),
                 k=self.vision_dim,
                 n=self.vision_dim,
@@ -597,3 +556,46 @@ class TtModelArgs:
             self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR, False
         )
         return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+    @staticmethod
+    def matmul_config(
+        m: int,
+        k: int,
+        n: int,
+        grid_size: Tuple[int, int],
+        in0_block_w: int = None,
+        fuse_batch: bool = False,
+        fused_activation=None,
+    ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+        per_core_M = math.ceil(m / (32 * grid_size[1]))
+        per_core_N = math.ceil(n / (32 * grid_size[0]))
+
+        out_subblock_h = 1
+        out_subblock_w = 4
+        while out_subblock_w > 1:
+            if out_subblock_w * out_subblock_h <= 4 and per_core_N % out_subblock_w == 0:
+                break
+            out_subblock_w -= 1
+
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            in0_block_w=1,  # in0_block_w if in0_block_w is not None else max(1, k // (32 * grid_size[0])), # FIXME
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            transpose_mcast=False,
+            fused_activation=fused_activation,
+            fuse_batch=fuse_batch,
+        )
+
+    @staticmethod
+    def dram_matmul_config(
+        m: int, k: int, n: int, grid_size: Tuple[int, int]
+    ) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:
+        return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=math.ceil(k / (32 * grid_size[0] * grid_size[1])),
+            per_core_M=math.ceil(m / 32),
+            per_core_N=math.ceil(n / (32 * grid_size[0] * grid_size[1])),
+            fused_activation=None,
+        )
