@@ -42,7 +42,10 @@ void py_module(py::module& module) {
         Returns:
             `None`: modifies print options.
 
+        Examples:
+            >>> ttnn.set_printoptions(profile="short")
         )doc");
+
     module.def("dump_stack_trace_on_segfault", &ttnn::core::dump_stack_trace_on_segfault);
 }
 
