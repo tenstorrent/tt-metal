@@ -165,8 +165,8 @@ ttnn::SimpleShape LegacyShape::logical_shape() const
     const LegacyShape logical = without_padding();
 
     std::vector<uint32_t> values(rank());
-    for (auto& item: values) {
-        item = logical[i];
+    for (size_t i = 0; i < values.size(); i++) {
+        values[i] = logical[i];
     }
     return ttnn::SimpleShape(std::move(values));
 }
