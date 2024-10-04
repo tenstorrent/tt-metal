@@ -50,7 +50,6 @@ public:
     uint32_t &operator[](int32_t index);
 
     size_t rank() const { return this->value.size(); }
-
     uint64_t volume() const;
 
     auto cbegin() const { return this->value.cbegin(); }
