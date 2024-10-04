@@ -159,6 +159,8 @@ void MAIN {
         }
 
         if constexpr (gather_in0) {
+            cb_reserve_back(in1_cb_id, in1_block_num_tiles * num_blocks);
+            cb_push_back(in1_cb_id, in1_block_num_tiles * num_blocks);
             cb_wait_front(in1_cb_id, in1_block_num_tiles * num_blocks);
         }
         const uint32_t in1_block_num_tiles_per_core = in1_block_num_tiles / ring_size;

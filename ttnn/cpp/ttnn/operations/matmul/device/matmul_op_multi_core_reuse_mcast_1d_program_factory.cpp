@@ -538,7 +538,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     tt_metal::CircularBufferConfig src0_cb_config =
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
             .set_page_size(src0_cb_index, in0_single_tile_size)
-            .set_tile_dims(src0_cb_index, in0_tile);
+            .set_tile_dims(src0_cb_index, in0_tile)
+            .set_globally_allocated_address(*in0_buffer);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
     log_debug(
         LogOp,

@@ -64,8 +64,8 @@ void kernel_main() {
             noc_semaphore_wait_min(l1_signal_sem_addr, shard_cnt + 1);
 
             if (shard_cnt == 0) { // Need to load the local shard from cb2 to cb0 in the correct place
-                noc_async_read(get_noc_addr(local_shard_read_addr), curr_shard_read_addr, shard_size_bytes);
-                noc_async_read_barrier();
+                // noc_async_read(get_noc_addr(local_shard_read_addr), curr_shard_read_addr, shard_size_bytes);
+                // noc_async_read_barrier();
 
                 noc_async_write_one_packet_set_state(remote_curr_shard_write_addr, shard_size_bytes);
             }

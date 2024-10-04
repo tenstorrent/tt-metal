@@ -138,6 +138,31 @@ def run_prefetch_matmul_on_t3000_impl(
 
     ##### Create input tensor for the all gather #####
     _, _, M, K = input_shape
+
+    # Add padding to create a dummy tensor to overcome PCC issue for in-place CB
+    padded_K = K * (mem_config_input.shard_spec.num_cores() - 1)
+    input_tensor_padding = torch.randn([1, 1, M, padded_K]).float()
+    _ = ttnn.as_tensor(
+        input_tensor_padding,
+        dtype=input_dtype,
+        layout=layout,
+        device=t3k_mesh_device,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                shard_spec_24_cores_grid,
+                [
+                    M,
+                    padded_K // mem_config_input.shard_spec.num_cores(),
+                ],
+                ttnn.ShardOrientation.ROW_MAJOR,
+                False,
+            ),
+        ),
+        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+    )
+
     input_tensor = torch.randn(input_shape).float()
     tt_input_tensor = ttnn.as_tensor(
         input_tensor,
