@@ -290,7 +290,7 @@ int main(int argc, char **argv) {
         } else if (source_mem_g == 5) {
             log_info(LogTest, "Writing: {} - core ({}, {})", src_mem, w.x, w.y);
         } else if (source_mem_g == 6) {
-            log_info(LogTest, "Writing: {} - core grid {}", src_mem, mcast_src_workers_g.str());
+            log_info(LogTest, "Writing: {} - core grid [({}, {}) - ({}, {})]", src_mem, noc_addr_x, noc_addr_y, mcast_noc_addr_end_x, mcast_noc_addr_end_y);
         } else {
             log_info(LogTest, "Reading: {} - core ({}, {})", src_mem, noc_addr_x, noc_addr_y);
         }
