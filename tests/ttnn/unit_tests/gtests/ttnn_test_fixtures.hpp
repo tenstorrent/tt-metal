@@ -15,7 +15,7 @@
 #include "tests/tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_values.hpp"
-#include "tt_metal/impl/device/mesh_device.hpp"
+#include "tt_metal/distributed/mesh_device.hpp"
 
 namespace ttnn {
 
@@ -53,7 +53,7 @@ class TTNNFixtureWithDevice : public TTNNFixture {
 }  // namespace ttnn
 
 
-namespace ttnn::multi_device::test {
+namespace ttnn::distributed::test {
 
 class T3kMultiDeviceFixture : public ::testing::Test {
    protected:
@@ -78,4 +78,4 @@ class T3kMultiDeviceFixture : public ::testing::Test {
     std::shared_ptr<MeshDevice> mesh_device_;
 };
 
-}  // namespace ttnn::multi_device::test
+}  // namespace ttnn::distributed::test
