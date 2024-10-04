@@ -22,7 +22,7 @@ operation::ProgramWithCallbacks moreh_softmax_backward_h_large(const Tensor &out
     log_info(LogTest, "Large tensor algorithm selected");
 
     // split work
-    auto shape = input_grad.get_legacy_shape();
+    auto shape = input_grad.get_padded_shape();
     auto H = shape[-2];
     auto W = shape[-1];
     auto Ht = H / TILE_HEIGHT;
@@ -115,7 +115,7 @@ operation::ProgramWithCallbacks moreh_softmax_backward_h_large(const Tensor &out
         }
 
         float scaler = 1.0f;
-        uint32_t mask_h = shape.without_padding()[-2] % TILE_HEIGHT;
+        uint32_t mask_h = input_grad.get_logical_shape()[-2] % TILE_HEIGHT;
         if(mask_h == 0) mask_h = TILE_HEIGHT;
         vector<uint32_t> reader_args = {
             output.buffer()->address(),

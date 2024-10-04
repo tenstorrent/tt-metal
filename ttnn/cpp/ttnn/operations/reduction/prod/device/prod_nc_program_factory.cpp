@@ -30,8 +30,8 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
     const auto cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
     const auto single_tile_size = detail::TileSize(cb_data_format);
 
-    const auto &input_shape = input.get_legacy_shape();
-    const auto &input_shape_without_padding = input_shape.without_padding();
+    const auto input_shape = input.get_padded_shape();
+    const auto input_shape_without_padding = input.get_logical_shape();
 
     const auto N = input_shape[0];
     const auto C = input_shape[1];

@@ -275,8 +275,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
 
     // 1D distribution of blocks across cores
     auto core_assignments = ttnn::distribute_work(
-        output.get_legacy_shape().without_padding(),
-        output.get_legacy_shape().padding(),
+        output.get_logical_shape(),
+        output.get_padding(),
         ncores,
         nblocks_per_core,
         has_cliff,

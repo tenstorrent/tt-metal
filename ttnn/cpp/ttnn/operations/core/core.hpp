@@ -38,7 +38,7 @@ ttnn::Tensor reshape(const ttnn::Tensor& tensor, const std::array<int32_t, Rank>
     std::array<std::uint32_t, Rank> new_shape{};
     std::copy(shape.begin(), shape.end(), new_shape.begin());
     if (new_volume < 0) {
-        const auto volume = tensor.get_shape().with_tile_padding().volume();
+        const auto volume = tensor.volume();
         new_shape[index_of_negative_1] = volume / (-new_volume);
     }
     return reshape(tensor, ttnn::Shape(new_shape));

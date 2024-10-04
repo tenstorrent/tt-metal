@@ -212,8 +212,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    const auto& input_shape = a.get_legacy_shape();
-    const auto& output_shape = output.get_legacy_shape();
+    const auto& input_shape = a.get_padded_shape();
+    const auto& output_shape = output.get_padded_shape();
 
     Device* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();

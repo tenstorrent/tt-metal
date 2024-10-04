@@ -31,10 +31,8 @@ void test_operation_infrastructure() {
     auto input_tensor = ttnn::numpy::random::uniform(bfloat16(0), bfloat16(1), input_shape);
     auto output_tensor = ttnn::pad(input_tensor, padded_shape, tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
 
-    auto output_shape = output_tensor.get_legacy_shape();
-
-    TT_FATAL(output_shape == tt::tt_metal::LegacyShape(padded_shape), "Error");
-    TT_FATAL(output_shape.without_padding() == tt::tt_metal::LegacyShape(input_shape), "Error");
+    TT_FATAL(output_tensor.get_padded_shape() == padded_shape, "Error");
+    TT_FATAL(output_tensor.get_logical_shape() == input_shape, "Error");
 }
 
 int main(int argc, char** argv) {

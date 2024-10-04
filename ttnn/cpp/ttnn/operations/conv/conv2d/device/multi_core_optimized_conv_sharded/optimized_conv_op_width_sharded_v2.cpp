@@ -248,7 +248,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         // Tensor bias is of shape {output_channels}
         TT_FATAL(bias.has_value(), "Error");
         TT_FATAL(bias.value().buffer() != nullptr, "Error");
-        auto bias_shape_without_padding = bias.value().get_legacy_shape().without_padding();
+        auto bias_shape_without_padding = bias.value().get_logical_shape();
         TT_FATAL(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
     }
 

@@ -25,8 +25,8 @@ void Prod::validate(const std::vector<Tensor>& inputs) const {
     auto input_shape = input.get_legacy_shape();
     TT_FATAL((input_shape.rank() == 4), "rank should be 4");
     const auto& output_shape = output.get_legacy_shape();
-    auto input_shape_wo_padding = input.get_legacy_shape().without_padding();
-    const auto& output_shape_wo_padding = output.get_legacy_shape().without_padding();
+    auto input_shape_wo_padding = input.get_logical_shape();
+    const auto& output_shape_wo_padding = output.get_logical_shape();
 
     if (dim == 0 || dim == 1) {
         input_shape[dim] = 1;

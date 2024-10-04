@@ -15,6 +15,9 @@ struct ConcatenateHeads : public ttnn::operations::experimental::transformer::NL
         const auto& input_tensor = input_tensors.at(0);
         const auto head_size = input_tensor.get_shape()[-1];
         const auto padded_head_size = input_tensor.get_legacy_shape()[-1];
+        const auto input_logical_shape = input_tensor.get_logical_shape();
+
+        TT_FATAL(input_logical_shape.rank() == 4, "Input tensor must have rank 4. Shape: {}", input_logical_shape);
 
         TT_FATAL(
             head_size % ttnn::types::TILE_SIZE == 0,
@@ -31,17 +34,16 @@ struct ConcatenateHeads : public ttnn::operations::experimental::transformer::NL
     }
 
     std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-        std::vector<tt::tt_metal::LegacyShape> output_shape_vec;
         const auto& input_tensor = input_tensors.at(0);
-        const ttnn::types::Shape input_shape = input_tensor.get_shape();
-        const ttnn::types::Shape padded_input_shape = input_shape.with_tile_padding();
+        const ttnn::SimpleShape input_logical_shape = input_tensor.get_logical_shape();
+        const ttnn::SimpleShape input_padded_shape = input_tensor.get_padded_shape();
 
-        auto batch_size = input_shape[0];
-        auto num_heads = input_shape[1];
-        auto sequence_size = input_shape[2];
-        auto padded_sequence_size = padded_input_shape[2];
-        auto head_size = input_shape[3];
-        auto padded_head_size = padded_input_shape[3];
+        auto batch_size = input_logical_shape[0];
+        auto num_heads = input_logical_shape[1];
+        auto sequence_size = input_logical_shape[2];
+        auto padded_sequence_size = input_padded_shape[2];
+        auto head_size = input_logical_shape[3];
+        auto padded_head_size = input_padded_shape[3];
 
         std::array<uint32_t, 3> intended_output_shape = {batch_size, sequence_size, num_heads * head_size};
         std::array<uint32_t, 3> padded_output_shape = {batch_size, padded_sequence_size, num_heads * padded_head_size};

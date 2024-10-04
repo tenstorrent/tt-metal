@@ -65,9 +65,9 @@ Tensor _lerp(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c
 // compute multiply-accumulate: y = a * b + c,  over various 8 combinations of a, b, c
 // being a scalar or tensor
 Tensor _mac(const Tensor& a, const Tensor& b, const Tensor& c, const std::optional<MemoryConfig>& output_mem_config) {
-    bool a_is_scalar = a.intended_volume() == 1;
-    bool b_is_scalar = b.intended_volume() == 1;
-    bool c_is_scalar = c.intended_volume() == 1;
+    bool a_is_scalar = a.is_scalar();
+    bool b_is_scalar = b.is_scalar();
+    bool c_is_scalar = c.is_scalar();
 
     if (!a_is_scalar && !b_is_scalar && !c_is_scalar) {
         // all tensors

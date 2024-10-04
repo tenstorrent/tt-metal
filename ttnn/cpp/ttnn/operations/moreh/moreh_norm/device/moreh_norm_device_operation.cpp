@@ -28,12 +28,12 @@ inline void validate_input_tensor_with_dim(const Tensor& input, int64_t dim) {
 }
 
 inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tensor& output, int64_t dim, bool keepdim) {
-    const auto& input_shape = input.get_legacy_shape();
-    const auto& input_shape_wo_padding = input_shape.without_padding();
+    const auto input_shape = input.get_padded_shape();
+    const auto input_shape_wo_padding = input.get_logical_shape();
     const auto input_rank = input_shape.rank();
 
-    const auto& output_shape = output.get_legacy_shape();
-    const auto& output_shape_wo_padding = output_shape.without_padding();
+    const auto output_shape = output.get_padded_shape();
+    const auto output_shape_wo_padding = output.get_logical_shape();
     const auto output_rank = output_shape.rank();
 
     const bool is_tile_dim = (dim == input_rank - 1 || dim == input_rank - 2);

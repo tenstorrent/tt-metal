@@ -46,7 +46,7 @@ operation::ProgramWithCallbacks moreh_softmax_backward_w_small(const Tensor &out
     log_info(LogTest, "Small tensor algorithm selected");
 
     // split work
-    auto shape = input_grad.get_legacy_shape();
+    auto shape = input_grad.get_padded_shape();
     auto H = shape[-2];
     auto W = shape[-1];
     auto Ht = H / TILE_HEIGHT;
@@ -138,7 +138,7 @@ operation::ProgramWithCallbacks moreh_softmax_backward_w_small(const Tensor &out
         }
 
         float scaler = 1.0f;
-        uint32_t mask_w = shape.without_padding()[-1] % TILE_WIDTH;
+        uint32_t mask_w = input_grad.get_logical_shape()[-1] % TILE_WIDTH;
         if(mask_w == 0) mask_w = TILE_WIDTH;
         vector<uint32_t> reader_args = {
             output.buffer()->address(),
