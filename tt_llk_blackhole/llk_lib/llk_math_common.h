@@ -131,3 +131,11 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
 
 inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format) {
 }
+
+inline std::uint32_t _llk_math_get_compute_special_value_flags_() {
+    return reg_read(RISCV_DEBUG_REG_FPU_STICKY_BITS); 
+}
+
+inline void _llk_math_clear_compute_special_value_flags_() {
+    reg_write(RISCV_DEBUG_REG_FPU_STICKY_BITS, 0);
+}
