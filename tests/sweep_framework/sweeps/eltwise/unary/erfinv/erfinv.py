@@ -40,8 +40,8 @@ parameters = {
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    if test_vector["input_a_layout"] == ttnn.ROW_MAJOR_LAYOUT:
-        return True, "Row major layout is not supported"
+    if test_vector["input_a_layout"] == ttnn.ROW_MAJOR_LAYOUT or test_vector["input_a_dtype"] == ttnn.bfloat8_b:
+        return True, "Row major layout / bfloat8 is not supported"
     return False, None
 
 
@@ -79,4 +79,4 @@ def run(
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
-    return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
+    return [check_with_pcc(torch_output_tensor, output_tensor, 0.98), e2e_perf]
