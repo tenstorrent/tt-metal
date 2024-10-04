@@ -308,8 +308,8 @@ MemoryConfig load_memory_config(const std::string& file_name) {
 namespace ttnn {
 
 namespace {
-int32_t normalized_index(int32_t index) const {
-    int32_t size = static_cast<int32_t>(value.size());
+int32_t normalized_index(int32_t index, size_t container_size) {
+    int32_t size = static_cast<int32_t>(container_size);
 
     if (index < 0) {
         index += size;
@@ -332,12 +332,12 @@ bool SimpleShape::operator==(const std::vector<uint32_t> &other) const {
 }
 
 uint32_t SimpleShape::operator[](int32_t index) const {
-    auto norm_index = normalized_index(index);
+    auto norm_index = normalized_index(index, value.size());
     return value[norm_index];
 }
 
 uint32_t& SimpleShape::operator[](int32_t index) {
-    auto norm_index = normalized_index(index);
+    auto norm_index = normalized_index(index, value.size());
     return value[norm_index];
 }
 
