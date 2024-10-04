@@ -26,7 +26,7 @@ constexpr uint32_t DEFAULT_BATCH_SIZE_K = 512;
 //////////////////////////////////////////////////////////////////////////////////////////
 // Test dispatch program performance
 //
-// Test read bw and latency from host/dram/l1
+// Test read/write bw and latency from host/dram/l1
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
@@ -165,6 +165,7 @@ int main(int argc, char **argv) {
         uint64_t noc_mem_addr = 0;
         uint32_t dram_banked = 0;
         uint32_t issue_mcast = 0;
+        uint32_t num_mcast_dests = mcast_src_workers_g.size();
         uint32_t mcast_noc_addr_end_x = 0;
         uint32_t mcast_noc_addr_end_y = 0;
 
@@ -257,6 +258,7 @@ int main(int argc, char **argv) {
             {"READ_ONE_PACKET", std::to_string(read_one_packet_g)},
             {"DRAM_BANKED", std::to_string(dram_banked)},
             {"ISSUE_MCAST", std::to_string(issue_mcast)},
+            {"NUM_MCAST_DESTS", std::to_string(num_mcast_dests)},
             {"MCAST_NOC_END_ADDR_X", std::to_string(mcast_noc_addr_end_x)},
             {"MCAST_NOC_END_ADDR_Y", std::to_string(mcast_noc_addr_end_y)}
         };

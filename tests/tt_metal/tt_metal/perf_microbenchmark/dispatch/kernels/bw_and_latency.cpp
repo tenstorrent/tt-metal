@@ -23,10 +23,9 @@ void kernel_main() {
 #endif
 
 #if ISSUE_MCAST
-            const uint32_t num_dests = (MCAST_NOC_END_ADDR_Y - NOC_ADDR_Y + 1) * (MCAST_NOC_END_ADDR_X - NOC_ADDR_X + 1);
             uint64_t dst_noc_multicast_addr =
                 get_noc_multicast_addr(NOC_ADDR_X, NOC_ADDR_Y, MCAST_NOC_END_ADDR_X, MCAST_NOC_END_ADDR_Y, NOC_MEM_ADDR);
-            noc_async_write_multicast(write_ptr, dst_noc_multicast_addr, page_size, num_dests);
+            noc_async_write_multicast(write_ptr, dst_noc_multicast_addr, page_size, NUM_MCAST_DESTS);
 #elif READ_ONE_PACKET
             noc_async_read_one_packet(noc_addr, read_ptr, page_size);
 #else
