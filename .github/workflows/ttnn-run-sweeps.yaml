@@ -132,6 +132,7 @@ on:
           - eltwise.ternary.mac.mac
           - eltwise.ternary.lerp
           - eltwise.ternary.where.where
+          - eltwise.ternary.where.where_pytorch2
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
           - matmul.full.matmul_default_interleaved
