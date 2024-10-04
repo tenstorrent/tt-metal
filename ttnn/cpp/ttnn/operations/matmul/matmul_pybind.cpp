@@ -158,12 +158,12 @@ void py_module(py::module& module) {
         If the input tensors have more than two dimensions, the additional, front,
         dimensions may be used for batched matrix multiply.
         These front dimensions may also be referred to as batch dimensions.
-        E.g. a tensor with dimensions :math:`(a \\times b \\times c \\times d)`
-        has batch dimensions a and b.
+        E.g. a tensor with dimensions (`a` x `b` x `c` x `d`)
+        has batch dimensions `a` and `b`.
         The following are the allowed possibilities for batch dimensions.
         Examples below show concrete operations and tensor sizes.
 
-        - If all batch dimensions are all of size 1, then there is no batched operation.
+        - If all batch dimensions are of size 1, then there is no batched operation.
 
         - If both inputs have batch dimensions that are not all of size 1, then the
           batch dimensions of both inputs should be the same. If the dimensions are
@@ -172,7 +172,7 @@ void py_module(py::module& module) {
 
         - If the first input has batch dimensions that are not all of size 1, and the
           second input has no batch dimensions or has batch dimensions all of size 1,
-          then the second input is broadcast to align appropriately with the first
+          then the second input is broadcasted to align appropriately with the first
           input.
 
         - Matrix multiplication will not work if the first input has batch
@@ -191,22 +191,22 @@ void py_module(py::module& module) {
           These exceptions are for the following scenarios related to batch
           dimensions:
 
-              - The two batch dimensions are swapped. E.g. the first input has :math:`(j \\times 1)`
-                and the second input has :math:`(1 \\times j)`
-                or the first input has :math:`(1 \\times j)` and the second input has
-                :math:`(j \\times 1)`
-              - When a batch dimension is implicitly extended then the two patch dimensions are swapped.
-                E.g.  :math:`(j \\times 1)` and :math:`(j)` which is treated as
-                :math:`(j \\times 1)` and :math:`(1 \\times j)`
+              - The two batch dimensions are swapped. E.g. the first input has (`j` x `1`)
+                and the second input has (`1` x `j`)
+                or the first input has (`1` x `j`) and the second input has
+                (`j` x `1`)
+              - When a batch dimension is implicitly extended, the two patch dimensions are swapped.
+                E.g.  (`j` x `1`) and (`j`) which is treated as
+                (`j` x `1`) and (`1` x `j`)
 
-        - In order to leverage sharded matmul implementations we can shard both input_tensor_a and input_tensor_b. The sharding strategy used will be according
-          to the sharding strategy on the respective tensor. A sharded 1D matmul can be either HEIGHT or WIDTH sharded, 2D matmuls can be block sharded.
+        - In order to leverage sharded matmul implementations we can shard both `input_tensor_a` and `input_tensor_b`. The sharding strategy used will be according
+          to the sharding strategy on the respective tensor. A sharded 1D matmul can be either HEIGHT or WIDTH sharded, 2D matmuls can be BLOCK sharded.
 
           Note: the broadcasting logic only looks at the batch dimensions when determining if the inputs
           are broadcastable, and not the matrix dimensions. For example, if :attr:`input_tensor_a` is a
-          :math:`(j \\times 1 \\times n\_size \\times m\_size)` tensor and :attr:`input_tensor_b` is a :math:`(k\_size \\times m\_size \\times p)`
+          (`j` x `1` x `n_size` x `m_size`) tensor and :attr:`input_tensor_b` is a (`k_size` x `m_size` x `p`)
           tensor, these inputs are valid for broadcasting even though the final two dimensions (i.e. the
-          matrix dimensions) are different. The operation will return a :math:`(j \\times k\_size \\times n\_size \\times p)` tensor.
+          matrix dimensions) are different. The operation will return a (`j` x `k_size` x `n_size` x `p`) tensor.
 
         - Note: there are various additional constraints related to specific program
           configs chosen. Please look at the error messages carefully and fix
@@ -217,12 +217,15 @@ void py_module(py::module& module) {
             input_tensor_b (ttnn.Tensor): the second tensor to be multiplied. Needs to be on the device.
 
         Keyword Args:
+            transpose_a (bool, optional): Whether to transpose input_tensor_a. Defaults to `False`.
+            transpose_b (bool, optional): Whether to transpose input_tensor_b. Defaults to `False`.
             memory_config(ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using ttnn.DRAM_MEMORY_CONFIG.
             dtype (ttnn.DataType): the data type of the output tensor. Defaults to `None`.
-            core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             program_config (ttnn.MatmulProgramConfig): the program configuration for the matmul operation. Defaults to `None`.
             activation (str, optional): the activation function to be applied. Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig): the compute kernel configuration for the matmul operation. Defaults to `None`.
+            core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
+            output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -319,12 +322,15 @@ void py_module(py::module& module) {
 
         Keyword Args:
             bias (ttnn.Tensor, optional): the bias tensor to be added. If specified, needs to be on the device. Defaults to `None`.
+            transpose_a (bool, optional): Whether to transpose input_tensor_a. Defaults to `False`.
+            transpose_b (bool, optional): Whether to transpose input_tensor_b. Defaults to `False`.
             memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using `ttnn.DRAM_MEMORY_CONFIG`.
             dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to `None`.
-            core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             program_config (MatmulProgramConfig, optional): the program configuration for the matmul operation. Defaults to `None`.
             activation (str, optional): the activation function to be applied. Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`.
+            core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
+            output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.

@@ -81,7 +81,7 @@ void bind_primitive_binary_operation(py::module& module, const binary_operation_
 
 
 template <typename binary_operation_t>
-void bind_binary_operation(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math, const std::string& info=". ") {
+void bind_binary_operation(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math, const std::string& info=". ", const std::string& note=" ") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -106,7 +106,7 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
         Supports broadcasting.
 
         Note:
-            {4}
+            {5}
 
         Example:
 
@@ -118,7 +118,8 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
         operation.python_fully_qualified_name(),
         description,
         math,
-        info);
+        info,
+        note);
 
     bind_registered_operation(
         module,
@@ -803,7 +804,7 @@ void py_module(py::module& module) {
         module,
         ttnn::logical_and,
         R"doc(Compute logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i \& \mathrm{{input\_tensor\_b}}_i))doc",
+        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i \& \mathrm{{input\_tensor\_b}}_i))doc",". ",
 
         R"doc(Supported dtypes, layouts, and ranks:
         +----------------------------+---------------------------------+-------------------+
@@ -817,7 +818,7 @@ void py_module(py::module& module) {
         module,
         ttnn::logical_or,
         R"doc(Compute logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i | \mathrm{{input\_tensor\_b}}_i))doc",
+        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i | \mathrm{{input\_tensor\_b}}_i))doc",". ",
 
         R"doc(Supported dtypes, layouts, and ranks:
         +----------------------------+---------------------------------+-------------------+
