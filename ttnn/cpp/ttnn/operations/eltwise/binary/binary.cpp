@@ -124,7 +124,7 @@ auto preprocess_inputs(
     return [](const auto &input_tensor_a, const auto &input_tensor_b) {
         if constexpr (detail::is_associative(binary_op_type)) {
             // Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
-            if (input_tensor_a.volume() < input_tensor_b.volume()) {
+            if (input_tensor_a.get_logical_volume() < input_tensor_b.get_logical_volume()) {
                 return std::make_tuple(input_tensor_b, input_tensor_a);
             }
         }

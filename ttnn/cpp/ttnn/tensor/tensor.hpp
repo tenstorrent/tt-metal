@@ -327,6 +327,9 @@ struct Tensor {
     const tt::tt_metal::LegacyShape strides() const;
     uint32_t volume() const;
 
+    // todo: rename volume to get_volume to indicate that its blocking
+    uint32_t get_logical_volume() const;
+
     bool is_scalar() const;
 
     bool is_allocated() const;

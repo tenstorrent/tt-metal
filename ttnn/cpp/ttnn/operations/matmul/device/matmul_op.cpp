@@ -234,8 +234,8 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     const std::optional<const UnaryWithParam> fused_activation,
     const bool fp32_dest_acc_en,
     const TensorMemoryLayout input_layout_a) {
-    ttnn::SimpleShape a_padded_shape = input_shape_a.padded_shape();
-    ttnn::SimpleShape b_padded_shape = input_shape_b.padded_shape();
+    auto a_padded_shape = input_shape_a.padded_shape();
+    auto b_padded_shape = input_shape_b.padded_shape();
     auto k_size = a_padded_shape[-1];
     auto m_size = a_padded_shape[-2];
     auto n_size = b_padded_shape[-1];
