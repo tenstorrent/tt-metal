@@ -133,6 +133,8 @@ def test_llama_model_inference(device, weights, layers, use_program_cache, reset
             ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[: model_args.max_batch_size, :, :]
         )  # [seq, batch, hidden_dim]
 
+        ttnn.deallocate(tt_out)
+
         # Update rotation matrix for next iteration
         current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
 
