@@ -61,6 +61,8 @@ run_perf_models_other() {
 
     env pytest models/demos/distilbert/tests/test_perf_distilbert.py -m $test_marker
 
+    env pytest models/demos/swin/tests/test_perf_swin.py -m $test_marker
+
     # env pytest -n auto models/demos/vgg/tests/test_perf_vgg.py -m $test_marker
 
     env pytest -n auto models/demos/convnet_mnist/tests -m $test_marker
