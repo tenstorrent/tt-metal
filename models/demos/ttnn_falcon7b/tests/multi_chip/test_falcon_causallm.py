@@ -80,8 +80,7 @@ def test_falcon_causal_lm(
     enable_async,
     num_loops,
 ):
-    for device in mesh_device.get_device_ids():
-        mesh_device.get_device(device).enable_async(enable_async)
+    mesh_device.enable_async(enable_async)
 
     torch.manual_seed(0)
     batch = device_batch_size * mesh_device.get_num_devices()
@@ -247,8 +246,7 @@ def test_falcon_causal_lm(
 
     logger.info("Falcon CausalLM Passed!")
 
-    for device in mesh_device.get_device_ids():
-        mesh_device.get_device(device).enable_async(False)
+    mesh_device.enable_async(False)
 
 
 @pytest.mark.parametrize(
@@ -297,8 +295,8 @@ def test_t3k_falcon_causal_lm_with_trace(
     enable_async,
     num_loops,
 ):
+    t3k_mesh_device.enable_async(enable_async)
     for device in t3k_mesh_device.get_device_ids():
-        t3k_mesh_device.get_device(device).enable_async(enable_async)
         t3k_mesh_device.get_device(device).enable_program_cache()
 
     torch.manual_seed(0)
@@ -509,5 +507,4 @@ def test_t3k_falcon_causal_lm_with_trace(
 
     logger.info("Falcon CausalLM Passed!")
 
-    for device in t3k_mesh_device.get_device_ids():
-        t3k_mesh_device.get_device(device).enable_async(False)
+    t3k_mesh_device.enable_async(False)

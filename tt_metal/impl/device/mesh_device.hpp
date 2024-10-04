@@ -152,6 +152,7 @@ class MeshDevice : public std::enable_shared_from_this<MeshDevice> {
     CoreCoord dram_grid_size() const;
 
     tt::ARCH arch() const;
+    void enable_async(bool enable);
 
     void close_devices();
     std::shared_ptr<const MeshDeviceView> get_view() const;

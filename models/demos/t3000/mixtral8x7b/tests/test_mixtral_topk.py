@@ -42,8 +42,7 @@ class Emb(torch.nn.Module):
 def test_mixtral_model_inference(
     t3k_mesh_device, use_program_cache, reset_seeds, iterations, expected_top1, expected_top5
 ):
-    for device in t3k_mesh_device.get_device_ids():
-        t3k_mesh_device.get_device(device).enable_async(True)
+    t3k_mesh_device.enable_async(True)
 
     # TODO Currently topk test is supporting decode-only mode. Add prefill support.
 

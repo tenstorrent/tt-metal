@@ -401,6 +401,12 @@ bool validate_worker_modes(const std::vector<Device*>& workers) {
     return worker_modes_match;
 }
 
+void MeshDevice::enable_async(bool enable) {
+    for (auto device : this->devices) {
+        device->enable_async(enable);
+    }
+}
+
 std::vector<int> get_t3k_physical_device_ids_ring() {
     auto& instance = SystemMesh::instance();
     auto num_devices = instance.get_num_devices();

@@ -151,8 +151,9 @@ def test_LlamaModel_inference(
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
-    for i in t3k_mesh_device.get_device_ids():
-        device = t3k_mesh_device.get_device(i)
+    t3k_mesh_device.enable_async(True)
+    for device_id in t3k_mesh_device.get_device_ids():
+        device = t3k_mesh_device.get_device(device_id)
         device.enable_program_cache()
 
     args = construct_arg(

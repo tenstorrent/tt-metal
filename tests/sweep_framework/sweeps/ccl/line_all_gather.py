@@ -94,8 +94,7 @@ def run(
     device,
 ) -> list:
     t3k_mesh_device = device
-    for device in t3k_mesh_device.get_devices():
-        device.enable_async(enable_async)
+    t3k_mesh_device.enable_async(enable_async)
 
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")

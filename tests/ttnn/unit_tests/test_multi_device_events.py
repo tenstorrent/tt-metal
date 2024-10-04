@@ -20,8 +20,8 @@ def test_multi_device_events(t3k_mesh_device, shape):
         pytest.skip("This test requires multiple devices")
 
     # Enable Program Cache and Async Mode
+    t3k_mesh_device.enable_async(True)
     for device_id in t3k_mesh_device.get_device_ids():
-        t3k_mesh_device.get_device(device_id).enable_async(True)
         t3k_mesh_device.get_device(device_id).enable_program_cache()
 
     # Preallocate activation tensors.
@@ -85,5 +85,4 @@ def test_multi_device_events(t3k_mesh_device, shape):
         )
         assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.96)
 
-    for device_id in t3k_mesh_device.get_device_ids():
-        t3k_mesh_device.get_device(device_id).enable_async(False)
+    t3k_mesh_device.enable_async(False)

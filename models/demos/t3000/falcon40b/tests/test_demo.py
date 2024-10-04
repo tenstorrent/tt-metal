@@ -48,9 +48,7 @@ def test_demo(
     use_program_cache,
 ):
     input_file = "models/demos/t3000/falcon40b/demo/input_data.json"
-    # Enable async mode
-    for device in t3k_mesh_device.get_devices():
-        device.enable_async(True)
+    t3k_mesh_device.enable_async(True)
 
     generated_text, measurements = run_falcon_demo_kv(
         user_input=input_file,
