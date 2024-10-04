@@ -61,6 +61,10 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor> &input_tensors) c
             TT_FATAL(
                 in_ref.memory_config().memory_layout == first_input.memory_config().memory_layout,
                 "Sharded tensors must have the same memory layout.");
+            // TODO(jerrysky3): Remove this when we replace the two tensors concat kernel with the general one.
+            TT_FATAL(
+                input_tensors.size() > 2 || in_ref.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED,
+                "Width sharded inputs are not supported for two tensors concat yet");
             TT_FATAL(
                 in_ref.memory_config().memory_layout != TensorMemoryLayout::BLOCK_SHARDED,
                 "Block sharded inputs are not supported");
