@@ -58,6 +58,7 @@ on:
           - eltwise.unary.erfinv.erfinv
           - eltwise.unary.i0.i0
           - eltwise.unary.silu.silu
+          - eltwise.unary.silu.silu_pytorch2
           - eltwise.unary.glu.glu
           - eltwise.unary.sigmoid.sigmoid
           - eltwise.unary.sigmoid_accurate.sigmoid_accurate
