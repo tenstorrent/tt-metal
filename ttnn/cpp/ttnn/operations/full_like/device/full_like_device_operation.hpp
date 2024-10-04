@@ -13,11 +13,10 @@
 
 namespace ttnn::operations::full_like {
 
-
 struct FullLikeOperation {
 
     struct operation_attributes_t {
-        const std::variant<float, int> fill_value;
+        const int fill_value;
         const DataType dtype;
         const Layout layout;
         const MemoryConfig memory_config;
@@ -32,7 +31,6 @@ struct FullLikeOperation {
 
     struct ProgramFactory {
         struct shared_variables_t {
-            KernelHandle unary_reader_kernel_id;
             KernelHandle unary_writer_kernel_id;
             std::size_t num_cores;
             std::size_t num_cores_y;
@@ -61,7 +59,7 @@ struct FullLikeOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor &input,
-        const std::variant<float, int> fill_value,
+        const int fill_value,
         const std::optional<DataType> &dtype,
         const std::optional<Layout> &layout,
         const std::optional<MemoryConfig> &memory_config);
@@ -69,6 +67,6 @@ struct FullLikeOperation {
 }
 
 namespace ttnn::prim {
-constexpr auto full_like =
-    ttnn::register_operation<"ttnn::prim::full_like", ttnn::operations::full_like::FullLikeOperation>();
+constexpr auto full_like_2 =
+    ttnn::register_operation<"ttnn::prim::full_like_2", ttnn::operations::full_like::FullLikeOperation>();
 }

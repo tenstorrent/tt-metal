@@ -28,7 +28,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
     tensor_return_value_t &output_tensor) {
 
     auto input = tensor_args.input;
-    std::variant<float, int> fill_value = operation_attributes.fill_value;
+    auto fill_value = operation_attributes.fill_value;
     DataType dtype{operation_attributes.dtype};
     Layout layout{operation_attributes.layout};
     Device *device = input.device();
@@ -90,20 +90,17 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
 
 
     /* READER/WRTIER KERNEL */
-    auto reader_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/full_like/device/kernels/reader_full_like.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    // auto reader_id = tt::tt_metal::CreateKernel(
+    //     program,
+    //     "ttnn/cpp/ttnn/operations/full_like/device/kernels/reader_full_like.cpp",
+    //     all_cores,
+    //     tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     auto writer_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/full_like/device/kernels/writer_full_like.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
-
-    union datatype value;
-    value.f32 = get<float>(fill_value);
 
     uint32_t tiles_offset = 0;
     for (uint32_t i = 0; i < num_cores; i++) {
@@ -118,7 +115,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        SetRuntimeArgs(program, reader_id, core, {});
+        // SetRuntimeArgs(program, reader_id, core, {});
         SetRuntimeArgs(
             program,
             writer_id,
@@ -127,6 +124,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
                 output.buffer()->address(),
                 num_tiles_per_core,
                 tiles_offset,
+                fill_value
             });
 
         tiles_offset += num_tiles_per_core;
@@ -223,7 +221,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
     //     tiles_offset += num_tiles_per_core;
     // }
 
-    return {std::move(program), {reader_id, writer_id}};
+    return {std::move(program), { writer_id}};
 }
 
 void FullLikeOperation::ProgramFactory::override_runtime_arguments(
@@ -232,7 +230,6 @@ void FullLikeOperation::ProgramFactory::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
-    auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
 
     const auto& input = tensor_args.input;
@@ -240,11 +237,6 @@ void FullLikeOperation::ProgramFactory::override_runtime_arguments(
 
     auto src_buffer = input.buffer();
     auto dst_buffer = output_tensor.buffer();
-
-    {
-        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, CoreCoord{0, 0});
-        runtime_args[0] = src_buffer->address();
-    }
 
     {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, CoreCoord{0, 0});

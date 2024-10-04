@@ -20,7 +20,7 @@ void bind_full_like_operation(py::module& module) {
 
 bind_registered_operation(
     module,
-    ttnn::full_like,
+    ttnn::full_like_2,
     "Full like Operation",
     ttnn::pybind_arguments_t{
         py::arg("input"),
