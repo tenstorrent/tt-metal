@@ -15,7 +15,7 @@ struct ConcatenateHeads : public ttnn::operations::experimental::transformer::NL
         const auto& input_tensor = input_tensors.at(0);
         const auto head_size = input_tensor.get_shape()[-1];
         const auto padded_head_size = input_tensor.get_legacy_shape()[-1];
-        const auto input_logical_shape = input_tensors.get_logical_shape();
+        const auto input_logical_shape = input_tensor.get_logical_shape();
 
         TT_FATAL(input_logical_shape.rank() == 4, "Input tensor must have rank 4. Shape: {}", input_logical_shape);
 
