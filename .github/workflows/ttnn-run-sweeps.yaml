@@ -50,6 +50,7 @@ on:
           - eltwise.unary.log_sigmoid.log_sigmoid
           - eltwise.unary.logical_not.logical_not_
           - eltwise.unary.logical_not.logical_not
+          - eltwise.unary.logical_not.logical_not_output
           - eltwise.unary.erf.erf
           - eltwise.unary.erfinv.erfinv
           - eltwise.unary.i0.i0
