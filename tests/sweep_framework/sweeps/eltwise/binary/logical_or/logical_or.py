@@ -32,14 +32,22 @@ parameters = {
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "output_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_a_layout": [ttnn.TILE_LAYOUT],
-        "input_b_layout": [ttnn.TILE_LAYOUT],
+        "input_a_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "input_b_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
 
+
+# Invalidate vector is called during the generation phase where each vector will be passed in.
+# If invalidated, the vector will still be stored but will be skipped.
+# Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    if test_vector["input_a_layout"] == ttnn.ROW_MAJOR_LAYOUT or test_vector["input_b_layout"] == ttnn.ROW_MAJOR_LAYOUT:
+        return True, "Row Major layout is not supported"
+    return False, None
 
 
 # This is the run instructions for the test, defined by the developer.
@@ -70,7 +78,6 @@ def run(
     )(input_shape)
     torch_output_tensor = tensor_to_dtype(torch.logical_or(torch_input_tensor_a, torch_input_tensor_b), output_dtype)
 
-
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         dtype=input_a_dtype,
@@ -93,4 +100,3 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     return [assert_equal(torch_output_tensor, output_tensor), e2e_perf]
-

@@ -29,11 +29,20 @@ parameters = {
         + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 16)
         + gen_shapes([32, 32], [256, 256], [32, 32], 32),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_a_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
+
+
+# Invalidate vector is called during the generation phase where each vector will be passed in.
+# If invalidated, the vector will still be stored but will be skipped.
+# Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    if test_vector["input_a_layout"] == ttnn.ROW_MAJOR_LAYOUT:
+        return True, "Row Major layout is not supported for unary ops when the input tensor is not sharded"
+    return False, None
 
 
 # This is the run instructions for the test, defined by the developer.

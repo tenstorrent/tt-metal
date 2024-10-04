@@ -20,16 +20,17 @@ TIMEOUT = 30
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "batch_sizes": [(1,)],
-        "height": [32, 384, 1024],
-        "width": [32, 1024, 4096],
+        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 8)
+        + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 8)
+        + gen_shapes([32, 32], [256, 256], [32, 32], 8),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "output_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_b_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
 
@@ -48,46 +49,51 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
-    batch_sizes,
-    height,
-    width,
+    input_shape,
     input_a_dtype,
     input_b_dtype,
     input_a_layout,
     input_b_layout,
-    input_b_memory_config,
+    output_dtype,
     input_a_memory_config,
+    input_b_memory_config,
     output_memory_config,
     *,
     device,
 ) -> list:
-    input_shape_a = (*batch_sizes, height, width)
-    input_shape_b = (*batch_sizes, height, width)
+    data_seed = random.randint(0, 20000000)
+    torch.manual_seed(data_seed)
 
-    torch_input_tensor_a = torch_random(input_shape_a, -100, 100, dtype=torch.bfloat16)
-    torch_input_tensor_b = torch_random(input_shape_b, -80, 80, dtype=torch.bfloat16)
-    torch_optional_output_tensor = torch_random(input_shape_a, -0.1, 0.1, dtype=torch.bfloat16)
-    torch_output_tensor = torch.logical_and(torch_input_tensor_a, torch_input_tensor_b)
+    torch_input_tensor_a = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+    )(input_shape)
+    torch_input_tensor_b = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
+    )(input_shape)
+    torch_optional_output_tensor = gen_func_with_cast_tt(
+        partial(torch_random, low=-0.1, high=0.1, dtype=torch.float32), output_dtype
+    )(input_shape)
+    torch_output_tensor = tensor_to_dtype(torch.logical_and(torch_input_tensor_a, torch_input_tensor_b), output_dtype)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         dtype=input_a_dtype,
         layout=input_a_layout,
         device=device,
-        memory_config=input_b_memory_config,
+        memory_config=input_a_memory_config,
     )
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b,
         dtype=input_b_dtype,
         layout=input_b_layout,
         device=device,
-        memory_config=input_a_memory_config,
+        memory_config=input_b_memory_config,
     )
 
     output_tensor = ttnn.from_torch(
         torch_optional_output_tensor,
-        dtype=input_a_dtype,
-        layout=input_a_layout,
+        dtype=output_dtype,
+        layout=output_dtype,
         device=device,
         memory_config=output_memory_config,
     )
