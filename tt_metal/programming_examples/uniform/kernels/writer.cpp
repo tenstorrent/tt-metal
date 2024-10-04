@@ -25,6 +25,7 @@ void kernel_main() {
         for (uint32_t j = 0; j < 32; j++) {
             uint32_t cur = *(uint32_t *)l1_ptr;
             *(float *)l1_ptr = static_cast<float>(cur) / (1 << 31 - 1) / 2;
+            // *(float *)l1_ptr = 1.1f;
             l1_ptr += 4;
         }
     }

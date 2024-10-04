@@ -2,12 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "core_coord.h"
 #include "tt_metal/common/bfloat16.hpp"
+// #include "tt_metal/common/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/device/device.hpp"
+// #include "ttnn/cpp/ttnn/tensor/tensor.hpp"
+// #include "ttnn/cpp/ttnn/tensor/types.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
+
+// void create(const Tensor &input, const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
+//     Device *device = input.device();
+
+//     auto grid = CoreCoord(0, 0);
+
+//     uint32_t units_to_divide = input.volume() / constants::TILE_HEIGHT / constants::TILE_WIDTH;
+//     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
+//         split_work_to_cores(grid, units_to_divide);
+
+//     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+//         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+
+//     Program program = Program();
+
+//     tt::DataFormat data_format = datatype_to_dataformat_converter(input.dtype());
+
+//     // tt::operations::primary::CreateCircularBuffer(program, all_cores, data_format, {{CB::c_in0, 2, data}});
+// }
 
 int main(int argc, char **argv) {
     /* Silicon accelerator setup */
@@ -25,17 +48,13 @@ int main(int argc, char **argv) {
         .page_size = single_tile_size,
         .buffer_type = tt_metal::BufferType::DRAM};
 
-    std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config);
-    std::shared_ptr<tt::tt_metal::Buffer> src1_dram_buffer = CreateBuffer(dram_config);
+    // std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config);
     std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
 
-    auto src0_dram_noc_coord = src0_dram_buffer->noc_coordinates();
-    auto src1_dram_noc_coord = src1_dram_buffer->noc_coordinates();
+    // auto src0_dram_noc_coord = src0_dram_buffer->noc_coordinates();
     auto dst_dram_noc_coord = dst_dram_buffer->noc_coordinates();
-    uint32_t src0_dram_noc_x = src0_dram_noc_coord.x;
-    uint32_t src0_dram_noc_y = src0_dram_noc_coord.y;
-    uint32_t src1_dram_noc_x = src1_dram_noc_coord.x;
-    uint32_t src1_dram_noc_y = src1_dram_noc_coord.y;
+    // uint32_t src0_dram_noc_x = src0_dram_noc_coord.x;
+    // uint32_t src0_dram_noc_y = src0_dram_noc_coord.y;
     uint32_t dst_dram_noc_x = dst_dram_noc_coord.x;
     uint32_t dst_dram_noc_y = dst_dram_noc_coord.y;
 
@@ -46,12 +65,6 @@ int main(int argc, char **argv) {
         CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Int32}})
             .set_page_size(src0_cb_index, single_tile_size);
     CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
-
-    constexpr uint32_t src1_cb_index = CB::c_in1;
-    CircularBufferConfig cb_src1_config =
-        CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Int32}})
-            .set_page_size(src1_cb_index, single_tile_size);
-    CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
     constexpr uint32_t output_cb_index = CB::c_out0;
     constexpr uint32_t num_output_tiles = 1;
@@ -92,20 +105,17 @@ int main(int argc, char **argv) {
     std::vector<uint32_t> src0_vec(1024);
     std::vector<uint32_t> src1_vec(1024);
 
-    EnqueueWriteBuffer(cq, src0_dram_buffer, src0_vec, false);
-    EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
+    // EnqueueWriteBuffer(cq, src0_dram_buffer, src0_vec, false);
+    // EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
 
     /* Configure program and runtime kernel arguments, then execute */
-    SetRuntimeArgs(
-        program,
-        binary_reader_kernel_id,
-        core,
-        {src0_dram_buffer->address(),
-         src1_dram_buffer->address(),
-         src0_dram_noc_x,
-         src0_dram_noc_y,
-         src1_dram_noc_x,
-         src1_dram_noc_y});
+    SetRuntimeArgs(program, binary_reader_kernel_id, core, {});
+    // {src0_dram_buffer->address(),
+    //  src1_dram_buffer->address(),
+    //  src0_dram_noc_x,
+    //  src0_dram_noc_y,
+    //  src1_dram_noc_x,
+    //  src1_dram_noc_y});
     SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
     SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), dst_dram_noc_x, dst_dram_noc_y});
 
@@ -115,23 +125,20 @@ int main(int argc, char **argv) {
     /* Read in result into a host vector */
     std::vector<float> result_vec(1024);
     EnqueueReadBuffer(cq, dst_dram_buffer, result_vec.data(), true);
-    std::map<uint, int> mp;
+    std::map<float, int> mp;
 
     for (uint32_t i = 0; i < 1024; ++i) {
-        float a = result_vec[i];  // / float(1 << 31 - 1) / 2;
+        float a = result_vec[i];
         mp[result_vec[i]] += 1;
         std::cout << result_vec[i] << " ";
         if ((i & 31) == 31)
             std::cout << std::endl;
     }
 
-    // std::cout << mp.size() << std::endl;
+    std::cout << mp.size() << std::endl;
     // for (const auto &pair : mp) {
     //     std::cout << std::bitset<32>(pair.first) << " " << pair.second << std::endl;
     // }
 
-    // printf("Result = %d\n", result_vec[0]); // 22 = 1102070192
-    // printf("Expected = %d\n", pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>( bfloat16(22.0f),
-    // bfloat16(22.0f))));
     CloseDevice(device);
 }
