@@ -19,6 +19,7 @@ on:
           - eltwise.unary.cos.cos
           - eltwise.unary.sin.sin
           - eltwise.unary.sin.sin_pytorch2
+          - eltwise.unary.tril.tril_pytorch2
           - eltwise.unary.clamp.clamp
           - eltwise.unary.clip.clip
           - eltwise.unary.cbrt.cbrt
