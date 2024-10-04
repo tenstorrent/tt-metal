@@ -70,7 +70,8 @@ on:
           - eltwise.unary.identity
           - eltwise.unary.neg
           - eltwise.unary.sinh
-          - eltwise.unary.relu_max.relu_max
+          - eltwise.unary.relu_min
+          - eltwise.unary.relu_max
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multiply
           - eltwise.binary.div.div
