@@ -474,8 +474,6 @@ void bind_unary_backward_optional_float_params_with_default(
             {2} (float, optional): {3} , Default value = {4}
             {5} (float, optional): {6} , Default value = {7}
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
             List of ttnn.Tensor: the output tensor.
@@ -653,7 +651,7 @@ void bind_unary_backward_unary_optional_float(
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            input_grad (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
             queue_id (int, optional): Command queue id. Defaults to `0`.
 
         Returns:

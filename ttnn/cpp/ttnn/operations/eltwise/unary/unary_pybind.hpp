@@ -388,8 +388,6 @@ void bind_unary_operation_with_dim_parameter(
         Keyword Args:
             {2} (int): {3}.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
             ttnn.Tensor: the output tensor.

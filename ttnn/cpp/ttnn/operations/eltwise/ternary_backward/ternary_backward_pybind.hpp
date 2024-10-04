@@ -112,7 +112,7 @@ void bind_ternary_backward_op(py::module& module, const ternary_backward_operati
             >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
             >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
             >>> tensor3 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
-            >>> output = {1}(grad_tensor, tensor1, tensor2, tensor3, float)
+            >>> output = {1}(grad_tensor, tensor1, tensor2, tensor3/scalar)
 
         )doc",
 
@@ -170,9 +170,10 @@ void bind_ternary_backward_optional_output(py::module& module, const ternary_bac
             grad_tensor (ttnn.Tensor): the input tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
             input_tensor_b (ttnn.Tensor): the input tensor.
-            input_tensor_c (ttnn.Tensor or Number): the input tensor.
+            input_tensor_c (ttnn.Tensor): the input tensor.
 
         Keyword args:
+            are_required_outputs (List[bool], optional): List of required outputs. Defaults to `[True, True]`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
