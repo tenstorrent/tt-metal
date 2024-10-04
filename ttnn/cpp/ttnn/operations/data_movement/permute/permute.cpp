@@ -32,6 +32,14 @@ inline bool has_tile_padding(const Tensor& t) {
     }
     return false;
 }
+uint32_t pround_up(uint32_t value, uint32_t multiple) {
+    if (multiple == 0) {
+        return value;
+    } else if (value == 0) {
+        return multiple;
+    }
+    return (value % multiple == 0) ? value : ((value + multiple - 1) / multiple) * multiple;
+}
 
 ttnn::Tensor permute_impl(const ttnn::Tensor &a, const std::vector<uint32_t>& dims, const MemoryConfig& output_mem_config) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
@@ -51,17 +59,23 @@ ttnn::Tensor permute_impl(const ttnn::Tensor &a, const std::vector<uint32_t>& di
     bool pad_n = H == 0 || W == 0;
     bool pad_c = H == 1 || W == 1;
     // Convert tensor back to original
-    auto a_pad_shape = AutoFormat::pad_to_tile_shape(a.get_legacy_shape(), pad_c, pad_n);
-    auto out_shape = a.get_legacy_shape();
-    out_shape = {out_shape[N], out_shape[C], out_shape[H], out_shape[W]};
+    auto input_shape = a.get_shape();
 
+    // create_output_tensor shape is useless when we potentially have new padding to deal with
+    std::vector<uint32_t> output_shape = {input_shape[N], input_shape[C], input_shape[H], input_shape[W]};
+    std::vector<uint32_t> padded_output_shape = output_shape;
+
+    uint32_t input_rank = a.get_shape().rank();
+    if (a.layout() == Layout::TILE) {
+        padded_output_shape[input_rank - 1] = detail::pround_up(padded_output_shape[input_rank - 1], 32);
+        padded_output_shape[input_rank - 2] = detail::pround_up(padded_output_shape[input_rank - 2], 32);
+    }
+
+    ttnn::Shape final_shape = ttnn::Shape(output_shape, padded_output_shape);
     auto formatted_input_tensor = a;
     bool typecast = formatted_input_tensor.get_dtype() == DataType::BFLOAT8_B and formatted_input_tensor.get_layout() == Layout::TILE and (pad_n or pad_c) and !a.is_sharded();
     formatted_input_tensor = typecast ? ttnn::typecast(formatted_input_tensor, DataType::BFLOAT16) : formatted_input_tensor;
 
-    if (!AutoFormat::check_input_tensor_format(a, a_pad_shape)) {
-        formatted_input_tensor = AutoFormat::format_input_tensor(a, device, a_pad_shape, 0.0, Layout::TILE);
-    }
     auto output = formatted_input_tensor;
     static auto transpose_wh = std::bind(ttnn::transpose, std::placeholders::_1, -2, -1, output_mem_config);
     static auto transpose_hc = std::bind(ttnn::transpose, std::placeholders::_1, 1, -2, output_mem_config);
@@ -117,7 +131,7 @@ ttnn::Tensor permute_impl(const ttnn::Tensor &a, const std::vector<uint32_t>& di
     } else {
         TT_ASSERT(false, "Illegal permute args");
     }
-    output =  AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
+    output =  ttnn::reshape(output, final_shape);
     output = typecast ? ttnn::typecast(output, DataType::BFLOAT8_B) : output;
     return output;
 }
@@ -183,10 +197,6 @@ ttnn::Tensor ExecutePermute::invoke(
     };
     auto itensor = (input_tensor.get_shape().rank() < 4) ? ttnn::unsqueeze_to_4D(input_tensor) : input_tensor;
     auto iorder = adjust_order(dims);  // internals of permute_impl already adjust negative indices
-
-    if (detail::has_tile_padding(itensor)) {
-        itensor = ttnn::to_layout(itensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
-    }
 
     TT_FATAL(detail::is_on_device(itensor) and itensor.get_shape().rank() == 4, "Error");
     auto output_tensor = detail::permute_launch(itensor, iorder, memory_config.value_or(input_tensor.memory_config()));

@@ -651,3 +651,57 @@ def test_transpose_hc(dtype, shape, device):
     logger.info("transpose on C H dim")
 
     transpose(shape, device, dim0=1, dim1=-2, input_dtype=dtype)
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    (ttnn.bfloat16, ttnn.float32),
+    ids=["bfloat16", "float"],
+)
+@pytest.mark.parametrize(
+    "shape",
+    [(1, 32), (1, 12), (1, 35), (16, 32), (34, 8)],
+)
+@pytest.mark.parametrize(
+    "layout",
+    [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+)
+@pytest.mark.parametrize(
+    "dims",
+    [(1, 0), (-1, -2)],
+)
+def test_transpose_2D(dtype, shape, layout, dims, device):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Skipping float32 tests on Grayskull")
+    if layout == ttnn.ROW_MAJOR_LAYOUT and dtype == ttnn.bfloat16 and shape[-1] % 2:
+        pytest.skip("Skipping RM odd inner dim test cases")
+    transpose(shape, device, dim0=0, dim1=1, input_dtype=dtype)
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    (ttnn.bfloat16, ttnn.float32),
+    ids=["bfloat16", "float"],
+)
+@pytest.mark.parametrize(
+    "shape",
+    [[32, 1, 32], [32, 1, 12], [1, 1, 35], [1, 16, 32], [2, 34, 8]],
+)
+@pytest.mark.parametrize(
+    "layout",
+    [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+)
+@pytest.mark.parametrize(
+    "dims",
+    [[0, 1], [0, 2], [2, 1], [-3, -2], [-3, -1], [-2, -1]],
+)
+def test_transpose_3D(dtype, shape, layout, dims, device):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Skipping float32 tests on Grayskull")
+
+    new_shape = shape
+    new_shape[dims[0]], new_shape[dims[1]] = shape[dims[1]], shape[dims[0]]
+    if layout == ttnn.ROW_MAJOR_LAYOUT and dtype == ttnn.bfloat16 and (shape[-1] % 2 or new_shape[-1] % 2):
+        pytest.skip("Skipping RM odd inner dim test cases")
+
+    transpose(shape, device, dim0=dims[0], dim1=dims[1], input_dtype=dtype)
