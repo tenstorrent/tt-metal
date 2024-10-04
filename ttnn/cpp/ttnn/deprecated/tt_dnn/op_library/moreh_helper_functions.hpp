@@ -293,7 +293,7 @@ uint32_t compute_inner(tt::tt_metal::LegacyShape shape, uint32_t dim);
 
 uint32_t compute_outer(tt::tt_metal::LegacyShape shape, uint32_t dim);
 
-void expand_to_max_dim(std::vector<uint32_t> &dim, const tt::tt_metal::LegacyShape &shape);
+void expand_to_max_dim(std::vector<uint32_t> &dim, const ttnn::SimpleShape &shape);
 
 void validate_input_with_dim(const Tensor &input, const int64_t &dim);
 

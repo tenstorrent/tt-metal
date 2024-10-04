@@ -786,9 +786,9 @@ struct Shape {
     }
 
     SimpleShape padded_shape() const {
-        std::vector<uint32_t> values(this->rank());
-        for (auto i = 0; i < this->rank(); ++i) {
-            values.push_back(this->value[i]); // value stored LegacyShape, its operator[] returns padded value
+        std::vector<uint32_t> values(rank());
+        for (auto& item : values) {
+            item = this->value[i]; // value stored LegacyShape, its operator[] returns padded value
         }
         return SimpleShape(std::move(values));
     }
@@ -796,8 +796,8 @@ struct Shape {
     // Returns the shape without padding, padding information is stipped
     SimpleShape logical_shape() const {
         std::vector<uint32_t> values(this->rank());
-        for (auto i = 0; i < this->rank(); ++i) {
-            values.push_back(this->operator[](i)); // operator[] returns the shape without padding
+        for (auto& item : values) {
+            item = this->operator[](i); // operator[] returns the shape without padding
         }
         return SimpleShape(std::move(values));
     }
@@ -830,7 +830,7 @@ struct Shape {
 
     bool operator!=(const Shape &other) const { return not(*this == other); }
 
-    // Returns the unpaddded value
+    // Returns value without padding
     uint32_t operator[](std::int64_t index) const;
 
     template <std::size_t NewRank>
