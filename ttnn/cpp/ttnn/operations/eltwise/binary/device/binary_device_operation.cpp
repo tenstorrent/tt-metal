@@ -155,23 +155,52 @@ BinaryDeviceOperation::shape_return_value_t BinaryDeviceOperation::compute_outpu
     const auto input_shape_a = tensor_args.input_tensor_a.tensor_attributes->shape;
     const auto input_shape_b = tensor_args.input_tensor_b.tensor_attributes->shape;
 
-    auto rank = std::max(input_shape_a.rank(), input_shape_b.rank());
-    std::vector<uint32_t> output_shape(rank, 0);
-    std::vector<uint32_t> output_shape_with_tile_padding(rank, 0);
+    const int rank_a = input_shape_a.rank();
+    const int rank_b = input_shape_b.rank();
+    const int larger_rank = std::max(rank_a, rank_b);
 
-    for (int i = -1; i >= -rank; --i) {
-        auto dim_a = i + input_shape_a.rank() < input_shape_a.rank() ? input_shape_a[i] : 1;
-        auto dim_b = i + input_shape_b.rank() < input_shape_b.rank() ? input_shape_b[i] : 1;
-        output_shape[i + rank] = std::max(dim_a, dim_b);
+    // -------------------------------------------------------------------------
+    // This lambda function computes the broadcasted output shape between two tensors.
+    // It follows the broadcasting rules to determine the shape of the result
+    // when performing binary operations on tensors of potentially different shapes and ranks.
+    //
+    // Broadcasting Rules Overview:
+    // - If the two tensors have different ranks, we virtually pad the smaller-rank tensor's shape
+    //   with ones on the left (i.e., higher-order dimensions) until both shapes have the same length.
+    // - For each dimension (starting from the rightmost), the sizes are compatible if:
+    //     - They are equal, or
+    //     - One of them is 1 (the dimension can be broadcast to match the other size).
+    // - The result dimension is the maximum of the two sizes.
+    //
+    // Key Points:
+    // - Negative indexing simplifies dimension alignment from the right (least significant dimensions),
+    //   thats essential for correct broadcasting.
+    // - By defaulting to 1 for missing dimensions, we correctly handle tensors of different ranks.
+    // - The use of 'std::max' ensures that when one of the dimensions is 1, the other dimension size
+    //   is used, adhering to broadcasting rules. Important! Code assumes that shapes are validated beforehand.
+    // - The lambda is reused for both logical shapes and padded shapes, ensuring consistency.
+    // -------------------------------------------------------------------------
+    auto compute_broadcasted_output = [rank_a, rank_b, larger_rank](const auto& shape_a, const auto& shape_b) {
+        std::vector<uint32_t> output_shape(larger_rank, 1);
+        for (int i = -1; i >= -larger_rank; --i) {
+            auto dim_a = (i >= -rank_a) ? shape_a[i] : 1;
+            auto dim_b = (i >= -rank_b) ? shape_b[i] : 1;
+            output_shape[i + larger_rank] = std::max(dim_a, dim_b);
+        }
+        return output_shape;
+    };
 
-        auto dim_a_with_tile_padding =
-            i + input_shape_a.rank() < input_shape_a.rank() ? input_shape_a.with_tile_padding()[i] : 1;
-        auto dim_b_with_tile_padding =
-            i + input_shape_b.rank() < input_shape_b.rank() ? input_shape_b.with_tile_padding()[i] : 1;
-        output_shape_with_tile_padding[i + rank] = std::max(dim_a_with_tile_padding, dim_b_with_tile_padding);
-    }
+    const auto logical_shape_a = input_shape_a.logical_shape();
+    const auto logical_shape_b = input_shape_b.logical_shape();
+    const auto output_shape = compute_broadcasted_output(logical_shape_a, logical_shape_b);
+
+    const auto padded_shape_a = input_shape_a.padded_shape();
+    const auto padded_shape_b = input_shape_b.padded_shape();
+    const auto output_shape_with_tile_padding = compute_broadcasted_output(padded_shape_a, padded_shape_b);
+
     return ttnn::Shape(output_shape, output_shape_with_tile_padding);
 }
+
 
 BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

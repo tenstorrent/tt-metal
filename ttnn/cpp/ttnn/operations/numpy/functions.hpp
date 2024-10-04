@@ -439,8 +439,9 @@ static Tensor fill_first_val_into_tensor(
     Device* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    const tt::tt_metal::LegacyShape& s_a = input_tensor.get_legacy_shape();
-    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(s_a));  // ouput
+
+    auto physical_volume = input_tensor.volume();
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(physical_volume);  // ouput
     auto device_buffer = input_tensor.device_buffer();
     uint32_t size_in_bytes = device_buffer->size();
     vector<T> data_vec;
@@ -454,9 +455,10 @@ static Tensor fill_first_val_into_tensor(
     }
     auto input_buffer = owned_buffer::create<T>(std::move(data_vec));
     const tt::tt_metal::LegacyShape input_tensor_strides = input_tensor.strides();
-    for (uint32_t i = 0; i < tt::tt_metal::compute_volume(s_a); i++) {
+    for (uint32_t i = 0; i < physical_volume; i++) {
         owned_buffer[i] = input_buffer[0];
     }
+    const tt::tt_metal::LegacyShape& s_a = input_tensor.get_legacy_shape();
     auto output = Tensor(OwnedStorage{owned_buffer}, s_a, data_type, layout).to(layout);
     if (device != nullptr) {
         output = output.to(device, output_mem_config);
@@ -473,7 +475,7 @@ static Tensor prod_result_computation_GS(
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     const tt::tt_metal::LegacyShape& s_a = input_tensor.get_legacy_shape();
-    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(s_a));  // ouput
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(input_tensor.volume());  // ouput
     auto device_buffer = input_tensor.device_buffer();
     uint32_t size_in_bytes = device_buffer->size();
     vector<T> data_vec;

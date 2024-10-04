@@ -24,7 +24,7 @@ operation::ProgramWithCallbacks moreh_sum_w_impl(const Tensor &a, const Tensor &
     tt_metal::ReduceOpDim reduce_dim = tt_metal::ReduceOpDim::W;
     float scaler = 1.0f;
 
-    const auto shape = a.get_legacy_shape();
+    const auto shape = a.get_padded_shape();
     const auto [W, H, other_dims_product] = extract_spatial_dims(shape);
 
     uint32_t HW = H * W;
@@ -32,7 +32,7 @@ operation::ProgramWithCallbacks moreh_sum_w_impl(const Tensor &a, const Tensor &
     uint32_t Ht = H / TILE_HEIGHT;
 
     // check mask for w-dim
-    const auto input_shape_without_padding = shape.without_padding();
+    const auto input_shape_without_padding = a.get_logical_shape();
     const auto origin_W = input_shape_without_padding[-1];
     const bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
     const auto mask_w = do_mask_w ? origin_W % TILE_WIDTH : TILE_WIDTH;

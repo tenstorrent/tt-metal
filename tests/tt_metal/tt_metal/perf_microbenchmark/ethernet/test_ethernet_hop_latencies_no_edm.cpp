@@ -8,7 +8,7 @@
 #include <random>
 #include <tuple>
 
-#include "impl/device/mesh_device_view.hpp"
+#include "tt_metal/distributed/mesh_device_view.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "device/tt_arch_types.h"
 #include "impl/device/device.hpp"
@@ -27,7 +27,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
-#include "tt_metal/impl/device/mesh_device.hpp"
+#include "tt_metal/distributed/mesh_device.hpp"
 
 using tt::tt_metal::Device;
 

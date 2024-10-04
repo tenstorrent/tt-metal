@@ -511,7 +511,24 @@ const tt::tt_metal::LegacyShape Tensor::strides() const { return tt::tt_metal::L
 
 uint32_t Tensor::volume() const { return tt::tt_metal::compute_volume(this->get_legacy_shape()); }
 
-uint32_t Tensor::intended_volume() const { return tt::tt_metal::compute_volume(this->get_shape()); }
+uint32_t Tensor::get_logical_volume() const { return get_logical_shape().volume(); }
+
+bool Tensor::is_scalar() const {
+    const ttnn::SimpleShape logical_shape = this->get_shape().logical_shape();
+    return logical_shape.rank() == 0 || logical_shape.volume() == 1;
+}
+
+ttnn::SimpleShape Tensor::get_logical_shape() const {
+    return this->get_shape().logical_shape();
+}
+
+ttnn::SimpleShape Tensor::get_padded_shape() const {
+    return this->get_shape().padded_shape();
+}
+
+tt::tt_metal::Padding Tensor::get_padding() const {
+    return this->get_legacy_shape().padding();
+}
 
 Tensor create_device_tensor(
     const tt::tt_metal::LegacyShape& shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config, const std::optional<Tile>& tile) {

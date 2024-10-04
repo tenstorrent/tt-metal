@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/device/mesh_device.hpp"
+#include "tt_metal/distributed/mesh_device.hpp"
 
 #include <memory>
 #include <unordered_map>
@@ -11,7 +11,8 @@
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/device/mesh_device_view.hpp"
+#include "tt_metal/distributed/mesh_device_view.hpp"
+#include "tt_metal/distributed/mesh_device.hpp"
 
 namespace tt::tt_metal {
 
@@ -20,7 +21,7 @@ using PhysicalCoordinate = eth_coord_t;
 
 static std::string get_config_path(const std::string& filename) {
     std::string root_path = getenv("TT_METAL_HOME") ? getenv("TT_METAL_HOME") : "./";
-    return root_path + "/tt_metal/impl/device/mesh_configurations/" + filename;
+    return root_path + "/tt_metal/distributed/mesh_configurations/" + filename;
 }
 
 static std::unordered_map<LogicalCoordinate, PhysicalCoordinate> load_translation_map(const std::string& filename, const std::string& key) {
