@@ -24,7 +24,7 @@ random.seed(0)
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "xfail": {
+    "nightly": {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16),
         "input_a_dtype": [ttnn.bfloat16],
         "input_b_dtype": [ttnn.bfloat16],
@@ -69,7 +69,7 @@ def run(
     torch_input_tensor_b = gen_func_with_cast_tt(
         partial(gen_with_zeroes, probabilityzeroes=0.5, low=-100, high=100, dtype=torch.float32), input_b_dtype
     )(input_shape)
-    torch_output_tensor = torch_input_tensor_a.logical_xor_(torch_input_tensor_b)
+    torch_output_tensor = torch_input_tensor_a.clone().detach().logical_xor_(torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,

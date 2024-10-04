@@ -8,7 +8,7 @@ from functools import partial
 import torch
 import random
 import ttnn
-from tests.sweep_framework.utils import gen_shapes, tensor_to_dtype
+from tests.sweep_framework.utils import gen_shapes, tensor_to_dtype, gen_with_zeroes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import assert_equal, start_measuring_time, stop_measuring_time
@@ -68,10 +68,10 @@ def run(
     torch.manual_seed(data_seed)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+        partial(gen_with_zeroes, probabilityzeroes=0.5, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
     torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
+        partial(gen_with_zeroes, probabilityzeroes=0.5, low=-100, high=100, dtype=torch.float32), input_b_dtype
     )(input_shape)
     torch_output_tensor = tensor_to_dtype(torch.logical_xor(torch_input_tensor_a, torch_input_tensor_b), input_a_dtype)
 

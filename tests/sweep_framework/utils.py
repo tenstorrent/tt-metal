@@ -124,7 +124,7 @@ def gen_with_zeroes(size, probabilityzeroes=0.5, low=-100, high=100, dtype=torch
     element_count = 1
     for i in size:
         element_count = element_count * i
-    raw = torch.zeros(element_count)
+    raw = torch.zeros(element_count).to(dtype)
     raw[: int(probabilityzeroes * element_count)] = torch.Tensor(
         size=(1, int(probabilityzeroes * element_count))
     ).uniform_(low, high)

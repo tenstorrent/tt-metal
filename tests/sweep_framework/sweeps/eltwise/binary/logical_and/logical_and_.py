@@ -71,7 +71,7 @@ def run(
     torch_input_tensor_b = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
     )(input_shape)
-    torch_output_tensor = torch_input_tensor_a.logical_and_(torch_input_tensor_b)
+    torch_output_tensor = torch_input_tensor_a.clone().detach().logical_and_(torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
