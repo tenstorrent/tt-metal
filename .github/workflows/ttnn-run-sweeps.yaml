@@ -24,6 +24,7 @@ on:
           - eltwise.unary.cbrt.cbrt
           - eltwise.unary.rsub.rsub
           - eltwise.unary.rsub.rsub_pytorch2
+          - eltwise.unary.rsqrt.rsqrt_pytorch2
           - eltwise.unary.rdiv.rdiv
           - eltwise.unary.frac.frac
           - eltwise.unary.ceil.ceil
