@@ -34,8 +34,8 @@ Plan:
 **/
 class SimpleShape {
 public:
-    explicit SimpleShape(const std::vector<uint32_t> &shape) : value{shape} {}
-    explicit SimpleShape(std::vector<uint32_t> &&shape) : value{std::move(shape)} {}
+    template <typename T>
+    explicit SimpleShape(T&& shape) : value{std::forward<T>(shape)} {}
 
     template<std::size_t N>
     bool operator==(const std::array<uint32_t, N> &other) const {
@@ -43,33 +43,20 @@ public:
         return sameSize && std::equal(value.begin(), value.end(), other.begin());
     }
 
-    bool operator==(const SimpleShape &other) const { return this->value == other.value; }
-    bool operator==(const std::vector<uint32_t> &other) const { return this->value == other; }
+    bool operator==(const SimpleShape &other) const;
+    bool operator==(const std::vector<uint32_t> &other) const;
 
-    uint32_t operator[](std::size_t index) const {
-        if (index < 0) {
-            index += this->value.size();
-        }
-        return this->value.at(index);
-    }
-
-    uint32_t &operator[](std::size_t index) {
-        if (index < 0) {
-            index += this->value.size();
-        }
-        return this->value.at(index);
-    }
+    uint32_t operator[](int32_t index) const;
+    uint32_t &operator[](int32_t index);
 
     size_t rank() const { return this->value.size(); }
-    uint32_t volume() const {
-        return std::accumulate(this->value.begin(), this->value.end(), 1, std::multiplies<uint32_t>());
-    }
+
+    uint64_t volume() const;
 
     auto cbegin() const { return this->value.cbegin(); }
     auto cend() const { return this->value.cend(); }
 
-    // to help build Shape or LegacyShape from it
-    const std::vector<uint32_t> &as_vector() const { return this->value; }
+    const std::vector<uint32_t>& as_vector() const { return this->value; }
 
     // Needed for reflect / fmt
     static constexpr auto attribute_names = std::forward_as_tuple("value");
@@ -194,6 +181,8 @@ struct Padding {
     const PadDimension operator[](const std::int64_t index) const;
 
     PadValue pad_value() const;
+
+    size_t rank() const { return rank_; }
 
     static constexpr auto attribute_names = std::forward_as_tuple("rank", "pad_dimensions", "pad_value");
     const auto attribute_values() const {
