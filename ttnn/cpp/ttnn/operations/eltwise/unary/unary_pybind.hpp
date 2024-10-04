@@ -252,7 +252,8 @@ void bind_unary_operation_with_float_parameter(
     const unary_operation_t& operation,
     const std::string& parameter_name,
     const std::string& parameter_doc,
-    const std::string& info_doc) {
+    const std::string& info_doc,
+    const std::string& note=" ") {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -275,7 +276,7 @@ void bind_unary_operation_with_float_parameter(
             ttnn.Tensor: the output tensor.
 
         Note:
-            {4}
+            {5}
 
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -285,7 +286,8 @@ void bind_unary_operation_with_float_parameter(
         operation.python_fully_qualified_name(),
         parameter_name,
         parameter_doc,
-        info_doc);
+        info_doc,
+        note);
 
     bind_registered_operation(
         module,
@@ -1325,29 +1327,35 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::atan, R"doc(\mathrm{{output\_tensor}}_i = atan(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::cos, R"doc(\mathrm{{output\_tensor}}_i = cos(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::erfinv, R"doc(\mathrm{{output\_tensor}}_i = erfinv(\mathrm{{input\_tensor}}_i))doc",
-    R"doc(Supported dtypes, layouts, and ranks:
+        R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16                |          TILE                   |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        )doc");
+
+
     detail::bind_unary_operation(module, ttnn::exp2, R"doc(\mathrm{{output\_tensor}}_i = exp2(\mathrm{{input\_tensor}}_i))doc",
-    R"doc(Supported dtypes, layouts, and ranks:
+        R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        )doc");
+
     detail::bind_unary_operation(module, ttnn::expm1, R"doc(\mathrm{{output\_tensor}}_i = expm1(\mathrm{{input\_tensor}}_i))doc",
-    R"doc(Supported dtypes, layouts, and ranks:
+        R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        )doc");
     detail::bind_unary_operation(module, ttnn::eqz, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ == 0}}))doc");
     detail::bind_unary_operation(module, ttnn::floor, R"doc(\mathrm{{output\_tensor}}_i = floor(\mathrm{{input\_tensor}}_i))doc", "Available for Wormhole_B0 only");
     detail::bind_unary_operation(module, ttnn::ceil, R"doc(\mathrm{{output\_tensor}}_i = ceil(\mathrm{{input\_tensor}}_i))doc", "Available for Wormhole_B0 only");
@@ -1383,41 +1391,45 @@ void py_module(py::module& module) {
 
     //  Unaries with fast_and_approximate_mode
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::exp,
-    R"doc(Supported dtypes, layouts, and ranks:
+        R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        )doc");
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erf,
-    R"doc(Supported dtypes, layouts, and ranks:
+        R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+            +----------------------------+---------------------------------+-------------------+
+            |     Dtypes                 |         Layouts                 |     Ranks         |
+            +----------------------------+---------------------------------+-------------------+
+            |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+            +----------------------------+---------------------------------+-------------------+
+        )doc");
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erfc,
-    R"doc(Supported dtypes, layouts, and ranks:
+        R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        )doc");
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::gelu);
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::rsqrt);
 
     // Unaries with float parameter
-    detail::bind_unary_operation_with_float_parameter(module, ttnn::elu, "alpha", "The alpha parameter for the ELU function",
-    R"doc(Supported dtypes, layouts, and ranks:
+    detail::bind_unary_operation_with_float_parameter(module, ttnn::elu, "alpha", "The alpha parameter for the ELU function","",
+        R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        )doc");
 
     detail::bind_unary_operation_with_float_parameter(module, ttnn::rsub, "value", "subtrahent value which is actually calculated as minuend", "Returns tensor with respective elements of the input tensor subtracted from the value.");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::heaviside, "value", "The value parameter for the Heaviside function", "");
