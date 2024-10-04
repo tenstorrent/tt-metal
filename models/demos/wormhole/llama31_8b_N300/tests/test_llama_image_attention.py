@@ -49,78 +49,6 @@ def test_llama_attention_inference(seq_len, mesh_device, use_program_cache, rese
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
-    """
-    class VisionEncoder(nn.Module):
-    def __init__(
-        self,
-        max_num_tiles: int,
-        ckpt_path: str = None,
-        image_size: int = 224,
-        patch_size: int = 14,
-        width: int = 1280,
-        layers: int = 32,
-        heads: int = 16,
-        mlp_ratio: float = 4.0,
-        act_layer: Callable = nn.GELU,
-        in_channels: int = 3,
-        load_ckpt: bool = False,
-        n_global_layers: int = 2,
-        global_model: bool = False,
-        return_intermediate=None,
-    ):
-
-        self.transformer = ImageTransformer(
-            width, layers, heads, mlp_ratio, act_layer=act_layer
-        )
-
-    class ImageTransformer(nn.Module):
-    def __init__(
-        self,
-        width: int,
-        layers: int,
-        heads: int,
-        mlp_ratio: float = 4.0,
-        act_layer: Callable = nn.GELU,
-        gated: bool = False,
-    ):
-        super().__init__()
-        self.width = width
-        self.layers = layers
-        self.resblocks = nn.ModuleList(
-            [
-                ImageTransformerBlock(
-                    d_model=width,
-                    n_head=heads,
-                    mlp_ratio=mlp_ratio,
-                    act_layer=act_layer,
-                    gated=gated,
-                )
-                for _ in range(self.layers)
-            ]
-        )
-
-    class ImageTransformerBlock(nn.Module):
-    def __init__(
-        self,
-        d_model: int,
-        n_head: int,
-        mlp_ratio: float = 4.0,
-        act_layer: Callable = nn.GELU,
-        gated: bool = False,
-    ):
-        super().__init__()
-        assert d_model % n_head == 0
-        self.n_heads = n_head
-        self.head_dim = d_model // self.n_heads
-        self.attn = ImageAttention(
-            dim=d_model,
-            head_dim=self.head_dim,
-            n_heads=self.n_heads,
-        )
-
-
-        """
-
     dim = 1280
     heads = 16
     reference_model = llama_reference_mod.ImageAttention(dim=dim, head_dim=dim // heads, n_heads=heads)
@@ -145,20 +73,35 @@ def test_llama_attention_inference(seq_len, mesh_device, use_program_cache, rese
         tt_attention_input,
         mesh_device,
     )
-    mask = torch.ones((batch, seq_len), dtype=torch.bool)
 
-    tt_out = tt_model(attention_input, mask)
+    mask = torch.bernoulli(
+        torch.full(
+            (
+                batch,
+                seq_len,
+                seq_len,
+            ),
+            0.25,
+        )
+    )
+    mask = mask.unsqueeze(1)
+    mask = mask * -1e9
+
+    tt_mask = ttnn.from_torch(
+        mask,
+        device=mesh_device,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    tt_out = tt_model(attention_input, mask=tt_mask)
     tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[:, 0, :, :].view(
         batch, seq_len, -1
     )  # [ batch, seq, hidden_dim]
 
-    positions = torch.LongTensor(range(seq_len))
-    freqs_cis_i = precompute_freqs_cis(
-        model_args.head_dim, model_args.max_seq_len * 2, model_args.rope_theta, model_args.use_scaled_rope
-    )[positions]
-    attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
-    attn_mask_torch = torch.triu(attn_mask, diagonal=1)
-    reference_output = reference_model(pt_attention_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
+    reference_output = reference_model(pt_attention_input, mask=mask)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
@@ -170,35 +113,6 @@ def test_llama_attention_inference(seq_len, mesh_device, use_program_cache, rese
     else:
         logger.warning(f"Llama_Attention Failed!")
         all_tests_pass = False
-
-    check_kv_cache = True  # May want to disable: Issue #10648
-    if check_kv_cache:
-        # PyTorch output --------------------------------------------------------------------
-        pytorch_layer_present = [
-            reference_model.cache_k.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-            reference_model.cache_v.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-        ]
-        # TT hardware execution -------------------------------------------------------------
-        tt_layer_present = [
-            ttnn.to_torch(cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
-            for cache in tt_model.layer_past
-        ]
-
-        for i, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
-            cache_length_to_check = min(model_args.sliding_window, generation_start_pos + generation_length + 1)
-            cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
-            cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
-            does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
-            if i == 0:
-                logger.info(f"K cache output: {output_pcc}")
-            else:
-                logger.info(f"V cache output: {output_pcc}")
-
-            if does_pass:
-                logger.info(f"KV Cache Passed!")
-            else:
-                logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
-                all_tests_pass = False
 
     if all_tests_pass:
         logger.info("Llama Attention output Passed!")

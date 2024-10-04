@@ -59,23 +59,50 @@ class TtLlamaImageAttention(LightweightModule):
         assert self.n_heads % configuration.num_devices == 0
         assert self.n_kv_heads % configuration.num_devices == 0
 
+        # Pad head_dim to multiple of 32
+        def pad_head_dim(weight, heads_out=True):
+            # Pad head dim to multiple of 32
+            # heads_out means that the output dim of this weight contains heads.
+            dim = weight.shape[1]
+            assert weight.shape[0] == dim
+            padded_head_dim = nearest_32(self.head_dim)
+            padding_size = padded_head_dim - self.head_dim
+            if padding_size > 0:
+                if heads_out:
+                    weight = weight.transpose(-1, -2)
+                weight = weight.reshape(dim, self.n_heads, self.head_dim)
+                padding = torch.zeros(dim, self.n_heads, padding_size, dtype=weight.dtype)
+                weight = torch.cat([weight, padding], dim=-1)
+                weight = weight.reshape(dim, self.n_heads * padded_head_dim)
+                if heads_out:
+                    weight = weight.transpose(-1, -2)
+            return weight
+
+        wq_padded = pad_head_dim(self.state_dict[wq_str])
+        wk_padded = pad_head_dim(self.state_dict[wk_str])
+        wv_padded = pad_head_dim(self.state_dict[wv_str])
+        wo_padded = pad_head_dim(self.state_dict[wo_str], heads_out=False)
+        wq_chunked, wk_chunked, wv_chunked = (
+            torch.chunk(w, configuration.num_devices) for w in [wq_padded, wk_padded, wv_padded]
+        )
+
         self.wqkv = ttnn.as_tensor(
             torch.concat(
                 [
                     torch.concat(
                         [
                             torch.transpose(
-                                torch.chunk(self.state_dict[wq_str], configuration.num_devices)[i],
+                                wq_chunked[i],
                                 -2,
                                 -1,
                             ),
                             torch.transpose(
-                                torch.chunk(self.state_dict[wk_str], configuration.num_devices)[i],
+                                wk_chunked[i],
                                 -2,
                                 -1,
                             ),
                             torch.transpose(
-                                torch.chunk(self.state_dict[wv_str], configuration.num_devices)[i],
+                                wv_chunked[i],
                                 -2,
                                 -1,
                             ),
@@ -96,7 +123,7 @@ class TtLlamaImageAttention(LightweightModule):
 
         self.wo = ttnn.as_tensor(
             torch.transpose(
-                self.state_dict[wo_str],
+                wo_padded,
                 -2,
                 -1,
             ),
@@ -108,26 +135,6 @@ class TtLlamaImageAttention(LightweightModule):
             cache_file_name=cache_name("wo_sharded"),
         )
 
-        self.reduce_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(self.grid_size.x, self.grid_size.y),
-            in0_block_w=4,
-            out_subblock_h=4,
-            out_subblock_w=1,
-            per_core_M=4,
-            per_core_N=1,
-            transpose_mcast=False,
-            fused_activation=None,
-        )
-
-        self.attn_program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
-            in0_block_w=1,
-            out_subblock_h=1,
-            out_subblock_w=4,
-            per_core_M=1,
-            per_core_N=32,
-        )
-        self.attention_grid = ttnn.CoreCoord(8, 4)
         self.scale = self.head_dim**-0.5
 
     def forward(self, x_11SH, mask=None):
@@ -173,8 +180,9 @@ class TtLlamaImageAttention(LightweightModule):
             q_heads_1QSD,
             k_heads_1KSD,
             v_heads_1VSD,
-            is_causal=True,
+            is_causal=False,
             scale=self.scale,
+            attn_mask=mask,
             program_config=self.model_config["SDPA_PROGCFG"](seq_len),
         )
 
