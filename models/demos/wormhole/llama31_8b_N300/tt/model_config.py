@@ -12,6 +12,7 @@ import torch
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.demos.wormhole.llama31_8b_N300.tt.llama_common import precompute_freqs, freqs_to_rotation_matrix
 from typing import Tuple
+from models.utility_functions import nearest_32
 
 
 def calculate_hidden_dim(dim, ffn_dim_multiplier, multiple_of):
@@ -426,14 +427,15 @@ class TtModelArgs:
             self.model_config["IMAGE_ATTN_QKV_PROGCFG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 1024),
                 k=self.vision_dim,
-                n=(self.vision_dim * 3),
+                n=(nearest_32(self.vision_head_dim) * self.vision_attn_n_heads * 3)
+                // self.num_devices,  # Head dim was padded to nearest 32
                 grid_size=(8, 8),
                 in0_block_w=1,
                 fuse_batch=seq_len <= 1024,
             )
             self.model_config["IMAGE_ATTN_OUT_PROGCFG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 1024),
-                k=self.vision_dim,
+                k=(nearest_32(self.vision_head_dim) * self.vision_attn_n_heads * 3) // self.num_devices,
                 n=self.vision_dim,
                 grid_size=(8, 8),
                 in0_block_w=1,
