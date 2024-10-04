@@ -25,6 +25,8 @@ run_perf_models_other() {
 
     env pytest models/demos/distilbert/tests/test_perf_distilbert.py -m $test_marker
 
+    env pytest models/demos/swin/tests/test_perf_swin.py -m $test_marker
+
     env pytest -n auto tests/ttnn/integration_tests/whisper/test_performance.py -m $test_marker
 
     env pytest -n auto models/demos/metal_BERT_large_11/tests -m $test_marker
@@ -89,6 +91,8 @@ run_device_perf_models() {
     env pytest tests/device_perf_tests/stable_diffusion -m $test_marker --timeout=600
 
     env pytest models/demos/distilbert/tests -m $test_marker
+
+    env pytest models/demos/swin/tests/ -m $test_marker
 
     env pytest models/demos/vgg/tests/ -m $test_marker
 
