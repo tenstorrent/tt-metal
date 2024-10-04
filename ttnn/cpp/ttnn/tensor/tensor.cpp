@@ -91,9 +91,6 @@ Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, L
     this->tensor_attributes->metadata_populated = true;
 }
 
-Tensor::Tensor(const Storage storage, const tt::tt_metal::LegacyShape shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) :
-    Tensor(storage, ttnn::Shape{shape}, dtype, layout, tile) {}
-
 Tensor::~Tensor() {
     ZoneScoped;
     this->deallocate_through_destructor = true;

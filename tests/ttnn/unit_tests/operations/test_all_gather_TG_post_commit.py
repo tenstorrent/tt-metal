@@ -62,8 +62,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
 ):
     if len(mesh_device.get_devices()) != 32:
         pytest.skip("Not TG!")
-    for device in mesh_device.get_devices():
-        device.enable_async(enable_async)
+    mesh_device.enable_async(enable_async)
 
     input_shape_per_chip = list(input_shape_per_all_gather)
     input_shape_per_chip[2 if cluster_axis == 0 else 3] //= num_devices_per_line

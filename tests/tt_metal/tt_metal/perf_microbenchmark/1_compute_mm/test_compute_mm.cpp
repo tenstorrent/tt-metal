@@ -83,7 +83,7 @@ double get_tt_npu_rpeak_tflops(tt::ARCH arch, CoreCoord grid_size, int tt_npu_cl
 std::tuple<uint32_t, uint32_t, uint32_t> get_aligned_input_tile_num(uint32_t M, uint32_t N, uint32_t K);
 
 uint32_t get_in0_block_w(
-    uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t Kt, uint32_t single_tile_size, uint32_t l1_size);
+    uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t Kt, uint32_t single_tile_size, uint32_t l1_size, uint32_t l1_unreserved_base);
 
 CoreCoord get_core_range(
     uint32_t num_blocks_rows, uint32_t num_blocks_cols, uint32_t max_num_rows, uint32_t max_num_cols);
@@ -93,7 +93,7 @@ std::tuple<MathFidelity, bool> get_compute_params(tt::ARCH arch);
 std::tuple<uint32_t, uint32_t> get_out_subblock_params(uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t choice);
 
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_all_buffers_addresses(
-    uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t in0_block_w, uint32_t single_tile_size);
+    uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t in0_block_w, uint32_t single_tile_size, uint32_t l1_unreserved_base);
 
 std::vector<float> generate_fp32_random(uint32_t num_elems, int32_t rand_max_val);
 
@@ -305,6 +305,7 @@ int main(int argc, char** argv) {
 
         int pci_express_slot = 0;
         tt_metal::Device* device = tt_metal::CreateDevice(pci_express_slot);
+        uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
         const tt::ARCH arch = device->arch();
         ////////////////////////////////////////////////////////////////////////////
         //                      Check Input Args
@@ -330,7 +331,7 @@ int main(int argc, char** argv) {
         uint32_t num_cores_x = grid_size.x;
         uint32_t per_core_Mt = (Mt - 1) / num_cores_y + 1;
         uint32_t per_core_Nt = (Nt - 1) / num_cores_x + 1;
-        uint32_t in0_block_w = get_in0_block_w(per_core_Mt, per_core_Nt, Kt, single_tile_size, l1_size);
+        uint32_t in0_block_w = get_in0_block_w(per_core_Mt, per_core_Nt, Kt, single_tile_size, l1_size, l1_unreserved_base);
         if (in0_block_w == 0) {
             log_error(
                 LogTest,
@@ -418,7 +419,7 @@ int main(int argc, char** argv) {
         }
         auto [out_subblock_h, out_subblock_w] = get_out_subblock_params(per_core_Mt, per_core_Nt, subblock_choice);
         auto [in0_cb_addr, in1_cb_addr, in2_cb_addr, out_cb_addr, in0_addr, in1_addr, out_addr] =
-            get_all_buffers_addresses(per_core_Mt, per_core_Nt, in0_block_w, single_tile_size);
+            get_all_buffers_addresses(per_core_Mt, per_core_Nt, in0_block_w, single_tile_size, l1_unreserved_base);
 
         if (fp32_dest_acc_en and (out_subblock_h * out_subblock_w > 4)) {
             if (out_subblock_w >= 4) {
@@ -732,11 +733,11 @@ std::tuple<uint32_t, uint32_t, uint32_t> get_aligned_input_tile_num(uint32_t M, 
 }
 
 uint32_t get_in0_block_w(
-    uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t Kt, uint32_t single_tile_size, uint32_t l1_size) {
+    uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t Kt, uint32_t single_tile_size, uint32_t l1_size, uint32_t l1_unreserved_base) {
     std::vector<uint32_t> in0_block_w_choices = {4, 2, 1};
     uint32_t num_buffer = 2;  // double buffering
     uint32_t in0_block_w = 0;
-    uint32_t base_addr = L1_UNRESERVED_BASE;
+    uint32_t base_addr = l1_unreserved_base;
     for (auto choice : in0_block_w_choices) {
         if (Kt % choice != 0)
             continue;
@@ -811,9 +812,9 @@ std::tuple<uint32_t, uint32_t> get_out_subblock_params(uint32_t per_core_Mt, uin
 }
 
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_all_buffers_addresses(
-    uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t in0_block_w, uint32_t single_tile_size) {
+    uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t in0_block_w, uint32_t single_tile_size, uint32_t l1_unreserved_base) {
     uint32_t num_buffer = 2;  // double buffering
-    uint32_t in0_cb_addr = L1_UNRESERVED_BASE;
+    uint32_t in0_cb_addr = l1_unreserved_base;
     uint32_t in0_cb_size = per_core_Mt * in0_block_w * num_buffer * single_tile_size;
     uint32_t in1_cb_addr = in0_cb_addr + in0_cb_size;
     uint32_t in1_cb_size = per_core_Nt * in0_block_w * num_buffer * single_tile_size;

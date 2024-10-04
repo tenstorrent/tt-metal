@@ -9,20 +9,39 @@
 #include <optional>
 #include <vector>
 
-#include "mesh_device_view.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/device/mesh_device_view.hpp"
 
 namespace tt::tt_metal {
 
 using DeviceIds = std::vector<int>;
-using MeshDeviceID = std::size_t;
+using MeshDeviceID = size_t;
 using MeshOffset = std::pair<size_t, size_t>;
 class MeshDeviceView;
 
 struct MeshDeviceConfig {
     MeshShape mesh_shape;
     MeshOffset offset;
+    std::vector<chip_id_t> physical_device_ids;
+    MeshType mesh_type;
+
+    MeshDeviceConfig(
+        const MeshShape &mesh_shape,
+        MeshType mesh_type) :
+        mesh_shape(mesh_shape),
+        offset(MeshOffset{0, 0}),
+        physical_device_ids(std::vector<chip_id_t>()),
+        mesh_type(mesh_type) {}
+
+    MeshDeviceConfig(
+        const MeshShape &mesh_shape,
+        const MeshOffset &offset = MeshOffset{0, 0},
+        const std::vector<chip_id_t> &physical_device_ids = {},
+        MeshType mesh_type = MeshType::RowMajor) :
+        mesh_shape(mesh_shape),
+        offset(offset),
+        physical_device_ids(physical_device_ids),
+        mesh_type(mesh_type) {}
 };
 
 // SystemMesh creates a virtualization over the physical devices in the system.
@@ -43,7 +62,7 @@ class SystemMesh {
 
     // Logical mesh shape and coordinates
     MeshShape logical_mesh_shape;
-    std::map<LogicalCoordinate, PhysicalCoordinate> logical_to_physical_coordinates;
+    std::unordered_map<LogicalCoordinate, PhysicalCoordinate> logical_to_physical_coordinates;
 
     // Handling of physical coordinates
     std::unordered_map<PhysicalCoordinate, chip_id_t> physical_coordinate_to_device_id;
@@ -55,9 +74,9 @@ class SystemMesh {
     SystemMesh(SystemMesh &&) = delete;
     SystemMesh &operator=(SystemMesh &&) = delete;
 
-    static MeshShape get_system_mesh_shape(std::size_t system_num_devices);
-    static std::map<LogicalCoordinate, PhysicalCoordinate> get_system_mesh_translation_map(
-        std::size_t system_num_devices);
+    static MeshShape get_system_mesh_shape(size_t system_num_devices);
+    static std::unordered_map<LogicalCoordinate, PhysicalCoordinate> get_system_mesh_translation_map(
+        size_t system_num_devices);
 
     bool is_system_mesh_initialized() const;
 
@@ -68,10 +87,11 @@ class SystemMesh {
 
     // Return the shape of the logical mesh
     const MeshShape &get_shape() const;
-    std::size_t get_num_devices() const;
+    size_t get_num_devices() const;
 
     // Get the physical device IDs mapped to a MeshDevice
     std::vector<chip_id_t> get_mapped_physical_device_ids(const MeshDeviceConfig &config) const;
+    void register_mesh_device(const std::shared_ptr<MeshDevice> &mesh_device, const std::vector<Device*>& devices);
 
     // Map MeshDevice to physical devices
     std::vector<Device *> map_mesh_device(
@@ -80,30 +100,33 @@ class SystemMesh {
         size_t l1_small_size,
         size_t trace_region_size,
         DispatchCoreType dispatch_core_type,
-        const std::pair<size_t, size_t> &offset = {0, 0},
-        const std::vector<chip_id_t> &physical_device_ids = {});
+        const MeshDeviceConfig &config);
 
     // Unmap MeshDevice, releasing the associated physical devices.
-    void unmap_mesh_device(const std::shared_ptr<MeshDevice> &mesh_device);
+    void unmap_mesh_device(const MeshDevice* mesh_device);
+    std::shared_ptr<MeshDevice> get_mesh_device(const std::vector<chip_id_t>& physical_device_ids);
+    Device* get_device(const chip_id_t physical_device_id) const;
 };
 
 class MeshDevice : public std::enable_shared_from_this<MeshDevice> {
+  private:
     MeshDeviceID mesh_id;
     MeshShape mesh_device_shape;
+    MeshType type;
     std::shared_ptr<MeshDeviceView> primary_view;
     std::vector<Device *> devices;
-    std::unordered_map<chip_id_t, int> physical_id_to_device_index;
+    std::vector<std::shared_ptr<MeshDevice>> submeshes; // Parent owns submeshes and responsible fortheir destruction
+    std::weak_ptr<MeshDevice> parent_mesh; // Submesh created with reference to parent mesh
 
     void initialize(
         size_t l1_small_size,
         size_t trace_region_size,
         size_t num_command_queues,
         DispatchCoreType dispatch_core_type,
-        const std::pair<size_t, size_t> &offset,
-        const std::vector<chip_id_t> &physical_device_ids);
+        const MeshDeviceConfig &config);
 
    public:
-    MeshDevice(const MeshShape &mesh_device_shape);
+    MeshDevice(const MeshShape &mesh_device_shape, MeshType type, std::weak_ptr<MeshDevice> parent_mesh = {});
     ~MeshDevice();
 
     MeshDevice(const MeshDevice &) = delete;
@@ -113,17 +136,15 @@ class MeshDevice : public std::enable_shared_from_this<MeshDevice> {
     MeshDevice &operator=(MeshDevice &&) = delete;
 
     std::vector<Device *> get_devices() const;
-    Device *get_device_index(int logical_device_id) const;
-    Device *get_device(int physical_device_id) const;
-    Device *get_device(int row_idx, int col_idx) const;
-    std::vector<Device *> get_devices_on_row(int row_idx) const;
-    std::vector<Device *> get_devices_on_column(int col_idx) const;
+    Device *get_device_index(size_t logical_device_id) const;
+    Device *get_device(chip_id_t physical_device_id) const;
+    Device *get_device(size_t row_idx, size_t col_idx) const;
 
     const DeviceIds get_device_ids() const;
 
-    int num_devices() const;
-    int num_rows() const;
-    int num_cols() const;
+    size_t num_devices() const;
+    size_t num_rows() const;
+    size_t num_cols() const;
     MeshShape shape() const;
 
     CoreCoord compute_with_storage_grid_size() const;
@@ -131,6 +152,7 @@ class MeshDevice : public std::enable_shared_from_this<MeshDevice> {
     CoreCoord dram_grid_size() const;
 
     tt::ARCH arch() const;
+    void enable_async(bool enable);
 
     void close_devices();
     std::shared_ptr<const MeshDeviceView> get_view() const;
@@ -138,15 +160,26 @@ class MeshDevice : public std::enable_shared_from_this<MeshDevice> {
 
     std::string to_string() const;
     MeshDeviceID get_mesh_id() const;
+    bool is_parent_mesh() const;
 
+    std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const;
+
+    std::shared_ptr<MeshDevice> create_submesh(
+        const MeshShape &submesh_shape,
+        const MeshOffset &offset = MeshOffset{0, 0},
+        MeshType type = MeshType::RowMajor);
+
+    std::vector<std::shared_ptr<MeshDevice>> create_submeshes(
+        const MeshShape &submesh_shape,
+        MeshType type = MeshType::RowMajor);
+
+    static std::shared_ptr<MeshDevice> fetch_mesh_device(const std::vector<Device*>& devices);
     static std::shared_ptr<MeshDevice> create(
-        const MeshShape &mesh_device_shape,
-        size_t l1_small_size,
-        size_t trace_region_size,
-        size_t num_command_queues,
-        DispatchCoreType dispatch_core_type,
-        const std::pair<size_t, size_t> &offset = {0, 0},
-        const std::vector<chip_id_t> &physical_device_ids = {});
+        const MeshDeviceConfig &config,
+        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+        size_t num_command_queues = 1,
+        DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER);
 };
 
 std::ostream &operator<<(std::ostream &os, const MeshDevice &mesh_device);

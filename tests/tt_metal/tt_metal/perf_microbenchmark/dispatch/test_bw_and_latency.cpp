@@ -283,9 +283,10 @@ int main(int argc, char **argv) {
                 uint32_t offset = 0;
                 uint32_t page = 0;
                 uint32_t * pcie_base = (uint32_t *)host_pcie_base + pcie_offset / sizeof(uint32_t);
+                uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
                 while (!done) {
                     if (hammer_write_reg_g) {
-                        tt::Cluster::instance().write_reg(&addr, tt_cxy_pair(device->id(), w), L1_UNRESERVED_BASE);
+                        tt::Cluster::instance().write_reg(&addr, tt_cxy_pair(device->id(), w), l1_unreserved_base);
                     }
                     if (hammer_pcie_g) {
                         if (page == page_count_g) {
@@ -316,20 +317,22 @@ int main(int argc, char **argv) {
             vector<std::uint32_t> vec;
             vec.resize(page_size_g / sizeof(uint32_t));
 
+            CoreType core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+            uint32_t dispatch_l1_unreserved_base = dispatch_constants::get(core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
             for (int i = 0; i < warmup_iterations_g; i++) {
                 if (source_mem_g == 4) {
-                    tt::Cluster::instance().read_core(vec, sizeof(uint32_t), tt_cxy_pair(device->id(), w), DISPATCH_L1_UNRESERVED_BASE);
+                    tt::Cluster::instance().read_core(vec, sizeof(uint32_t), tt_cxy_pair(device->id(), w), dispatch_l1_unreserved_base);
                 } else {
-                    tt::Cluster::instance().write_core(vec.data(), vec.size() * sizeof(uint32_t), tt_cxy_pair(device->id(), w), DISPATCH_L1_UNRESERVED_BASE, vec.size() == 1);
+                    tt::Cluster::instance().write_core(vec.data(), vec.size() * sizeof(uint32_t), tt_cxy_pair(device->id(), w), dispatch_l1_unreserved_base, vec.size() == 1);
                 }
             }
 
             auto start = std::chrono::system_clock::now();
             for (int i = 0; i < iterations_g; i++) {
                 if (source_mem_g == 4) {
-                    tt::Cluster::instance().read_core(vec, page_size_g, tt_cxy_pair(device->id(), w), DISPATCH_L1_UNRESERVED_BASE);
+                    tt::Cluster::instance().read_core(vec, page_size_g, tt_cxy_pair(device->id(), w), dispatch_l1_unreserved_base);
                 } else {
-                    tt::Cluster::instance().write_core(vec.data(), vec.size() * sizeof(uint32_t), tt_cxy_pair(device->id(), w), DISPATCH_L1_UNRESERVED_BASE, vec.size() == 1);
+                    tt::Cluster::instance().write_core(vec.data(), vec.size() * sizeof(uint32_t), tt_cxy_pair(device->id(), w), dispatch_l1_unreserved_base, vec.size() == 1);
                 }
             }
             auto end = std::chrono::system_clock::now();

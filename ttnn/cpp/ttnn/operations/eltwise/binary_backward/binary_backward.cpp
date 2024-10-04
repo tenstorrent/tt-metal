@@ -7,7 +7,6 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/eltwise/unary_backward/device/unary_backward_op.hpp"
 
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"

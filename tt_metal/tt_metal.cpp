@@ -248,7 +248,7 @@ namespace detail {
 bool WriteToDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, std::vector<uint32_t> &host_buffer)
 {
     bool pass = true;
-    TT_FATAL(address >= DRAM_UNRESERVED_BASE, "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!", DRAM_UNRESERVED_BASE);
+    TT_FATAL(address >= device->get_base_allocator_addr(HalMemType::DRAM), "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!", device->get_base_allocator_addr(HalMemType::DRAM));
     tt::Cluster::instance().write_dram_vec(host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address);
     return pass;
 }
@@ -301,9 +301,6 @@ std::map<chip_id_t, Device *> CreateDevices(
     const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
     bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
-    if (is_galaxy) {
-        TT_FATAL(num_hw_cqs < 2, "Multiple Command Queues are not Currently Supported on Galaxy Systems");
-    }
     tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type);
     std::vector<Device *> devices = tt::DevicePool::instance().get_all_active_devices();
     std::map<chip_id_t, Device *> ret_devices;
@@ -683,11 +680,12 @@ void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done,
             CoreType core_type = hal.get_core_type(programmable_core_type_index);
             for (const auto &logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
                 launch_msg_t *msg = &program.kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
+                go_msg_t* go_msg = &program.kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
                 msg->kernel_config.host_assigned_id = program.get_runtime_id();
 
                 auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);
-                tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg, device->get_dev_addr(physical_core, HalMemAddrType::LAUNCH));
+                tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg, go_msg, device->get_dev_addr(physical_core, HalMemAddrType::LAUNCH));
             }
         }
         if (wait_until_cores_done) {
@@ -728,7 +726,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
 
     auto device_id = device->id();
 
-    program.allocate_circular_buffers();
+    program.allocate_circular_buffers(device);
     detail::ValidateCircularBufferRegion(program, device);
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
@@ -864,6 +862,10 @@ size_t GetNumAvailableDevices() {
     return tt::Cluster::instance().number_of_user_devices();
 }
 
+bool IsGalaxyCluster() {
+    return tt::Cluster::instance().is_galaxy_cluster();
+}
+
 size_t GetNumPCIeDevices() {
     return tt::Cluster::instance().number_of_pci_devices();
 }
@@ -888,7 +890,7 @@ Device *CreateDevice(
 
 Device *CreateDeviceMinimal(chip_id_t device_id, const uint8_t num_hw_cqs, DispatchCoreType dispatch_core_type) {
     ZoneScoped;
-    tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_type);
+    tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_type, num_hw_cqs);
     Device *dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     return dev;

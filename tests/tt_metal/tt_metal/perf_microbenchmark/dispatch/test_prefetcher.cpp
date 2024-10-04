@@ -47,8 +47,6 @@ constexpr uint32_t DRAM_DATA_BASE_ADDR = 1024 * 1024;
 
 constexpr uint32_t PCIE_TRANSFER_SIZE_DEFAULT = 4096;
 
-constexpr uint32_t dev_hugepage_base_g = 2 * (CQ_START * sizeof(uint32_t)); // HOST_CQ uses some at the start address
-
 constexpr uint32_t host_data_dirty_pattern = 0xbaadf00d;
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -125,7 +123,7 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -hp: host huge page issue buffer size (default {})", DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE);
         log_info(LogTest, "  -pq: prefetch queue entries (default {})", DEFAULT_PREFETCH_Q_ENTRIES);
         log_info(LogTest, "  -cs: cmddat q size (default {})", DEFAULT_CMDDAT_Q_SIZE);
-        log_info(LogTest, "-pdcs: prefetch_d cmddat cb size (default {})", dispatch_constants::get(CoreType::WORKER).prefetch_d_buffer_size());
+        log_info(LogTest, "-pdcs: prefetch_d cmddat cb size (default {})", dispatch_constants::get(CoreType::WORKER, 1).prefetch_d_buffer_size());
         log_info(LogTest, "  -ss: scratch cb size (default {})", DEFAULT_SCRATCH_DB_SIZE);
         log_info(LogTest, " -pcies: size of data to transfer in pcie bw test type (default: {})", PCIE_TRANSFER_SIZE_DEFAULT);
         log_info(LogTest, " -dpgs: dram page size in dram bw test type (default: {})", DRAM_PAGE_SIZE_DEFAULT);
@@ -154,7 +152,7 @@ void init(int argc, char **argv) {
     pcie_transfer_size_g = test_args::get_command_option_uint32(input_args, "-pcies", PCIE_TRANSFER_SIZE_DEFAULT);
     dram_page_size_g = test_args::get_command_option_uint32(input_args, "-dpgs", DRAM_PAGE_SIZE_DEFAULT);
     dram_pages_to_read_g = test_args::get_command_option_uint32(input_args, "-dpgr", DRAM_PAGES_TO_READ_DEFAULT);
-    prefetch_d_buffer_size_g = test_args::get_command_option_uint32(input_args, "-pdcs", dispatch_constants::get(CoreType::WORKER).prefetch_d_buffer_size());
+    prefetch_d_buffer_size_g = test_args::get_command_option_uint32(input_args, "-pdcs", dispatch_constants::get(CoreType::WORKER, 1).prefetch_d_buffer_size());
 
     test_type_g = test_args::get_command_option_uint32(input_args, "-t", DEFAULT_TEST_TYPE);
     all_workers_g.end_coord.x = test_args::get_command_option_uint32(input_args, "-wx", all_workers_g.end_coord.x);
@@ -1513,10 +1511,11 @@ void configure_for_single_chip(Device *device,
                                CoreCoord& phys_dispatch_relay_mux_core,
                                CoreCoord& phys_dispatch_relay_demux_core,
                                uint32_t& packetized_path_test_results_addr,
-                               uint32_t packetized_path_test_results_size) {
+                               uint32_t packetized_path_test_results_size,
+                               uint32_t dev_hugepage_base_g) {
 
     const CoreType dispatch_core_type = CoreType::WORKER;
-    uint32_t dispatch_buffer_pages = dispatch_constants::get(dispatch_core_type).dispatch_buffer_block_size_pages() * dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS;
+    uint32_t dispatch_buffer_pages = dispatch_constants::get(dispatch_core_type, 1).dispatch_buffer_block_size_pages() * dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS;
     uint32_t num_compute_cores = device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
 
     CoreCoord prefetch_core = {0, 0};
@@ -1541,10 +1540,11 @@ void configure_for_single_chip(Device *device,
     phys_dispatch_relay_demux_core = device->worker_core_from_logical_core(dispatch_relay_demux_core);
 
     // Packetized components will write their status + a few debug values here:
-    packetized_path_test_results_addr = L1_UNRESERVED_BASE;
+    uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
+    packetized_path_test_results_addr = l1_unreserved_base;
 
     // Want different buffers on each core, instead use big buffer and self-manage it
-    uint32_t l1_unreserved_base_aligned = align(L1_UNRESERVED_BASE + packetized_path_test_results_size, (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE)); // Was not aligned, lately.
+    uint32_t l1_unreserved_base_aligned = align(l1_unreserved_base + packetized_path_test_results_size, (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE)); // Was not aligned, lately.
     TT_ASSERT((l1_buf_base_g & ((1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) - 1)) == 0);
 
     uint32_t dispatch_buffer_base = l1_buf_base_g;
@@ -1574,8 +1574,10 @@ void configure_for_single_chip(Device *device,
     uint32_t* host_hugepage_completion_buffer = (uint32_t *)host_hugepage_completion_buffer_base_g;
     vector<uint32_t> tmp = {dev_hugepage_completion_buffer_base >> 4};
     CoreCoord phys_dispatch_host_core = split_dispatcher_g ? phys_dispatch_h_core : phys_dispatch_core;
-    tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, CQ_COMPLETION_WRITE_PTR);
-    tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, CQ_COMPLETION_READ_PTR);
+    uint32_t completion_q_wr_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
+    uint32_t completion_q_rd_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
+    tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, completion_q_wr_ptr);
+    tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, completion_q_rd_ptr);
     dirty_host_completion_buffer(host_hugepage_completion_buffer);
 
     const uint32_t prefetch_core_sem_0_id = tt_metal::CreateSemaphore(program, {prefetch_core}, 0);
@@ -1652,6 +1654,11 @@ void configure_for_single_chip(Device *device,
         prefetch_downstream_cb_sem, // prefetch_d only
         dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
         dispatch_constants::PREFETCH_D_BUFFER_BLOCKS, // prefetch_d only
+        0, // unused: for prefetch_hd <--> dispatch_hd
+        0, // unused: for prefetch_hd <--> dispatch_hd
+        0, // unused: for prefetch_hd <--> dispatch_hd
+        0, // unused: for prefetch_hd <--> dispatch_hd
+        0, // unused: for prefetch_hd <--> dispatch_hd
     };
 
     constexpr NOC my_noc_index = NOC::NOC_0;
@@ -1670,7 +1677,6 @@ void configure_for_single_chip(Device *device,
         prefetch_compile_args[11] = prefetch_d_buffer_base;
         prefetch_compile_args[12] = prefetch_d_buffer_pages * (1 << dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
         prefetch_compile_args[13] = scratch_db_base;
-
         CoreCoord phys_prefetch_d_upstream_core =
             packetized_path_en_g ? phys_prefetch_relay_demux_core : phys_prefetch_core_g;
         configure_kernel_variant<true, false>(program,
@@ -1694,7 +1700,6 @@ void configure_for_single_chip(Device *device,
         prefetch_compile_args[11] = cmddat_q_base;
         prefetch_compile_args[12] = cmddat_q_size_g;
         prefetch_compile_args[13] = 0;
-
         CoreCoord phys_prefetch_h_downstream_core =
             packetized_path_en_g ? phys_prefetch_relay_mux_core : phys_prefetch_d_core;
         configure_kernel_variant<false, true>(program,
@@ -1715,7 +1720,7 @@ void configure_for_single_chip(Device *device,
             uint32_t prefetch_relay_mux_queue_size_bytes = prefetch_d_buffer_size_g;
 
             // Packetized path buffer, can be at any available address.
-            constexpr uint32_t prefetch_relay_demux_queue_start_addr = L1_UNRESERVED_BASE;
+            uint32_t prefetch_relay_demux_queue_start_addr = l1_unreserved_base;
             constexpr uint32_t prefetch_relay_demux_queue_size_bytes = 0x10000;
 
             // For tests with checkers enabled, packetized path may time out and
@@ -1881,10 +1886,14 @@ void configure_for_single_chip(Device *device,
             my_noc_index);
     }
 
+    uint32_t host_completion_queue_wr_ptr = dispatch_constants::get(CoreType::WORKER).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
+    uint32_t dev_completion_queue_wr_ptr = dispatch_constants::get(CoreType::WORKER).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
+    uint32_t dev_completion_queue_rd_ptr = dispatch_constants::get(CoreType::WORKER).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
+
     std::vector<uint32_t> dispatch_compile_args = {
          dispatch_buffer_base,
          dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
-         dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS * dispatch_constants::get(dispatch_core_type).dispatch_buffer_block_size_pages(),
+         dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS * dispatch_constants::get(dispatch_core_type, 1).dispatch_buffer_block_size_pages(),
          dispatch_cb_sem, // overridden below for h
          split_prefetcher_g ? prefetch_d_downstream_cb_sem : prefetch_downstream_cb_sem, // overridden below for dispatch_h
          dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS,
@@ -1901,7 +1910,15 @@ void configure_for_single_chip(Device *device,
          NOC_XY_ENCODING(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
          prefetch_downstream_cb_sem,
          prefetch_downstream_buffer_pages,
-         num_compute_cores // max_write_packed_cores
+         num_compute_cores, // max_write_packed_cores
+         0,
+         0,
+         0,
+         0,
+         0,
+         host_completion_queue_wr_ptr,
+         dev_completion_queue_wr_ptr,
+         dev_completion_queue_rd_ptr
     };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
@@ -1955,7 +1972,7 @@ void configure_for_single_chip(Device *device,
             uint32_t dispatch_relay_mux_queue_size_bytes = dispatch_buffer_page_size_g*dispatch_buffer_pages;
 
             // Packetized path buffer, can be at any available address.
-            constexpr uint32_t dispatch_relay_demux_queue_start_addr = L1_UNRESERVED_BASE;
+            uint32_t dispatch_relay_demux_queue_start_addr = l1_unreserved_base;
             constexpr uint32_t dispatch_relay_demux_queue_size_bytes = 0x10000;
 
             // For tests with checkers enabled, packetized path may time out and
@@ -2133,10 +2150,11 @@ void configure_for_multi_chip(Device *device,
                               CoreCoord& phys_dispatch_relay_mux_core,
                               CoreCoord& phys_dispatch_relay_demux_core,
                               uint32_t& packetized_path_test_results_addr,
-                              uint32_t packetized_path_test_results_size) {
+                              uint32_t packetized_path_test_results_size,
+                              uint32_t dev_hugepage_base_g) {
 
     const CoreType dispatch_core_type = CoreType::WORKER;
-    uint32_t dispatch_buffer_pages = dispatch_constants::get(dispatch_core_type).dispatch_buffer_block_size_pages() * dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS;
+    uint32_t dispatch_buffer_pages = dispatch_constants::get(dispatch_core_type, 1).dispatch_buffer_block_size_pages() * dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS;
     uint32_t num_compute_cores = device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
     TT_ASSERT(num_compute_cores == (device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y));
 
@@ -2168,14 +2186,15 @@ void configure_for_multi_chip(Device *device,
     log_info(LogTest, "Right Tunneler = {}", r_tunneler_logical_core.str());
 
     // Packetized components will write their status + a few debug values here:
-    packetized_path_test_results_addr = L1_UNRESERVED_BASE;
+    uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
+    packetized_path_test_results_addr = l1_unreserved_base;
     uint32_t tunneler_queue_start_addr = 0x19000;
     uint32_t tunneler_queue_size_bytes = 0x10000;
     uint32_t tunneler_test_results_addr = 0x39000;
     uint32_t tunneler_test_results_size = 0x7000;
 
     // Want different buffers on each core, instead use big buffer and self-manage it
-    uint32_t l1_unreserved_base_aligned = align(L1_UNRESERVED_BASE + packetized_path_test_results_size, (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE)); // Was aligned, lately.
+    uint32_t l1_unreserved_base_aligned = align(l1_unreserved_base + packetized_path_test_results_size, (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE)); // Was aligned, lately.
     l1_buf_base_g = l1_unreserved_base_aligned + (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE); // Reserve a page.
     TT_ASSERT((l1_buf_base_g & ((1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) - 1)) == 0);
 
@@ -2208,8 +2227,10 @@ void configure_for_multi_chip(Device *device,
     uint32_t* host_hugepage_completion_buffer = (uint32_t *)host_hugepage_completion_buffer_base_g;
     vector<uint32_t> tmp = {dev_hugepage_completion_buffer_base >> 4};
     CoreCoord phys_dispatch_host_core = split_dispatcher_g ? phys_dispatch_h_core : phys_dispatch_core;
-    tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, CQ_COMPLETION_WRITE_PTR);
-    tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, CQ_COMPLETION_READ_PTR);
+    uint32_t completion_q_wr_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
+    uint32_t completion_q_rd_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
+    tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, completion_q_wr_ptr);
+    tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, completion_q_rd_ptr);
     dirty_host_completion_buffer(host_hugepage_completion_buffer);
 
     const uint32_t prefetch_core_sem_0_id = tt_metal::CreateSemaphore(program, {prefetch_core}, 0);
@@ -2290,6 +2311,11 @@ void configure_for_multi_chip(Device *device,
         prefetch_downstream_cb_sem, // prefetch_d only
         dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
         dispatch_constants::PREFETCH_D_BUFFER_BLOCKS, // prefetch_d only
+        0, // unused: for prefetch_d <--> dispatch_d
+        0, // unused: for prefetch_d <--> dispatch_d
+        0, // unused: for prefetch_d <--> dispatch_d
+        0, // unused: for prefetch_d <--> dispatch_d
+        0, // unused: for prefetch_d <--> dispatch_d
     };
 
     constexpr NOC my_noc_index = NOC::NOC_0;
@@ -2353,7 +2379,7 @@ void configure_for_multi_chip(Device *device,
             uint32_t prefetch_relay_mux_queue_size_bytes = prefetch_d_buffer_size_g;
 
             // Packetized path buffer, can be at any available address.
-            constexpr uint32_t prefetch_relay_demux_queue_start_addr = L1_UNRESERVED_BASE;
+            uint32_t prefetch_relay_demux_queue_start_addr = l1_unreserved_base;
             constexpr uint32_t prefetch_relay_demux_queue_size_bytes = 0x10000;
 
             // For tests with checkers enabled, packetized path may time out and
@@ -2604,10 +2630,13 @@ void configure_for_multi_chip(Device *device,
             my_noc_index);
     }
 
+    uint32_t host_completion_queue_wr_ptr = dispatch_constants::get(CoreType::WORKER).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
+    uint32_t dev_completion_queue_wr_ptr = dispatch_constants::get(CoreType::WORKER).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
+    uint32_t dev_completion_queue_rd_ptr = dispatch_constants::get(CoreType::WORKER).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
     std::vector<uint32_t> dispatch_compile_args = {
          dispatch_buffer_base,
          dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
-         dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS * dispatch_constants::get(dispatch_core_type).dispatch_buffer_block_size_pages(),
+         dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS * dispatch_constants::get(dispatch_core_type, 1).dispatch_buffer_block_size_pages(),
          dispatch_cb_sem, // overridden below for h
          split_prefetcher_g ? prefetch_d_downstream_cb_sem : prefetch_downstream_cb_sem,
          dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS,
@@ -2624,7 +2653,15 @@ void configure_for_multi_chip(Device *device,
          NOC_XY_ENCODING(phys_prefetch_core_g.x, phys_prefetch_core_g.y),
          prefetch_downstream_cb_sem,
          prefetch_downstream_buffer_pages,
-         num_compute_cores
+         num_compute_cores,
+         0,
+         0,
+         0,
+         0,
+         0,
+         host_completion_queue_wr_ptr,
+         dev_completion_queue_wr_ptr,
+         dev_completion_queue_rd_ptr
     };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
@@ -2677,7 +2714,7 @@ void configure_for_multi_chip(Device *device,
             uint32_t dispatch_relay_mux_queue_size_bytes = dispatch_buffer_page_size_g*dispatch_buffer_pages;
 
             // Packetized path buffer, can be at any available address.
-            constexpr uint32_t dispatch_relay_demux_queue_start_addr = L1_UNRESERVED_BASE;
+            uint32_t dispatch_relay_demux_queue_start_addr = l1_unreserved_base;
             constexpr uint32_t dispatch_relay_demux_queue_size_bytes = 0x10000;
 
             // For tests with checkers enabled, packetized path may time out and
@@ -2911,8 +2948,9 @@ int main(int argc, char **argv) {
         tt_metal::Program program_r = tt_metal::CreateProgram();
 
         void* host_hugepage_base;
+        uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
         uint32_t packetized_path_test_results_size = 1024;
-        uint32_t l1_unreserved_base_aligned = align(L1_UNRESERVED_BASE + packetized_path_test_results_size, (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE)); // Was not aligned, lately.
+        uint32_t l1_unreserved_base_aligned = align(l1_unreserved_base + packetized_path_test_results_size, (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE)); // Was not aligned, lately.
         l1_buf_base_g = l1_unreserved_base_aligned + (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE); // Reserve a page.
         uint32_t prefetch_q_base = l1_buf_base_g;
         uint32_t prefetch_q_rd_ptr_addr = l1_unreserved_base_aligned;
@@ -2921,13 +2959,16 @@ int main(int argc, char **argv) {
         CoreCoord phys_dispatch_relay_mux_core;
         CoreCoord phys_dispatch_relay_demux_core;
         uint32_t packetized_path_test_results_addr;
+        uint32_t cq_start = dispatch_constants::get(CoreType::WORKER).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+        uint32_t dev_hugepage_base_g = 2 * (cq_start * sizeof(uint32_t)); // HOST_CQ uses some at the start address
+
         if (test_device_id_g == 0) {
             configure_for_single_chip(device, program,
                                       host_hugepage_base,
                                       prefetch_q_base, prefetch_q_rd_ptr_addr,
                                       phys_prefetch_relay_mux_core, phys_prefetch_relay_demux_core,
                                       phys_dispatch_relay_mux_core, phys_dispatch_relay_demux_core,
-                                      packetized_path_test_results_addr, packetized_path_test_results_size);
+                                      packetized_path_test_results_addr, packetized_path_test_results_size, dev_hugepage_base_g);
         } else {
             configure_for_multi_chip(device, program,
                                      device_r, program_r,
@@ -2936,7 +2977,7 @@ int main(int argc, char **argv) {
                                      prefetch_q_base, prefetch_q_rd_ptr_addr,
                                      phys_prefetch_relay_mux_core, phys_prefetch_relay_demux_core,
                                      phys_dispatch_relay_mux_core, phys_dispatch_relay_demux_core,
-                                     packetized_path_test_results_addr, packetized_path_test_results_size);
+                                     packetized_path_test_results_addr, packetized_path_test_results_size, dev_hugepage_base_g);
         }
 
         if ((1 << exec_buf_log_page_size_g) * device->num_banks(BufferType::DRAM) > cmddat_q_size_g) {

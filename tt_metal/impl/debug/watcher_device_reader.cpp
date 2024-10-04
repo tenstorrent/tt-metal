@@ -71,8 +71,17 @@ static string get_noc_target_str(Device *device, CoreDescriptor &core, int noc, 
             default: return {"Unknown", ""};
         }
     };
-    string out = fmt::format("{} using noc{} tried to access ", get_riscv_name(core.coord, san->which), noc);
-    if (san->multicast) {
+    string out = fmt::format(
+        "{} using noc{} tried to {} {} {} bytes {} ",
+        get_riscv_name(core.coord, san->which_risc),
+        noc,
+        string(san->is_multicast ? "multicast" : "unicast"),
+        string(san->is_write ? "write" : "read"),
+        san->len,
+        string(san->is_write ? "from" : "to"));
+    out += fmt::format("local L1[{:#08x}] {} ", san->l1_addr, string(san->is_write ? "to" : "from"));
+
+    if (san->is_multicast) {
         CoreCoord target_phys_noc_core_start = {
             NOC_MCAST_ADDR_START_X(san->noc_addr), NOC_MCAST_ADDR_START_Y(san->noc_addr)};
         CoreCoord target_phys_noc_core_end = {NOC_MCAST_ADDR_END_X(san->noc_addr), NOC_MCAST_ADDR_END_Y(san->noc_addr)};
@@ -90,8 +99,15 @@ static string get_noc_target_str(Device *device, CoreDescriptor &core, int noc, 
             "{} core w/ physical coords {} {}", type_and_mem.first, target_phys_noc_core.str(), type_and_mem.second);
     }
 
-    out += fmt::format("[addr=0x{:08x},len={}]", NOC_LOCAL_ADDR(san->noc_addr), san->len);
+    out += fmt::format("[addr=0x{:08x}]", NOC_LOCAL_ADDR(san->noc_addr));
     return out;
+}
+const launch_msg_t* get_valid_launch_message(const mailboxes_t *mbox_data) {
+    uint32_t launch_msg_read_ptr = mbox_data->launch_msg_rd_ptr;
+    if (mbox_data->launch[launch_msg_read_ptr].kernel_config.enables == 0) {
+        launch_msg_read_ptr = (launch_msg_read_ptr - 1 + launch_msg_buffer_num_entries) % launch_msg_buffer_num_entries;
+    }
+    return &mbox_data->launch[launch_msg_read_ptr];
 }
 } // anonymous namespace
 
@@ -280,18 +296,26 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor &logical_core, bool is_active_
     // Ethernet cores have a different mailbox base addr
     uint64_t mailbox_addr = MEM_MAILBOX_BASE;
     if (is_eth_core) {
-        if (is_active_eth_core)
+        if (is_active_eth_core) {
             mailbox_addr = eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE;
-        else
+        }
+        else {
             mailbox_addr = MEM_IERISC_MAILBOX_BASE;
+        }
     }
 
     std::vector<uint32_t> data;
     data = tt::llrt::read_hex_vec_from_core(device->id(), core.coord, mailbox_addr, sizeof(mailboxes_t));
     mailboxes_t *mbox_data = (mailboxes_t *)(&data[0]);
-
+    // Get the launch message buffer read pointer.
+    // For more accurate reporting of launch messages and running kernel ids, dump data from the previous valid
+    // program (one entry before), if the current program is invalid (enables == 0)
+    uint32_t launch_msg_read_ptr = mbox_data->launch_msg_rd_ptr;
+    if (mbox_data->launch[launch_msg_read_ptr].kernel_config.enables == 0) {
+        launch_msg_read_ptr = (launch_msg_read_ptr - 1 + launch_msg_buffer_num_entries) % launch_msg_buffer_num_entries;
+    }
     // Validate these first since they are used in diagnostic messages below.
-    ValidateKernelIDs(core, &mbox_data->launch);
+    ValidateKernelIDs(core, &(mbox_data->launch[launch_msg_read_ptr]));
 
     // Whether or not watcher data is available depends on a flag set on the device.
     bool enabled = (mbox_data->watcher.enable == WatcherEnabled);
@@ -303,7 +327,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor &logical_core, bool is_active_
         // Ethernet cores have firmware that starts at address 0, so no need to check it for a
         // magic value.
         if (!is_eth_core)
-            DumpL1Status(core, &mbox_data->launch);
+            DumpL1Status(core, &mbox_data->launch[launch_msg_read_ptr]);
         if (!tt::llrt::OptionsG.watcher_noc_sanitize_disabled()) {
             for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
                 DumpNocSanitizeStatus(core, core_str, mbox_data, noc);
@@ -326,20 +350,20 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor &logical_core, bool is_active_
         }
     } else {
         fprintf(f, "rmsg:");
-        DumpRunState(core, &mbox_data->launch, mbox_data->launch.go.run);
+        DumpRunState(core, &mbox_data->launch[launch_msg_read_ptr], mbox_data->go_message.signal);
         fprintf(f, " ");
     }
 
     // Eth core only reports erisc kernel id, uses the brisc field
     if (is_eth_core) {
-        fprintf(f, "k_id:%d", mbox_data->launch.kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]);
+        fprintf(f, "k_id:%d", mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]);
     } else {
         fprintf(
             f,
             "k_ids:%d|%d|%d",
-            mbox_data->launch.kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0],
-            mbox_data->launch.kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1],
-            mbox_data->launch.kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]);
+            mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0],
+            mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1],
+            mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]);
     }
 
     // Ring buffer at the end because it can print a bunch of data, same for stack usage
@@ -367,71 +391,80 @@ void WatcherDeviceReader::DumpL1Status(CoreDescriptor &core, const launch_msg_t 
 
 void WatcherDeviceReader::DumpNocSanitizeStatus(
     CoreDescriptor &core, const string &core_str, const mailboxes_t *mbox_data, int noc) {
-    const launch_msg_t *launch_msg = &mbox_data->launch;
+    const launch_msg_t *launch_msg = get_valid_launch_message(mbox_data);
     const debug_sanitize_noc_addr_msg_t *san = &mbox_data->watcher.sanitize_noc[noc];
     string error_msg;
-    string error_reason = "Watcher detected NOC error and stopped device: ";
+    string error_reason;
 
-    switch (san->invalid) {
-        case DebugSanitizeNocInvalidOK:
+    switch (san->return_code) {
+        case DebugSanitizeNocOK:
             if (san->noc_addr != DEBUG_SANITIZE_NOC_SENTINEL_OK_64 ||
                 san->l1_addr != DEBUG_SANITIZE_NOC_SENTINEL_OK_32 || san->len != DEBUG_SANITIZE_NOC_SENTINEL_OK_32 ||
-                san->multicast != DEBUG_SANITIZE_NOC_SENTINEL_OK_16 ||
-                san->which != DEBUG_SANITIZE_NOC_SENTINEL_OK_16) {
+                san->which_risc != DEBUG_SANITIZE_NOC_SENTINEL_OK_16 ||
+                san->is_multicast != DEBUG_SANITIZE_NOC_SENTINEL_OK_8 ||
+                san->is_write != DEBUG_SANITIZE_NOC_SENTINEL_OK_8 ||
+                san->is_target != DEBUG_SANITIZE_NOC_SENTINEL_OK_8) {
                 error_msg = fmt::format(
                     "Watcher unexpected noc debug state on core {}, reported valid got noc{}{{0x{:08x}, {} }}",
                     core.coord.str().c_str(),
-                    san->which,
+                    san->which_risc,
                     san->noc_addr,
                     san->len);
-                error_reason += "corrupted noc sanitization state - sanitization memory overwritten.";
+                error_msg += " (corrupted noc sanitization state - sanitization memory overwritten)";
             }
             break;
-        case DebugSanitizeNocInvalidL1:
-            error_msg = fmt::format(
-                "{} using noc{} accesses local L1[addr=0x{:08x},len={}]",
-                get_riscv_name(core.coord, san->which),
-                noc,
-                san->l1_addr,
-                san->len);
-            error_reason += "bad NOC L1/reg address.";
-            break;
-        case DebugSanitizeNocInvalidUnicast:
+        case DebugSanitizeNocAddrUnderflow:
             error_msg = get_noc_target_str(device, core, noc, san);
-            error_reason += "bad NOC unicast transaction.";
+            error_msg += string(san->is_target ? " (NOC target" : " (Local L1") + " address underflow).";
             break;
-        case DebugSanitizeNocInvalidMulticast:
+        case DebugSanitizeNocAddrOverflow:
             error_msg = get_noc_target_str(device, core, noc, san);
-            error_reason += "bad NOC multicast transaction.";
+            error_msg += string(san->is_target ? " (NOC target" : " (Local L1") + " address overflow).";
             break;
-        case DebugSanitizeNocInvalidAlignment:
+        case DebugSanitizeNocAddrZeroLength:
             error_msg = get_noc_target_str(device, core, noc, san);
-            error_msg += fmt::format(", misaligned with local L1[addr=0x{:08x}]", san->l1_addr);
-            error_reason += "bad alignment in NOC transaction.";
+            error_msg += " (zero length transaction).";
+            break;
+        case DebugSanitizeNocTargetInvalidXY:
+            error_msg = get_noc_target_str(device, core, noc, san);
+            error_msg += " (NOC target address did not map to any known Tensix/Ethernet/DRAM/PCIE core).";
+            break;
+        case DebugSanitizeNocMulticastNonWorker:
+            error_msg = get_noc_target_str(device, core, noc, san);
+            error_msg += " (multicast to non-worker core).";
+            break;
+        case DebugSanitizeNocMulticastInvalidRange:
+            error_msg = get_noc_target_str(device, core, noc, san);
+            error_msg += " (multicast invalid range).";
+            break;
+        case DebugSanitizeNocAlignment:
+            error_msg = get_noc_target_str(device, core, noc, san);
+            error_msg += " (invalid address alignment in NOC transaction).";
             break;
         default:
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",
                 core.coord.str(),
-                san->invalid);
-            error_reason += "corrupted noc sanitization state - unknown failure code.";
+                san->return_code);
+            error_msg += " (corrupted noc sanitization state - unknown failure code).";
     }
 
     // If we logged an error, print to stdout and throw.
     if (!error_msg.empty()) {
-        log_warning(error_reason.c_str());
+        log_warning("Watcher detected NOC error and stopped device:");
         log_warning("{}: {}", core_str, error_msg);
         DumpWaypoints(core, mbox_data, true);
         DumpRingBuffer(core, mbox_data, true);
         LogRunningKernels(core, launch_msg);
         // Save the error string for checking later in unit tests.
         set_watcher_exception_message(fmt::format("{}: {}", core_str, error_msg));
-        TT_THROW("{}", error_reason);
+        TT_THROW("{}: {}", core_str, error_msg);
     }
 }
 
 void WatcherDeviceReader::DumpAssertStatus(CoreDescriptor &core, const string &core_str, const mailboxes_t *mbox_data) {
-    const launch_msg_t *launch_msg = &mbox_data->launch;
+    uint32_t launch_msg_read_ptr = mbox_data->launch_msg_rd_ptr;
+    const launch_msg_t *launch_msg = get_valid_launch_message(mbox_data);
     const debug_assert_msg_t *assert_status = &mbox_data->watcher.assert_status;
     switch (assert_status->tripped) {
         case DebugAssertTripped: {
@@ -487,7 +520,7 @@ void WatcherDeviceReader::DumpPauseStatus(CoreDescriptor &core, const string &co
             log_warning("{}: {}", core_str, error_reason);
             DumpWaypoints(core, mbox_data, true);
             DumpRingBuffer(core, mbox_data, true);
-            LogRunningKernels(core, &mbox_data->launch);
+            LogRunningKernels(core, get_valid_launch_message(mbox_data));
             // Save the error string for checking later in unit tests.
             set_watcher_exception_message(fmt::format("{}: {}", core_str, error_reason));
             TT_THROW("{}", error_reason);
@@ -540,6 +573,8 @@ void WatcherDeviceReader::DumpRunState(CoreDescriptor &core, const launch_msg_t 
         code = 'G';
     else if (state == RUN_MSG_DONE)
         code = 'D';
+    else if (state == RUN_MSG_RESET_READ_PTR)
+        code = 'R';
     if (code == 'U') {
         LogRunningKernels(core, launch_msg);
         TT_THROW(
@@ -555,10 +590,9 @@ void WatcherDeviceReader::DumpRunState(CoreDescriptor &core, const launch_msg_t 
 }
 
 void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor &core, const mailboxes_t *mbox_data) {
-    const launch_msg_t *launch_msg = &mbox_data->launch;
+    const launch_msg_t *launch_msg = get_valid_launch_message(mbox_data);
     const slave_sync_msg_t *slave_sync = &mbox_data->slave_sync;
     fprintf(f, "rmsg:");
-
     if (launch_msg->kernel_config.mode == DISPATCH_MODE_DEV) {
         fprintf(f, "D");
     } else if (launch_msg->kernel_config.mode == DISPATCH_MODE_HOST) {
@@ -582,14 +616,13 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor &core, const mailboxe
             core.coord.str(),
             launch_msg->kernel_config.brisc_noc_id);
     }
+    DumpRunState(core, launch_msg, mbox_data->go_message.signal);
 
-    DumpRunState(core, launch_msg, launch_msg->go.run);
 
     fprintf(f, "|");
-
     if (launch_msg->kernel_config.enables & ~(DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0 |
-                                              DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1 |
-                                              DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE)) {
+                                            DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1 |
+                                            DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE)) {
         LogRunningKernels(core, launch_msg);
         TT_THROW(
             "Watcher data corruption, unexpected kernel enable on core {}: {} (expected only low bits set)",
@@ -627,7 +660,7 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor &core, const mailboxe
 }
 
 void WatcherDeviceReader::DumpWaypoints(CoreDescriptor &core, const mailboxes_t *mbox_data, bool to_stdout) {
-    const launch_msg_t *launch_msg = &mbox_data->launch;
+    const launch_msg_t *launch_msg = get_valid_launch_message(mbox_data);
     const debug_waypoint_msg_t *debug_waypoint = mbox_data->watcher.debug_waypoint;
     string out;
 

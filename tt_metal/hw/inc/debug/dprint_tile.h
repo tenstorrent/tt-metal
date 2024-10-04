@@ -59,14 +59,14 @@ struct TileSlice : TileSliceHostDev<MAXCOUNT> {
         // access to CBs, so TileSlice printing is skipped on this risc.
         this->count_ = 0;
         volatile Tile* t;
-#if defined(TRISC_PACK) || defined(COMPILE_FOR_NCRISC)
+#if defined(UCK_CHLKC_PACK) || defined(COMPILE_FOR_NCRISC)
         this->ptr_ = cb_interface[cb].fifo_wr_ptr<<4;
-#elif defined(TRISC_UNPACK) || defined(COMPILE_FOR_BRISC)
+#elif defined(UCK_CHLKC_UNPACK) || defined(COMPILE_FOR_BRISC)
         this->ptr_ = cb_interface[cb].fifo_rd_ptr<<4;
 #else
         this->ptr_ = 0;
 #endif
-#if defined(TRISC_PACK) || defined(TRISC_UNPACK) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+#if defined(DEBUG_PRINT_ENABLED) && (defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC))
         this->ptr_ += itile * sizeof(Tile);
         if (this->ptr_ < L1_UNRESERVED_BASE || this->ptr_ >= MEM_L1_SIZE) {
             this->w0_ = 0xFFFF;

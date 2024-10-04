@@ -96,10 +96,12 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(Device *device, CommandQueue 
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
     uint32_t cq_size = device->sysmem_manager().get_cq_size();
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+    uint32_t cq_start = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
 
-    std::vector<uint32_t> cq_zeros((cq_size - CQ_START) / sizeof(uint32_t), 0);
+    std::vector<uint32_t> cq_zeros((cq_size - cq_start) / sizeof(uint32_t), 0);
 
-    tt::Cluster::instance().write_sysmem(cq_zeros.data(), (cq_size - CQ_START), get_absolute_cq_offset(channel, 0, cq_size) + CQ_START, mmio_device_id, channel);
+    tt::Cluster::instance().write_sysmem(cq_zeros.data(), (cq_size - cq_start), get_absolute_cq_offset(channel, 0, cq_size) + cq_start, mmio_device_id, channel);
 
     for (const bool cq_write : {true, false}) {
         for (const bool cq_read : {true, false}) {
@@ -356,7 +358,7 @@ TEST_F(CommandQueueSingleCardFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRo
 TEST_F(CommandQueueSingleCardFixture, Sending131072Pages) {
     for (Device *device : devices_) {
         TestBufferConfig config = {.num_pages = 131072, .page_size = 128, .buftype = BufferType::DRAM};
-
+        tt::log_info("Running On Device {}", device->id());
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
     }
 }
@@ -433,8 +435,10 @@ TEST_F(CommandQueueSingleCardFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
         tt::log_info("Running On Device {}", device->id());
         uint32_t page_size = 2048;
         uint32_t command_issue_region_size = device->sysmem_manager().get_issue_queue_size(0);
+        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+        uint32_t cq_start = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
 
-        uint32_t max_command_size = command_issue_region_size - CQ_START;
+        uint32_t max_command_size = command_issue_region_size - cq_start;
         uint32_t buffer = 14240;
         uint32_t buffer_size = max_command_size - buffer;
         uint32_t num_pages = buffer_size / page_size;

@@ -13,7 +13,6 @@
 #include "debug/assert.h"
 #include "debug/dprint.h"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
-#include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 
@@ -42,12 +41,21 @@ constexpr uint32_t prefetch_h_noc_xy = get_compile_time_arg_val(16);
 constexpr uint32_t prefetch_h_local_downstream_sem_addr = get_compile_time_arg_val(17);
 constexpr uint32_t prefetch_h_max_credits = get_compile_time_arg_val(18);
 constexpr uint32_t packed_write_max_unicast_sub_cmds = get_compile_time_arg_val(19); // Number of cores in compute grid
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(20);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(21);
+constexpr uint32_t dispatch_s_sem_id = get_compile_time_arg_val(20);
+constexpr uint32_t worker_mcast_grid = get_compile_time_arg_val(21);
+constexpr uint32_t mcast_go_signal_addr = get_compile_time_arg_val(22);
+constexpr uint32_t unicast_go_signal_addr = get_compile_time_arg_val(23);
+constexpr uint32_t distributed_dispatcher = get_compile_time_arg_val(24);
+constexpr uint32_t host_completion_q_wr_ptr = get_compile_time_arg_val(25);
+constexpr uint32_t dev_completion_q_wr_ptr = get_compile_time_arg_val(26);
+constexpr uint32_t dev_completion_q_rd_ptr = get_compile_time_arg_val(27);
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(28);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(29);
 
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
+constexpr uint32_t dispatch_s_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SLAVE_NOC_X, DOWNSTREAM_SLAVE_NOC_Y));
 constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 constexpr uint64_t pcie_noc_xy = uint64_t(NOC_XY_PCIE_ENCODING(NOC_0_X(static_cast<uint8_t>(NOC_INDEX), noc_size_x, PCIE_NOC_X), NOC_0_Y(static_cast<uint8_t>(NOC_INDEX), noc_size_y, PCIE_NOC_Y), NOC_INDEX));
@@ -92,12 +100,26 @@ constexpr uint32_t l1_cache_elements_rounded =
     ((l1_cache_elements + l1_to_local_cache_copy_chunk - 1) / l1_to_local_cache_copy_chunk) *
     l1_to_local_cache_copy_chunk;
 
+// Used to send go signals asynchronously. Currently unused but this is a prototype for a GoSignalState
+// ring buffer that can be used to store and then asynchronously send Go Signals.
+typedef struct GoSignalState {
+    uint32_t go_signal;
+    uint32_t wait_count;
+} GoSignalState;
+
+static GoSignalState go_signal_state_ring_buf[4];
+static uint8_t go_signal_state_wr_ptr = 0;
+static uint8_t go_signal_state_rd_ptr = 0;
+// Used when dispatch_s is moved into main dispatcher and needs to unicast + multicast go signals
+static uint32_t unicast_only_cores[16];
+static int num_unicast_cores = -1; // Initialize to -1: Number of cores we need to unicast go signals to. Host will set this during init.
+
 FORCE_INLINE volatile uint32_t *get_cq_completion_read_ptr() {
-    return reinterpret_cast<volatile uint32_t *>(CQ_COMPLETION_READ_PTR);
+    return reinterpret_cast<volatile uint32_t *>(dev_completion_q_rd_ptr);
 }
 
 FORCE_INLINE volatile uint32_t *get_cq_completion_write_ptr() {
-    return reinterpret_cast<volatile uint32_t *>(CQ_COMPLETION_WRITE_PTR);
+    return reinterpret_cast<volatile uint32_t *>(dev_completion_q_wr_ptr);
 }
 
 FORCE_INLINE
@@ -131,11 +153,11 @@ void completion_queue_reserve_back(uint32_t num_pages) {
 // Note that this fn does not increment any counters
 FORCE_INLINE
 void notify_host_of_completion_queue_write_pointer() {
-    uint32_t completion_queue_write_ptr_addr = command_queue_base_addr + HOST_CQ_COMPLETION_WRITE_PTR;
+    uint32_t completion_queue_write_ptr_addr = command_queue_base_addr + host_completion_q_wr_ptr;
     uint32_t completion_wr_ptr_and_toggle = cq_write_interface.completion_fifo_wr_ptr | (cq_write_interface.completion_fifo_wr_toggle << 31);
     volatile tt_l1_ptr uint32_t* completion_wr_ptr_addr = get_cq_completion_write_ptr();
     completion_wr_ptr_addr[0] = completion_wr_ptr_and_toggle;
-    cq_noc_async_write_with_state<CQ_NOC_SnDL>(CQ_COMPLETION_WRITE_PTR, completion_queue_write_ptr_addr, 4);
+    cq_noc_async_write_with_state<CQ_NOC_SnDL>(dev_completion_q_wr_ptr, completion_queue_write_ptr_addr, 4);
 }
 
 FORCE_INLINE
@@ -774,7 +796,6 @@ static void process_wait() {
         noc_semaphore_inc(get_noc_addr_helper(my_noc_xy, addr), neg_sem_val, noc_index);
         noc_async_atomic_barrier(noc_index);
     }
-
     if (notify_prefetch) {
         noc_semaphore_inc(get_noc_addr_helper(upstream_noc_xy, get_semaphore<fd_core_type>(upstream_sync_sem)), 1, upstream_noc_index);
     }
@@ -786,6 +807,60 @@ static void process_delay_cmd() {
     volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
     uint32_t count = cmd->delay.delay;
     for (volatile uint32_t i = 0; i < count; i++);
+    cmd_ptr += sizeof(CQDispatchCmd);
+}
+
+FORCE_INLINE
+void process_go_signal_mcast_cmd() {
+    volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
+    volatile tt_l1_ptr uint32_t* worker_sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cmd->mcast.wait_addr);
+    // The location of the go signal embedded in the command does not meet NOC alignment requirements.
+    // cmd_ptr is guaranteed to meet the alignment requirements, since it is written to by prefetcher over NOC.
+    // Copy the go signal from an unaligned location to an aligned (cmd_ptr) location. This is safe as long as we
+    // can guarantee that copying the go signal does not corrupt any other command fields, which is true (see CQDispatchGoSignalMcastCmd).
+    volatile uint32_t tt_l1_ptr* aligned_go_signal_storage = (volatile uint32_t tt_l1_ptr*)cmd_ptr;
+    *aligned_go_signal_storage = cmd->mcast.go_signal;
+
+    while (*worker_sem_addr < cmd->mcast.wait_count);
+    if (cmd->mcast.mcast_flag & GoSignalMcastSettings::SEND_MCAST) {
+        uint64_t dst = get_noc_addr_helper(worker_mcast_grid, mcast_go_signal_addr);
+        // packed_write_max_unicast_sub_cmds is the total number of compute cores (num_mcast_dests for this txn)
+        noc_async_write_multicast_one_packet((uint32_t)(aligned_go_signal_storage), dst, sizeof(uint32_t), packed_write_max_unicast_sub_cmds);
+    }
+    if (cmd->mcast.mcast_flag & GoSignalMcastSettings::SEND_UNICAST) {
+        for (int core_idx = 0; core_idx < num_unicast_cores; core_idx++) {
+            uint64_t dst = get_noc_addr_helper(unicast_only_cores[core_idx], unicast_go_signal_addr);
+            noc_async_write_one_packet((uint32_t)(aligned_go_signal_storage), dst, sizeof(uint32_t));
+        }
+    }
+    cmd_ptr += sizeof(CQDispatchCmd);
+}
+
+FORCE_INLINE
+void process_set_unicast_only_cores() {
+    volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
+    num_unicast_cores = (int)(cmd->set_unicast_only_cores.num_unicast_only_cores);
+    uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);;
+    for (int core_idx = 0; core_idx < num_unicast_cores; core_idx++) {
+        unicast_only_cores[core_idx] = *((uint32_t tt_l1_ptr*)data_ptr);
+        data_ptr += sizeof(uint32_t);
+    }
+    cmd_ptr += sizeof(CQDispatchCmd) + num_unicast_cores * sizeof(uint32_t);
+}
+
+FORCE_INLINE
+void process_notify_dispatch_s_go_signal_cmd() {
+    // Update free running counter on dispatch_s, signalling that it's safe to send a go signal to workers, since program
+    // config has been written and barriered upon
+    if constexpr (distributed_dispatcher) {
+        uint64_t dispatch_s_notify_addr = get_noc_addr_helper(dispatch_s_noc_xy, get_semaphore<fd_core_type>(dispatch_s_sem_id));
+        static uint32_t num_go_signals_safe_to_send = 1;
+        noc_inline_dw_write(dispatch_s_notify_addr, num_go_signals_safe_to_send);
+        num_go_signals_safe_to_send++;
+    } else {
+        tt_l1_ptr uint32_t* notify_ptr = (uint32_t tt_l1_ptr*)(get_semaphore<fd_core_type>(dispatch_s_sem_id));
+        *notify_ptr = (*notify_ptr) + 1;
+    }
     cmd_ptr += sizeof(CQDispatchCmd);
 }
 
@@ -840,6 +915,11 @@ re_run_command:
             }
         } break;
 
+        case CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL:
+            DPRINT << "cmd_notify_dispatch_s_go_signal" << ENDL();
+            process_notify_dispatch_s_go_signal_cmd();
+            break;
+
         case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE:
             DPRINT << "cmd_write_packed_large" << ENDL();
             process_write_packed_large(l1_cache, block_noc_writes_to_clear, block_next_start_addr);
@@ -876,6 +956,16 @@ re_run_command:
             } else {
                 process_exec_buf_end_d(block_noc_writes_to_clear, block_next_start_addr);
             }
+            break;
+
+        case CQ_DISPATCH_CMD_SEND_GO_SIGNAL:
+            DPRINT << "cmd_go_send_go_signal" << ENDL();
+            process_go_signal_mcast_cmd();
+            break;
+
+        case CQ_DISPATCH_SET_UNICAST_ONLY_CORES:
+            DPRINT << "cmd_set_unicast_only_cores" << ENDL();
+            process_set_unicast_only_cores();
             break;
 
         case CQ_DISPATCH_CMD_SET_WRITE_OFFSET:

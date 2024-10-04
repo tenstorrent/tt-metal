@@ -69,14 +69,16 @@ inline const std::string get_product_name(tt::ARCH arch, uint32_t num_harvested_
 
 const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, const uint8_t num_hw_cqs, CoreType dispatch_core_type);
 
-inline uint32_t get_l1_bank_size(chip_id_t device_id, const uint8_t num_hw_cqs, CoreType dispatch_core_type) {
+const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(chip_id_t chip, uint8_t num_hw_cqs, CoreType dispatch_core_type);
+
+inline std::optional<uint32_t> get_storage_core_bank_size(chip_id_t device_id, const uint8_t num_hw_cqs, CoreType dispatch_core_type) {
     const core_descriptor_t &core_desc = get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_type);
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(device_id);
-    uint32_t l1_bank_size = core_desc.storage_core_bank_size.has_value()
-                                ? core_desc.storage_core_bank_size.value()
-                                : (soc_desc.worker_l1_size - L1_UNRESERVED_BASE);
-    TT_FATAL(l1_bank_size % tt_metal::hal.get_alignment(tt_metal::HalMemType::L1) == 0, "L1 bank size must be {} B aligned", tt_metal::hal.get_alignment(tt_metal::HalMemType::L1));
-    return l1_bank_size;
+    if (core_desc.storage_core_bank_size.has_value()) {
+        TT_FATAL(core_desc.storage_core_bank_size.value() % tt_metal::hal.get_alignment(tt_metal::HalMemType::L1) == 0,
+            "Storage core bank size must be {} B aligned", tt_metal::hal.get_alignment(tt_metal::HalMemType::L1));
+    }
+    return core_desc.storage_core_bank_size;
 }
 
 inline const std::vector<CoreCoord> &get_logical_storage_cores(chip_id_t device_id, const uint8_t num_hw_cqs, CoreType dispatch_core_type) {

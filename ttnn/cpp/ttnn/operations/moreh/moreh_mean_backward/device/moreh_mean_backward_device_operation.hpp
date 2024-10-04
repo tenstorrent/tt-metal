@@ -18,9 +18,8 @@ struct MorehMeanBackwardOperation {
         const std::vector<int64_t> dims;
         const bool keepdim;
         const std::optional<Shape> input_grad_shape;
-        const MemoryConfig output_memory_config;
-        // const CoreRange core_range; // unused for now
-        const std::optional<DeviceComputeKernelConfig> compute_kernel_config;
+        const MemoryConfig memory_config;
+        const DeviceComputeKernelConfig compute_kernel_config;
     };
     struct tensor_args_t {
         const Tensor& output_grad;
@@ -43,13 +42,13 @@ struct MorehMeanBackwardOperation {
         static cached_program_t create(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output_tensor);
+            tensor_return_value_t& output);
 
         static void override_runtime_arguments(
             cached_program_t& cached_program,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output_tensor);
+            tensor_return_value_t& output);
     };
 
     using program_factory_t = std::variant<MorehMeanBackwardFactory>;
@@ -66,13 +65,14 @@ struct MorehMeanBackwardOperation {
         const bool keepdim,
         const std::optional<Shape>& input_grad_shape,
         const std::optional<Tensor>& input_grad,
-        const std::optional<MemoryConfig>& output_memory_config,
+        const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::moreh::moreh_mean_backward
 
 namespace ttnn::prim {
-constexpr auto moreh_mean_backward =
-    ttnn::register_operation<"ttnn::prim::moreh_mean_backward", ttnn::operations::moreh::moreh_mean_backward::MorehMeanBackwardOperation>();
+constexpr auto moreh_mean_backward = ttnn::register_operation<
+    "ttnn::prim::moreh_mean_backward",
+    ttnn::operations::moreh::moreh_mean_backward::MorehMeanBackwardOperation>();
 }

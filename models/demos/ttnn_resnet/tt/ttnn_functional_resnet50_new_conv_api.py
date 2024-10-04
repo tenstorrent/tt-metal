@@ -1023,7 +1023,7 @@ class resnet50:
         )
 
         if is_wormhole_b0() and self.batch_size == 16:
-            xshape = x.shape_without_padding()
+            xshape = x.shape
             x = ttnn.slice(x, [0, 0, 0, 0], [xshape[0], xshape[1], xshape[2], xshape[3]])
 
         layer4_module1_input_shape = ttnn.Shape(x.shape.with_tile_padding())
@@ -1119,7 +1119,7 @@ class resnet50:
         )
         x = ttnn.to_memory_config(x, width_sharded_mem_config)
 
-        unpadded_shape = x.shape_without_padding()
+        unpadded_shape = x.shape
         x = ttnn.untilize_with_unpadding(
             x,
             output_tensor_end=(
@@ -1195,7 +1195,7 @@ class resnet50:
         )
 
         x = self.fc(x)
-        desired_shape = list(x.shape_without_padding())
+        desired_shape = list(x.shape)
         desired_shape[-1] = 1000
         x = ttnn.untilize_with_unpadding(
             x,

@@ -26,8 +26,7 @@ def test_ttnn_to_and_from_multi_device_shard(pcie_mesh_device, layout, memory_co
     if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("Unsupported test permutation: bfloat8_b with ROW_MAJOR_LAYOUT")
 
-    for device in pcie_mesh_device.get_device_ids():
-        pcie_mesh_device.get_device(device).enable_async(True)
+    pcie_mesh_device.enable_async(True)
 
     for i in range(100):
         torch_tensor = torch.rand((1, 1, 256, 512), dtype=torch.bfloat16)
@@ -41,8 +40,7 @@ def test_ttnn_to_and_from_multi_device_shard(pcie_mesh_device, layout, memory_co
         )
         assert_with_pcc(torch_tensor, torch_loop_back_tensor, pcc=0.9999)
 
-    for device in pcie_mesh_device.get_device_ids():
-        pcie_mesh_device.get_device(device).enable_async(False)
+    pcie_mesh_device.enable_async(False)
 
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
@@ -55,8 +53,7 @@ def test_multi_device_check_per_device_shard(pcie_mesh_device, layout, memory_co
     if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("Unsupported test permutation: bfloat8_b with ROW_MAJOR_LAYOUT")
 
-    for device in pcie_mesh_device.get_device_ids():
-        pcie_mesh_device.get_device(device).enable_async(True)
+    pcie_mesh_device.enable_async(True)
 
     num_loops = 50
     if dtype == ttnn.bfloat8_b:
@@ -79,8 +76,7 @@ def test_multi_device_check_per_device_shard(pcie_mesh_device, layout, memory_co
             )
             shard_offset += shard_size
 
-    for device in pcie_mesh_device.get_device_ids():
-        pcie_mesh_device.get_device(device).enable_async(False)
+    pcie_mesh_device.enable_async(False)
 
 
 @pytest.mark.parametrize("shape", [(1, 1, 512, 512), (1, 1, 1040, 1040)])
@@ -90,8 +86,7 @@ def test_multi_device_replicate(pcie_mesh_device, shape, layout, memory_config):
     """Test ReplicateTensorToMesh to broadcast a tensor across multiple devices"""
     from ttnn import ReplicateTensorToMesh, ListMeshToTensor
 
-    for device in pcie_mesh_device.get_device_ids():
-        pcie_mesh_device.get_device(device).enable_async(True)
+    pcie_mesh_device.enable_async(True)
 
     for i in range(100):
         full_tensor = torch.rand(shape, dtype=torch.bfloat16)
@@ -111,8 +106,7 @@ def test_multi_device_replicate(pcie_mesh_device, shape, layout, memory_config):
         for loopback_replicated_tensor in loopback_replicated_tensors:
             assert torch.all(full_tensor == loopback_replicated_tensor)
 
-    for device in pcie_mesh_device.get_device_ids():
-        pcie_mesh_device.get_device(device).enable_async(False)
+    pcie_mesh_device.enable_async(False)
 
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
@@ -123,8 +117,7 @@ def test_ttnn_to_multi_device_tilized_parallel(pcie_mesh_device, layout, memory_
     from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
 
     shard_dim = 3
-    for device in pcie_mesh_device.get_device_ids():
-        pcie_mesh_device.get_device(device).enable_async(True)
+    pcie_mesh_device.enable_async(True)
     for loop in range(20):
         torch_tensor = torch.rand((8, 1, 1024, 1024), dtype=torch.bfloat16)
         ttnn_tensor = ttnn.from_torch(
@@ -146,8 +139,7 @@ def test_ttnn_to_multi_device_tilized_parallel(pcie_mesh_device, layout, memory_
             )
             readback_tensor = torch.cat(readback_tensors, dim=shard_dim)
         assert torch.all(readback_tensor == torch_tensor)
-    for device in pcie_mesh_device.get_device_ids():
-        pcie_mesh_device.get_device(device).enable_async(False)
+    pcie_mesh_device.enable_async(False)
 
 
 @pytest.mark.parametrize("program_cache", [False, True])
@@ -156,8 +148,8 @@ def test_multi_device_unary_binary_op_chain(pcie_mesh_device, program_cache, sha
     """Multidevice API test: Running tensor-parallel multi-device chain of eltwise ops"""
     from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
+    pcie_mesh_device.enable_async(True)
     for device in pcie_mesh_device.get_device_ids():
-        pcie_mesh_device.get_device(device).enable_async(True)
         if program_cache:
             pcie_mesh_device.get_device(device).enable_program_cache()
 
@@ -188,8 +180,7 @@ def test_multi_device_unary_binary_op_chain(pcie_mesh_device, program_cache, sha
         )
         assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.98)
 
-    for device in pcie_mesh_device.get_device_ids():
-        pcie_mesh_device.get_device(device).enable_async(False)
+    pcie_mesh_device.enable_async(False)
 
 
 @pytest.mark.parametrize("program_cache", [False, True])
@@ -198,8 +189,8 @@ def test_multi_device_data_parallel_op_chain(pcie_mesh_device, program_cache, in
     """Multidevice API: Running data-parallel chain of ops with matmul"""
     from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ReplicateTensorToMesh
 
+    pcie_mesh_device.enable_async(True)
     for device in pcie_mesh_device.get_device_ids():
-        pcie_mesh_device.get_device(device).enable_async(True)
         if program_cache:
             pcie_mesh_device.get_device(device).enable_program_cache()
 
@@ -239,8 +230,7 @@ def test_multi_device_data_parallel_op_chain(pcie_mesh_device, program_cache, in
         )
         assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.97)
 
-    for device in pcie_mesh_device.get_device_ids():
-        pcie_mesh_device.get_device(device).enable_async(False)
+    pcie_mesh_device.enable_async(False)
 
 
 @pytest.mark.parametrize(
@@ -251,8 +241,7 @@ def test_multi_device_data_parallel_op_chain(pcie_mesh_device, program_cache, in
 )
 @pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_multi_device_argmax(pcie_mesh_device, layout, mem_config):
-    for device in pcie_mesh_device.get_device_ids():
-        pcie_mesh_device.get_device(device).enable_async(True)
+    pcie_mesh_device.enable_async(True)
 
     torch.manual_seed(0)
     torch_input = torch.randn(1, 1, 32, 4096)
@@ -273,8 +262,7 @@ def test_multi_device_argmax(pcie_mesh_device, layout, mem_config):
 
     assert_with_pcc(tt_out_1B, reference_output, pcc=0.97)
 
-    for device in pcie_mesh_device.get_device_ids():
-        pcie_mesh_device.get_device(device).enable_async(False)
+    pcie_mesh_device.enable_async(False)
 
 
 @pytest.mark.parametrize("pcie_mesh_device", [2], indirect=True)
@@ -322,8 +310,7 @@ def test_multi_device_explicit_dealloc(pcie_mesh_device):
 def test_add_1D_tensor_and_scalar(pcie_mesh_device, scalar, size):
     torch.manual_seed(0)
 
-    for device in pcie_mesh_device.get_device_ids():
-        pcie_mesh_device.get_device(device).enable_async(True)
+    pcie_mesh_device.enable_async(True)
 
     torch_input_tensor = torch.rand((size,), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor + scalar

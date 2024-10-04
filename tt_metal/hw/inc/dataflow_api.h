@@ -1393,7 +1393,6 @@ void noc_async_write_multicast_loopback_src(
  *
  * Return value: None
  */
-FORCE_INLINE
 void noc_async_read_barrier() {
     WAYPOINT("NRBW");
     // BH cache is write-through so reader must invalidate if reading any address that was previously read
@@ -1565,7 +1564,7 @@ void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF) {
  * | addr      | Encoding of the destination location (x,y)+address             | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
  * | incr      | The value to increment by                                      | uint32_t | Any uint32_t value                                            | True     |
  */
-inline
+FORCE_INLINE
 void noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index) {
     /*
     [REFER TO grayskull/noc/noc.h for the documentation of noc_atomic_increment()]

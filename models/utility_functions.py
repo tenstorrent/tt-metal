@@ -54,7 +54,7 @@ def float_to_bits(x):
 
 
 def torch_random(shape, low, high, dtype):
-    if dtype == torch.int64:
+    if dtype in [torch.int64, torch.int32, torch.int16, torch.int8]:
         return torch.randint(low, high, shape, dtype=dtype)
     return torch.zeros(shape, dtype=dtype).uniform_(low, high)
 

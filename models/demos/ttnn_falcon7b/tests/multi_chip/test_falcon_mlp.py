@@ -71,8 +71,7 @@ def test_falcon_mlp(
     torch_model,
     enable_async,
 ):
-    for device in mesh_device.get_device_ids():
-        mesh_device.get_device(device).enable_async(enable_async)
+    mesh_device.enable_async(enable_async)
 
     torch.manual_seed(0)
 
@@ -112,5 +111,4 @@ def test_falcon_mlp(
     )
     logger.success(f"Passed: pcc: {pcc}, expected: {expected_pcc}")
 
-    for device in mesh_device.get_device_ids():
-        mesh_device.get_device(device).enable_async(False)
+    mesh_device.enable_async(False)

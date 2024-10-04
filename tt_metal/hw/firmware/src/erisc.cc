@@ -10,6 +10,7 @@
 #include "noc_parameters.h"
 #include "risc_attribs.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "debug/watcher_common.h"
 
 extern "C" void ApplicationHandler(void);
 
@@ -19,7 +20,6 @@ namespace kernel_profiler {
     uint32_t stackSize __attribute__((used));
     uint32_t sums[SUM_COUNT] __attribute__((used));
     uint32_t sumIDs[SUM_COUNT] __attribute__((used));
-    uint16_t core_flat_id __attribute__((used));
 }
 #endif
 
@@ -64,17 +64,45 @@ void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
     }
     WAYPOINT("RED");
 
-
+    mailboxes->launch_msg_rd_ptr = 0; // Initialize the rdptr to 0
     while (routing_info->routing_enabled) {
         // FD: assume that no more host -> remote writes are pending
-        if (mailboxes->launch.go.run == RUN_MSG_GO) {
+        uint8_t go_message_signal = mailboxes->go_message.signal;
+        if (go_message_signal == RUN_MSG_GO) {
+            // Only include this iteration in the device profile if the launch message is valid. This is because all workers get a go signal regardless of whether
+            // they're running a kernel or not. We don't want to profile "invalid" iterations.
             DeviceZoneScopedMainN("ERISC-FW");
-            DeviceZoneSetCounter(mailboxes->launch.kernel_config.host_assigned_id);
+            uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+            launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
+            DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
+            DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
+            enum dispatch_core_processor_masks enables = (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
+            if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
+                firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
+                kernel_init();
+            }
+            mailboxes->go_message.signal = RUN_MSG_DONE;
 
-            firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
-
+            if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
+                launch_msg_address->kernel_config.enables = 0;
+                uint64_t dispatch_addr =
+                    NOC_XY_ADDR(NOC_X(mailboxes->go_message.master_x),
+                                NOC_Y(mailboxes->go_message.master_y), DISPATCH_MESSAGE_ADDR);
+                internal_::notify_dispatch_core_done(dispatch_addr);
+                mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
+                // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid launch messages in the ring buffer
+                CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
+            }
             WAYPOINT("R");
-            kernel_init();
+
+        } else if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
+            // Reset the launch message buffer read ptr
+            mailboxes->launch_msg_rd_ptr = 0;
+            int64_t dispatch_addr =
+                NOC_XY_ADDR(NOC_X(mailboxes->go_message.master_x),
+                            NOC_Y(mailboxes->go_message.master_y), DISPATCH_MESSAGE_ADDR);
+            mailboxes->go_message.signal = RUN_MSG_DONE;
+            internal_::notify_dispatch_core_done(dispatch_addr);
         } else {
             internal_::risc_context_switch();
         }

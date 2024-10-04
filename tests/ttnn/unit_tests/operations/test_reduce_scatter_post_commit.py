@@ -107,8 +107,7 @@ def run_reduce_scatter_test(
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
 
-    for device_id in t3k_mesh_device.get_device_ids():
-        t3k_mesh_device.get_device(device_id).enable_async(enable_async)
+    t3k_mesh_device.enable_async(enable_async)
     if enable_async:
         logger.info(f"Using Async Mode for Reduce Scatter Op Dispatch")
 
@@ -339,8 +338,7 @@ def run_reduce_scatter_sharded_test(
 
     debug = False
 
-    for device_id in t3k_mesh_device.get_device_ids():
-        t3k_mesh_device.get_device(device_id).enable_async(enable_async)
+    t3k_mesh_device.enable_async(enable_async)
 
     # Generate input tensors
     input_shard_shape = list(output_shard_shape)
