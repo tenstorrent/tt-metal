@@ -194,7 +194,7 @@ void JitBuildState::finish_init() {
 
     // Note the preceding slash which defies convention as this gets appended to
     // the kernel name used as a path which doesn't have a slash
-    this->target_full_path_ = "/" + this->target_name_ + "/" + this->target_name_ + ".hex";
+    this->target_full_path_ = "/" + this->target_name_ + "/" + this->target_name_ + ".elf";
 }
 
 JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) :
