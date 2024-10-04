@@ -66,7 +66,7 @@ void dispatch_s_wr_reg_cmd_buf_init() {
 
 FORCE_INLINE
 void dispatch_s_atomic_cmd_buf_init() {
-    uint64_t atomic_ret_addr = get_noc_addr_helper(my_noc_xy, (uint32_t)(&atomic_ret_val));
+    uint64_t atomic_ret_addr = get_noc_addr_helper(my_noc_xy, MEM_NOC_ATOMIC_RET_VAL_ADDR);
     NOC_CMD_BUF_WRITE_REG(my_noc_index, DISPATCH_S_ATOMIC_CMD_BUF, NOC_RET_ADDR_LO, (uint32_t)(atomic_ret_addr & 0xFFFFFFFF));
     NOC_CMD_BUF_WRITE_REG(my_noc_index, DISPATCH_S_ATOMIC_CMD_BUF, NOC_RET_ADDR_COORDINATE, (uint32_t)(atomic_ret_addr >> NOC_ADDR_COORD_SHIFT));
 }
