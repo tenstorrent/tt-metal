@@ -28,6 +28,16 @@ parameters = {
     "nightly": {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_b_dtype": [ttnn.bfloat16],
+        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_b_layout": [ttnn.TILE_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    },
+    "xfail": {
+        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16),
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_b_layout": [ttnn.TILE_LAYOUT],

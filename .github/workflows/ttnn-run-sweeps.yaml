@@ -27,6 +27,8 @@ on:
           - eltwise.unary.trunc.trunc
           - eltwise.unary.floor.floor
           - eltwise.unary.clone.clone
+          - eltwise.unary.elu.elu
+          - eltwise.unary.erfc.erfc
           - eltwise.unary.exp.exp
           - eltwise.unary.exp2.exp2
           - eltwise.unary.expm1.expm1
@@ -55,13 +57,28 @@ on:
           - eltwise.unary.lgamma.lgamma
           - eltwise.unary.sigmoid.sigmoid
           - eltwise.unary.sigmoid_accurate.sigmoid_accurate
+          - eltwise.unary.tril.tril
+          - eltwise.unary.triu.triu
+          - eltwise.unary.normalize_hw.normalize_hw
+          - eltwise.unary.normalize_global.normalize_global
+          - eltwise.unary.heaviside.heaviside
+          - eltwise.unary.hardtanh.hardtanh
+          - eltwise.unary.hardswish.hardswish
+          - eltwise.unary.hardsigmoid.hardsigmoid
+          - eltwise.unary.hardshrink.hardshrink
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multiply
           - eltwise.binary.div.div
           - eltwise.binary.div_no_nan.div_no_nan
+          - eltwise.binary.logical_and.logical_and
+          - eltwise.binary.logical_or.logical_or
+          - eltwise.binary.logical_xor.logical_xor
+          - eltwise.binary.logical_and_output.logical_and_output
+          - eltwise.binary.logical_or_output.logical_or_output
           - eltwise.binary.logical_or_.logical_or_
           - eltwise.binary.logical_xor_.logical_xor_
           - eltwise.binary.logical_and_.logical_and_
+          - eltwise.binary.polyval.polyval
           - eltwise.binary.remainder.remainder
           - eltwise.binary.bcast.bcast_h_sharded
           - eltwise.binary.bcast.bcast
