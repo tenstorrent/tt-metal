@@ -509,8 +509,7 @@ def test_mixtral8x7b_demo(t3k_mesh_device, use_program_cache, input_prompts, ins
     else:
         batch_size = 32
 
-    for device in t3k_mesh_device.get_device_ids():
-        t3k_mesh_device.get_device(device).enable_async(True)
+    t3k_mesh_device.enable_async(True)
 
     return run_mixtral_demo(
         user_input=input_prompts,

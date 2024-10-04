@@ -216,11 +216,11 @@ MeshDevice::MeshDevice(const MeshShape& mesh_device_shape, MeshType type, std::w
     : mesh_device_shape(mesh_device_shape), type(type), mesh_id(generate_unique_mesh_id()), parent_mesh(parent_mesh) {}
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
+    const MeshDeviceConfig& config,
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    DispatchCoreType dispatch_core_type,
-    const MeshDeviceConfig& config)
+    DispatchCoreType dispatch_core_type)
 {
     auto mesh_device = std::make_shared<MeshDevice>(config.mesh_shape, config.mesh_type);
     mesh_device->initialize(l1_small_size, trace_region_size, num_command_queues, dispatch_core_type, config);
@@ -399,6 +399,12 @@ bool validate_worker_modes(const std::vector<Device*>& workers) {
         worker_modes_match &= (worker->get_worker_mode() == first_worker_mode);
     }
     return worker_modes_match;
+}
+
+void MeshDevice::enable_async(bool enable) {
+    for (auto device : this->devices) {
+        device->enable_async(enable);
+    }
 }
 
 std::vector<int> get_t3k_physical_device_ids_ring() {

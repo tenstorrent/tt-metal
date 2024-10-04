@@ -77,15 +77,16 @@ void RunTest(Device *device) {
     }
 
     // Check results
+    uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
     for (auto &core_range : core_ranges) {
         CoreCoord core = core_range.start_coord;
         std::vector<uint32_t> brisc_result;
         tt_metal::detail::ReadFromDeviceL1(
-            device, core, L1_UNRESERVED_BASE, sizeof(uint32_t), brisc_result
+            device, core, l1_unreserved_base, sizeof(uint32_t), brisc_result
         );
         std::vector<uint32_t> ncrisc_result;
         tt_metal::detail::ReadFromDeviceL1(
-            device, core, L1_UNRESERVED_BASE, sizeof(uint32_t), ncrisc_result
+            device, core, l1_unreserved_base, sizeof(uint32_t), ncrisc_result
         );
         uint32_t expected_result = get_first_arg(device, core, 1) + get_second_arg(device, core, 1);
         if (expected_result != brisc_result[0])
