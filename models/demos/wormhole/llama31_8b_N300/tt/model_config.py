@@ -25,6 +25,7 @@ def calculate_hidden_dim(dim, ffn_dim_multiplier, multiple_of):
     return hidden_dim
 
 
+# TODO Add other default params for models in the family
 DEFAULT_LLAMA3_2_3B_PARAMS = {
     "dim": 3072,
     "ffn_dim_multiplier": 1.0,
@@ -38,9 +39,24 @@ DEFAULT_LLAMA3_2_3B_PARAMS = {
     "vocab_size": 128256,
 }
 
+DEFAULT_LLAMA3_1_8B_PARAMS = {
+    "dim": 4096,
+    "ffn_dim_multiplier": 1.3,
+    "multiple_of": 1024,
+    "n_heads": 32,
+    "n_kv_heads": 8,
+    "n_layers": 32,
+    "norm_eps": 1e-05,
+    "rope_theta": 500000.0,
+    "use_scaled_rope": True,
+    "vocab_size": 128256,
+}
+
 
 class TtModelArgs:
     paged_attention_config = None
+
+    # TODO Update these params based on the loaded model
 
     # Parameters for our use
     max_batch_size = 1
@@ -48,6 +64,8 @@ class TtModelArgs:
     max_seq_len = 8192 * 4 * 4  # 128k
     kv_seq_len = 8192 * 4 * 4  # 128k
     sliding_window = 8192 * 4 * 4  # 128k
+
+    tile_size = 32
 
     OP_KEYS = (
         # Embedding
@@ -118,9 +136,11 @@ class TtModelArgs:
         logger.info(f"Checkpoint directory: {self.DEFAULT_CKPT_DIR}")
         logger.info(f"Tokenizer file: {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'}")
         logger.info(f"Cache directory: {self.DEFAULT_CACHE_PATH}")
-        if dummy_weights:
+        if (
+            dummy_weights
+        ):  # TODO Choose the correct dummy weights for the correct model specified (take model as arg input?)
             logger.info(f"Note: Using dummy weights, weight caching disabled")
-            self._set_llama_params_from_dict(DEFAULT_LLAMA3_2_3B_PARAMS)
+            self._set_llama_params_from_dict(DEFAULT_LLAMA3_1_8B_PARAMS)
         else:
             self._set_llama_params(self.DEFAULT_CKPT_DIR)
 
@@ -256,7 +276,7 @@ class TtModelArgs:
             )
 
             self.model_config["LM_HEAD_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
-                (self.batch_rows, self.dim // (8 * 8)),  # Shard shape: [32, 128] -> 1 shard per core
+                (self.batch_rows * self.tile_size, self.dim // (8 * 8)),  # Shard shape: [32, 128] -> 1 shard per core
                 ttnn.CoreGrid(y=8, x=8),
                 ttnn.ShardStrategy.WIDTH,
                 ttnn.ShardOrientation.ROW_MAJOR,
@@ -276,33 +296,6 @@ class TtModelArgs:
                 fused_activation=None,
                 fuse_batch=seq_len <= 2048,
             )
-
-            # if self.di_dt_workaround:
-            #     per_core_N = math.ceil((self.vocab_size // self.num_devices) / (7 * 8 * 32))
-            #     self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            #         compute_with_storage_grid_size=(7, 8),
-            #         in0_block_w=1,
-            #         per_core_M=1,
-            #         per_core_N=per_core_N,  # vocab size / num_devices / (7 * 8 * 32 cores), rounded up
-            #         out_subblock_h=1,
-            #         out_subblock_w=1,
-            #         fuse_batch=True,
-            #         fused_activation=None,
-            #         mcast_in0=True,
-            #     )
-            # else:
-            #     per_core_N = math.ceil((self.vocab_size // self.num_devices) / (8 * 8 * 32))
-            #     self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            #         compute_with_storage_grid_size=(8, 8),
-            #         in0_block_w=2,
-            #         out_subblock_h=1,
-            #         out_subblock_w=4,
-            #         per_core_M=1,
-            #         per_core_N=per_core_N,  # vocab size / num_devices / (8 * 8 * 32 cores), rounded up
-            #         fuse_batch=True,
-            #         fused_activation=None,
-            #         mcast_in0=True,
-            #     )
 
             assert self.n_kv_heads % self.num_devices == 0, "n_kv_heads must be divisible by num_devices"
             self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
@@ -399,14 +392,14 @@ class TtModelArgs:
 
             # Width sharded
             self.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
-                (self.batch_rows, self.dim // 32),  # Shard shape: [32, 128] -> 1 shard per core
+                (self.batch_rows * self.tile_size, self.dim // 32),  # Shard shape: [32, 128] -> 1 shard per core
                 ttnn.CoreGrid(y=4, x=8),
                 ttnn.ShardStrategy.WIDTH,
                 ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
             self.model_config["SHARDED_SKIP_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
-                (self.batch_rows, self.dim // 32),  # Shard shape: [32, 128] -> 1 shard per core
+                (self.batch_rows * self.tile_size, self.dim // 32),  # Shard shape: [32, 128] -> 1 shard per core
                 ttnn.CoreGrid(y=4, x=8),
                 ttnn.ShardStrategy.WIDTH,
                 ttnn.ShardOrientation.ROW_MAJOR,
