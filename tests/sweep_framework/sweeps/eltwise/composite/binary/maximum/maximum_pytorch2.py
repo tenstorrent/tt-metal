@@ -25,12 +25,12 @@ random.seed(0)
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "maximum_1": {
+    "nightly": {
         "input_shape": [
-            [1, 16, 1, 60],
-            # [1,16,s10+1],
-            [1, 16, 19, 19],
-            [1, 16, 59, 59],
+            {"shape1": [1, 16, 1, 60], "shape2": []},
+            # {"shape1": [1,16,s10+1], "shape2": []},
+            {"shape1": [1, 16, 19, 19], "shape2": []},
+            {"shape1": [1, 16, 59, 59], "shape2": []},
         ],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -63,11 +63,11 @@ def run(
     torch.manual_seed(data_seed)
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(input_shape)
+    )(input_shape["shape1"])
 
     torch_input_tensor_b = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
-    )(input_shape)
+    )(input_shape["shape2"])
 
     torch_output_tensor = torch.max(torch_input_tensor_a, torch_input_tensor_b)
 

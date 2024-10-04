@@ -25,7 +25,7 @@ random.seed(0)
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "where_5": {
+    "nightly": {
         "input_shape": [
             {"shape1": [1, 1, 1, 46], "shape2": [1, 12, 1, 46], "shape3": []},
             {"shape1": [1, 1, 1, 6], "shape2": [1, 16, 1, 6], "shape3": []},

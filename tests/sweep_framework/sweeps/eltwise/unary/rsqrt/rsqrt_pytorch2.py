@@ -24,7 +24,7 @@ random.seed(0)
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "rsqrt_2": {
+    "nightly": {
         "input_shape": [
             [1, 1, 1],
             [1, 10, 1],
