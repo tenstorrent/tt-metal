@@ -36,8 +36,12 @@ run_common_func_tests() {
   # ConvNet Mnist
   pytest --disable-warnings models/demos/convnet_mnist/demo/demo.py --timeout 600; fail+=$?
 
+<<<<<<< HEAD
   # Mnist
   pytest --disable-warnings models/demos/mnist/demo/demo.py --timeout 600; fail+=$?
+=======
+  pytest --disable-warnings models/demos/lenet/demo/demo.py --timeout 600; fail+=$?
+>>>>>>> #13405: TTNN implementation of LENET model
 
   return $fail
 }
