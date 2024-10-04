@@ -16,7 +16,7 @@ To build and execute, you may use the following commands. Note that we include t
 ```bash
     export ARCH_NAME=<arch name>
     export TT_METAL_HOME=<this repo dir>
-    ./build_metal.sh
+    ./build_metal.sh --build-tests
     ./build/programming_examples/matmul_multi_core
 ```
 ## Accessing all the cores

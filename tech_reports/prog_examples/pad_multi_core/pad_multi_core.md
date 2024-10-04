@@ -17,7 +17,7 @@ The following commands will build and execute the code for this example. Environ
 ```bash
     export ARCH_NAME=<arch name>
     export TT_METAL_HOME=<this repo dir>
-    ./build_metal.sh
+    ./build_metal.sh --build-tests
     ./build/programming_examples/pad_multi_core
 ```
 ## Device setup
@@ -49,8 +49,8 @@ for (uint32_t i = 0; i < src_vec.size(); i++) {
 }
 ```
 
-For our example, we will be using a simple tensor with shape (8, 4). We fill this vector with an arbitrary set of values; in this case, it will be values that lie in the range \[1, 32\]. This tensor contains the values that we will send to the device to pad. 
-Note that we are using a source vector with `uint32_t` values, but the tensor values themselves are `bfloat16`. 
+For our example, we will be using a simple tensor with shape (8, 4). We fill this vector with an arbitrary set of values; in this case, it will be values that lie in the range \[1, 32\]. This tensor contains the values that we will send to the device to pad.
+Note that we are using a source vector with `uint32_t` values, but the tensor values themselves are `bfloat16`.
 
 This example demonstrates a manual way to pack `bfloat16` values into `uint32_t` for another layer of parallelism.
 
@@ -69,10 +69,10 @@ uint32_t dst_num_values_packed = dst_num_values_unpacked / packing_ratio;
 std::vector<uint32_t> dst_vec(dst_num_values_packed, 0);
 ```
 
-The input tensor will be padded to form an output tensor of shape (8, 8). We set this output tensor with the intended dimensions and a constant initial value of 0. 
+The input tensor will be padded to form an output tensor of shape (8, 8). We set this output tensor with the intended dimensions and a constant initial value of 0.
 
-This output tensor will store the values of the padded tensor retrieved from the device. 
-Since this example will demonstrate padding from a tensor of shape (8, 4) to a tensor of shape (8, 8), only the second dimension will receive padding. 
+This output tensor will store the values of the padded tensor retrieved from the device.
+Since this example will demonstrate padding from a tensor of shape (8, 4) to a tensor of shape (8, 8), only the second dimension will receive padding.
 The code in this example will focus on padding of a single dimension.
 
 ## Designate cores for utilization
@@ -141,7 +141,7 @@ CircularBufferConfig cb_config = tt::tt_metal::CircularBufferConfig(dst_N * pack
 auto cb_src = tt::tt_metal::CreateCircularBuffer(program, cores, cb_config);
 ```
 
-We designate a `CircularBuffer` index to be accessed across each of the utilized cores for this program. For this program, the first dimension of the input tensor is 8, and we are parallelizing the operation through chunking the first dimension across 4 cores. Therefore, each core will have 2 rows of the input tensor. 
+We designate a `CircularBuffer` index to be accessed across each of the utilized cores for this program. For this program, the first dimension of the input tensor is 8, and we are parallelizing the operation through chunking the first dimension across 4 cores. Therefore, each core will have 2 rows of the input tensor.
 Since each of these rows will be padded to match the size of the output tensor\'s second dimension, we set the circular buffer size accordingly.
 
 # Create data movement kernels
@@ -167,8 +167,8 @@ KernelHandle writer_id = CreateKernel(program,
     tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = writer_compile_time_args});
 ```
 
-Using the compile-time arguments and the respective kernel functions, which are written in the designated C++ files, we create the kernels to dispatch to the cores for execution. 
-Since the operation of padding involves moving data, we specify these kernels with a data movement configuration. The reader kernel will read in the input tensor data from the DRAM and use the stored pad value to pad each of the rows. 
+Using the compile-time arguments and the respective kernel functions, which are written in the designated C++ files, we create the kernels to dispatch to the cores for execution.
+Since the operation of padding involves moving data, we specify these kernels with a data movement configuration. The reader kernel will read in the input tensor data from the DRAM and use the stored pad value to pad each of the rows.
 The writer kernel will then read the padded tensor back to host, where it is stored in `dst_vec`. Each kernel uses a different NoC.
 
 # Set kernel runtime arguments
@@ -213,7 +213,7 @@ for (uint32_t core_idx = 0; core_idx < num_cores; core_idx++) {
 ```
 
 We specify `start_src_idx` in order for each core to access the intended input tensor values through the kernel. Similarly, `start_dst_idx` is used in order for each core to access the intended output tensor values.
-We iterate through the range of cores that are designated for utilization and set the corresponding runtime arguments for the reader and writer kernels. 
+We iterate through the range of cores that are designated for utilization and set the corresponding runtime arguments for the reader and writer kernels.
 
 Note that for this example, on the host side, we define the kernel arguments based on the size of the packed data (`uint32_t`).
 
@@ -256,7 +256,7 @@ for (uint32_t i = 0; i < num_rows_per_core; i++) {
 }
 ```
 
-The reader kernel is designed to focus on tensor padding along the second dimension. Each core will iterate through a given number of rows of the tensor based on the number of cores used and the number of rows in the tensor; in this case, it is 2, since there are 8 rows divided evenly among 4 cores. 
+The reader kernel is designed to focus on tensor padding along the second dimension. Each core will iterate through a given number of rows of the tensor based on the number of cores used and the number of rows in the tensor; in this case, it is 2, since there are 8 rows divided evenly among 4 cores.
 Using the start and end index, the kernel reads the pad value into the circular buffer until it is able to pad the source tensor row into the intended shape, then reads in the source data before padding the rest of the row.
 
 # Writer kernel function
@@ -295,7 +295,7 @@ Finish(cq);
 CloseDevice(device);
 ```
 
-In order to send the program to the device for execution, we call `EnqueueWriteBuffer` to move the input tensor data into its corresponding DRAM buffer, and also move the pad value into its corresponding DRAM buffer. 
+In order to send the program to the device for execution, we call `EnqueueWriteBuffer` to move the input tensor data into its corresponding DRAM buffer, and also move the pad value into its corresponding DRAM buffer.
 We then call `EnqueueReadBuffer` to move the output tensor data from its corresponding DRAM buffer to the destination vector.
 
 # Summary

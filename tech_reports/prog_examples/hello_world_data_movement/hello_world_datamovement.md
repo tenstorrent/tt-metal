@@ -17,7 +17,7 @@ need more depending on the most up-to-date installation methods.
 
     export ARCH_NAME=<arch name>
     export TT_METAL_HOME=<this repo dir>
-    ./build_metal.sh
+    ./build_metal.sh --build-tests
     ./build/programming_examples/hello_world_datamovement_kernel
 
 # Silicon accelerator setup

@@ -11,7 +11,7 @@ To build and execute, you may use the following commands. Note that we include t
 ```bash
     export ARCH_NAME=<arch name>
     export TT_METAL_HOME=<this repo dir>
-    ./build_metal.sh
+    ./build_metal.sh  --build-tests
     ./build/programming_examples/add_2_integers_in_riscv
 ```
 ## Set up device and program/collaboration mechanisms
