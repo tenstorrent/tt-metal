@@ -20,8 +20,7 @@ from models.utility_functions import (
 
 
 def test_mixtral_rms_norm_inference(t3k_mesh_device, use_program_cache, reset_seeds):
-    for device in t3k_mesh_device.get_device_ids():
-        t3k_mesh_device.get_device(device).enable_async(True)
+    t3k_mesh_device.enable_async(True)
 
     dtype = ttnn.bfloat8_b
 

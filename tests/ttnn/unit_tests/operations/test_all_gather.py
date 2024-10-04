@@ -138,8 +138,7 @@ def run_all_gather_impl(
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
     # Use Async mode based on test input config
-    for device in mesh_device.get_devices():
-        device.enable_async(enable_async)
+    mesh_device.enable_async(enable_async)
 
     if enable_async:
         logger.info(f"Using Async Mode for All Gather Op Dispatch")
@@ -1280,8 +1279,7 @@ def run_all_gather_sharded_t3k(
     if t3k_mesh_device.get_num_devices() < num_devices:
         pytest.skip("Not T3000!")
 
-    for d in t3k_mesh_device.get_devices():
-        d.enable_async(enable_async)
+    t3k_mesh_device.enable_async(enable_async)
 
     return run_all_gather_sharded(
         t3k_mesh_device,
@@ -1332,8 +1330,7 @@ def run_all_gather_sharded_n300(
     if mesh_device.get_num_devices() != 2:
         pytest.skip("Not N300!")
 
-    for device in mesh_device.get_devices():
-        device.enable_async(enable_async)
+    mesh_device.enable_async(enable_async)
 
     return run_all_gather_sharded(
         mesh_device,
