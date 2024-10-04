@@ -35,7 +35,11 @@ Plan:
 class SimpleShape {
 public:
     template <typename T>
-    explicit SimpleShape(T&& shape) : value{std::forward<T>(shape)} {}
+    explicit SimpleShape(const std::vector<uint32_t>& shape) : value(shape) {}
+    explicit SimpleShape(std::vector<uint32_t>&& shape) : value(std::move(shape)) {}
+    explicit SimpleShape(std::initializer_list<uint32_t> ilist) : value(ilist) {}
+    template<std::size_t N>
+    explicit SimpleShape(const std::array<uint32_t, N>& arr) : value(arr.begin(), arr.end()) {}
 
     template<std::size_t N>
     bool operator==(const std::array<uint32_t, N> &other) const {
