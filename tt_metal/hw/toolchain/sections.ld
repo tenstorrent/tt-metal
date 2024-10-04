@@ -68,11 +68,7 @@ SECTIONS
 
   l1_data :
   {
-    *(l1_data)
-  } > REGION_CODE
-  l1_data_noinit (NOLOAD) :
-  {
-    *(l1_data_noinit)
+    *(l1_data_test_only)
   } > REGION_CODE
 
   . = ALIGN(. + MEM_PAD, MEM_ALIGN);

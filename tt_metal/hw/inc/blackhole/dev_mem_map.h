@@ -15,12 +15,16 @@
 // Before adding a define here, read the following:
 // 1) Any "truly global" address must be specified explicitly here.  Truly
 // global addresses are addresses that are referenced on both the host and
-// device
+// device or between processors
 // 2) Memory section sizes must be specified here, these are used in the
 // linker scripts
-// 3) Device static/global variables generally should NOT be listed here.  If
-// they are global to a core, declare them in the that core's source code and
-// tag them if needed with a section (e.g., "l1_data")
+// 3) static/global variables generally should NOT be listed here.  If
+// they are global to a processor, declare them in the that processor's source
+// code, they will get placed in local memory
+// 4) L1 data sections are no longer supported as addressing them with XIP
+// binaries requires runtime address patching.  Instead of using named
+// variables in the L1 data section use a mailbox (or address in the mailbox
+// range and initialize explicitly)
 //
 
 /////////////
@@ -39,7 +43,6 @@
 
 /////////////
 // Firmware/kernel code holes
-#define MEM_BOOT_CODE_SIZE 4
 #define MEM_BRISC_FIRMWARE_SIZE (10 * 1024 + MEM_BRISC_LOCAL_SIZE)
 #define MEM_NCRISC_FIRMWARE_SIZE (16 * 1024 + MEM_NCRISC_LOCAL_SIZE)
 #define MEM_TRISC0_FIRMWARE_SIZE (16 * 1024 + MEM_TRISC_LOCAL_SIZE)
@@ -48,6 +51,7 @@
 #define MEM_ZEROS_SIZE 512
 
 #define MEM_BOOT_CODE_BASE 0
+#define MEM_NOC_ATOMIC_RET_VAL_ADDR 4
 #define MEM_L1_BARRIER 12
 #define MEM_MAILBOX_BASE 16
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
