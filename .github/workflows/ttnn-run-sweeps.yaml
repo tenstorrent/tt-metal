@@ -66,12 +66,12 @@ on:
           - eltwise.unary.hardswish.hardswish
           - eltwise.unary.hardsigmoid.hardsigmoid
           - eltwise.unary.hardshrink.hardshrink
-          - eltwise.unary.softmax
-          - eltwise.unary.identity
-          - eltwise.unary.neg
-          - eltwise.unary.sinh
-          - eltwise.unary.relu_min
-          - eltwise.unary.relu_max
+          - eltwise.unary.softmax.softmax
+          - eltwise.unary.identity.identity
+          - eltwise.unary.neg.neg
+          - eltwise.unary.sinh.sinh
+          - eltwise.unary.relu_min.relu_min
+          - eltwise.unary.relu_max.relu_max
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multiply
           - eltwise.binary.div.div
