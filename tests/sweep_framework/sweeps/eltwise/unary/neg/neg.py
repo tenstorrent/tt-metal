@@ -53,9 +53,9 @@ def run(
     torch.manual_seed(data_seed)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=-100, high=100, dtype=torch.float16), input_a_dtype
     )(input_shape)
-    torch_output_tensor = torch.deg2rad(torch_input_tensor_a)
+    torch_output_tensor = -torch_input_tensor_a
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -66,7 +66,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.deg2rad(input_tensor_a, memory_config=output_memory_config)
+    result = ttnn.neg(input_tensor_a, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 

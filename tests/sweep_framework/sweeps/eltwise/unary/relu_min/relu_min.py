@@ -16,6 +16,8 @@ from models.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
+low = 0
+high = 100
 
 random.seed(0)
 
@@ -25,6 +27,15 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
+        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16)
+        + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 16)
+        + gen_shapes([32, 32], [256, 256], [32, 32], 32),
+        "input_a_dtype": [ttnn.bfloat16],
+        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    },
+    "xfail": {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16)
         + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 16)
         + gen_shapes([32, 32], [256, 256], [32, 32], 32),
@@ -52,10 +63,13 @@ def run(
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
+    lower_limit = torch.tensor(1, dtype=torch.bfloat16).uniform_(low, high).item()
+
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
-    torch_output_tensor = torch.deg2rad(torch_input_tensor_a)
+
+    torch_output_tensor = torch.max(torch_input_tensor_a, torch.tensor(lower_limit))
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -66,7 +80,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.deg2rad(input_tensor_a, memory_config=output_memory_config)
+    result = ttnn.relu_min(input_tensor_a, lower_limit, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
