@@ -115,6 +115,14 @@ struct ExecuteUnaryCompositeOpWithFloats {
         }
 };
 
+struct ExecuteUnaryCompositeClamp {
+    static Tensor invoke(
+        const Tensor &input_tensor,
+        float param1,
+        float param2,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
 template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOpWithInt {
 
@@ -265,7 +273,7 @@ constexpr auto clip = ttnn::register_operation_with_auto_launch_op<
     operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::CLIP>>();
 constexpr auto clamp = ttnn::register_operation_with_auto_launch_op<
     "ttnn::clamp",
-    operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::CLAMP>>();
+    operations::unary::ExecuteUnaryCompositeClamp>();
 constexpr auto selu = ttnn::register_operation_with_auto_launch_op<
     "ttnn::selu",
     operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::SELU>>();
