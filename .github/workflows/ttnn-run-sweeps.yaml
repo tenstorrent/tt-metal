@@ -96,6 +96,7 @@ on:
           - eltwise.binary.logaddexp.logaddexp
           - eltwise.binary.ldexp.ldexp
           - eltwise.binary.hypot.hypot
+          - eltwise.binary.xlogy.xlogy
           - eltwise.composite.binary.addalpha.addalpha
           - eltwise.composite.binary.subalpha.subalpha
           - eltwise.composite.binary.minimum.minimum
