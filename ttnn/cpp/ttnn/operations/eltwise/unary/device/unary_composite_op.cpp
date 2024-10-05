@@ -477,7 +477,7 @@ Tensor _clip(const Tensor& a, float low, float high, const std::optional<MemoryC
 }
 
 // clamp
-Tensor _clamp(const Tensor& a, float low, float high, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ExecuteUnaryCompositeClamp::invoke(const Tensor& a, float low, float high, const std::optional<MemoryConfig>& output_mem_config) {
     return _clip(a, low, high, output_mem_config);
 }
 
