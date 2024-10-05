@@ -88,6 +88,8 @@ on:
           - eltwise.binary.logical_and.logical_and_output
           - eltwise.binary.polyval.polyval
           - eltwise.binary.remainder.remainder
+          - eltwise.binary.squared_difference.squared_difference
+          - eltwise.binary.squared_difference_output.squared_difference_output
           - eltwise.binary.bcast.bcast_h_sharded
           - eltwise.binary.bcast.bcast
           - eltwise.binary.fmod.fmod
