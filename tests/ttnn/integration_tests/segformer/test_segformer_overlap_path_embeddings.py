@@ -57,8 +57,21 @@ def create_custom_preprocessor(device):
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_segformer_overlap_patch_embeddings(
-    patch_size, stride, num_channels, hidden_size, batch_size, height, width, patch_emb_i, device, reset_seeds
+    patch_size,
+    stride,
+    num_channels,
+    hidden_size,
+    batch_size,
+    height,
+    width,
+    patch_emb_i,
+    device,
+    reset_seeds,
+    is_ci_env,
 ):
+    if is_ci_env:
+        pytest.skip("Skip in CI, model is WIP, issue# 13357")
+
     torch_input_tensor = torch.randn(batch_size, num_channels, height, width)
     if width == 512:
         ttnn_input_tensor = ttnn.from_torch(

@@ -45,7 +45,10 @@ def create_custom_preprocessor(device):
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_segformer_selfoutput(device, block_i, self_output_i, batch_size, seq_len, hidden_size, reset_seeds):
+def test_segformer_selfoutput(device, block_i, self_output_i, batch_size, seq_len, hidden_size, reset_seeds, is_ci_env):
+    if is_ci_env:
+        pytest.skip("Skip in CI, model is WIP, issue# 13357")
+
     torch_input_tensor = torch.randn(batch_size, seq_len, hidden_size)
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor,

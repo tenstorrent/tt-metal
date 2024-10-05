@@ -47,7 +47,12 @@ def create_custom_preprocessor(device):
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_segformer_decode_head(device, batch_size=1):
+def test_segformer_decode_head(device, is_ci_env):
+    if is_ci_env:
+        pytest.skip("Skip in CI, model is WIP, issue# 13357")
+
+    batch_size = 1
+
     torch_input_tensor_0 = torch.randn(1, 32, 128, 128)
     torch_input_tensor_1 = torch.randn(1, 64, 64, 64)
     torch_input_tensor_2 = torch.randn(1, 160, 32, 32)
