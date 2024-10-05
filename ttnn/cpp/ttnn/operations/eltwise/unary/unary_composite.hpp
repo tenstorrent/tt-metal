@@ -118,8 +118,8 @@ struct ExecuteUnaryCompositeOpWithFloats {
 struct ExecuteUnaryCompositeClamp {
     static Tensor invoke(
         const Tensor &input_tensor,
-        float param1,
-        float param2,
+        std::optional<float> min = std::nullopt,
+        std::optional<float> max = std::nullopt,
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 

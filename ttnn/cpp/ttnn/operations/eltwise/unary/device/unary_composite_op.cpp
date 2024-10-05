@@ -477,8 +477,24 @@ Tensor _clip(const Tensor& a, float low, float high, const std::optional<MemoryC
 }
 
 // clamp
-Tensor ExecuteUnaryCompositeClamp::invoke(const Tensor& a, float low, float high, const std::optional<MemoryConfig>& output_mem_config) {
-    return _clip(a, low, high, output_mem_config);
+Tensor ExecuteUnaryCompositeClamp::invoke(const Tensor& a, std::optional<float> min, std::optional<float> max, const std::optional<MemoryConfig>& output_mem_config) {
+    auto output_memory_config = output_mem_config.value_or(a.memory_config());
+    TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
+    if (!max.has_value()) {
+        return ttnn::where( ttnn::ge(a, min.value(), std::nullopt, output_memory_config), a, min.value(), output_memory_config);
+    }else if(!min.has_value()) {
+        return ttnn::where( ttnn::le(a, max.value(), std::nullopt, output_memory_config), a, max.value(), output_memory_config);
+    }else if(min.value() > max.value()){
+        return full_like(a, max.value());
+    }
+    const Tensor h_const = full_like(a, max.value());
+    Tensor a_max = ttnn::minimum(a, h_const, output_memory_config);
+    if (min.value() == 0.0f) {
+        return ttnn::relu(a_max, output_memory_config);
+    } else {
+        const Tensor l_const = full_like(a, min.value());
+        return ttnn::maximum(a_max, l_const, output_memory_config);
+    }
 }
 
 // hardtanh
