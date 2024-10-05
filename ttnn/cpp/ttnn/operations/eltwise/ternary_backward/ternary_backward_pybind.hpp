@@ -20,14 +20,14 @@ namespace ternary_backward {
 namespace detail {
 
 template <typename ternary_backward_operation_t>
-void bind_ternary_backward(py::module& module, const ternary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
+void bind_ternary_backward(py::module& module, const ternary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
 
         {2}
 
         Args:
-            grad_tensor (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
             input_tensor_b (ttnn.Tensor): the input tensor.
             input_tensor_c (ttnn.Tensor or Number): the input tensor.
@@ -39,7 +39,8 @@ void bind_ternary_backward(py::module& module, const ternary_backward_operation_
         Returns:
             List of ttnn.Tensor: the output tensor.
 
-        {3}
+        Note:
+            {3}
 
         Example:
 
@@ -80,7 +81,7 @@ void bind_ternary_backward(py::module& module, const ternary_backward_operation_
 }
 
 template <typename ternary_backward_operation_t>
-void bind_ternary_backward_op(py::module& module, const ternary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
+void bind_ternary_backward_op(py::module& module, const ternary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -101,7 +102,8 @@ void bind_ternary_backward_op(py::module& module, const ternary_backward_operati
             List of ttnn.Tensor: the output tensor.
 
 
-        {3}
+        Note:
+            {3}
 
 
         Note : bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
@@ -160,7 +162,7 @@ void bind_ternary_backward_op(py::module& module, const ternary_backward_operati
 }
 
 template <typename ternary_backward_operation_t>
-void bind_ternary_backward_optional_output(py::module& module, const ternary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
+void bind_ternary_backward_optional_output(py::module& module, const ternary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
 
@@ -182,7 +184,8 @@ void bind_ternary_backward_optional_output(py::module& module, const ternary_bac
             List of ttnn.Tensor: the output tensor.
 
 
-        {3}
+        Note:
+            {3}
 
         Example:
 

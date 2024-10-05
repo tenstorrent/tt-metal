@@ -22,31 +22,24 @@ namespace binary_backward {
 namespace detail {
 
 template <typename binary_backward_operation_t>
-void bind_binary_backward_ops(py::module& module, const binary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
+void bind_binary_backward_ops(py::module& module, const binary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
 
-
         Args:
-            grad_tensor (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
             input_tensor_b (ttnn.Tensor): the input tensor.
-
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
-
         Returns:
             List of ttnn.Tensor: the output tensor.
 
-
-        Supported dtypes, layouts, and ranks:
-
-
-        {3}
-
+        Note:
+            {3}
 
         Note : bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
@@ -86,14 +79,13 @@ void bind_binary_backward_ops(py::module& module, const binary_backward_operatio
 }
 
 template <typename binary_backward_operation_t>
-void bind_binary_backward_int_default(py::module& module, const binary_backward_operation_t& operation, const std::string& parameter_name, const std::string& parameter_doc, int parameter_value, std::string_view description, std::string_view supported_dtype) {
+void bind_binary_backward_int_default(py::module& module, const binary_backward_operation_t& operation, const std::string& parameter_name, const std::string& parameter_doc, int parameter_value, const std::string_view description, const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
         {5}
 
-
         Args:
-            grad_tensor (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
             input_tensor_b (ttnn.Tensor): the input tensor.
             {2} (int): {3}. Defaults to `{4}`.
@@ -111,11 +103,8 @@ void bind_binary_backward_int_default(py::module& module, const binary_backward_
             List of ttnn.Tensor: the output tensor.
 
 
-        Supported dtypes, layouts, and ranks:
-
-
-        {6}
-
+        Note:
+            {6}
 
         Note : bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
@@ -168,14 +157,14 @@ void bind_binary_backward_int_default(py::module& module, const binary_backward_
 }
 
 template <typename binary_backward_operation_t>
-void bind_binary_backward_opt_float_default(py::module& module, const binary_backward_operation_t& operation, const std::string& parameter_name, const std::string& parameter_doc, float parameter_value, std::string_view description, std::string_view supported_dtype) {
+void bind_binary_backward_opt_float_default(py::module& module, const binary_backward_operation_t& operation, const std::string& parameter_name, const std::string& parameter_doc, float parameter_value, const std::string_view description, const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
         {5}
 
 
         Args:
-            grad_tensor (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
             input_tensor_b (ttnn.Tensor): the input tensor.
             {2} (float): {3}. Defaults to `{4}`.
@@ -193,10 +182,8 @@ void bind_binary_backward_opt_float_default(py::module& module, const binary_bac
             List of ttnn.Tensor: the output tensor.
 
 
-        Supported dtypes, layouts, and ranks:
-
-        {6}
-
+        Note:
+            {6}
 
         Note : bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
@@ -266,7 +253,7 @@ void bind_binary_backward_float_string_default(
         {7}
 
         Args:
-            grad_tensor (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
             input_tensor_b (ttnn.Tensor or Number): the input tensor.
 
@@ -277,9 +264,8 @@ void bind_binary_backward_float_string_default(
         Returns:
             List of ttnn.Tensor: the output tensor.
 
-        Supported dtypes, layouts, and ranks:
-
-        {8}
+        Note:
+            {8}
 
         Note : bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
@@ -337,14 +323,14 @@ void bind_binary_backward_float_string_default(
 }
 
 template <typename binary_backward_operation_t>
-void bind_binary_backward_sub_alpha(py::module& module, const binary_backward_operation_t& operation, const std::string& parameter_name, const std::string& parameter_doc, float parameter_value, std::string_view description, std::string_view supported_dtype) {
+void bind_binary_backward_sub_alpha(py::module& module, const binary_backward_operation_t& operation, const std::string& parameter_name, const std::string& parameter_doc, float parameter_value, const std::string_view description, const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
 
         {5}
 
         Args:
-            grad_tensor (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
             input_tensor_b (ttnn.Tensor): the input tensor.
             {2} (float): {3}. Defaults to `{4}`.
@@ -356,9 +342,8 @@ void bind_binary_backward_sub_alpha(py::module& module, const binary_backward_op
             other_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor_b`. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
 
-        Supported dtypes, layouts, and ranks:
-
-        {6}
+        Note:
+            {6}
 
         Note : bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
@@ -409,7 +394,7 @@ void bind_binary_backward_sub_alpha(py::module& module, const binary_backward_op
 }
 
 template <typename binary_backward_operation_t>
-void bind_binary_backward_rsub(py::module& module, const binary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
+void bind_binary_backward_rsub(py::module& module, const binary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "") {
 
     auto doc = fmt::format(
         R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, are_required_outputs: Optional[List[bool]] = [True, True], memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
@@ -417,7 +402,7 @@ void bind_binary_backward_rsub(py::module& module, const binary_backward_operati
         {2}
 
         Args:
-            grad_tensor (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
             input_tensor_b (ttnn.Tensor): the input tensor.
 
@@ -428,9 +413,8 @@ void bind_binary_backward_rsub(py::module& module, const binary_backward_operati
             other_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor_b`. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
 
-        Supported dtypes, layouts, and ranks:
-
-        {3}
+        Note:
+            {3}
 
         Note : bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
@@ -476,13 +460,13 @@ void bind_binary_backward_rsub(py::module& module, const binary_backward_operati
 }
 
 template <typename binary_backward_operation_t>
-void bind_binary_bw_mul(py::module& module, const binary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
+void bind_binary_bw_mul(py::module& module, const binary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
 
         Args:
-            grad_tensor (ComplexTensor or ttnn.Tensor): the input tensor.
+            grad_tensor (ComplexTensor or ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ComplexTensor or ttnn.Tensor): the input tensor.
             input_tensor_b (ComplexTensor or ttnn.Tensor or Number): the input tensor.
 
@@ -496,9 +480,8 @@ void bind_binary_bw_mul(py::module& module, const binary_backward_operation_t& o
         Returns:
             List of ttnn.Tensor: the output tensor.
 
-        Supported dtypes, layouts, and ranks:
-
-        {3}
+        Note:
+            {3}
 
         Note : bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
@@ -578,7 +561,7 @@ void bind_binary_bw_mul(py::module& module, const binary_backward_operation_t& o
 
 
 template <typename binary_backward_operation_t>
-void bind_binary_bw(py::module& module, const binary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
+void bind_binary_bw(py::module& module, const binary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
 
@@ -586,7 +569,7 @@ void bind_binary_bw(py::module& module, const binary_backward_operation_t& opera
         Supports broadcasting.
 
         Args:
-            grad_tensor (ComplexTensor or ttnn.Tensor): the input tensor.
+            grad_tensor (ComplexTensor or ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ComplexTensor or ttnn.Tensor): the input tensor.
             input_tensor_b (ComplexTensor or ttnn.Tensor or Number): the input tensor.
 
@@ -597,9 +580,8 @@ void bind_binary_bw(py::module& module, const binary_backward_operation_t& opera
             other_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor_b`. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
 
-        Supported dtypes, layouts, and ranks:
-
-        {3}
+        Note:
+            {3}
 
         Note : bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
@@ -680,14 +662,14 @@ void bind_binary_bw(py::module& module, const binary_backward_operation_t& opera
 }
 
 template <typename binary_backward_operation_t>
-void bind_binary_bw_optional(py::module& module, const binary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype = "") {
+void bind_binary_bw_optional(py::module& module, const binary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
 
         {2}
 
         Args:
-            grad_tensor (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor (ttnn.Tensor): the input tensor.
             other_tensor (ttnn.Tensor or Number): the input tensor.
 
@@ -698,9 +680,8 @@ void bind_binary_bw_optional(py::module& module, const binary_backward_operation
             other_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `other_tensor`. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
 
-        Supported dtypes, layouts, and ranks:
-
-        {3}
+        Note:
+            {3}
 
         Note : bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
@@ -764,14 +745,14 @@ void bind_binary_bw_optional(py::module& module, const binary_backward_operation
 }
 
 template <typename binary_backward_operation_t>
-void bind_binary_bw_div(py::module& module, const binary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
+void bind_binary_bw_div(py::module& module, const binary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
 
         {2}
 
         Args:
-            grad_tensor (ComplexTensor or ttnn.Tensor): the input tensor.
+            grad_tensor (ComplexTensor or ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ComplexTensor or ttnn.Tensor): the input tensor.
             input_tensor_b (ComplexTensor or ttnn.Tensor or Number): the input tensor.
 
@@ -788,9 +769,8 @@ void bind_binary_bw_div(py::module& module, const binary_backward_operation_t& o
 
         Supports broadcasting.
 
-        Supported dtypes, layouts, and ranks:
-
-        {3}
+        Note:
+            {3}
 
         Note : bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
@@ -880,7 +860,7 @@ void bind_binary_backward_overload(py::module& module, const binary_backward_ope
         {2}
 
         Args:
-            grad_tensor (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
             input_tensor_b (ttnn.Tensor or Number): the input tensor.
 
@@ -890,7 +870,7 @@ void bind_binary_backward_overload(py::module& module, const binary_backward_ope
         Returns:
             List of ttnn.Tensor: the output tensor.
 
-        Supported dtypes, layouts, and ranks:
+        Note:
             {3}
 
         Example:
@@ -941,14 +921,14 @@ void bind_binary_backward_overload(py::module& module, const binary_backward_ope
 }
 
 template <typename binary_backward_operation_t>
-void bind_binary_backward_assign(py::module& module, const binary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
+void bind_binary_backward_assign(py::module& module, const binary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
 
         {2}
 
         Args:
-            grad_tensor (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
             input_tensor_b (ttnn.Tensor): the input tensor.
 
@@ -960,7 +940,7 @@ void bind_binary_backward_assign(py::module& module, const binary_backward_opera
             queue_id (int, optional): command queue id. Defaults to `0`.
             round_mode (str, optional): Round mode for the operation. Defaults to `None`.
 
-        Supported dtypes, layouts, and ranks:
+        Note:
             {3}
 
         Example:
@@ -1027,7 +1007,8 @@ void py_module(py::module& module) {
         module,
         ttnn::mul_bw,
         R"doc(Performs backward operations for multiply on :attr:`input_tensor_a`, :attr:`input_tensor_b`, with given :attr:`grad_tensor`.)doc",
-        R"doc(
+        R"doc(Supported dtypes, layouts, and ranks:
+
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
         +----------------------------+---------------------------------+-------------------+
@@ -1038,7 +1019,8 @@ void py_module(py::module& module) {
         module,
         ttnn::add_bw,
         R"doc(Performs backward operations for add of :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc",
-        R"doc(
+        R"doc(Supported dtypes, layouts, and ranks:
+
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
         +----------------------------+---------------------------------+-------------------+
@@ -1049,7 +1031,8 @@ void py_module(py::module& module) {
         module,
         ttnn::sub_bw,
         R"doc(Performs backward operations for subtract of :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc",
-        R"doc(
+        R"doc(Supported dtypes, layouts, and ranks:
+
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
         +----------------------------+---------------------------------+-------------------+
@@ -1060,7 +1043,8 @@ void py_module(py::module& module) {
         module,
         ttnn::div_bw,
         R"doc(Performs backward operations for divide on :attr:`input_tensor`, :attr:`alpha` or :attr:`input_tensor_a`, attr:`input_tensor_b`, attr:`round_mode`,  with given :attr:`grad_tensor`.)doc",
-        R"doc(
+        R"doc(Supported dtypes, layouts, and ranks:
+
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
         +----------------------------+---------------------------------+-------------------+
@@ -1071,7 +1055,8 @@ void py_module(py::module& module) {
         module,
         ttnn::remainder_bw,
         R"doc(Performs backward operations for remainder of :attr:`input_tensor_a`, :attr:`scalar` or :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(
+        R"doc(Supported dtypes, layouts, and ranks:
+
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
         +----------------------------+---------------------------------+-------------------+
@@ -1083,7 +1068,8 @@ void py_module(py::module& module) {
         ttnn::fmod_bw,
         R"doc(Performs backward operations for fmod of :attr:`input_tensor_a`, :attr:`scalar` or :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
 
-        R"doc(
+        R"doc(Supported dtypes, layouts, and ranks:
+
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
         +----------------------------+---------------------------------+-------------------+
@@ -1095,7 +1081,8 @@ void py_module(py::module& module) {
         ttnn::assign_bw,
         R"doc(Performs backward operations for assign of :attr:`input_tensor_a`, :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
 
-        R"doc(
+        R"doc(Supported dtypes, layouts, and ranks:
+
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
         +----------------------------+---------------------------------+-------------------+
@@ -1111,7 +1098,8 @@ void py_module(py::module& module) {
         module,
         ttnn::atan2_bw,
         R"doc(Performs backward operations for atan2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(
+        R"doc(Supported dtypes, layouts, and ranks:
+
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
         +----------------------------+---------------------------------+-------------------+
@@ -1123,7 +1111,8 @@ void py_module(py::module& module) {
         ttnn::subalpha_bw,
         "alpha", "Alpha value", 1.0f,
         R"doc(Performs backward operations for subalpha of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(
+        R"doc(Supported dtypes, layouts, and ranks:
+
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
         +----------------------------+---------------------------------+-------------------+
@@ -1135,7 +1124,8 @@ void py_module(py::module& module) {
         ttnn::addalpha_bw,
         "alpha", "Alpha value", 1.0f,
         R"doc(Performs backward operations for addalpha on :attr:`input_tensor_b` , :attr:`input_tensor_a` and :attr:`alpha` with given attr:`grad_tensor`.)doc",
-        R"doc(
+        R"doc(Supported dtypes, layouts, and ranks:
+
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
         +----------------------------+---------------------------------+-------------------+
@@ -1146,7 +1136,8 @@ void py_module(py::module& module) {
         module,
         ttnn::xlogy_bw,
         R"doc(Performs backward operations for xlogy of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(
+        R"doc(Supported dtypes, layouts, and ranks:
+
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
         +----------------------------+---------------------------------+-------------------+
@@ -1157,7 +1148,8 @@ void py_module(py::module& module) {
         module,
         ttnn::hypot_bw,
         R"doc(Performs backward operations for hypot of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(
+        R"doc(Supported dtypes, layouts, and ranks:
+
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
         +----------------------------+---------------------------------+-------------------+
@@ -1168,7 +1160,8 @@ void py_module(py::module& module) {
         module,
         ttnn::ldexp_bw,
         R"doc(Performs backward operations for ldexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(
+        R"doc(Supported dtypes, layouts, and ranks:
+
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
         +----------------------------+---------------------------------+-------------------+
@@ -1179,7 +1172,8 @@ void py_module(py::module& module) {
         module,
         ttnn::logaddexp_bw,
         R"doc(Performs backward operations for logaddexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(
+        R"doc(Supported dtypes, layouts, and ranks:
+
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
         +----------------------------+---------------------------------+-------------------+
@@ -1190,7 +1184,8 @@ void py_module(py::module& module) {
         module,
         ttnn::logaddexp2_bw,
         R"doc(Performs backward operations for logaddexp2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(
+        R"doc(Supported dtypes, layouts, and ranks:
+
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
         +----------------------------+---------------------------------+-------------------+
@@ -1201,7 +1196,8 @@ void py_module(py::module& module) {
         module,
         ttnn::squared_difference_bw,
         R"doc(Performs backward operations for squared_difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(
+        R"doc(Supported dtypes, layouts, and ranks:
+
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
         +----------------------------+---------------------------------+-------------------+
@@ -1213,7 +1209,8 @@ void py_module(py::module& module) {
         ttnn::concat_bw,
         "dim", "Dimension to concatenate", 0,
         R"doc(Performs backward operations for concat on :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(
+        R"doc(Supported dtypes, layouts, and ranks:
+
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
         +----------------------------+---------------------------------+-------------------+
@@ -1224,7 +1221,8 @@ void py_module(py::module& module) {
         module,
         ttnn::rsub_bw,
         R"doc(Performs backward operations for subraction of :attr:`input_tensor_a` from :attr:`input_tensor_b` with given :attr:`grad_tensor` (reversed order of subtraction operator).)doc",
-        R"doc(
+        R"doc(Supported dtypes, layouts, and ranks:
+
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
         +----------------------------+---------------------------------+-------------------+
@@ -1235,7 +1233,8 @@ void py_module(py::module& module) {
         module,
         ttnn::min_bw,
         R"doc(Performs backward operations for minimum of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(
+        R"doc(Supported dtypes, layouts, and ranks:
+
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
         +----------------------------+---------------------------------+-------------------+
@@ -1246,7 +1245,8 @@ void py_module(py::module& module) {
         module,
         ttnn::max_bw,
         R"doc(Performs backward operations for maximum of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(
+        R"doc(Supported dtypes, layouts, and ranks:
+
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
         +----------------------------+---------------------------------+-------------------+
@@ -1263,7 +1263,8 @@ void py_module(py::module& module) {
         "none",
         R"doc(Performs backward operations for bias_gelu on :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`input_tensor` and :attr:`bias`, with given :attr:`grad_tensor` using given :attr:`approximate` mode.
         :attr:`approximate` mode can be 'none', 'tanh'.)doc",
-        R"doc(
+        R"doc(Supported dtypes, layouts, and ranks:
+
         +----------------------------+---------------------------------+-------------------+
         |     Dtypes                 |         Layouts                 |     Ranks         |
         +----------------------------+---------------------------------+-------------------+

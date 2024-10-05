@@ -22,13 +22,14 @@ namespace detail {
 
 template <typename unary_backward_operation_t>
 void bind_unary_backward_two_float(
-    py::module& module, const unary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
+    py::module& module, const unary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
+
         {2}
 
         Args:
-            grad_tensor (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor (ttnn.Tensor): the input tensor.
             threshold (float): the input threshold value.
             value (float): the input value.
@@ -39,7 +40,8 @@ void bind_unary_backward_two_float(
         Returns:
             List of ttnn.Tensor: the output tensor.
 
-        {3}
+        Note:
+            {3}
 
         Example:
 
@@ -75,13 +77,13 @@ void bind_unary_backward_two_float(
 
 template <typename unary_backward_operation_t>
 void bind_unary_backward_op(
-    py::module& module, const unary_backward_operation_t& operation, const std::string& description, const std::string& supported_dtype) {
+    py::module& module, const unary_backward_operation_t& operation, const std::string& description, const std::string& supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
 
         Args:
-            grad_tensor (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
 
         Keyword args:
@@ -90,7 +92,8 @@ void bind_unary_backward_op(
         Returns:
             List of ttnn.Tensor: the output tensor.
 
-        {3}
+        Note:
+            {3}
 
         Example:
 
@@ -122,22 +125,23 @@ void bind_unary_backward_op(
 
 template <typename unary_backward_operation_t>
 void bind_unary_backward_rsqrt(
-    py::module& module, const unary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
+    py::module& module, const unary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+        R"doc(
 
         {2}
 
         Args:
-            * :attr:`grad_tensor`
-            * :attr:`input_tensor`
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
+            input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
-            * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-            * :attr:`queue_id` (Optional[uint8]): command queue id
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (uint8, optional): command queue id. Defaults to `0`.
 
-        {3}
+        Note:
+            {3}
 
         Example:
 
@@ -179,7 +183,7 @@ void bind_unary_backward_op_reciprocal(
         {2}
 
         Args:
-            grad_tensor (ComplexTensor or ttnn.Tensor): the input tensor.
+            grad_tensor (ComplexTensor or ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ComplexTensor or ttnn.Tensor): the input tensor.
 
         Keyword args:
@@ -229,13 +233,13 @@ void bind_unary_backward_op_reciprocal(
 
 template <typename unary_backward_operation_t>
 void bind_unary_backward_op_overload_abs(
-    py::module& module, const unary_backward_operation_t& operation, std::string_view description) {
+    py::module& module, const unary_backward_operation_t& operation, const std::string_view description) {
     auto doc = fmt::format(
         R"doc(
         {2}
 
         Args:
-            grad_tensor (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor (ComplexTensor or ttnn.Tensor): the input tensor.
 
         Keyword args:
@@ -290,7 +294,7 @@ void bind_unary_backward_float(py::module& module, const unary_backward_operatio
         {2}
 
         Args:
-            grad_tensor (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor (ttnn.Tensor): the input tensor.
             float_value (Number): the input tensor.
 
@@ -341,13 +345,13 @@ void bind_unary_backward_two_float_with_default(
     const std::string& parameter_name_b,
     const std::string& parameter_b_doc,
     float parameter_b_value,
-    std::string_view description) {
+    const std::string_view description) {
     auto doc = fmt::format(
         R"doc(
         {8}
 
         Args:
-            grad_tensor (ComplexTensor or ttnn.Tensor): the input tensor.
+            grad_tensor (ComplexTensor or ttnn.Tensor): the input gradient tensor.
             input_tensor (ComplexTensor or ttnn.Tensor): the input tensor.
 
         Keyword args:
@@ -408,7 +412,7 @@ void bind_unary_backward_float_with_default(
         {5}
 
         Args:
-            grad_tensor (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
 
 
@@ -467,7 +471,7 @@ void bind_unary_backward_optional_float_params_with_default(
         {8}
 
         Args:
-            grad_tensor (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
@@ -524,19 +528,18 @@ void bind_unary_backward_float_string_default(
     const std::string& parameter_name_b,
     const std::string& parameter_b_doc,
     string parameter_b_value,
-    std::string_view description) {
+    const std::string_view description) {
     auto doc = fmt::format(
         R"doc(
         {7}
 
         Args:
-            grad_tensor (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (float): the input scalar.
-
+            {2} (float): {3}.
 
         Keyword args:
-            round_mode (round_mode, optional): Round mode for the operation. Defaults to `None`.
+            {4} (string, optional): {5} , Default value = {6}
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Returns:
@@ -585,13 +588,13 @@ void bind_unary_backward_string_default(
     const std::string& parameter_name_a,
     const std::string& parameter_a_doc,
     string parameter_a_value,
-    std::string_view description) {
+    const std::string_view description) {
     auto doc = fmt::format(
         R"doc(
         {5}
 
         Args:
-            grad_tensor (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
 
         Keyword args:
@@ -639,15 +642,15 @@ void bind_unary_backward_unary_optional_float(
     const unary_backward_operation_t& operation,
     const std::string& parameter_name,
     const std::string& parameter_doc,
-    std::string_view description) {
+    const std::string_view description) {
     auto doc = fmt::format(
         R"doc(
         {4}
 
         Args:
-            grad_tensor (ttnn.Tensor): the input grad tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (ttnn.Tensor or Number): the input tensor.
+            {2} (ttnn.Tensor or Number): {3}.
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
@@ -699,15 +702,15 @@ void bind_unary_backward_shape(
     const unary_backward_operation_t& operation,
     const std::string& parameter_name_a,
     const std::string& parameter_a_doc,
-    std::string_view description) {
+    const std::string_view description) {
     auto doc = fmt::format(
         R"doc(
         {4}
 
         Args:
-            grad_tensor (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor (ttnn.Tensor): the input tensor.
-            {2} (string): {3} of tensor.
+            {2} (List[int]): {3}.
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
@@ -748,13 +751,13 @@ void bind_unary_backward_shape(
 
 template <typename unary_backward_operation_t>
 void bind_unary_backward_optional(
-    py::module& module, const unary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype = "") {
+    py::module& module, const unary_backward_operation_t& operation, const std::string_view description, std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
 
         Args:
-            grad_tensor (ComplexTensor or ttnn.Tensor): the input tensor.
+            grad_tensor (ComplexTensor or ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ComplexTensor or ttnn.Tensor): the input tensor.
 
         Keyword args:
@@ -765,7 +768,8 @@ void bind_unary_backward_optional(
         Returns:
             List of ttnn.Tensor: the output tensor.
 
-        {3}
+        Note:
+            {3}
 
         Example:
 
@@ -806,7 +810,7 @@ void bind_unary_backward_prod_bw(py::module& module, const unary_backward_operat
         Performs backward operations for prod on input along `all_dimensions` or a particular `dim`.
 
         Args:
-            grad_tensor (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
 
         Keyword args:
@@ -849,17 +853,18 @@ void bind_unary_backward_prod_bw(py::module& module, const unary_backward_operat
 
 
 template <typename unary_backward_operation_t>
-void bind_unary_backward_opt(py::module& module, const unary_backward_operation_t& operation, std::string_view description) {
+void bind_unary_backward_opt(py::module& module, const unary_backward_operation_t& operation, const std::string_view description) {
     auto doc = fmt::format(
         R"doc(
         {2}
 
         Args:
-            * :attr:`grad_tensor`
-            * :attr:`input_tensor`
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
+            input_tensor_a (ttnn.Tensor): the input tensor.
+
 
         Keyword args:
-            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Example:
 
@@ -901,7 +906,7 @@ void bind_unary_backward(
         {2}
 
         Args:
-            grad_tensor (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
 
         Keyword args:
@@ -946,21 +951,21 @@ void bind_unary_backward_gelu(
     const std::string& parameter_name_a,
     const std::string& parameter_a_doc,
     string parameter_a_value,
-    std::string_view description) {
+    const std::string_view description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, {2}: string, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc({0}(
         {5}
 
         Args:
-            * :attr:`grad_tensor`
-            * :attr:`input_tensor`
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
+            input_tensor_a (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            * :attr:`{2}` (string): {3} , Default value = {4}
-            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
-            * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-            * :attr:`queue_id` (Optional[uint8]): command queue id
+            {2}` (string): {3} , Default value = {4}.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (uint8, optional): command queue id. Defaults to `0`.
+
 
         Example:
 
@@ -1109,8 +1114,8 @@ void py_module(py::module& module) {
         module,
         ttnn::repeat_bw,
         "shape",
-        "Shape",
-        R"doc(Performs backward operations for repeat on :attr:`input_tensor_a` or :attr:`input_tensor`, with given :attr:`grad_tensor` using given :attr:`shape`.)doc");
+        "Shape of tensor",
+        R"doc(Performs backward operations for repeat on :attr:`input_tensor`, with given :attr:`grad_tensor` using given :attr:`shape`.)doc");
 
     detail::bind_unary_backward_gelu(
         module,
