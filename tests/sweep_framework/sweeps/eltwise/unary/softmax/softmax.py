@@ -24,7 +24,7 @@ random.seed(0)
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "nightly": {
+    "xfail": {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16)
         + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 16)
         + gen_shapes([32, 32], [256, 256], [32, 32], 32),
@@ -53,9 +53,9 @@ def run(
     torch.manual_seed(data_seed)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=-1, high=1, dtype=torch.float16), input_a_dtype
     )(input_shape)
-    torch_output_tensor = torch.deg2rad(torch_input_tensor_a)
+    torch_output_tensor = torch.softmax(torch_input_tensor_a, -1)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -66,7 +66,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.deg2rad(input_tensor_a, memory_config=output_memory_config)
+    result = ttnn.softmax(input_tensor_a, dim=-1, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
