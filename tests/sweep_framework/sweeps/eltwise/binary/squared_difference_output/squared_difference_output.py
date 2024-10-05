@@ -71,7 +71,8 @@ def run(
 
     torch_optional_output = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
 
-    torch_output_tensor = torch.square(torch.sub(torch_input_tensor_a, torch_input_tensor_b))
+    golden_function = ttnn.get_golden_function(ttnn.squared_difference)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
