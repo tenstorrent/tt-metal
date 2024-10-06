@@ -72,6 +72,7 @@ on:
           - eltwise.unary.sinh.sinh
           - eltwise.unary.relu_min.relu_min
           - eltwise.unary.relu_max.relu_max
+          - eltwise.unary.softplus.softplus
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multiply
           - eltwise.binary.div.div
