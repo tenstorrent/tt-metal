@@ -37,6 +37,8 @@ Cluster::Cluster() {
 
     this->detect_arch_and_target();
 
+    this->initialize_hal();
+
     this->generate_cluster_descriptor();
 
     this->initialize_device_drivers();
@@ -94,6 +96,11 @@ void Cluster::detect_arch_and_target() {
         this->target_type_ == TargetDevice::Silicon or this->target_type_ == TargetDevice::Simulator,
         "Target type={} is not supported",
         this->target_type_);
+}
+
+void Cluster::initialize_hal() {
+    tt_metal::hal.initialize(arch_);
+    dram_address_params.DRAM_BARRIER_BASE = tt_metal::hal.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalMemAddrType::DRAM_BARRIER);
 }
 
 std::filesystem::path get_cluster_desc_yaml() {
