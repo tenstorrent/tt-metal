@@ -1127,7 +1127,7 @@ void bind_unary_composite_float(py::module& module, const unary_operation_t& ope
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            {2}
+            {2} (float): {3}.
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
@@ -1567,6 +1567,11 @@ void py_module(py::module& module) {
         "min", "Minimum value", std::nullopt,
         "max", "Maximum value", std::nullopt,
         R"doc(Performs clamp function on :attr:`input_tensor`, :attr:`min`, :attr:`max`. Only one of 'min' or 'max' value can be None.)doc");
+    detail::bind_unary_composite_float(
+        module,
+        ttnn::clamp_min,
+        "min", "Minimum value",
+        R"doc(Performs clamp min function on :attr:`input_tensor`, :attr:`min`)doc");
     detail::bind_unary_composite_floats_with_default(
         module,
         ttnn::selu,
