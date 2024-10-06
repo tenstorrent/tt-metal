@@ -497,6 +497,11 @@ Tensor ExecuteUnaryCompositeClamp::invoke(const Tensor& a, std::optional<float> 
     }
 }
 
+// clamp_min
+Tensor ExecuteUnaryCompositeClampMin::invoke(const Tensor& a, float min, const std::optional<MemoryConfig>& output_mem_config) {
+    return ExecuteUnaryCompositeClamp::invoke(a, min, std::nullopt, output_mem_config);
+}
+
 // hardtanh
 Tensor _hardtanh(
     const Tensor& a, float low /* = -1.0f */, float high /* = +1.0f */, const std::optional<MemoryConfig>& output_mem_config) {
