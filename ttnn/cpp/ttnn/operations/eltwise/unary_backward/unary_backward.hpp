@@ -455,8 +455,24 @@ struct ExecuteUnaryBackwardClamp {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
-        std::optional<float> parameter_a,
-        std::optional<float> parameter_b,
+        std::optional<float> parameter_a = std::nullopt,
+        std::optional<float> parameter_b = std::nullopt,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardClampMin {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float parameter_a,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryBackwardClampMax {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float parameter_a,
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
@@ -669,6 +685,8 @@ constexpr auto hardsigmoid_bw = ttnn::register_operation<"ttnn::hardsigmoid_bw",
 constexpr auto cos_bw = ttnn::register_operation<"ttnn::cos_bw", operations::unary_backward::ExecuteUnaryBackwardCos>();
 constexpr auto acosh_bw = ttnn::register_operation<"ttnn::acosh_bw", operations::unary_backward::ExecuteUnaryBackwardAcosh>();
 constexpr auto clamp_bw = ttnn::register_operation<"ttnn::clamp_bw", operations::unary_backward::ExecuteUnaryBackwardClamp>();
+constexpr auto clamp_min_bw = ttnn::register_operation<"ttnn::clamp_min_bw", operations::unary_backward::ExecuteUnaryBackwardClampMin>();
+constexpr auto clamp_max_bw = ttnn::register_operation<"ttnn::clamp_max_bw", operations::unary_backward::ExecuteUnaryBackwardClampMax>();
 constexpr auto rdiv_bw = ttnn::register_operation<"ttnn::rdiv_bw", operations::unary_backward::ExecuteUnaryBackwardRdiv>();
 constexpr auto gelu_bw = ttnn::register_operation<"ttnn::gelu_bw", operations::unary_backward::ExecuteUnaryBackwardGelu>();
 constexpr auto repeat_bw = ttnn::register_operation<"ttnn::repeat_bw", operations::unary_backward::ExecuteUnaryBackwardRepeat>();

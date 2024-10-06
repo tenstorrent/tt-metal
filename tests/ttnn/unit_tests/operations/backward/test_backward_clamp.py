@@ -46,7 +46,7 @@ def test_bw_clamp_min(input_shapes, min, device):
     tt_output_tensor_on_device = ttnn.clamp_bw(grad_tensor, input_tensor, min=min)
 
     golden_function = ttnn.get_golden_function(ttnn.clamp_bw)
-    golden_tensor = golden_function(grad_data, in_data, min, None)
+    golden_tensor = golden_function(grad_data, in_data, min)
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
@@ -68,7 +68,7 @@ def test_bw_clamp_max(input_shapes, max, device):
     tt_output_tensor_on_device = ttnn.clamp_bw(grad_tensor, input_tensor, max=max)
 
     golden_function = ttnn.get_golden_function(ttnn.clamp_bw)
-    golden_tensor = golden_function(grad_data, in_data, None, max)
+    golden_tensor = golden_function(grad_data, in_data, max)
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass

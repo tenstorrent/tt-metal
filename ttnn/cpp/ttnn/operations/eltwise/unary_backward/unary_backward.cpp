@@ -50,6 +50,16 @@ std::vector<Tensor> ExecuteUnaryBackwardClamp::invoke(
     return grad_tensor;
 }
 
+std::vector<Tensor> ExecuteUnaryBackwardClampMin::invoke(
+    const Tensor& grad, const Tensor& input, float min, const std::optional<MemoryConfig>& output_mem_config) {
+    return ExecuteUnaryBackwardClamp::invoke(grad, input, min, std::nullopt, output_mem_config);
+}
+
+std::vector<Tensor> ExecuteUnaryBackwardClampMax::invoke(
+    const Tensor& grad, const Tensor& input, float> max, const std::optional<MemoryConfig>& output_mem_config) {
+    return ExecuteUnaryBackwardClamp::invoke(grad, input, std::nullopt, max, output_mem_config);
+}
+
 // Hardtanh
 // result: torch.where((input <= min) | (input >= max), 0.0, grad)
 std::vector<Tensor> ExecuteUnaryBackwardHardtanh::invoke(

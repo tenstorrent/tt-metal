@@ -60,7 +60,9 @@ def _golden_function_unary_backward_with_float(torch_op, grad_tensor, input_tens
     return golden_tensor
 
 
-def _golden_function_unary_backward_with_two_float(torch_op, grad_tensor, input_tensor, a, b, *args, **kwargs):
+def _golden_function_unary_backward_with_two_float(
+    torch_op, grad_tensor, input_tensor, a=None, b=None, *args, **kwargs
+):
     if torch_op == torch.clamp:
         pyt_y = torch.clamp(input_tensor, min=a, max=b)
     else:
@@ -165,6 +167,20 @@ ttnn.attach_golden_function(
     ttnn.hardshrink_bw,
     golden_function=lambda grad, input, alpha=None, *args, **kwargs: _golden_function_unary_backward_with_float(
         torch.hardshrink, grad, input, alpha, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.clamp_min_bw,
+    golden_function=lambda grad, input, alpha=None, *args, **kwargs: _golden_function_unary_backward_with_float(
+        torch.clamp_min, grad, input, alpha, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.clamp_max_bw,
+    golden_function=lambda grad, input, alpha=None, *args, **kwargs: _golden_function_unary_backward_with_float(
+        torch.clamp_max, grad, input, alpha, *args, **kwargs
     ),
 )
 
