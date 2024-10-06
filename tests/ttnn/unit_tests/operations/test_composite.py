@@ -134,8 +134,8 @@ def test_unary_composite_clamp_min_ttnn(input_shapes, min, device):
 @pytest.mark.parametrize("max", (-1.0, 1.0, 0.0, -0.5, -10.0, 10.0))
 def test_unary_composite_clamp_max_ttnn(input_shapes, max, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    output_tensor = ttnn.clamp(input_tensor1, max=max)
-    golden_function = ttnn.get_golden_function(ttnn.clamp)
+    output_tensor = ttnn.clamp_max(input_tensor1, max)
+    golden_function = ttnn.get_golden_function(ttnn.clamp_max)
     golden_tensor = golden_function(in_data1, max=max)
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass

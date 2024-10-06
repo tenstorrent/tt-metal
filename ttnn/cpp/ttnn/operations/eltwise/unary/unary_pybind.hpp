@@ -1560,6 +1560,11 @@ void py_module(py::module& module) {
         ttnn::clamp_min,
         "min", "Minimum value",
         R"doc(Performs clamp min function on :attr:`input_tensor`, :attr:`min`)doc");
+    detail::bind_unary_composite_float(
+        module,
+        ttnn::clamp_max,
+        "max", "Maximum value",
+        R"doc(Performs clamp max function on :attr:`input_tensor`, :attr:`max`)doc");
     detail::bind_unary_composite_floats_with_default(
         module,
         ttnn::selu,

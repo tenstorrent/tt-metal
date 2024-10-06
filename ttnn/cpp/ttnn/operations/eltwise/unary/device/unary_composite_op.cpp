@@ -500,6 +500,11 @@ Tensor ExecuteUnaryCompositeClampMin::invoke(const Tensor& a, float min, const s
     return ExecuteUnaryCompositeClamp::invoke(a, min, std::nullopt, output_mem_config);
 }
 
+// clamp_max
+Tensor ExecuteUnaryCompositeClampMax::invoke(const Tensor& a, float max, const std::optional<MemoryConfig>& output_mem_config) {
+    return ExecuteUnaryCompositeClamp::invoke(a, std::nullopt, max, output_mem_config);
+}
+
 // hardtanh
 Tensor _hardtanh(
     const Tensor& a, float low /* = -1.0f */, float high /* = +1.0f */, const std::optional<MemoryConfig>& output_mem_config) {
