@@ -14,11 +14,6 @@
 * This file contains addresses that are visible to both host and device compiled code.
 */
 
-// Reserved DRAM addresses
-// Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been committed
-constexpr static std::uint32_t DRAM_BARRIER_BASE = 0;
-constexpr static std::uint32_t DRAM_BARRIER_SIZE = ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
-
 // Take max alignment to satisfy NoC rd/wr constraints
 // Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned
 // PCIe/DRAM -> Tensix/Eth src and dst addrs must be DRAM_ALIGNMENT aligned
