@@ -1009,11 +1009,11 @@ void py_module(py::module& module) {
         R"doc(Performs backward operations for multiply on :attr:`input_tensor_a`, :attr:`input_tensor_b`, with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_bw(
         module,
@@ -1021,11 +1021,11 @@ void py_module(py::module& module) {
         R"doc(Performs backward operations for add of :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_bw(
         module,
@@ -1033,11 +1033,11 @@ void py_module(py::module& module) {
         R"doc(Performs backward operations for subtract of :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_bw_div(
         module,
@@ -1045,11 +1045,11 @@ void py_module(py::module& module) {
         R"doc(Performs backward operations for divide on :attr:`input_tensor`, :attr:`alpha` or :attr:`input_tensor_a`, attr:`input_tensor_b`, attr:`round_mode`,  with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_backward_overload(
         module,
@@ -1057,11 +1057,11 @@ void py_module(py::module& module) {
         R"doc(Performs backward operations for remainder of :attr:`input_tensor_a`, :attr:`scalar` or :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16                |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       ROW_MAJOR, TILE           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_backward_overload(
         module,
@@ -1070,11 +1070,11 @@ void py_module(py::module& module) {
 
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16                |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       ROW_MAJOR, TILE           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_backward_assign(
         module,
@@ -1083,11 +1083,11 @@ void py_module(py::module& module) {
 
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16                |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       ROW_MAJOR, TILE           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_bw_optional(
         module,
@@ -1100,11 +1100,11 @@ void py_module(py::module& module) {
         R"doc(Performs backward operations for atan2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_backward_sub_alpha(
         module,
@@ -1113,11 +1113,11 @@ void py_module(py::module& module) {
         R"doc(Performs backward operations for subalpha of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_backward_opt_float_default(
         module,
@@ -1126,11 +1126,11 @@ void py_module(py::module& module) {
         R"doc(Performs backward operations for addalpha on :attr:`input_tensor_b` , :attr:`input_tensor_a` and :attr:`alpha` with given attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_backward_ops(
         module,
@@ -1138,11 +1138,11 @@ void py_module(py::module& module) {
         R"doc(Performs backward operations for xlogy of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_backward_ops(
         module,
@@ -1150,11 +1150,11 @@ void py_module(py::module& module) {
         R"doc(Performs backward operations for hypot of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_backward_ops(
         module,
@@ -1162,11 +1162,11 @@ void py_module(py::module& module) {
         R"doc(Performs backward operations for ldexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16                |       ROW_MAJOR                 |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       ROW_MAJOR                 |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_backward_ops(
         module,
@@ -1174,11 +1174,11 @@ void py_module(py::module& module) {
         R"doc(Performs backward operations for logaddexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_backward_ops(
         module,
@@ -1186,11 +1186,11 @@ void py_module(py::module& module) {
         R"doc(Performs backward operations for logaddexp2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_backward_ops(
         module,
@@ -1198,11 +1198,11 @@ void py_module(py::module& module) {
         R"doc(Performs backward operations for squared_difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_backward_int_default(
         module,
@@ -1211,11 +1211,11 @@ void py_module(py::module& module) {
         R"doc(Performs backward operations for concat on :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_backward_rsub(
         module,
@@ -1223,11 +1223,11 @@ void py_module(py::module& module) {
         R"doc(Performs backward operations for subraction of :attr:`input_tensor_a` from :attr:`input_tensor_b` with given :attr:`grad_tensor` (reversed order of subtraction operator).)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_backward_ops(
         module,
@@ -1235,11 +1235,11 @@ void py_module(py::module& module) {
         R"doc(Performs backward operations for minimum of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_backward_ops(
         module,
@@ -1247,11 +1247,11 @@ void py_module(py::module& module) {
         R"doc(Performs backward operations for maximum of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+)doc");
 
     detail::bind_binary_backward_float_string_default(
         module,
@@ -1265,11 +1265,11 @@ void py_module(py::module& module) {
         :attr:`approximate` mode can be 'none', 'tanh'.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+)doc");
 }
 
 }  // namespace binary_backward
