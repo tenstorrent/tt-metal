@@ -873,10 +873,10 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
             if (optional_id) {
                 auto kernel = detail::GetKernel(*this, optional_id.value());
                 kernel->set_runtime_args_count(kg.core_ranges, max_rtas[dispatch_class]);
-                kg.launch_msg.kernel_config.mem_map[dispatch_class].rta_offset = base_offset + offset;
+                kg.launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset = base_offset + offset;
                 offset += max_rtas[dispatch_class] * sizeof(uint32_t);
             } else {
-                kg.launch_msg.kernel_config.mem_map[dispatch_class].rta_offset = 0;
+                kg.launch_msg.kernel_config.rta_offset[dispatch_class].rta_offset = 0;
             }
         }
 
@@ -925,7 +925,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
     // Set the kernel group common runtime arg offsets use in the launch message
     for (auto& kg : this->get_kernel_groups(programmable_core_type_index)) {
         for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
-            kg.launch_msg.kernel_config.mem_map[dispatch_class].crta_offset = this->get_program_config(programmable_core_type_index).crta_offsets[dispatch_class];
+            kg.launch_msg.kernel_config.rta_offset[dispatch_class].crta_offset = this->get_program_config(programmable_core_type_index).crta_offsets[dispatch_class];
         }
     }
 

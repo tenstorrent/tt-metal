@@ -79,9 +79,9 @@ uint32_t firmware_config_init(tt_l1_ptr mailboxes_t* const mailboxes, uint32_t c
             launch_msg_address->kernel_config.sem_offset[index]);
     }
     rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base[core_type_index] +
-        launch_msg_address->kernel_config.mem_map[dispatch_class].rta_offset);
+        launch_msg_address->kernel_config.rta_offset[dispatch_class].rta_offset);
     crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base[core_type_index] +
-        launch_msg_address->kernel_config.mem_map[dispatch_class].crta_offset);
+        launch_msg_address->kernel_config.rta_offset[dispatch_class].crta_offset);
 
     return kernel_config_base[core_type_index];
 }
