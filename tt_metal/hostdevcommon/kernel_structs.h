@@ -55,78 +55,12 @@ enum CB : std::uint8_t
  // end of user facing APIs //
 /////////////////////////////
 
-
-enum class Dim : std::uint8_t
-{
-    None      = 0,
-    R         = 1,
-    C         = 2,
-    Z         = 3,
-    RC        = 4,
-    ZR        = 5,
-    Invalid   = 0xFF,
-};
-
-enum class SfpuOp : std::uint8_t
-{
-    Exp,
-    Log,
-    Sqrt,
-    Gelu,
-    GeluDerivative,
-    Reciprocal,
-    Sigmoid,
-    Tanh,
-    Dropout,
-    Datacopy, // This just means passthrough and no sfpu
-    Transpose, // datacopy + math transpose
-    Invalid,
-};
-
-enum class BinaryOp : std::uint8_t
-{
-    Add,
-    Subtract,
-    Multiply,
-    Power,
-    AddRelu, // Add + Relu
-    SubtractRelu, // Subtract + Relu
-    Invalid,
-};
-
-enum class TmOp : std::uint8_t
-{
-    rBroadcast,
-    cBroadcast,
-    zBroadcast,
-    hSlice,
-    hStack,
-    vSlice,
-    vStack,
-    Transpose,
-    Invalid,
-};
-
-enum class ReduceFunc : std::uint8_t
-{
-    Sum,
-    Avg,  // Needed only on tensor level to compute correct coefficient. Kernel uses Sum.
-    Max,
-    Invalid,
-};
-
 enum DstMode : std::uint8_t
 {
     Full          = 0,
     Half          = 1,
     Tile          = 2,
     NUM_DST_MODES = 3,
-};
-
-enum class Action {
-    None,
-    Slice,
-    Stack,
 };
 
 // To be deprecated: the old enum from which CBs evolved
@@ -167,24 +101,6 @@ enum HlkOperand : std::uint8_t
   intermed5 = 29,
   intermed6 = 30,
   intermed7 = 31,
-};
-
-enum class OpCode : uint8_t
-{
-    Exponential = 0,
-    Reciprocal  = 1,
-    Gelu        = 2,
-    Add         = 3,
-    Subtract    = 4,
-    Multiply    = 5
-
-};
-
-enum class PullAndPushConfig : uint8_t {
-    LOCAL = 0,                  // fast dispatch only on local chip
-    PUSH_TO_REMOTE = 1,         // read from issue queue and write data to CB on SRC router on issue path
-    REMOTE_PULL_AND_PUSH = 2,   // read from CB on DST router on issue path and push to CB on SRC router on completion path
-    PULL_FROM_REMOTE = 3        // read from CB on DST router on completion path and write to completion queue
 };
 
 constexpr std::uint32_t NUM_MAX_IN_BUFFERS_PER_CORE = HlkOperand::in7 - HlkOperand::in0 + 1;
