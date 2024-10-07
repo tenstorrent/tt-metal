@@ -250,6 +250,7 @@ if(ENABLE_TRACY)
     include(${PROJECT_SOURCE_DIR}/cmake/tracy.cmake)
 endif()
 
+option(BUILD_PROGRAMMING_EXAMPLES "Enables build of tt_metal programming examples" OFF)
 add_subdirectory(${PROJECT_SOURCE_DIR}/tt_metal)
 add_subdirectory(${PROJECT_SOURCE_DIR}/ttnn)
 
