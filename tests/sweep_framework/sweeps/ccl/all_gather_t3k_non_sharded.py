@@ -64,7 +64,7 @@ dtype_map = {"bf16": ttnn.bfloat16, "bf8": ttnn.bfloat8_b}
 
 orientation_map = {"row_major": ttnn.ShardOrientation.ROW_MAJOR, "col_major": ttnn.ShardOrientation.COL_MAJOR}
 
-gather_op_map = {"line": "line_all_gather", "ring": "all_gather"}
+gather_op_map = {"line": ttnn.Topology.Linear, "ring": ttnn.Topology.Ring}
 
 tensor_layouts = {"row": ttnn.ROW_MAJOR_LAYOUT, "tile": ttnn.TILE_LAYOUT}
 
@@ -103,7 +103,7 @@ def generate_params(
             "tensor_layout": [tensor_layout_value],
             "input_dtype": [dtype],
             "mem_config": [buffer_value],
-            "all_gather_operation": [gather_op],
+            "all_gather_topology": [gather_op],
             "num_iters": [1],
         },
     }
@@ -151,9 +151,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 
 def mesh_device_fixture():
     assert ttnn.get_num_devices() >= 8, "Not T3000!"
-    device_ids = [0, 4, 5, 1, 2, 6, 7, 3]
+    device_ids = ttnn.get_t3k_physical_device_ids_ring()
     num_devices_requested = len(device_ids)
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, num_devices_requested), device_ids[:num_devices_requested])
+    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, num_devices_requested), mesh_type=ttnn.MeshType.Ring)
     print("ALL GATHER: Opened device mesh")
 
     yield (mesh_device, "T3000 Mesh")
@@ -180,7 +180,7 @@ def run(
     mem_config,
     # num_cores,
     num_iters,
-    all_gather_operation,
+    all_gather_topology,
     *,
     device,
 ):
@@ -195,11 +195,12 @@ def run(
     input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_mesh_device)
 
     ## Run the actual allgather operation
-    gather_function = ttnn.all_gather if all_gather_operation == "all_gather" else ttnn.line_all_gather
 
     for i in range(num_iters):
         start_time = start_measuring_time()
-        tt_out_tensor = gather_function(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
+        tt_out_tensor = ttnn.all_gather(
+            input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=all_gather_topology
+        )
         e2e_perf = stop_measuring_time(start_time)
 
         logger.info(f"Done iteration {i}")

@@ -71,7 +71,7 @@ dtype_map = {"bf16": ttnn.bfloat16, "bf8": ttnn.bfloat8_b}
 
 orientation_map = {"row_major": ttnn.ShardOrientation.ROW_MAJOR, "col_major": ttnn.ShardOrientation.COL_MAJOR}
 
-gather_op_map = {"line": "line_all_gather", "ring": "all_gather"}
+gather_op_map = {"line": ttnn.Topology.Linear, "ring": ttnn.Topology.Ring}
 
 tensor_layouts = {"row": ttnn.ROW_MAJOR_LAYOUT, "tile": ttnn.TILE_LAYOUT}
 
@@ -143,7 +143,7 @@ def generate_params(
             "orientation": [orientation],
             "tensor_mem_layout": [tensor_mem_layout_value],
             "shard_grid": [shard_grid],
-            "all_gather_operation": [gather_op],
+            "all_gather_topology": [gather_op],
         },
     }
 
@@ -193,9 +193,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 
 def mesh_device_fixture():
     assert ttnn.get_num_devices() >= 8, "Not T3000!"
-    device_ids = [0, 4, 5, 1, 2, 6, 7, 3]
+    device_ids = ttnn.get_t3k_physical_device_ids_ring()
     num_devices_requested = len(device_ids)
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, num_devices_requested), device_ids[:num_devices_requested])
+    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, num_devices_requested), mesh_type=ttnn.MeshType.Ring)
     print("ALL GATHER: Opened device mesh")
 
     yield (mesh_device, "T3000 Mesh")
@@ -224,7 +224,7 @@ def run(
     tensor_layout,
     tensor_mem_layout,
     # num_cores,
-    all_gather_operation,
+    all_gather_topology,
     *,
     device,
 ):
@@ -258,10 +258,11 @@ def run(
     input_tensor_mesh = generate_tt_tensors(input_tensors, input_dtype, tensor_layout, t3k_device, input_mem_config)
 
     ## Run the actual allgather operation
-    gather_function = ttnn.all_gather if all_gather_operation == "all_gather" else ttnn.line_all_gather
 
     start_time = start_measuring_time()
-    tt_out_tensor = gather_function(input_tensor_mesh, dim, num_links=num_links, memory_config=output_mem_config)
+    tt_out_tensor = ttnn.all_gather(
+        input_tensor_mesh, dim, num_links=num_links, memory_config=output_mem_config, topology=all_gather_topology
+    )
     e2e_perf = stop_measuring_time(start_time)
 
     all_eq, output = compare_results(input_dtype, tt_out_tensor, unchunked_input_tensor, input_shape)
