@@ -11,55 +11,58 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
+    using namespace tt;
+    using namespace tt::tt_metal;
+    using namespace tt::tt_metal::detail;
+
     const auto& input = tensor_args.input;
     Program program = Program();
 
     bool tilized = output.get_layout() == Layout::TILE;
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
+    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
     bool convert_dtype = input_cb_data_format != output_cb_data_format;
-    uint32_t input_unit_size = tilized ? tt::tt_metal::detail::TileSize(input_cb_data_format)
-                                       : input.get_legacy_shape()[-1] * input.element_size();
-    uint32_t output_unit_size = tilized ? tt::tt_metal::detail::TileSize(output_cb_data_format)
-                                        : output.get_legacy_shape()[-1] * output.element_size();
+    uint32_t input_unit_size =
+        tilized ? TileSize(input_cb_data_format) : input.get_legacy_shape()[-1] * input.element_size();
+    uint32_t output_unit_size =
+        tilized ? TileSize(output_cb_data_format) : output.get_legacy_shape()[-1] * output.element_size();
 
     uint32_t num_units =
-        tilized ? output.volume() / tt::constants::TILE_HW : output.volume() / output.get_legacy_shape()[-1];
+        tilized ? output.volume() / constants::TILE_HW : output.volume() / output.get_legacy_shape()[-1];
 
-    tt::tt_metal::Device* device = output.device();
+    Device* device = output.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_units);
+        split_work_to_cores(compute_with_storage_grid_size, num_units);
 
-    uint32_t src0_cb_index = tt::CB::c_in0;
+    uint32_t src0_cb_index = CB::c_in0;
     uint32_t num_input_units = 2;
     uint32_t aligned_input_unit_size = round_up_to_mul32(input_unit_size);
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_input_units * aligned_input_unit_size, {{src0_cb_index, input_cb_data_format}})
+    auto cb_src0_config =
+        CircularBufferConfig(num_input_units * aligned_input_unit_size, {{src0_cb_index, input_cb_data_format}})
             .set_page_size(src0_cb_index, aligned_input_unit_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    auto cb_src0 = CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t output_cb_index = src0_cb_index;
     if (convert_dtype) {
-        output_cb_index = tt::CB::c_out0;
+        output_cb_index = CB::c_out0;
         uint32_t num_output_units = 2;
         uint32_t aligned_output_unit_size = round_up_to_mul32(output_unit_size);
-        tt::tt_metal::CircularBufferConfig output_cb_config =
-            tt::tt_metal::CircularBufferConfig(
+        auto output_cb_config =
+            CircularBufferConfig(
                 num_output_units * aligned_output_unit_size, {{output_cb_index, output_cb_data_format}})
                 .set_page_size(output_cb_index, aligned_output_unit_size);
-        auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+        auto cb_output = CreateCircularBuffer(program, all_cores, output_cb_config);
     }
 
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
 
     vector<uint32_t> reader_compile_time_args, writer_compile_time_args;
     if (tilized) {
@@ -82,35 +85,35 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
             (uint32_t)dst_log2_stick_size};
     }
     map<string, string> kernel_defines;
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
+    KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
         tilized ? "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/read_kernel.cpp"
                 : "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/read_kernel_rm.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
+        ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
 
-    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
+    KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
         tilized ? "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/write_kernel.cpp"
                 : "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/write_kernel_rm.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
+        WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
 
     if (convert_dtype) {
         vector<uint32_t> compute_kernel_args_group_1 = {num_units_per_core_group_1};
-        auto eltwise_unary_kernel_group_1 = tt::tt_metal::CreateKernel(
+        auto eltwise_unary_kernel_group_1 = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/compute_kernel.cpp",
             core_group_1,
-            tt::tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_1});
+            ComputeConfig{.compile_args = compute_kernel_args_group_1});
 
         if (!core_group_2.ranges().empty()) {
             vector<uint32_t> compute_kernel_args_group_2 = {num_units_per_core_group_2};
-            auto eltwise_unary_kernel_group_2 = tt::tt_metal::CreateKernel(
+            auto eltwise_unary_kernel_group_2 = CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/compute_kernel.cpp",
                 core_group_2,
-                tt::tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_2});
+                ComputeConfig{.compile_args = compute_kernel_args_group_2});
         }
     }
 
@@ -123,17 +126,17 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
         uint32_t num_units_per_core = i < g1_numcores ? num_units_per_core_group_1 : num_units_per_core_group_2;
 
         if (tilized) {
-            tt::tt_metal::SetRuntimeArgs(
+            SetRuntimeArgs(
                 program, unary_reader_kernel_id, core, {src_buffer->address(), num_units_per_core, start_id});
-            tt::tt_metal::SetRuntimeArgs(
+            SetRuntimeArgs(
                 program, unary_writer_kernel_id, core, {dst_buffer->address(), num_units_per_core, start_id});
         } else {
-            tt::tt_metal::SetRuntimeArgs(
+            SetRuntimeArgs(
                 program,
                 unary_reader_kernel_id,
                 core,
                 {src_buffer->address(), input_unit_size, num_units_per_core, start_id});
-            tt::tt_metal::SetRuntimeArgs(
+            SetRuntimeArgs(
                 program,
                 unary_writer_kernel_id,
                 core,
