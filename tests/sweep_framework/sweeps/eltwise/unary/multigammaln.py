@@ -25,14 +25,18 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 32),
+        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 16)
+        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 16)
+        + gen_shapes([1, 1], [256, 256], [1, 1], 16),
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
     "xfail": {
-        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 32),
+        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 4)
+        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 4)
+        + gen_shapes([1, 1], [256, 256], [1, 1], 4),
         "input_a_dtype": [ttnn.bfloat8_b],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -76,5 +80,5 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    print(f"pcc {pcc}")
+    # print(f"pcc {pcc}")
     return [pcc, e2e_perf]
