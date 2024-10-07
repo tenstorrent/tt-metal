@@ -81,7 +81,7 @@ enum noc_mode : uint8_t {
 
 // Address offsets to kernel runtime configuration components
 // struct to densely packs values used by each processor
-struct dyn_mem_map_t {
+struct rta_offset_t {
     volatile uint16_t rta_offset;
     volatile uint16_t crta_offset;
 };
@@ -96,7 +96,7 @@ struct kernel_config_msg_t {
     volatile uint32_t kernel_config_base[static_cast<int>(ProgrammableCoreType::COUNT)];
     volatile uint16_t sem_offset[static_cast<int>(ProgrammableCoreType::COUNT)];
     volatile uint16_t cb_offset;
-    dyn_mem_map_t mem_map[DISPATCH_CLASS_MAX];
+    rta_offset_t rta_offset[DISPATCH_CLASS_MAX];
 
     volatile uint8_t mode;                   // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;
