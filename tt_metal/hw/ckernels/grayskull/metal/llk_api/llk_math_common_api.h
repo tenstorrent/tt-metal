@@ -83,24 +83,24 @@ inline void llk_math_reconfig_data_format_srcb(
 }
 
 inline std::uint32_t llk_math_get_compute_special_value_flags() {
-    static_assert(false && "API not supported in Grayskull");
-    return 0;
+    // API not supported in Grayskull
+    return 0xFFFFFFFF;
 }
 
 inline std::uint32_t llk_math_get_compute_special_value_flags_fpu(std::uint32_t special_value_flags_reg) {
-    static_assert(false && "API not supported in Grayskull");
-    return 0;
+    // API not supported in Grayskull
+    return 0xFFFFFFFF;
 }
 
 inline std::uint32_t llk_math_get_compute_special_value_flags_sfpu(std::uint32_t special_value_flags_reg) {
-    static_assert(false && "API not supported in Grayskull");
-    return 0;
+    // API not supported in Grayskull
+    return 0xFFFFFFFF;
 }
 
 inline void llk_math_clear_compute_special_value_flags() {
-    static_assert(false && "API not supported in Grayskull");
+    // API not supported in Grayskull
 }
 
 inline void llk_math_store_compute_special_value_flags_to_l1(std::uint32_t l1_addr) {
-    static_assert(false && "API not supported in Grayskull");
+    // API not supported in Grayskull
 }
