@@ -33,7 +33,7 @@ parameters = {
         + tuple(combinations([0, 1, 2], 3))
         + tuple(combinations([0, 1], 2)),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_a_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
@@ -46,6 +46,8 @@ parameters = {
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if len(test_vector["input_shape"]) != len(test_vector["permute_spec"]):
         return True, "Length of the permutation vector must be the same as the rank of input tensor"
+    if test_vector["input_a_layout"] == ttnn.ROW_MAJOR_LAYOUT and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
+        return True, "bfloat8_b not supported with row major layout"
     return False, None
 
 
