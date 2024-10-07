@@ -60,7 +60,9 @@ def run(
     input_shape = (*batch_sizes, height, width)
 
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
-    torch_output_tensor = torch.ne(torch_input_tensor, 0)
+
+    golden_function = ttnn.get_golden_function(ttnn.nez)
+    torch_output_tensor = golden_function(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=dtype, device=device, memory_config=input_memory_config, layout=layout
