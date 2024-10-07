@@ -177,9 +177,9 @@ def from_torch(
     device: Optional[ttnn.Device] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
     mesh_mapper: Optional[ttnn.TensorToMesh] = None,
-) -> ttnn.Tensor:
+) -> Union[ttnn.Tensor, float, int]:
     """
-    Converts the `torch.Tensor` tensor into a `ttnn.Tensor`.
+    Converts the `torch.Tensor` tensor into a `ttnn.Tensor`. A 0-dimensional torch Tensor is converted to a scalar value.
 
     Args:
         tensor (torch.Tensor): the input tensor.
@@ -203,6 +203,8 @@ def from_torch(
     """
 
     shape_with_padding = None
+    if tensor.dim() == 0:
+        return tensor.item()
     if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
         if len(tensor.shape) < 2:
             raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires at least 2 dimensions!")
