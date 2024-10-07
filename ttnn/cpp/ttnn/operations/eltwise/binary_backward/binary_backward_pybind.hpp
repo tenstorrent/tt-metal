@@ -397,7 +397,7 @@ template <typename binary_backward_operation_t>
 void bind_binary_backward_rsub(py::module& module, const binary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "") {
 
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, are_required_outputs: Optional[List[bool]] = [True, True], memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+        R"doc(
 
         {2}
 
@@ -1048,7 +1048,7 @@ void py_module(py::module& module) {
     detail::bind_binary_bw_div(
         module,
         ttnn::div_bw,
-        R"doc(Performs backward operations for divide on :attr:`input_tensor`, :attr:`alpha` or :attr:`input_tensor_a`, attr:`input_tensor_b`, attr:`round_mode`,  with given :attr:`grad_tensor`.)doc",
+        R"doc(Performs backward operations for divide on :attr:`input_tensor`, :attr:`alpha` or :attr:`input_tensor_a`, :attr:`input_tensor_b`, :attr:`round_mode`,  with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
            +----------------------------+---------------------------------+-------------------+
@@ -1141,7 +1141,7 @@ void py_module(py::module& module) {
         module,
         ttnn::addalpha_bw,
         "alpha", "Alpha value", 1.0f,
-        R"doc(Performs backward operations for addalpha on :attr:`input_tensor_b` , :attr:`input_tensor_a` and :attr:`alpha` with given attr:`grad_tensor`.)doc",
+        R"doc(Performs backward operations for addalpha on :attr:`input_tensor_b` , :attr:`input_tensor_a` and :attr:`alpha` with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
            +----------------------------+---------------------------------+-------------------+
