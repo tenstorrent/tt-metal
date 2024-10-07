@@ -81,7 +81,7 @@ namespace data_movement {
                 return output;
             });
         // Convert dim after unsqueeze
-        dim = dim + 4 - rank;
+        dim = rank < 4 ? dim + 4 - rank : dim;
         auto output_tensor = concat_impl(itensor, dim, mem_config);
         while (output_tensor.get_shape().rank() > rank) {
             const auto shape = output_tensor.get_shape();

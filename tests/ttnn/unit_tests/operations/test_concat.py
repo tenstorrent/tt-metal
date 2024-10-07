@@ -112,3 +112,14 @@ def test_sharded_concat(
 
     assert_with_pcc(torch_output_tensor, output, 0.9999)
     assert_with_pcc(torch_output_tensor, output)
+
+
+@pytest.mark.parametrize("dim", [0, 1, 2, 3])
+def test_concat_5d(device, dim):
+    torch_input_tensor = torch.rand(1, 1, 1, 1, 2, dtype=torch.bfloat16)
+    torch_result = torch.cat([torch_input_tensor, torch_input_tensor], dim=dim)
+
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_result = ttnn.concat([ttnn_input_tensor, ttnn_input_tensor], dim=dim)
+    ttnn_result = ttnn.to_torch(ttnn_result)
+    assert_with_pcc(torch_result, ttnn_result, 0.9999)
