@@ -5,7 +5,7 @@
 
 #include "repeat_interleave.hpp"
 
-#include "ttnn/cpp/ttnn/operations/data_movement/reshape/reshape.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 
 namespace ttnn {
 namespace operations {

@@ -144,21 +144,6 @@ Example::
 
 """
 
-# Unsupported cases, which require a fallback: (found in bert, t5, bloom)
-# Shape([1, 128, 512])  <-> (1, 128, 8, 64)
-# Shape([1, 128, 384])  <-> (1, 128, 6, 64)
-# Shape([1, 384, 1024]) <-> (1, 384, 16, 64)
-# Shape([1, 11, 4096])  <-> (1, 11, 32, 128)
-# Shape([1, 128, 28, 28]) <-> (-1, 128)
-# Shape([1, 11, 32, 128]) <-> (1, 1, 11, -1) in ttnn_functional_attention.py test_mistral_attention_inference
-ttnn.register_python_operation(
-    name="ttnn.reshape",
-    golden_function=_golden_function,
-    preprocess_golden_function_inputs=_preprocess_golden_function_inputs,
-    postprocess_golden_function_outputs=_postprocess_golden_function_outputs,
-    doc=doc,
-)(ttnn._ttnn.operations.core.reshape)
-
 # TODO(arakhmati): remove this once underlying C++ code can handle non-4D shapes
 ttnn.register_python_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operations.core.unsqueeze_to_4D)
 

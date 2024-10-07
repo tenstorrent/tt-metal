@@ -20,6 +20,7 @@
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 using namespace tt::constants;
 
@@ -45,7 +46,7 @@ Tensor HaloTensorCreation(const Tensor &input){
             input_tensor.memory_config().shard_spec.value().grid,
             false, true);
 
-    input_tensor = ttnn::operations::core::reshape(
+    input_tensor = ttnn::reshape(
         input_tensor,
         Shape(std::array<uint32_t, 4>{
             1,

@@ -44,54 +44,6 @@ void py_module_types(py::module& module) {
 }
 
 void py_module(py::module& module) {
-    module.def(
-        "reshape",
-        [](const ttnn::Tensor& tensor, const ttnn::Shape& shape) -> ttnn::Tensor {
-            return ttnn::reshape(tensor, shape);
-        },
-        py::arg("tensor"),
-        py::arg("shape"));
-
-    module.def(
-        "reshape",
-        [](const ttnn::Tensor& tensor, const std::array<int32_t, 1>& shape) -> ttnn::Tensor {
-            return ttnn::reshape(tensor, shape);
-        },
-        py::arg("tensor"),
-        py::arg("shape"));
-
-    module.def(
-        "reshape",
-        [](const ttnn::Tensor& tensor, const std::array<int32_t, 2>& shape) -> ttnn::Tensor {
-            return ttnn::reshape(tensor, shape);
-        },
-        py::arg("tensor"),
-        py::arg("shape"));
-
-    module.def(
-        "reshape",
-        [](const ttnn::Tensor& tensor, const std::array<int32_t, 3>& shape) -> ttnn::Tensor {
-            return ttnn::reshape(tensor, shape);
-        },
-        py::arg("tensor"),
-        py::arg("shape"));
-
-    module.def(
-        "reshape",
-        [](const ttnn::Tensor& tensor, const std::array<int32_t, 4>& shape) -> ttnn::Tensor {
-            return ttnn::reshape(tensor, shape);
-        },
-        py::arg("tensor"),
-        py::arg("shape"));
-
-    module.def(
-        "reshape",
-        [](const ttnn::Tensor& tensor, const std::array<int32_t, 5>& shape) -> ttnn::Tensor {
-            return ttnn::reshape(tensor, shape);
-        },
-        py::arg("tensor"),
-        py::arg("shape"));
-
     module.def("unsqueeze_to_4D", &ttnn::unsqueeze_to_4D, py::arg("tensor"));
 
     module.def(
