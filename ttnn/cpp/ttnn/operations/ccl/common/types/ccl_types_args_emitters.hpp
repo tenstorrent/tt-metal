@@ -11,9 +11,12 @@
 namespace tt {
 namespace tt_metal {
 class Tensor;
+
+inline namespace v0 {
 class Device;
-} // namespace tt_metal
-} // namespace tt
+}  // namespace v0
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 namespace ccl {

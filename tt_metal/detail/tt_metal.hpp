@@ -13,9 +13,11 @@
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 
 namespace tt::tt_metal {
+inline namespace v0 {
     class Program;
     class Buffer;
     class Device;
+}  // namespace v0
 
     namespace detail {
 
@@ -278,5 +280,5 @@ namespace tt::tt_metal {
         void AllocateBuffer(Buffer* buffer, bool bottom_up);
 
         void DeallocateBuffer(Buffer *buffer);
-    }
-}
+    }  // namespace detail
+}  // namespace tt::tt_metal

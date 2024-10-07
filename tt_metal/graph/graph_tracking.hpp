@@ -13,8 +13,12 @@
 #include "tt_metal/impl/buffers/buffer.hpp"
 
 namespace tt::tt_metal {
+inline namespace v0 {
 
     class Program;
+
+}  // namespace v0
+
     class IGraphProcessor{
     public:
         enum class RunMode {

@@ -21,10 +21,14 @@
 #include "tt_metal/impl/trace/trace_buffer.hpp"
 
 namespace tt::tt_metal {
+inline namespace v0 {
 
+class CommandQueue;
 class Event;
 class Trace;
 using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
+
+}  // namespace v0
 
 // Only contains the types of commands which are enqueued onto the device
 enum class EnqueueCommandType {
@@ -47,7 +51,6 @@ enum class EnqueueCommandType {
 
 string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 
-class CommandQueue;
 class CommandInterface;
 
 using WorkerQueue = LockFreeQueue<CommandInterface>;
@@ -591,8 +594,8 @@ class HWCommandQueue {
     friend void EnqueueWaitForEventImpl(CommandQueue& cq, const std::shared_ptr<Event>& event);
     friend void FinishImpl(CommandQueue& cq);
     friend void EnqueueRecordEvent(CommandQueue& cq, const std::shared_ptr<Event>& event);
-    friend class CommandQueue;
-    friend class Device;
+    friend CommandQueue;
+    friend Device;
 };
 
 // Common interface for all command queue types
@@ -609,6 +612,8 @@ struct CommandInterface {
     std::optional<std::shared_ptr<Event>> event;
     std::optional<uint32_t> trace_id;
 };
+
+inline namespace v0 {
 
 class CommandQueue {
     friend class Device;
@@ -696,6 +701,8 @@ class CommandQueue {
     inline static uint32_t num_async_cqs = 0;
     inline static uint32_t num_passthrough_cqs = 0;
 };
+
+}  // namespace v0
 
 // Primitives used to place host only operations on the SW Command Queue.
 // These are used in functions exposed through tt_metal.hpp or host_api.hpp
