@@ -234,7 +234,6 @@ class Cluster {
     ~Cluster();
 
     void detect_arch_and_target();
-    void initialize_hal();
     void generate_cluster_descriptor();
     void initialize_device_drivers();
     void assert_risc_reset();
@@ -302,8 +301,6 @@ class Cluster {
 
     // Mapping of each devices' ethernet routing mode
     std::unordered_map<chip_id_t, std::unordered_map<CoreCoord, EthRouterMode>> device_eth_routing_info_;
-
-    tt_device_dram_address_params dram_address_params;
 
     tt_device_l1_address_params l1_address_params = {
         (uint32_t)MEM_NCRISC_FIRMWARE_BASE,
