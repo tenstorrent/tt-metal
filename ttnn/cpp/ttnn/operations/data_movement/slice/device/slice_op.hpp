@@ -17,7 +17,7 @@ uint32_t get_tiled_start_offset(const Tensor &input_tensor, const Shape &slice_s
 struct SliceDeviceOperation {
     const tt::tt_metal::LegacyShape slice_start;
     const tt::tt_metal::LegacyShape slice_end;
-    const std::optional<tt::tt_metal::LegacyShape> step;
+    const tt::tt_metal::LegacyShape step;
     const MemoryConfig output_mem_config;
 
 

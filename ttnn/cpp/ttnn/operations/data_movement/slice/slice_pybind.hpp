@@ -59,7 +59,28 @@ void bind_slice(py::module& module) {
                 py::arg("input_tensor"),
                 py::arg("slice_start"),
                 py::arg("slice_end"),
-                py::arg("step") = std::nullopt, // should consider a better default value
+                py::arg("slice_step") = std::nullopt, // should consider a better default value
+                py::kw_only(),
+                py::arg("memory_config") = std::nullopt,
+                py::arg("output_tensor") = std::nullopt,
+                py::arg("queue_id") = 0,
+                },
+
+        ttnn::pybind_overload_t{
+            [] (const OperationType& self,
+                const ttnn::Tensor& input_tensor,
+                const std::array<uint32_t, 4> &begins,
+                const std::array<uint32_t, 4> &ends,
+                const std::array<uint32_t, 4> &step,
+                const std::optional<ttnn::MemoryConfig>& memory_config,
+                const std::optional<Tensor>& optional_output_tensor,
+                uint8_t queue_id) {
+                    return self(queue_id, input_tensor, begins, ends, step, memory_config, optional_output_tensor);
+                },
+                py::arg("input_tensor"),
+                py::arg("starts"),
+                py::arg("ends"),
+                py::arg("steps"),
                 py::kw_only(),
                 py::arg("memory_config") = std::nullopt,
                 py::arg("output_tensor") = std::nullopt,

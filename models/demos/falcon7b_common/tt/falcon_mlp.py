@@ -367,8 +367,9 @@ class TtFalconMLPDecode(nn.Module):
         if self.model_config["PREFILL_OPTIMIZED_MODE"] and self.prefill_seq_len in [1024, 2048]:
             hidden_states = ttnn.slice(
                 hidden_states,
-                [0, 0, 0, 0],
-                [1, 1, batch_size, self.hidden_size],
+                starts=(0, 0, 0, 0),
+                ends=(1, 1, batch_size, self.hidden_size),
+                steps=(1, 1, 1, 1),
                 memory_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
             )
 

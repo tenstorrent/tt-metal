@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include "ttnn/common/constants.hpp"
 #include "slice.hpp"
 #include "device/slice_op.hpp"
@@ -10,15 +9,16 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/common/constants.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/copy/copy.hpp"
 
 
 namespace ttnn::operations::data_movement {
 namespace detail {
-    uint32_t wrap_index(int index, int size) {
+    static inline uint32_t wrap_index(int index, int size) {
         return index < 0 ? size + index : index;
     }
-    uint32_t round_up_to_multiple_of_32(uint32_t value) {
-        return value == 0 ? 32 : ((value + 31) & ~31);
+    static inline uint32_t round_up_to_multiple_of_32(uint32_t value) {
+        return value == 0 ? 32u : ((value + 31u) & ~31);
     }
 }
 
@@ -34,34 +34,22 @@ ttnn::Tensor SliceOperation::invoke(
 
     // Ensure start and end vectors have matching sizes and correct tensor rank
     uint32_t input_rank = input_tensor.get_shape().rank();
-    // Check if we can use the optimized version for uint32_t and 4D tensors
-    if (begins.size() == 4 && ends.size() == 4 && step.size() == 4 && input_rank == 4) [[likely]] {
-        // Convert vectors to arrays
-        std::array<uint32_t, 4> begins_array;
-        std::array<uint32_t, 4> ends_array;
-        std::array<uint32_t, 4> step_array;
-        if constexpr (std::is_same_v<T, uint32_t>) {
-            std::copy(begins.begin(), begins.end(), begins_array.begin());
-            std::copy(ends.begin(), ends.end(), ends_array.begin());
-            std::copy(step.begin(), step.end(), step_array.begin());
-            // Call the optimized version
-            return SliceOperation::invoke<uint32_t, 4>(
-                queue_id, input_tensor, begins_array, ends_array, step_array,
-                memory_config_arg, optional_output_tensor);
+    const auto &input_shape = input_tensor.get_shape();
+    bool no_step = std::ranges::all_of(step, [](uint32_t s) { return s == 1; });
+    bool starts_zero = std::ranges::all_of(begins, [](uint32_t s) { return s == 0; });
+    bool ends_max = true;
+    for (size_t i = 0; i < ends.size(); ++i) {
+        ends_max &= ends[i] == input_shape[i];
+        if (!ends_max) {
+            break;
         }
-        else {
-            if (begins[0] >= 0 && begins[1] >= 0 && begins[2] >= 0 && begins[3] >= 0 && ends[0] >= 0 && ends[1] >= 0 && ends[2] >= 0 && ends[3] >= 0) [[likely]] {
-                if (input_tensor.get_layout() == Layout::ROW_MAJOR || (input_tensor.get_layout() == Layout::TILE && (ends[2]%32 == 0) && (ends[3]%32 == 0))) [[likely]] {
-                    // Call the optimized version
-                    std::copy(begins.begin(), begins.end(), begins_array.begin());
-                    std::copy(ends.begin(), ends.end(), ends_array.begin());
-                    std::copy(step.begin(), step.end(), step_array.begin());
-                    return SliceOperation::invoke<uint32_t, 4>(
-                        queue_id, input_tensor, begins_array, ends_array, step_array,
-                        memory_config_arg, optional_output_tensor);
-                }
-            }
+    }
+    if (no_step && starts_zero && ends_max) {
+        if (input_tensor.storage_type() == StorageType::DEVICE) {
+            auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config_arg.value_or(input_tensor.memory_config());
+            return ttnn::to_memory_config(input_tensor, memory_config, std::nullopt);
         }
+        return input_tensor;
     }
 
     TT_FATAL(input_rank == begins.size(), "Input rank {} and begins {} must have the same size", input_rank, begins.size());
@@ -118,8 +106,12 @@ ttnn::Tensor SliceOperation::invoke(
     }
 
     // Early exit if slice is a no-op (ends = padding ends and step = 1 for all dimensions)
-    bool no_step = std::all_of(step.begin(), step.end(), [](int i) {return i == 1;});
     if (tt::tt_metal::LegacyShape(padded_shape) == input_tensor.get_legacy_shape() and no_step) {
+        if (input_tensor.storage_type() == StorageType::DEVICE) {
+            auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config_arg.value_or(input_tensor.memory_config());
+            auto res = ttnn::to_memory_config(input_tensor, memory_config, std::nullopt);
+            return ttnn::reshape(res, output_shape);
+        }
         return ttnn::reshape(input_tensor, output_shape);
     }
 
@@ -163,13 +155,11 @@ ttnn::Tensor SliceOperation::invoke(
                    SliceDeviceOperation{
                     tt::tt_metal::LegacyShape(modified_begins),
                     tt::tt_metal::LegacyShape(padded_ends),
-                    no_step ? std::nullopt : std::optional<tt::tt_metal::LegacyShape>(tt::tt_metal::LegacyShape(modified_step)),
+                    modified_step,
                     memory_config},
                     {input_4d}, {}, {optional_output_tensor}, queue_id)
             .at(0);
-        res = ttnn::reshape(res, output_shape);
-        return res;
-
+        return ttnn::reshape(res, output_shape);
     }
 }
 template<typename T>
@@ -188,109 +178,100 @@ template<>
 ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
-    const std::array<uint32_t, 4> &output_tensor_start,
-    const std::array<uint32_t, 4> &output_tensor_end,
+    const std::array<uint32_t, 4> &begins,
+    const std::array<uint32_t, 4> &ends,
     const std::array<uint32_t, 4> &step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor) {
 
-    bool efficient_path = input_tensor.storage_type() == StorageType::DEVICE && !input_tensor.is_sharded();
-    for (int i = 0; i < 4; ++i) {
-        efficient_path &= (step[i] == 1) && (output_tensor_end[i] > output_tensor_start[i]);
-        if (!efficient_path) {
-            break;
+    const auto& padded_input_shape = input_tensor.get_shape().with_tile_padding();
+    TT_FATAL(padded_input_shape.rank() == 4, "Input tensor must have rank 4");
+
+    bool no_step = step[0] == 1 && step[1] == 1 && step[2] == 1 && step[3] == 1;
+    bool starts_zero = begins[0]==0 && begins[1]==0 && begins[2]==0 && begins[3]==0;
+    bool ends_max = ends[0]==padded_input_shape[0] && ends[1]==padded_input_shape[1] && ends[2]==padded_input_shape[2] && ends[3]==padded_input_shape[3];
+
+    if (no_step && starts_zero && ends_max) {
+        if (input_tensor.storage_type() == StorageType::DEVICE) {
+            auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config_arg.value_or(input_tensor.memory_config());
+            return ttnn::to_memory_config(input_tensor, memory_config, std::nullopt);
         }
-    }
-    if (efficient_path) {
-        return operation::run(
-            SliceDeviceOperation{
-                tt::tt_metal::LegacyShape(output_tensor_start),
-                tt::tt_metal::LegacyShape(output_tensor_end),
-                std::nullopt,
-                memory_config_arg.value_or(input_tensor.memory_config())},
-            {input_tensor}, {}, {optional_output_tensor}, queue_id)
-            .at(0);
+        return input_tensor;
     }
 
-    const auto& input_shape = input_tensor.get_legacy_shape();
-    std::array<uint32_t, 4> modified_begins;
-    std::array<uint32_t, 4> modified_ends;
-    std::array<uint32_t, 4> modified_step = step;
+    const bool tiled = input_tensor.get_layout() == Layout::TILE;
+    bool on_device = input_tensor.storage_type() == StorageType::DEVICE;
 
-    bool no_step = true;
-    bool empty = false;
     std::array<uint32_t, 4> actual_shape;
     std::array<uint32_t, 4> padded_shape;
-
+    const std::array<uint32_t, 4> padded_ends = tiled ? std::array<uint32_t, 4>({ends[0], ends[1], detail::round_up_to_multiple_of_32(ends[2]), detail::round_up_to_multiple_of_32(ends[3])}) : ends;
+    bool empty = false;
     for (int i = 0; i < 4; ++i) {
-        // No need for wrap_index since we're using uint32_t
-        modified_begins[i] = output_tensor_start[i];
-        modified_ends[i] = output_tensor_end[i];
-
-        TT_FATAL(modified_ends[i] >= modified_begins[i], "End {} must be greater than or equal to start {}", modified_ends[i], modified_begins[i]);
-
-        no_step &= (step[i] == 1);
-
-        uint32_t dim_size = (modified_ends[i] - modified_begins[i] + step[i] - 1) / step[i];
+        TT_FATAL(ends[i] >= begins[i], "End {} must be greater than or equal to start {}", ends[i], begins[i]);
+        uint32_t offset = step[i] - begins[i] - 1;
+        uint32_t dim_size = (ends[i] + offset) / step[i];
+        empty |= dim_size == 0;
         actual_shape[i] = dim_size;
-        padded_shape[i] = (i >= 2 && input_tensor.get_layout() == Layout::TILE) ? std::max(dim_size, 32u) : std::max(dim_size, 1u);
-
-        if (dim_size == 0) {
-            empty = true;
-        }
+        padded_shape[i]= std::max((padded_ends[i] + offset) / step[i], 1u);
     }
 
     ttnn::Shape output_shape(actual_shape, padded_shape);
 
     if (empty) {
-        TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Host tensor slice cannot return a scalar or empty tensor");
+        TT_FATAL(on_device, "Host tensor slice cannot return a scalar or empty tensor");
+        auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config_arg.value_or(input_tensor.memory_config());
         return ttnn::empty(output_shape, input_tensor.dtype(), input_tensor.layout(),
-            input_tensor.device(), memory_config_arg.value_or(input_tensor.memory_config()));
+            input_tensor.device(), memory_config);
     }
 
     // Early exit if slice is a no-op
-    if (tt::tt_metal::LegacyShape(padded_shape) == input_shape && no_step) {
-        return ttnn::reshape(input_tensor, output_shape);
+    if (ttnn::Shape(padded_shape) == padded_input_shape && no_step) {
+        if (input_tensor.storage_type() == StorageType::DEVICE) {
+            auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config_arg.value_or(input_tensor.memory_config());
+            auto res = ttnn::to_memory_config(input_tensor, memory_config, std::nullopt);
+            return ttnn::reshape(res, output_shape);
+        }
+        return ttnn::reshape(input_tensor, output_shape); // change to view
     }
 
-    if (input_tensor.storage_type() != StorageType::DEVICE) {
-        TT_FATAL(no_step, "Host tensor slice does not support strides");
-        if (input_tensor.get_legacy_shape() == actual_shape) {
-            return input_tensor;
-        } else {
-            auto input_4d_rm = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (Device *)nullptr);
-            auto output_4d =  input_4d_rm.unpad(tt::tt_metal::LegacyShape(modified_begins), tt::tt_metal::LegacyShape(modified_ends));
-            auto output_4d_rm = ttnn::to_layout(output_4d, input_tensor.get_layout(), std::nullopt, std::nullopt, (Device *)nullptr);
-            return ttnn::reshape(output_4d_rm, output_shape);
-        }
-    } else {
+    if (on_device) {
         auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config_arg.value_or(input_tensor.memory_config());
 
         // Check for in-place unpad optimization
-        if (input_tensor.is_sharded() && input_tensor.memory_config() == memory_config && input_shape.rank() > 1) {
+        if (input_tensor.is_sharded() && input_tensor.memory_config() == memory_config && padded_input_shape.rank() > 1) {
             TT_FATAL(no_step, "Sharded tensor slice implementation does not support striding");
             bool in_place_unpad = true;
             for (int i = 0; i < 2; ++i) {
-                in_place_unpad &= modified_begins[i] == 0 && modified_ends[i] == 1 && input_shape[i] == 1;
+                in_place_unpad &= begins[i] == 0 && ends[i] == 1 && padded_input_shape[i] == 1;
             }
-            in_place_unpad &= modified_begins[2] == 0 &&
-                              tt::div_up(modified_ends[2], input_tensor.shard_spec().value().shape[0]) ==
-                                  tt::div_up(input_shape[2], input_tensor.shard_spec().value().shape[0]);
-            in_place_unpad &= modified_begins[3] == 0 && modified_ends[3] == input_shape[3];
+            in_place_unpad &= begins[2] == 0 &&
+                                tt::div_up(ends[2], input_tensor.shard_spec().value().shape[0]) ==
+                                    tt::div_up(padded_input_shape[2], input_tensor.shard_spec().value().shape[0]);
+            in_place_unpad &= begins[3] == 0 && ends[3] == padded_input_shape[3];
             if (in_place_unpad) {
                 return ttnn::reshape(input_tensor, output_shape);
             }
         }
 
         auto res = operation::run(
-                   SliceDeviceOperation{
-                    tt::tt_metal::LegacyShape(modified_begins),
-                    tt::tt_metal::LegacyShape(modified_ends),
-                    no_step ? std::nullopt : std::optional<tt::tt_metal::LegacyShape>(tt::tt_metal::LegacyShape(modified_step)),
+                    SliceDeviceOperation{
+                    begins,
+                    padded_ends,
+                    step,
                     memory_config},
-                    {input_tensor}, {}, {optional_output_tensor}, queue_id)
-            .at(0);
-        return res.get_shape() != output_shape ? ttnn::reshape(res, output_shape) : res;
+                    {input_tensor}, {}, {optional_output_tensor}, queue_id)[0];
+        return ttnn::reshape(res, output_shape);
+    }
+
+    TT_FATAL(no_step, "Host tensor slice does not support strides");
+
+    if (input_tensor.get_legacy_shape() == actual_shape) {
+        return input_tensor;
+    } else {
+        auto input_4d_rm = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (Device *)nullptr);
+        auto output_4d =  input_4d_rm.unpad(tt::tt_metal::LegacyShape(begins), tt::tt_metal::LegacyShape(ends));
+        auto output_4d_rm = ttnn::to_layout(output_4d, input_tensor.get_layout(), std::nullopt, std::nullopt, (Device *)nullptr);
+        return ttnn::reshape(output_4d_rm, output_shape);
     }
 }
 

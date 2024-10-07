@@ -158,9 +158,9 @@ Tensor AutoFormat::format_output_tensor(
             // Output can be unpadded and layout supports the shape
             if ((formatted_output.get_layout() == Layout::TILE && AutoFormat::legal_tile_shape(shape)) ||
                 (formatted_output.get_layout() == Layout::ROW_MAJOR && AutoFormat::legal_rm_shape(shape))) {
-                auto begins = std::vector<uint32_t>({0, 0, 0, 0});
-                auto ends = std::vector<uint32_t>({shape[0], shape[1], shape[2], shape[3]});
-                auto step = std::vector<uint32_t>({1, 1, 1, 1});
+                auto begins = std::array<uint32_t, 4>({0, 0, 0, 0});
+                auto ends = std::array<uint32_t, 4>({shape[0], shape[1], shape[2], shape[3]});
+                auto step = std::array<uint32_t, 4>({1, 1, 1, 1});
 
                 formatted_output = ttnn::slice(
                     DefaultQueueId,
@@ -189,9 +189,9 @@ Tensor AutoFormat::format_output_tensor(
             } else if (
                 formatted_output.get_layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE &&
                 AutoFormat::legal_tile_shape(shape)) {
-                auto begins = std::vector<uint32_t>({0, 0, 0, 0});
-                auto ends = std::vector<uint32_t>({shape[0], shape[1], shape[2], shape[3]});
-                auto step = std::vector<uint32_t>({1, 1, 1, 1});
+                auto begins = std::array<uint32_t, 4>({0, 0, 0, 0});
+                auto ends = std::array<uint32_t, 4>({shape[0], shape[1], shape[2], shape[3]});
+                auto step = std::array<uint32_t, 4>({1, 1, 1, 1});
                 formatted_output = ttnn::slice(
                     DefaultQueueId,
                     formatted_output,
@@ -214,9 +214,9 @@ Tensor AutoFormat::format_output_tensor(
             formatted_output = formatted_output.to(Layout::ROW_MAJOR);
             convert_layout = formatted_output.get_layout() != target_layout;
         }
-        auto begins = std::vector<uint32_t>({0, 0, 0, 0});
-        auto ends = std::vector<uint32_t>({shape[0], shape[1], shape[2], shape[3]});
-        auto step = std::vector<uint32_t>({1, 1, 1, 1});
+        auto begins = std::array<uint32_t, 4>({0, 0, 0, 0});
+        auto ends = std::array<uint32_t, 4>({shape[0], shape[1], shape[2], shape[3]});
+        auto step = std::array<uint32_t, 4>({1, 1, 1, 1});
         formatted_output =
             ttnn::slice(formatted_output, begins, ends, step, std::nullopt);
     }
