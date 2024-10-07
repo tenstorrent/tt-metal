@@ -55,25 +55,38 @@ void py_bind_reduce_scatter(pybind11::module& module) {
     detail::bind_reduce_scatter(
         module,
         ttnn::reduce_scatter,
-        R"doc(reduce_scatter(input_tensor: std::vector<ttnn.Tensor>, scatter_dim: int, math_op: ReduceType, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None, topology: ttnn.ccl.Topology, num_workers: int = None, num_buffers_per_channel: int = None) -> std::vector<ttnn.Tensor>
+        R"doc(
 
         Performs an reduce_scatter operation on multi-device :attr:`input_tensor` across all devices.
 
         Args:
-            * :attr:`input_tensor` (ttnn.Tensor): multi-device tensor
-            * :attr:`dim` (int)
+            input_tensor (ttnn.Tensor): multi-device tensor
+            dim (int): Dimension to perform operation
 
         Keyword Args:
-            * :attr:`num_links` (int): Number of links to use for the all-gather operation.
-            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-            * :attr:`topology` (Optional[ttnn.ccl.topology]): The topology configuration to run the operation in. Valid options are Ring and Linear. Default = Ring
-            * :attr:`num_workers` (int): Number of workers to use for the operation.
-            * :attr:`num_buffers_per_channel` (int): Number of buffers per channel to use for the operation.
+            num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
+            num_workers (int, optional): Number of workers to use for the operation. Defaults to `None`.
+            num_buffers_per_channel (int, optional): Number of buffers per channel to use for the operation. Defaults to `None`.
+            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
 
         Example:
 
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.reduce_scatter(tensor, dim=0)
+            >>> full_tensor = torch.randn([1, 1, 256, 256], dtype=torch.bfloat16)
+            >>> num_devices = 8
+            >>> dim = 3
+            >>> input_tensors = torch.chunk(full_tensor, num_devices, dim)
+            >>> physical_device_ids = ttnn.get_t3k_physical_device_ids_ring()
+            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), physical_device_ids=physical_device_ids[:8])
+            >>> tt_input_tensors = []
+            >>> for i, t in enumerate(input_tensors):
+                    tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], mem_config))
+            >>> input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+
+            >>> output = ttnn.reduce_scatter(input_tensor_mesh, dim=0, topology=ttnn.Topology.Linear)
 
         )doc");
 }
