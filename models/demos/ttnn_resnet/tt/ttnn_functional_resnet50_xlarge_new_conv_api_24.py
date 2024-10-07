@@ -689,8 +689,9 @@ class resnet50:
         unpadded_shape = x.shape
         x = ttnn.slice(
             x,
-            (0, 0, 0, 0),
-            (unpadded_shape[0], unpadded_shape[1], unpadded_shape[2], unpadded_shape[3]),
+            starts=(0, 0, 0, 0),
+            ends=(unpadded_shape[0], unpadded_shape[1], unpadded_shape[2], unpadded_shape[3]),
+            steps=(1, 1, 1, 1),
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
