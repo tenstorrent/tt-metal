@@ -468,6 +468,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         get_dram_reader_core_coords_grayskull(device, all_worker_cores, all_worker_cores_ordered);
     } else if (device->arch() == tt::ARCH::BLACKHOLE) {
         get_dram_reader_core_coords_blackhole(device, all_worker_cores, all_worker_cores_ordered);
+    } else {
+        TT_THROW("Device not supported");
     }
 
     // dram banks
