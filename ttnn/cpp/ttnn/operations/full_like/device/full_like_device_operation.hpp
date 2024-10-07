@@ -16,7 +16,7 @@ namespace ttnn::operations::full_like {
 struct FullLikeOperation {
 
     struct operation_attributes_t {
-        const int fill_value;
+        const std::variant<float, int> fill_value;
         const DataType dtype;
         const Layout layout;
         const MemoryConfig memory_config;
@@ -59,11 +59,12 @@ struct FullLikeOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor &input,
-        const int fill_value,
+        const std::variant<float, int> fill_value,
         const std::optional<DataType> &dtype,
         const std::optional<Layout> &layout,
         const std::optional<MemoryConfig> &memory_config);
     };
+
 }
 
 namespace ttnn::prim {

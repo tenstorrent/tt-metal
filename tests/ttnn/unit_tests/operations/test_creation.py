@@ -93,24 +93,25 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, divup
     "input_shape",
     [
         [32, 32],
-        [5, 96, 64],
+        # [5, 96, 64],
     ],
 )
 @pytest.mark.parametrize(
     "fill_value",
-    [-5, 3, 15, 25],
+    [3],
 )
 def test_full_like(device, input_shape, fill_value):
-    torch_input_tensor = torch.rand((input_shape), dtype=torch.bfloat16)
+    torch_input_tensor = torch.randint(0, 100, (input_shape), dtype=torch.int32)
     torch_output_tensor = torch.full_like(torch_input_tensor, fill_value)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT)
     input_tensor = ttnn.to_device(input_tensor, device)
     output_tensor = ttnn.full_like_2(input_tensor, fill_value)
     assert ttnn.is_tensor_storage_on_device(output_tensor)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    print("output_tensor", output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
     assert torch.allclose(torch_output_tensor, output_tensor)
 

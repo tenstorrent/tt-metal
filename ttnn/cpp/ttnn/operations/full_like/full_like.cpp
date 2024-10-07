@@ -15,8 +15,18 @@ namespace ttnn::operations::full_like {
         const std::optional<DataType> &dtype,
         const std::optional<Layout> &layout,
         const std::optional<MemoryConfig> &memory_config) {
+            std::cout << "Ditconme int ben ngoai" << std::endl;
             return ttnn::prim::full_like_2(
                 input, fill_value, dtype, layout, memory_config);
         }
-
+    Tensor FullLike::invoke(
+        const Tensor &input,
+        const float fill_value,
+        const std::optional<DataType> &dtype,
+        const std::optional<Layout> &layout,
+        const std::optional<MemoryConfig> &memory_config) {
+            std::cout << "Ditconme float ben ngoai" << std::endl;
+            return ttnn::prim::full_like_2(
+                input, fill_value, dtype, layout, memory_config);
+        }
 }

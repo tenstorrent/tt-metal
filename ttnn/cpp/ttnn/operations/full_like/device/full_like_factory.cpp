@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include "common/constants.hpp"
 #include "full_like_device_operation.hpp"
 #include "host_api.hpp"
@@ -20,15 +21,23 @@ using namespace tt::constants;
 union datatype {
     uint32_t u32;
     float f32;
-};
+} u;
 
 FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFactory::create(
     const operation_attributes_t &operation_attributes,
     const tensor_args_t &tensor_args,
     tensor_return_value_t &output_tensor) {
 
+    output_tensor.print();
+
     auto input = tensor_args.input;
     auto fill_value = operation_attributes.fill_value;
+    uint32_t fill_value_u;
+    if (std::holds_alternative<int>(fill_value)) {
+        fill_value_u = static_cast<uint32_t>(std::get<int>(fill_value));
+    } else if (std::holds_alternative<float>(fill_value)) {
+        fill_value_u = static_cast<uint32_t>(std::get<float>(fill_value));
+    }
     DataType dtype{operation_attributes.dtype};
     Layout layout{operation_attributes.layout};
     Device *device = input.device();
@@ -73,8 +82,8 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
         (uint32_t) src_is_dram,
     };
     tt::tt_metal::CircularBufferConfig src_cb_config = tt::tt_metal::CircularBufferConfig(
-        num_tiles * single_tile_size, {{tt::CB::c_in0, data_format}}
-    ).set_page_size(tt::CB::c_in0, single_tile_size);
+        num_tiles * single_tile_size, {{tt::CB::c_intermed0, data_format}}
+    ).set_page_size(tt::CB::c_intermed0, single_tile_size);
     auto cb_src = tt::tt_metal::CreateCircularBuffer(program, all_cores, src_cb_config);
 
 
@@ -90,11 +99,11 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
 
 
     /* READER/WRTIER KERNEL */
-    // auto reader_id = tt::tt_metal::CreateKernel(
-    //     program,
-    //     "ttnn/cpp/ttnn/operations/full_like/device/kernels/reader_full_like.cpp",
-    //     all_cores,
-    //     tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    auto reader_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/full_like/device/kernels/reader_full_like.cpp",
+        all_cores,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     auto writer_id = tt::tt_metal::CreateKernel(
         program,
@@ -115,7 +124,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        // SetRuntimeArgs(program, reader_id, core, {});
+        SetRuntimeArgs(program, reader_id, core, {fill_value_u});
         SetRuntimeArgs(
             program,
             writer_id,
@@ -124,7 +133,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
                 output.buffer()->address(),
                 num_tiles_per_core,
                 tiles_offset,
-                fill_value
+                fill_value_u
             });
 
         tiles_offset += num_tiles_per_core;

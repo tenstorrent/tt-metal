@@ -14,7 +14,12 @@ struct FullLike {
         const std::optional<DataType> &dtype,
         const std::optional<Layout> &layout,
         const std::optional<MemoryConfig> &memory_config);
-
+    static Tensor invoke(
+        const Tensor &input,
+        const float fill_value,
+        const std::optional<DataType> &dtype,
+        const std::optional<Layout> &layout,
+        const std::optional<MemoryConfig> &memory_config);
 };
 }
 

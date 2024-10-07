@@ -59,7 +59,7 @@ FullLikeOperation::tensor_return_value_t FullLikeOperation::create_output_tensor
 std::tuple<FullLikeOperation::operation_attributes_t, FullLikeOperation::tensor_args_t>
 FullLikeOperation::invoke(
         const Tensor &input,
-        const int fill_value,
+        const std::variant<float, int> fill_value,
         const std::optional<DataType> &dtype,
         const std::optional<Layout> &layout,
         const std::optional<MemoryConfig> &memory_config) {
@@ -70,6 +70,8 @@ FullLikeOperation::invoke(
             layout.value_or(input.tensor_attributes->layout),
             memory_config.value_or(input.memory_config())},
         tensor_args_t {input}};
-}
+    }
+
+
 
 }
