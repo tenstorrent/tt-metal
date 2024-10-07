@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Optional, Tuple
-
 from functools import partial
 
 import torch
@@ -18,11 +17,9 @@ from models.utility_functions import torch_random
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
 
-random.seed(0)
-
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
-# Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
+# Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
@@ -53,7 +50,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 # This is the run instructions for the test, defined by the developer.
 # The run function must take the above-defined parameters as inputs.
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
-# If you defined a device_mesh_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
+# If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_shape,
     input_a_dtype,
@@ -76,6 +73,9 @@ def run(
     torch_input_tensor_b = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
     )(input_shape)
+    torch_optional_output_tensor = gen_func_with_cast_tt(
+        partial(torch_random, low=-0.1, high=0.1, dtype=torch.float32), output_dtype
+    )(input_shape)
     torch_output_tensor = tensor_to_dtype(torch.logical_or(torch_input_tensor_a, torch_input_tensor_b), output_dtype)
 
     input_tensor_a = ttnn.from_torch(
@@ -92,10 +92,16 @@ def run(
         device=device,
         memory_config=input_b_memory_config,
     )
-    start_time = start_measuring_time()
-    output_tensor = ttnn.logical_or(
-        input_tensor_a, input_tensor_b, memory_config=output_memory_config, dtype=output_dtype
+
+    output_tensor = ttnn.from_torch(
+        torch_optional_output_tensor,
+        dtype=output_dtype,
+        layout=input_a_layout,
+        device=device,
+        memory_config=output_memory_config,
     )
+    start_time = start_measuring_time()
+    ttnn.logical_or(input_tensor_a, input_tensor_b, output_tensor=output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 

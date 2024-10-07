@@ -11,6 +11,9 @@ import ttnn
 
 
 def tensor_to_dtype(x, dtype):
+    if x.dtype == torch.bool:
+        x = x.to(torch.bfloat16)
+
     if dtype == ttnn.bfloat16:
         x = x.to(torch.bfloat16)
 
@@ -115,3 +118,16 @@ def gen_rand_bitwise_left_shift(size, shift_bits=None, low=-2147483647, high=214
     res = torch.where(res < 0, torch.bitwise_or(res, includebit_mask), torch.bitwise_and(res, exludebit_mask))
 
     return res
+
+
+def gen_with_zeroes(size, probabilityzeroes=0.5, low=-100, high=100, dtype=torch.bfloat16):
+    element_count = 1
+    for i in size:
+        element_count = element_count * i
+    raw = torch.zeros(element_count).to(dtype)
+    raw[: int(probabilityzeroes * element_count)] = torch.Tensor(
+        size=(1, int(probabilityzeroes * element_count))
+    ).uniform_(low, high)
+    ridx = torch.randperm(element_count)  # a random permutation of the entries
+    mask = torch.reshape(raw[ridx], size)
+    return mask
