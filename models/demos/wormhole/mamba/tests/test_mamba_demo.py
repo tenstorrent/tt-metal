@@ -44,6 +44,7 @@ def test_demo(
     get_tt_cache_path,
     max_gen_len,
     prefill_chunk_size,
+    reset_seeds,
 ):
     assert len(user_input) == len(expected_output)
 
@@ -55,6 +56,7 @@ def test_demo(
         display=True,
         cache_dir=get_tt_cache_path(model_version),
         prefill_chunk_size=prefill_chunk_size,
+        assert_on_performance_measurements=False,  # Don't check performance for functional tests
     )
 
     expected = user_input[0] + expected_output[0]
