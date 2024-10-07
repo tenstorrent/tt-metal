@@ -66,7 +66,8 @@ The APIs for printing data from Circular Buffers can be found in ``debug/dprint_
 how to print data from a CB (in this case, ``CB::c_intermed1``) is shown below.  Note that sampling happens relative
 to the current CB read or write pointer. This means that for printing a tile read from the front of the CB, the
 ``DPRINT`` call has to occur between the ``cb_wait_front`` and ``cb_pop_front`` calls. For printing a tile from the
-back of the CB, the ``DPRINT`` call has to occur between the ``cb_reserve_back`` and ``cb_push_back`` calls.
+back of the CB, the ``DPRINT`` call has to occur between the ``cb_reserve_back`` and ``cb_push_back`` calls. Please
+note that currently only CBs with type `DataFormat::Float16_b` are supported for printing.
 
 .. code-block:: sh
 
@@ -86,7 +87,14 @@ back of the CB, the ``DPRINT`` call has to occur between the ``cb_reserve_back``
         // Print a full tile
         for (int32_t r = 0; r < 32; ++r) {
             SliceRange sr = SliceRange{.h0 = r, .h1 = r+1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-            DPRINT << (uint)r << " --READ--cin0-- " << TileSlice(0, 0, sr, true, false) << ENDL();
+            // On data movement RISCs, tiles can be printed from either the CB read or write pointers. Also need to specify whether
+            // the CB is input or output.
+            DPRINT_DATA0({ DPRINT << (uint)r << " --READ--cin1-- " << TileSlice(0, 0, sr, TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false) << ENDL(); });
+            DPRINT_DATA1({ DPRINT << (uint)r << " --READ--cin1-- " << TileSlice(0, 0, sr, TSLICE_OUTPUT_CB, TSLICE_WR_PTR, true, false) << ENDL(); });
+            // Unpacker RISC only has rd_ptr and only input CBs, so no extra args
+            DPRINT_UNPACK({ DPRINT << (uint)r << " --READ--cin1-- " << TileSlice(0, 0, sr, true, false) << ENDL(); });
+            // Packer RISC only has wr_ptr
+            DPRINT_PACK({ DPRINT << (uint)r << " --READ--cin1-- " << TileSlice(0, 0, sr, true, false) << ENDL(); });
         }
 
         ...

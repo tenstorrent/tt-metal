@@ -66,6 +66,12 @@ on:
           - eltwise.unary.hardswish.hardswish
           - eltwise.unary.hardsigmoid.hardsigmoid
           - eltwise.unary.hardshrink.hardshrink
+          - eltwise.unary.softmax.softmax
+          - eltwise.unary.identity.identity
+          - eltwise.unary.neg.neg
+          - eltwise.unary.sinh.sinh
+          - eltwise.unary.relu_min.relu_min
+          - eltwise.unary.relu_max.relu_max
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multiply
           - eltwise.binary.div.div
@@ -111,8 +117,9 @@ on:
           - data_movement.concat.concat_pytorch2
           - data_movement.slice.slice_pytorch2_rm
           - data_movement.slice.slice_pytorch2_tiled
-          - data_movement.permute.permute_pytorch2_rm
+          - data_movement.permute.permute
           - data_movement.permute.permute_pytorch2_tiled
+          - data_movement.permute.permute_pytorch2_rm
           - data_movement.transpose.transpose_pytorch2
           - data_movement.transpose.transpose_interleaved
           - data_movement.transpose.t_pytorch2

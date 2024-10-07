@@ -457,6 +457,18 @@ Transformer
    ttnn.transformer.scaled_dot_product_attention_decode
    ttnn.transformer.scaled_dot_product_attention_decode_gqa
 
+CCL
+===
+
+.. autosummary::
+   :toctree: api
+   :nosignatures:
+   :template: function.rst
+
+   ttnn.all_gather
+   ttnn.reduce_scatter
+
+
 Embedding
 =========
 

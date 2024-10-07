@@ -54,6 +54,7 @@ tests/scripts/tgg/ @ttmchiou
 tt_metal/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema
 tt_metal/host_api.hpp @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @davorchap
 tt_metal/impl/device/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu
+tt_metal/distributed/ @cfjchu @aliuTT
 
 # metal - dispatch
 tt_metal/impl/dispatch/kernels/packet_* @ubcheema @aliuTT
@@ -110,8 +111,16 @@ ttnn/cpp/ttnn/operations/reduction/ @SeanNijjar @ntarafdar @sjameelTT
 ttnn/cpp/ttnn/operations/normalization/ @yugaoTT @tt-aho
 ttnn/cpp/ttnn/operations/embedding/ @ntarafdar @tt-aho @TT-BrianLiu
 ttnn/cpp/ttnn/operations/embedding_backward/ @TT-BrianLiu @yan-zaretskiy
+ttnn/ttnn/operations/eltwise @patrickroberts @yan-zaretskiy @eyonland
 tests/ttnn/ @ayerofieiev-tt @dmakoviichuk-tt @rfurko-tt @cfjchu @TT-BrianLiu @razorback3 @dongjin-na
+tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
+tests/sweep_framework/sweeps/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
 tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
+
+# TTNN Distributed
+ttnn/cpp/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
+ttnn/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
+tests/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
 
 # models
 /models/ @tt-rkim @uaydonat

@@ -1195,6 +1195,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     TT_ASSERT(device_worker_variants[DispatchWorkerType::DEMUX].size() == 3, "Insufficient Demux cores. Expected = 3. Found = {}", device_worker_variants[DispatchWorkerType::DEMUX].size());
                     uint32_t dispatch_idx = 0;
                     uint32_t demux_fanout = num_dispatchers / 2;
+                    auto mux_settings = std::get<1>(device_worker_variants[DispatchWorkerType::MUX][0]);
                     for (int i = 1; i < 3; i++) {
                         auto demux_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX][i]);
                         TT_ASSERT(demux_fanout == demux_settings.semaphores.size(), "Demux does not have required number of semaphores for Dispatchers. Exptected = {}. Found = {}", num_dispatchers / 2, demux_settings.semaphores.size());
@@ -1229,7 +1230,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                             compile_args[15] = true,    // split_prefetcher
                             compile_args[16] = NOC_XY_ENCODING(prefetch_physical_core.x, prefetch_physical_core.y),
                             compile_args[17] = prefetch_h_settings.producer_semaphore_id, // sem_id on prefetch_h that dispatch_d is meant to increment, to resume sending of cmds post exec_buf stall
-                            compile_args[18] = dispatch_constants::get(dispatch_core_type).mux_buffer_pages(num_hw_cqs), // XXXX should this be mux pages?
+                            compile_args[18] = mux_settings.cb_pages,
                             compile_args[19] = settings.num_compute_cores;
                             compile_args[20] = 0; // unused: dispatch_d only
                             compile_args[21] = 0; // unused: dispatch_d only
