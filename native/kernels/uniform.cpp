@@ -29,7 +29,6 @@ inline void _my_calculate_dropout_(const int iterations) {
         TTI_SFPSTORE(0, 4, 3, 0);
         TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG0, 5);
         dst_reg++;
-        DPRINT << "hehe" << ENDL();
     }
 }
 
@@ -51,21 +50,21 @@ inline void my_llk_math_eltwise_unary_sfpu_dropout(uint dst_index, int vector_mo
 ALWI void my_dropout_tile(uint32_t idst) { MATH((my_llk_math_eltwise_unary_sfpu_dropout<APPROX>(idst))); }
 
 void MAIN {
-    constexpr auto cb_in0 = tt::CB::c_in0;
+    // constexpr auto cb_in0 = tt::CB::c_in0;
     constexpr auto cb_out0 = tt::CB::c_out0;
 
-    unary_op_init_common(cb_in0, cb_out0);
+    unary_op_init_common(cb_out0);
     dropout_tile_init(0xDEADBEEF);
 
-    tile_regs_acquire();  // acquire 8 tile registers
+    tile_regs_acquire();
 
     my_dropout_tile(0);
 
-    tile_regs_commit();  // signal the packer
+    tile_regs_commit();
 
-    tile_regs_wait();  // packer waits here
+    tile_regs_wait();
     pack_tile(0, cb_out0);
-    tile_regs_release();  // packer releases
+    tile_regs_release();
 
     cb_push_back(cb_out0, 1);
 }

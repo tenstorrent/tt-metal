@@ -21,6 +21,7 @@ void kernel_main() {
     auto l1_addr = get_write_ptr(cb_id_out0);
 
     auto l1_ptr = reinterpret_cast<char *>(l1_addr);
+    // for(k : 0 -> 1024)
     for (uint32_t k = 0; k < 32; k++) {
         for (uint32_t j = 0; j < 32; j++) {
             uint32_t cur = *(uint32_t *)l1_ptr;

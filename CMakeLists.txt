@@ -252,6 +252,7 @@ endif()
 
 add_subdirectory(${PROJECT_SOURCE_DIR}/tt_metal)
 add_subdirectory(${PROJECT_SOURCE_DIR}/ttnn)
+add_subdirectory(${PROJECT_SOURCE_DIR}/native)
 
 option(TT_METAL_BUILD_TESTS "Enables build of tt_metal tests" OFF)
 option(TTNN_BUILD_TESTS "Enables build of ttnn tests" OFF)

@@ -1,38 +1,83 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-//
-// SPDX-License-Identifier: Apache-2.0
-
-#include "core_coord.h"
-#include "tt_metal/common/bfloat16.hpp"
-// #include "tt_metal/common/work_split.hpp"
+#include "common/core_coord.h"
+#include "detail/tt_metal.hpp"
+#include "impl/kernels/kernel_types.hpp"
+#include "tt_metal/common/tilize_untilize.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/device/device.hpp"
-// #include "ttnn/cpp/ttnn/tensor/tensor.hpp"
-// #include "ttnn/cpp/ttnn/tensor/types.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt;
-using namespace tt::tt_metal;
+using namespace tt_metal;
 
-// void create(const Tensor &input, const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
-//     Device *device = input.device();
+void create(const Tensor &output, const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
+    Device *device = output.device();
 
-//     auto grid = CoreCoord(0, 0);
+    auto grid = CoreCoord(0, 0);
 
-//     uint32_t units_to_divide = input.volume() / constants::TILE_HEIGHT / constants::TILE_WIDTH;
-//     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
-//         split_work_to_cores(grid, units_to_divide);
+    uint32_t units_to_divide = output.volume() / constants::TILE_HEIGHT / constants::TILE_WIDTH;
+    auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
+        split_work_to_cores(grid, units_to_divide);
 
-//     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
-//         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    CommandQueue &cq = device->command_queue();
+    Program program = Program();
 
-//     Program program = Program();
+    tt::DataFormat data_format = datatype_to_dataformat_converter(output.dtype());
+    constexpr uint32_t single_tile_size = 4 * 1024;
 
-//     tt::DataFormat data_format = datatype_to_dataformat_converter(input.dtype());
+    constexpr uint32_t src0_cb_index = CB::c_in0;
+    constexpr uint32_t num_input_tiles = 1;
+    CircularBufferConfig cb_src0_config =
+        CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Int32}})
+            .set_page_size(src0_cb_index, single_tile_size);
+    CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, grid, cb_src0_config);
 
-//     // tt::operations::primary::CreateCircularBuffer(program, all_cores, data_format, {{CB::c_in0, 2, data}});
-// }
+    constexpr uint32_t output_cb_index = CB::c_out0;
+    constexpr uint32_t num_output_tiles = 1;
+    CircularBufferConfig cb_output_config =
+        CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float32}})
+            .set_page_size(output_cb_index, single_tile_size);
+    CBHandle cb_output = tt_metal::CreateCircularBuffer(program, grid, cb_output_config);
 
-int main(int argc, char **argv) {
+    const std::string kernels_dir_path = "native/kernels/";
+    const std::vector<uint32_t> reader_compile_time_args{};
+    const std::string reader_file_path = kernels_dir_path + "reader.cpp";
+    const std::vector<uint32_t> writer_compile_time_args{};
+    const std::string writer_file_path = kernels_dir_path + "writer.cpp";
+    const std::vector<uint32_t> compute_compile_time_args{};
+    const std::string compute_file_path = kernels_dir_path + "uniform.cpp";
+
+    KernelHandle reader_kernel_id = tt_metal::CreateKernel(
+        program, reader_file_path, all_cores, ReaderDataMovementConfig(reader_compile_time_args));
+    KernelHandle writer_kernel_id = tt_metal::CreateKernel(
+        program, writer_file_path, all_cores, WriterDataMovementConfig(writer_compile_time_args));
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    KernelHandle eltwise_binary_kernel_id = CreateKernel(
+        program,
+        compute_file_path,
+        all_cores,
+        ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .math_approx_mode = math_approx_mode,
+            .compile_args = compute_compile_time_args,
+        });
+
+    CoreCoord core = {0, 0};
+    SetRuntimeArgs(program, reader_kernel_id, core, {});
+    SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
+    SetRuntimeArgs(program, writer_kernel_id, core, {output.buffer()->address()});
+    // tt::operations::primary::CreateCircularBuffer(program, all_cores, data_format, {{CB::c_in0, 2, data}});
+
+    EnqueueProgram(cq, program, false);
+    Finish(cq);
+}
+
+int main() {
+    printf("Hello, World!\n");
     /* Silicon accelerator setup */
     Device *device = CreateDevice(0);
 
@@ -48,13 +93,10 @@ int main(int argc, char **argv) {
         .page_size = single_tile_size,
         .buffer_type = tt_metal::BufferType::DRAM};
 
-    // std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config);
     std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
 
     // auto src0_dram_noc_coord = src0_dram_buffer->noc_coordinates();
     auto dst_dram_noc_coord = dst_dram_buffer->noc_coordinates();
-    // uint32_t src0_dram_noc_x = src0_dram_noc_coord.x;
-    // uint32_t src0_dram_noc_y = src0_dram_noc_coord.y;
     uint32_t dst_dram_noc_x = dst_dram_noc_coord.x;
     uint32_t dst_dram_noc_y = dst_dram_noc_coord.y;
 
@@ -76,13 +118,13 @@ int main(int argc, char **argv) {
     /* Specify data movement kernels for reading/writing data to/from DRAM */
     KernelHandle binary_reader_kernel_id = CreateKernel(
         program,
-        "tt_metal/programming_examples/uniform/kernels/reader.cpp",
+        "native/kernels/reader.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
-        "tt_metal/programming_examples/uniform/kernels/writer.cpp",
+        "native/kernels/writer.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
@@ -92,7 +134,7 @@ int main(int argc, char **argv) {
     /* Use the add_tiles operation in the compute kernel */
     KernelHandle eltwise_binary_kernel_id = CreateKernel(
         program,
-        "tt_metal/programming_examples/uniform/kernels/uniform.cpp",
+        "native/kernels/uniform.cpp",
         core,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
@@ -105,17 +147,8 @@ int main(int argc, char **argv) {
     std::vector<uint32_t> src0_vec(1024);
     std::vector<uint32_t> src1_vec(1024);
 
-    // EnqueueWriteBuffer(cq, src0_dram_buffer, src0_vec, false);
-    // EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
-
     /* Configure program and runtime kernel arguments, then execute */
     SetRuntimeArgs(program, binary_reader_kernel_id, core, {});
-    // {src0_dram_buffer->address(),
-    //  src1_dram_buffer->address(),
-    //  src0_dram_noc_x,
-    //  src0_dram_noc_y,
-    //  src1_dram_noc_x,
-    //  src1_dram_noc_y});
     SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
     SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), dst_dram_noc_x, dst_dram_noc_y});
 
