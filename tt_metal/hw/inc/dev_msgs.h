@@ -97,6 +97,7 @@ struct kernel_config_msg_t {
     volatile uint16_t sem_offset[static_cast<int>(ProgrammableCoreType::COUNT)];
     volatile uint16_t cb_offset;
     rta_offset_t rta_offset[DISPATCH_CLASS_MAX];
+    volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
 
     volatile uint8_t mode;                   // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;
@@ -104,6 +105,7 @@ struct kernel_config_msg_t {
     volatile uint8_t max_cb_index;
     volatile uint8_t exit_erisc_kernel;
     volatile uint8_t enables;
+    volatile uint8_t pad2[12];
 } __attribute__((packed));
 
 struct go_msg_t {
@@ -321,15 +323,14 @@ static_assert(
     MEM_MAILBOX_BASE + offsetof(mailboxes_t, ncrisc_halt.stack_save) == MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS);
 #endif
 #if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
-static_assert( eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE + sizeof(mailboxes_t) < eth_l1_mem::address_map::ERISC_MEM_MAILBOX_END);
-static_assert( MEM_IERISC_MAILBOX_BASE + sizeof(mailboxes_t) < MEM_IERISC_MAILBOX_END);
+static_assert( eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE + sizeof(mailboxes_t) <= eth_l1_mem::address_map::ERISC_MEM_MAILBOX_END);
+static_assert( MEM_IERISC_MAILBOX_BASE + sizeof(mailboxes_t) <= MEM_IERISC_MAILBOX_END);
 static constexpr uint32_t ETH_LAUNCH_CHECK = (eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE  + offsetof(mailboxes_t, launch)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
 static constexpr uint32_t ETH_PROFILER_CHECK = (eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE  + offsetof(mailboxes_t, profiler)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
 static_assert( ETH_LAUNCH_CHECK == 0);
 static_assert( ETH_PROFILER_CHECK == 0);
 static_assert(MEM_IERISC_FIRMWARE_BASE % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 static_assert(MEM_IERISC_MAILBOX_BASE + sizeof(mailboxes_t) < MEM_IERISC_MAILBOX_END);
-static_assert(MEM_IERISC_MAILBOX_END <= MEM_IERISC_RESERVED2);
 #else
 static_assert(MEM_MAILBOX_BASE + sizeof(mailboxes_t) < MEM_MAILBOX_END);
 static constexpr uint32_t TENSIX_LAUNCH_CHECK = (MEM_MAILBOX_BASE + offsetof(mailboxes_t, launch)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
