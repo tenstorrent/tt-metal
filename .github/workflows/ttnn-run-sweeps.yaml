@@ -117,8 +117,9 @@ on:
           - data_movement.concat.concat_pytorch2
           - data_movement.slice.slice_pytorch2_rm
           - data_movement.slice.slice_pytorch2_tiled
-          - data_movement.permute.permute_pytorch2_rm
+          - data_movement.permute.permute
           - data_movement.permute.permute_pytorch2_tiled
+          - data_movement.permute.permute_pytorch2_rm
           - data_movement.transpose.transpose_pytorch2
           - data_movement.transpose.transpose_interleaved
           - data_movement.transpose.t_pytorch2
