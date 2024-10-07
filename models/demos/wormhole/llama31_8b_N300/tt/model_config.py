@@ -126,6 +126,8 @@ class TtModelArgs:
             assert os.path.isfile(
                 self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
             ), f"Tokenizer file {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'} does not exist, please use export LLAMA_TOKENIZER_PATH=..."
+            if not os.path.exists(self.DEFAULT_CACHE_PATH):
+                os.makedirs(self.DEFAULT_CACHE_PATH)
             assert os.path.exists(
                 self.DEFAULT_CACHE_PATH
             ), f"Cache directory {self.DEFAULT_CACHE_PATH} does not exist, please use export LLAMA_CACHE_PATH=..."
