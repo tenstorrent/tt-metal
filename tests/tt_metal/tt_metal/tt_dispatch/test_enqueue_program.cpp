@@ -5,6 +5,7 @@
 #include "tt_metal/common/bfloat16.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
 using namespace tt;
@@ -15,7 +16,7 @@ tt_metal::Program generate_eltwise_unary_program(Device *device) {
     // TODO(agrebenisan): This is directly copy and pasted from test_eltwise_binary.
     // We need to think of a better way to generate test data, so this section needs to be heavily refactored.
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateProgram();
 
     CoreCoord core = {0, 0};
 
@@ -81,14 +82,14 @@ tt_metal::Program generate_eltwise_unary_program(Device *device) {
     return program;
 }
 
-void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device *device)> create_program) {
+void test_enqueue_program(std::function<tt_metal::ProgramHandle(tt_metal::Device *device)> create_program) {
 
 
     int device_id = 0;
     tt_metal::Device *device = tt_metal::CreateDevice(device_id);
 
 
-    tt_metal::Program program = create_program(device);
+    auto program = create_program(device);
 
     CoreCoord worker_core(0, 0);
     vector<uint32_t> inp = create_random_vector_of_bfloat16(NUM_TILES * 2048, 100, 0);
@@ -102,7 +103,8 @@ void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device *devi
         Buffer out(device, NUM_TILES * 2048, 2048, BufferType::DRAM);
 
         // Absolutely disgusting way to query for the kernel I want to set runtime args for... needs to be cleaned up
-        const KernelGroup *kernel_group = program.kernels_on_core(worker_core, CoreType::WORKER);
+        auto* program_ptr = ProgramPool::instance().get_program(program);
+        const KernelGroup *kernel_group = program_ptr->kernels_on_core(worker_core, CoreType::WORKER);
         SetRuntimeArgs(program, kernel_group->riscv0_id.value(), worker_core, {out.address(), 0, 0, NUM_TILES});
         SetRuntimeArgs(program, kernel_group->riscv1_id.value(), worker_core, {buf.address(), 0, 0, NUM_TILES});
 

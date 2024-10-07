@@ -37,7 +37,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     Device* device = output_grad.device();
-    Program program = Program();
+    auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup

@@ -19,7 +19,7 @@ using namespace tt::constants;
 namespace ttnn::operations::upsample {
 using namespace tt;
 operation::ProgramWithCallbacks upsample_single_core(const Tensor &input, Tensor& output, const uint32_t scale_factor_h, const uint32_t scale_factor_w) {
-    Program program{};
+    auto program = tt::tt_metal::CreateProgram();
     CoreRange core({0, 0}, {0, 0});
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
@@ -117,7 +117,7 @@ operation::ProgramWithCallbacks upsample_single_core(const Tensor &input, Tensor
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
         const void* operation,
-        Program &program,
+        ProgramHandle program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors

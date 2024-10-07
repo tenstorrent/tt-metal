@@ -20,7 +20,7 @@ namespace operations::data_movement {
 
 operation::ProgramWithCallbacks non_zero_indices_single_core(const Tensor &input, const Tensor &out_num_indices, const Tensor &out_indices) {
 
-    tt::tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
     Device *device = input.device();
 
 
@@ -96,7 +96,7 @@ operation::ProgramWithCallbacks non_zero_indices_single_core(const Tensor &input
 
     auto override_runtime_args_callback = [kernel_id, core,  page_size](
         const void* operation,
-        const tt::tt_metal::Program& program,
+        const tt::tt_metal::ProgramHandle program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors

@@ -341,7 +341,7 @@ DownsampleReadPatternParams generate_downsample_read_pattern(
 
 operation::ProgramWithCallbacks downsample_single_core(
     const Tensor& a, std::array<uint32_t, 5> downsample_params, Tensor& output) {
-              tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+              auto program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
@@ -854,7 +854,7 @@ operation::ProgramWithCallbacks downsample_single_core(
                                            downsample_writer_kernel_id = downsample_writer_kernel_id,
                                            cores = cores](
                                               const void* operation,
-                                              Program& program,
+                                              ProgramHandle program,
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                                               const std::vector<Tensor>& output_tensors) {

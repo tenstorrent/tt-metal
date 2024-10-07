@@ -85,7 +85,7 @@ core at (0, 0).
 .. code-block:: cpp
 
     CommandQueue& cq = detail::GetCommandQueue(device);
-    Program program{};
+    auto program = tt::tt_metal::CreateProgram();
     CoreRange core({0, 0}, {0, 0});
 
 

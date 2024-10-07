@@ -86,7 +86,7 @@ operation::ProgramWithCallbacks UntilizeWithHaloV2::create_program(
     const auto& remote_config = input_tensors.at(3);
     auto& output_tensor = output_tensors.at(0);
 
-    Program program = CreateProgram();
+    auto program = CreateProgram();
 
     return {detail::untilize_with_halo_multi_core_v2(
         program,

@@ -32,7 +32,7 @@ uint32_t get_largest_divisor(uint32_t dividend, uint32_t starting_divisor, uint3
 operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
 
-    tt::tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
@@ -246,7 +246,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
                                                 cb_output = cb_output,
                                                 cores_with_rtargs](
                                                    const void* operation,
-                                                   Program& program,
+                                                   ProgramHandle program,
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {
@@ -276,7 +276,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
 
 operation::ProgramWithCallbacks untilize_multi_core(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
-    tt::tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
@@ -659,7 +659,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
                                                 cb_output = cb_output,
                                                 cores_with_rtargs](
                                                    const void* operation,
-                                                   Program& program,
+                                                   ProgramHandle program,
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {
@@ -695,7 +695,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
 operation::ProgramWithCallbacks untilize_single_core(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
-    tt::tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     CoreRange core({0, 0}, {0, 0});
 
@@ -817,7 +817,7 @@ operation::ProgramWithCallbacks untilize_single_core(
 
     auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
                                            writer_kernel_id = unary_writer_kernel_id](
-                                              const Program& program,
+                                              const ProgramHandle program,
                                               const std::vector<Buffer*>& input_buffers,
                                               const std::vector<Buffer*>& output_buffers) {
         auto src_buffer = input_buffers.at(0);
@@ -836,7 +836,7 @@ operation::ProgramWithCallbacks untilize_single_core(
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 }  // namespace ttnn::operations::data_movement::detail

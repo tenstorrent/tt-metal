@@ -23,7 +23,7 @@ MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::Mor
     const DeviceComputeKernelConfig &compute_kernel_config = operation_attributes.compute_kernel_config;
 
     tt::tt_metal::Device *device{input.device()};
-    tt::tt_metal::Program program{tt::tt_metal::CreateProgram()};
+    auto program = tt::tt_metal::CreateProgram();
 
     const auto cb_data_format{datatype_to_dataformat_converter(output.get_dtype())};
     const auto single_tile_size{tt::tt_metal::detail::TileSize(cb_data_format)};
@@ -156,7 +156,7 @@ MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::Mor
         tile_offset += num_tiles_per_core;
     }
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores_to_be_used, num_cores_y}};
+    return {program, {reader_kernel_id, writer_kernel_id, num_cores_to_be_used, num_cores_y}};
 }
 
 void MorehSumOperation::MorehSumNCIntFactory::override_runtime_arguments(

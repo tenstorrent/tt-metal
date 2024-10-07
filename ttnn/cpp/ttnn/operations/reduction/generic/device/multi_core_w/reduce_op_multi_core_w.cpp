@@ -31,7 +31,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(a.device()->arch(), compute_kernel_config);
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateProgram();
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
@@ -165,7 +165,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     }
 
     auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, cores](
-                                              const Program &program,
+                                              const ProgramHandle program,
                                               const std::vector<Buffer *> &input_buffers,
                                               const std::vector<Buffer *> &output_buffers) {
         auto src_dram_buffer = input_buffers.at(0);
@@ -187,7 +187,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 }  // namespace tt_metal

@@ -203,7 +203,7 @@ MorehNormOperation::ProgramFactoryOther::cached_program_t MorehNormOperation::Pr
         tile_offset += num_output_tiles_per_core;
     }
 
-    return {std::move(program), {reader_kernels_id, writer_kernels_id, num_cores_to_be_used, num_cores_y}};
+    return {program, {reader_kernels_id, writer_kernels_id, num_cores_to_be_used, num_cores_y}};
 }
 
 void MorehNormOperation::ProgramFactoryOther::override_runtime_arguments(

@@ -174,7 +174,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel);
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::ProgramHandle program,
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const uint32_t dim,

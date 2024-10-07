@@ -88,7 +88,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] KernelHandle CreateReadKernel(
-    Program &program,
+    ProgramHandle program,
     const std::string &file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::vector<uint32_t> &compile_args,
@@ -105,7 +105,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] KernelHandle CreateWriteKernel(
-    Program &program,
+    ProgramHandle program,
     const std::string &file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::vector<uint32_t> &compile_args,
@@ -122,7 +122,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] std::vector<KernelHandle> CreateComputeKernel(
-    Program &program,
+    ProgramHandle program,
     const std::string &file_name,
     std::vector<ComputeKernelArg> args,
     std::map<std::string, std::string> defines,
@@ -148,7 +148,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] KernelHandle CreateComputeKernel(
-    Program &program,
+    ProgramHandle program,
     const std::string &file_name,
     ComputeKernelArg arg,
     std::map<std::string, std::string> defines,
@@ -174,7 +174,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] std::vector<KernelHandle> CreateComputeKernel(
-    Program &program, const std::string &file_name, std::vector<ComputeKernelArg> args, ComputeKernelConfig config) {
+    ProgramHandle program, const std::string &file_name, std::vector<ComputeKernelArg> args, ComputeKernelConfig config) {
     std::vector<KernelHandle> compute_kernel_ids{};
     KernelHandle compute_kernel_id{};
     for (auto arg : args) {
@@ -185,7 +185,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] KernelHandle CreateComputeKernel(
-    Program &program, const std::string &file_name, ComputeKernelArg arg, ComputeKernelConfig config) {
+    ProgramHandle program, const std::string &file_name, ComputeKernelArg arg, ComputeKernelConfig config) {
     KernelHandle compute_kernel_id{0};
     if (arg.num_tile_per_core_group > 0) {
         compute_kernel_id = CreateKernel(
@@ -204,7 +204,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] std::vector<CBHandle> CreateCircularBuffer(
-    Program &program,
+    ProgramHandle program,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_range,
     tt::DataFormat data_format,
     std::vector<CircularBufferArg> args) {
@@ -218,7 +218,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] CBHandle CreateCircularBuffer(
-    Program &program,
+    ProgramHandle program,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_range,
     tt::DataFormat data_format,
     CircularBufferArg arg) {

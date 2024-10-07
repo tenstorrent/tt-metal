@@ -51,7 +51,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program{};
+    auto program = tt::tt_metal::CreateProgram();
     CoreCoord core = {0, 0};
     const uint32_t core_num = 1;
 
@@ -130,7 +130,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     SetRuntimeArgs(program, writer_kernel_id, core, {bias_grad.buffer()->address(), 1, 0});
     SetRuntimeArgs(program, compute_kernel_id, core, {batch_num, Ht, Wt, do_mask_h, do_mask_w});
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id}};
+    return {program, {reader_kernel_id, writer_kernel_id}};
 }
 
 void MorehBiasAddBackwardOperation::SingleCoreProgramFactory::override_runtime_arguments(

@@ -21,7 +21,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
     const Tensor& a, Tensor& output, const float pad_value) {
     auto output_shape = output.get_legacy_shape();
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateProgram();
 
     CoreRange core({0, 0}, {0, 0});
 
@@ -172,7 +172,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
 
     auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
                                            writer_kernel_id = unary_writer_kernel_id](
-                                              const Program& program,
+                                              const ProgramHandle program,
                                               const std::vector<Buffer*>& input_buffers,
                                               const std::vector<Buffer*>& output_buffers) {
         auto src_buffer = input_buffers.at(0);
@@ -192,12 +192,12 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     const Tensor& a, Tensor& output, const float pad_value) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
@@ -325,7 +325,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
 
     auto override_runtime_args_callback =
         [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, cores = cores](
-            const Program& program,
+            const ProgramHandle program,
             const std::vector<Buffer*>& input_buffers,
             const std::vector<Buffer*>& output_buffers) {
             auto src_buffer = input_buffers.at(0);
@@ -345,13 +345,13 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
             }
         };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 // This purely supports input width shard -> output width shard for now
 operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
     const Tensor& a, Tensor& output, const float pad_value) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateProgram();
 
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
@@ -465,7 +465,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
                                                 cb_src0 = cb_src0,
                                                 cb_output = cb_output](
                                                    const void* operation,
-                                                   Program& program,
+                                                   ProgramHandle program,
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {

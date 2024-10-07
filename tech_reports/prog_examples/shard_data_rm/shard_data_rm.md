@@ -18,7 +18,7 @@ specifications.
 int device_id = 0;
 Device *device = CreateDevice(device_id);
 CommandQueue& cq = device->command_queue();
-Program program = CreateProgram();
+auto program = CreateProgram();
 ```
 
 We start the source code by creating an object that designates the hardware device that we will be using for the program. For this example, we select the device with an ID of 0.

@@ -213,14 +213,13 @@ static void log_sharded_tensor_kernel_args(Tensor const& tensor, std::size_t pag
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
 //   (in other words, disable the "bidirectional" send flag)
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor& input_tensor, Tensor& output_tensor, const uint32_t dim, const uint32_t num_links, const uint32_t ring_size, const uint32_t ring_index, const std::optional<chip_id_t> receiver_device_id, const std::optional<chip_id_t> sender_device_id, ccl::Topology topology, const std::optional<size_t> user_defined_num_workers, const std::optional<size_t> user_defined_num_buffers_per_channel) {
-
-    tt::tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
     return all_gather_multi_core_with_workers_helper(program, input_tensor, output_tensor, dim, num_links, ring_size, ring_index, receiver_device_id, sender_device_id, topology, user_defined_num_workers, user_defined_num_buffers_per_channel, empty_fused_op_signaler);
 }
 
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::ProgramHandle program,
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const uint32_t dim,
@@ -1120,7 +1119,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
          all_sender_worker_cores,
          all_receiver_worker_cores] (
         const void* operation,
-        Program& program,
+        ProgramHandle program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors

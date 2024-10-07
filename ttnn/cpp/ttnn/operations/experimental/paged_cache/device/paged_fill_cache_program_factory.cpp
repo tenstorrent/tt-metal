@@ -17,7 +17,7 @@ using namespace tt;
 
 
 operation::ProgramWithCallbacks paged_fill_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const Tensor &page_table_tensor, const uint32_t batch_idx) {
-    Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
@@ -166,7 +166,7 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(const Tensor& cache_
         ]
     (
         const void* operation,
-        Program& program,
+        ProgramHandle program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors

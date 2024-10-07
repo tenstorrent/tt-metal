@@ -72,7 +72,7 @@ TEST(SlotMapTest, CanRemoveValueFromSlotMap) {
 }
 
 TEST(SlotMapTest, CanRemoveValueFromStringSlotMap) {
-  StringSlotMap slotmap(2);
+  StringSlotMap slotmap{};
 
   auto key1 = slotmap.insert("hello");
   auto key2 = slotmap.insert("world");
@@ -121,13 +121,4 @@ TEST(SlotMapTest, ThrowsOnInsertIfMaxIndex) {
 
     EXPECT_EQ(key.index(), IntKey::max_index);
     EXPECT_THROW(slotmap.insert(0), std::runtime_error);
-}
-
-TEST(SlotMapTest, CanReserveSlots) {
-    StringSlotMap slotmap;
-
-    slotmap.insert("hello");
-    slotmap.reserve(32);
-
-    EXPECT_GE(slotmap.capacity(), 32);
 }

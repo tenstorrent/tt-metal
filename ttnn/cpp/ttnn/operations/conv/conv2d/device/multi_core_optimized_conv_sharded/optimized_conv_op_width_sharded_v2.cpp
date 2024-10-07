@@ -33,7 +33,7 @@ const uint32_t untilize_mode_reblock_cb = CB::c_intermed2;
 const uint32_t out0_cb = CB::c_out0;
 
 operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
-    tt_metal::Program& program,
+    tt_metal::ProgramHandle program,
     const Tensor& a,
     const Tensor& b,
     const ttnn::Shape& ashape,
@@ -790,17 +790,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         });
     }
 
-    auto empty_callback = [](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            };
-    return {
-        .program = std::move(program), .override_runtime_arguments_callback = empty_callback
-        };
-
+    return {.program = std::move(program), .override_runtime_arguments_callback = [](auto...) {}};
 }
 
 }  // namespace tt_metal

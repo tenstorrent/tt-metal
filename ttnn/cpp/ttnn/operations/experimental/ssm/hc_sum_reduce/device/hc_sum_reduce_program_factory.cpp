@@ -17,7 +17,7 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
     constexpr uint32_t TILE_WIDTH = 32;
     constexpr uint32_t LATENT_DIM = TILE_WIDTH;
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateProgram();
 
     const auto* input_buffer = a.buffer();
     const bool input_is_dram = input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
@@ -137,7 +137,7 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
                              g2_numcores = g2_numcores,
                              num_blocks_per_core_group_1 = num_blocks_per_core_group_1,
                              num_blocks_per_core_group_2 = num_blocks_per_core_group_2,
-                             ashape = ashape](Program& program, const Tensor& a, const Tensor& output) {
+                             ashape = ashape](ProgramHandle program, const Tensor& a, const Tensor& output) {
         tt::tt_metal::Buffer* input_buffer = a.buffer();
         tt::tt_metal::Buffer* output_buffer = output.buffer();
 
@@ -187,7 +187,7 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
 
     auto override_runtime_arguments_callback = [set_runtime_args](
                                                    const void* operation,
-                                                   Program& program,
+                                                   ProgramHandle program,
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {

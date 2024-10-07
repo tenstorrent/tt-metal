@@ -47,7 +47,7 @@ Device* get_device(const Tensors& input_tensors, const OptionalConstTensors& opt
 template <class OutputTensors>
 void override_addresses(
     const OverrideAddressesCallback& override_addresses_callback,
-    const Program& program,
+    const ProgramHandle program,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OutputTensors& output_tensors) {
@@ -75,14 +75,14 @@ void override_addresses(
 
 template void override_addresses<Tensors>(
     const OverrideAddressesCallback& override_addresses_callback,
-    const Program& program,
+    const ProgramHandle program,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const Tensors& output_tensors);
 
 template void override_addresses<OptionalTensors>(
     const OverrideAddressesCallback& override_addresses_callback,
-    const Program& program,
+    const ProgramHandle program,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& output_tensors);
@@ -118,7 +118,7 @@ struct OldInfraDeviceOperation {
             auto program_with_callbacks = operation_attributes.create_program(
                 tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_return_value);
             return cached_program_t{
-                std::move(program_with_callbacks.program),
+                program_with_callbacks.program,
                 shared_variables_t{
                     program_with_callbacks.override_addresses_callback,
                     program_with_callbacks.override_runtime_arguments_callback}
@@ -132,7 +132,7 @@ struct OldInfraDeviceOperation {
             tensor_return_value_t& tensor_return_value) {
             auto& override_addresses_callback = cached_program.shared_variables.override_addresses_callback;
             auto& override_runtime_arguments_callback = cached_program.shared_variables.override_runtime_arguments_callback;
-            auto& program = cached_program.program;
+            auto program = cached_program.program;
 
             if (override_addresses_callback.has_value()) {
                 // Deprecated

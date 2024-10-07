@@ -9,7 +9,7 @@
 namespace ttnn::operations::data_movement::detail {
 
 void setup_runtime(
-    const Program &program,
+    const ProgramHandle program,
     const uint32_t &core_offset,
     const uint32_t &num_cores_r,
     const uint32_t &num_cores_c,
@@ -86,7 +86,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
     auto input_shape = input_tensor.get_legacy_shape();
 
-    Program program{};
+    auto program = tt::tt_metal::CreateProgram();
     tt::tt_metal::Device *device = input_tensor.device();
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
@@ -214,7 +214,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
     auto override_runtime_args_callback =
         [reader_kernel_id, writer_kernel_id, num_cores_r, num_cores_c, start_core_x, start_core_y](
-            const Program &program,
+            const ProgramHandle program,
             const std::vector<Buffer *> &input_buffers,
             const std::vector<Buffer *> &output_buffers) {
             auto src_dram_buffer = input_buffers.at(0);
@@ -240,7 +240,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
             }
         };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 

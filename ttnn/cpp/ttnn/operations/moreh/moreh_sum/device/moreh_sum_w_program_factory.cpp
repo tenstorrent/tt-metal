@@ -48,7 +48,7 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
         fp32_dest_acc_en,
         packer_l1_acc);
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
@@ -223,7 +223,7 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
         num_tiles_read += num_tensor_tiles_per_core;
     }
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, num_cores_y}};
+    return {program, {reader_kernel_id, writer_kernel_id, num_cores, num_cores_y}};
 }
 
 void MorehSumOperation::MorehSumWFactory::override_runtime_arguments(

@@ -66,7 +66,7 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     auto *device = output_grad.device();
-    auto program = Program();
+    auto program = tt::tt_metal::CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -210,7 +210,7 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
 
         tile_offset += num_tiles_per_core;
     }
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores_to_be_used, num_cores_y}};
+    return {program, {reader_kernel_id, writer_kernel_id, num_cores_to_be_used, num_cores_y}};
 }
 
 void MorehMeanBackwardOperation::MorehMeanBackwardFactory::override_runtime_arguments(

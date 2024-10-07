@@ -49,7 +49,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    Program program = Program();
+    auto program = CreateProgram();
 
     // create circular buffers
     tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
@@ -228,7 +228,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    Program program = Program();
+    auto program = CreateProgram();
 
     // create circular buffers
     tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
@@ -416,7 +416,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    Program program = Program();
+    auto program = CreateProgram();
 
     // create circular buffers
     tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());

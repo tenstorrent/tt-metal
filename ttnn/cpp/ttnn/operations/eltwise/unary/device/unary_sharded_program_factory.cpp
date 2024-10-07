@@ -25,7 +25,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
 
     const auto& input = tensor_args.input;
 
-    tt::tt_metal::Program program = CreateProgram();
+    auto program = CreateProgram();
     tt::tt_metal::Device *device = input.device();
 
     auto shard_spec = input.shard_spec().value();

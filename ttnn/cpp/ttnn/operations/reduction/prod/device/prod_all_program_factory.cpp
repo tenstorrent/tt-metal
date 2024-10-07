@@ -16,7 +16,7 @@ namespace primary {
     operation::ProgramWithCallbacks prod_single_core(const Tensor &a, const Tensor& output)
     {
 
-        Program program{};
+        auto program = tt::tt_metal::CreateProgram();
 
         CoreRange core({0, 0}, {0, 0});
 
@@ -107,7 +107,7 @@ namespace primary {
     );
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-        const Program &program,
+        const ProgramHandle program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -129,7 +129,7 @@ namespace primary {
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 }  // namespace primary

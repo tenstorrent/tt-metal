@@ -17,7 +17,7 @@ operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
     const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output) {
     TT_FATAL(dim == 3, "Sharded concat RM only supports dim=3");
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateProgram();
 
     tt_metal::Device *device = output.device();
 
@@ -120,20 +120,7 @@ operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
         all_cores,
         tt_metal::WriterDataMovementConfig(compile_time_args_1));
 
-
-
-
-    auto override_runtime_arguments_callback =
-        [unary_reader_kernel_id, unary_writer_kernel_id, all_cores, num_input_tensors](
-            const void *operation,
-            Program &program,
-            const std::vector<Tensor> &input_tensors,
-            const std::vector<std::optional<const Tensor>> &,
-            const std::vector<Tensor> &output_tensors) {
-                ;
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = [](auto...){}};
 }
 
 
@@ -142,7 +129,7 @@ operation::ProgramWithCallbacks s2s_rm_concat_multi_core(
     const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output) {
     TT_FATAL(dim == 3, "Sharded concat RM only supports dim=3");
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateProgram();
 
     tt_metal::Device *device = output.device();
 
@@ -312,7 +299,7 @@ operation::ProgramWithCallbacks s2s_rm_concat_multi_core(
     auto override_runtime_arguments_callback =
         [unary_reader_kernel_id, unary_writer_kernel_id, all_cores, num_input_tensors](
             const void *operation,
-            Program &program,
+            ProgramHandle program,
             const std::vector<Tensor> &input_tensors,
             const std::vector<std::optional<const Tensor>> &,
             const std::vector<Tensor> &output_tensors) {
@@ -354,7 +341,7 @@ operation::ProgramWithCallbacks s2s_rm_concat_multi_core(
 
 operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
     const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateProgram();
 
     tt_metal::Device *device = output.device();
 
@@ -446,7 +433,7 @@ operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
     auto override_runtime_arguments_callback =
         [unary_reader_kernel_id, unary_writer_kernel_id, all_cores, num_input_tensors](
             const void *operation,
-            Program &program,
+            ProgramHandle program,
             const std::vector<Tensor> &input_tensors,
             const std::vector<std::optional<const Tensor>> &,
             const std::vector<Tensor> &output_tensors) {
@@ -503,7 +490,7 @@ operation::ProgramWithCallbacks sharded_concat_multi_core(
 
 operation::ProgramWithCallbacks concat_multi_core(
     const std::vector<Tensor> &input_tensors, const uint32_t dim, const Tensor &output) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateProgram();
 
     tt_metal::Device *device = output.device();
 
@@ -701,7 +688,7 @@ operation::ProgramWithCallbacks concat_multi_core(
     }
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id, cores](
-                                              const Program &program,
+                                              const ProgramHandle program,
                                               const std::vector<Buffer *> &input_buffers,
                                               const std::vector<Buffer *> &output_buffers) {
         std::vector<uint32_t> src_addrs(input_buffers.size());
@@ -724,7 +711,7 @@ operation::ProgramWithCallbacks concat_multi_core(
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 }  // namespace ttnn::operations::data_movement::detail

@@ -24,7 +24,7 @@ using namespace tt;
 using namespace tt_metal;
 
 operation::ProgramWithCallbacks create_program_mcast_in0_in1(
-    tt_metal::Program& program,
+    tt_metal::ProgramHandle program,
     tt_metal::Device* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -1156,7 +1156,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
          transpose_mcast,
          cores](
             const void* operation,
-            Program& program,
+            ProgramHandle program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
@@ -1231,7 +1231,7 @@ namespace operations {
 namespace matmul {
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::ProgramHandle program,
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor> bias,
@@ -1396,7 +1396,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
     std::optional<UnaryWithParam> fused_activation,
     bool untilize_out) {
 
-    tt_metal::Program program{}; /* Create a program */
+    auto program = tt_metal::CreateProgram(); /* Create a program */
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
 
     return matmul_multi_core_reuse_mcast_2d_optimized_(
@@ -1421,7 +1421,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
 }
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helper(
-    tt_metal::Program& program, /* Take programa as input by reference */
+    tt_metal::ProgramHandle program,
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor> bias,

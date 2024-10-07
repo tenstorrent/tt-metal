@@ -26,7 +26,7 @@ We instantiate a device object that will be used to interface with the designate
 
 ``` cpp
 CommandQueue& cq = device->command_queue();
-Program program = CreateProgram();
+auto program = CreateProgram();
 ```
 
 We first obtain the global `CommandQueue` associated with the device in order to use the fast dispatch capabilities of the software. Thism mechanism enables commands to be run asynchronously between the host and device.

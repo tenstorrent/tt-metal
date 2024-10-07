@@ -74,7 +74,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     tt::log_debug("k_num_chunks: {}", k_num_chunks);
     tt::log_debug("NKH: {}", NKH);
 
-    Program program = CreateProgram();
+    auto program = CreateProgram();
 
     Device* device = input_tensor_q.device();
 
@@ -510,7 +510,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
          cb_in0_id,
          cb_out0_id](
             const void* operation,
-            Program& program,
+            ProgramHandle program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {

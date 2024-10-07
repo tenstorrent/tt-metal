@@ -12,7 +12,7 @@ public:
     inline static const string dprint_file_name = "gtest_dprint_log.txt";
 
     // A function to run a program, according to which dispatch mode is set.
-    void RunProgram(Device* device, Program& program) {
+    void RunProgram(Device* device, ProgramHandle program) {
         // Only difference is that we need to wait for the print server to catch
         // up after running a test.
         CommonFixture::RunProgram(device, program);

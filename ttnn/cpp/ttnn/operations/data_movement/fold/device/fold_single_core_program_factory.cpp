@@ -14,7 +14,7 @@ namespace ttnn::operations::data_movement {
 
 Fold::SingleCore::cached_program_t fold_single_core(
     const Tensor &input, const Tensor &output, uint32_t stride_h, uint32_t stride_w) {
-    Program program = CreateProgram();
+    auto program = CreateProgram();
 
     CoreCoord core = {0, 0};
 
