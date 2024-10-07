@@ -13,26 +13,9 @@
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "tensix.h"
 #include "tt_elffile.hpp"
-#include "tt_hexfile.h"
 #include "tt_metal/common/assert.hpp"
 
-using std::numeric_limits;
-using std::runtime_error;
-using std::string;
-using std::vector;
-
 namespace ll_api {
-
-// We use stoul to parse an address. We cast address_t to unsigned long to format with %08lX.
-static_assert(
-    numeric_limits<unsigned long>::max() >= numeric_limits<memory::address_t>::max(),
-    "unsigned long can't cover whole range of addresses");
-
-// We cast word_t to unsigned long to format with %08lX.
-static_assert(
-    numeric_limits<unsigned long>::max() >= numeric_limits<memory::word_t>::max(),
-    "unsigned long can't cover whole range of words");
-
 
 memory::memory() {
     data_.reserve(initial_data_space_);
@@ -40,15 +23,10 @@ memory::memory() {
 }
 
 memory::memory(std::string const &path) : memory() {
-    // TODO: Eventually we'll have only elf, and this hack can go away.
-    if (path.ends_with(".hex")) {
-        fill_from_discontiguous_hex(path);
-        return;
-    }
-
     ElfFile elf(path);
 
-    // The ELF file puts the text segment first, but memory wants ordered spans
+    // The ELF file puts the text segment first, but memory wants
+    // ordered spans.
     // FIXME: Perhaps we can relax that?
     auto emit_segment = [&](ElfFile::Segment const& segment) {
         link_spans_.emplace_back(
@@ -73,26 +51,6 @@ bool memory::operator==(const memory& other) const {
     return
         data_ == other.data_ &&
         link_spans_ == other.link_spans_;
-}
-
-void memory::fill_from_discontiguous_hex(std::string const &path) {
-    std::ifstream is(path);
-
-    // Intended to start empty
-    assert(data_.empty());
-    bool first = true;
-    address_t last_addr = 0;
-    // hex files run low address to high address
-    read_discontiguous_hex_file(is, [&](memory::address_t word_addr, memory::word_t value) {
-        if (first || word_addr != last_addr + 1) {
-            link_spans_.push_back({word_addr << 2, 0});
-            first = false;
-        }
-
-        data_.push_back(value);
-        link_spans_.back().len++;
-        last_addr = word_addr;
-    });
 }
 
 void memory::fill_from_mem_template(const memory& mem_template, const std::function<void (std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback) {

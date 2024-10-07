@@ -5,7 +5,6 @@ set(LLRT_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tlb_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tt_cluster.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tt_elffile.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tt_hexfile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tt_memory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/hal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/grayskull/gs_hal.cpp
