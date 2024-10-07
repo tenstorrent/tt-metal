@@ -24,7 +24,7 @@ namespace optimized_conv_op_utils {
 using namespace tt;
 using namespace tt::tt_metal;
 
-pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(const tt::tt_metal::LegacyShape& conv_activation_shape, ttnn::operations::sliding_window::SlidingWindowConfig sliding_window_config, uint32_t act_block_h_ntiles, uint32_t padding_for_32B_alignment) {
+pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(const tt::tt_metal::LegacyShape& conv_activation_shape, ttnn::operations::sliding_window::SlidingWindowConfig sliding_window_config, uint32_t act_block_h_ntiles) {
 
     uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;  // filter_h
     uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
@@ -53,7 +53,7 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     uint32_t groups,
     bool untilize_out, bool fuse_relu, MathFidelity math_fidelity,
     const OptimizedConvParallelizationConfig& parallelization_config,
-    const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment,
+    const OptimizedConvBlockConfig& block_config,
     MemoryConfig memory_config,
     DataType dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
@@ -65,7 +65,7 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
 ) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({a, b}))};
     operation::launch_op(
-        [sliding_window_config, output_channels, groups, untilize_out, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, compute_kernel_config, enable_act_double_buffer, enable_split_reader, enable_subblock_padding]
+        [sliding_window_config, output_channels, groups, untilize_out, fuse_relu, math_fidelity, parallelization_config, block_config, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, compute_kernel_config, enable_act_double_buffer, enable_split_reader, enable_subblock_padding]
             (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 using ttnn::operations::experimental::auto_format::FormatParams;
                 auto& a = input_tensors.at(0);
@@ -86,7 +86,7 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
                 bool fp32_accum = a.device()->arch() == tt::ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ? compute_kernel_config.value().fp32_dest_acc_en : false;
                 auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::LoFi, true, fp32_accum, false);
                 return operation::run_without_autoformat(
-                    OptimizedConvNew(sliding_window_config, output_channels, groups, untilize_out, bias.has_value(), fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, kernel_config_val, enable_act_double_buffer, enable_split_reader, enable_subblock_padding
+                    OptimizedConvNew(sliding_window_config, output_channels, groups, untilize_out, bias.has_value(), fuse_relu, math_fidelity, parallelization_config, block_config, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, kernel_config_val, enable_act_double_buffer, enable_split_reader, enable_subblock_padding
                     ),
                     input_tensors,
                     optional_input_tensors);
@@ -105,7 +105,7 @@ void OptimizedConvNew::validate(const std::vector<Tensor>& input_tensors, const 
     }
     if (this->memory_config.is_sharded()) {
         uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntiles;
-        auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(input_tensor_a.get_legacy_shape(), sliding_window_config, out_block_h_ntiles, extra_padding_for_32B_alignment);
+        auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(input_tensor_a.get_legacy_shape(), sliding_window_config, out_block_h_ntiles);
         uint32_t out_width_ntiles = this->compute_output_shapes(input_tensors).at(0)[-1] / TILE_WIDTH;
         if(this->memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
             TT_FATAL(this->parallelization_config.per_core_out_matrix_width_ntiles == out_width_ntiles, "Error");
@@ -178,7 +178,7 @@ std::vector<Tensor> OptimizedConvNew::create_output_tensors(const std::vector<Te
             return{create_device_tensor(output_shape, this->dtype, output_layout, input_tensor.device(), mem_config)};
 
         } else if (this->memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-            auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(this->input_tensor_shape, sliding_window_config, this->parallelization_config.per_core_out_matrix_height_ntiles, extra_padding_for_32B_alignment);
+            auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(this->input_tensor_shape, sliding_window_config, this->parallelization_config.per_core_out_matrix_height_ntiles);
             uint32_t act_matrix_height = (uint32_t) act_matrix_shape[1];
             uint32_t act_matrix_height_ntiles = act_matrix_height / TILE_HEIGHT;
             uint32_t total_active_num_cores_per_weight_slice = act_matrix_height_ntiles / this->parallelization_config.per_core_out_matrix_height_ntiles;
@@ -220,7 +220,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
         groups,
         untilize_out, fuse_relu, math_fidelity,
         parallelization_config,
-        block_config, extra_padding_for_32B_alignment,
+        block_config,
         dtype,
         input_tensor_shape,
         use_shallow_conv_variant,

@@ -49,7 +49,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(const T
     uint32_t groups,
     bool untilize_out, bool fuse_relu, MathFidelity math_fidelity,
     const OptimizedConvParallelizationConfig& parallelization_config,
-    const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment,
+    const OptimizedConvBlockConfig& block_config,
     DataType dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
     bool use_shallow_conv_variant,
@@ -68,7 +68,6 @@ struct OptimizedConvNew {
     const uint32_t groups;
     bool untilize_out, has_bias, fuse_relu;
     MathFidelity math_fidelity;
-    uint32_t extra_padding_for_32B_alignment;
     MemoryConfig memory_config;
     const DataType dtype;
     std::array<std::uint32_t, 4> input_tensor_shape; // For sharded input, input tensor shape is nonsense
@@ -83,7 +82,7 @@ struct OptimizedConvNew {
         bool has_bias, bool fuse_relu,
         MathFidelity mfidelity, const OptimizedConvParallelizationConfig& p_config,
         const OptimizedConvBlockConfig& b_config,
-        uint32_t e_padding_for_32B_alignment, MemoryConfig out_mem_config,
+        MemoryConfig out_mem_config,
         DataType dtype,
         std::array<std::uint32_t, 4> input_tensor_shape, bool use_shallow_conv_variant,
         const DeviceComputeKernelConfig compute_kernel_config, bool enable_act_double_buffer, bool enable_split_reader, bool enable_subblock_padding) :
@@ -96,7 +95,6 @@ struct OptimizedConvNew {
             math_fidelity(mfidelity),
             parallelization_config(p_config),
             block_config(b_config),
-            extra_padding_for_32B_alignment(e_padding_for_32B_alignment),
             memory_config(out_mem_config),
             dtype(dtype), input_tensor_shape(input_tensor_shape),
             use_shallow_conv_variant(use_shallow_conv_variant),
@@ -121,7 +119,6 @@ struct OptimizedConvNew {
         "has_bias",
         "fuse_relu",
         "math_fidelity",
-        "extra_padding_for_32B_alignment",
         "dtype",
         "input_tensor_shape",
         "use_shallow_conv_variant",
@@ -138,7 +135,6 @@ struct OptimizedConvNew {
             std::cref(this->has_bias),
             std::cref(this->fuse_relu),
             std::cref(this->math_fidelity),
-            std::cref(this->extra_padding_for_32B_alignment),
             std::cref(this->dtype),
             std::cref(this->input_tensor_shape),
             std::cref(this->use_shallow_conv_variant),
@@ -154,7 +150,7 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     uint32_t groups,
     bool untilize_out, bool fuse_relu, MathFidelity math_fidelity,
     const OptimizedConvParallelizationConfig& parallelization_config,
-    const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment,
+    const OptimizedConvBlockConfig& block_config,
     MemoryConfig memory_config,
     DataType dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
@@ -176,6 +172,6 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 
-pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(const tt::tt_metal::LegacyShape& conv_activation_shape, ttnn::operations::sliding_window::SlidingWindowConfig sliding_window_config, uint32_t act_block_h_ntiles, uint32_t padding_for_32B_alignment);
+pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(const tt::tt_metal::LegacyShape& conv_activation_shape, ttnn::operations::sliding_window::SlidingWindowConfig sliding_window_config, uint32_t act_block_h_ntiles);
 
 } // optimized_conv_op_utils

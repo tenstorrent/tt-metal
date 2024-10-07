@@ -51,7 +51,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     bool fuse_relu,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
-    uint32_t extra_padding_for_32B_alignment,
     bool use_shallow_conv_variant,
     bool transpose_mcast,
     Tensor& output,
@@ -348,7 +347,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     bool fuse_relu,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
-    uint32_t extra_padding_for_32B_alignment,
     bool use_shallow_conv_variant,
     bool transpose_mcast,
     Tensor& output,
@@ -532,7 +530,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] =
         optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(
-            ashape_with_channels_padded.value, sliding_window_config, out_block_h_ntiles, extra_padding_for_32B_alignment);
+            ashape_with_channels_padded.value, sliding_window_config, out_block_h_ntiles);
     assert(act_matrix_shape.size() == 3);
     assert(act_matrix_shape[0] == 1);
     uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
@@ -1686,7 +1684,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
     MathFidelity math_fidelity,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
-    uint32_t extra_padding_for_32B_alignment,
     DataType output_dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
     bool use_shallow_conv_variant,
@@ -1737,7 +1734,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
         fuse_relu,
         parallelization_config,
         block_config,
-        extra_padding_for_32B_alignment,
         use_shallow_conv_variant,
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
         output,
@@ -1761,7 +1757,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
         fuse_relu,
         parallelization_config,
         block_config,
-        extra_padding_for_32B_alignment,
         use_shallow_conv_variant,
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
         output,
