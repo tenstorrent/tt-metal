@@ -74,6 +74,11 @@ on:
           - eltwise.unary.sinh.sinh
           - eltwise.unary.relu_min.relu_min
           - eltwise.unary.relu_max.relu_max
+          - eltwise.unary_backward.clamp_bw.clamp_bw
+          - eltwise.unary_backward.hardtanh_bw.hardtanh_bw
+          - eltwise.unary_backward.mul_bw.mul_bw
+          - eltwise.unary_backward.softplus_bw.softplus_bw
+          - eltwise.unary_backward.threshikd_bw.threshikd_bw
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multiply
           - eltwise.binary.div.div
