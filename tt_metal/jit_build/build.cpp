@@ -530,70 +530,6 @@ void JitBuildState::link(const string& log_file, const string& out_dir) const {
     }
 }
 
-void JitBuildState::elf_to_hex8(const string& log_file, const string& out_dir) const {
-    ZoneScoped;
-    string cmd;
-    cmd = "cd " + out_dir + " && ";
-    cmd += env_.objcopy_;
-    cmd += " -O verilog " + this->target_name_ + ".elf" + " " + this->target_name_ + ".hex.tmp";
-
-    log_debug(tt::LogBuildKernels, "    objcopy cmd: {}", cmd);
-    if (!tt::utils::run_command(cmd, log_file, false)) {
-        build_failure(this->target_name_, "objcopy", cmd, log_file);
-    }
-}
-
-void JitBuildState::hex8_to_hex32(const string& log_file, const string& out_dir) const {
-    ZoneScoped;
-    auto write_data = [](std::ofstream& outf, std::vector<uint64_t>& data, uint64_t& ptr) {
-        if (!data.empty()) {
-            outf << "@" << std::setfill('0') << std::setw(8) << std::hex << (ptr >> 2) << "\n";
-            for (size_t i = 0; i < data.size(); i += 4) {
-                for (int j = 3; j >= 0; --j) {
-                    if (i + j < data.size()) {
-                        outf << std::setfill('0') << std::setw(2) << std::hex << data[i + j];
-                    }
-                }
-                outf << "\n";
-            }
-        }
-        data.clear();
-    };
-
-    auto pad_zeroes = [](std::vector<uint64_t>& data, uint32_t num) {
-        for (unsigned int i = 0; i < num; i++) {
-            data.push_back(0);
-        }
-    };
-
-    std::ifstream inf(out_dir + this->target_name_ + ".hex.tmp");
-    std::ofstream outf(out_dir + this->target_name_ + ".hex");
-    std::string line;
-    std::vector<uint64_t> data;
-    uint64_t ptr = 0;
-
-    while (std::getline(inf, line)) {
-        if (line[0] == '@') {
-            uint64_t addr = std::stol(line.substr(1), nullptr, 16);
-            if (addr > ptr + 4) {
-                write_data(outf, data, ptr);
-                ptr = addr;
-                pad_zeroes(data, (ptr % 4));
-                ptr -= ptr % 4;
-            } else {
-                pad_zeroes(data, (addr - ptr - data.size()));
-            }
-        } else {
-            std::istringstream iss(line);
-            std::string tok;
-            while (iss >> tok) {
-                data.push_back(std::stol(tok, nullptr, 16));
-            }
-        }
-    }
-    write_data(outf, data, ptr);
-}
-
 // Given this elf (A) and a later elf (B):
 // weakens symbols in A so that it can be used as a "library" for B. B imports A's weakened symbols, B's symbols of the
 // same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to remain
@@ -644,8 +580,6 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
 
     compile(log_file, out_dir, settings);
     link(log_file, out_dir);
-    elf_to_hex8(log_file, out_dir);
-    hex8_to_hex32(log_file, out_dir);
     if (this->is_fw_) {
         weaken(log_file, out_dir);
     }

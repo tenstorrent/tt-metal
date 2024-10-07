@@ -109,8 +109,6 @@ class alignas(CACHE_LINE_ALIGNMENT) JitBuildState {
     void compile(const string& log_file, const string& out_path, const JitBuildSettings *settings) const;
     void compile_one(const string& log_file, const string& out_path, const JitBuildSettings *settings, const string& src, const string &obj) const;
     void link(const string& log_file, const string& out_path) const;
-    void elf_to_hex8(const string& log_file, const string& out_path) const;
-    void hex8_to_hex32(const string& log_file, const string& out_path) const;
     void weaken(const string& log_file, const string& out_path) const;
     void copy_kernel( const string& kernel_in_path, const string& op_out_path) const;
     void extract_zone_src_locations(const string& log_file) const;
