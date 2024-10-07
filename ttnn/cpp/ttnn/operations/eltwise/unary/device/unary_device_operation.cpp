@@ -4,7 +4,7 @@
 
 #include "unary_device_operation.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
+#include "magic_enum.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"

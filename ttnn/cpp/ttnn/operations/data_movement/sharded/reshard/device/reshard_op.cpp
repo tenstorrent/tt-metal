@@ -4,7 +4,7 @@
 
 #include "reshard_op.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
+#include "magic_enum.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "reshard_program_factory.hpp"

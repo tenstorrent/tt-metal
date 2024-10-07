@@ -10,7 +10,7 @@
 
 #include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "third_party/magic_enum/magic_enum.hpp"
+#include "magic_enum.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"

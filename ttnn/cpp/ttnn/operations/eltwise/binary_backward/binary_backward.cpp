@@ -26,7 +26,7 @@
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
-#include "third_party/magic_enum/magic_enum.hpp"
+#include "magic_enum.hpp"
 
 namespace ttnn::operations::binary_backward {
 

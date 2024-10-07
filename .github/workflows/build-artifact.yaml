@@ -62,6 +62,7 @@ jobs:
   build-artifact:
     needs: build-docker-image
     if: always()
+    timeout-minutes: 30
     strategy:
       matrix:
         arch: ${{ fromJson(inputs.arch || '["grayskull", "wormhole_b0", "blackhole"]') }}

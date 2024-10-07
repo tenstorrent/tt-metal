@@ -6,7 +6,7 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include "third_party/magic_enum/magic_enum.hpp"
+#include "magic_enum.hpp"
 
 namespace py = pybind11;
 

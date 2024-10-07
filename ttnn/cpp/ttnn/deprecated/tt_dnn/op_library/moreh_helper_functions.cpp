@@ -5,7 +5,7 @@
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 
 #include "common/constants.hpp"
-#include "third_party/magic_enum/magic_enum.hpp"
+#include "magic_enum.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/common/work_split.hpp"
 
