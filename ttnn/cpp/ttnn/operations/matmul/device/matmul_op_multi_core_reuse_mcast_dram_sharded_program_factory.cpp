@@ -310,6 +310,92 @@ void get_dram_reader_core_coords_wormhole_b0(
     all_cores_ordered = adj_core_logical_realloc;
 }
 
+void get_dram_reader_core_coords_blackhole(
+    tt_metal::Device* device, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
+
+    // hardcoded for blackhole
+    uint32_t full_grid_size_x = 17;
+
+    // get all the logical coord
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+
+    // get dram banks and coords
+    uint32_t num_banks = device->num_dram_channels();
+    uint32_t max_bank_id = num_banks - 1;
+    std::vector<CoreCoord> dram_coord_phy;
+    for (int i = 0; i < num_banks; ++i) {
+        dram_coord_phy.push_back(device->dram_core_from_dram_channel(i));
+    }
+
+    // get worker logical coords
+    std::vector<CoreCoord> all_worker_cores_logical;
+    for (int i = 0; i < num_cores_x; ++i) {
+        for (int j = 0; j < num_cores_y; ++j) {
+            all_worker_cores_logical.push_back(CoreCoord(i, j));
+        }
+    }
+
+    // get x coords of the workers
+    std::vector<uint32_t> all_worker_cores_x_physical;
+    for (int i = 0; i < num_cores_x; ++i) {
+        auto core_phy = device->worker_core_from_logical_core(CoreCoord(i, 0));
+        all_worker_cores_x_physical.push_back(core_phy.x);
+    }
+
+    // get the harvested cols, we treat dram and eth cores as harvested as well
+    std::vector<uint32_t> harvested_cols;
+    for (int i = 0; i < full_grid_size_x; ++i) {
+        auto x = i;
+
+        if (std::find(all_worker_cores_x_physical.begin(), all_worker_cores_x_physical.end(), x) ==
+            all_worker_cores_x_physical.end()) {
+            harvested_cols.push_back(x);
+        }
+    }
+
+    // get the ajacent cores of DRAM banks
+    std::vector<CoreCoord> adj_core_physical;
+    for (int i = 0; i < num_banks; ++i) {
+        auto dram_core = dram_coord_phy[i];
+        uint32_t adj_core_x = dram_core.x + 1;
+        uint32_t adj_core_y = dram_core.y;
+        adj_core_physical.push_back(CoreCoord(adj_core_x, adj_core_y));
+    }
+
+    // move worker if they are in the harvested cols
+    for (auto& coord : adj_core_physical) {
+        auto x = coord.x;
+
+        // if col is harvested, move core right by 1
+        while (std::find(harvested_cols.begin(), harvested_cols.end(), x) != harvested_cols.end() and x < (full_grid_size_x - 1)) {
+            x += 1;
+        }
+
+        coord.x = x;
+    }
+
+    // find the logical coord from physical coord
+    std::vector<CoreCoord> adj_core_logical_realloc;
+    for (int i = 0; i < adj_core_physical.size(); ++i) {
+        for (int j = 0; j < all_worker_cores_logical.size(); ++j) {
+            auto core = device->worker_core_from_logical_core(all_worker_cores_logical[j]);
+            if (adj_core_physical[i] == core) {
+                adj_core_logical_realloc.push_back(all_worker_cores_logical[j]);
+            }
+        }
+    }
+
+    // create sets
+    std::set<CoreRange> all_cores_set;
+    for (int i = 0; i < num_banks; ++i) {
+        all_cores_set.insert(CoreRange(adj_core_logical_realloc[i]));
+    }
+    all_cores = CoreRangeSet(all_cores_set);
+    all_cores_ordered = adj_core_logical_realloc;
+}
+
 void get_max_page_size_and_num_pages(uint32_t num_tiles, uint32_t tile_size, uint32_t& page_size, uint32_t& num_pages) {
     uint64_t total_size = static_cast<uint64_t>(num_tiles) * tile_size;
 
@@ -378,8 +464,12 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
 
     if (device->arch() == tt::ARCH::WORMHOLE_B0) {
         get_dram_reader_core_coords_wormhole_b0(device, all_worker_cores, all_worker_cores_ordered);
-    } else {
+    } else if (device->arch() == tt::ARCH::GRAYSKULL) {
         get_dram_reader_core_coords_grayskull(device, all_worker_cores, all_worker_cores_ordered);
+    } else if (device->arch() == tt::ARCH::BLACKHOLE) {
+        get_dram_reader_core_coords_blackhole(device, all_worker_cores, all_worker_cores_ordered);
+    } else {
+        TT_THROW("Device not supported");
     }
 
     // dram banks

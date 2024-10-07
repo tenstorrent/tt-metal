@@ -4,7 +4,7 @@
 
 import pytest
 from loguru import logger
-from models.utility_functions import is_wormhole_b0, is_grayskull, skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_grayskull, is_blackhole, skip_for_wormhole_b0
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
 import ttnn
@@ -69,7 +69,7 @@ def run_test_matmul_in1_dram_sharded(
     if is_grayskull() and (N == 4096 or K == 32768):
         pytest.skip("Skipping too large tensor test on Grayskull")
 
-    if is_grayskull():
+    if is_grayskull() or is_blackhole():
         N_padded = N
         num_banks = 8
     else:
@@ -191,7 +191,6 @@ def run_test_matmul_in1_dram_sharded(
     assert passing
 
 
-@skip_for_blackhole("Segfault on BH, see #12349")
 @pytest.mark.parametrize(
     "fidelity",
     [
@@ -297,7 +296,7 @@ def run_test_matmul_in1_dram_sharded_mm_chain(
     if is_grayskull() and (N == 4096 or K == 32768):
         pytest.skip("Skipping too large tensor test on Grayskull")
 
-    if is_grayskull():
+    if is_grayskull() or is_blackhole():
         N_padded = N
         num_banks = 8
     else:
@@ -397,7 +396,6 @@ def run_test_matmul_in1_dram_sharded_mm_chain(
     assert True
 
 
-@skip_for_blackhole("Segfaulting on BH, see #12349")
 @pytest.mark.parametrize(
     "fidelity",
     [
@@ -492,7 +490,7 @@ def test_matmul_2d_in1_dram_sharded(
     fuse_batch,
     function_level_defaults,
 ):
-    if is_grayskull():
+    if is_grayskull() or is_blackhole():
         N_padded = N
         num_banks = 8
     else:
