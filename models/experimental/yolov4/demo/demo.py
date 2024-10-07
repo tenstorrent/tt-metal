@@ -428,20 +428,16 @@ def do_detect(model, img, conf_thresh, nms_thresh, n_classes, device=None, class
             output = model(device, img)
 
             output_tensor1 = ttnn.to_torch(output[0])
-            output_tensor1 = output_tensor1.reshape(1, 40, 40, 256)
+            output_tensor1 = output_tensor1.reshape(1, 40, 40, 255)
             output_tensor1 = torch.permute(output_tensor1, (0, 3, 1, 2))
 
             output_tensor2 = ttnn.to_torch(output[1])
-            output_tensor2 = output_tensor2.reshape(1, 20, 20, 256)
+            output_tensor2 = output_tensor2.reshape(1, 20, 20, 255)
             output_tensor2 = torch.permute(output_tensor2, (0, 3, 1, 2))
 
             output_tensor3 = ttnn.to_torch(output[2])
-            output_tensor3 = output_tensor3.reshape(1, 10, 10, 256)
+            output_tensor3 = output_tensor3.reshape(1, 10, 10, 255)
             output_tensor3 = torch.permute(output_tensor3, (0, 3, 1, 2))
-
-            output_tensor1 = output_tensor1[:, :255, :, :]
-            output_tensor2 = output_tensor2[:, :255, :, :]
-            output_tensor3 = output_tensor3[:, :255, :, :]
 
             yolo1 = YoloLayer(
                 anchor_mask=[0, 1, 2],
