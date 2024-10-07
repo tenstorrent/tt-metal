@@ -54,10 +54,14 @@ struct dispatch_constants {
     dispatch_constants(dispatch_constants &&other) noexcept = delete;
 
     static const dispatch_constants &get(const CoreType &core_type, const uint32_t num_hw_cqs = 0) {
-        static uint32_t hw_cqs = num_hw_cqs;
+        if (num_hw_cqs > 0 && (num_hw_cqs != hw_cqs || core_type != last_core_type || !inst)) {
+            hw_cqs = num_hw_cqs;
+            last_core_type = core_type;
+            inst = std::unique_ptr<dispatch_constants>(new dispatch_constants(core_type, hw_cqs));
+        }
+
         TT_FATAL(hw_cqs > 0, "Command Queue is not initialized.");
-        static dispatch_constants inst = dispatch_constants(core_type, hw_cqs);
-        return inst;
+        return *inst;
     }
 
     static constexpr uint8_t MAX_NUM_HW_CQS = 2;
@@ -131,7 +135,11 @@ struct dispatch_constants {
         uint32_t dispatch_buffer_block_size;
         uint32_t base_device_command_queue_addr;
         if (core_type == CoreType::WORKER) {
-            prefetch_q_entries_ = 1532 / num_hw_cqs;
+            if (tt::Cluster::instance().is_galaxy_cluster()) {
+                prefetch_q_entries_ = 1532 / num_hw_cqs;
+            } else {
+                prefetch_q_entries_ = 1534;
+            }
             max_prefetch_command_size_ = 128 * 1024;
             cmddat_q_size_ = 256 * 1024;
             scratch_db_size_ = 128 * 1024;
@@ -210,6 +218,9 @@ struct dispatch_constants {
     uint32_t prefetch_d_buffer_pages_;
     uint32_t dispatch_s_buffer_size_;
     std::vector<uint32_t> device_cq_addrs_;
+    static inline std::unique_ptr<dispatch_constants> inst;
+    static inline uint32_t hw_cqs;
+    static inline CoreType last_core_type = CoreType::WORKER;
 };
 
 /// @brief Get offset of the command queue relative to its channel
