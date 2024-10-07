@@ -70,7 +70,6 @@ constexpr uint32_t inner_stop_mux_d_bypass = get_compile_time_arg_val(15);
 
 void kernel_main() {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
-    noc_init();
 
     write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
     write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000000);

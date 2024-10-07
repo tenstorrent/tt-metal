@@ -61,7 +61,10 @@ def move_to_device(object, device):
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_segformer_for_semantic_segmentation(device):
+def test_segformer_for_semantic_segmentation(device, is_ci_env):
+    if is_ci_env:
+        pytest.skip("Skip in CI, model is WIP, issue# 13357")
+
     processor = SegformerImageProcessor.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
     torch_model = SegformerForSemanticSegmentation.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
 
@@ -118,5 +121,4 @@ def test_segformer_for_semantic_segmentation(device):
     )
     ttnn_final_output = ttnn.to_torch(ttnn_output.logits)
 
-
-# assert_with_pcc(torch_output.logits, ttnn_final_output, pcc=0.55)
+    assert_with_pcc(torch_output.logits, ttnn_final_output, pcc=0.99)

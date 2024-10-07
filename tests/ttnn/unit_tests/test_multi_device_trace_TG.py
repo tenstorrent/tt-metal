@@ -20,8 +20,8 @@ NUM_TRACE_LOOPS = int(os.getenv("NUM_TRACE_LOOPS", 15))
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("enable_multi_cq", [False])  # To be toggled when Galaxy supports Multi-CQ
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 60000}], indirect=True)
+@pytest.mark.parametrize("enable_multi_cq", [True, False])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 60000, "num_command_queues": 2}], indirect=True)
 def test_multi_device_single_trace(mesh_device, shape, enable_async, enable_multi_cq):
     if mesh_device.get_num_devices() < 32:
         pytest.skip("Test is only valid on Galaxy")
@@ -120,8 +120,8 @@ def test_multi_device_single_trace(mesh_device, shape, enable_async, enable_mult
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("enable_multi_cq", [False])  # To be toggled when Galaxy supports Multi-CQ
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+@pytest.mark.parametrize("enable_multi_cq", [True, False])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000, "num_command_queues": 2}], indirect=True)
 def test_multi_device_multi_trace(mesh_device, shape, enable_async, enable_multi_cq):
     torch.manual_seed(0)
     if mesh_device.get_num_devices() < 32:

@@ -5,6 +5,7 @@
 import ttnn
 
 adam = ttnn._ttnn.operations.moreh.moreh_adam
+adamw = ttnn._ttnn.operations.moreh.moreh_adamw
 arange = ttnn._ttnn.operations.moreh.moreh_arange
 bmm = ttnn._ttnn.operations.moreh.moreh_bmm
 bmm_backward = ttnn._ttnn.operations.moreh.moreh_bmm_backward

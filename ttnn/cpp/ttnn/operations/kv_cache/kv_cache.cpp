@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "kv_cache.hpp"
-#include "ttnn/multi_device.hpp"
+#include "ttnn/distributed/mesh_device.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/kv_cache/device/update_cache_op.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
