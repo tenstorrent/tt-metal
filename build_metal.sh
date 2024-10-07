@@ -16,7 +16,11 @@ show_help() {
     echo "  -u, --enable-ubsan               Enable UndefinedBehaviorSanitizer."
     echo "  -p, --enable-profiler            Enable Tracy profiler."
     echo "  --install-prefix                 Where to install build artifacts."
-    echo "  --build-tests                    Build Testcases."
+    echo "  --build-tests                    Build All Testcases."
+    echo "  --build-ttnn-tests               Build ttnn Testcases."
+    echo "  --build-metal-tests              Build metal Testcases."
+    echo "  --build-umd-tests                Build umd Testcases."
+    echo "  --build-programming-examples     Build programming examples."
     echo "  --release                        Set the build type as Release."
     echo "  --development                    Set the build type as RelWithDebInfo."
     echo "  --debug                          Set the build type as Debug."
@@ -39,11 +43,15 @@ enable_ubsan="OFF"
 build_type="Release"
 enable_profiler="OFF"
 build_tests="OFF"
+build_ttnn_tests="OFF"
+build_metal_tests="OFF"
+build_umd_tests="OFF"
+build_programming_examples="OFF"
 
 declare -a cmake_args
 
 OPTIONS=h,e,c,t,a,m,s,u,b:,p
-LONGOPTIONS=help,export-compile-commands,enable-ccache,enable-time-trace,enable-asan,enable-msan,enable-tsan,enable-ubsan,build-type:,enable-profiler,install-prefix:,build-tests,release,development,debug,clean
+LONGOPTIONS=help,export-compile-commands,enable-ccache,enable-time-trace,enable-asan,enable-msan,enable-tsan,enable-ubsan,build-type:,enable-profiler,install-prefix:,build-tests,build-ttnn-tests,build-metal-tests,build-umd-tests,build-programming-examples,release,development,debug,clean
 
 # Parse the options
 PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTIONS --name "$0" -- "$@")
@@ -81,6 +89,14 @@ while true; do
             install_prefix="$2";shift;;
         --build-tests)
             build_tests="ON";;
+        --build-ttnn-tests)
+            build_ttnn_tests="ON";;
+        --build-metal-tests)
+            build_metal_tests="ON";;
+        --build-umd-tests)
+            build_umd_tests="ON";;
+        --build-programming-examples)
+            build_programming_examples="ON";;
         --release)
             build_type="Release";;
         --development)
@@ -180,6 +196,23 @@ if [ "$build_tests" = "ON" ]; then
     cmake_args+=("-DTTNN_BUILD_TESTS=ON")
     cmake_args+=("-DTT_UMD_BUILD_TESTS=ON")
 fi
+
+if [ "$build_metal_tests" = "ON" ]; then
+    cmake_args+=("-DTT_METAL_BUILD_TESTS=ON")
+fi
+
+if [ "$build_ttnn_tests" = "ON" ]; then
+    cmake_args+=("-DTTNN_BUILD_TESTS=ON")
+fi
+
+if [ "$build_tt_umd_tests" = "ON" ]; then
+    cmake_args+=("-DTT_UMD_BUILD_TESTS=ON")
+fi
+
+if [ "$build_programming_examples" = "ON" ]; then
+    cmake_args+=("-DBUILD_PROGRAMMING_EXAMPLES=ON")
+fi
+
 # Create and link the build directory
 mkdir -p $build_dir
 ln -nsf $build_dir build
