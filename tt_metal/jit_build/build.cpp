@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <span>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -18,8 +19,9 @@
 #include "jit_build/kernel_args.hpp"
 #include "tools/profiler/common.hpp"
 #include "tools/profiler/profiler_state.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/llrt/tt_elffile.hpp"
 
 namespace fs = std::filesystem;
 
@@ -536,16 +538,15 @@ void JitBuildState::link(const string& log_file, const string& out_dir) const {
 // strong so to propogate link addresses
 void JitBuildState::weaken(const string& log_file, const string& out_dir) const {
     ZoneScoped;
-    string cmd;
-    cmd = "cd " + out_dir + " && ";
-    cmd += env_.objcopy_;
-    cmd += " --wildcard --weaken-symbol \"*\" --weaken-symbol \"!__fw_export_*\" " + this->target_name_ + ".elf " +
-           this->target_name_ + "_weakened.elf";
 
-    log_debug(tt::LogBuildKernels, "    objcopy cmd: {}", cmd);
-    if (!tt::utils::run_command(cmd, log_file, false)) {
-        build_failure(this->target_name_, "objcopy weaken", cmd, log_file);
-    }
+    std::string in = out_dir + target_name_ + ".elf";
+    std::string out = out_dir + target_name_ + "_weakened.elf";
+
+    ll_api::ElfFile elf;
+    elf.ReadImage(in);
+    static std::string_view const strong_names[] = {"__fw_export_*"};
+    elf.WeakenDataSymbols(std::span<std::string_view const>(), strong_names);
+    elf.WriteImage(out);
 }
 
 void JitBuildState::extract_zone_src_locations(const string& log_file) const {

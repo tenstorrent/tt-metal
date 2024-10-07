@@ -58,6 +58,8 @@ class ElfFile::Impl {
 
    public:
     void LoadImage();
+    void WeakenDataSymbols(
+        std::span<std::string_view const> allow_names, std::span<std::string_view const> strong_names);
 
    private:
     Elf32_Ehdr const &GetHeader() const { return *reinterpret_cast<Elf32_Ehdr const *>(GetContents().data()); }
@@ -156,6 +158,24 @@ void ElfFile::ReadImage(std::string const &path) {
     pimpl_->LoadImage();
 }
 
+void ElfFile::WriteImage(std::string const &path) {
+    int fd = open(
+        path.c_str(),
+        O_WRONLY | O_CLOEXEC | O_CREAT | O_TRUNC,
+        S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
+    bool failed = fd < 0;
+    if (!failed) {
+        failed = write(fd, contents_.data(), contents_.size()) != ssize_t(contents_.size());
+        close(fd);
+    }
+    if (failed)
+        TT_THROW("{}: cannot map elf file into memory: {}", path, strerror(errno));
+}
+
+void ElfFile::WeakenDataSymbols(std::span<std::string_view const> allow, std::span<std::string_view const> strong) {
+    pimpl_->WeakenDataSymbols(allow, strong);
+}
+
 void ElfFile::Impl::LoadImage() {
     auto &hdr = GetHeader();
 
@@ -234,5 +254,68 @@ void ElfFile::Impl::LoadImage() {
         auto &segments = GetSegments();
 	auto text = std::next(segments.begin(), textIx);
         std::rotate(segments.begin(), text, std::next(text, 1));
+    }
+}
+
+// Any global symbol matching STRONG is preserved.
+// Any global symbol in a data-segment section, or matching ALLOW is weakeend
+// Any other global symbol is made internal
+void ElfFile::Impl::WeakenDataSymbols(
+    std::span<std::string_view const> allow, std::span<std::string_view const> strong) {
+    auto name_matches = [&](std::string_view name, std::span<std::string_view const> list) {
+        for (auto const &pattern : list) {
+            if (pattern.back() == '*' ? name.starts_with(pattern.substr(0, pattern.size() - 1)) : name == pattern)
+                return true;
+        }
+        return false;
+    };
+    for (unsigned ix = GetShdrs().size(); ix--;) {
+        auto const &shdr = GetShdr(ix);
+        if (shdr.sh_type != SHT_SYMTAB || shdr.sh_flags & SHF_ALLOC)
+            continue;
+        auto symbols = GetSymbols(shdr);
+        unsigned num_locals = shdr.sh_info;
+        unsigned num_nonlocals = symbols.size() - num_locals;
+        std::vector<unsigned> remap;
+        std::vector<Elf32_Sym> locals, nonlocals;
+        remap.reserve(num_nonlocals);
+        locals.reserve(num_nonlocals);
+        nonlocals.reserve(num_nonlocals);
+
+        // Weaken or hide globals
+        for (auto &sym : symbols.subspan(num_locals)) {
+            if ((ELF32_ST_BIND(sym.st_info) == STB_GLOBAL || ELF32_ST_BIND(sym.st_info) == STB_WEAK) &&
+                !name_matches(GetName(sym, shdr.sh_link), strong)) {
+                unsigned bind =
+                    IsDataSymbol(sym) || name_matches(GetName(sym, shdr.sh_link), allow) ? STB_WEAK : STB_LOCAL;
+                sym.st_info = ELF32_ST_INFO(bind, ELF32_ST_TYPE(sym.st_info));
+                if (bind == STB_LOCAL) {
+                    remap.push_back(locals.size());
+                    locals.push_back(sym);
+                    continue;
+                }
+            }
+            remap.push_back(~nonlocals.size());
+            nonlocals.push_back(sym);
+        }
+        for (auto const &relhdr : GetShdrs()) {
+            if (!(relhdr.sh_type == SHT_RELA && relhdr.sh_link == ix))
+                continue;
+
+            // Adjust relocs using remap array.
+            for (auto &reloc : GetRelocations(relhdr)) {
+                unsigned sym_ix = ELF32_R_SYM(reloc.r_info);
+                if (sym_ix < num_locals)
+                    continue;
+                sym_ix = remap[sym_ix - num_locals];
+                if (int(sym_ix) < 0)
+                    sym_ix = ~sym_ix + locals.size();
+                reloc.r_info = ELF32_R_INFO(ELF32_R_TYPE(reloc.r_info), sym_ix + num_locals);
+            }
+        }
+        std::copy(locals.begin(), locals.end(), std::next(symbols.begin(), num_locals));
+        num_locals += locals.size();
+        std::copy(nonlocals.begin(), nonlocals.end(), std::next(symbols.begin(), num_locals));
+        const_cast<Elf32_Shdr &>(shdr).sh_info = num_locals;
     }
 }
