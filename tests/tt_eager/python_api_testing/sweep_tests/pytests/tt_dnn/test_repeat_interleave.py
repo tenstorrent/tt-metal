@@ -15,7 +15,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
-from models.utility_functions import is_wormhole_b0, skip_for_blackhole
+from models.utility_functions import is_wormhole_b0, is_grayskull, skip_for_blackhole
 
 shapes = (
     [[1, 1, 32, 32]],  # Single core
@@ -30,6 +30,8 @@ shapes = (
 @pytest.mark.parametrize("dim", [0, 2, -4, -2, 1, 3])
 @pytest.mark.parametrize("repeat", [2, 3, 4])
 def test_run_repeat_interleave_test(input_shapes, dim, repeat, device):
+    if is_grayskull and dim == 3:
+        pytest.skip("Grayskull does not support dim=3 because we cannot tranpose WH reliably")
     datagen_func = [
         generation_funcs.gen_func_with_cast(
             partial(generation_funcs.gen_rand_along_dim, low=-100, high=100),

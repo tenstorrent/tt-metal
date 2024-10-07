@@ -35,6 +35,7 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
         case TransposeOpDim::HC:
             pad_c = a.get_layout() == Layout::TILE && a.get_shape().with_tile_padding()[1] % 32 != 0;
             break;
+        // bubble dim around to make it possible as these implementations don't have a kernel
         case TransposeOpDim::NH:
             return ttnn::permute((const ttnn::Tensor)a, std::vector<int64_t>({2, 1, 0, 3}), output_mem_config);
         case TransposeOpDim::NW:
@@ -42,7 +43,15 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
         case TransposeOpDim::CW:
             return ttnn::permute((const ttnn::Tensor)a, std::vector<int64_t>({0, 3, 2, 1}), output_mem_config);
         case TransposeOpDim::CN:
-            tiled_only = true;
+            tiled_only = true; // CN only has a tiled implementation at the moment
+            break;
+        case TransposeOpDim::WH: // THIS NEEDS TO BE FIXED
+            if (a.device()->arch() == tt::ARCH::GRAYSKULL) {
+                tiled_only = a.shape()[-2] > 256; // horrible hack because PCC on transpose HW row major is terrible on GS in this code path - kernel spits out garbage and has some demuxing for greater than this size that doesn't work
+            }
+            else if (a.device()->arch() == tt::ARCH::WORMHOLE_B0) {
+                tiled_only = !a.is_sharded() && (a.shape()[-2]*a.shape()[-1] >= 400000); // CB blows up on large sizes, hack until transpose_wh_rm is optimized
+            }
         default:
             break;
     }
@@ -98,17 +107,18 @@ ttnn::Tensor ExecuteTranspose::invoke(
     uint32_t normalized_dim1 = input_tensor.get_legacy_shape().get_normalized_index(dim1);
     uint32_t normalized_dim2 = input_tensor.get_legacy_shape().get_normalized_index(dim2);
 
-    uint32_t rank_diff = 4 - input_tensor.get_shape().rank();
-    Tensor input_4d = input_tensor;
-    if (rank_diff > 0) {
-        input_4d = ttnn::unsqueeze_to_4D(input_tensor);
+    Tensor input_unsqueezed = input_tensor;
+    uint32_t initial_rank = input_tensor.get_shape().rank();
+    if (initial_rank  < 4) {
+        input_unsqueezed = ttnn::unsqueeze_to_4D(input_tensor);
+        uint32_t rank_diff = 4 - initial_rank;
         normalized_dim1 += rank_diff;
         normalized_dim2 += rank_diff;
     }
 
     bool wh = (normalized_dim2 == 2 && normalized_dim1 == 0) || (normalized_dim2 == 0 && normalized_dim1 == 2);
-    bool typecast = input_4d.get_dtype() == DataType::BFLOAT8_B and input_4d.get_layout() == Layout::TILE and !wh and !input_4d.is_sharded();
-    Tensor input_typecasted = typecast ? ttnn::typecast(input_4d, DataType::BFLOAT16) : input_4d;
+    bool typecast = input_unsqueezed.get_dtype() == DataType::BFLOAT8_B and input_unsqueezed.get_layout() == Layout::TILE and !wh and !input_unsqueezed.is_sharded();
+    Tensor input_typecasted = typecast ? ttnn::typecast(input_unsqueezed, DataType::BFLOAT16) : input_unsqueezed;
 
     auto input_shape = input_typecasted.get_shape();
 
@@ -135,8 +145,8 @@ ttnn::Tensor ExecuteTranspose::invoke(
             auto& a = input_tensors.at(0);
             auto memory_config = memory_config_arg.value_or(a.memory_config());
 
-            TT_FATAL(normalized_dim1 <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
-            TT_FATAL(normalized_dim2 <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
+            TT_FATAL(normalized_dim1 <= 3, "dimension has to be 0-3 only corresponding to N,C,H,W");
+            TT_FATAL(normalized_dim2 <= 3, "dimension has to be 0-3 only corresponding to N,C,H,W");
 
             if (
                 (normalized_dim1 == normalized_dim2) ||
@@ -170,7 +180,7 @@ ttnn::Tensor ExecuteTranspose::invoke(
         }, {input_typecasted}, output_tensors);
 
     auto output = ttnn::reshape(output_tensors.at(0), ttnn::Shape(output_shape, padded_output_shape));
-    output = ttnn::squeeze_from_4D(output, input_tensor.get_shape().rank());
+    output = initial_rank < 4 ? ttnn::squeeze_from_4D(output, initial_rank) : output;
     return typecast ? ttnn::typecast(output, DataType::BFLOAT8_B) : output;
 
 }

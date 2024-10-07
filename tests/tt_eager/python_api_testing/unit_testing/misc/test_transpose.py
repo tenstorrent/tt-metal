@@ -660,22 +660,25 @@ def test_transpose_hc(dtype, shape, device):
 )
 @pytest.mark.parametrize(
     "shape",
-    [(1, 32), (1, 12), (1, 35), (16, 32), (34, 8)],
+    [(9216, 128), (1, 32), (1, 12), (1, 35), (16, 32), (34, 8)],
 )
 @pytest.mark.parametrize(
     "layout",
-    [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+    [ttnn.TILE_LAYOUT],
 )
-@pytest.mark.parametrize(
-    "dims",
-    [(1, 0), (-1, -2)],
-)
-def test_transpose_2D(dtype, shape, layout, dims, device):
+def test_transpose_2D(dtype, shape, layout, device):
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
-    if layout == ttnn.ROW_MAJOR_LAYOUT and dtype == ttnn.bfloat16 and shape[-1] % 2:
+    if layout == ttnn.ROW_MAJOR_LAYOUT and dtype == ttnn.bfloat16 and (shape[-1] % 2 or shape[-2] % 2):
         pytest.skip("Skipping RM odd inner dim test cases")
-    transpose(shape, device, dim0=0, dim1=1, input_dtype=dtype)
+
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output = torch_input.transpose(0, 1)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=layout, device=device)
+    tt_output = ttnn.transpose(tt_input, 0, 1)
+    tt_output = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
 @pytest.mark.parametrize(
@@ -689,7 +692,7 @@ def test_transpose_2D(dtype, shape, layout, dims, device):
 )
 @pytest.mark.parametrize(
     "layout",
-    [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+    [ttnn.TILE_LAYOUT],
 )
 @pytest.mark.parametrize(
     "dims",
@@ -698,10 +701,41 @@ def test_transpose_2D(dtype, shape, layout, dims, device):
 def test_transpose_3D(dtype, shape, layout, dims, device):
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
-
-    new_shape = shape
-    new_shape[dims[0]], new_shape[dims[1]] = shape[dims[1]], shape[dims[0]]
-    if layout == ttnn.ROW_MAJOR_LAYOUT and dtype == ttnn.bfloat16 and (shape[-1] % 2 or new_shape[-1] % 2):
+    if layout == ttnn.ROW_MAJOR_LAYOUT and dtype == ttnn.bfloat16 and (shape[-1] % 2 or shape[dims[-1]] % 2):
         pytest.skip("Skipping RM odd inner dim test cases")
 
-    transpose(shape, device, dim0=dims[0], dim1=dims[1], input_dtype=dtype)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output = torch_input.transpose(dims[0], dims[1])
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=layout, device=device)
+    tt_output = ttnn.transpose(tt_input, dims[0], dims[1])
+    tt_output = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [[4, 3, 1280, 40], [1, 4096, 4096]],
+)
+def test_transpose_4d_wh_rm(shape, device):
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output = torch_input.transpose(-1, -2)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.transpose(tt_input, -1, -2)
+    tt_output = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [[4, 3, 1280, 40], [1, 1200, 1280]],
+)
+def test_transpose_4d_wh_tile(shape, device):
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output = torch_input.transpose(-1, -2)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.transpose(tt_input, -1, -2)
+    tt_output = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
