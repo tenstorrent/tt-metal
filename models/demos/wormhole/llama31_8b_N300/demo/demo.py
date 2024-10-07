@@ -464,7 +464,11 @@ def run_llama_demo_n300(user_input, batch_size, mesh_device, instruct_mode, is_c
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 5487616, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
-    [{"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(os.environ.get("FAKE_DEVICE"), None)],
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(
+            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
     indirect=True,
 )
 def test_llama_demo(mesh_device, use_program_cache, input_prompts, instruct_weights, is_ci_env, num_batches):
