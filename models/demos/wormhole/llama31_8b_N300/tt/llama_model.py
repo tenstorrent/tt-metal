@@ -139,7 +139,9 @@ class LMHead(nn.Module):
             combined_split = torch.cat(device_splits, dim=-1)
             # print(f"combined_split shape: {combined_split.shape}")
 
-            memory_config = args.create_dram_sharded_mem_config(k=args.dim, n=combined_split.shape[-1])
+            memory_config = args.create_dram_sharded_mem_config(
+                k=args.dim, n=combined_split.shape[-1] // self.num_devices
+            )
             # print(f"memory_config: {memory_config}")
             self.output_weights.append(
                 ttnn.as_tensor(
